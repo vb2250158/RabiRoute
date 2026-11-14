@@ -12,6 +12,8 @@ Host 在原任务归属核对通过后，发现登录自启值已经相同时直
 
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
 
+Host 停止应用代时，等待原 Job 成员清空、Manager 与托盘原始内核进程句柄确认退出，再释放 owner 或启动下一代。退出未确认时撤销 Manager 地址，保留原句柄与清理操作，进入仍可查询的 `faulted` 状态；原 restart/quit 请求以原 operationId 返回 `generation_exit_unconfirmed`。带当前围栏的恢复继续同一清理，确认退出后才能切代；故障态 quit 也不能提前返回 `stopped`。身份重置不绕过该退出边界。
+
 ## 进程名称、图标与归属
 
 构建阶段为实际可执行文件写入产品名称和 `assets/rabiroute-icon.ico`，在发布清单生成前完成；不通过修改命令行标题代替程序标识。

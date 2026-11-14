@@ -12,6 +12,8 @@ stateRoot/data/plugins/<pluginId>/
 
 公开默认值来自应用 profile；用户实例覆盖仍由 `PluginProfileSettings` 保存。一个生效配置沿一个正式入口读写。路由、人格、请求、回执及投递重放账本继续由原宿主或人格 owner 管理。
 
+冷启动的存档准备读取同一实例配置选中的包版本，默认依次查找随包目录、`stateRoot/data/plugins/packages/` 的本机导入包及显式配置的扩展包目录。原生接口安装的新版本在重启后仍可准备存档，不要求它同时存在于随包目录；显式传入 `packageRoots` 时仍只使用该列表。缺失或损坏的包继续隔离，不跳过迁移失败。
+
 | 插件 | 默认存档 |
 | --- | --- |
 | DSH | 插件目录的 `credentials/`（含本地保护密钥）及 `auth.json` |

@@ -8,6 +8,8 @@ The historical native voice bridge assigns an available local port for TTS playb
 
 ## Current route
 
+SDK review on 2026-11-05: the Android Gradle dependencies now use CXR-L `1.1.2`, glasses bridge `1.8`, and Phone SDK / Glass3 Open SDK `2.6.2-P`. These are source dependency versions, not proof that installed phone packages or glasses firmware have been updated. AIUI is maintained separately from those Android dependencies. See [AIUI conversation and voice](../apps/rabilink-aiui/docs/aiui-voice-current_en.md) for current API contracts, tool versions and validation results. Other dated device records on this page remain historical evidence.
+
 ### Custom-command probe in the slim phone build
 
 `RokidProbeActivity` offers independent CXR-L diagnostics in the slim build: connect, query the glasses component, explicitly install the bundled component, start it, send one Ping, and copy logs. The target is `com.rabi.link.glass.video`; no recording-start command is sent. CXR/Bluetooth connectivity, a current installation query, and an application-start callback are required. A successful send return only means SDK acceptance; a Pong matching the current random requestId within 15 seconds proves the custom channel round trip. Disconnecting or leaving clears pending state.

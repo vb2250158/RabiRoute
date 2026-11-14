@@ -12,6 +12,8 @@ After the existing task-ownership check, Host returns immediately when logon aut
 
 The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
+Generation retirement waits for the original Job to become empty and for the original Manager and tray kernel process handles to confirm exit before releasing ownership or launching a replacement. If exit remains unconfirmed, Host revokes the Manager endpoint, retains those handles and the original cleanup operation, and keeps its control surface available in `faulted`. The original restart/quit operation receives `generation_exit_unconfirmed` with its original operationId. Fenced recovery resumes that same cleanup before replacement; faulted quit reports `stopped` only after confirmed exit. Identity reset cannot bypass this boundary.
+
 ## Process names, icons, and ownership
 
 The build writes product metadata and `assets/rabiroute-icon.ico` into the actual executables before manifest hashing. A command-line title does not replace executable identity.

@@ -21,11 +21,13 @@ Windows 稳定入口 `RabiRouteHost.exe` 按 `current.json` 定位本地 Host Co
 
 部署配置 `home-assistant-deployment.json` 可设置 `healthCheckIntervalMs`（默认 30000）、`recoveryCooldownMs`（默认 300000）、`recoveryMaxAttempts`（默认 3，范围 1–10）。失败冷却从恢复尝试结束时计算。检查的是基础设施健康，不轮询设备状态或推导业务意图。HTTP 正向就绪证据重置连续恢复预算；失败到达预算后只继续观测，不再修改虚拟机。人工点击启动可重新尝试。断线、恢复、耗尽分别进入既有事件投递和审计入口；所属人格未绑定时不猜测接收人。
 
-恢复只操作安装回执、VM Notes 与磁盘链共同确认的虚拟机。读取实际网卡 IP，检查来宾的 80 和 8123 端口；确认 HA 就绪后，由 Rabi 在本机动态分配回环端口并连接实际就绪的地址。旧版凭据仅在旧映射及虚拟机归属得到核验后迁移。Core 等待 90 秒仍不健康且 VM 原已运行时，一次恢复最多优雅关闭／启动一次 VM，再等 180 秒；关闭等待最多 90 秒，不强制断电。新启动的 VM 未就绪时保留现场，下轮有界恢复再判断。Core 恢复后重新读取 IP。`installed` 文件或 VM 在运行都不能代替 HTTP 就绪。
+恢复只操作安装回执、VM Notes 与磁盘链共同确认的虚拟机。自动路径只 Start/Observe：Running VM 的 Core 未就绪时只观察，不关闭或重启 VM。Off VM 启动前核对实际启动内存与宿主可用内存；内存不足或本次 Start-VM 的 0x800705AA 进入资源等待，按原冷却时间自动重检，不消耗预算。资源恢复后自动续起，无需页面点击。实际网卡与 Core 80/8123 就绪、旧映射及 VM 归属证明继续约束动态回环连接和凭据迁移。安装回执或 VM Running 均不代替 HTTP 就绪。
 
-HAOS 的 Core 启动依赖其 Supervisor 的正常启动链；若一次优雅重启仍不能恢复，Rabi 报错并遵守重试预算，不宣称恢复成功。未启用 SSH，也不向 Linux HAOS 使用 Windows PowerShell Direct。
+HAOS Core 仍依赖正常的 Supervisor 启动链。自动启动不重启运行中的 VM，以免中断拉取或更新；显式原生 Recover 兼容入口仍可执行原有一次优雅重启，禁止强制断电。每次操作只接受本次子进程唯一结构化结果，取消、非零退出或缺失／重复结果不冒充资源等待。预算属于当前 runtime 内存，不持久化。未启用 SSH，也不向 Linux HAOS 使用 Windows PowerShell Direct。
 
 事件 WebSocket 在授权／订阅阶段设置超时；订阅后每 30 秒发送 HA 协议 ping，超时未收到匹配 pong 则断开重连。状态提供最近事件时间、传输错误类别与投递状态；投递失败和没有匹配 Route 会进入统一审计，不把录像投递失败误报为抓取失败。已有正确绑定的小米消息 Route 才能收到 Agent 投递；只有账本追加不算投递成功。
+
+`scripts/Test-XiaomiHomePrerequisites.ps1` 默认通过当前 Manager 的身份围栏读取米家健康和部署端点，由 Manager 检查已有受保护授权；脚本不读取或转发 HA／录像环境令牌。显式 `-HomeAssistantBaseUrl` 仅做无凭据网络检查；地址与当前 owner 一致时复用 owner 的授权结果，否则授权状态为未检查。旧令牌环境参数只为调用兼容保留。`ffmpeg` 是录像依赖，`ffprobe` 仅提供可选元数据；连接健康不代表真实摄像头事件或录像已经验收。
 
 ## 摄像头与人格目录
 

@@ -20,11 +20,13 @@ The generic HTTP connection identity includes its original `authenticatedAt` tim
 
 ```powershell
 cd C:\Path\To\RabiRoute
-$env:RABILINK_RELAY_PORT = "8788"
+$env:RABILINK_RELAY_PORT = "0"
 node scripts/rabilink-relay-server.mjs
 ```
 
-For a direct launch, explicitly set `PORT` or `RABILINK_RELAY_PORT` to `0` to let the OS assign a port. After listening, Relay emits a `RABILINK_RELAY_READY` JSON record with the process ID, host and port. The existing default remains `8788` for compatibility. The current Windows deployment script and Caddy share a fixed internal port; changing only one side breaks forwarding.
+For a direct launch without `PORT` or `RABILINK_RELAY_PORT`, the OS assigns an available port. Explicit `0` uses the same allocation. After listening, Relay emits a `RABILINK_RELAY_READY` JSON record with the process ID, host and actual port; callers use that address. An explicitly configured nonzero port is preserved and startup fails if it is occupied. Windows deployment uses loopback `0`: the original Relay owner publishes its child READY/PID/start identity and actual port, and the original Caddy owner verifies that listener before rendering the upstream. Backend restarts revoke the old endpoint and restart only the owned Caddy child after it exits. Public `80`/`443` and explicit `PublicHttpPort` are unchanged.
+
+RuntimeOnly also updates the original service launchers. For a previously managed Caddy task it migrates only the known Relay route blocks into `Caddyfile.template`, preserving public addresses and custom routes; unrecognized legacy upstreams stop migration before replacement. The managed template disables the unneeded Caddy admin listener. `logs/relay-endpoint.json` is a revocable runtime discovery hint, never authority without current process and socket identity checks. A legacy child left running fences replacement.
 
 Read `/health`, then register an account and create an application at HTTPS `/manage`. Copy the PC enrollment prompt from the console; a private Agent on the target PC uses a short-lived single-use code to configure its connection. See [PC enrollment](rabilink-pc-pairing_en.md). Keep credentials out of public logs, examples and screenshots.
 

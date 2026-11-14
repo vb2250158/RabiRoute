@@ -6,7 +6,7 @@
 
 > Status: source migration and isolated HTTP/native-service tests. Full builds, installed applications, physical devices and cross-machine acceptance are confirmed separately.
 
-`io.rabiroute.manager.xiaomi-home` registers 53 exact endpoints through `createXiaomiHomeManagerOperations()`: 48 JSON operations, one HTML operation, one SSE operation and three native byte proxies. The same definitions execute requests and populate the active catalog. Original `home:METHOD:path` discovery IDs are derived as aliases, without adding routes. The old boolean HTTP handler, manual exact/prefix lists and dedicated HTTP tracker are removed.
+`io.rabiroute.manager.xiaomi-home` registers 54 exact endpoints through `createXiaomiHomeManagerOperations()`: 49 JSON operations, one HTML operation, one SSE operation and three native byte proxies. The same definitions execute requests and populate the active catalog. Original `home:METHOD:path` discovery IDs are derived as aliases, without adding routes. The old boolean HTTP handler, manual exact/prefix lists and dedicated HTTP tracker are removed.
 
 ## Endpoints and owners
 
@@ -19,7 +19,7 @@ Every path below starts with `/api/agent/xiaomi-home`. Counts are method/path pa
 | HA credentials | GET/POST/DELETE `/auth`; POST `/auth/refresh` | 4 |
 | Resources and devices | GET `/resources`, `/resources/:resourceId`, `/devices`, `/devices/:deviceId`, `/entity-actions`, `/capabilities` | 6 |
 | Actions and events | GET/POST `/action-requests`; POST `/events` | 3 |
-| Recorded files | GET/POST `/artifacts`; GET `/artifacts/lifecycle`, `/artifacts/:artifactId`, `/artifacts/:artifactId/content` (bytes) | 5 |
+| Recorded files | GET `/recordings/latest`; GET/POST `/artifacts`; GET `/artifacts/lifecycle`, `/artifacts/:artifactId`, `/artifacts/:artifactId/content` (bytes) | 6 |
 | Remote driving | GET `/vacuum-remote/capabilities`, `/vacuum-remote/status`; POST `/vacuum-remote/start`, `/pulse`, `/stop`, `/exit` (the last three share the same prefix) | 6 |
 | Cloud account and devices | GET `/vacuum-cloud/status`, `/vacuum-cloud/devices`; POST `/vacuum-cloud/login`, `/vacuum-cloud/login/poll` | 4 |
 | Cloud files and maps | GET `/vacuum-cloud/plugin-package`, `/plugin-information`, `/map`, `/path`, `/trajectory`, `/feedback`, `/position`, `/telemetry` (all under `/vacuum-cloud`) | 8 |
@@ -37,6 +37,12 @@ Before reading a body, the API captures the original ingress identity and checks
 Settings and deployment retain native revisions. Credential changes retain authorization revisions, joint candidate-address/token verification, protected storage and durable authentication mutation receipts. Logs, responses and discovery never include plaintext credentials. Device actions retain state versions and original receipts. After uncertainty, inspect the original key/session/action instead of creating another key or automatically replaying device or installation work. Registration adds no universal idempotency guarantee where the native owner has none.
 
 Reads declare ignored bodies. JSON operations retain empty-body `{}`, arbitrary Content-Type and no newly added application body cap. Malformed JSON now receives the common parser's 400 response; business fields remain native validations. Unsupported methods on registered paths receive 405 and `Allow`.
+
+## Latest role recording
+
+GET `/recordings/latest` requires current generation and Manager instance headers and returns `{artifact: null | {artifactId, ownerRoleId, mediaKind, occurredAt, byteLength, durationMs?}, settingsRevision}`. It uses the original ledger-derived latest MP4 for the saved `agentRoleId`, without local paths or cloud URLs. An unbound role or incomplete/conflicting evidence returns 409; no recording returns `artifact: null`.
+
+If `/artifacts/:artifactId/content` includes any of `expectedApplicationGenerationId`, `expectedManagerInstanceId`, `settingsRevision`, all three must be present exactly once. The original owner checks identity, revision and role before file access and access-audit writes, and while streaming; a mismatch returns 409. Existing unfenced reads remain compatible. The client rechecks `/meta` around metadata lookup, cancels old requests and clears the video source on close, unmount or role/settings changes, without creating a Blob or copying an authentication token.
 
 ## HTML, SSE and native bytes
 

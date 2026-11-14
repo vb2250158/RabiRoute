@@ -6,7 +6,7 @@
 
 > 状态：源码迁移与隔离 HTTP、原生服务测试。整包构建、安装版、真实跨机与家居设备验收分别确认。
 
-`io.rabiroute.manager.xiaomi-home` 通过 `createXiaomiHomeManagerOperations()` 注册 53 个精确入口：48 个 JSON 操作、1 个 HTML 操作、1 个 SSE 操作和 3 个原生字节代理。相同定义用于请求执行与活动目录；原 `home:METHOD:路径` 发现 ID 从定义派生为别名，不创建第二条路由。旧 bool HTTP handler、手写 exact/prefix 清单和专属 HTTP Tracker 已移除。
+`io.rabiroute.manager.xiaomi-home` 通过 `createXiaomiHomeManagerOperations()` 注册 54 个精确入口：49 个 JSON 操作、1 个 HTML 操作、1 个 SSE 操作和 3 个原生字节代理。相同定义用于请求执行与活动目录；原 `home:METHOD:路径` 发现 ID 从定义派生为别名，不创建第二条路由。旧 bool HTTP handler、手写 exact/prefix 清单和专属 HTTP Tracker 已移除。
 
 ## 入口与拥有者
 
@@ -19,7 +19,7 @@
 | HA 凭据 | GET/POST/DELETE `/auth`；POST `/auth/refresh` | 4 |
 | 资源与设备 | GET `/resources`、`/resources/:resourceId`、`/devices`、`/devices/:deviceId`、`/entity-actions`、`/capabilities` | 6 |
 | 动作与事件 | GET/POST `/action-requests`；POST `/events` | 3 |
-| 录像文件 | GET/POST `/artifacts`；GET `/artifacts/lifecycle`、`/artifacts/:artifactId`、`/artifacts/:artifactId/content`（字节） | 5 |
+| 录像文件 | GET `/recordings/latest`；GET/POST `/artifacts`；GET `/artifacts/lifecycle`、`/artifacts/:artifactId`、`/artifacts/:artifactId/content`（字节） | 6 |
 | 远程驾驶 | GET `/vacuum-remote/capabilities`、`/vacuum-remote/status`；POST `/vacuum-remote/start`、`/pulse`、`/stop`、`/exit`（后 3 项同前缀） | 6 |
 | 米家云账号与设备 | GET `/vacuum-cloud/status`、`/vacuum-cloud/devices`；POST `/vacuum-cloud/login`、`/vacuum-cloud/login/poll` | 4 |
 | 云文件与地图 | GET `/vacuum-cloud/plugin-package`、`/plugin-information`、`/map`、`/path`、`/trajectory`、`/feedback`、`/position`、`/telemetry`（同 `/vacuum-cloud` 前缀） | 8 |
@@ -37,6 +37,12 @@
 设置与部署保留原 revision。凭据变更保留原认证 revision、候选地址与令牌同次验证、受保护保存和持久认证 mutation 回执；日志、响应与目录不包含明文凭据。设备动作使用原状态版本和原动作回执。发生超时或结果不确定时，查询原 key/session/action，不生成替代键，不自动重放家居动作或安装操作。原服务未提供通用幂等的写入，不因注册合同而获得新的幂等承诺。
 
 读取操作声明忽略正文。JSON 操作保留原空正文 `{}`、任意 Content-Type 与无新增应用正文上限的读取规则；畸形 JSON 改由公共解析器返回 400，原生字段校验继续由原业务拥有者执行。已注册路径的不支持方法统一为 405 与 `Allow`。
+
+## 最新角色录像
+
+GET `/recordings/latest` 要求当前代际和 Manager 实例请求头，返回 `{artifact: null | {artifactId, ownerRoleId, mediaKind, occurredAt, byteLength, durationMs?}, settingsRevision}`。只读取当前已保存 `agentRoleId` 的原账本派生最新 MP4，不返回本机路径或云地址；未绑定角色或证据不完整、冲突返回 409。角色没有录像时返回 `artifact: null`。
+
+播放器沿原 Manager 资源 URL 读取 `/artifacts/:artifactId/content`。查询若含 `expectedApplicationGenerationId`、`expectedManagerInstanceId`、`settingsRevision` 中任意一项，必须三项齐全且各出现一次；原 owner 在文件和读取审计打开前及传输时复验代际、实例、设置与角色归属，失配 409。原无这些查询字段的读取保持兼容。客户端读取元数据前后复验 `/meta`，关闭、卸载或角色及设置变化时取消旧请求并清空视频来源；不创建 Blob 或复制鉴权 token。
 
 ## HTML、SSE 与原生字节
 

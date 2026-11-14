@@ -29,10 +29,10 @@
       ]
     }
   },
-  "gatewayPort": 8791,
-  "webhookPort": 8791,
+  "gatewayPort": 0,
+  "webhookPort": 0,
   "webhookPath": "/webhook",
-  "xiaoaiWebhookPort": 8791,
+  "xiaoaiWebhookPort": 0,
   "xiaoaiWebhookPath": "/xiaoai",
   "codexThreadName": "RabiRoute XiaoAI",
   "codexCwd": ".",

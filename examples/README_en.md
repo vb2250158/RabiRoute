@@ -40,24 +40,13 @@ The phone companion and glasses clients are independently buildable, testable, a
 
 ## Webhook demo
 
-Start a Route with the `webhook` message adapter and confirm its endpoint, for example:
+Start a Route with the `webhook` message adapter and copy its currently listening Webhook URL from the page. The service publishes its address; there is no default port.
 
-```text
-http://127.0.0.1:8791/webhook
-```
-
-Run either standard-library example:
+Pass that address as the first argument, or set `RABIROUTE_WEBHOOK_URL`. A missing URL fails immediately without sending a request.
 
 ```powershell
-node examples/send-webhook-demo.mjs
-python examples/send-webhook-demo.py
-```
-
-You can also pass the endpoint and message explicitly:
-
-```bash
-node examples/send-webhook-demo.mjs http://127.0.0.1:8791/webhook "Test task from an external system"
-python examples/send-webhook-demo.py http://127.0.0.1:8791/webhook "Test task from an external system"
+node examples/send-webhook-demo.mjs "$env:RABIROUTE_WEBHOOK_URL" "Test task from an external system"
+python examples/send-webhook-demo.py "$env:RABIROUTE_WEBHOOK_URL" "Test task from an external system"
 ```
 
 ## Public-data boundary

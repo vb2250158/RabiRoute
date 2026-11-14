@@ -12,6 +12,8 @@ stateRoot/data/plugins/<pluginId>/
 
 Application profiles supply public defaults; `PluginProfileSettings` remains the owner of user instance overrides. Each effective configuration has one read/write owner. Route, persona, request, receipt and delivery replay stores retain their original host or persona owners.
 
+Cold-start storage preparation resolves the version selected by the same instance settings. Its default search order includes bundled packages, locally imported packages under `stateRoot/data/plugins/packages/`, and explicitly configured extension roots. A version installed through the native API remains available after restart without also appearing in the bundle. An explicit `packageRoots` list still replaces these defaults. Missing or invalid packages remain isolated; migration failures are never bypassed.
+
 | Plugin | Default storage |
 | --- | --- |
 | DSH | Plugin `credentials/`, including its local protection key, and `auth.json` |

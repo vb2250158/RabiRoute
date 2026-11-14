@@ -31,7 +31,7 @@
       ]
     }
   },
-  "gatewayPort": 8789,
+  "gatewayPort": 0,
   "napcatHttpUrl": "http://127.0.0.1:3000",
   "napcatAccessToken": "",
   "heartbeatIntervalSeconds": 900,

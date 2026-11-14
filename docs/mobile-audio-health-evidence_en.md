@@ -19,3 +19,5 @@ These metrics cover the phone microphone only. Glasses input, missing/stale metr
 - Upload validation still targets the legacy stream ACK contract. Event-ASR receipts are not stream ACKs; missing stream-contract evidence cannot establish end-to-end event upload success.
 
 The helper tests use in-memory fixtures and never connect to a device. Real soak/fault scripts affect live environments and must not be run merely to validate these edits.
+
+When audio soak/fault scripts omit `-RabiSpeechBaseUrl`, each server observation resolves the online Speech owner through the current identity-verified Manager. Unavailable owners fail without guessing ports. Pass the option explicitly for an independent or remote service.

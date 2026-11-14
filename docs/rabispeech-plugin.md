@@ -16,7 +16,7 @@ RabiSpeech 是 RabiRoute 内、默认只监听回环地址的语音 Provider 服
 
 ```text
 本机或任意远端客户端
-  -> 本机 127.0.0.1:8781，或 RabiLink Relay + 通用应用 token
+  -> 本机语音 owner 发布的当前地址，或 RabiLink Relay + 通用应用 token
   -> RabiSpeech provider registry
   -> 本地 TTS / ASR worker，或显式启用的外部 API provider
   -> WAV 或转写结果
@@ -71,7 +71,9 @@ cd plugin-adapters\rabi-speech
 
 依赖和模型准备完成后，只启动已安装的 `RabiRouteHost.exe`，再通过 RibiWebGUI 的“语音服务”开关启用 RabiSpeech。Host 创建 Manager，Manager 的语音插件持有 RabiSpeech；插件停用、应用代重建或用户退出时，同代 RabiSpeech 必须随之停止。`scripts/start.ps1` 仅供受控诊断，`scripts/install-service.ps1` 已退役并会明确失败，不能再创建独立计划任务或登录启动入口。
 
-RabiSpeech 默认只监听 `http://127.0.0.1:8781`。首次启动生成 Git 忽略的 `config.json`；模型、参考音、输出和私有绝对路径均不提交。
+托管 RabiSpeech 默认绑定本机端口 `0`，由系统分配可用端口。Manager 在原进程完成就绪握手后发布实际地址，页面和请求使用该地址。显式配置的独立服务 URL 及非零端口继续保留。首次启动生成 Git 忽略的 `config.json`；模型、参考音、输出和私有绝对路径均不提交。
+
+`scripts/test-rabispeech-tts-loop.mjs` 省略 `--speech` 时，通过当前 Manager 的在线语音状态取得地址，前后核对同一运行代；尚未就绪会返回具体错误。独立服务可显式传入 `--speech <loopback-url>`，配合 `--skip-manager` 只验收语音服务。
 
 RibiWebGUI“语音服务”页顶部提供整页 RabiSpeech 滑轨。开启时，已鉴权的 Manager 通过当前工作区 `scripts/start.ps1` 设置 Python 与私有依赖环境，再启动正式的 `runtime/RabiSpeech.exe`；只有轻量 `/health` 成功后才展开模型、音频流、ASR、TTS、声纹和播放参数。模型清单和预热在健康检查之后继续，不会让已经在线的服务被误报为启动失败。若启动日志显示端口冲突，Manager 只在确认占用者属于当前工作区且健康检查仍离线时终止旧进程，并重试一次；其他占用者保持失败关闭。关闭时，Manager 先核验监听端口确实属于当前工作区的 `runtime/RabiSpeech.exe` 或 `windows_host.py`，再停止进程并收起全部参数。端口归属不明时失败关闭，绝不按端口盲杀其他服务。该开关当前只支持 Windows 主机；Manager 只读模式继续禁止启停。服务切换期间旧 SSE 短暂断开属于自动重连过程，不显示成操作失败，也不触发布局抖动；运行时配置刷新不会反向提交一次无意义的设置保存。
 

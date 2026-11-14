@@ -20,11 +20,13 @@ Relay 保存账号与凭据、设备连接登记、同应用目标目录、opaqu
 
 ```powershell
 cd C:\Path\To\RabiRoute
-$env:RABILINK_RELAY_PORT = "8788"
+$env:RABILINK_RELAY_PORT = "0"
 node scripts/rabilink-relay-server.mjs
 ```
 
-直接启动时可显式将 `PORT` 或 `RABILINK_RELAY_PORT` 设为 `0`，由系统分配端口；监听成功后输出 `RABILINK_RELAY_READY` JSON（含进程 ID、主机和端口）。未指定时仍使用兼容端口 `8788`。当前 Windows 部署脚本与 Caddy 共同配置固定的内部端口；仅更改其中一处会中断转发。
+直接启动且未指定 `PORT` 或 `RABILINK_RELAY_PORT` 时，由系统分配可用端口；显式设为 `0` 也使用系统分配。监听成功后输出 `RABILINK_RELAY_READY` JSON（含进程 ID、主机和实际端口），调用者使用该地址。显式指定的非零端口保持不变，占用时报告启动失败。Windows 部署固定使用回环地址与端口 `0`：原 Relay 启动器发布原子进程 READY、PID、启动身份和实际端口，原 Caddy 启动器核实实际监听后生成上游。后端重启撤销旧地址，等待原 Caddy 子进程退出后更新上游。公开 `80`/`443` 和显式 `PublicHttpPort` 保持原约定。
+
+RuntimeOnly 同时更新原有服务启动器；已有受管 Caddy 任务时，仅迁移已知 Relay 路由到 `Caddyfile.template`，保留公开地址与自定义路由；无法识别的旧上游会在代码替换前停止迁移。受管模板关闭不需要的 Caddy 管理监听。`logs/relay-endpoint.json` 是可撤销的运行发现提示，必须结合当前进程与套接字身份核实。残留旧子进程会阻止新实例启动。
 
 先读取 `/health`，再通过 HTTPS `/manage` 注册账号、创建应用。在控制台复制电脑接入提示词，由目标 PC 的私密 Agent 使用短期一次性接入码配置连接；见[电脑接入](rabilink-pc-pairing.md)。凭据不得出现在公开日志、示例或截图中。
 

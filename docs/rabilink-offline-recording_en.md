@@ -35,6 +35,10 @@ Reception, preview and recording run locally without Relay, a PC or online SDK a
 
 RTMP receives the stream; preview uses RTSP/TCP bound only to `127.0.0.1`. A random persistent stream key protects the publishing path. Configuration and logs are not uploaded. Other publishing paths and replacement of an active publisher are rejected.
 
+Without an explicit port setting, RTMP and preview use automatic ports. Saved preferences stay `0`; zero is never advertised as a connectable endpoint. The receiver directly tries random high-port candidates. Only matching success messages for both listeners from the original MediaMTX child publish the current streaming/preview addresses and start automatic glasses streaming. Stop, closure and original-process exit revoke those addresses. A bind conflict permits another candidate only after that same child has actually exited, with at most three launches; no probe-and-release socket or unrelated process termination is used. Saved positive ports remain strict and fail when occupied. Copy the currently displayed address for each new session.
+
+JVM regressions cover occupied legacy ports, actual child exit and the protocol. Android build and phone/glasses acceptance remain required; this does not replace the historical device evidence below.
+
 Fragmented MP4 recordings are segmented approximately once per minute and are not automatically deleted. Parts are written every second; termination, power loss or storage failure can lose the unfinished tail. Below 256 MiB free space, reception stops while existing files remain. Live preview is muted to avoid feedback, while recordings retain incoming audio. Preview failure does not stop recording.
 
 ## Device trial on 2026-09-08

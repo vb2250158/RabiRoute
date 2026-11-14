@@ -9,7 +9,7 @@
     "promptOutputMode": "voice_short",
     "ttsProvider": "local-tts",
     "ttsVoice": "Rabi",
-    "ttsWorkerUrl": "http://127.0.0.1:8781/v1/audio/speech",
+    "ttsWorkerUrl": "",
     "ttsPlay": true,
     "preventFeedbackLoop": true,
     "replyToSource": false
@@ -29,8 +29,8 @@
       ]
     }
   },
-  "gatewayPort": 8792,
-  "webhookPort": 8792,
+  "gatewayPort": 0,
+  "webhookPort": 0,
   "webhookPath": "/webhook",
   "routeVariables": {
     "speechAsrModel": "faster-whisper/small",

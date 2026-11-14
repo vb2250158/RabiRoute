@@ -31,10 +31,10 @@
       ]
     }
   },
-  "gatewayPort": 8794,
-  "webhookPort": 8794,
+  "gatewayPort": 0,
+  "webhookPort": 0,
   "webhookPath": "/webhook",
-  "rabiLinkWebhookPort": 8794,
+  "rabiLinkWebhookPort": 0,
   "rabiLinkWebhookPath": "/rabilink",
   "codexThreadName": "RabiLink Active Intelligence",
   "codexCwd": ".",

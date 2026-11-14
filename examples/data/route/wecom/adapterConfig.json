@@ -40,7 +40,7 @@
   "wecomWsUrl": "",
   "heartbeatIntervalSeconds": 900,
   "heartbeatMessage": "Scheduled heartbeat: inspect current plans, memory, and available runtime state.",
-  "gatewayPort": 8796,
+  "gatewayPort": 0,
   "codexThreadName": "WeCom message monitor",
   "codexCwd": ".",
   "agentModel": "",

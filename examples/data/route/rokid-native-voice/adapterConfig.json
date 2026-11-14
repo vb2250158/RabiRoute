@@ -33,12 +33,9 @@
       ]
     }
   },
-  "gatewayPort": 8795,
-  "webhookPort": 8795,
-  "webhookPath": "/webhook",
-  "fenneNoteWebhookPort": 8795,
-  "fenneNoteWebhookPath": "/fennenote",
-  "codexThreadName": "RabiRoute Rokid Native Voice",
+  "gatewayPort": 0,
+  "webhookPort": 0,
+  "webhookPath": "/webhook",  "codexThreadName": "RabiRoute Rokid Native Voice",
   "codexCwd": ".",
   "agentRoleFile": "persona.md",
   "agentAdapters": [

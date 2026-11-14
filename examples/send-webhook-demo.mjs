@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
-const endpoint = process.argv[2] || process.env.RABIROUTE_WEBHOOK_URL || "http://127.0.0.1:8791/webhook";
+const endpoint = (process.argv[2] || process.env.RABIROUTE_WEBHOOK_URL || "").trim();
+if (!endpoint) {
+  console.error("Webhook URL is required: pass the current Route endpoint as the first argument or set RABIROUTE_WEBHOOK_URL.");
+  process.exit(1);
+}
 const text = process.argv[3] || "Hello from RabiRoute Node.js webhook demo";
 
 const payload = {

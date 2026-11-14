@@ -22,7 +22,7 @@
   },
   "weixinBaseUrl": "https://ilinkai.weixin.qq.com",
   "weixinBotType": "3",
-  "gatewayPort": 8796,
+  "gatewayPort": 0,
   "agentRoleId": "Rabi",
   "rolesDir": "./data/roles",
   "dataDir": "./data/route/weixin",

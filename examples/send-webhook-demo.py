@@ -8,7 +8,9 @@ import urllib.error
 import urllib.request
 
 
-endpoint = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("RABIROUTE_WEBHOOK_URL", "http://127.0.0.1:8791/webhook")
+endpoint = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("RABIROUTE_WEBHOOK_URL", "")).strip()
+if not endpoint:
+    sys.exit("Webhook URL is required: pass the current Route endpoint as the first argument or set RABIROUTE_WEBHOOK_URL.")
 text = sys.argv[2] if len(sys.argv) > 2 else "Hello from RabiRoute Python webhook demo"
 
 payload = {

@@ -40,24 +40,13 @@ cp -R examples/data/. data/
 
 ## Webhook 发送示例
 
-先启动一条包含 `webhook` 消息端的 Route，并确认它监听的地址，例如：
+启动包含 `webhook` 消息端的 Route，从页面复制当前已监听的 Webhook URL。地址由服务发布，不使用默认端口。
 
-```text
-http://127.0.0.1:8791/webhook
-```
-
-使用零依赖的 Node.js 或 Python 示例：
+将实际地址作为第一个参数；也可通过 `RABIROUTE_WEBHOOK_URL` 提供。缺少地址时脚本立即报错，不发送请求。
 
 ```powershell
-node examples/send-webhook-demo.mjs
-python examples/send-webhook-demo.py
-```
-
-也可以显式传入 endpoint 和正文：
-
-```bash
-node examples/send-webhook-demo.mjs http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
-python examples/send-webhook-demo.py http://127.0.0.1:8791/webhook "来自外部系统的测试任务"
+node examples/send-webhook-demo.mjs "$env:RABIROUTE_WEBHOOK_URL" "来自外部系统的测试任务"
+python examples/send-webhook-demo.py "$env:RABIROUTE_WEBHOOK_URL" "来自外部系统的测试任务"
 ```
 
 ## 公开安全边界
