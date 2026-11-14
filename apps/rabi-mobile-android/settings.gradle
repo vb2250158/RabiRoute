@@ -30,3 +30,6 @@ rootProject.name = "RabiLinkProbe"
 include ":app"
 include ":glass-app"
 include ":glass-video-app"
+
+include ":phone-eye-transport"
+project(":phone-eye-transport").projectDir = file("../../packages/phone-eye-transport-android")

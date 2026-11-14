@@ -13,6 +13,7 @@
 ## 当前能力
 
 - 扫描局域网内的 RabiRoute Manager 和 RabiLink callback。
+- 默认先验证 Manager 身份，再从当前公开 API 目录读取 RabiLink callback 的实际监听地址和路径；不扫描固定 callback 端口。`discoverRabiLinkCallbacks(instance)` 可读取单个已核验实例的当前目录，目录换代或分页快照变化时拒绝沿用旧地址。
 - 读取实例 GUID、名称、设备信息和版本。
 - 按实例读取 Route、Agent 工作目录和任务选项，并更新 Agent 绑定。
 - 向本地 RabiLink callback 投递消息、发送回复、拉取下行消息并执行双向 smoke test。
@@ -21,6 +22,8 @@
 - 发布便携设备 observation、拉取主动/普通下行消息和上报设备状态。
 
 这些 API 是同步调用。Android 应用应在后台线程使用，并自行处理网络权限、生命周期、超时和用户授权。
+
+`rabiLinkPorts` 默认为空；调用方显式传入的端口列表仍用于旧服务兼容扫描。显式 callback URL 保留自定义路径，省略端口时遵循 HTTP/HTTPS 的标准端口，不替换成产品端口。发现结果是读取当时的快照，连接换代后应重新发现。
 
 ## 局域网监听
 

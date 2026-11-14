@@ -17,7 +17,7 @@ import org.json.JSONObject;
 /** Dedicated text-only entry: no microphone, camera, speech SDK, or capture startup. */
 public final class GlassTextActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final CXRServiceBridge bridge = new CXRServiceBridge();
+    private CXRServiceBridge bridge;
     private TextView textView;
     private JSONObject pending;
     private boolean destroyed;
@@ -25,6 +25,7 @@ public final class GlassTextActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        bridge = new CXRServiceBridge(getApplicationContext());
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         textView = new TextView(this); textView.setTextColor(Color.WHITE); textView.setTextSize(24);
         textView.setPadding(20, 16, 20, 16);

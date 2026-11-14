@@ -9,7 +9,7 @@ param(
 
     [int]$MaximumConsecutiveUnhealthySamples = 1,
 
-    [string]$RabiSpeechBaseUrl = "http://127.0.0.1:8781",
+    [string]$RabiSpeechBaseUrl = "",
 
     [string]$ExpectedSourceDeviceId = "rabi-phone",
 
@@ -19,6 +19,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'Resolve-RabiSpeechEndpoint.ps1')
+# Fail before ADB/network fault actions if the target owner is unavailable.
+[void](Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)
 $packageName = "com.rabi.link"
 $metricsFile = "shared_prefs/rabi_phone_audio_capture.xml"
 
@@ -31,6 +34,7 @@ if ($RequestTimeoutSeconds -lt 1) { throw "RequestTimeoutSeconds must be at leas
 $adbCommand = Get-Command adb -ErrorAction SilentlyContinue
 $adb = if ($null -ne $adbCommand) { $adbCommand.Source } else { "" }
 $RabiSpeechBaseUrl = $RabiSpeechBaseUrl.TrimEnd("/")
+$resolvedRabiSpeechBaseUrl = ""
 if (-not $OutputDirectory) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $OutputDirectory = Join-Path $PSScriptRoot "..\out\mobile-audio-soak-$stamp"
@@ -75,7 +79,8 @@ function Read-CaptureMetrics {
 
 function Read-AudioStreamStatus {
     try {
-        $snapshot = Invoke-RestMethod -Uri "$RabiSpeechBaseUrl/v1/audio-streams" -TimeoutSec $RequestTimeoutSeconds
+        $script:resolvedRabiSpeechBaseUrl = Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl
+        $snapshot = Invoke-RestMethod -Uri "$script:resolvedRabiSpeechBaseUrl/v1/audio-streams" -TimeoutSec $RequestTimeoutSeconds
         $clients = @($snapshot.clients)
         $client = $null
         if ($ExpectedSourceDeviceId) {
@@ -354,7 +359,8 @@ $summary = [ordered]@{
     passed = $passed
     serial = $Serial
     packageName = $packageName
-    rabiSpeechBaseUrl = $RabiSpeechBaseUrl
+    rabiSpeechBaseUrl = $resolvedRabiSpeechBaseUrl
+    configuredRabiSpeechBaseUrl = $RabiSpeechBaseUrl
     expectedSourceDeviceId = $ExpectedSourceDeviceId
     startedAt = $startedAt.ToString("o")
     endedAt = $endedAt.ToString("o")

@@ -112,7 +112,7 @@ tasks.register("prepareLiveRecorderRuntime", Exec) {
 }
 tasks.register("generateMobileTheme", Exec) {
     workingDir rootProject.projectDir
-    commandLine "node", "scripts/generate-mobile-theme.mjs"
+    commandLine "node", "scripts/generate-mobile-theme.mjs", "$buildDir/generated/mobileTheme"
     inputs.files(rootProject.file("../../ribiwebgui/src/themes/light/tokens.css"), rootProject.file("../../ribiwebgui/src/themes/dark/tokens.css"), rootProject.file("scripts/generate-mobile-theme.mjs"))
     outputs.dir("$buildDir/generated/mobileTheme")
 }
@@ -141,6 +141,7 @@ tasks.register("copyGlassVideoDebugApk", Copy) {
 }
 
 dependencies {
+    implementation project(":phone-eye-transport")
     implementation "org.java-websocket:Java-WebSocket:1.6.0"
     // Pure location release; later engine/model bundles exceed the mobile package budget.
     implementation "com.amap.api:location:6.5.1"
@@ -153,17 +154,17 @@ dependencies {
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
     implementation "androidx.activity:activity-ktx:1.7.2"
     implementation "androidx.health.connect:connect-client:1.1.0-alpha07"
-    implementation "com.rokid.cxr:client-l:1.1.0"
+    implementation "com.rokid.cxr:client-l:1.1.2"
     if (mobileSlim) {
         // Camera streaming needs the Phone SDK at runtime. Inference-only
         // diagnostic libraries below remain compile-only; RabiPC owns ASR/TTS.
         if (rokidVideo) {
-            implementation("com.rokid.security:phone.sdk:2.5.1-P") {
+            implementation("com.rokid.security:phone.sdk:2.6.2-P") {
                 exclude group: "org.slf4j"
                 exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
             }
         } else {
-            compileOnly("com.rokid.security:phone.sdk:2.5.1-P") {
+            compileOnly("com.rokid.security:phone.sdk:2.6.2-P") {
                 exclude group: "org.slf4j"
                 exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
             }
@@ -173,7 +174,7 @@ dependencies {
         compileOnly(name: "nlpconsumer-1.4.3", ext: "aar")
         compileOnly(name: "audioai-1.4.3", ext: "aar")
     } else {
-        implementation("com.rokid.security:phone.sdk:2.5.1-P") {
+        implementation("com.rokid.security:phone.sdk:2.6.2-P") {
             exclude group: "org.slf4j"
             // Rokid 链会传递引入 bcprov-jdk15on:1.69，与上面显式声明的
             // bcprov-jdk18on:1.77 是两个不同 artifact 坐标，Gradle 冲突解析

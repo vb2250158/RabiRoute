@@ -8,7 +8,8 @@ import { execFileSync } from 'node:child_process';
 const version = '1.21.0';
 const archiveHash = 'a8113b5928ba1a934b81557b61b8a07954b76921a4b567d54c7f086f8b39d9a2';
 const binaryHash = 'e47c58c398adbcaa2cbd545fdd908b9c2e36db4c7a4590fd2e746d3cbf28ae6b';
-const root = fileURLToPath(new URL('../out/live-recorder/', import.meta.url));
+// Windows child-process argument quoting must not receive a trailing backslash.
+const root = path.resolve(fileURLToPath(new URL('../out/live-recorder/', import.meta.url)));
 const binary = path.join(root, 'jniLibs/arm64-v8a/libmediamtx.so');
 const license = path.join(root, 'assets/third_party/mediamtx-LICENSE.txt');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');

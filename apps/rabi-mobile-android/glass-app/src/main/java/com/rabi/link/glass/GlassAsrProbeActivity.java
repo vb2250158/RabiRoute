@@ -770,7 +770,7 @@ public class GlassAsrProbeActivity extends Activity {
 
     private void initCustomCmdBridge() {
         try {
-            cxrBridge = new CXRServiceBridge();
+            cxrBridge = new CXRServiceBridge(getApplicationContext());
             cxrBridge.setStatusListener(cxrStatusListener);
             int result = cxrBridge.subscribe(CUSTOM_CMD_CLIENT_KEY, customCmdCallback);
             append("CXR custom cmd subscribed key=" + CUSTOM_CMD_CLIENT_KEY + " result=" + result);

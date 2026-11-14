@@ -16,4 +16,10 @@ public class RabiGlassVideoProtocolTest {
         assertFalse(RabiGlassVideoProtocol.isLocalReceiver("rtmp://10.0.0.1:1936/rabi/wrong"));
         assertFalse(RabiGlassVideoProtocol.isLocalReceiver("rtmp://10.0.0.1:80/rabi/0123456789abcdef0123456789abcdef"));
     }
+    @Test public void acceptsPublishedDynamicPortsButRejectsInvalidOrPrivilegedPorts() {
+        for (int port : new int[]{1024, 49152, 63341, 65535})
+            assertTrue(RabiGlassVideoProtocol.isLocalReceiver("rtmp://192.168.4.1:" + port + "/rabi/0123456789abcdef0123456789abcdef"));
+        for (String port : new String[]{"", ":0", ":80", ":1023", ":65536", ":-1"})
+            assertFalse(RabiGlassVideoProtocol.isLocalReceiver("rtmp://192.168.4.1" + port + "/rabi/0123456789abcdef0123456789abcdef"));
+    }
 }

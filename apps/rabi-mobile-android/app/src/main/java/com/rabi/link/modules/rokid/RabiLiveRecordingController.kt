@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import com.rabi.link.recording.RecordingStore
+import com.rabi.link.recording.LocalMediaReceiverStartup
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -26,7 +27,7 @@ class RabiLiveRecordingController(
     private val onStopped: () -> Unit
 ) : ContextWrapper(context.applicationContext), AutoCloseable {
     private val mediaSettings = com.rabi.link.recording.LocalMediaSettings.load(context)
-    val previewUrl: String get() = "rtsp://127.0.0.1:${mediaSettings.previewPort}/rabi/$streamKey"
+    val previewUrl: String get() = publishedAttempt()?.let { "rtsp://127.0.0.1:${it.previewPort}/rabi/$streamKey" } ?: ""
     private val main = Handler(Looper.getMainLooper())
     private var process: Process? = null
     var active = false; private set
@@ -38,7 +39,9 @@ class RabiLiveRecordingController(
     private var videoController: RabiGlassVideoController? = null
     private var observer: FileObserver? = null
     private var wake: PowerManager.WakeLock? = null
-    private var delayedStart: Runnable? = null
+    private var startupTimeout: Runnable? = null
+    private var receiverStartup: LocalMediaReceiverStartup? = null
+    @Volatile private var receiverAttempt: LocalMediaReceiverStartup.Attempt? = null
     private val listeners = mutableSetOf<() -> Unit>()
     fun listen(listener: () -> Unit) = onMain { if (!closed) { listeners.add(listener); listener() } }
     fun unlisten(listener: () -> Unit) = onMain { listeners.remove(listener) }
@@ -54,13 +57,21 @@ class RabiLiveRecordingController(
         }
     }
 
-    fun urls(): List<String> = try {
+    private fun localAddresses(): List<String> = try {
         NetworkInterface.getNetworkInterfaces().toList()
             .filter { it.isUp && !it.isLoopback && !it.name.startsWith("tun") && !it.name.startsWith("rmnet") }
             .flatMap { it.inetAddresses.toList() }
             .filter { it is Inet4Address && it.isSiteLocalAddress }
-            .map { "rtmp://${it.hostAddress}:${mediaSettings.rtmpPort}/rabi" }.distinct()
+            .mapNotNull { it.hostAddress }.distinct()
     } catch (_: Exception) { emptyList() }
+
+    private fun publishedAttempt(): LocalMediaReceiverStartup.Attempt? = receiverAttempt
+        ?.takeIf { active && running && !stopping && !closed && it.ready() }
+
+    fun urls(): List<String> {
+        val attempt = publishedAttempt() ?: return emptyList()
+        return localAddresses().map { "rtmp://$it:${attempt.rtmpPort}/rabi" }
+    }
 
     private fun onMain(action: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) action() else main.post { action() }
@@ -79,6 +90,8 @@ class RabiLiveRecordingController(
         if (closed || active) return@onMain
         active = true; saveSucceeded = false; stopping = false; forcedStop = false; receivedAt = 0L; sessionId = ""
         val epoch = ++generation
+        val startup = LocalMediaReceiverStartup(mediaSettings.rtmpPort, mediaSettings.previewPort)
+        receiverStartup = startup
         // Create the manifest and launch the receiver away from the UI thread.
         Thread({
             var id = ""
@@ -87,15 +100,16 @@ class RabiLiveRecordingController(
                 id = entry.id
                 val directory = entry.directory
                 check(directory.usableSpace >= RESERVE) { "space" }
-                check(urls().isNotEmpty()) { "network" }
+                check(localAddresses().isNotEmpty()) { "network" }
                 val executable = File(applicationInfo.nativeLibraryDir, "libmediamtx.so")
                 val config = File(filesDir, "rabi-live-recorder.yml")
-                config.writeText(configuration(directory))
+                val attempt = startup.first()
+                config.writeText(configuration(directory, attempt))
                 // The main thread grants process launch only if this generation is live.
                 main.post {
                     if (closed || stopping || generation != epoch) {
                         finishWithoutProcess(epoch, id, "已停止，录像保存在本机")
-                    } else launch(epoch, id, directory, executable, config, auto)
+                    } else launch(epoch, id, directory, executable, config, auto, attempt)
                 }
             } catch (error: Exception) {
                 val reason = when (error.message) {
@@ -109,7 +123,8 @@ class RabiLiveRecordingController(
         update("正在准备本地接收")
     }
 
-    private fun launch(epoch: Long, id: String, directory: File, executable: File, config: File, auto: Boolean) {
+    private fun launch(epoch: Long, id: String, directory: File, executable: File, config: File, auto: Boolean,
+                       attempt: LocalMediaReceiverStartup.Attempt) {
         sessionId = id
         try {
             // The shell writes its kernel start identity before exec; exec retains PID/starttime.
@@ -119,9 +134,10 @@ class RabiLiveRecordingController(
                 "cat /proc/\u0024\u0024/stat > \"\u00243.partial\" && mv \"\u00243.partial\" \"\u00243\" && exec \"\u00241\" \"\u00242\"",
                 "rabi-receiver", executable.absolutePath, config.absolutePath, proof.absolutePath)
                 .directory(filesDir).redirectErrorStream(true).start()
-            process = owned; running = true
+            attempt.attach(owned)
+            process = owned; running = true; receiverAttempt = attempt
             // Install the exit/save waiter before any optional resources can fail.
-            watchProcess(epoch, id, owned)
+            watchProcess(epoch, id, directory, executable, config, auto, attempt, owned)
             wake = (getSystemService(Context.POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RabiLink:LocalRecording").apply { acquire() }
             val streamDirectory = File(directory, "rabi/$streamKey").apply { mkdirs() }
@@ -137,31 +153,65 @@ class RabiLiveRecordingController(
                 }
             }.also { it.startWatching() }
             update("正在启动本地接收")
-            if (auto && !closed && !stopping && active && generation == epoch) {
-                val controller = RabiGlassVideoController(this, { urls().map { "$it/$streamKey" } }, { message ->
-                    main.post { if (!closed && !stopping && generation == epoch && !receiving) update(message) }
-                })
-                videoController = controller
-                delayedStart = Runnable {
-                    if (!closed && !stopping && active && generation == epoch && videoController === controller) controller.start()
-                }.also { main.postDelayed(it, 1000) }
-            }
+            startupTimeout = Runnable {
+                if (process === owned && generation == epoch && !attempt.ready() && !stopping)
+                    stopInternal("本地接收器尚未就绪，正在停止并保存")
+            }.also { main.postDelayed(it, com.rabi.link.transport.ScopedManagerTimeouts.active(this).get("android.recording.start",15000)) }
         } catch (_: Exception) {
             if (process != null) stopInternal("本地接收器启动失败，正在保存")
             else finishWithoutProcess(epoch, id, "本地接收器启动失败")
         }
     }
 
-    private fun watchProcess(epoch: Long, id: String, owned: Process) {
+    private fun receiverReady(epoch: Long, owned: Process, attempt: LocalMediaReceiverStartup.Attempt, auto: Boolean) {
+        if (process !== owned || generation != epoch || !active || closed || stopping || !attempt.ready()) return
+        startupTimeout?.let { main.removeCallbacks(it) }; startupTimeout = null
+        update("等待眼镜推流；无需互联网")
+        if (auto && videoController == null) {
+            try {
+                val controller = RabiGlassVideoController(this, { urls().map { "$it/$streamKey" } }, { message ->
+                    main.post { if (!closed && !stopping && generation == epoch && !receiving) update(message) }
+                })
+                videoController = controller
+                controller.start()
+            } catch (_: Exception) {
+                runCatching { videoController?.close() }; videoController = null
+                update("本地接收已就绪；眼镜自动开播失败，可手动开播")
+            }
+        }
+    }
+
+    private fun prepareRetry(epoch: Long, id: String, directory: File, executable: File, config: File,
+                             auto: Boolean, attempt: LocalMediaReceiverStartup.Attempt) {
+        update("接收端口被占用，正在重新分配（${attempt.number}/3）")
+        Thread({
+            try {
+                config.writeText(configuration(directory, attempt))
+                main.post {
+                    if (closed || stopping || generation != epoch) finishWithoutProcess(epoch, id, "已停止，录像保存在本机")
+                    else launch(epoch, id, directory, executable, config, auto, attempt)
+                }
+            } catch (_: Exception) {
+                main.post { finishWithoutProcess(epoch, id, "本地接收器准备失败，已有文件保留") }
+            }
+        }, "rabi-video-retry").start()
+    }
+
+    private fun watchProcess(epoch: Long, id: String, directory: File, executable: File, config: File,
+                             auto: Boolean, attempt: LocalMediaReceiverStartup.Attempt, owned: Process) {
         Thread({
             var failed = false
+            var readyReported = false
             try {
                 owned.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
+                    if (attempt.observe(line) && !readyReported) {
+                        readyReported = true
+                        main.post { receiverReady(epoch, owned, attempt, auto) }
+                    }
                     if (line.contains("ERR")) failed = true
                     val publishing = line.contains("is publishing")
                     val segmentStopped = line.contains("recording") && line.contains("stopped")
                     val message = when {
-                        line.contains("listener opened") -> "等待眼镜推流；无需互联网"
                         publishing -> "正在接收并录像（手机本地）"
                         segmentStopped -> "本段录像已保存，等待下一次推流"
                         line.contains("ERR") -> "接收器异常；请检查端口、空间及视频格式"
@@ -169,7 +219,8 @@ class RabiLiveRecordingController(
                     }
                     if (message != null) main.post {
                         if (process === owned && generation == epoch && !stopping && !closed) {
-                            if (publishing) { receiving = true; if (receivedAt == 0L) receivedAt = System.currentTimeMillis() }
+                            if (publishing && !attempt.ready()) return@post
+                            if (publishing && attempt.ready()) { receiving = true; if (receivedAt == 0L) receivedAt = System.currentTimeMillis() }
                             if (segmentStopped) receiving = false
                             update(message)
                         }
@@ -183,13 +234,26 @@ class RabiLiveRecordingController(
             val processFailed = failed
             main.post {
                 if (process === owned && generation == epoch) {
+                    // A bind retry is admitted only after this same original child
+                    // completed waitFor; no probe socket or unrelated PID is stopped.
+                    var retryAllocationFailed = false
+                    val nextAttempt = try {
+                        if (!closed && !stopping && active) receiverStartup?.retryAfterExit(attempt, owned) else null
+                    } catch (_: IllegalStateException) { retryAllocationFailed = true; null }
                     process = null; running = false; receiving = false
                     releaseResources()
+                    if (nextAttempt != null) {
+                        prepareRetry(epoch, id, directory, executable, config, auto, nextAttempt)
+                        return@post
+                    }
                     val normal = stopping && !forcedStop && !processFailed
                     // SIGTERM commonly exits non-zero even after successful finalization.
                     // An unexpected exit or forced timeout is never labelled saved.
                     saveAndComplete(epoch, id, if (normal) "saved" else "interrupted",
-                        if (normal) "已停止，录像保存在本机" else "接收已结束，保留已写入录像")
+                        if (normal) "已停止，录像保存在本机"
+                        else if (retryAllocationFailed) "无法分配接收端口，已有文件保留"
+                        else if (attempt.portConflict()) "接收端口被占用，已有文件保留"
+                        else "接收已结束，保留已写入录像")
                 }
             }
         }, "rabi-video-receiver").start()
@@ -232,7 +296,8 @@ class RabiLiveRecordingController(
         }, "rabi-video-stop").start()
     }
     private fun releaseResources() {
-        delayedStart?.let { main.removeCallbacks(it) }; delayedStart = null
+        receiverAttempt?.retire(); receiverAttempt = null
+        startupTimeout?.let { main.removeCallbacks(it) }; startupTimeout = null
         videoController?.close(); videoController = null
         observer?.stopWatching(); observer = null
         wake?.let { if (it.isHeld) it.release() }; wake = null
@@ -240,12 +305,12 @@ class RabiLiveRecordingController(
     override fun close() = onMain {
         if (closed) return@onMain
         closed = true
-        listeners.clear()
         stopInternal("正在关闭并保存录像")
         releaseResources()
+        listeners.clear()
     }
 
-    private fun configuration(directory: File): String = """
+    private fun configuration(directory: File, attempt: LocalMediaReceiverStartup.Attempt): String = """
         logLevel: info
         logDestinations: [stdout]
         api: false
@@ -253,13 +318,13 @@ class RabiLiveRecordingController(
         pprof: false
         playback: false
         rtsp: true
-        rtspAddress: 127.0.0.1:${mediaSettings.previewPort}
+        rtspAddress: 127.0.0.1:${attempt.previewPort}
         rtspTransports: [tcp]
         hls: false
         webrtc: false
         srt: false
         rtmp: true
-        rtmpAddress: 0.0.0.0:${mediaSettings.rtmpPort}
+        rtmpAddress: 0.0.0.0:${attempt.rtmpPort}
         authInternalUsers:
           - user: any
             pass:

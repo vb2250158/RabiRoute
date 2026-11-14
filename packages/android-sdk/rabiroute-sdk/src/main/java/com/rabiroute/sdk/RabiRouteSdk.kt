@@ -198,7 +198,7 @@ data class RabiAgentBinding(
 
 class RabiRouteSdk @JvmOverloads constructor(
     private val managerBaseUrls: List<String> = emptyList(),
-    private val rabiLinkPorts: List<Int> = listOf(8794),
+    private val rabiLinkPorts: List<Int> = emptyList(),
     private val timeoutMs: Int = 650,
     private val managerTransport: RabiLinkManagerHttpTransport? = null,
     private val discoveryTimeout: (String,Long)->Long = { _, fallback -> fallback }
@@ -293,27 +293,51 @@ class RabiRouteSdk @JvmOverloads constructor(
     }
 
     fun scanRabiLinkCallbacks(context: Context): List<RabiLinkEndpoint> {
+        val managers = if (rabiLinkPorts.isEmpty()) scanLan(context)
+            else runCatching { scanLan(context) }.getOrDefault(emptyList())
+        val published = managers.flatMap(::discoverRabiLinkCallbacks)
+        if (rabiLinkPorts.isEmpty()) return published.distinctBy { it.url }
+        // Existing explicit scan ports remain a caller-selected compatibility path.
+        require(rabiLinkPorts.size <= 32 && rabiLinkPorts.all { it in 1..65535 }) { "Explicit callback scan ports are invalid" }
         val hosts = candidateHosts(context)
         val executor = Executors.newFixedThreadPool(32)
         val results = Collections.synchronizedList(ArrayList<RabiLinkEndpoint>())
-        for (host in hosts) {
-            for (port in rabiLinkPorts.distinct()) {
-                executor.submit {
-                    probeRabiLinkCallback(host, port)?.let { results.add(it) }
-                }
-            }
+        results.addAll(published)
+        for (host in hosts) for (port in rabiLinkPorts.distinct()) {
+            executor.submit { probeRabiLinkCallback(host, port)?.let { results.add(it) } }
         }
         executor.shutdown()
-        executor.awaitTermination(discoveryTimeout("android.discovery.scan",(timeoutMs.toLong() * hosts.size.coerceAtMost(254) / 8L).coerceAtLeast(1500L)), TimeUnit.MILLISECONDS)
-        return results.sortedWith(compareBy<RabiLinkEndpoint> { !it.ok }.thenBy { it.host }.thenBy { it.port })
+        val completed = executor.awaitTermination(discoveryTimeout("android.discovery.scan",
+            (timeoutMs.toLong() * hosts.size.coerceAtMost(254) / 8L).coerceAtLeast(1500L)), TimeUnit.MILLISECONDS)
+        if (!completed) executor.shutdownNow()
+        return results.distinctBy { it.url }.sortedWith(compareBy<RabiLinkEndpoint> { !it.ok }.thenBy { it.host }.thenBy { it.port })
+    }
+
+    fun discoverRabiLinkCallbacks(instance: RabiInstance): List<RabiLinkEndpoint> {
+        var snapshot: String? = null
+        var cursor = ""
+        val cursors = HashSet<String>()
+        val urls = LinkedHashSet<String>()
+        for (pageNumber in 0 until 16) {
+            val query = "method=GET&limit=200" + if (cursor.isEmpty()) "" else "&cursor=" + encodeQuery(cursor)
+            val response = getManagerJson(instance, instance.baseUrl + "/api/agent/help?" + query)
+            val page = RabiLinkCallbackDiscovery.readPage(instance.baseUrl, instance.applicationGenerationId,
+                instance.managerInstanceId, response, snapshot)
+            snapshot = page.snapshot
+            urls.addAll(page.urls)
+            require(urls.size <= 64) { "Callback discovery exceeds its endpoint limit" }
+            cursor = page.nextCursor
+            if (cursor.isEmpty()) return urls.map { probeRabiLinkCallback(it) }
+            require(cursors.add(cursor)) { "Callback catalog repeated a pagination cursor" }
+        }
+        error("Callback catalog exceeds its pagination limit")
     }
 
     fun probeRabiLinkCallback(baseUrl: String): RabiLinkEndpoint {
-        val trimmed = baseUrl.trimEnd('/')
-        val url = if (trimmed.endsWith("/rabilink")) trimmed else "$trimmed/rabilink"
-        val parsed = URL(url)
-        return probeRabiLinkCallback(parsed.host, parsed.port.takeIf { it > 0 } ?: 8794)
-            ?: RabiLinkEndpoint(url, parsed.host, parsed.port.takeIf { it > 0 } ?: 8794, false, "unreachable", "No response")
+        val parsed = RabiLinkCallbackDiscovery.callbackUrl(baseUrl)
+        val port = if (parsed.port == -1) parsed.defaultPort else parsed.port
+        return probeCallbackAt(parsed)
+            ?: RabiLinkEndpoint(parsed.toExternalForm(), parsed.host, port, false, "unreachable", "No response")
     }
 
     fun readIdentity(baseUrl: String): RabiInstance {
@@ -412,8 +436,7 @@ class RabiRouteSdk @JvmOverloads constructor(
     ): JSONObject = throw UnsupportedOperationException(LEGACY_ROUTE_MUTATION_MESSAGE)
 
     fun deliverRabiLinkMessage(callbackUrl: String, text: String, routeId: String? = null): RabiLinkDeliveryResult {
-        val trimmed = callbackUrl.trimEnd('/')
-        val url = if (trimmed.endsWith("/rabilink")) trimmed else "$trimmed/rabilink"
+        val url = RabiLinkCallbackDiscovery.callbackUrl(callbackUrl).toExternalForm()
         val payload = JSONObject()
             .put("type", "rabilink")
             .put("source", "rabilink-phone-probe")
@@ -457,8 +480,7 @@ class RabiRouteSdk @JvmOverloads constructor(
 
     fun getRabiLinkReplies(callbackUrl: String, routeId: String, limit: Int = 10, afterId: String = ""): JSONObject {
         val safeLimit = limit.coerceIn(1, 100)
-        val trimmed = callbackUrl.trimEnd('/')
-        val base = if (trimmed.endsWith("/rabilink")) trimmed else "$trimmed/rabilink"
+        val base = RabiLinkCallbackDiscovery.callbackUrl(callbackUrl).toExternalForm()
         val after = if (afterId.isBlank()) "" else "&afterId=${encodeQuery(afterId)}"
         val route = if (routeId.isBlank()) "" else "&routeId=${encodeQuery(routeId)}"
         val json = getJson("$base/replies?limit=$safeLimit$route$after")
@@ -828,14 +850,18 @@ class RabiRouteSdk @JvmOverloads constructor(
 
     private fun getJson(url: String): JSONObject = requestJson(url, "GET", null)
 
-    private fun probeRabiLinkCallback(host: String, port: Int): RabiLinkEndpoint? {
-        val url = "http://$host:$port/rabilink"
+    private fun probeRabiLinkCallback(host: String, port: Int): RabiLinkEndpoint? =
+        probeCallbackAt(URL("http", host, port, "/rabilink"))
+
+    private fun probeCallbackAt(parsed: URL): RabiLinkEndpoint? {
+        val url = parsed.toExternalForm()
+        val port = if (parsed.port == -1) parsed.defaultPort else parsed.port
         return try {
             val json = getJson(url)
             val ok = json.optBoolean("ok") && json.optString("adapterType") == "rabilink"
             RabiLinkEndpoint(
                 url = url,
-                host = host,
+                host = parsed.host,
                 port = port,
                 ok = ok,
                 status = json.optString("status", if (ok) "ready" else "unexpected")

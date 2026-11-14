@@ -3,12 +3,15 @@ param(
     [Parameter(Mandatory = $true)][string]$Serial,
     [int]$OfflineSeconds = 20,
     [int]$RecoveryTimeoutSeconds = 90,
-    [string]$RabiSpeechBaseUrl = "http://127.0.0.1:8781",
+    [string]$RabiSpeechBaseUrl = "",
     [string]$ExpectedSourceDeviceId = "rabi-phone",
     [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'Resolve-RabiSpeechEndpoint.ps1')
+# Fail before ADB/network fault actions if the target owner is unavailable.
+[void](Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)
 . (Join-Path $PSScriptRoot 'MobileCaptureEvidence.ps1')
 $packageName = "com.rabi.link"
 $adb = Join-Path $env:LOCALAPPDATA "RabiRoute\android-sdk\platform-tools\adb.exe"
@@ -65,7 +68,7 @@ function Read-Manifest {
 }
 function Read-ServerLedger {
     try {
-        $snapshot = Invoke-RestMethod -Uri "$($RabiSpeechBaseUrl.TrimEnd('/'))/v1/audio-streams" -TimeoutSec 5
+        $snapshot = Invoke-RestMethod -Uri "$(Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)/v1/audio-streams" -TimeoutSec 5
         $rows = @($snapshot.durable_chunk_ledger.sources) |
             Where-Object { "$($_.source_device_id)" -like "$ExpectedSourceDeviceId*" }
         if ($rows.Count -eq 0) { return $null }

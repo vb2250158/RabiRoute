@@ -47,4 +47,4 @@ export function generateMobileThemes(output = path.join(project, 'app/build/gene
   return palettes;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) generateMobileThemes();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) generateMobileThemes(process.argv[2] ? path.resolve(process.argv[2]) : undefined);

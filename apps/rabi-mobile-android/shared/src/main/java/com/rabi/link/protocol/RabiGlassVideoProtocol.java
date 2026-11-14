@@ -13,7 +13,7 @@ public final class RabiGlassVideoProtocol {
     public static boolean isLocalReceiver(String value) {
         try {
             URI uri = new URI(value);
-            if (!"rtmp".equals(uri.getScheme()) || uri.getPort() != 1936
+            if (!"rtmp".equals(uri.getScheme()) || uri.getPort() < 1024 || uri.getPort() > 65535
                     || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
                     || !uri.getPath().matches("/rabi/[a-f0-9]{32}")) return false;
             String[] parts = uri.getHost().split("\\.");

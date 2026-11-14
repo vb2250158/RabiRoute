@@ -47,6 +47,7 @@ class RabiRouteSdkProbeActivity : Activity() {
     private val cwdOptionValues = mutableListOf("")
     private val threadOptionValues = mutableListOf("")
     private var selectedInstance: RabiInstance? = null
+    private var discoveredCallbackUrl = ""
     @Volatile private var routeCatalogContentHash = ""
     private val bindingOperationLock = Any()
     private var pendingAgentBindingOperation: PendingAgentBindingOperation? = null
@@ -73,8 +74,11 @@ class RabiRouteSdkProbeActivity : Activity() {
         intent.getStringExtra("baseUrl")?.takeIf { it.isNotBlank() }?.let {
             baseUrlInput.setText(it)
         }
+        intent.getStringExtra("callbackUrl")?.takeIf { it.isNotBlank() }?.let {
+            callbackUrlInput.setText(it)
+        }
         append("RabiRoute / RabiLink 测试台已启动。")
-        append("先扫描局域网 RabiRoute；扫到后自动推导 Manager 和 RabiLink URL。")
+        append("先扫描局域网 RabiRoute；扫到后读取 Manager 发布的 RabiLink URL。")
         if (autoProbe) {
             baseUrlInput.post { runFullProbeFromBaseUrl() }
         }
@@ -91,8 +95,7 @@ class RabiRouteSdkProbeActivity : Activity() {
         dashboardView = addDashboard(content)
 
         baseUrlInput = plainInput("RabiRoute Manager URL；先扫描或从电脑 Host 状态复制")
-        callbackUrlInput = plainInput("RabiLink 回调 URL，默认 USB 反向端口")
-        callbackUrlInput.setText("http://127.0.0.1:8794/rabilink")
+        callbackUrlInput = plainInput("RabiLink 回调 URL；留空读取当前 Manager 发布的唯一入口")
         val managerSelectorPanel = managerSelectorPanel()
         val routeBindingPanel = routeBindingPanel()
 
@@ -101,9 +104,9 @@ class RabiRouteSdkProbeActivity : Activity() {
             content,
             "01 局域网 RabiRoute 发现",
             "先扫描局域网里的 RabiRoute Manager；扫到后自动拿到电脑 IP。",
-            "用途：这是整个手机测试页的前提。拿到 Manager IP 后，页面会自动推导 Manager URL 和 RabiLink 回调 URL。",
+            "用途：这是整个手机测试页的前提。拿到 Manager IP 后，页面会读取 Manager 和已发布的 RabiLink 回调 URL。",
             "前置：电脑端 Manager 允许局域网访问；手机和电脑在同一 Wi-Fi；Windows 防火墙允许当前 Host 代际动态发布的 Manager 端口。",
-            "证据：identity、guid、computer、version，以及自动生成的 http://电脑IP:8794/rabilink。",
+            "证据：identity、guid、computer、version，以及当前 Manager 发布的实际回调地址。",
             managerSelectorPanel,
             primaryButton("扫描并自动配置") { scanRabiRoutes() },
             button("读取当前 Manager") { readIdentityFromBaseUrl() },
@@ -115,7 +118,7 @@ class RabiRouteSdkProbeActivity : Activity() {
             "02 RabiLink 回调端",
             "用第一张卡片选中的 RabiRoute 测试 /rabilink 探活和真实消息投递。",
             "用途：这是 Rokid/手机语音到 Codex 的主链路；选定 RabiRoute 后，先探活，再发送一条测试消息。",
-            "前置：RabiLink 适配器已启动；局域网测试需电脑防火墙放行 8794；USB 临时测试可用默认 127.0.0.1。",
+            "前置：RabiLink 适配器已监听；防火墙允许其实际端口。USB 测试需填写已设置反向转发的实际回调地址。",
             "证据：GET /rabilink 返回 ready；POST /rabilink 返回 accepted 和 messageId，并在 RabiRoute/Codex 侧产生事件。",
             button("1. 探活当前 RabiLink") { probeCallbackUrl() },
             button("2. 投递测试消息") { deliverRabiLinkTestMessage() }
@@ -427,7 +430,10 @@ class RabiRouteSdkProbeActivity : Activity() {
         routeCatalogContentHash = ""
         synchronized(bindingOperationLock) { pendingAgentBindingOperation = null }
         baseUrlInput.setText(instance.baseUrl)
-        callbackUrlInput.setText("http://${instance.host}:8794/rabilink")
+        if (callbackUrlInput.text.toString().trim() == discoveredCallbackUrl) {
+            callbackUrlInput.setText("")
+        }
+        discoveredCallbackUrl = ""
         updateRoutes(emptyList())
         refreshDashboard("已选择 ${instance.host}")
     }
@@ -552,13 +558,26 @@ class RabiRouteSdkProbeActivity : Activity() {
             setOnClickListener { action() }
         }
 
+    private fun resolveCallbackUrl(instance: RabiInstance, explicitUrl: String): String {
+        if (explicitUrl.isNotBlank()) return explicitUrl
+        val endpoints = sdk.discoverRabiLinkCallbacks(instance)
+        require(endpoints.size == 1 && endpoints.single().ok) { "当前 Manager 未发布唯一可用的 RabiLink 入口；请在高级参数填写目标回调 URL。" }
+        val url = endpoints.single().url
+        runOnUiThread {
+            if (selectedInstance?.guid == instance.guid && (callbackUrlInput.text.isBlank() || callbackUrlInput.text.toString().trim() == discoveredCallbackUrl)) {
+                discoveredCallbackUrl = url
+                callbackUrlInput.setText(url)
+            }
+        }
+        return url
+    }
+
     private fun probeCallbackUrl() {
         val instance = selectedInstance ?: return append("请先在第一张卡片选择 RabiRoute。")
-        callbackUrlInput.setText("http://${instance.host}:8794/rabilink")
-        val url = callbackUrlInput.text.toString().trim()
-        if (url.isBlank()) return append("请先在高级参数填写 RabiLink 回调 URL。")
-        append("正在探活 $url ...")
+        val explicitUrl = callbackUrlInput.text.toString().trim().takeUnless { it == discoveredCallbackUrl }.orEmpty()
+        append("正在探活当前 RabiLink 入口 ...")
         runAsync {
+            val url = resolveCallbackUrl(instance, explicitUrl)
             val endpoint = sdk.probeRabiLinkCallback(url)
             buildString {
                 appendLine("RabiLink 回调探活：")
@@ -573,10 +592,10 @@ class RabiRouteSdkProbeActivity : Activity() {
         val instance = selectedInstance ?: return append("请先在第一张卡片选择 RabiRoute。")
         val routeId = selectedRouteId()
         if (routeId.isBlank()) return append("请先在第一张卡片读取并选择 Route。")
-        val url = "http://${instance.host}:8794/rabilink"
-        callbackUrlInput.setText(url)
+        val explicitUrl = callbackUrlInput.text.toString().trim().takeUnless { it == discoveredCallbackUrl }.orEmpty()
         append("正在做 RabiLink 双向投递测试：手机 -> RabiRoute/Codex -> RabiLink 回包队列 ...")
         runAsync {
+            val url = resolveCallbackUrl(instance, explicitUrl)
             val result = sdk.runRabiLinkBidirectionalSmoke(instance, routeId, url)
             val replies = result.repliesJson.optJSONArray("replies")
             val latestReply = replies
@@ -662,16 +681,21 @@ class RabiRouteSdkProbeActivity : Activity() {
     }
 
     private fun scanRabiRoutes() {
-        append("正在扫描局域网 RabiRoute Manager；扫到后会自动推导 RabiLink 回调 URL...")
+        append("正在扫描局域网 RabiRoute Manager，并读取其已发布回调入口...")
         runAsync {
             val instances = sdk.scanLan(this)
             val selected = instances.firstOrNull()
             runOnUiThread { updateDiscoveredManagers(instances) }
             val callbacks = selected
-                ?.let { listOf(sdk.probeRabiLinkCallback("http://${it.host}:8794")) }
-                ?: sdk.scanRabiLinkCallbacks(this)
-            callbacks.firstOrNull { it.ok }?.let { endpoint ->
-                runOnUiThread { callbackUrlInput.setText(endpoint.url) }
+                ?.let { sdk.discoverRabiLinkCallbacks(it) }
+                ?: emptyList()
+            callbacks.singleOrNull()?.takeIf { it.ok }?.let { endpoint ->
+                runOnUiThread {
+                    if (callbackUrlInput.text.isBlank()) {
+                        discoveredCallbackUrl = endpoint.url
+                        callbackUrlInput.setText(endpoint.url)
+                    }
+                }
             }
             refreshDashboard("manager=${instances.size} callbackProbe=${callbacks.size}")
             buildString {
@@ -679,7 +703,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                 for (item in instances) {
                     appendLine("- ${item.name} ${item.baseUrl}")
                     appendLine("  guid=${item.guid} computer=${item.computerName} type=${item.deviceType} version=${item.version ?: "-"}")
-                    appendLine("  推导 RabiLink=${"http://${item.host}:8794/rabilink"}")
+                    appendLine("  RabiLink 地址由此 Manager 当前发布目录提供")
                 }
                 if (instances.isEmpty()) {
                     appendLine("- 未发现 manager；这个页面的正确前提是先让 Manager 能被局域网访问。")
@@ -691,21 +715,27 @@ class RabiRouteSdkProbeActivity : Activity() {
                     appendLine("- ${item.url} ok=${item.ok} status=${item.status}")
                 }
                 if (callbacks.isEmpty()) {
-                    appendLine("- 未发现 /rabilink 探活；常见原因是电脑防火墙未放行 TCP 8794，或 RabiLink route 未启动。")
-                    appendLine("- USB 调试时可先执行 adb reverse tcp:8794 tcp:8794，然后用默认回调 URL。")
+                    appendLine("- 未发现 /rabilink 探活；请确认 RabiLink route 已监听且防火墙允许实际发布端口。")
+                    appendLine("- USB 调试按实际端口设置 adb reverse，并在高级参数填写回调 URL。")
                 } else if (callbacks.none { it.ok }) {
-                    appendLine("- Manager 扫到了，但 /rabilink 没通；多数是 TCP 8794 防火墙或 RabiLink route 未启动。")
+                    appendLine("- Manager 扫到了，但 /rabilink 没通；请检查实际发布端口的防火墙和 RabiLink route 状态。")
                 }
             }
         }
     }
 
     private fun scanRabiLinkCallbacks() {
+        val instance = selectedInstance ?: return append("请先读取或扫描一个 RabiRoute Manager。")
         append("正在扫描 RabiLink 回调端...")
         runAsync {
-            val callbacks = sdk.scanRabiLinkCallbacks(this)
-            callbacks.firstOrNull { it.ok }?.let {
-                runOnUiThread { callbackUrlInput.setText(it.url) }
+            val callbacks = sdk.discoverRabiLinkCallbacks(instance)
+            callbacks.singleOrNull()?.takeIf { it.ok }?.let { endpoint ->
+                runOnUiThread {
+                    if (callbackUrlInput.text.isBlank()) {
+                        discoveredCallbackUrl = endpoint.url
+                        callbackUrlInput.setText(endpoint.url)
+                    }
+                }
             }
             refreshDashboard("callbacks=${callbacks.size}")
             buildString {
@@ -715,8 +745,8 @@ class RabiRouteSdkProbeActivity : Activity() {
                 }
                 if (callbacks.isEmpty()) {
                     appendLine("没有发现可访问的 /rabilink 探活。")
-                    appendLine("如果电脑能 ping 通但这里是 0 个，多半是 Windows 防火墙挡了 TCP 8794。")
-                    appendLine("USB 调试可用 adb reverse tcp:8794 tcp:8794，再用默认回调 URL。")
+                    appendLine("请检查 Manager 发布目录、目标 Route 状态及实际端口的防火墙。")
+                    appendLine("USB 调试按实际端口设置 adb reverse，并填写对应回调 URL。")
                 }
             }
         }

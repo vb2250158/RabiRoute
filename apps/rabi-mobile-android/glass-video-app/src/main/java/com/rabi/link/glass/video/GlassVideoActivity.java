@@ -24,7 +24,7 @@ import org.json.JSONObject;
 /** Visible camera owner. Losing the phone lease releases both camera and microphone. */
 public final class GlassVideoActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final CXRServiceBridge bridge = new CXRServiceBridge();
+    private CXRServiceBridge bridge;
     private RtmpCamera2 stream;
     private TextView status;
     private String session = "";
@@ -58,6 +58,7 @@ public final class GlassVideoActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        bridge = new CXRServiceBridge(getApplicationContext());
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL); root.setGravity(Gravity.CENTER); root.setBackgroundColor(Color.BLACK);

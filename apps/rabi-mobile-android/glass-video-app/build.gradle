@@ -28,7 +28,7 @@ android {
 }
 dependencies {
     implementation "com.github.pedroSG94.RootEncoder:library:2.4.3"
-    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260417.063502-103") {
+    implementation("com.rokid.cxr:cxr-service-bridge:1.8") {
         exclude group: "androidx.test"
         exclude group: "androidx.concurrent"
     }

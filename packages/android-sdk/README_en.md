@@ -6,6 +6,10 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Android SDK
 
+Callback discovery first verifies the Manager identity, then reads the actual RabiLink listener address and path from the current public API catalog. It does not scan a conventional callback port. `discoverRabiLinkCallbacks(instance)` reads one verified instance and rejects Manager or catalog changes during pagination.
+
+`rabiLinkPorts` defaults to an empty list; explicitly supplied scan ports remain available for legacy services. Explicit callback URLs retain custom paths and use standard HTTP/HTTPS ports when no port is supplied. Discovery is a point-in-time snapshot and must be repeated after a connection generation changes.
+
 > Status: experimental SDK. `apps/rabi-mobile-android/` consumes the source directly, but no standalone Maven or Gradle artifact is published.
 
 The first native SDK uses Kotlin, `HttpURLConnection`, and `org.json` without Retrofit.

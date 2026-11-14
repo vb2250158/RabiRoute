@@ -36,11 +36,11 @@ android {
 }
 
 dependencies {
-    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260417.063502-103") {
+    implementation("com.rokid.cxr:cxr-service-bridge:1.8") {
         exclude group: "androidx.test"
         exclude group: "androidx.concurrent"
     }
-    implementation "com.rokid.security:glass3.open.sdk:2.5.1-P"
+    implementation "com.rokid.security:glass3.open.sdk:2.6.2-P"
     implementation(name: "basic-1.4.3", ext: "aar")
     implementation(name: "turenso-1.4.3", ext: "aar")
     implementation(name: "nlpconsumer-1.4.3", ext: "aar")

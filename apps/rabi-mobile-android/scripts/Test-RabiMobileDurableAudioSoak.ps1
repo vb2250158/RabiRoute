@@ -4,12 +4,15 @@ param(
     [ValidateSet("Offline", "Online")][string]$Mode = "Online",
     [double]$DurationHours = 72,
     [int]$SampleIntervalSeconds = 60,
-    [string]$RabiSpeechBaseUrl = "http://127.0.0.1:8781",
+    [string]$RabiSpeechBaseUrl = "",
     [string]$ExpectedSourceDeviceId = "rabi-phone",
     [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'Resolve-RabiSpeechEndpoint.ps1')
+# Fail before ADB/network fault actions if the target owner is unavailable.
+[void](Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)
 . (Join-Path $PSScriptRoot 'MobileCaptureEvidence.ps1')
 $packageName = "com.rabi.link"
 $localAdb = Join-Path $env:LOCALAPPDATA "RabiRoute\android-sdk\platform-tools\adb.exe"
@@ -198,7 +201,7 @@ function Read-FinalManifestProof {
 
 function Read-OnlineAck {
     if ($Mode -ne "Online") { return $null }
-    $snapshot = Invoke-RestMethod -Uri "$($RabiSpeechBaseUrl.TrimEnd('/'))/v1/audio-streams" -TimeoutSec 5
+    $snapshot = Invoke-RestMethod -Uri "$(Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)/v1/audio-streams" -TimeoutSec 5
     if ($null -eq $snapshot -or $null -eq $snapshot.durable_chunk_ledger) { throw "RabiSpeech ledger snapshot is null." }
     $client = @($snapshot.clients) | Where-Object { "$($_.source_device_id)" -like "$ExpectedSourceDeviceId*" } |
         Sort-Object -Property last_audio_at -Descending | Select-Object -First 1
@@ -220,7 +223,7 @@ function Read-ServerTupleManifest([string]$SourceDeviceId, [long]$FirstSequence,
     $after = [Math]::Max(0L, $FirstSequence - 1L)
     while ($true) {
         $source = [Uri]::EscapeDataString($SourceDeviceId)
-        $uri = "$($RabiSpeechBaseUrl.TrimEnd('/'))/v1/audio-streams/rabilink/ledger/tuples?sourceDeviceId=$source&afterSourceSequence=$after&limit=1000"
+        $uri = "$(Resolve-RabiSpeechEndpoint -ExplicitUrl $RabiSpeechBaseUrl)/v1/audio-streams/rabilink/ledger/tuples?sourceDeviceId=$source&afterSourceSequence=$after&limit=1000"
         $page = Invoke-RestMethod -Uri $uri -TimeoutSec 10
         if ($null -eq $page -or $null -eq $page.records) { throw "Server tuple page is null after source sequence $after." }
         foreach ($record in @($page.records)) {

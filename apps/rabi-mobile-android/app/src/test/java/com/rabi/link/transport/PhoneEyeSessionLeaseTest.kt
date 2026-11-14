@@ -26,5 +26,16 @@ class PhoneEyeSessionLeaseTest {
         current=true;revoked=true;assertFails{lease.renew()};assertEquals(old,lease.expiresAt)
         now=old;assertFails{lease.renew()};assertEquals(old,lease.expiresAt)
     }
+    @Test fun sharedLeaseUsesCallerDurationAndRejectsChangedAuthority() {
+        var now = 100L
+        var valid = true
+        val lease = PhoneEyeLease({ check(valid) }, {}, 50L, { now })
+        assertEquals(150L, lease.expiresAt)
+        now = 120L
+        assertEquals(170L, lease.renew())
+        valid = false
+        assertFails { lease.renew() }
+        assertEquals(170L, lease.expiresAt)
+    }
     private fun assertFails(block:()->Unit){try{block();fail("lease should fail closed")}catch(_:IllegalStateException){}}
 }

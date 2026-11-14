@@ -292,13 +292,29 @@ class RabiRecordingHubActivity : Activity() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(12), dp(18), dp(12)) }
         panel.addView(label("1. 眼镜与手机连接同一 Wi-Fi 或手机热点。\n2. 在记录页开启记录。\n3. 在乐奇原生直播填写以下地址和密钥并开播。\n4. 返回记录页确认真实画面。"))
         val current = RabiConversationService.currentVideo()
-        if(current == null) panel.addView(label("尚未建立视频接收连接。"))
-        else {
-            current.urls().forEach { url -> panel.addView(button("复制推流地址") { copy(url) }) }
-            panel.addView(button("复制推流密钥") { copy(current.streamKey) })
+        val addresses = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(addresses)
+        val refreshAddresses: () -> Unit = {
+            addresses.removeAllViews()
+            if(current == null) addresses.addView(label("尚未建立视频接收连接。"))
+            else {
+                val endpoints = current.urls()
+                if (endpoints.isEmpty()) addresses.addView(label("接收器就绪后显示当前推流地址。"))
+                else {
+                    endpoints.forEach { url -> addresses.addView(button("复制推流地址") {
+                        if (url in current.urls()) copy(url) else toast("当前推流地址已失效")
+                    }) }
+                    addresses.addView(button("复制推流密钥") {
+                        if (current.urls().isNotEmpty()) copy(current.streamKey) else toast("接收已停止")
+                    })
+                }
+            }
         }
+        refreshAddresses()
         panel.addView(label("Rabi 暂停会停止手机接收；乐奇原生相机仍需在乐奇结束直播。自动安装／开播未验收，不自动启用。", 13f))
-        AlertDialog.Builder(this).setTitle("眼镜开播").setView(panel).setPositiveButton("完成", null).show()
+        val dialog = AlertDialog.Builder(this).setTitle("眼镜开播").setView(panel).setPositiveButton("完成", null).show()
+        current?.listen(refreshAddresses)
+        dialog.setOnDismissListener { current?.unlisten(refreshAddresses) }
     }
     private fun share(entry: RecordingStore.Entry) {
         runCatching {
