@@ -71,3 +71,9 @@ Scanner workers declare `mode: "host-factory"` in their descriptor and export `h
 In the Host workspace, run `npm run build` followed by `npm run test:plugins` to collect native-plugin and existing-integration MJS suites. The root `npm test` includes this entry; TypeScript suites remain in its main source phase.
 
 Use `createPluginTestHarness()` for independent plugin contract tests. Integration fixtures that verify actual Host owners, including video fixtures, require the current Host workspace, built output and development dependencies. They do not claim that an independent plugin repository installs or runs the Host.
+
+## Gateway listener descriptors (Host @3)
+
+`host.message-endpoints@3` retains the common endpoint service and provides `GatewayListenerAccess` through the Manager's `manager` port. `readListener(gatewayId, localName)` reads the current published registry; `waitForListener(gatewayId, localName, { signal, timeoutMs })` observes the original native child publication within a bounded wait. The Host retains `@1` and `@2`; new consumers require `@3` rather than guessing a port on an older Host.
+
+`GatewayListenerDescriptor` carries the original Gateway generation, PID, listener/lease identity and actual address. Call `assertCurrent()` before dependent steps. A descriptor owns no saved configuration and grants no device or process authority; a cache alone is not readiness. Cancellation ends waits, and retirement or generation replacement invalidates old descriptors. See the [complete NapCat path](../../../docs/napcat-dynamic-ws_en.md).

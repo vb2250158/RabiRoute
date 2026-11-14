@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.bilibili-history",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "哔哩哔哩历史",
   "description": "同步观看记录并管理历史整理任务",
   "icon": "mdi-history",

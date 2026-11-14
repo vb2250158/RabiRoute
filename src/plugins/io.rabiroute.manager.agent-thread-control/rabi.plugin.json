@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.agent-thread-control",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Agent 会话管理",
   "description": "管理会话、任务请求与提醒",
   "icon": "mdi-chat-processing",

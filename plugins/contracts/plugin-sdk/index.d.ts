@@ -19,6 +19,18 @@ export type PluginContext = Readonly<{
 export type PluginModule = Readonly<{ activate(context: PluginContext): void | Promise<void> }>;
 export function capability(name: string, major: number): string;
 export function definePlugin(module: PluginModule): PluginModule;
+/** A descriptor is valid only while the original native listener and generation remain current. */
+export type GatewayListenerDescriptor = Readonly<{
+  gatewayId: string; gatewayGenerationId: string; pid: number;
+  listenerId: string; leaseId: string; protocol: string;
+  address: Readonly<{ protocol: "http" | "https"; hostname?: string; port: number }>;
+  assertCurrent(): void;
+}>;
+/** Supplied by host.message-endpoints@3 on the Manager host. No listener is started by these reads. */
+export type GatewayListenerAccess = Readonly<{
+  readListener(gatewayId: string, localName: string): GatewayListenerDescriptor | undefined;
+  waitForListener(gatewayId: string, localName: string, options: Readonly<{ signal: AbortSignal; timeoutMs: number }>): Promise<GatewayListenerDescriptor>;
+}>;
 /** Shared owners are supplied as explicit ports; platform factories stay in their packages. */
 export type MessageEndpointHostPorts = Readonly<{
   prepareModules(ids: readonly string[]): Promise<void>;

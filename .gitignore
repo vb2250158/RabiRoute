@@ -85,6 +85,9 @@ examples/rabi-link-vela-probe/*.log
 # 本地插件适配器运行目录：含依赖缓存、模型运行产物与日志，不入库。
 /plugin-adapters/
 /packages/phone-eye-transport-android/build/
+
+# host-api 生成器的中间候选目录，发布成功即被替换；SMB 上清理可能失败，勿入库。
+/plugins/contracts/.host-api-candidate-*
 apps/rabilink-aiui/node_modules/
 apps/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.

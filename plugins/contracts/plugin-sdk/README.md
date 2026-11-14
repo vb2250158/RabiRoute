@@ -73,3 +73,9 @@ export const activate = definePlugin({ async activate(context) {
 在宿主工作区先运行 `npm run build`，再运行 `npm run test:plugins`，收集原生插件和既有集成的 MJS 测试；根 `npm test` 也包含此入口，TypeScript 测试保留在主测试阶段。
 
 独立插件的合同测试使用 `createPluginTestHarness()`。视频等验证真实宿主拥有者的集成 fixture 需要当前宿主工作区、构建产物及其开发依赖，按集成测试运行；它们不代表一个独立插件仓库已经安装或运行了宿主。
+
+## Gateway listener descriptor（Host @3）
+
+`host.message-endpoints@3` 保留通用消息端服务，并在 Manager 的 `manager` 端口上提供 `GatewayListenerAccess`：`readListener(gatewayId, localName)` 只读当前正式 registry；`waitForListener(gatewayId, localName, { signal, timeoutMs })` 在有界等待内观察原子进程发布。Host 同时保留 `@1`、`@2` 服务，新消费者声明 `@3`，不在旧 Host 上降级猜端口。
+
+`GatewayListenerDescriptor` 包含原 Gateway generation、PID、listener/lease 标识和实际地址。`assertCurrent()` 在每个依赖步骤前验证原 owner；描述符不拥有持久配置，不授予设备或进程权限，也不能把缓存单独当作就绪。停止时取消等待，原 listener 退役或换代后拒绝旧描述符。见[NapCat 完整调用链](../../../docs/napcat-dynamic-ws.md)。

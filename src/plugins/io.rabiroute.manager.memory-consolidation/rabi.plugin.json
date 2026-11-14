@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.memory-consolidation",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "记忆整理",
   "description": "定期整理角色记忆并维护长期记录",
   "icon": "mdi-brain",
