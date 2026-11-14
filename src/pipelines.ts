@@ -107,7 +107,7 @@ export const pipelinePresets: Record<PipelinePresetId, ResolvedPipeline> = {
     promptOutputMode: "voice_short",
     ttsProvider: "local-tts",
     ttsVoice: "",
-    ttsWorkerUrl: "http://127.0.0.1:8781/v1/audio/speech",
+    ttsWorkerUrl: "",
     ttsPlay: true,
     preventFeedbackLoop: true,
     replyToSource: false

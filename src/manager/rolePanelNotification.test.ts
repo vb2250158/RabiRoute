@@ -19,3 +19,13 @@ test("only newly committed sent assistant text becomes a persona notification", 
   notifyRolePanelMessage({ appended: true, message: { ...message, text: "  " } }, publish);
   assert.equal(events.length, 1);
 });
+
+test("notification carries the committed input identity, never an inferred or private reply context", () => {
+  const events: unknown[] = [];
+  notifyRolePanelMessage({ appended: true, message: { id: "reply", roleId: "role", gatewayId: "route",
+    replyToMessageId: "input", time: 1, direction: "assistant", sender: "agent", text: "hello", attachments: [],
+    status: "sent", replyContext: { messageId: "untrusted-other", privateMetadata: "not for subscribers" } } },
+  (event, data) => events.push({ event, data }));
+  assert.deepEqual(events, [{ event: "role_panel_message", data: {
+    roleId: "role", messageId: "reply", gatewayId: "route", replyToMessageId: "input", text: "hello" } }]);
+});

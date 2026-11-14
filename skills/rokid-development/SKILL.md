@@ -10,8 +10,11 @@ description: 乐奇眼镜与 RabiLink 手机端的官方资料核对、CXR-L 接
 1. 阅读 [接入依据与排障](../../docs/rokid-development.md)，区分官方说明、项目约束、历史结果和本次实测。
 2. 录像任务阅读 [离线录像](../../docs/rabilink-offline-recording.md)；旧语音问题按该文档的历史资料入口按需读取。
 3. 核对当前源码、设备和构建；旧成功记录不能替代当前验收。
+4. AIUI 对话或页面任务先读[当前对话与语音核对](../../apps/rabilink-aiui/docs/aiui-voice-current.md)和官方 [aiui-dev Skill](https://github.com/yodaos-project/AIUI/blob/main/skills/aiui-dev/SKILL.md)，按其索引读取所需 API、事件与交付检查表。分别记录官方文档提交、npm 工具版本和设备运行时；文档存在差异时列出来源，并用匹配版本与实际宿主验证。
 
 ## 路线边界
+
+AIUI 官方 Skill 的项目入口是 `apps/rabilink-aiui/.agents/skills/aiui-dev/SKILL.md`；读取本地完整版本并运行 `npm run check:skill`，联网更新时按官方 GitHub 当前提交校验整个目录。不要把全局 `rokid-rabilink-plugin` 的历史两工具流程当作 AIUI 页面规范。
 
 - 本项目当前不采用 CXR-M；商务授权不是待补凭证，不索要 CLIENT_SECRET 或 `.lc` 来继续本路线。
 - 手机侧采用 CXR-L，经乐奇 App 控制眼镜。自有眼镜应用需核实官方眼镜端开发资料与具体设备支持。

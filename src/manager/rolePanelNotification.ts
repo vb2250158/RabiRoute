@@ -7,5 +7,7 @@ export function notifyRolePanelMessage(
 ): void {
   const { message, appended } = result;
   if (!appended || message.direction !== "assistant" || message.status !== "sent" || !message.text.trim()) return;
-  publish("role_panel_message", { roleId: message.roleId, messageId: message.id, text: message.text });
+  publish("role_panel_message", { roleId: message.roleId, messageId: message.id, text: message.text,
+    ...(message.gatewayId ? { gatewayId: message.gatewayId } : {}),
+    ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}) });
 }

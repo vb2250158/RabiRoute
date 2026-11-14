@@ -174,7 +174,7 @@ export type AgentReplyOptions = {
   fenneNotePlaybackToken?: string;
   fenneNoteReplyUrl?: string;
   fenneNoteReplyToken?: string;
-  speechServiceUrl?: string;
+  speechServiceUrl?: string | (() => string);
   publishEvent?: (eventType: string, data: Record<string, unknown>) => void;
   appendRolePanelTimeline?: (
     roleId: string,
@@ -1529,6 +1529,7 @@ async function appendRolePanelReply(
     text,
     attachments,
     status: "sent",
+    replyToMessageId: target.messageId,
     replyContext: contextObject(request)
   });
   return {
@@ -1670,7 +1671,8 @@ async function postRabiSpeechOutput(
   const context = contextObject(request);
   const roleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId) || "default";
   const speed = Number(routeVariable(route, "speechSpeed") || "1");
-  const serviceUrl = options.speechServiceUrl ?? process.env.RABISPEECH_URL ?? "http://127.0.0.1:8781";
+  const serviceUrl = typeof options.speechServiceUrl === "function" ? options.speechServiceUrl() : options.speechServiceUrl ?? process.env.RABISPEECH_URL;
+  if (!serviceUrl?.trim()) throw new Error("RabiSpeech endpoint is unavailable; start the managed service or configure an explicit service URL.");
   const result = await requestLocalSpeech(serviceUrl, "/v1/audio/speech", {
     method: "POST",
     headers: { "content-type": "application/json; charset=utf-8" },

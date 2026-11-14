@@ -7,6 +7,7 @@ import test from "node:test";
 import { applyPluginStorageMigrations, pluginStorageMigrationFailure, pluginStorageResourceRoot, pluginStorageRoot,
   prepareApplicationPluginStorage, type PluginStorageMigrationDeclaration } from "./pluginStorage.js";
 import { loadPluginProfile, PluginPackageCatalog } from "../plugin-kernel/profile.js";
+import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
 import type { LoadedPluginPackage } from "../plugin-kernel/packageLoader.js";
 
 function fixture(t: test.TestContext) {
@@ -94,6 +95,30 @@ test("existing Xiaomi VM, media, keys and ledgers stay at the actual resource wh
   const binding = path.join(pluginStorageRoot(id, undefined, layout), "resources.json"), selected = path.join(temporary, "user-selected-resource");
   write(binding, JSON.stringify({ schemaVersion: 1, resources: { runtime: selected } }));
   assert.equal(pluginStorageResourceRoot(id, "runtime", "runtime", layout), selected);
+});
+
+test("cold startup prepares the installed managed version selected by the original instance settings", async t => {
+  const { layout } = fixture(t), pluginId = "io.fixture.managed", instanceId = "manager:managed";
+  const profilePath = path.join(layout.packageRoot, "dist/plugins/profiles/desktop.json");
+  const definition = { id: instanceId, package: pluginId, version: "0.1.1", enabled: true, config: {}, grants: [] };
+  write(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [definition] }));
+  fs.mkdirSync(path.join(layout.packageRoot, "dist/plugins/packages", pluginId, "0.1.1"), { recursive: true });
+  const managed = path.join(layout.stateRoot, "data/plugins/packages", pluginId, "0.1.2");
+  const declared: PluginStorageMigrationDeclaration = { schemaVersion: 1, scope: "plugin", migrations: [{ id: "imported-original",
+    kind: "file", source: { root: "state", path: "data/managed-original.json" }, target: "original.json" }] };
+  write(path.join(managed, "storage-migrations.json"), JSON.stringify(declared));
+  write(path.join(layout.stateRoot, "data/managed-original.json"), "original-private-bytes\r\n");
+  const settings = new PluginProfileSettings({ profilePath, settingsRoot: path.join(layout.stateRoot, "data/plugins/settings") });
+  const initial = await settings.snapshot();
+  const existing = initial.profile.instances.find(instance => instance.id === instanceId);
+  assert.ok(existing);
+  await settings.install({ ...existing, version: "0.1.2" }, initial.revision);
+  const results = await prepareApplicationPluginStorage({ phase: "owners-retired", layout, environment: {} });
+  assert.equal(results.find(row => row.migrationId === "imported-original")?.status, "migrated");
+  assert.equal(pluginStorageMigrationFailure(pluginId, layout.stateRoot, instanceId), undefined);
+  assert.equal(fs.readFileSync(path.join(pluginStorageRoot(pluginId, undefined, layout), "original.json"), "utf8"), "original-private-bytes\r\n");
+  assert.equal((await settings.snapshot()).profile.instances[0]?.version, "0.1.2");
+  assert.ok((await prepareApplicationPluginStorage({ phase: "owners-retired", layout, environment: {} })).every(row => row.status === "unchanged"));
 });
 
 test("startup storage conflicts block their real package without discarding either raw file or an independent healthy package", async t => {

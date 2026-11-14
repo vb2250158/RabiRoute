@@ -689,6 +689,13 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "effect": "手机/眼镜收到对应PC配置并缓存后，下次操作生效；离线沿用该账户和PC缓存"
   },
   {
+    "key": "android.recording.start",
+    "defaultMs": 15000,
+    "label": "手机：录像接收器启动",
+    "scope": "mobile-client",
+    "effect": "手机/眼镜收到对应PC配置并缓存后，下次操作生效；离线沿用该账户和PC缓存"
+  },
+  {
     "key": "android.recording.stop",
     "defaultMs": 10000,
     "label": "手机：录像进程退出",

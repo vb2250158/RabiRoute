@@ -34,7 +34,7 @@ export type RabiLinkRelayRuntimeConfig = {
   applicationGenerationId?: string;
   /** Direct Manager endpoints advertised only to PCs using the same application token. */
   peerUrls?: string[];
-  localSpeechUrl: string;
+  localSpeechUrl: string | (() => string);
 };
 
 export type RabiLinkRelayRuntimeStatus = {
@@ -65,6 +65,16 @@ const DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS = 180000;
 const DEFAULT_RELAY_WRITE_TIMEOUT_MS = 5000;
 const DEFAULT_RELAY_WRITE_ATTEMPTS = 4;
 const WEBGUI_EVENT_STREAM_PATHS = ["/api/events", "/api/speech/events"] as const;
+
+/** Resolve only where speech is actually used; general Relay/WebGUI startup remains independent. */
+function resolveSpeechUrl(config: RabiLinkRelayRuntimeConfig): string {
+  return typeof config.localSpeechUrl === "function" ? config.localSpeechUrl() : config.localSpeechUrl;
+}
+
+function speechEndpointAvailable(config: RabiLinkRelayRuntimeConfig): boolean {
+  try { return Boolean(resolveSpeechUrl(config)); }
+  catch { return false; }
+}
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -391,11 +401,13 @@ type SpeechAdvertisement = { available: boolean; speechAvailable: boolean };
 const asrAdvertisements = new WeakMap<RabiLinkRelayRuntimeConfig, SpeechAdvertisement>();
 
 async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, signal: AbortSignal): Promise<SpeechAdvertisement> {
-  if (!config.localSpeechUrl || signal.aborted) return { available: false, speechAvailable: false };
+  if (signal.aborted) return { available: false, speechAvailable: false };
   let available = false;
   let speechAvailable = false;
   try {
-    const response = await fetch(`${config.localSpeechUrl}/v1/capabilities`, {
+    const endpoint = resolveSpeechUrl(config);
+    if (!endpoint) return { available: false, speechAvailable: false };
+    const response = await fetch(`${endpoint}/v1/capabilities`, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkRelayRuntime.probeSpeechAdvertisement.AbortSignal.timeout.request", 3000))]), redirect: "error"
     });
     if (response.ok) {
@@ -449,7 +461,7 @@ function isWebguiEventStreamProxy(localPath: string, headers: Record<string, str
 }
 
 function safeSpeechUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): string {
-  const base = new URL(config.localSpeechUrl);
+  const base = new URL(resolveSpeechUrl(config));
   const localUrl = new URL(pathname.startsWith("/") ? pathname : `/${pathname}`, base);
   localUrl.protocol = base.protocol;
   localUrl.host = base.host;
@@ -683,7 +695,7 @@ async function proxySpeechRequest(
       if ((input.captureId || input.processingPolicy === 'transcribe') && request.expectedWorkerFencing !== true) throw new Error('CAPTURE_EXPECTED_WORKER_REQUIRED');
     }
     const managerVideoOffer = method === "POST" && localPath === "/api/rabilink/video/offer";
-    if (!managerVideoOffer && !Boolean(config.localSpeechUrl)) throw new Error("Local speech service is not configured.");
+    if (!managerVideoOffer && !Boolean(resolveSpeechUrl(config))) throw new Error("Local speech service is not configured.");
     const managerSpeechIngress = localPath === "/api/speech/messages" || managerVideoOffer;
     if (!managerSpeechIngress) headers["x-rabilink-tunnel-local"] = "relay-speech";
     const response = await localFetchWithTimeout(
@@ -761,7 +773,7 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
     claimWaitMs: Math.max(0, Math.min(60000, Number(config.claimWaitMs) || 0)),
     localWebguiUrl: normalizeBaseUrl(config.localWebguiUrl),
     peerUrls: [...new Set((config.peerUrls || []).map(normalizeBaseUrl).filter(Boolean))].slice(0, 8),
-    localSpeechUrl: normalizeBaseUrl(config.localSpeechUrl)
+    localSpeechUrl: typeof config.localSpeechUrl === "function" ? config.localSpeechUrl : normalizeBaseUrl(config.localSpeechUrl)
   };
 }
 
@@ -921,7 +933,7 @@ export class RabiLinkRelayRuntime {
     const webguiEvents = new Map<string, Promise<void>>();
     const markChannelsOnline = (): void => {
       if (webguiDrainFailures === 0
-        && (!Boolean(config.localSpeechUrl) || speechDrainFailures === 0)
+        && (!speechEndpointAvailable(config) || speechDrainFailures === 0)
         && this.active(generation, signal)) {
         this.markOnline(asrAdvertisements.get(config)?.speechAvailable === true);
       }

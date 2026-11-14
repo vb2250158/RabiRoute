@@ -366,7 +366,7 @@ test("dedicated DSH scan retries one transient session.list 404", async () => {
   let calls = 0;
   const result = await scanDshAgentAdapter({
     rootDir: process.cwd(),
-    runtimes: [],
+    runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:49141" } }],
     discoverLocalDsh: () => ({
       installed: true,
       homeDir: process.cwd(),
@@ -420,6 +420,7 @@ test("DSH base scan does not probe or require optional Rabi extensions", async (
 test("DSH base scan still diagnoses an offline owner without extension advice", async () => {
   const result = await scanDshAgentAdapter({
     rootDir: process.cwd(),
+    runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:49142" } }],
     discoverLocalDsh: () => ({
       installed: false,
       homeDir: process.cwd(),
@@ -435,12 +436,12 @@ test("DSH base scan still diagnoses an offline owner without extension advice", 
   assert.equal(result.agents.dsh.plugins, undefined);
 });
 
-test("DSH scan treats a local Home as installed and prefers a live launch-log origin over the default port", async () => {
+test("DSH scan treats a local Home as installed and uses a live launch-log origin without a default port", async () => {
   const probed: string[] = [];
   const requested: string[] = [];
   const result = await scanDshAgentAdapter({
     rootDir: process.cwd(),
-    runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:3080" } }],
+    runtimes: [],
     discoverLocalDsh: () => ({
       installed: true,
       homeDir: "C:/Users/example/.dsh",
@@ -466,10 +467,9 @@ test("DSH scan treats a local Home as installed and prefers a live launch-log or
   });
 
   assert.equal(result.agents.dsh.installed, true);
-  assert.deepEqual(probed, ["http://127.0.0.1:3080", "http://127.0.0.1:3180"]);
+  assert.deepEqual(probed, ["http://127.0.0.1:3180"]);
   assert.deepEqual(requested, ["http://127.0.0.1:3180"]);
   assert.equal(result.agents.dsh.endpoints?.find((endpoint) => endpoint.url === "http://127.0.0.1:3180")?.healthy, true);
-  assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /已保存的 DSH 地址 http:\/\/127\.0\.0\.1:3080 未响应/);
   assert.doesNotMatch(result.agents.dsh.warnings?.join(" ") ?? "", /没有发现可用安装/);
 });
 

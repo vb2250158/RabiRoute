@@ -142,6 +142,8 @@ test("role panel outbox uses the injected idempotent timeline command with a sta
   const timeline = readRolePanelTimeline(roleDir);
   assert.equal(timeline.length, 1);
   assert.match(timeline[0].id, /^role-panel-assistant-[a-f0-9]{24}$/);
+  assert.equal(timeline[0].replyToMessageId, "source-role-panel-message");
+  assert.equal(timeline[0].gatewayId, "main");
 });
 
 test("plan feedback replies are written to the plan audit record and published to the plan page", async () => {
@@ -1251,7 +1253,7 @@ test("RabiSpeech message endpoint binds TTS voice to the persona while preservin
     rootDir,
     routeRoot: path.join(rootDir, "data", "route"),
     rolesRoot: path.join(rootDir, "data", "roles"),
-    speechServiceUrl: url,
+    speechServiceUrl: () => url,
     runtimes: [{
       id: "speech-route",
       agentRoleId: "Ilias",

@@ -28,6 +28,8 @@ export type RolePanelTimelineMessage = {
   attachments: RolePanelAttachment[];
   status: typeof ROLE_PANEL_MESSAGE_STATUSES[number];
   replyContext?: Record<string, unknown>;
+  /** Authoritative source input, set by the outbox owner rather than inferred by a view. */
+  replyToMessageId?: string;
 };
 
 export type RolePanelTimelineAppendResult = Readonly<{
@@ -176,6 +178,7 @@ export function readRolePanelTimeline(roleDir: string, limit = ROLE_PANEL_DEFAUL
         roleId: stringValue(raw.roleId) || "",
         gatewayId: stringValue(raw.gatewayId),
         routeProfileId: stringValue(raw.routeProfileId),
+        replyToMessageId: stringValue(raw.replyToMessageId),
         direction: raw.direction === "assistant" || raw.direction === "system" ? raw.direction : "user",
         sender: stringValue(raw.sender) || "",
         text: stringValue(raw.text) || "",

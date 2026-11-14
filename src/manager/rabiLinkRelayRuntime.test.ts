@@ -44,7 +44,7 @@ for (const behavior of ['success', 'disconnect', 'body-stall'] as const) {
     const runtime = new RabiLinkRelayRuntime({ localRequestAttempts: 3 }); t.after(() => runtime.stop());
     const start = performance.now();
     runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: 'fixture-history-token', deviceId: 'fixture-pc', deviceGuid: 'fixture-guid', deviceName: 'Fixture', claimWaitMs: 60000,
-      applicationGenerationId: 'history-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: '' });
+      applicationGenerationId: 'history-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: () => { throw Object.assign(new Error('managed Speech not ready'), { status: 409 }); } });
     await waitForRelayRuntime(runtime, 'history completion', () => completed, () => ({ claims, completed }), 2500);
     assert.equal(claims, 1); assert.ok(performance.now() - start < 2000);
     assert.equal(finished.statusCode, behavior === 'success' ? 200 : 503);
