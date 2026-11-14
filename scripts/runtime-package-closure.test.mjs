@@ -21,7 +21,7 @@ async function prepareFixture(t, full = false) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const files = JSON.parse(await fs.readFile(path.join(root, 'scripts/rabilink-relay-runtime-files.json'), 'utf8'));
   for (const file of [...files, 'package.json', 'scripts/rabilink-relay-runtime-files.json', 'scripts/deploy-rabilink-relay-windows.ps1',
-    'scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json']) {
+    'scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json', 'scripts/lib/rabilink-relay-service.ps1']) {
     const target = path.join(directory, file); await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(path.join(root, file), target);
   }
@@ -152,7 +152,8 @@ test('Relay staging and remote validation use the same explicit manifest', async
   assert(source.includes('foreach (`$relative in `$runtimeFiles)'));
   assert(source.includes('Required Relay runtime module is missing'));
   assert(source.includes('"start": "node scripts/rabilink-relay-server.mjs"'));
-  assert(source.includes('node "$RemoteRoot\\scripts\\rabilink-relay-server.mjs"'));
+  assert(source.includes('Start-RelayServiceOwner -Root'));
+  assert(source.includes('Get-RelayEndpoint -Root'));
   assert(source.indexOf('Remove-LegacyRelayRuntimeLayout -Root `$remoteRoot') > source.indexOf('Unregister-ScheduledTask -TaskName `$taskName'));
   assert(source.includes("'logs/relay-layout-migration.json'"));
 });
@@ -322,8 +323,8 @@ test('PrepareOnly generates HTML share proxy routes in all four Caddy sites with
   const prepared = JSON.parse(result.stdout.trim());
   t.after(async () => { await fs.rm(prepared.BundleRoot, { recursive: true, force: true }); await fs.rm(prepared.BundleZip, { force: true }); });
   assert.equal(prepared.Prepared, true); assert.equal(prepared.RuntimeOnly, false);
-  const config = await fs.readFile(path.join(prepared.BundleRoot, 'Caddyfile'), 'utf8');
-  assert.equal([...config.matchAll(/handle \/share\/\*\s*\{\s*reverse_proxy 127\.0\.0\.1:8788\s*\}/g)].length, 4);
+  const config = await fs.readFile(path.join(prepared.BundleRoot, 'Caddyfile.template'), 'utf8');
+  assert.equal([...config.matchAll(/handle \/share\/\*\s*\{\s*reverse_proxy __RABILINK_RELAY_UPSTREAM__\s*\}/g)].length, 4);
   const runtimeSource = await fs.readFile(path.join(root, 'scripts/deploy-rabilink-relay-windows.ps1'), 'utf8');
-  assert(runtimeSource.includes("foreach ($file in @('Caddyfile', 'start-caddy.ps1'))"));
+  assert(runtimeSource.includes("foreach ($file in @('Caddyfile', 'Caddyfile.template'))"));
 });

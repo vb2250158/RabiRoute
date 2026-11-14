@@ -18,7 +18,6 @@ if (process.argv.includes("--manager")) {
 const services = [
   {
     name: "WebGUI",
-    port: 8793,
     command: process.execPath,
     args: [
       "node_modules/vite/bin/vite.js",
@@ -33,7 +32,6 @@ const services = [
 if (process.argv.includes("--speech")) {
   services.push({
     name: "RabiSpeech",
-    port: 8781,
     command: "powershell.exe",
     args: [
       "-NoProfile",
@@ -48,7 +46,7 @@ if (process.argv.includes("--speech")) {
 
 if (describeOnly) {
   console.log(JSON.stringify({
-    services: services.map(({ name, port }) => ({ name, port })),
+    services: services.map(({ name }) => ({ name, addressReportedAtStartup: true })),
     managerHotReload: false,
     managerReason: "Manager owns long-lived Route adapters and is isolated from the safe hot-reload loop."
   }));

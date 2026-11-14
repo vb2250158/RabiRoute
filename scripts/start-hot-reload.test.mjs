@@ -10,7 +10,7 @@ test("safe hot reload excludes Manager and defaults to WebGUI only", () => {
     { encoding: "utf8" }
   ));
 
-  assert.deepEqual(payload.services, [{ name: "WebGUI", port: 8793 }]);
+  assert.deepEqual(payload.services, [{ name: "WebGUI", addressReportedAtStartup: true }]);
   assert.equal(payload.managerHotReload, false);
 });
 
@@ -21,8 +21,8 @@ test("speech reload is explicit and Manager reload is rejected", () => {
     { encoding: "utf8" }
   ));
   assert.deepEqual(payload.services, [
-    { name: "WebGUI", port: 8793 },
-    { name: "RabiSpeech", port: 8781 }
+    { name: "WebGUI", addressReportedAtStartup: true },
+    { name: "RabiSpeech", addressReportedAtStartup: true }
   ]);
 
   const manager = spawnSync(

@@ -15,7 +15,7 @@ import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-de
 import { RabiLinkEventHub } from "./rabilink-event-hub.mjs";
 import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
 
-const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 8788);
+const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 0);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
 const replyTimeoutMs = relayTimeout("reply", clamp(Number(process.env.RABILINK_RELAY_REPLY_TIMEOUT_MS || 60000), 1000, 120000));
 const outboxWaitMs = relayTimeout("outboxWait", clamp(Number(process.env.RABILINK_RELAY_OUTBOX_WAIT_MS || 60000), 0, 60000));

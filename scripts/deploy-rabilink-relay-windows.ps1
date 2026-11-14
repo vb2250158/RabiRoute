@@ -143,7 +143,7 @@ foreach ($relative in $relayRuntimeFiles) {
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot $relative) -Destination $destination -Force
 }
-foreach ($relative in @('scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json')) {
+foreach ($relative in @('scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json', 'scripts/lib/rabilink-relay-service.ps1')) {
     $destination = Join-Path $bundleRoot $relative
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot $relative) -Destination $destination -Force
@@ -177,19 +177,10 @@ New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 "@
 
 New-AsciiFile -Path (Join-Path $bundleRoot "start-rabilink-relay.ps1") -Content @"
-`$ErrorActionPreference = "Continue"
-Remove-Item Env:RABILINK_RELAY_TOKEN -ErrorAction SilentlyContinue
-`$env:RABILINK_RELAY_PORT = "8788"
-`$env:RABILINK_RELAY_HOST = "127.0.0.1"
-`$env:RABILINK_RELAY_DATA_DIR = "$RemoteRoot\data"
-Set-Location "$RemoteRoot"
-New-Item -ItemType Directory -Force -Path "$RemoteRoot\logs" | Out-Null
-while (`$true) {
-    "`$(Get-Date -Format o) starting RabiLink relay" | Add-Content "$RemoteRoot\logs\rabilink-relay-supervisor.log"
-    node "$RemoteRoot\scripts\rabilink-relay-server.mjs" *> "$RemoteRoot\logs\rabilink-relay.log"
-    "`$(Get-Date -Format o) relay exited; restarting in 3 seconds" | Add-Content "$RemoteRoot\logs\rabilink-relay-supervisor.log"
-    Start-Sleep -Seconds 3
-}
+param([switch]`$Once)
+`$ErrorActionPreference = 'Stop'
+. (Join-Path `$PSScriptRoot 'scripts/lib/rabilink-relay-service.ps1')
+Start-RelayServiceOwner -Root `$PSScriptRoot -Once:`$Once
 "@
 
 $publicHttpCaddyBlock = ""
@@ -200,31 +191,31 @@ http://:$PublicHttpPort {
     encode gzip
 
     handle /health {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /rokid/rabilink* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /api/rabilink/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /openapi* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /share/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /worker/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /manage* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
 
@@ -235,8 +226,9 @@ http://:$PublicHttpPort {
 "@
 }
 
-New-AsciiFile -Path (Join-Path $bundleRoot "Caddyfile") -Content @"
+New-AsciiFile -Path (Join-Path $bundleRoot "Caddyfile.template") -Content @"
 {
+    admin off
     auto_https disable_redirects
 }
 
@@ -244,31 +236,31 @@ http://$Domain {
     encode gzip
 
     handle /health {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /rokid/rabilink* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /api/rabilink/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /openapi* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /share/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /worker/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /manage* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
 
@@ -281,31 +273,31 @@ http://:80 {
     encode gzip
 
     handle /health {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /rokid/rabilink* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /api/rabilink/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /openapi* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /share/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /worker/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /manage* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
 
@@ -318,31 +310,31 @@ https://$Domain {
     encode gzip
 
     handle /health {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /rokid/rabilink* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /api/rabilink/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /openapi* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /share/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /worker/* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
     handle /manage* {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy __RABILINK_RELAY_UPSTREAM__
     }
 
 
@@ -353,32 +345,32 @@ https://$Domain {
 $publicHttpCaddyBlock
 "@
 
+# Before the backend is ready, the full bundle contains a valid unavailable response.
+New-AsciiFile -Path (Join-Path $bundleRoot 'Caddyfile') -Content ((Get-Content -LiteralPath (Join-Path $bundleRoot 'Caddyfile.template') -Raw).Replace('reverse_proxy __RABILINK_RELAY_UPSTREAM__', 'respond 503'))
 New-AsciiFile -Path (Join-Path $bundleRoot "start-caddy.ps1") -Content @"
-`$ErrorActionPreference = "Continue"
-Set-Location "$RemoteRoot"
-New-Item -ItemType Directory -Force -Path "$RemoteRoot\logs" | Out-Null
-while (`$true) {
-    "`$(Get-Date -Format o) starting Caddy" | Add-Content "$RemoteRoot\logs\caddy-supervisor.log"
-    `$process = Start-Process -FilePath "C:\caddy\caddy.exe" -ArgumentList @("run","--config","$RemoteRoot\Caddyfile") -WorkingDirectory "$RemoteRoot" -RedirectStandardOutput "$RemoteRoot\logs\caddy.stdout.log" -RedirectStandardError "$RemoteRoot\logs\caddy.stderr.log" -WindowStyle Hidden -PassThru
-    Wait-Process -Id `$process.Id
-    "`$(Get-Date -Format o) Caddy exited with code `$(`$process.ExitCode); restarting in 3 seconds" | Add-Content "$RemoteRoot\logs\caddy-supervisor.log"
-    Start-Sleep -Seconds 3
-}
+param([string]`$Executable = 'C:\caddy\caddy.exe', [string]`$ArgumentPrefix = '', [switch]`$Once)
+`$ErrorActionPreference = 'Stop'
+. (Join-Path `$PSScriptRoot 'scripts/lib/rabilink-relay-service.ps1')
+Start-RelayCaddyOwner -Root `$PSScriptRoot -Executable `$Executable -ArgumentPrefix `$ArgumentPrefix -Once:`$Once
 "@
 
 New-AsciiFile -Path (Join-Path $bundleRoot "health-check.ps1") -Content @"
-`$ErrorActionPreference = "Stop"
-`$localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 5
+`$ErrorActionPreference = 'Stop'
+. (Join-Path `$PSScriptRoot 'scripts/lib/rabilink-relay-service.ps1')
+`$endpoint = Get-RelayEndpoint -Root `$PSScriptRoot
+if (-not `$endpoint) { throw 'No live owned Relay endpoint.' }
+`$localHealth = Invoke-RestMethod -Uri ('http://127.0.0.1:' + `$endpoint.port + '/health') -MaximumRedirection 0 -TimeoutSec 5
 if (`$localHealth.ok -ne `$true) { throw "local health did not return ok=true" }
 `$domainHealth = Invoke-RestMethod -Uri "http://$Domain/health" -TimeoutSec 15
 if (`$domainHealth.ok -ne `$true) { throw "domain health did not return ok=true" }
 "@
 
 if ($RuntimeOnly) {
-    foreach ($file in @('Caddyfile', 'start-caddy.ps1')) {
+    foreach ($file in @('Caddyfile', 'Caddyfile.template')) {
         Remove-Item -LiteralPath (Join-Path $bundleRoot $file) -Force
     }
 }
+
 $relayLayoutFunctions = @'
 function Get-RelayFileHash {
     param([string]$LiteralPath)
@@ -505,6 +497,8 @@ function Restore-RelayRuntimeLayout {
 '@
 
 
+$relayServiceFunctions = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/rabilink-relay-service.ps1') -Raw
+
 # Embed the same format rules/functions so rollback does not depend on replaced live files.
 $relayRuntimeRulesLiteral = ($relayRuntimePathRules | ConvertTo-Json -Compress).Replace("'", "''")
 $relayLayoutFunctions = '$relayRuntimePathRules = ConvertFrom-Json ' + "'" + $relayRuntimeRulesLiteral + "'`r`n" + (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/rabilink-relay-runtime-paths.ps1') -Raw) + "`r`n" + $relayLayoutFunctions
@@ -512,11 +506,15 @@ New-AsciiFile -Path (Join-Path $bundleRoot 'rollback-rabilink-relay.ps1') -Conte
 param([Parameter(Mandatory=`$true)][string]`$Root, [Parameter(Mandatory=`$true)][string]`$BackupRoot)
 `$ErrorActionPreference = 'Stop'
 $relayLayoutFunctions
+$relayServiceFunctions
 `$task = Get-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue
+`$caddyTask = Get-ScheduledTask -TaskName 'RabiLinkCaddy' -ErrorAction SilentlyContinue
+Assert-RelayScheduledTaskRoot -Task `$task -Root `$Root -Launcher 'start-rabilink-relay.ps1'
+Assert-RelayScheduledTaskRoot -Task `$caddyTask -Root `$Root -Launcher 'start-caddy.ps1'
 if (`$task) { Stop-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue }
-Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { `$_.CommandLine -like "*`$Root*rabilink-relay-server.mjs*" } |
-    ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+if (`$caddyTask) { Stop-ScheduledTask -TaskName 'RabiLinkCaddy' -ErrorAction SilentlyContinue }
+Stop-RelayServiceProcesses -Root `$Root -Role relay
+Stop-RelayServiceProcesses -Root `$Root -Role caddy
 Restore-RelayRuntimeLayout -Root `$Root -BackupRoot `$BackupRoot
 Unregister-ScheduledTask -TaskName 'RabiLinkRelay' -Confirm:`$false -ErrorAction SilentlyContinue
 `$taskXml = Resolve-RelayLayoutPath -Root `$BackupRoot -Relative 'relay-task.xml'
@@ -524,7 +522,13 @@ if (Test-Path -LiteralPath `$taskXml) {
     Register-ScheduledTask -TaskName 'RabiLinkRelay' -Xml (Get-Content -LiteralPath `$taskXml -Raw) -Force | Out-Null
     Start-ScheduledTask -TaskName 'RabiLinkRelay'
 }
-Write-Host 'Relay code and original task restored. Live data was not rolled back.'
+Unregister-ScheduledTask -TaskName 'RabiLinkCaddy' -Confirm:`$false -ErrorAction SilentlyContinue
+`$caddyXml = Resolve-RelayLayoutPath -Root `$BackupRoot -Relative 'caddy-task.xml'
+if (Test-Path -LiteralPath `$caddyXml) {
+    Register-ScheduledTask -TaskName 'RabiLinkCaddy' -Xml (Get-Content -LiteralPath `$caddyXml -Raw) -Force | Out-Null
+    Start-ScheduledTask -TaskName 'RabiLinkCaddy'
+}
+Write-Host 'Relay code and original tasks restored. Live data was not rolled back.'
 "@
 $deploymentArtifactFiles = @(Get-ChildItem -LiteralPath $bundleRoot -Recurse -File | ForEach-Object { $_.FullName.Substring($bundleRoot.Length + 1).Replace('\', '/') } | Where-Object { $_ -notmatch '^(data|logs)/' })
 
@@ -568,6 +572,7 @@ $remoteSetup = @"
 `$runtimeOnly = $runtimeOnlyLiteral
 `$ErrorActionPreference = "Stop"
 $relayLayoutFunctions
+$relayServiceFunctions
 `$remoteRoot = "$RemoteRoot"
 `$zipPath = "C:\Windows\Temp\rabilink-relay.zip"
 `$stagingRoot = Join-Path `$env:TEMP ("rabilink-relay-stage-" + [Guid]::NewGuid().ToString("N"))
@@ -579,41 +584,23 @@ New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
 `$previousTask = Get-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue
 if (`$previousTask) { Export-ScheduledTask -TaskName 'RabiLinkRelay' | Set-Content -LiteralPath (Join-Path `$backupRoot 'relay-task.xml') -Encoding UTF8 }
 `$taskName = "RabiLinkRelay"
+`$previousCaddyTask = Get-ScheduledTask -TaskName 'RabiLinkCaddy' -ErrorAction SilentlyContinue
+foreach (`$row in @(@{task=`$previousTask; script='start-rabilink-relay.ps1'}, @{task=`$previousCaddyTask; script='start-caddy.ps1'})) {
+    Assert-RelayScheduledTaskRoot -Task `$row.task -Root `$remoteRoot -Launcher `$row.script
+}
+`$caddyTemplateMigration = `$null
+if (`$runtimeOnly -and `$previousCaddyTask) {
+    `$templatePath = Join-Path `$remoteRoot 'Caddyfile.template'
+    if (Test-Path -LiteralPath `$templatePath) { `$caddyTemplateMigration = ConvertTo-RelayCaddyTemplate (Get-Content -LiteralPath `$templatePath -Raw) }
+    else { `$caddyTemplateMigration = ConvertTo-RelayCaddyTemplate (Get-Content -LiteralPath (Join-Path `$remoteRoot 'Caddyfile') -Raw) }
+    if (-not `$caddyTemplateMigration.Contains('__RABILINK_RELAY_UPSTREAM__')) { throw 'Existing Caddy template requires explicit migration.' }
+}
+if (`$previousCaddyTask) { Export-ScheduledTask -TaskName 'RabiLinkCaddy' | Set-Content -LiteralPath (Join-Path `$backupRoot 'caddy-task.xml') -Encoding UTF8 }
 Stop-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
-`$processSnapshot = @(Get-CimInstance Win32_Process)
-`$processById = @{}
-foreach (`$process in `$processSnapshot) {
-    `$processById[[int]`$process.ProcessId] = `$process
-}
-`$relayProcesses = @(`$processSnapshot | Where-Object {
-    `$_.Name -eq "node.exe" -and `$_.CommandLine -like "*rabilink-relay-server.mjs*"
-})
-`$relayProcessTreeIds = New-Object 'System.Collections.Generic.HashSet[int]'
-foreach (`$relayProcess in `$relayProcesses) {
-    [void]`$relayProcessTreeIds.Add([int]`$relayProcess.ProcessId)
-    `$ancestor = `$processById[[int]`$relayProcess.ParentProcessId]
-    for (`$depth = 0; `$depth -lt 2 -and `$null -ne `$ancestor; `$depth += 1) {
-        if (`$ancestor.Name -notin @("powershell.exe", "pwsh.exe", "cmd.exe")) {
-            break
-        }
-        [void]`$relayProcessTreeIds.Add([int]`$ancestor.ProcessId)
-        `$ancestor = `$processById[[int]`$ancestor.ParentProcessId]
-    }
-}
-Get-CimInstance Win32_Process |
-    Where-Object {
-        `$_.Name -in @("powershell.exe", "pwsh.exe") -and
-        `$_.CommandLine -like "*start-rabilink-relay.ps1*"
-    } |
-    ForEach-Object { [void]`$relayProcessTreeIds.Add([int]`$_.ProcessId) }
-`$relayProcessTreeIds |
-    Sort-Object -Descending |
-    ForEach-Object { Stop-Process -Id `$_ -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Seconds 1
-Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { `$_.CommandLine -like "*rabilink-relay-server.mjs*" } |
-    ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
-`$codeFiles = @(@($deploymentArtifactLiteral) + `$runtimeFiles + `$legacyRuntimeFiles + @('rabilink-relay-runtime-files.json', 'scripts/rabilink-relay-runtime-files.json', 'start-rabilink-relay.ps1', 'health-check.ps1', 'Caddyfile', 'package.json'))
+Stop-RelayServiceProcesses -Root `$remoteRoot -Role relay
+if (`$previousCaddyTask) { Stop-ScheduledTask -TaskName 'RabiLinkCaddy' -ErrorAction SilentlyContinue }
+Stop-RelayServiceProcesses -Root `$remoteRoot -Role caddy
+`$codeFiles = @(@($deploymentArtifactLiteral) + `$runtimeFiles + `$legacyRuntimeFiles + @('rabilink-relay-runtime-files.json', 'scripts/rabilink-relay-runtime-files.json', 'start-rabilink-relay.ps1', 'health-check.ps1', 'Caddyfile', 'Caddyfile.template', 'start-caddy.ps1', 'package.json'))
 `$wsDirectory = Resolve-RelayLayoutPath -Root `$remoteRoot -Relative 'node_modules/ws'
 if (Test-Path -LiteralPath `$wsDirectory) {
     `$codeFiles += @(Get-ChildItem -LiteralPath `$wsDirectory -Recurse -File | ForEach-Object { `$_.FullName.Substring(`$remoteRoot.TrimEnd('\', '/').Length + 1).Replace('\', '/') })
@@ -623,6 +610,7 @@ try {
     Backup-RelayRuntimeLayout -Root `$remoteRoot -BackupRoot `$backupRoot -Files `$codeFiles
 } catch {
     if (`$previousTask) { Start-ScheduledTask -TaskName 'RabiLinkRelay' -ErrorAction SilentlyContinue }
+    if (`$previousCaddyTask) { Start-ScheduledTask -TaskName 'RabiLinkCaddy' -ErrorAction SilentlyContinue }
     throw
 }
 `$codeLayout = @{ version = 1; files = @(); absent = @() }
@@ -653,6 +641,7 @@ try {
     }
 }
 New-Item -ItemType Directory -Force -Path "`$remoteRoot\logs" | Out-Null
+if (`$null -ne `$caddyTemplateMigration) { [IO.File]::WriteAllText((Join-Path `$remoteRoot 'Caddyfile.template'), `$caddyTemplateMigration, (New-Object Text.UTF8Encoding(`$false))) }
 
 if (-not `$runtimeOnly) {
 if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
@@ -661,7 +650,7 @@ if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
 }
 
 Stop-ScheduledTask -TaskName "RabiLinkCaddy" -ErrorAction SilentlyContinue
-Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Stop-RelayServiceProcesses -Root `$remoteRoot -Role caddy
 
 `$caddyDir = "C:\caddy"
 `$caddyExe = Join-Path `$caddyDir "caddy.exe"
@@ -687,34 +676,24 @@ Register-ScheduledTask -TaskName `$taskName -Action `$action -Trigger `$trigger 
 Start-ScheduledTask -TaskName `$taskName
 
 `$localHealth = `$null
-for (`$i = 0; `$i -lt 20; `$i += 1) {
-    try {
-        `$localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 5
-        break
-    } catch {
-        Start-Sleep -Seconds 1
+`$endpoint = `$null
+for (`$i = 0; `$i -lt 30; `$i += 1) {
+    `$endpoint = Get-RelayEndpoint -Root `$remoteRoot
+    if (`$endpoint) {
+        try { `$localHealth = Invoke-RestMethod -Uri ('http://127.0.0.1:' + `$endpoint.port + '/health') -MaximumRedirection 0 -TimeoutSec 5; if (`$localHealth.ok -eq `$true) { break } } catch { }
     }
+    Start-Sleep -Seconds 1
 }
-if (-not `$localHealth) {
-    throw "RabiLink relay did not pass local health check."
-}
-`$relayProcess = Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { `$_.CommandLine -like "*rabilink-relay-server.mjs*" } |
-    Select-Object -First 1
-if (-not `$relayProcess) {
-    throw "RabiLink relay process was not found after health check."
-}
+if (-not `$endpoint -or `$localHealth.ok -ne `$true) { throw 'RabiLink relay did not pass owned endpoint health check.' }
 Start-Sleep -Seconds 5
-`$stableRelayProcess = Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { `$_.ProcessId -eq `$relayProcess.ProcessId }
-if (-not `$stableRelayProcess) {
-    throw "RabiLink relay process exited during the stabilization check."
-}
-`$localHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8788/health" -TimeoutSec 5
+`$stableEndpoint = Get-RelayEndpoint -Root `$remoteRoot
+if (-not `$stableEndpoint -or `$stableEndpoint.run -ne `$endpoint.run) { throw 'Relay owner changed during stabilization.' }
+`$localHealth = Invoke-RestMethod -Uri ('http://127.0.0.1:' + `$stableEndpoint.port + '/health') -MaximumRedirection 0 -TimeoutSec 5
 
-if (-not `$runtimeOnly) {
-& `$caddyExe validate --config "`$remoteRoot\Caddyfile"
-Get-Process caddy -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if (-not `$runtimeOnly -or `$previousCaddyTask) {
+`$caddyExe = "C:\caddy\caddy.exe"
+if (-not (Test-Path -LiteralPath `$caddyExe)) { throw "Managed Caddy executable is missing." }
+Stop-RelayServiceProcesses -Root `$remoteRoot -Role caddy
 `$caddyTaskName = "RabiLinkCaddy"
 Stop-ScheduledTask -TaskName `$caddyTaskName -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName `$caddyTaskName -Confirm:`$false -ErrorAction SilentlyContinue

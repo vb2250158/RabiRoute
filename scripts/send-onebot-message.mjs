@@ -1,6 +1,6 @@
 function parseArgs(argv) {
   const options = {
-    url: "http://127.0.0.1:3000",
+    url: "",
     token: "",
     message: ""
   };
@@ -25,11 +25,11 @@ function parseArgs(argv) {
 
 function usage() {
   console.log(`Usage:
-  node scripts/send-onebot-message.mjs --group 123456 --message "中文测试"
-  node scripts/send-onebot-message.mjs --user 123456 --message "中文测试\\n第二行"
+  node scripts/send-onebot-message.mjs --url <current-OneBot-HTTP-URL> --group 123456 --message "中文测试"
+  node scripts/send-onebot-message.mjs --url <current-OneBot-HTTP-URL> --user 123456 --message "中文测试\\n第二行"
 
 Options:
-  --url      OneBot HTTP base URL, default http://127.0.0.1:3000
+  --url      Required current OneBot HTTP base URL for the intended account
   --token    Optional OneBot access token
   --group    Target group_id for send_group_msg
   --user     Target user_id for send_private_msg
@@ -38,6 +38,12 @@ Options:
 }
 
 const options = parseArgs(process.argv.slice(2));
+
+if (!String(options.url).trim() || options.url === "true") {
+  console.error("OneBot URL is required: provide --url for the intended account; no message was sent.");
+  usage();
+  process.exit(1);
+}
 
 if (!options.message || (!options.group && !options.user)) {
   usage();
