@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { posixOwnerLeaseRuntime, requirePosixOwnerProtocol } from './posix-owner-lease.mjs';
 import path from 'node:path';
 import net from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,7 +10,7 @@ export function launcherLeaseTarget(configPath) {
   const canonical = fs.realpathSync(configPath);
   const hash = sha256(process.platform === 'win32' ? canonical.toLowerCase() : canonical);
   return process.platform === 'win32' ? `\\\\.\\pipe\\rabi-agent-${hash}`
-    : { host: '127.0.0.1', port: 16384 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+    : (() => { throw Error('POSIX launcher ownership uses its stable private inode, not a TCP address'); })();
 }
 function regular(filename) {
   const stat = fs.lstatSync(filename);
@@ -32,8 +33,17 @@ export async function adoptColdRelease(options) {
   if (typeof assertOwnerAbsent !== 'function') throw Error('An original-owner absence check is required');
   const configPath = fs.realpathSync(options.configPath), root = path.dirname(configPath);
   const pointerPath = path.join(root, 'current-release.json');
-  const lease = net.createServer(socket => socket.destroy());
-  await new Promise((resolve, reject) => { lease.once('error', reject); lease.listen(launcherLeaseTarget(configPath), resolve); });
+  requirePosixOwnerProtocol(configPath);
+  const lease = process.platform === 'win32' ? net.createServer(socket => socket.destroy()) : undefined;
+  const owned = [];
+  try {
+    if (lease) await new Promise((resolve, reject) => { lease.once('error', reject); lease.listen(launcherLeaseTarget(configPath), resolve); });
+    else {
+      const runtime = posixOwnerLeaseRuntime(configPath);
+      owned.push(runtime.acquire(configPath, 'launcher'));
+      owned.push(runtime.acquire(configPath, 'config'));
+    }
+  } catch (error) { for (const handle of owned.reverse()) handle.release(); throw error; }
   try {
     await assertOwnerAbsent();
     const configBytes = regular(configPath), config = JSON.parse(configBytes);
@@ -66,6 +76,9 @@ export async function adoptColdRelease(options) {
       if (bytes.length !== file.size || sha256(bytes) !== file.sha256) throw Error('Asset integrity mismatch: ' + file.path);
     }
     if (!names.has('rabi-agent.mjs')) throw Error('Release entry is missing');
+    if (process.platform !== 'win32' && (!names.has('package.json')
+        || JSON.parse(regular(path.join(target, 'package.json'))).rabiAgentOwnerProtocol !== 2))
+      throw Error('Cold POSIX selection cannot cross the owner protocol; original launcher and pointer are unchanged');
     const installed = JSON.parse(regular(path.join(target, 'release-identity.json')));
     if (installed.digest !== digest || installed.version !== manifest.version) throw Error('Installed release identity mismatch');
     const entrypoint = path.join(target, 'rabi-agent.mjs');
@@ -90,5 +103,8 @@ export async function adoptColdRelease(options) {
       }
       throw error;
     } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
-  } finally { await new Promise((resolve, reject) => lease.close(error => error ? reject(error) : resolve())); }
+  } finally {
+    if (lease) await new Promise((resolve, reject) => lease.close(error => error ? reject(error) : resolve()));
+    else for (const handle of owned.reverse()) handle.release();
+  }
 }

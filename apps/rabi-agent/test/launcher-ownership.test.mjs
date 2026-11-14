@@ -31,9 +31,10 @@ ${mode === "crash" ? "setTimeout(()=>{log('crash');process.exit(1);},60);" : ""}
 setInterval(()=>{},1000);
 log('start');
 `);
+  if (process.platform !== "win32") fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ rabiAgentOwnerProtocol: 2 }));
+  const launcher = __test.writeLauncher(config, { baseDelayMs: 20, maxDelayMs: 40, maxRestarts: 2, stableMs: 60000 });
   __test.writeCurrentRelease(config, entry, "a".repeat(64));
   const pointerBytes = fs.readFileSync(path.join(root, "current-release.json"));
-  const launcher = __test.writeLauncher(config, { baseDelayMs: 20, maxDelayMs: 40, maxRestarts: 2, stableMs: 60000 });
   if (platform !== process.platform) {
     const bytes = fs.readFileSync(launcher, "utf8");
     fs.writeFileSync(launcher, bytes.replace("(async function stableLauncher", `Object.defineProperty(process, 'platform', {value:${JSON.stringify(platform)}});\n(async function stableLauncher`));
@@ -75,7 +76,7 @@ log('start');
   return { root, config, diagnostic, target, run, events, started, ready, stopped };
 }
 
-for (const platform of new Set([process.platform, "linux"])) {
+for (const platform of [process.platform]) {
   test(`${platform}: empty retired owner and crash recovery never block startup`, async t => {
     const f = fixture(t, platform);
     const owner = path.join(f.root, "launcher-owner.json"); const recovery = `${owner}.recovery`;
@@ -113,8 +114,20 @@ for (const platform of new Set([process.platform, "linux"])) {
   test(`${platform}: unrelated live listener is not stolen or sent unauthenticated stop`, async t => {
     const f = fixture(t, platform); let received = "";
     const server = net.createServer(socket => { socket.on("data", bytes => { received += bytes.toString(); socket.end("not-a-launcher\n"); }); });
-    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(f.target, resolve); });
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(platform === "win32" ? f.target : { host: "127.0.0.1", port: 0 }, resolve); });
     t.after(() => new Promise(resolve => server.close(resolve)));
+    if (platform !== "win32") {
+      const owner = f.run(); await f.ready();
+      const original = fs.readFileSync(f.diagnostic);
+      const diagnostic = JSON.parse(original);
+      fs.writeFileSync(f.diagnostic, JSON.stringify({ ...diagnostic, token: "a".repeat(64),
+        address: { host: "127.0.0.1", port: server.address().port } }));
+      const stop = f.run(["--stop"]); assert.equal(await stop.closed, 1);
+      assert.match(received, /^hello [a-f0-9]{64}\n$/); assert.equal(received.includes("stop"), false);
+      assert.equal(server.listening, true); assert.equal(owner.done, false);
+      fs.writeFileSync(f.diagnostic, original); await f.stopped(); assert.equal(await owner.closed, 0);
+      return;
+    }
     const contender = f.run(); assert.equal(await contender.closed, 1); assert.equal(f.started().length, 0);
     fs.writeFileSync(f.diagnostic, JSON.stringify({ configHash: createHash("sha256").update(platform === "win32" ? fs.realpathSync(f.config).toLowerCase() : fs.realpathSync(f.config)).digest("hex"), token: "a".repeat(64), pid: process.pid }));
     const stop = f.run(["--stop"]); assert.equal(await stop.closed, 1);
@@ -223,4 +236,22 @@ test("API and upload remain short-lived bypasses even while owner is busy", asyn
     assert.equal(f.started().at(-1).supervised, undefined);
   }
   assert.equal(f.started().length, 3); await f.stopped(); assert.equal(await launcher.closed, 0);
+});
+
+test("serialized launcher retains its pinned lease implementation instead of loading a current-release helper", async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.root, "lib"));
+  fs.writeFileSync(path.join(f.root, "lib", "posix-owner-lease.mjs"), "throw new Error('Untrusted current-release helper executed');");
+  const owner = f.run(); await f.ready();
+  assert.equal(f.started().length, 1);
+  await f.stopped(); assert.equal(await owner.closed, 0);
+});
+
+test("same-protocol launcher replacement cannot admit a second owner", async t => {
+  const f = fixture(t); const original = f.run(); await f.ready();
+  __test.writeLauncher(f.config, { baseDelayMs: 30, maxDelayMs: 50, maxRestarts: 3, stableMs: 60000 });
+  const duplicate = f.run(); assert.equal(await duplicate.closed, 1);
+  assert.match(fs.readFileSync(duplicate.output, "utf8"), /ownership is busy/);
+  assert.equal(f.started().length, 1); assert.equal(original.done, false);
+  await f.stopped(); assert.equal(await original.closed, 0);
 });

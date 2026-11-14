@@ -18,8 +18,9 @@ test('real update candidate exits before READY without changing active pointer o
     const oldEntry = path.join(oldRoot, 'rabi-agent.mjs');
     fs.writeFileSync(oldEntry, '');
     fs.writeFileSync(path.join(oldRoot, 'lib', 'instance-hook.mjs'), 'export async function requestInstanceHook(){ return "old-hook"; }');
-    __test.writeCurrentRelease(configPath, oldEntry, 'a'.repeat(64));
+    if(process.platform!=='win32') fs.writeFileSync(path.join(oldRoot,'package.json'),JSON.stringify({rabiAgentOwnerProtocol:2}));
     __test.writeLauncher(configPath);
+    __test.writeCurrentRelease(configPath, oldEntry, 'a'.repeat(64));
     // A legacy shared copy must remain untouched, even though the new shim does not use it.
     fs.writeFileSync(path.join(root, 'manager-client.mjs'), '// old shared transport fixture');
     const preserved = ['current-release.json', 'hook-client.mjs', 'manager-client.mjs', 'rabi-agent-launcher.mjs'];
@@ -28,7 +29,12 @@ test('real update candidate exits before READY without changing active pointer o
     const dependencyMarker = path.join(root, 'dependency-script-ran');
     const candidateMarker = path.join(root, 'candidate-ran');
     const fakeNpm = path.join(root, 'fake-npm.mjs');
-    fs.writeFileSync(fakeNpm, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(dependencyMarker)}, 'fixture'); process.exit(0);`);
+    // This test owns candidate exit/rollback; native terminal readiness has its own tests.
+    const fixturePty = "exports.spawn=()=>({onData(){},onExit(callback){setImmediate(()=>callback({exitCode:0}))},kill(){}});";
+    fs.writeFileSync(fakeNpm, `import fs from 'node:fs'; import path from 'node:path';
+fs.writeFileSync(${JSON.stringify(dependencyMarker)}, 'fixture');
+if(process.platform!=='win32'){const root=path.join(process.cwd(),'node_modules','node-pty');fs.mkdirSync(root,{recursive:true});fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'node-pty',version:'0.0.0-fixture',main:'index.cjs'}));fs.writeFileSync(path.join(root,'index.cjs'),${JSON.stringify(fixturePty)});}
+process.exit(0);`);
     process.env.npm_execpath = fakeNpm;
     const bytes = Buffer.from(`import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(candidateMarker)}, 'fixture'); process.exit(1);`);
     const keys = generateKeyPairSync('ed25519');

@@ -88,6 +88,9 @@ examples/rabi-link-vela-probe/*.log
 
 # host-api 生成器的中间候选目录，发布成功即被替换；SMB 上清理可能失败，勿入库。
 /plugins/contracts/.host-api-candidate-*
+
+# rabi-agent 下载测试的临时目录
+/apps/rabi-agent/test/.download-test-*
 apps/rabilink-aiui/node_modules/
 apps/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.

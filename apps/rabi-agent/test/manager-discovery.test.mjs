@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { createHash } from "node:crypto";
+import { posixOwnerLeaseRuntime } from "../lib/posix-owner-lease.mjs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { discoverManager, createDiscoveryCooldown } from "../lib/manager-discovery.mjs";
@@ -178,16 +179,17 @@ function startWriter(t, configPath, mode = "run") {
   } };
 }
 
-// Only used to check the kernel address is free after crash; no business service
-// or endpoint discovery is performed, and no alternative port is tried.
+// Windows checks its original named pipe; POSIX acquires the real inode below.
 function writerAddress(configPath) {
-  const canonical = fs.realpathSync.native(configPath);
-  const hash = createHash("sha256").update(process.platform === "win32" ? canonical.toLowerCase() : canonical).digest("hex");
-  return process.platform === "win32" ? { path: `\\\\.\\pipe\\rabi-agent-endpoint-${hash}` }
-    : { host: "127.0.0.1", port: 49152 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+  const hash = createHash("sha256").update(fs.realpathSync.native(configPath).toLowerCase()).digest("hex");
+  return { path: "\\\\.\\pipe\\rabi-agent-endpoint-" + hash };
 }
 
 async function assertOwnerReleased(configPath) {
+  if (process.platform !== "win32") {
+    const lease = posixOwnerLeaseRuntime(fs.realpathSync.native(configPath)).acquire(fs.realpathSync.native(configPath), "config");
+    lease.release(); return;
+  }
   const probe = net.createServer(socket => socket.destroy());
   await new Promise((resolve, reject) => { probe.once("error", reject); probe.listen(writerAddress(configPath), resolve); });
   await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));

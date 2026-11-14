@@ -1,4 +1,7 @@
 import { createTimeoutSettings } from "./lib/timeout-settings.mjs";
+import { createRequire } from "node:module";
+import { createPosixOwnerLeaseRuntime, posixOwnerLeaseRuntime, materializePosixLeaseNative, requirePosixOwnerProtocol,
+  readLauncherControlDiagnostic, requirePosixParentOwner, protectPosixWorkerLease } from "./lib/posix-owner-lease.mjs";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -145,10 +148,14 @@ async function bootstrapConfig(configPath, fetcher = fetch) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
   const canonical = fs.existsSync(configPath) ? fs.realpathSync.native(configPath)
     : path.join(fs.realpathSync.native(path.dirname(configPath)), path.basename(configPath));
-  const hash = sha256(Buffer.from(process.platform === "win32" ? canonical.toLowerCase() : canonical));
+  if (process.platform !== "win32") {
+    requirePosixOwnerProtocol(canonical);
+    const lease = posixOwnerLeaseRuntime(canonical).acquire(canonical, "config");
+    try { return await bootstrapLockedConfig(canonical, fetcher); } finally { lease.release(); }
+  }
+  const hash = sha256(Buffer.from(canonical.toLowerCase()));
   const owner = net.createServer(socket => socket.destroy());
-  const target = process.platform === "win32" ? `\\\\.\\pipe\\rabi-agent-bootstrap-${hash}`
-    : { host: "127.0.0.1", port: 32768 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+  const target = "\\\\.\\pipe\\rabi-agent-bootstrap-" + hash;
   await new Promise((resolve, reject) => {
     owner.once("error", () => reject(new Error("Connection setup is already running or its local ownership address is busy. No enrollment was sent.")));
     owner.listen(target, resolve);
@@ -292,7 +299,7 @@ function launcherPath(configPath) {
 }
 
 // Serialized into the stable launcher: no imports from a replaceable release.
-async function stableLauncher(defaultConfigPath, policy) {
+async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
   const args = process.argv.slice(2);
   const index = args.indexOf("--config");
   const requestedConfig = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : defaultConfigPath;
@@ -305,10 +312,17 @@ async function stableLauncher(defaultConfigPath, policy) {
   const currentPath = path.join(path.dirname(configPath), "current-release.json");
   const configHash = createHash("sha256").update(process.platform === "win32" ? configPath.toLowerCase() : configPath).digest("hex");
   const diagnosticPath = path.join(path.dirname(configPath), `launcher-control-${configHash}.json`);
+  const requireEntryProtocol = entrypoint => {
+    if (process.platform === "win32") return;
+    const declared = JSON.parse(fs.readFileSync(path.join(path.dirname(entrypoint), "package.json"), "utf8"));
+    if (declared.rabiAgentOwnerProtocol !== 2) throw new Error("POSIX launcher cannot select a legacy worker protocol; current owner is retained.");
+  };
   const currentEntry = () => {
     const pointer = JSON.parse(fs.readFileSync(currentPath, "utf8"));
     if (!pointer.entrypoint || !fs.statSync(pointer.entrypoint).isFile()) throw new Error("Current release is missing.");
-    return path.resolve(pointer.entrypoint);
+    const entrypoint = path.resolve(pointer.entrypoint);
+    requireEntryProtocol(entrypoint);
+    return entrypoint;
   };
   if (forwarded.includes("--api") || forwarded.includes("--operation") || forwarded.includes("--upload") || forwarded.some(arg => ["--delivery-submit", "--delivery-query", "--delivery-list"].includes(arg))) {
     const child = spawn(process.execPath, [currentEntry(), ...forwarded, "--config", configPath], { stdio: "inherit", windowsHide: true });
@@ -316,12 +330,13 @@ async function stableLauncher(defaultConfigPath, policy) {
     child.once("exit", code => { process.exitCode = code ?? 1; });
     return;
   }
-  // The listening handle is the only lease. Retired launcher-owner.json,
-  // .recovery and launcher-control.sock are neither consulted nor removed.
-  // Unix pathname sockets cannot be safely recovered with probe-then-unlink;
-  // use exactly one deterministic loopback port, never scan or steal a busy one.
+  // POSIX ownership belongs to the retained private inode; the control socket is discovery only.
+  requirePosixOwnerProtocol(configPath);
+  const leaseRuntime = process.platform === "win32" ? undefined : createPosixOwnerLeaseRuntime({
+    fs, path, createHash, requireNative: createRequire(import.meta.url), nativeSpec });
+  let ownerLease;
   const controlTarget = process.platform === "win32" ? `\\\\.\\pipe\\rabi-agent-${configHash}`
-    : { host: "127.0.0.1", port: 16384 + (Number.parseInt(configHash.slice(0, 8), 16) % 16384), exclusive: true };
+    : { host: "127.0.0.1", port: 0, exclusive: true };
   const { randomBytes, createHmac } = await import("node:crypto");
   const proof = (token, operation, nonce) => createHmac("sha256", token).update(`${configHash}:${operation}:${nonce}`).digest("hex");
   const commandIndex = forwarded.indexOf("--command");
@@ -330,9 +345,20 @@ async function stableLauncher(defaultConfigPath, policy) {
   if (requestedCommand && !["status", "start", "pause", "restart", "reconnect", "enable-startup", "disable-startup"].includes(requestedCommand)) throw new Error("Unsupported launcher command.");
   if (forwarded.includes("--stop") || requestedCommand) {
     let diagnostic;
-    try { diagnostic = JSON.parse(fs.readFileSync(diagnosticPath, "utf8")); } catch { /* Absence is not a lease. */ }
+    if (leaseRuntime) {
+      let probe;
+      try { probe = leaseRuntime.acquire(configPath, "launcher"); }
+      catch (error) { if (error.code !== "RABI_AGENT_LEASE_BUSY") throw error; }
+      if (probe) {
+        probe.release();
+        if (!requestedCommand) return;
+        throw new Error("Launcher owner is unavailable; no command sent.");
+      }
+    }
+    try { diagnostic = readLauncherControlDiagnostic(diagnosticPath, configHash); }
+    catch (error) { if (leaseRuntime) throw error; }
     await new Promise((resolve, reject) => {
-      const socket = net.createConnection(controlTarget);
+      const socket = net.createConnection(leaseRuntime ? diagnostic.address : controlTarget);
       const nonce = randomBytes(32).toString("hex");
       let buffer = ""; let authenticated = false; let complete = false;
       socket.setTimeout(timeout("agent.launcher.command",12000), () => socket.destroy(new Error("Launcher stop timed out; result uncertain.")));
@@ -365,13 +391,14 @@ async function stableLauncher(defaultConfigPath, policy) {
         }
       });
       socket.once("error", error => {
-        if (!requestedCommand && !authenticated && ["ENOENT", "ECONNREFUSED"].includes(error.code)) { complete = true; resolve(); }
+        if (!leaseRuntime && !requestedCommand && !authenticated && ["ENOENT", "ECONNREFUSED"].includes(error.code)) { complete = true; resolve(); }
         else reject(error);
       });
       socket.once("close", () => complete ? resolve() : reject(new Error("Launcher stop was not acknowledged; result uncertain.")));
     });
     return;
   }
+  if (leaseRuntime) ownerLease = leaseRuntime.acquire(configPath, "launcher");
   const token = randomBytes(32).toString("hex");
   const children = new Set(); const sockets = new Set(); const stopWaiters = new Set();
   let worker; let candidate; let stopping = false; let released = false; let retryTimer; let stopDeadline; let failures = 0; let workerStartedAt;
@@ -469,7 +496,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     }
     released = true; clearTimeout(stopDeadline);
     // Keep the lease until all owned workers/candidates have actually closed.
-    control.close();
+    control.close(() => { ownerLease?.release(); ownerLease = undefined; });
     for (const socket of sockets) {
       if (stopWaiters.has(socket)) socket.end("stopped\n");
       // Already connected clients may still be authenticating. Let their short
@@ -501,12 +528,19 @@ async function stableLauncher(defaultConfigPath, policy) {
     retryTimer = setTimeout(startWorker, wait);
   };
   const startChild = (entrypoint, isCandidate = false) => {
+    requireEntryProtocol(entrypoint);
     const child = spawn(process.execPath, [entrypoint, ...(isCandidate ? ["--run"] : forwarded.length ? forwarded : ["--run"]), "--config", configPath], {
-      cwd: path.dirname(entrypoint), windowsHide: true, stdio: ["ignore", "inherit", "inherit", "ipc"],
+      cwd: path.dirname(entrypoint), windowsHide: true, stdio: ["ignore", "inherit", "inherit", "ipc", ...(ownerLease ? [ownerLease.inheritedDescriptor()] : [])],
       env: { ...process.env, RABI_AGENT_SUPERVISED: "1", RABI_AGENT_UPDATE_CANDIDATE: isCandidate ? "1" : "0" }
     });
     children.add(child);
     child.on("message", message => {
+      if (ownerLease && !stopping && message?.type === "posixOwnerChallenge"
+          && /^[a-f0-9]{64}$/.test(message.nonce || "") && message.configHash === configHash) {
+        ownerLease.assertCurrent();
+        send(child, { type: "posixOwnerProtocol", protocol: 2, nonce: message.nonce, configHash });
+        return;
+      }
       if (child === candidate?.child) { send(candidate.owner, { type: "launcherCandidateEvent", requestId: candidate.requestId, event: message }); return; }
       if (child !== worker || stopping) return;
       if (message?.type === "deliveryControlResult") {
@@ -524,7 +558,11 @@ async function stableLauncher(defaultConfigPath, policy) {
         publish(publicState.summary);
       } else if (message?.type === "launcherSpawnCandidate" && !candidate) {
         candidate = { owner: child, requestId: message.requestId, child: null };
-        candidate.child = startChild(path.resolve(message.entrypoint), true);
+        try { candidate.child = startChild(path.resolve(message.entrypoint), true); }
+        catch {
+          send(child, { type: "launcherCandidateExit", requestId: candidate.requestId, code: 1, signal: null });
+          candidate = null;
+        }
       } else if (message?.requestId === candidate?.requestId && candidate.owner === child) {
         if (message.type === "launcherCandidateCommand") send(candidate.child, { type: message.command });
         if (message.type === "launcherTerminateCandidate") candidate.child.kill("SIGKILL");
@@ -626,6 +664,7 @@ async function stableLauncher(defaultConfigPath, policy) {
     });
   } catch (error) {
     process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop);
+    ownerLease?.release(); ownerLease = undefined;
     if (error.code === "EADDRINUSE") throw new Error("Rabi Agent launcher ownership is busy; no worker started.");
     throw error;
   }
@@ -635,7 +674,8 @@ async function stableLauncher(defaultConfigPath, policy) {
   // Publish only after listen; failure releases the kernel lease without spawning.
   try {
     const temporary = `${diagnosticPath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify({ pid: process.pid, configHash, token })}\n`, { mode: 0o600 });
+    const address = control.address();
+    fs.writeFileSync(temporary, `${JSON.stringify({ pid: process.pid, configHash, token, ...(leaseRuntime ? { protocol: 2, address: { host: "127.0.0.1", port: address.port } } : {}) })}\n`, { flag: "wx", mode: 0o600 });
     fs.renameSync(temporary, diagnosticPath);
     fs.chmodSync(diagnosticPath, 0o600);
   } catch (error) { stop(); throw error; }
@@ -648,6 +688,13 @@ async function stableLauncher(defaultConfigPath, policy) {
 }
 
 function writeLauncher(configPath, policy = { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 }) {
+  let nativeSpec;
+  if (process.platform !== "win32") {
+    const canonical = fs.existsSync(configPath) ? fs.realpathSync(configPath)
+      : path.join(fs.realpathSync(path.dirname(configPath)), path.basename(configPath));
+    requirePosixOwnerProtocol(canonical);
+    nativeSpec = materializePosixLeaseNative(path.dirname(canonical));
+  }
   const writeObservedText = (filename, content) => {
     if (fs.existsSync(filename)) fs.readFileSync(filename);
     const temporary = `${filename}.${process.pid}.tmp`;
@@ -657,7 +704,7 @@ function writeLauncher(configPath, policy = { baseDelayMs: 1000, maxDelayMs: 300
   const hookShim = `import fs from "node:fs";\nimport path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport async function requestInstanceHook(input, configPath, fetcher = fetch) {\n const current = JSON.parse(fs.readFileSync(path.join(path.dirname(path.resolve(configPath)), "current-release.json"), "utf8"));\n const module = await import(pathToFileURL(path.join(path.dirname(current.entrypoint), "lib", "instance-hook.mjs")).href);\n return module.requestInstanceHook(input, configPath, fetcher);\n}\n`;
   writeObservedText(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim);
   const launcher = launcherPath(configPath);
-  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\nconst createDesktopPresentation = ${createDesktopPresentation.toString()};\nconst startupCommand = ${startupCommand.toString()};\nconst startupFiles = ${startupFiles.toString()};\nconst launcherPath = ${launcherPath.toString()};\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
+  const code = `// RABI_AGENT_POSIX_OWNER_PROTOCOL:2\nimport fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\nimport { createRequire } from "node:module";\nconst createPosixOwnerLeaseRuntime = ${createPosixOwnerLeaseRuntime.toString()};\nconst requirePosixOwnerProtocol = ${requirePosixOwnerProtocol.toString()};\nconst readLauncherControlDiagnostic = ${readLauncherControlDiagnostic.toString()};\nconst createDesktopPresentation = ${createDesktopPresentation.toString()};\nconst startupCommand = ${startupCommand.toString()};\nconst startupFiles = ${startupFiles.toString()};\nconst launcherPath = ${launcherPath.toString()};\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}, ${JSON.stringify(nativeSpec)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
   writeObservedText(launcher, code);
   return launcher;
 }
@@ -757,9 +804,17 @@ function readConfig(configPath) {
   if (!previous || previous.schemaVersion !== 1) throw new Error("Rabi Agent configuration is missing or invalid.");
   const config = withoutSessionBindings(previous);
   if (JSON.stringify(previous) !== JSON.stringify(config)) {
-    if (fs.readFileSync(configPath, "utf8") !== original) throw new Error("Configuration changed during binding retirement; retry from current configuration.");
-    fs.writeFileSync(configPath + ".before-explicit-sessions-" + Date.now() + ".json", original, { mode: 0o600, flag: "wx" });
-    writePrivateJson(configPath, config);
+    const canonical = process.platform === "win32" ? configPath : fs.realpathSync(configPath);
+    let lease;
+    if (process.platform !== "win32") {
+      requirePosixOwnerProtocol(canonical);
+      lease = posixOwnerLeaseRuntime(canonical).acquire(canonical, "config");
+    }
+    try {
+      if (fs.readFileSync(canonical, "utf8") !== original) throw new Error("Configuration changed during binding retirement; retry from current configuration.");
+      fs.writeFileSync(canonical + ".before-explicit-sessions-" + Date.now() + ".json", original, { mode: 0o600, flag: "wx" });
+      writePrivateJson(canonical, config);
+    } finally { lease?.release(); }
   }
   const nodeCredential = String(config.nodeCredential || "").trim();
   const nodeId = String(config.nodeId || "").trim();
@@ -1726,24 +1781,31 @@ async function main() {
   }
   if (ARGS.includes("--bootstrap")) {
     await bootstrapConfig(CONFIG_PATH);
+    writeLauncher(CONFIG_PATH);
     initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
     const startup = await configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH, { activate: true, timeoutOverrides: readConfig(CONFIG_PATH).timeoutOverridesCache });
     if (startup.diagnostic) process.stderr.write(`Rabi Agent startup: ${startup.diagnostic}\n`);
     // Enrollment enters the owner in this process, rather than retaining a
     // second long-lived bootstrap parent above the stable main program.
-    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
+    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 }, materializePosixLeaseNative(path.dirname(fs.realpathSync(CONFIG_PATH))));
     return;
   }
   if (process.env.RABI_AGENT_SUPERVISED === "1" && (!process.send || !process.connected)) {
     throw new Error("Owned connector requires the main program IPC; no independent child was started.");
   }
+  if (process.env.RABI_AGENT_SUPERVISED === "1") {
+    const originalParentPid = process.ppid;
+    const originalConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    await requirePosixParentOwner(CONFIG_PATH, createTimeoutSettings(originalConfig.timeoutOverridesCache).get("agent.launcher.handshake", 3000));
+    protectPosixWorkerLease(CONFIG_PATH, originalParentPid);
+  } else requirePosixOwnerProtocol(fs.realpathSync(CONFIG_PATH));
   const loadedConfig = readConfig(CONFIG_PATH);
   if (!UPDATE_CANDIDATE && process.env.RABI_AGENT_SUPERVISED !== "1") {
     // Direct --run shares the stable owner too. Never reset an update pointer
     // simply because an obsolete release entrypoint was launched manually.
-    initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
     writeLauncher(CONFIG_PATH);
-    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 });
+    initializeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
+    await stableLauncher(CONFIG_PATH, { baseDelayMs: 1000, maxDelayMs: 30000, maxRestarts: 5, stableMs: 60000 }, materializePosixLeaseNative(path.dirname(fs.realpathSync(CONFIG_PATH))));
     return;
   }
   await ensureNativeTerminalDependencies(fileURLToPath(import.meta.url), { timeoutOverrides: loadedConfig.timeoutOverridesCache });

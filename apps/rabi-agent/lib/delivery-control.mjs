@@ -1,5 +1,6 @@
 import { createTimeoutSettings } from "./timeout-settings.mjs";
 import fs from "node:fs";
+import { readLauncherControlDiagnostic } from "./posix-owner-lease.mjs";
 import path from "node:path";
 import net from "node:net";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -10,10 +11,10 @@ export async function requestDeliveryControl(configPath, operation, params, { ti
   const config = JSON.parse(fs.readFileSync(canonical, "utf8"));
   timeoutMs ??= createTimeoutSettings(config.timeoutOverridesCache ?? config.timeoutOverrides).get("agent.client.localControl", 15_000);
   const configHash = createHash("sha256").update(process.platform === "win32" ? canonical.toLowerCase() : canonical).digest("hex");
-  const diagnostic = JSON.parse(fs.readFileSync(path.join(path.dirname(canonical), `launcher-control-${configHash}.json`), "utf8"));
+  const diagnostic = readLauncherControlDiagnostic(path.join(path.dirname(canonical), `launcher-control-${configHash}.json`), configHash);
   if (diagnostic.configHash !== configHash || !/^[a-f0-9]{64}$/.test(diagnostic.token || "")) throw new Error("DELIVERY_OWNER_UNAVAILABLE: local acceptance was not confirmed.");
   const address = process.platform === "win32" ? `\\\\.\\pipe\\rabi-agent-${configHash}`
-    : { host: "127.0.0.1", port: 16384 + (Number.parseInt(configHash.slice(0, 8), 16) % 16384) };
+    : diagnostic.address;
   const requestId = randomUUID(), nonce = randomBytes(32).toString("hex");
   const body = JSON.stringify({ requestId, operation, params });
   if (Buffer.byteLength(body) > 3 * 1024 * 1024) throw new Error("Delivery control request exceeds the local size limit.");

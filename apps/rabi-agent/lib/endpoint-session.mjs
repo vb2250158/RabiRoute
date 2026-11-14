@@ -1,5 +1,6 @@
 import { createTimeoutSettings } from "./timeout-settings.mjs";
 import fs from "node:fs";
+import { posixOwnerLeaseRuntime, requirePosixOwnerProtocol } from "./posix-owner-lease.mjs";
 import net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverManager, createDiscoveryCooldown, verifyPublicEndpoint } from "./manager-discovery.mjs";
@@ -15,14 +16,18 @@ async function acquireEndpointWriter(configPath) {
   // Resolve symlink/directory aliases before hashing and writing. Atomic rename must
   // replace the actual config, not turn a config symlink into an independent copy.
   const canonical = fs.realpathSync.native(configPath);
-  const hash = createHash("sha256").update(process.platform === "win32" ? canonical.toLowerCase() : canonical).digest("hex");
-  // No pathname socket: probe-then-unlink recovery can race another successful
-  // bind and remove its live socket. Both choices below are kernel-only owners;
-  // process death releases them without any stale file/recovery lock to remove.
-  // Unix loopback hash collisions fail conservatively as busy, never steal ownership.
-  const address = process.platform === "win32"
-    ? { path: `\\\\.\\pipe\\rabi-agent-endpoint-${hash}` }
-    : { host: "127.0.0.1", port: 49152 + (Number.parseInt(hash.slice(0, 8), 16) % 16384), exclusive: true };
+  if (process.platform !== "win32") {
+    requirePosixOwnerProtocol(canonical);
+    try {
+      const lease = posixOwnerLeaseRuntime(canonical).acquire(canonical, "config");
+      return { canonical, release: () => lease.release() };
+    } catch (error) {
+      if (error.code === "RABI_AGENT_LEASE_BUSY") throw new EndpointConfigurationError("Endpoint configuration is busy; retry the read explicitly.");
+      throw error;
+    }
+  }
+  const hash = createHash("sha256").update(canonical.toLowerCase()).digest("hex");
+  const address = { path: "\\\\.\\pipe\\rabi-agent-endpoint-" + hash };
   const owner = net.createServer(socket => socket.destroy());
   await new Promise((resolve, reject) => {
     const failed = error => {

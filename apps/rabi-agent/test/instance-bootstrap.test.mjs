@@ -262,6 +262,7 @@ test("download uses independent credential, rejects cross origin and redirects",
 });
 
 test("launcher installs a pointer-resolving Hook shim and provides stable API forwarding", async () => fixture(async ({ configPath, directory }) => {
+  if (process.platform !== "win32") fs.writeFileSync(path.join(directory,"package.json"),JSON.stringify({rabiAgentOwnerProtocol:2}));
   const launcher = __test.writeLauncher(configPath);
   assert.ok(fs.existsSync(path.join(directory, "hook-client.mjs")));
   assert.equal(fs.existsSync(path.join(directory, "manager-client.mjs")), false);

@@ -17,6 +17,8 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-startup-owner-"));
   const config = path.join(root, "config.json");
   fs.writeFileSync(config, JSON.stringify({ nodeId: "fixture", nodeCredential: "private-fixture", autoUpdate: false, agents: [{ sessionId: "unchanged" }] }));
+  if (process.platform !== "win32") fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ rabiAgentOwnerProtocol: 2 }));
+  __test.writeLauncher(config, { baseDelayMs: 100, maxDelayMs: 200, maxRestarts: 2, stableMs: 60000 });
   const marker = path.join(root, "events.jsonl");
   const events = () => fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   const createWorker = (name, content) => {

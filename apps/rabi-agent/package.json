@@ -1,7 +1,8 @@
 {
   "name": "rabi-agent",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
+  "rabiAgentOwnerProtocol": 2,
   "type": "module",
   "description": "Enrolled computer connector with explicit Agent type and session targeting",
   "engines": {

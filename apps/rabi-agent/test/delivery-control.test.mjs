@@ -40,7 +40,7 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
  const result=process.argv.includes('--delivery-submit')?await runDeliveryCommand(process.argv.slice(2),configPath,readInput):await runManagerCommand(process.argv.slice(2),configPath,{readInput,fetchImpl,discover:async()=>null});
  console.log(JSON.stringify(result));
 } else {
- const owner=new DeliveryOwner({configPath,config:{nodeId:'fixture-node'},sendEvent:()=>false,client:()=>({request:async(method)=>{
+ const owner=new DeliveryOwner({configPath,config:{nodeId:'fixture-node',deliveryPolicy:{baseDelayMs:10,maxDelayMs:50,pollMs:10}},sendEvent:()=>false,client:()=>({request:async(method)=>{
   if(!fs.existsSync(${JSON.stringify(online)}))throw new Error('fixture offline');
   return {ok:true,statusCode:200,body:JSON.stringify(method==='GET'?{code:0,data:{state:'committed',deliveryId:'internal',receipt:{accepted:true}}}:{status:'delivered',delivery:{status:'accepted',deliveryId:'internal'}})};
  }})});
@@ -57,8 +57,9 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
  fs.writeFileSync(readyTemporary,String(process.pid));fs.renameSync(readyTemporary,readyMarker);
  setInterval(()=>{},1000);
 }`);
-  __test.writeCurrentRelease(configPath, entry, "a".repeat(64));
+  if (process.platform !== "win32") fs.writeFileSync(path.join(root,"package.json"),JSON.stringify({rabiAgentOwnerProtocol:2}));
   const launcher = __test.writeLauncher(configPath, { baseDelayMs: 50, maxDelayMs: 100, maxRestarts: 2, stableMs: 60000 });
+  __test.writeCurrentRelease(configPath, entry, "a".repeat(64));
   const children = [];
   const run = (args = [], stdin) => {
     const child = spawn(process.execPath, [launcher, "--config", configPath, ...args], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -120,7 +121,9 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
   const stop = run(["--stop"]); assert.equal((await stop.closed).code, 0); await first.closed;
   fs.unlinkSync(marker); fs.writeFileSync(online, "fixture recovered");
   run(); await until(() => fs.existsSync(marker));
-  await until(async () => (await requestDeliveryControl(configPath, "query", { action: "get", intentId: "stable-fixture" })).item?.state === "received");
+  let recovered;
+  try { await until(async () => { recovered = await requestDeliveryControl(configPath, "query", { action: "get", intentId: "stable-fixture" }); return recovered.item?.state === "received"; }); }
+  catch (error) { throw new Error(error.message + ': ' + JSON.stringify(recovered)); }
   const secondStop = run(["--stop"]); assert.equal((await secondStop.closed).code, 0);
 });
 
