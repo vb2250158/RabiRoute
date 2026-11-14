@@ -60,12 +60,11 @@ function normalizedRelayBaseUrl(value) {
 }
 
 function applyPrivateRelayDefaultToAppJson(stagingRoot, relayBaseUrl) {
-  if (!relayBaseUrl) return;
   const appJsonPath = path.join(stagingRoot, "app.json");
   const appJson = JSON.parse(readText(appJsonPath));
   appJson.rabiLink = {
     ...(appJson.rabiLink || {}),
-    relayBaseUrl,
+    relayBaseUrl: relayBaseUrl || appJson.rabiLink?.relayBaseUrl || "",
     token: ""
   };
   writeText(appJsonPath, `${JSON.stringify(appJson, null, 2)}\n`);
@@ -83,7 +82,38 @@ async function bundlePageSetup(setupSource, relayBaseUrl, releaseVersion) {
     fail(`pages/home/index.ink must contain exactly one ${releaseVersionMarker} marker.`);
   }
   const versionedSetupSource = setupSource.replace(releaseVersionMarker, releaseVersion);
-  const plugins = [];
+  // Read workspace SDK entries through Node. Some Windows SMB mounts
+  // reject esbuild's directory enumeration even though the files are readable.
+  const sharedModules = new Map([
+    ['rokid-voice/src/voice-runtime.js', '../../packages/rokid-voice/src/voice-runtime.js'],
+    ['rokid-voice/src/transcript-policy.js', '../../packages/rokid-voice/src/transcript-policy.js'],
+      ['rokid-voice/src/task-input.js', '../../packages/rokid-voice/src/task-input.js'],
+      ['rokid-voice/src/task-input-handoff.js', '../../packages/rokid-voice/src/task-input-handoff.js'],
+    ['assistant-runtime/src/decision-protocol.js', '../../packages/assistant-runtime/src/decision-protocol.js'],
+      ['assistant-runtime/src/assert-current.js', '../../packages/assistant-runtime/src/assert-current.js'],
+      ['assistant-runtime/src/interjection.js', '../../packages/assistant-runtime/src/interjection.js'],
+    ['assistant-runtime/src/turn-runtime.js', '../../packages/assistant-runtime/src/turn-runtime.js'],
+    ['assistant-runtime/src/assistant-session.js', '../../packages/assistant-runtime/src/assistant-session.js'],
+      ['assistant-runtime/src/conversation-runtime.js', '../../packages/assistant-runtime/src/conversation-runtime.js'],
+    ['assistant-runtime/src/listening-lifecycle.js', '../../packages/assistant-runtime/src/listening-lifecycle.js'],
+    ['assistant-runtime/src/speech-playback.js', '../../packages/assistant-runtime/src/speech-playback.js'],
+    ['assistant-runtime/src/voice-interaction.js', '../../packages/assistant-runtime/src/voice-interaction.js'],
+    ['assistant-runtime/src/aiui-runtime.js', '../../packages/assistant-runtime/src/aiui-runtime.js']
+  ].map(([key, value]) => [key, path.resolve(projectRoot, value)]));
+  const plugins = [{
+    name: 'shared-assistant-modules',
+    setup(build) {
+      const resolve = key => {
+        if (!sharedModules.has(key)) throw new Error(`Unknown shared assistant module: ${key}`);
+        return { path: key, namespace: 'shared-assistant-modules' };
+      };
+      build.onResolve({ filter: /packages\/(rokid-voice|assistant-runtime)\/src\// }, args => resolve(args.path.split('/packages/')[1]));
+      build.onResolve({ filter: /^\.\//, namespace: 'shared-assistant-modules' }, args => resolve(path.posix.join(path.posix.dirname(args.importer), args.path)));
+      build.onLoad({ filter: /.*/, namespace: 'shared-assistant-modules' }, args => ({
+        contents: readText(sharedModules.get(args.path)), loader: 'js'
+      }));
+    }
+  }];
   if (relayBaseUrl) {
     plugins.push({
       name: "rabilink-private-defaults",

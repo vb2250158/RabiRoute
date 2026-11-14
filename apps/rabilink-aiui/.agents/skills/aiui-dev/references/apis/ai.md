@@ -1,8 +1,8 @@
 # AIUI AI and Speech API Reference
 
-This file documents the verified AI and speech-related APIs available to AIUI app code.
+This file documents the verified AI and speech-related APIs available to AIUI agent code.
 
-- Common scope, entry points, and authoring rules live in [apis.md](./apis.md).
+- Common scope, entry points, and authoring rules live in [apis.md](./index.md).
 - Treat these definitions as implementation truth rather than as browser-platform guarantees.
 - Do not assume richer provider metadata, structured tool-call round trips, or broader Web Speech coverage unless it is explicitly listed here.
 
@@ -276,13 +276,49 @@ while (true) {
 
 ### Methods
 
-- `speechSynthesis.speak(utterance)`
+- `speechSynthesis.speak(utterance, mode?)`
+- `speechSynthesis.synthesize(utterance, options?)`
 
 ### Behavior notes
 
-- `speak(utterance)` forwards the utterance state to the native runtime through IPC.
-- `speechSynthesis` currently supports dispatching speech synthesis requests through `speak()` only.
+- `speak()` and `synthesize()` are independent workflows. Do not call both to complete one playback operation.
+- `speak()` generates and plays speech directly, returns `void`, and uses one runtime-managed speech player shared by all `speak()` calls.
+- `speak()` accepts `mode: 'enqueue' | 'immediate'`; omission defaults to `'enqueue'`.
+- `synthesize()` starts generation and returns `Promise<SpeechSynthesisTask>`, but does not play the generated audio automatically.
+- Tasks created by `synthesize()` do not enter the shared `speak()` playback queue.
+- For playback after `synthesize()`, construct an independent `SpeechAudioPlayer` for the returned task.
+- Prefer `speak()` for ordinary prompts and replies that only need direct playback.
+- Prefer `synthesize()` for subtitle cues, audio chunks, cancellation, custom playback UI, or independent playback controls.
 - `cancel()`, `pause()`, `resume()`, `getVoices()`, and utterance lifecycle events are not exposed.
+
+### Synthesis options
+
+- `subtitles?: 'none' | 'sentence' | 'word'`
+- `audio.preferredFormat?: 'pcm' | 'mp3' | 'ogg_opus'`
+- `audio.sampleRate?: number`
+- `audio.channels?: 1 | 2`
+- `audio.bitrate?: number`
+- `signal?: AbortSignal`
+
+### Examples
+
+Direct playback through the shared player:
+
+```js
+const utterance = new SpeechSynthesisUtterance('Hello Ink');
+speechSynthesis.speak(utterance, 'enqueue');
+```
+
+Independent generation and playback:
+
+```js
+const utterance = new SpeechSynthesisUtterance('Hello Ink');
+const task = await speechSynthesis.synthesize(utterance, {
+  subtitles: 'word',
+});
+const player = new SpeechAudioPlayer(task);
+player.play();
+```
 
 ## `SpeechSynthesisUtterance`
 
@@ -294,21 +330,90 @@ while (true) {
 
 - `text`
 - `lang`
-- `pitch`
-- `rate`
 - `voice`
 - `volume`
+- `pitch`
+- `rate`
 
 ### Behavior notes
 
 - The default initial state is `text = ''`.
 - The default initial state is `lang = 'en-US'`.
-- The default initial state is `pitch = 1.0`.
-- The default initial state is `rate = 1.0`.
 - The default initial state is `voice = null`.
-- The default initial state is `volume = 1.0`.
+- `lang` is not currently supported and does not change the generated language.
+- `pitch`, `rate`, and `volume` default to `1`. Fractional volume values survive assignment; audible volume and pitch/rate adjustments depend on the speech service.
+
+### Supported voice IDs
+
+- `female-tianmei`
+- `English_radiant_girl`
+- `English_expressive_narrator`
+- `male-qn-qingse`
+- `male-qn-jingying`
+- `female-yujie`
+- `Chinese (Mandarin)_News_Anchor`
+- `Chinese (Mandarin)_Radio_Host`
+- `clever_boy`
+- `lovely_girl`
+- `English_Trustworthy_Man`
+
+## `SpeechSynthesisTask`
+
+### Members
+
+- `id: string`
+- `state: 'running' | 'completed' | 'aborted' | 'errored'`
+- `audioConfig: SpeechSynthesisAudioConfig`
+- `language: string`
+- `granularity: 'none' | 'sentence' | 'word'`
+- `finished: Promise<{ duration: number }>`
+
+### Methods
+
+- `abort()`
+
+### Events
+
+- Event names: `chunk`, `end`, `error`, and `abort`.
+- Handler properties: `onchunk`, `onend`, `onerror`, and `onabort`.
+- A `chunk` event exposes `audio: Uint8Array` and `cues: readonly SpeechSynthesisCue[]`.
+
+## `SpeechAudioPlayer`
+
+### Constructor
+
+- `new SpeechAudioPlayer(task, options?)`
+- `options.trackMode?: 'hidden' | 'showing'`
+
+### Members
+
+- `audioPlayer`
+- `textTrack`
+- `activeCue`
+- `currentTime`
+- `duration`
+- `paused`
+
+### Methods
+
+- `play()`
+- `pause()`
+- `stop()`
+- `seek(position)`
+- `destroy()`
+
+### Behavior notes
+
+- Each instance consumes one `SpeechSynthesisTask` created by `synthesize()`.
+- It neither represents nor controls the runtime-managed player shared by `speak()` calls.
+- Generated `textTrack` cues preserve object identity for edits and removal; see [media text tracks](./media.md#text-tracks-and-subtitle-cues).
 
 ## `SpeechRecognition`
+
+Speech recognition no longer requires a separate `SPEECH_RECOGNITION`
+permission. Capturing microphone audio still requires declaring `RECORD_AUDIO`
+and obtaining platform authorization. External-audio sessions do not open the
+microphone themselves.
 
 ### Constructor
 
@@ -348,3 +453,74 @@ while (true) {
 ### Error behavior
 
 - `start()` fails immediately with `InvalidStateError` when the owning InkView is non-interactive.
+
+## `SpeechRecognitionSession`
+
+Use this API when audio is already recorded or must arrive incrementally. The session does not open the microphone itself; capture microphone chunks with `MediaRecorder` and write them to `session.audio`.
+
+### Constructor
+
+`new SpeechRecognitionSession(options?)`
+
+| Option | Type | Behavior |
+| --- | --- | --- |
+| `lang` | `string` | Recognition language such as `zh-CN`. |
+| `interimResults` | `boolean` | Enables provisional results when supported; defaults to `false`. |
+| `maxAlternatives` | `number` | Maximum alternatives per result; minimum/default is `1`. |
+| `phrases` | `{ phrase: string, boost?: number }[]` | Custom hotwords; check capabilities first. |
+| `segmentation` | `'auto' \| 'vad' \| 'semantic' \| { mode: 'vad', silenceDurationMs?: number }` | Requested segmentation mode; check supported modes and VAD threshold capability. |
+| `audio` | `{ mimeType?, sampleRate?, channelCount?, sampleFormat? }` | Input format; `sampleFormat` is `'s16'` or `'f32'`. |
+
+The instance exposes writable stream `audio`, read-only `state`, `updateContext(messages)`, and `onstart`, `onaudiostart`, `onresult`, `onerror`, `onaudioend`, and `onend`.
+
+### `SpeechRecognitionSession.getCapabilities()`
+
+Returns a Promise for:
+
+| Field | Meaning |
+| --- | --- |
+| `audioFormats` | MIME types and supported sample rates, channel counts, and sample formats. |
+| `maxChunkBytes` | Maximum transport chunk size; larger writes are split automatically. |
+| `interimResults` | Whether provisional results are supported. |
+| `maxAlternatives` | Maximum alternatives per result. |
+| `phrases` | Whether custom hotwords are supported. |
+| `contextUpdates` | Whether initial or updated ASR context is supported. |
+| `segmentationModes` | Supported `auto`, `vad`, or `semantic` modes. |
+| `vadSilenceDuration` | Whether a custom VAD silence duration is supported, with `minMs` and `maxMs` bounds. |
+
+For a custom VAD threshold, select a non-negative integer within the reported
+closed interval and pass `{ mode: 'vad', silenceDurationMs }`. Unsupported modes
+or threshold support reject the first audio write; malformed options throw.
+Segmentation ends a result segment, not the audio stream or session. Close the
+audio writer when all input is complete.
+
+### `session.updateContext(messages)`
+
+Replaces the recognition context. Each message has non-empty `text` and role `user` or `assistant`. Check `contextUpdates`; the Promise rejects when dynamic context is unsupported or the update fails.
+
+```javascript
+const capabilities = await SpeechRecognitionSession.getCapabilities();
+const session = new SpeechRecognitionSession({
+  lang: 'zh-CN',
+  interimResults: capabilities.interimResults,
+  phrases: capabilities.phrases
+    ? [{ phrase: 'Rokid', boost: 5 }, { phrase: 'AIUI', boost: 5 }]
+    : undefined,
+});
+
+if (capabilities.contextUpdates) {
+  await session.updateContext([
+    { role: 'user', text: 'I am asking about Rokid products.' },
+  ]);
+}
+
+session.onresult = (event) => {
+  console.log(event.results[event.resultIndex][0].transcript);
+};
+
+const writer = session.audio.getWriter();
+await writer.write(audioBlob);
+await writer.close();
+```
+
+For live microphone input, choose a MIME type supported by both `MediaRecorder.isTypeSupported()` and `capabilities.audioFormats`, serialize `dataavailable` writes through one Promise chain, wait for all writes, then close the writer and stop microphone tracks.

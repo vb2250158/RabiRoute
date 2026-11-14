@@ -1,10 +1,25 @@
 # AIUI Canvas and Barcode API Reference
 
-This file documents the verified Canvas and barcode APIs available to AIUI app code.
+This file documents the verified Canvas and barcode APIs available to AIUI agent code.
 
-- Common scope, entry points, and authoring rules live in [apis.md](./apis.md).
+- Common scope, entry points, and authoring rules live in [apis.md](./index.md).
 - Do not infer standard Web API behavior unless it is explicitly listed here or in the index file.
 - Do not add browser-compatible overloads or semantics that are not present in the source.
+
+## Encoded Canvas Output
+
+`canvas.convertToBlob({ type?, quality? })` asynchronously encodes a stable
+snapshot of the current Canvas pixels as a `Blob`. PNG is the default and
+fallback for unsupported types. PNG retains alpha; JPEG composites transparent
+pixels over black. Keep encoded image bytes distinct from `ImageBitmap` pixel
+data.
+
+`quality` is a JPEG value from `0` to `1`. For an open `ImageBitmap`, use global
+`createImageBlob(bitmap, { type?, quality? }): Promise<Blob>` without creating
+a Canvas. It has the same PNG/JPEG selection. Close the bitmap after encoding
+completes; closed input rejects with `InvalidStateError`, unsupported native
+external/GPU pixels with `NotSupportedError`, and a full encoding queue with
+`EncodingError`.
 
 ## `CanvasRenderingContext2D`
 
@@ -94,6 +109,11 @@ Value behavior:
 - `font`
 - `textAlign`
 - `textBaseline`
+- `letterSpacing` and `wordSpacing` (for example, `'2px'`)
+- `direction`: `ltr`, `rtl`, or `inherit`
+- `filter`
+- `imageSmoothingEnabled`
+- `imageSmoothingQuality`: `low`, `medium`, or `high`
 
 Value behavior:
 
@@ -120,12 +140,12 @@ Value behavior:
 - `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)`
 - `quadraticCurveTo(cpx, cpy, x, y)`
 - `closePath()`
-- `roundRect(x, y, width, height, ...radii)`
+- `roundRect(x, y, width, height, radii?)`
 
 Argument behavior:
 
 - `arc()` and `ellipse()` use `false` when `anticlockwise` is omitted.
-- `roundRect()` accepts a variadic radii list.
+- `roundRect()` accepts a number, elliptical `{ x, y }` radius, or iterable of 1–4 such entries; omitted radii default to `0`. Negative values, empty collections, or more than four entries throw `RangeError`. It only adds a path; call `fill()` / `stroke()` to draw it.
 
 #### Path painting and clipping
 
@@ -158,7 +178,7 @@ Argument behavior:
 
 Return behavior:
 
-- `measureText(text)` returns an object with only one confirmed field: `width`.
+- `measureText(text)` returns `TextMetrics`: width, actual/font bounds, em heights, and baselines. Metrics depend on current font, alignment, and direction and match text layout. For example, read `width`, `actualBoundingBoxAscent`, and `actualBoundingBoxDescent`.
 
 #### State and transform
 
@@ -211,11 +231,12 @@ Argument behavior:
 
 - `createLinearGradient(x0, y0, x1, y1)`
 - `createRadialGradient(x0, y0, r0, x1, y1, r1)`
+- `createConicGradient(startAngle, x, y)`
 - `createPattern(image, repetition)`
 
 Behavior notes:
 
-- `createPattern(image, repetition)` currently ignores the incoming JavaScript image value and creates the pattern from an internal 1x1 surface.
+- `createPattern(image, repetition)` snapshots a Canvas source. Repetition is `repeat`, `repeat-x`, `repeat-y`, or `no-repeat`; `''` means `repeat`. Invalid repetition throws `SyntaxError`. Do not assume other source types work.
 
 #### Image drawing
 
@@ -225,13 +246,18 @@ Behavior notes:
 
 Behavior notes:
 
-- `drawImage()` only recognizes another `Canvas` instance as the source image.
-- If the first argument is not a `Canvas`, the call returns without drawing.
+- `drawImage()` accepts Canvas and open `ImageBitmap` sources. A closed `ImageBitmap` throws `InvalidStateError`; create another bitmap before drawing again.
 - Only the 3-argument, 5-argument, and 9-argument forms are implemented.
 
 #### Flush
 
 - `flush()`
+- For mounted Page canvases, obtain the context with `wx.createCanvasContext('id')` (no `#`); it returns `null` when no matching Canvas is available. Call `flush()` after a drawing batch.
+
+#### Context management
+
+- `reset()` restores the initial state and clears the Canvas.
+- `getContextAttributes()` and `isContextLost()` inspect context settings/status.
 
 ### Dirty-mark behavior
 
@@ -306,7 +332,7 @@ When the context is bound to a page canvas node through `wx.createCanvasContext(
 - `moveTo(x, y)`
 - `lineTo(x, y)`
 - `rect(x, y, width, height)`
-- `roundRect(x, y, width, height, ...radii)`
+- `roundRect(x, y, width, height, radii?)`
 - `closePath()`
 - `arc(x, y, radius, startAngle, endAngle, anticlockwise?)`
 - `arcTo(x1, y1, x2, y2, radius)`
@@ -325,6 +351,7 @@ When the context is bound to a page canvas node through `wx.createCanvasContext(
 - `addPath(path, transform?)` requires the first argument to be a `Path2D`.
 - `addPath(path, transform?)` throws when `transform` is present but is not an accepted DOM matrix object.
 - `toString()` returns SVG path data.
+- `roundRect()` uses the same scalar, elliptical, or 1–4 entry radii rules and `RangeError` checks as the 2D context.
 
 ## `BarcodeDetector`
 
@@ -340,9 +367,8 @@ When the context is bound to a page canvas node through `wx.createCanvasContext(
 Behavior notes:
 
 - `options` is optional.
-- If `options.formats` is present and is readable as `Vec<String>`, each string is parsed as a barcode format name.
-- Unrecognized format strings are ignored.
-- If `options` is omitted, or `formats` is missing or unreadable, the detector is created with an empty format list.
+- `formats`, when supplied, must be a nonempty array of supported canonical names. Empty lists, unknown names, and `'unknown'` are invalid; do not rely on silently ignoring them.
+- Omit `formats` to use the runtime's default detection set. Query `getSupportedFormats()` before selecting a subset.
 
 ### Static methods
 
@@ -352,6 +378,7 @@ Return behavior:
 
 - `getSupportedFormats()` returns a `Promise`.
 - The promise resolves to an array of strings.
+- Prefer these canonical Web names, such as `qr_code`, `code_128`, and `ean_13`; detection results use canonical `format` names. Do not assume arbitrary platform/library aliases work.
 
 ### Instance methods
 
@@ -359,22 +386,19 @@ Return behavior:
 
 Argument behavior:
 
-- `image` must be an object.
-- `image.width` is required.
-- `image.height` is required.
-- `image.data` is required.
-- `image.data` is accepted only when it can be read as an `ArrayBuffer` or a byte typed array.
+- Prefer an `ImageData`, encoded-image `Blob`, or open `ImageBitmap`.
+- A legacy raw object requires `width`, `height`, and `data` as an ArrayBuffer or byte typed array; do not confuse raw pixels with encoded photo bytes.
+- `OffscreenCanvas`, `VideoFrame`, and HTML/SVG image, video, or Canvas elements are outside the supported input surface.
 
 Return behavior:
 
 - `detect(image)` returns a `Promise`.
-- When `image.data` is readable, the promise resolves to an array of result objects.
-- Each result object currently has these confirmed fields:
+- The promise resolves to an array of result objects with:
   - `format`
   - `rawValue`
-- When `image.data` cannot be read as supported binary data, the promise resolves to an empty array.
+  - `boundingBox`: `DOMRectReadOnly`
+  - `cornerPoints`: four `{ x, y }` coordinates
 
 Error behavior:
 
-- `detect(image)` throws if `image` is not an object.
-- `detect(image)` throws if `data`, `width`, or `height` is missing.
+- Invalid inputs, closed bitmaps, malformed images, and missing legacy raw-object fields can fail; handle synchronous errors and Promise rejection.

@@ -1,4 +1,5 @@
 {
+  "permissions": ["RECORD_AUDIO"],
   "pages": [
     "pages/home/index"
   ],

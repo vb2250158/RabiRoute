@@ -276,6 +276,7 @@ try {
     }
     start() {
       this.started = true;
+      this.onstart?.();
     }
     stop() {
       this.stopped = true;
@@ -354,6 +355,8 @@ try {
   };
 
   await buildPackageStaging(stagingRoot);
+  // This temporary Node fixture is outside the project's ESM package boundary.
+  writeText(path.join(stagingRoot, "package.json"), JSON.stringify({ type: "module", private: true }));
   rewriteCompiledImports(stagingRoot);
 
   const wxModule = await import(pathToFileURL(path.join(stagingRoot, "test-mocks", "wx.js")).href);
@@ -633,9 +636,9 @@ try {
   assert(page.data.mode === "transcription" && page.data.isTranscriptionMode, "Direct startup should default to transcription mode.");
   assert(
     page.data.transcriptionDesired === false
-      && page.data.transcriptionState === "等待绑定"
+      && page.data.transcriptionState === "浏览器调试：进入后点麦克风"
       && page.data.needsDeviceSetup === true,
-    "A tokenless startup must enter Setup without seizing ASR."
+    "A tokenless preview must await interaction; optional PC setup must not replace native conversation."
   );
   assert(page.data.panelId === "route", "onLoad should derive the first panel.");
   assert(page.data.surfaceId === "relay-status", "onLoad should start on the Relay status surface.");
@@ -647,6 +650,7 @@ try {
   assert(page.startupActivated === true, "Deferred startup should activate explicitly after the first frame.");
   assert(wxModule.wxCalls.storageReads > 0, "Deferred startup should load local state after the first frame.");
   assert(page.data.logs.length > 0, "Deferred startup should append the startup log.");
+  assert(page.data.transcriptionSyncLabel === "原生对话", "Tokenless startup must not claim a connected phone.");
 
   wxModule.setStorageValue("rabilink-aiui-settings", {
     token: "legacy-local-token-must-be-removed",
@@ -654,6 +658,7 @@ try {
   });
   const legacyTokenPage = createPageInstance(pageModule);
   legacyTokenPage.onLoad();
+  legacyTokenPage.onReady();
   legacyTokenPage.activateDeferredStartup();
   const migratedSettings = wxModule.getStorageValue("rabilink-aiui-settings");
   assert(legacyTokenPage.data.token === "", "A fresh page must not reuse a token persisted by an older package.");
@@ -779,9 +784,13 @@ try {
   assert(setupPage.data.token === "", "A legacy outer app token must not bypass physical-glasses Setup.");
   assert(setupPage.data.deviceSerialNumber === "ROKID-SETUP-SMOKE", "Setup must show the physical glasses serial number.");
   assert(setupPage.data.deviceSetupUrl.endsWith("/manage"), "Setup must show the Relay management URL.");
+  setupPage.setData({ transcriptionDesired: true, transcriptionText: 'ongoing native input',
+    agentReplyText: 'ongoing native answer', agentStatus: 'native conversation' });
   const setupClaimed = await setupPage.claimDeviceTokenFromSerial();
   assert(setupClaimed && setupPage.data.needsDeviceSetup === false, "A successful SN claim must leave Setup automatically.");
   assert(setupPage.data.token === "rbd_runtime-smoke-device-token", "A successful SN claim must install the device credential.");
+  assert(setupPage.data.transcriptionDesired === true && setupPage.data.transcriptionText === 'ongoing native input'
+    && setupPage.data.agentReplyText === 'ongoing native answer', 'Successful background enrollment must preserve native conversation and listening intent.');
   const storedDeviceCredential = [...localStorageValues.values()].find((value) => value.includes("rbd_runtime-smoke-device-token"));
   assert(storedDeviceCredential, "The claimed device credential must persist in Agent-isolated localStorage.");
   const setupClaimRequest = wxModule.wxCalls.requestBodies.find((request) => request.url.endsWith("/api/rabilink/devices/token"));
@@ -855,14 +864,13 @@ try {
   assert(transcriptPage.data.assistantUserText === "帮我读取配置", "Configuration ASR text must remain visible in the HUD.");
   const recognitionCountBeforeConfigurationResume = recognitions.length;
   await new Promise((resolve) => setTimeout(resolve, 260));
-  assert(recognitions.length === recognitionCountBeforeConfigurationResume && !transcriptPage.recognition, "ASR end must wait for a new activation without starting a timer-owned recognition.");
-  transcriptPage.resumeConfigurationListening("wakeup");
-  assert(transcriptPage.recognition?.started, "A new real wake activation can start another configuration recognition.");
+  assert(recognitions.length === recognitionCountBeforeConfigurationResume + 1 && transcriptPage.recognition?.started,
+    "Normal ASR end must continue the user's active listening intent after the bounded restart delay.");
 
   const unknownConfigurationRecognition = transcriptPage.recognition;
   const requestsBeforeUnknownConfigurationAsr = wxModule.wxCalls.requests;
   suppressSpeechEvents = true;
-  transcriptPage.speechPlaybackWatchdogMs = () => 30;
+  transcriptPage.speechPlaybackTimeoutMs = () => 30;
   nextLanguageModelCommand = "";
   nextLanguageModelReply = "请说明要读取、修改或运行哪一项配置。";
   unknownConfigurationRecognition.onresult?.({ results: [[{ transcript: "帮我看看天气怎么样" }]] });
@@ -873,7 +881,8 @@ try {
   const recognitionCountBeforeUnknownResume = recognitions.length;
   await new Promise((resolve) => setTimeout(resolve, 320));
   suppressSpeechEvents = false;
-  assert(recognitions.length === recognitionCountBeforeUnknownResume && !transcriptPage.recognition && !transcriptPage.speechActive, "After recognition ends, ASR awaits activation and unsupported TTS does not pretend to remain active.");
+  assert(recognitions.length === recognitionCountBeforeUnknownResume + 1 && transcriptPage.recognition?.started && !transcriptPage.speechActive,
+    "After a normal round, ASR continues listening while unsupported TTS does not pretend to remain active.");
 
   nextLanguageModelCommand = "";
   nextLanguageModelReply = "";
@@ -989,7 +998,7 @@ try {
   voiceRoundTripPage.onUnload();
   assistantPage.onUnload();
 
-  console.log(`RabiLink AIUI runtime smoke passed (${expectedCommands.length} commands / ${commandCases.length} phrases, 20 mode round trips, native ASR/TTS, LanguageModel and in-page configuration).`);
+  console.log(`RabiLink AIUI runtime smoke passed (${expectedCommands.length} commands / ${commandCases.length} phrases, 20 mode round trips, stubbed ASR/LanguageModel and in-page configuration; no audio-device acceptance).`);
 } finally {
   delete globalThis.SpeechRecognition;
   delete globalThis.SpeechSynthesisUtterance;

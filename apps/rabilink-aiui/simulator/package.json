@@ -1,0 +1,9 @@
+{
+  "name": "rabilink-aiui-simulator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test server.test.mjs host.test.mjs && node browser.test.mjs"
+  }
+}

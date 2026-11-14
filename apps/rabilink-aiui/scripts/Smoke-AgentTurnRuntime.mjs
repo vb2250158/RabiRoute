@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { createAgentTurnRuntime } from '../utils/agent-turn-runtime.js';
 import { AGENT_PROTOCOL, agentLoopModelOptions } from '../utils/agent-decision-protocol.js';
 import { createApiToolRuntime } from '../utils/api-tool-runtime.js';
+import { createPageAssistantFixture } from './AssistantSessionFixture.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
 const message = input => JSON.parse(input[0].content);
@@ -18,7 +19,7 @@ function toolRuntime(call) {
 
 test('same Rokid session reads live help, calls a future API and reasons from the actual receipt', async () => {
   const requests = [], calls = [], spoken = [];
-  const tools = toolRuntime(async packet => { calls.push(packet); return { structuredContent: { ok: true, data: packet.path === '/api/agent/help' ? { next: '/api/future' } : { count: 37 } } }; });
+  const tools = toolRuntime(async packet => { calls.push(packet); return { structuredContent: { ok: true, data: packet.path === '/api/agent/help?limit=32' ? { next: '/api/future' } : { count: 37 } } }; });
   const host = { addEventListener() { throw Error('no second native execution path'); }, async prompt(input) {
     requests.push(input); const step = requests.length;
     if (step === 1) return action(input, 'rabi_api_help', {});
@@ -29,7 +30,7 @@ test('same Rokid session reads live help, calls a future API and reasons from th
   const turn = createAgentTurnRuntime({ model: host, tools: await tools.loadTools(), executeTool: event => tools.handleToolCall(event), onText: value => spoken.push(value.delta) });
   const result = await turn.run('查询未来接口');
   assert.equal(result.state, 'completed'); assert.equal(result.steps, 3); assert.equal(result.toolResults.length, 2);
-  assert.deepEqual(calls.map(row => row.path), ['/api/agent/help','/api/future']); assert.deepEqual(spoken, ['查到 37 条。']);
+  assert.deepEqual(calls.map(row => row.path), ['/api/agent/help?limit=32','/api/future']); assert.deepEqual(spoken, ['查到 37 条。']);
   assert.ok(requests.every(input => input.length === 1 && input[0].role === 'user'));
   assert.equal(message(requests[1]).untrusted, true);
 });
@@ -38,7 +39,7 @@ test('model options retain the persona, use host default model and declare appli
   const base = { initialPrompts: [{ role: 'system', content: '角色指引' }], tools: [{ type: 'function', function: { name: 'close_app', parameters: {} } }] };
   const result = agentLoopModelOptions(base, [{ type: 'function', function: { name: 'rabi_api_call', parameters: {} } }]);
   assert.equal(result.options.model, undefined); assert.deepEqual(result.options.tools, []);
-  assert.ok(result.options.initialPrompts[0].content.startsWith('角色指引'));
+  assert.ok(result.options.initialPrompts[0].content.endsWith('\n\n角色指引'));
   assert.ok(result.options.initialPrompts[0].content.includes('rabi_api_call'));
   assert.equal(result.tools.length, 2); assert.equal(base.tools.length, 1); assert.equal(base.initialPrompts[0].content, '角色指引');
 });
@@ -62,7 +63,7 @@ test('unknown write outcome blocks subsequent writes but permits readback and st
     step++;
     if (step === 1) return action(input, 'rabi_api_call', { method: 'POST', path: '/api/first' });
     if (step === 2) return action(input, 'rabi_api_call', { method: 'POST', path: '/api/different' });
-    if (step === 3) { assert.equal(message(input).observation.outcome.result.structuredContent.code, 'WRITE_RECONCILIATION_REQUIRED'); return action(input, 'rabi_api_call', { method: 'GET', path: '/api/operations/original' }); }
+    if (step === 3) { assert.equal(message(input).observation.outcome.code, 'WRITE_RECONCILIATION_REQUIRED'); assert.equal(message(input).observation.dispatched, false); return action(input, 'rabi_api_call', { method: 'GET', path: '/api/operations/original' }); }
     return '原请求仍待核对。';
   } };
   const turn = createAgentTurnRuntime({ model: host, tools: ['rabi_api_call'], executeTool: async event => {
@@ -71,12 +72,93 @@ test('unknown write outcome blocks subsequent writes but permits readback and st
   assert.equal((await turn.run('保存')).state, 'uncertain'); assert.deepEqual(calls, ['POST','GET']);
 });
 
+test('a lost API response gives the model the generated original operation for readback', async () => {
+  const packets = [], inputs = [];
+  let rows = [], original;
+  const api = createApiToolRuntime({ sessionId: 'recovery-session', defaultTargetDeviceId: 'pc-original',
+    storage: { load: () => structuredClone(rows), save: value => { rows = structuredClone(value); } },
+    call: async packet => {
+      packets.push(packet);
+      if (packet.method === 'POST') {
+        original = packet.operationId;
+        throw Error('private transport diagnostic that must not reach the model');
+      }
+      assert.equal(packet.path, '/api/fixture/receipts/' + encodeURIComponent(original));
+      return { structuredContent: { ok: true, data: { operationId: original, state: 'committed' } } };
+    }
+  });
+  const model = { async prompt(input) {
+    inputs.push(input);
+    if (inputs.length === 1) return action(input, 'rabi_api_call', { method: 'POST', path: '/api/fixture/write' });
+    const outcome = message(input).observation.outcome;
+    if (inputs.length === 2) {
+      assert.equal(outcome.uncertain, true);
+      assert.equal(outcome.requestIdentity.operationId, original);
+      assert.equal(outcome.requestIdentity.targetDeviceId, 'pc-original');
+      assert.equal(outcome.requestIdentity.callId, 'recovery-turn:call-1');
+      assert.ok(!JSON.stringify(outcome).includes('private transport diagnostic'));
+      // This receipt path belongs to the fixture's known API contract.
+      return action(input, 'rabi_api_call', { method: 'GET', targetDeviceId: outcome.requestIdentity.targetDeviceId,
+        path: '/api/fixture/receipts/' + encodeURIComponent(outcome.requestIdentity.operationId) });
+    }
+    assert.equal(outcome.result.structuredContent.data.state, 'committed');
+    return final(input, '已查询原请求回执。');
+  } };
+  const result = await createAgentTurnRuntime({ model, turnId: 'recovery-turn', tools: await api.loadTools(),
+    executeTool: event => api.handleToolCall(event) }).run('保存并按原请求查询回执');
+  assert.equal(result.state, 'uncertain');
+  assert.deepEqual(packets.map(packet => packet.method), ['POST', 'GET']);
+  assert.equal(rows[0].state, 'uncertain');
+  const duplicate = await api.handleToolCall({ callId: 'later-call', functionName: 'rabi_api_call', isComplete: true,
+    arguments: { method: 'POST', path: '/api/fixture/write', operationId: original } });
+  assert.equal(duplicate.requestIdentity.operationId, original);
+  assert.equal(duplicate.resultAvailable, false);
+  assert.equal(packets.length, 2);
+});
+
+test('receipt storage failure preserves the returned result and original operation without replay', async () => {
+  let rows = [], saves = 0, calls = 0;
+  const dependencies = { sessionId: 'persist-session', defaultTargetDeviceId: 'pc-original',
+    storage: { load: () => structuredClone(rows), save: value => {
+      if (++saves === 2) throw Error('storage unavailable');
+      rows = structuredClone(value);
+    } },
+    call: async () => { calls++; return { structuredContent: { ok: true, data: { receipt: 'real-result' } } }; }
+  };
+  const event = { callId: 'save', functionName: 'rabi_api_call', isComplete: true,
+    arguments: { method: 'PUT', path: '/api/fixture/write' } };
+  const output = await createApiToolRuntime(dependencies).handleToolCall(event);
+  assert.equal(output.uncertain, true);
+  assert.equal(output.code, 'TOOL_RECEIPT_SAVE_UNCONFIRMED');
+  assert.equal(output.requestIdentity.operationId, 'persist-session:save');
+  assert.equal(output.result.structuredContent.data.receipt, 'real-result');
+  assert.equal(rows[0].state, 'pending');
+  const duplicate = await createApiToolRuntime(dependencies).handleToolCall(event);
+  assert.equal(duplicate.uncertain, true);
+  assert.equal(duplicate.requestIdentity.operationId, output.requestIdentity.operationId);
+  assert.equal(calls, 1);
+});
+
 test('malformed, stale and undeclared actions never reach an HTTP executor or TTS', async () => {
-  for (const reply of [() => '{"kind":"tool"', input => action(input,'unknown',{}), input => action(input,'rabi_api_call',{}, { requestId: 'old-step' })]) {
+  for (const reply of [() => '{"kind":"tool"', input => action(input,'unknown',{}, { say: '我已开始执行。' }), input => action(input,'rabi_api_call',{}, { requestId: 'old-step' })]) {
     let calls = 0; const shown = [];
     const host = { prompt: async input => reply(input) };
     await assert.rejects(createAgentTurnRuntime({ model: host, tools: ['rabi_api_call'], executeTool: async () => { calls++; return ok({}); }, onText: value => shown.push(value.text) }).run('查询'));
     assert.equal(calls, 0); assert.deepEqual(shown, []);
+  }
+});
+
+test('Rabi receipts without an outcome cannot certify completion or permit another write', async () => {
+  for (const receipt of [{}, { result: {} }, { result: { structuredContent: {} } }, 1, { local: true, terminal: true, requested: true }]) {
+    let step = 0, calls = 0;
+    const model = { prompt: async input => ++step <= 2
+      ? action(input, 'rabi_api_call', { method: 'POST', path: '/api/operation-' + step })
+      : '回执需要核对。' };
+    const result = await createAgentTurnRuntime({ model, tools: ['rabi_api_call'],
+      executeTool: async () => { calls++; return receipt; }
+    }).run('保存');
+    assert.equal(result.state, 'uncertain');
+    assert.equal(calls, 1);
   }
 });
 
@@ -150,7 +232,8 @@ test('main page stays busy across the application loop and applies persona chang
   const methods=vm.runInNewContext('({'+readiness+','+source.slice(start,end).trim().replace(/,$/,'')+'})',{createAgentTurnRuntime,requestTimeout:(_config,_target,_key,fallback)=>fallback,console,navigator:{onLine:true},wx:{}});
   const pending=deferred();let requests=0,applied=0;
   const host={prompt:async input=> ++requests===1?action(input,'rabi_api_call',{method:'GET',path:'/api/future'}):'已查询。'};
-  const page={...methods,config:()=>({}),currentAgentProfileScope:()=>'',pageVisible:true,data:{},chatModelAgentTools:['rabi_api_call'],setData(patch){Object.assign(this.data,patch);},speakText(){},applyPendingDeviceAgentProfile(){applied++;},applyPendingApiTools(){},ensureChatModel:async()=>host,chatModelApiRuntime:{ handleToolCall:async()=>{await pending.promise;return ok({});} }};
+  const page={...methods,config:()=>({}),currentAgentProfileScope:()=>'',pageVisible:true,data:{},chatModelAgentTools:['rabi_api_call'],setData(patch){Object.assign(this.data,patch);},speakText(){},applyPendingDeviceAgentProfile(){applied++;},applyPendingApiTools(){},chatModelApiRuntime:{ handleToolCall:async()=>{await pending.promise;return ok({});} }};
+  const assistant = createPageAssistantFixture(page, host); page.ensureChatModel = async () => assistant;
   const run=page.executeLingzhuAgentPrompt('查询');await tick();assert.equal(page.deviceAgentTurnActive,true);assert.equal(page.data.assistantModelBusy,true);assert.equal(applied,1);assert.equal(requests,1);
-  pending.resolve();await run;assert.equal(requests,2);assert.equal(page.deviceAgentTurnActive,false);assert.equal(applied,2);
+  pending.resolve();await run;assert.equal(requests,2);assert.equal(page.deviceAgentTurnActive,false);assert.equal(applied,2);assistant.dispose();
 });

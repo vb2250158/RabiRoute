@@ -39,6 +39,28 @@ function Read-RabiLinkAiuiAixPageDefinition {
   }
 }
 
+function Get-RabiLinkAiuiCraftPermissions {
+  param([Parameter(Mandatory = $true)][string] $AixPath)
+
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($AixPath)
+  try {
+    $entries = @($archive.Entries | Where-Object { $_.FullName.Replace("\", "/") -eq "app.json" })
+    if ($entries.Count -ne 1) { throw "AIX must contain exactly one app.json." }
+    $reader = [System.IO.StreamReader]::new($entries[0].Open(), [System.Text.Encoding]::UTF8, $true)
+    try { $definition = $reader.ReadToEnd() | ConvertFrom-Json }
+    finally { $reader.Dispose() }
+    if ($definition.permissions -isnot [System.Array]) { throw "AIX app.json permissions must be an array." }
+    foreach ($permission in $definition.permissions) {
+      if ($permission -isnot [string] -or $permission -cnotmatch '^[A-Z][A-Z0-9_]*$') {
+        throw "AIX app.json contains an invalid permission."
+      }
+    }
+    return ($definition.permissions -join ",")
+  }
+  finally { $archive.Dispose() }
+}
+
 function Read-RabiLinkAiuiCraftRelease {
   param(
     [Parameter(Mandatory = $true)]

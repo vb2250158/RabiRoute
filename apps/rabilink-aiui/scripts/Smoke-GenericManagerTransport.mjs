@@ -100,3 +100,56 @@ test('one operation cannot be replayed on another PC, including restored durable
   await assert.rejects(restored.handleToolCall({...event,callId:'three',arguments:{...event.arguments,targetDeviceId:'pc-two'}}),/TOOL_OPERATION_TARGET_CONFLICT/);
   await restored.handleToolCall({...event,callId:'four',arguments:{...event.arguments,targetDeviceId:'pc-one'}}); assert.equal(calls,1);
 });
+
+test('restored call IDs require the original request fingerprint for reads and writes', async () => {
+  for (const method of ['GET', 'PUT']) {
+    let rows = [], calls = 0;
+    const dependencies = { defaultTargetDeviceId: 'pc-one', sessionId: 'fixture',
+      storage: { load: () => structuredClone(rows), save: value => { rows = structuredClone(value); } },
+      call: async () => { calls++; return { structuredContent: { ok: true } }; } };
+    const event = { callId: 'same-call', functionName: 'rabi_api_call', isComplete: true,
+      arguments: { method, path: '/api/future', ...(method === 'PUT' ? { operationId: 'original', body: { secret: 'private-fixture' } } : {}) } };
+    await createApiToolRuntime(dependencies).handleToolCall(event);
+    for (const change of [{ targetDeviceId: 'pc-two' }, { path: '/api/other' },
+      ...(method === 'PUT' ? [{ operationId: 'changed-operation' }, { body: { secret: 'changed-private-fixture' } }] : [])]) {
+      await assert.rejects(createApiToolRuntime(dependencies).handleToolCall({ ...event,
+        arguments: { ...event.arguments, ...change } }), /TOOL_CALL_ID_CONFLICT/);
+    }
+    const duplicate = await createApiToolRuntime(dependencies).handleToolCall(event);
+    assert.deepEqual(duplicate, { duplicate: true, resultAvailable: false, uncertain: false, state: 'completed',
+      requestIdentity: { callId: 'same-call', sessionId: 'fixture', targetDeviceId: 'pc-one',
+        ...(method === 'PUT' ? { operationId: 'original' } : {}) } });
+    assert.equal(calls, 1);
+    assert.match(rows[0].fingerprint, /^[a-f0-9]{64}$/);
+    assert.ok(!JSON.stringify(rows).includes('private-fixture'));
+  }
+});
+
+test('legacy call rows without a request fingerprint cannot attest completion', async () => {
+  const rows = [{ id: 'legacy', state: 'completed' }];
+  const runtime = createApiToolRuntime({ sessionId: 'fixture', defaultTargetDeviceId: 'pc',
+    storage: { load: () => structuredClone(rows), save() { throw Error('must not overwrite evidence'); } },
+    call() { throw Error('must not replay an unverified call'); } });
+  const result = await runtime.handleToolCall({ callId: 'legacy', functionName: 'rabi_api_call', isComplete: true,
+    arguments: { method: 'GET', path: '/api/receipt' } });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.uncertain, true);
+  assert.equal(result.code, 'TOOL_CALL_FINGERPRINT_UNVERIFIED');
+});
+
+test('a full ledger still recognizes the original operation under a different call ID', async () => {
+  let rows = [];
+  const dependencies = { sessionId: 'fixture', defaultTargetDeviceId: 'pc',
+    storage: { load: () => structuredClone(rows), save: value => { rows = structuredClone(value); } },
+    call: async () => ({ structuredContent: { ok: true } }) };
+  const event = { callId: 'original-call', functionName: 'rabi_api_call', isComplete: true,
+    arguments: { method: 'PUT', path: '/api/future', operationId: 'original-operation' } };
+  await createApiToolRuntime(dependencies).handleToolCall(event);
+  rows.push(...Array.from({ length: 127 }, (_, index) => ({ id: 'old-' + index, state: 'pending' })));
+  const restored = createApiToolRuntime({ ...dependencies, call() { throw Error('must not replay'); } });
+  assert.deepEqual(await restored.handleToolCall({ ...event, callId: 'new-call' }),
+    { duplicate: true, resultAvailable: false, uncertain: false, state: 'completed',
+      requestIdentity: { callId: 'original-call', sessionId: 'fixture', targetDeviceId: 'pc', operationId: 'original-operation' } });
+  await assert.rejects(restored.handleToolCall({ ...event, callId: 'new-call',
+    arguments: { ...event.arguments, targetDeviceId: 'pc-other' } }), /TOOL_OPERATION_TARGET_CONFLICT/);
+});

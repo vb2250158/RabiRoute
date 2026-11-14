@@ -4,18 +4,24 @@
 </div>
 <!-- /docs-language-switch -->
 
+新路由和新 NapCat 实例使用 `gatewayPort: 0` 请求自动分配 WS 监听端口；配置输入和保存会保留 `0`。NapCat 管理操作携带原路由/实例身份，由 PC 当前拥有者解析地址；未配置 HTTP/WebUI URL 时不猜固定地址，显式上游 URL 保留原值。
+
 # RabiLink AIUI - Rokid AR 眼镜智能体与灵珠协同框架
 
 RabiLink AIUI 将语音识别、宿主模型、语音播报和透明 HUD 放在同一个眼镜应用页面中，用于随身对话、查看结果和受控配置。应用不绑定特定预设角色。默认由 **AIUI 宿主 `LanguageModel`** 处理对话，PC 通过受控 HTTP 提供工具，不替代眼镜应用的模型。
 
 > **成熟度**：手机角色绑定、通用 HTTP 接口、聊天记录与语音引导已接入源码，安装与硬件验收未完成。源码、模拟测试或本机构建不代表已安装或通过真机验收；应用多步循环已有源码与夹具证据，完整路由及真实宿主验收仍待完成；不承诺任意灵珠平台 Agent 绑定或物理离线推理。
 
-模型请求与页面交互分开：一个任务在同一模型会话中串行推理，实际工具结果作为应用观察交回模型，再决定下一步。触摸打断会停止当前模型并屏蔽迟到结果，工具超时不自动重发。高级设置同时保留角色来源电脑 ID，避免保存远端角色配置时遗漏来源。通用调用、实际连接路径和 QuickJS 的能力限制见[接口传输](docs/generic-api-transport.md)。详见[对话运行层](docs/agent-turn-runtime.md)与[角色、通用接口及语音引导](docs/persona-agent.md)。
+模型请求与页面交互分开：页面通过共享助手会话加载全局提示词与已连接工具，在同一模型会话中串行推理，将实际工具结果交回模型，再决定下一步。触摸或开口打断停止播报，推理和后台工作继续；显式结束会话才销毁模型并屏蔽迟到结果，工具超时不自动重发。高级设置同时保留角色来源电脑 ID，避免保存远端角色配置时遗漏来源。通用调用、实际连接路径和 QuickJS 的能力限制见[接口传输](docs/generic-api-transport.md)。详见[对话运行层](docs/agent-turn-runtime.md)与[角色、通用接口及语音引导](docs/persona-agent.md)。
 
+
+工具等待期间的追加语音已接入逐条回执：独立回答、按原编号延后处理和中断恢复分别记录。底部“↑ 记录”可逐条查看原话、答案与状态，不重放任务，见[语音输入回执](docs/input-receipts.md)。
 
 ---
 
 ## 当前实现与边界
+
+本机对话测试：在本目录执行 `npm ci`、`npm run simulator`，打开输出的 localhost 地址，填写自己的 API 配置即可测试同一份 AIUI 页面。使用官方 Ink `0.19.1`；语音接口、SDK 更新与实机边界见[当前语音与测试说明](docs/aiui-voice-current.md)。
 
 打包时，启动脚本与页面版本统一取自 `craft-release.json`；归档校验检查两者一致。原生 ASR 创建失败或返回错误时，模拟器日志会保留脱敏后的原因，供区分应用错误与宿主能力问题。
 
@@ -109,6 +115,8 @@ PC 的消息路线可选择 `deviceAgent`，眼镜加载原生模型后登记名
 
 ## 官方 API 契约与参考文档
 
+2026-11-05 已重新核对官方 `latest`、npm 与 Maven 发布记录；版本差异、升级验证及无声排查见[当前对话与语音文档](docs/aiui-voice-current.md)。下方 `0.18.0` 链接保留为原合同基线，不代表当前眼镜固件版本。
+
 - **语音识别 (ASR)**：[SpeechRecognition API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-recognition?lang=zh-CN&version=0.18.0)
   - 每次 `SpeechRecognition.start()` 必须在用户交互中调用。手势处理函数同步启动同一个 `continuous` 识别对象，推理及 TTS 期间保持监听，按 `resultIndex` 交付新的最终句段。识别结束或失败后等待再次点击或唤醒，不用定时器新建识别轮次。宿主是否提供中间结果及实际双向音频效果需单独验收。
 - **语音合成 (TTS)**：[speechSynthesis API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-synthesis?lang=zh-CN&version=0.18.0)
@@ -166,3 +174,5 @@ npm run package:aix
 4. 若平台审核、账号及设备条件均满足，在 Rokid 手机 App 智能体中心添加并同步到眼镜，分别核对同步与实际启动结果。
 
 这些是操作步骤，不是本次上传、安装或验收已经完成的证明。
+
+页面隐藏会停止收音和朗读，保留已进入助手循环的模型、工具调用与完整文字。已有设备 owner 在宿主仍运行 JavaScript 时继续续租，但不领取新消息；再次显示先核验原 session/ownerEpoch，再核对原回执。宿主冻结或连接变化造成租约无法确认时保留未确认记录，不把旧任务交给新 owner 重新执行。显示页面不自动开麦，也不补播被静音的旧回复。

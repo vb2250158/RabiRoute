@@ -1,0 +1,2 @@
+# Preserve upstream skill bytes so official Git blob verification survives checkout.
+skills/aiui-dev/** -text

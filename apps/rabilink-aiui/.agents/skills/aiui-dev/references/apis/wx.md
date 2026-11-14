@@ -1,8 +1,8 @@
 # AIUI wx API Reference
 
-This file documents the verified `wx` module surface and related task or media objects available to AIUI app code.
+This file documents the verified `wx` module surface and related task or media objects available to AIUI agent code.
 
-- Common scope, entry points, and authoring rules live in [apis.md](./apis.md).
+- Common scope, entry points, and authoring rules live in [apis.md](./index.md).
 - Treat these definitions as implementation truth.
 - Do not assume unlisted WeChat-compatible overloads or return shapes.
 
@@ -28,13 +28,22 @@ Error behavior:
 
 - `arrayBufferToBase64(buffer)` throws if the `ArrayBuffer` is detached.
 
+### Capability queries
+
+`wx.canIUse(schema): boolean` matches exact function paths registered when the
+current environment initializes. Omit the `wx.` prefix, for example
+`wx.canIUse('request')` or `wx.canIUse('media.getDevices')`. Namespaces, unknown
+paths, parameter-option queries such as `'request.object.unknown'`, and functions
+added by agent code return `false`. A positive result establishes registration,
+not permission, hardware readiness, network availability, or operation success.
+
 ### System methods
 
 - `wx.exitMiniProgram(options?)`
 
 Behavior notes:
 
-- `exitMiniProgram(options?)` calls `success()` and `complete()` when present, then sends the app exit event.
+- Options may be omitted, or contain `success`, `fail`, and `complete` callbacks. The method requests exit and returns `undefined`.
 
 ### UI methods
 
@@ -61,13 +70,17 @@ Argument behavior:
 - `navigateTo(options)` requires `options.url`.
 - `redirectTo(options)` requires `options.url`.
 - `navigateBack(options?)` uses `delta = 1` when omitted.
+- `url` accepts an absolute project path or a path relative to the current Page directory, with optional query parameters passed to `onLoad(query)`.
+- `navigateTo()` and `redirectTo()` target regular Pages, not tabBar Pages.
 
 Behavior notes:
 
-- `navigateTo(options)` requests page navigation.
-- `redirectTo(options)` requests page redirection.
-- `navigateBack(options?)` requests backward navigation.
-- These methods call `success()` and `complete()` when present.
+- All three methods return `undefined`; return from the call does not establish successful navigation.
+- `success({ errMsg })` runs after navigation actually succeeds. Missing targets, scripts, or configuration, load failures, and backward navigation without a previous Page invoke `fail({ errMsg })` and preserve the stack.
+- `complete({ errMsg })` follows success or failure, even if an earlier callback throws.
+- `navigateTo()` with the identical current path and query succeeds without adding a Page.
+- `redirectTo()` unloads the old Page only after the new target loads successfully.
+- `navigateBack()` treats `delta < 1` as `1`; values beyond stack depth return to the home Page. Failure with no previous Page does not show the current Page again.
 
 ### Storage methods
 
@@ -134,7 +147,7 @@ Behavior notes:
 
 - `request(options)` uses `GET` when `method` is omitted.
 - `request(options)` uses `'arraybuffer'` when `responseType` is omitted.
-- `request(options)` resolves timeout in this order: `options.timeout`, app config timeout, then `60000`.
+- `request(options)` resolves timeout in this order: `options.timeout`, `app.json` timeout, then `60000`.
 - `request(options)` accepts request data from `data` or fallback `body`.
 - When `data` is an object and `content-type` contains `application/x-www-form-urlencoded`, the body is URL-encoded.
 - Otherwise object `data` is serialized with `JSON.stringify`.
@@ -190,7 +203,7 @@ Return behavior:
 Behavior notes:
 
 - These methods return `undefined` when the current context does not provide the required media capability.
-- These methods may return `undefined` in unsupported app lifecycle modes.
+- These methods may return `undefined` in unsupported agent lifecycle modes.
 - `getRecorderManager()` also returns `undefined` when recording capability is unavailable.
 
 ## `RequestTask`

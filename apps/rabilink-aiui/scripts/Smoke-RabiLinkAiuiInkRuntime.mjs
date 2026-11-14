@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromium } from "playwright-core";
 import initAix, { AixReaderWasm } from "@yodaos-pkg/aix/pkg/aix_web.js";
 import { buildPackageStaging } from "./Build-RabiLinkAiuiPackage.mjs";
+import { streamSpeechFixture } from "./InkSpeechFixture.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const inkRoot = path.join(projectRoot, "node_modules", "@yodaos-pkg", "ink");
@@ -14,6 +15,8 @@ const aixInputPath = aixArgumentIndex >= 0
   ? path.resolve(process.argv[aixArgumentIndex + 1] || "")
   : "";
 const runtimeToken = String(process.env.RABILINK_AIUI_INK_TOKEN || "").trim();
+const inputReviewFixture = process.env.RABILINK_AIUI_TEST_INPUT_REVIEW === '1';
+if (aixInputPath && inputReviewFixture) throw Error('Input review fixture is source-build-only; it cannot alter a delivery AIX.');
 const testBatteryLevelText = String(process.env.RABILINK_AIUI_INK_BATTERY_LEVEL || "").trim();
 const testBatteryChargingText = String(process.env.RABILINK_AIUI_INK_BATTERY_CHARGING || "").trim().toLowerCase();
 const testFontScale = Number(String(process.env.RABILINK_AIUI_INK_FONT_SCALE || "1").trim());
@@ -115,6 +118,24 @@ function applyLongTextFixture(stagingRoot) {
   fs.writeFileSync(file,source.replace(marker, marker + '\nconst original = this.setData.bind(this); this.setData = patch => original({...patch, lingzhuAgentName:'+JSON.stringify(text)+', agentReplyText:'+JSON.stringify(text)+', assistantReplyText:'+JSON.stringify(text)+', knowledgeToolHudText:'+JSON.stringify(text)+'});'));
 }
 
+function applyInputReviewFixture(root) {
+  if (!inputReviewFixture) return;
+  const file = path.join(root, 'pages/home/index.js');
+  const source = fs.readFileSync(file, 'utf8'), marker = 'this.recoverAiuiInputs();';
+  if (source.split(marker).length !== 2) fail('Input recovery fixture marker missing.');
+  // Only the fixture owns this isolated in-memory storage; no production files or credentials change.
+  const seed = `let fixtureState;
+    this.readAiuiInputState = () => fixtureState;
+    this.writeAiuiInputState = value => { fixtureState = JSON.parse(JSON.stringify(value)); };
+    const answered = this.inputLedger().retain('先前的问题', 'fixture-old-owner');
+    this.inputLedger().submit(answered);
+    this.inputLedger().settle(answered, {input: answered, status:'answered', modelInvoked:true, toolDispatched:false, text:'先前保存的答案，不代表已经播出。'});
+    const pending = this.inputLedger().retain('这是中断前保留的第一段原话，后面的内容需要翻页。'.repeat(8) + '最后一段也应保留。', 'fixture-old-owner');
+    this.inputLedger().submit(pending);
+  `;
+  fs.writeFileSync(file, source.replace(marker, seed + marker));
+}
+
 function contentType(file) {
   if (file.endsWith(".js")) return "text/javascript; charset=utf-8";
   if (file.endsWith(".wasm")) return "application/wasm";
@@ -128,6 +149,7 @@ function harnessHtml(encoded) {
 <body><canvas id="ink" width="480" height="352"></canvas><canvas id="compact" width="448" height="150"></canvas><canvas id="tools" width="480" height="352"></canvas>
 <script type="module">
 import { configNavigatorHost, createInkView } from "/__ink__/index.js";
+const streamSpeechFixture = ${streamSpeechFixture.toString()};
 const encoded = ${JSON.stringify(encoded)};
 const runtimeToken = ${JSON.stringify(runtimeToken)};
 const withRuntimeToken = (query) => runtimeToken ? { ...query, token: runtimeToken } : query;
@@ -142,7 +164,7 @@ try {
   const asrStarts = [];
   const toolsAsrStarts = [];
   const hostCapabilities = {
-    speech: {
+    speech: streamSpeechFixture({
       startRecognition(request) {
         asrStarts.push(request);
         if (asrStarts.length !== 1) return;
@@ -165,16 +187,18 @@ try {
       stopRecognition() {},
       abortRecognition() {},
       speak() {}
-    }
+    })
   };
   configNavigatorHost("ROKID-SMOKE-DEVICE", "YodaOS Sprite", "aarch64", ["zh-CN"], "CN");
   view = await createInkView({ width: 480, height: 352, scaleFactor: 1, canvas, hostCapabilities });
-  const transcriptionQuery = withRuntimeToken({ mode: "transcription" });
+  // Studio's direct-run control supplies no mode query. Keep this main view on
+  // that path; the compact view below still covers explicit transcription mode.
+  const transcriptionQuery = withRuntimeToken({});
   view.openBundle({ appId: "rabilink-aiui", files, query: transcriptionQuery });
   view.startRendering();
   const compactAsrStarts = [];
   const compactHostCapabilities = {
-    speech: {
+    speech: streamSpeechFixture({
       startRecognition(request) {
         compactAsrStarts.push(request);
         if (compactAsrStarts.length !== 1) return;
@@ -197,7 +221,7 @@ try {
       stopRecognition() {},
       abortRecognition() {},
       speak() {}
-    }
+    })
   };
   configNavigatorHost();
   compactView = await createInkView({ width: 448, height: 150, scaleFactor: 1, canvas: compactCanvas, hostCapabilities: compactHostCapabilities });
@@ -209,12 +233,12 @@ try {
     scaleFactor: 1,
     canvas: toolsCanvas,
     hostCapabilities: {
-      speech: {
+      speech: streamSpeechFixture({
         startRecognition(request) { toolsAsrStarts.push(request); },
         stopRecognition() {},
         abortRecognition() {},
         speak() {}
-      }
+      })
     }
   });
   toolsView.openBundle({
@@ -226,7 +250,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   const startsBeforeFirstGesture = asrStarts.length;
   view.setInteractive(true);
-  const firstGestureHandled = view.dispatchVoiceWakeup("leqi", Date.now());
+  const firstGestureHandled = view.dispatchVoiceWakeup("乐奇", Date.now());
   const startDeadline = Date.now() + 2000;
   while (asrStarts.length === 0 && Date.now() < startDeadline)
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -285,6 +309,25 @@ try {
     compactLitPixels,
     toolsRunning: toolsView.isRunning(),
     toolsPageOneLitPixels
+  };
+  globalThis.__inputReview = async (step) => {
+    const key = step === 'open' ? 'ArrowUp' : step === 'page' ? 'ArrowDown' : step === 'record' ? 'ArrowLeft' : 'Backspace';
+    for (const target of [view, compactView]) {
+      target.setInteractive(true);
+      target.dispatchInput('keydown', key, Date.now()); target.dispatchInput('keyup', key, Date.now() + 1);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+    return [canvas, compactCanvas].map((surface, index) => {
+      const pixels = surface.getContext('2d').getImageData(0, 0, surface.width, surface.height).data;
+      let unsafe = 0;
+      for (let y = 0; y < surface.height; y++) for (let x = 0; x < surface.width; x++) {
+        if (x >= 8 && x < surface.width - 8 && y >= 6 && y < surface.height - 6) continue;
+        const offset = (y * surface.width + x) * 4;
+        if (Math.max(pixels[offset], pixels[offset + 1], pixels[offset + 2]) > 8) unsafe++;
+      }
+      return { png: surface.toDataURL('image/png'), running: [view, compactView][index].isRunning(),
+        closed: [view, compactView][index].isCloseRequested(), unsafe };
+    });
   };
   globalThis.__dispatchToolsPageDown = async () => {
     toolsView.setInteractive(true);
@@ -534,7 +577,8 @@ try {
   globalThis.__dispatchCompactVoiceWakeup = async () => {
     compactView.setInteractive(true);
     const handled = compactView.dispatchVoiceWakeup("leqi", Date.now());
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    const deadline = Date.now() + 2000;
+    while (!compactAsrStarts.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     return {
       handled,
       asrStarts: compactAsrStarts.length
@@ -612,6 +656,7 @@ try {
     applyTestBatteryFixture(stagingRoot);
     applyTestFontScaleFixture(stagingRoot);
     applyLongTextFixture(stagingRoot);
+    applyInputReviewFixture(stagingRoot);
     encoded = collectBundleFiles(stagingRoot);
   }
   server = await startServer(harnessHtml(encoded));
@@ -628,6 +673,8 @@ try {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--enable-unsafe-swiftshader",
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
       "--use-gl=angle",
       "--use-angle=swiftshader",
       `--explicitly-allowed-ports=${address.port}`
@@ -639,6 +686,7 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "networkidle" });
   await page.waitForFunction(() => globalThis.__smoke, null, { timeout: 15000 });
   const result = await page.evaluate(() => globalThis.__smoke);
+  if (result?.ok !== true) fail(`Ink harness initialization failed: ${JSON.stringify(result)}`);
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
   await writeFrozenCanvasPng(page, "#ink", screenshotPath);
   await writeFrozenCanvasPng(page, "#compact", compactScreenshotPath);
@@ -682,6 +730,21 @@ try {
   });
   if (!regions.normal.ok || !regions.compact.ok || !regions.faultRejected) fail('HUD region safety failed: '+JSON.stringify(regions));
   console.log('HUD region safety: '+JSON.stringify(regions));
+  if (inputReviewFixture) {
+    let previous;
+    for (const step of ['open', 'page', 'record', 'close']) {
+      const frames = await page.evaluate(step => globalThis.__inputReview(step), step);
+      for (let index = 0; index < frames.length; index++) {
+        const frame = frames[index];
+        if (!frame.running || frame.closed || frame.unsafe || frame.png.length < 1000 || frame.png === previous?.[index]?.png)
+          fail(`Input record ${step} failed on surface ${index}.`);
+        const output = path.join(projectRoot, 'dist', `ink-input-review-${index ? 'compact' : 'normal'}-${step}.png`);
+        fs.writeFileSync(output, Buffer.from(frame.png.split(',')[1], 'base64'));
+      }
+      previous = frames;
+    }
+    console.log('Input review fixture: opened, paged, changed record and returned on both Ink surfaces.');
+  }
   const joined = [...logs, ...pageErrors].join("\n");
   const required = [
     "JsRuntime::eval_module namespace success module='/__ink_bundle__/rabilink-aiui/app.js'",
@@ -692,7 +755,7 @@ try {
   const asrContractOk = result?.startsBeforeFirstGesture === 0
     && result?.firstGestureHandled === true
     && result?.asrStarts === 1
-    && result?.firstAsrRequest?.continuous === true
+    && result?.firstAsrRequest?.audio?.mimeType === "audio/pcm"
     && result?.firstAsrRequest?.interimResults === true;
   const tokenInvocationOk = result?.invocationHasToken === Boolean(runtimeToken);
   const hudLayoutOk = regions.normal.ok && result?.firstLitY >= 8

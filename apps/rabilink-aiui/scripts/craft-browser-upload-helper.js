@@ -14,15 +14,15 @@
           properties: {
             agentId: {
               type: "string",
-              description: "绑定的灵珠智能体 ID。设置后作为指定的灵珠智能体运行与交互。",
+              description: "页面本地配置标识；不代表灵珠平台 Agent 绑定或平台调用路由。",
             },
             agentName: {
               type: "string",
-              description: "绑定的灵珠智能体名称，例如“灵珠智能体”或自定义名称。",
+              description: "页面显示名称；设备 profile 生效后由手机管理。",
             },
             systemPrompt: {
               type: "string",
-              description: "灵珠智能体系统提示词，用于自定义智能体对话人设与回答风格。",
+              description: "传给 AIUI 宿主模型的全局提示词；设备 profile 生效后优先使用其配置。",
             },
             modelProbe: {
               type: "boolean",
@@ -30,12 +30,12 @@
             },
             token: {
               type: "string",
-              description: "仅用于无设备 SN 的 Craft 调试兼容。真眼镜忽略外层应用 token，未绑定时必须进入显示 SN 与管理后台地址的首次设置页。",
+              description: "仅用于无设备 SN 的 Craft 调试兼容，不能代替真眼镜设备凭据。基本宿主对话不需要 Rabi Token；PC 工具连接另行鉴权。",
             },
             mode: {
               type: "string",
               enum: ["transcription", "configuration"],
-              description: "运行模式。通过 Rabi 使用当前绑定 Agent 时使用 transcription；在当前页面用原生 LanguageModel 理解配置需求，或执行外层 Agent 传入的明确指令时使用 configuration。",
+              description: "页面操作状态：transcription 使用 AIUI 宿主模型对话；configuration 打开同页配置助手。状态切换不改变模型执行者，不自动连接平台 Agent。",
             },
             surface: {
               type: "string",
@@ -64,10 +64,10 @@
 
   const DEFAULTS = {
     agentName: "RabiLink",
-    version: "1.0.38",
+    version: "1.0.39",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
-    permissions: "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",
+    permissions: "RECORD_AUDIO",
     category: "tool",
     tools: DEFAULT_TOOLS,
   };

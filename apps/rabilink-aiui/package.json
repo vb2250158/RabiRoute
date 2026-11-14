@@ -6,6 +6,9 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "simulator": "node simulator/server.mjs",
+    "check:skill": "node scripts/Audit-AiuiDevSkill.mjs",
+    "test:simulator": "node --test simulator/server.test.mjs simulator/host.test.mjs && node simulator/browser.test.mjs",
     "package:aix": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Package-RabiLinkAiui.ps1",
     "check:agent": "node scripts/Check-Agent.mjs",
     "check": "npm run check:agent && node --check .\\scripts\\craft-browser-upload-helper.js && node --check .\\scripts\\craft-browser-embedded-aix-upload-helper.template.js && node --check .\\scripts\\Test-RabiLinkAiuiActiveIntelligenceE2E.mjs && node .\\scripts\\check-rabilink-aiui.mjs && node .\\scripts\\Audit-WebguiCoverage.mjs && node .\\scripts\\Audit-WebguiConfigSurface.mjs && node .\\scripts\\Audit-AiuiDesign.mjs && node .\\scripts\\Audit-RokidDeviceStatusBridge.mjs && node .\\scripts\\Smoke-RabiLinkApiContract.mjs && node .\\scripts\\Smoke-RabiLinkDeviceEnrollment.mjs && node .\\scripts\\Smoke-RabiLinkRelayMobileWebgui.mjs && node .\\scripts\\Smoke-RabiLinkRelayDeviceStatus.mjs && node .\\scripts\\Smoke-RabiLinkTranscriptPolicy.mjs && node .\\scripts\\Smoke-RabiLinkVoiceRuntime.mjs && node .\\scripts\\Test-AiuiNativeVoiceContract.mjs && node .\\scripts\\Smoke-RabiLinkAiuiRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInkRuntime.mjs && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode transcription && node .\\scripts\\Smoke-RabiLinkAiuiInteractiveResize.mjs --mode configuration && node .\\scripts\\Smoke-RabiLinkAiuiStartupSafety.mjs && node .\\scripts\\Audit-RabiLinkAiuiAix.mjs && node .\\scripts\\Audit-RokidCraftUploadApi.mjs",
@@ -40,9 +43,10 @@
     "goal:evidence": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Test-RabiLinkAiuiGoalEvidence.ps1"
   },
   "devDependencies": {
-    "@yodaos-pkg/aix": "0.6.0",
-    "@yodaos-pkg/ink": "^0.13.0",
-    "@yodaos-pkg/ink-daily": "npm:@yodaos-pkg/ink@^0.14.0",
+    "@yodaos-pkg/aix": "0.12.0",
+    "@yodaos-pkg/aix-cli": "0.12.0",
+    "@yodaos-pkg/ink": "0.19.1",
+    "@yodaos-pkg/ink-daily": "npm:@yodaos-pkg/ink@0.19.1",
     "esbuild": "0.28.0",
     "playwright-core": "1.61.1"
   }

@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { buildPackageStaging } from "./Build-RabiLinkAiuiPackage.mjs";
 import { publicApiTransportPolicy } from "./Audit-WebguiCoverage.mjs";
+import { missingSharedFields } from './config-surface-contract.mjs';
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const files = {
@@ -20,7 +21,7 @@ const files = {
   craftEmbeddedLauncher: path.join(projectRoot, "scripts", "Open-RabiLinkAiuiCraftEmbeddedUploadHelper.ps1"),
   configSurface: path.join(projectRoot, "utils", "config-surface.js"),
   rabilinkApi: path.join(projectRoot, "utils", "rabilink-api.js"),
-  voiceRuntime: path.join(projectRoot, "utils", "voice-runtime.js"),
+  voiceRuntime: path.join(projectRoot, "../../packages/rokid-voice/src/voice-runtime.js"),
   quickStartDocs: path.resolve(projectRoot, "..", "..", "ribiwebgui", "src", "docs", "rabilinkAiuiDocs.ts"),
   quickStartGuide: path.resolve(projectRoot, "..", "..", "ribiwebgui", "src", "components", "docs", "RabiLinkQuickStartGuide.vue"),
   exampleRoute: path.resolve(projectRoot, "..", "..", "examples", "data", "route", "RabiLink", "adapterConfig.json"),
@@ -136,13 +137,11 @@ const embeddedHelperSource = read(files.craftEmbeddedHelper);
 const uploadPowerShellSource = read(files.craftUploadPowerShell);
 const metadataPowerShellSource = read(files.craftMetadataPowerShell);
 const embeddedLauncherSource = read(files.craftEmbeddedLauncher);
-for (const [label, source] of [
-  ["browser helper", browserHelperSource],
-  ["embedded helper", embeddedHelperSource],
-  ["PowerShell uploader", uploadPowerShellSource],
-]) {
-  assert(source.includes("RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET"), `${label} must request the complete audio permission set.`);
-}
+const artifactPermissions = parseJsonFile(files.appJson).permissions.join(',');
+assert(browserHelperSource.includes(`permissions: ${JSON.stringify(artifactPermissions)}`), 'Browser helper defaults must match app.json capabilities.');
+assert(uploadPowerShellSource.includes('Get-RabiLinkAiuiCraftPermissions -AixPath $resolvedAixPath'), 'CLI upload permissions must come from the selected AIX.');
+assert(embeddedHelperSource.includes('__RABILINK_AIX_PERMISSIONS_JSON__')
+  && embeddedLauncherSource.includes('Get-RabiLinkAiuiCraftPermissions -AixPath $resolvedAixPath'), 'Embedded upload must derive permissions from the selected AIX.');
 for (const [label, source] of [
   ["browser helper", browserHelperSource],
   ["embedded helper", embeddedHelperSource],
@@ -312,8 +311,7 @@ const coveredGatewayFields = new Set([
   ...exportedArrayKeys(configSurface, "GATEWAY_SCALAR_FIELDS"),
   ...exportedArrayKeys(configSurface, "GATEWAY_JSON_FIELDS")
 ]);
-const missingGatewayFields = gatewayDefinitionFields(read(files.gatewayModel))
-  .filter((field) => !coveredGatewayFields.has(field));
+const missingGatewayFields = missingSharedFields(gatewayDefinitionFields(read(files.gatewayModel)), coveredGatewayFields);
 assert(
   missingGatewayFields.length === 0,
   `AIUI advanced config fields do not cover GatewayDefinition fields: ${missingGatewayFields.join(", ")}`
@@ -324,7 +322,7 @@ const addedGateway = configSurfaceModule.appendDefaultGateway([
   configSurfaceModule.createDefaultGateway(1)
 ]);
 assert(
-  addedGateway.gateway.id === "config-2" && addedGateway.gateway.gatewayPort === 8791,
+  addedGateway.gateway.id === "config-2" && addedGateway.gateway.gatewayPort === 0,
   "appendDefaultGateway must follow WebGUI default gateway numbering."
 );
 const duplicatedGateway = configSurfaceModule.duplicateSelectedGateway(addedGateway.gateways, 0);
@@ -668,7 +666,6 @@ assert(
 );
 for (const fieldName of [
   "webhookPath",
-  "fenneNoteWebhookPath",
   "xiaoaiWebhookPath",
   "rabiLinkWebhookPath",
   "heartbeatIntervalSeconds",

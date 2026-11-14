@@ -9,7 +9,7 @@ import {
 } from "../utils/voice-runtime.js";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
-const runtimePath = path.join(projectRoot, "utils", "voice-runtime.js");
+const runtimePath = path.join(projectRoot, "../../packages/rokid-voice/src/voice-runtime.js");
 const runtimeSource = fs.readFileSync(runtimePath, "utf8");
 let networkCalls = 0;
 const originalFetch = globalThis.fetch;
@@ -47,6 +47,23 @@ try {
     now: () => clock
   });
   const asrCapability = asr.getCapability();
+  let resolveCapabilities;
+  const negotiatedAsr = createAiuiAsrInputAdapter({
+    SpeechRecognitionCtor: MockSpeechRecognition,
+    SpeechRecognitionSessionCtor: { getCapabilities: () => new Promise(resolve => { resolveCapabilities = resolve; }) }
+  });
+  const negotiatedRound = negotiatedAsr.createRound({ interimResults: true });
+  const negotiating = negotiatedAsr.start(negotiatedRound);
+  resolveCapabilities({ interimResults: false, maxAlternatives: 1 });
+  await negotiating;
+  assert.equal(negotiatedRound.started, true);
+  assert.equal(negotiatedRound.interimResults, false, "Final-only hosts must not be asked for interim results.");
+  const cancelledRound = negotiatedAsr.createRound({ interimResults: true });
+  const cancelledStart = negotiatedAsr.start(cancelledRound);
+  negotiatedAsr.stop(cancelledRound);
+  resolveCapabilities({ interimResults: true, maxAlternatives: 1 });
+  await cancelledStart;
+  assert.equal(cancelledRound.started, false, "Late capabilities must not restart a stopped round.");
   assert.equal(asrCapability.mode, AIUI_NATIVE_VOICE_MODE);
   assert.equal(asrCapability.available, true);
   assert.equal(asrCapability.requiresApiKey, false);
@@ -81,6 +98,10 @@ try {
   assert(nativeError instanceof VoiceRuntimeError);
   assert.equal(nativeError.code, "asr_runtime_error");
   assert.equal(nativeError.nativeCode, "network");
+  assert.equal(nativeError.message, "AIUI native ASR failed: network");
+  recognition.onerror?.({ error: "network", message: "Failed to open browser media stream" });
+  assert.equal(nativeError.nativeCode, "network");
+  assert.match(nativeError.message, /Failed to open browser media stream/);
   asr.stop(recognition, { graceful: true });
   assert.equal(recognition.stopped, true);
   assert.equal(endCount, 1);

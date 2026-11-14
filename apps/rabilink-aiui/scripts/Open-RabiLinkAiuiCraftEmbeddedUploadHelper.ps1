@@ -138,13 +138,15 @@ $aixBase64 = [System.Convert]::ToBase64String($aixBytes)
 $aixHash = Get-Sha256Hex $resolvedAixPath
 $toolsJson = Get-RabiLinkAiuiCraftToolsJson -AixPath $resolvedAixPath
 $toolsJsonString = ConvertTo-Json -InputObject $toolsJson -Compress
-$helperText = Get-Content -LiteralPath $templatePath -Raw
+$permissionsJson = ConvertTo-Json -InputObject (Get-RabiLinkAiuiCraftPermissions -AixPath $resolvedAixPath) -Compress
+$helperText = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
 $helperText = $helperText.Replace("__RABILINK_AIX_NAME__", $aixInfo.Name)
 $helperText = $helperText.Replace("__RABILINK_AIX_SIZE__", [string]$aixInfo.Length)
 $helperText = $helperText.Replace("__RABILINK_AIX_SHA256__", $aixHash)
 $helperText = $helperText.Replace("__RABILINK_AIX_BASE64__", $aixBase64)
 $helperText = $helperText.Replace("__RABILINK_FALLBACK_AGENT_ID__", $AgentId)
 $helperText = $helperText.Replace("__RABILINK_TOOLS_JSON_STRING__", $toolsJsonString)
+$helperText = $helperText.Replace("__RABILINK_AIX_PERMISSIONS_JSON__", $permissionsJson)
 
 if (-not $NoClipboard) {
   Set-Clipboard -Value $helperText

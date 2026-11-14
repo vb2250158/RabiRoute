@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import { buildPackageStaging } from "./Build-RabiLinkAiuiPackage.mjs";
+import { streamSpeechFixture } from "./InkSpeechFixture.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const inkRoot = path.join(projectRoot, "node_modules", "@yodaos-pkg", "ink");
@@ -61,7 +62,7 @@ const heartbeat = setInterval(() => {
 }, 50);
 
 function unstableSpeech(viewFor, starts, errorFirst = false) {
-  return {
+  return (${streamSpeechFixture.toString()})({
     startRecognition(request) {
       starts.push(Date.now());
       speechTrace.push({event:'start',at:Date.now(),targetId:request.targetId,sessionId:request.sessionId});
@@ -93,7 +94,7 @@ function unstableSpeech(viewFor, starts, errorFirst = false) {
     stopRecognition(request) {speechTrace.push({event:'stop',at:Date.now(),sessionId:request?.sessionId});},
     abortRecognition(request) {speechTrace.push({event:'abort',at:Date.now(),sessionId:request?.sessionId});},
     speak() {}
-  };
+  });
 }
 
 try {
@@ -139,6 +140,10 @@ try {
   let gestureIndex = 0;
   globalThis.__startupAfterSpeechTerminal = () => {
     if (gestureIndex + 1 >= gestureCount) return;
+    // First network error must stop immediately. Each later gesture permits at
+    // most three immediate empty endings before continuation is suspended.
+    const expectedStoppedStarts = gestureIndex === 0 ? 1 : 1 + 3 * gestureIndex;
+    if (runtimeStarts.length !== expectedStoppedStarts) return;
     const index = ++gestureIndex;
     speechTrace.push({event:'page-terminal-observed',at:Date.now(),index});
     setTimeout(() => {
@@ -222,6 +227,7 @@ try {
     for (const [marker, extra] of [
       ['onVoiceWakeup(event) {', 'console.log("startup-page-wake", Date.now(), JSON.stringify({recognition:!!this.recognition,desired:this.data.transcriptionDesired,listening:this.data.transcriptionListening,busy:this.data.assistantModelBusy,speaking:this.data.agentSpeaking}));'],
       ['onError: (error) => {', 'console.log("startup-page-error", Date.now(), String(error?.nativeCode || error?.code));'],
+      ['onSpeechStart: () => {', 'console.log("startup-page-speech-onset", Date.now(), JSON.stringify({busy:!!this.deviceAgentTurnActive,speaking:!!this.speechActive}));'],
       ['const finishRound = (outcome) => {', 'console.log("startup-page-finish", Date.now(), outcome, roundFinished, this.recognition===recognition);']
     ]) {
       if (!source.includes(marker)) fail("Missing startup diagnostic marker: " + marker);
@@ -244,6 +250,8 @@ try {
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--enable-unsafe-swiftshader",
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
       "--use-gl=angle",
       "--use-angle=swiftshader",
       `--explicitly-allowed-ports=${address.port}`
@@ -278,14 +286,15 @@ try {
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
-  const minimumRuntimeStarts = soakMode ? 5 : 2;
+  const gestureCount = soakMode ? 5 : 2;
+  const minimumRuntimeStarts = 1 + (gestureCount - 1) * 3;
   const maximumRuntimeStarts = minimumRuntimeStarts;
   const startupSafe = result?.ok === true
     && result.previewStarts === 0
     && result.runtimeStarts >= minimumRuntimeStarts
     && result.runtimeStarts <= maximumRuntimeStarts
-    && result.startsBeforeGestures.length === minimumRuntimeStarts - 1
-    && result.startsBeforeGestures.every((count, index) => count === index + 1)
+    && result.startsBeforeGestures.length === gestureCount - 1
+    && result.startsBeforeGestures.every((count, index) => count === 1 + index * 3)
     && result.previewOpenBundleMs <= 1000
     && result.runtimeOpenBundleMs <= 1000
     && openBundleTotalMs <= 1400

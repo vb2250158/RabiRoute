@@ -112,8 +112,6 @@ const gatewayFields = [
   { key: "heartbeatMessage" },
   { key: "webhookPort" },
   { key: "webhookPath" },
-  { key: "fenneNoteWebhookPort" },
-  { key: "fenneNoteWebhookPath" },
   { key: "xiaoaiWebhookPort" },
   { key: "xiaoaiWebhookPath" },
   { key: "rabiLinkWebhookPort" },

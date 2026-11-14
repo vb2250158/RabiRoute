@@ -10,9 +10,12 @@ import {createHash,randomUUID} from 'node:crypto';
 const transportFixtureAccess = randomUUID();
 const renewalFixtureAccess = randomUUID();
 import {createApiToolRuntime} from '../utils/api-tool-runtime.js';
+import {openApiToolLedger} from '../utils/api-tool-ledger.js';
 import {createAgentTurnRuntime} from '../utils/agent-turn-runtime.js';
 import {AGENT_PROTOCOL} from '../utils/agent-decision-protocol.js';
 import {formatApiResult} from '../utils/api-result-view.js';
+import {sha256Text} from '../../../packages/rabi-api-contract/fingerprint.mjs';
+import {createTaskFollowRuntime,TASK_FOLLOW_TOOL} from '../utils/task-follow-runtime.js';
 
 test('private paired Eye client preserves buffered binary, SSE and actual WebSocket bytes',async t=>{
   const requests=[],binary=Buffer.from([0,255,1,128]);
@@ -45,6 +48,8 @@ test('private paired Eye client preserves buffered binary, SSE and actual WebSoc
   socketTaskMode=true;context.requestManagerStream=api.phoneEyeStreamRequest;context.openManagerWebSocket=api.phoneEyeOpenWebSocket;
   const streamSource=await fs.readFile(new URL('../utils/api-stream-tool.js',import.meta.url),'utf8');context.callApiStreamTool=vm.runInContext('(()=>{'+streamSource.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+';return callApiStreamTool})()',context);
   context.createApiToolRuntime=createApiToolRuntime;context.requestDeviceApi=async(config,packet)=>api.phoneEyeHttpRequest(config,packet);context.getMobileState=()=>{throw Error('frozen target already present');};context.formatApiResult=formatApiResult;
+  context.openApiToolLedger=openApiToolLedger;
+  Object.assign(context,{sha256Text,createTaskFollowRuntime,TASK_FOLLOW_TOOL});
   const pageSource=await fs.readFile(new URL('../utils/api-tool-page.js',import.meta.url),'utf8');const methods=vm.runInContext(pageSource.replace(/^import .*;\r?\n/gm,'').replaceAll('export ','')+';apiToolPageMethods',context);
   const page={...methods,deviceAgentProfileConfig:()=>({...config,targetDeviceId:'persona-pc-b'}),config:()=>config,deviceAgentProfile:{personaRef:{sourceDeviceId:'persona-pc-b'}},agentProfileScope:()=>config.relayBaseUrl, destroyed:false,setKnowledgePageData(){},speakText(){}};
   const prepared=await page.prepareRabiApiTools();assert.ok(prepared.tools[1].function.parameters.properties.mode.enum.includes('stream'));

@@ -13,7 +13,7 @@ export function hudText(value, columns, lines = 1) {
 export function hudDisplayFields(data) {
   return {
     hudDisplayName: hudText(data.modelProbe ? "Rabi 宿主模型测试" : data.lingzhuAgentName || "灵珠智能体", 14),
-    hudDisplayStatus: hudText(data.agentSpeaking ? "播报中" : data.assistantModelBusy ? "回复中" : data.transcriptionListening ? "正在聆听" : data.agentPolling ? "连接中" : "就绪", 12),
+    hudDisplayStatus: hudText(data.voiceErrorText || (data.agentSpeaking ? "播报中" : data.assistantModelBusy ? "回复中" : (data.transcriptionListening || data.assistantListening) ? "正在聆听" : data.agentPolling ? "连接中" : data.agentStatus || "就绪"), 12),
     hudDisplayReply: hudText(data.agentReplyText || data.assistantReplyText, 26, 2),
     hudDisplayUser: hudText(data.transcriptionText || data.assistantUserText, 32),
     hudDisplayCue: hudText(data.agentSpeakingCue, 24),

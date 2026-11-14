@@ -4,18 +4,24 @@ English | <a href="./README.md">简体中文</a>
 </div>
 <!-- /docs-language-switch -->
 
+New routes and NapCat instances use `gatewayPort: 0` to request an automatically assigned WS listener, and configuration input/save preserves zero. NapCat management carries the original route/instance identity so the current PC owner resolves its endpoint. Missing HTTP/WebUI URLs are not replaced with guessed addresses; explicit upstream URLs retain their configured values.
+
 # RabiLink AIUI - Agent and Lingzhu Collaboration Framework for Rokid AR Glasses
 
 RabiLink AIUI brings speech recognition, a host model, speech synthesis and a transparent HUD into one glasses application page for conversations, result presentation and controlled configuration. It is not tied to a specific preset persona. By default, the **AIUI host `LanguageModel`** handles conversation; PC supplies controlled HTTP tools rather than replacing the glasses application's model.
 
 > **Maturity**: Phone persona binding, generic HTTP APIs, history and voice steering are wired in source; installation and hardware acceptance remain pending. Source, mocks and local builds do not establish installation or device acceptance. An application multi-step loop has source and fixture evidence; complete Route and real-host acceptance remain pending. Arbitrary Lingzhu binding and physically offline inference are not promised.
 
-The model-turn runtime is separate from page interaction: one task serializes requests on the same model session; actual tool observations return for the next decision. Explicit cancellation destroys the current model and fences late results; timed-out tools are never automatically replayed. Advanced settings retain the persona source computer ID when saving remote-persona configuration. See [generic transport and host capabilities](docs/generic-api-transport_en.md), [model-turn runtime](docs/agent-turn-runtime_en.md) and [personas, generic APIs and steering](docs/persona-agent_en.md).
+The page loads global instructions and connected tools through the shared assistant session, serializing model requests and returning actual tool observations for the next decision. Touch or speech-onset interruption stops playback while reasoning and backend work continue. Explicit session cancellation destroys the model and fences late results; timed-out tools are never automatically replayed. Advanced settings retain the persona source computer ID when saving remote-persona configuration. See [generic transport and host capabilities](docs/generic-api-transport_en.md), [model-turn runtime](docs/agent-turn-runtime_en.md) and [personas, generic APIs and steering](docs/persona-agent_en.md).
 
+
+Speech arriving during tool waits now has per-input receipts for independent answers, original-ID deferred work and interrupted-input recovery. The footer record viewer shows original text, saved answers and status without replaying tasks. See [input receipts](docs/input-receipts_en.md).
 
 ---
 
 ## Current implementation and boundaries
+
+For local conversation testing, run `npm ci` and `npm run simulator` here, open the printed localhost URL and configure your API. This runs the same AIUI page on official Ink `0.19.1`. See [current speech and testing notes](docs/aiui-voice-current_en.md) for speech API requirements, SDK updates and device acceptance boundaries.
 
 Packaging injects the same `craft-release.json` version into the app and page; archive validation checks both. Native ASR construction and runtime errors retain sanitized reasons in simulator logs to distinguish application failures from host capability issues.
 
@@ -109,6 +115,8 @@ Pass these through AIUI Studio or a supported page invocation entry:
 
 ## Official API contracts and references
 
+The official `latest` documentation and npm/Maven releases were reviewed on 2026-11-05. See [current conversation and voice troubleshooting](docs/aiui-voice-current_en.md) for version differences, upgrade checks and silence diagnostics. The `0.18.0` links below remain the original contract baseline, not the current glasses firmware version.
+
 - **Speech recognition (ASR)**: [SpeechRecognition API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-recognition?lang=zh-CN&version=0.18.0)
   - Every `SpeechRecognition.start()` requires user interaction. The input handler synchronously starts one continuous recognizer, retaining it during inference and TTS and delivering new final segments by `resultIndex`. End or failure waits for another tap or wake; timers never create another recognition round. Interim-result support and actual simultaneous audio require separate host acceptance.
 - **Speech synthesis (TTS)**: [speechSynthesis API (0.18.0)](https://js.rokid.com/AIUI/api/ai/speech-synthesis?lang=zh-CN&version=0.18.0)
@@ -166,3 +174,5 @@ Supply valid Relay configuration as required by the packaging script. A test pac
 4. If review, account and device requirements are satisfied, add the Agent in the Rokid phone app and synchronize to the glasses; verify synchronization and actual launch separately.
 
 These instructions are not evidence that upload, installation or acceptance has already completed.
+
+Hiding the page stops capture and speech while retaining admitted model/tool work and full text. The existing device owner renews its lease while host JavaScript is running, without claiming new messages. Showing the page first validates the original session and ownerEpoch, then reconciles original receipts. If host suspension or connection changes prevent confirmation, records remain unconfirmed; work is never replayed under a replacement owner. Showing the page neither opens the microphone nor replays muted responses.

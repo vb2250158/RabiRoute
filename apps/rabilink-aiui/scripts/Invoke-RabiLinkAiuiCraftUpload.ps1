@@ -9,7 +9,7 @@ param(
   [string] $Version = "",
   [string] $Description = "AI glasses control panel for bound PC RabiRoute WebGUI settings through RabiLink Relay.",
   [string] $IconUrl = "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
-  [string] $Permissions = "RECORD_AUDIO,SPEECH_RECOGNITION,INTERNET",
+  [string] $Permissions = "",
   [string] $Category = "tool",
   [string] $ToolsJson = "",
   [switch] $ListAgents,
@@ -298,7 +298,11 @@ if ($ListAgents) {
   $result.Json | ConvertTo-Json -Depth 10
 }
 
-$permissionValues = @($Permissions -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$artifactPermissions = Get-RabiLinkAiuiCraftPermissions -AixPath $resolvedAixPath
+if ($PSBoundParameters.ContainsKey('Permissions') -and $Permissions -ne $artifactPermissions) {
+  throw "Permissions must match app.json inside the selected AIX. Rebuild the AIX to change capabilities."
+}
+$permissionValues = @($artifactPermissions -split "," | Where-Object { $_ })
 $toolsJsonCompact = $ToolsJson.Trim()
 if (-not $toolsJsonCompact -or $toolsJsonCompact -eq "[]") {
   $toolsJsonCompact = Get-RabiLinkAiuiCraftToolsJson -AixPath $resolvedAixPath

@@ -26,6 +26,7 @@ const tempRoot = path.join(os.tmpdir(), `rabilink-api-contract-${process.pid}-${
 
 try {
   fs.mkdirSync(tempRoot, { recursive: true });
+  writeText(path.join(tempRoot, 'package.json'), JSON.stringify({ type: 'module' }));
   const utilsRoot = path.join(tempRoot, "utils");
   fs.mkdirSync(utilsRoot, { recursive: true });
 

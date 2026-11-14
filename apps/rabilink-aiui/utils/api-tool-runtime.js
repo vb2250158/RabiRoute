@@ -1,27 +1,28 @@
 import { validateApiRequest } from '../../../packages/rabi-api-contract/request.mjs';
 import { fingerprintApiRequest } from '../../../packages/rabi-api-contract/fingerprint.mjs';
+import { API_TOOL_LEDGER_LIMIT, validateApiToolRows } from './api-tool-ledger.js';
+import { prepareApiHelp, projectApiHelpResult } from './api-help-view.js';
 const copy = value => JSON.parse(JSON.stringify(value));
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 export const RABI_API_TOOLS = Object.freeze([
-  { type: 'function', function: { name: 'rabi_api_help', description: '读取目标 RabiPC 的当前接口合同；默认本轮角色来源电脑，可用 targetDeviceId 选择同应用已鉴权电脑。先查合同与 capabilities，目录不是权限白名单。', parameters: { type: 'object', properties: { targetDeviceId: { type: 'string' }, operationId: { type: 'string' }, path: { type: 'string' }, method: { type: 'string' } }, additionalProperties: false } } },
+  { type: 'function', function: { name: 'rabi_api_help', description: '分页查找当前 RabiPC 接口：默认返回32条简短索引，沿 nextCursor 原样翻页并保持原筛选和目标。指定 operationId 或精确 path 后返回完整合同（默认1条）。调用前先读完整合同；目录不是权限白名单。默认角色来源电脑，targetDeviceId 可选择其他已鉴权电脑。', parameters: { type: 'object', properties: { targetDeviceId: { type: 'string' }, operationId: { type: 'string' }, path: { type: 'string' }, method: { type: 'string' }, cursor: { type: 'string', maxLength: 4096 }, limit: { type: 'integer', minimum: 1, maximum: 200 } }, additionalProperties: false } } },
   { type: 'function', function: { name: 'rabi_api_call', description: '调用全部公开 Rabi 接口和未来接口。mode=http 为普通请求，stream 有界读取原始流/SSE，websocket 有界发送 messages 并读取双向消息；流/WS需要已配对手机和对应宿主API。maxBytes/maxMessages/maxMs限制本次观察，不改变接口权限。默认本轮角色来源PC，targetDeviceId可显式选择其他已鉴权PC。带原operationId和版本条件；未知写入只核对原回执，不换键或目标重放。实际结果交回同一模型继续推理。', parameters: { type: 'object', properties: { targetDeviceId: { type: 'string' }, method: { type: 'string', enum: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] }, path: { type: 'string' }, headers: { type: 'object' }, body: {}, bodyBase64: { type: 'string' }, operationId: { type: 'string' }, mode:{type:'string',enum:['http','stream','websocket']},maxBytes:{type:'integer',minimum:1,maximum:65536},maxMessages:{type:'integer',minimum:1,maximum:64},maxMs:{type:'integer',minimum:100,maximum:30000},messages:{type:'array',maxItems:64,items:{oneOf:[{type:'string'},{type:'object',properties:{bodyBase64:{type:'string'}},required:['bodyBase64'],additionalProperties:false}]}},protocols:{type:'array',items:{type:'string'}} }, required: ['method', 'path'], additionalProperties: false } } }
 ]);
 export function createApiToolRuntime({ call, storage, sessionId, defaultTargetDeviceId, onResult = () => {} }) {
   let epoch = 0, closed = false, queued = 0, chain = Promise.resolve();
-  const fingerprints = new Map();
   if (typeof call !== 'function' || !sessionId || !storage?.save || !storage?.load) fail('API_DEPENDENCIES_REQUIRED');
   async function execute(event, generation) {
     if (closed || epoch !== generation) fail('TOOL_CANCELLED');
     if (!/^[A-Za-z0-9:._-]{1,128}$/.test(event.callId || '')) fail('TOOL_CALL_ID_INVALID');
     const args = typeof event.arguments === 'string' ? JSON.parse(event.arguments) : event.arguments;
     if (!args || typeof args !== 'object' || Array.isArray(args)) fail('TOOL_ARGUMENTS_INVALID');
-    let packet;
+    let packet, helpView;
     const targetDeviceId = args.targetDeviceId || defaultTargetDeviceId;
     if (targetDeviceId !== undefined && (typeof targetDeviceId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(targetDeviceId))) fail('TOOL_TARGET_INVALID');
     if (event.functionName === 'rabi_api_help') {
-      if (Object.keys(args).some(key => !['targetDeviceId', 'operationId', 'path', 'method'].includes(key)) || Object.values(args).some(value => typeof value !== 'string' || !value.trim())) fail('TOOL_ARGUMENTS_INVALID');
-      const query = Object.entries(args).filter(([name]) => name !== 'targetDeviceId').map(([name, value]) => encodeURIComponent(name) + '=' + encodeURIComponent(value)).join('&');
-      packet = { method: 'GET', path: '/api/agent/help' + (query ? '?' + query : '') };
+      const help = prepareApiHelp(args);
+      packet = help.request;
+      helpView = help.view;
     } else if (event.functionName === 'rabi_api_call') {
       packet = { ...args };
       delete packet.targetDeviceId;
@@ -34,26 +35,54 @@ export function createApiToolRuntime({ call, storage, sessionId, defaultTargetDe
     if(mode!=='http')Object.assign(request,{mode,maxBytes,maxMessages,maxMs,messages,protocols});
     if (targetDeviceId !== undefined) request.targetDeviceId = targetDeviceId;
     const fingerprint = fingerprintApiRequest(request), rows = await storage.load() || [];
-    if (!Array.isArray(rows) || rows.length > 128) fail('TOOL_LEDGER_INVALID');
-    const old = rows.find(row => row.id === event.callId);
+    validateApiToolRows(rows);
+    // This is local request identity, not proof of a backend/business result.
+    // Keep generated operation IDs available to the model after lost responses.
+    const requestIdentity = (row, verified = true) => ({ callId: row.id,
+      ...(row.sessionId ? { sessionId: row.sessionId } : {}),
+      ...(row.operationId ? { operationId: row.operationId } : {}),
+      ...(verified && request.targetDeviceId ? { targetDeviceId: request.targetDeviceId } : {}) });
+    const duplicate = row => ({ duplicate: true, resultAvailable: false,
+      uncertain: row.state !== 'completed', state: row.state, requestIdentity: requestIdentity(row) });
+    const old = rows.find(row => row.id === event.callId && (!row.sessionId || row.sessionId === sessionId));
     if (old) {
-      if (fingerprints.has(event.callId) && fingerprints.get(event.callId) !== fingerprint) fail('TOOL_CALL_ID_CONFLICT');
-      return { duplicate: true, uncertain: old.state !== 'completed', state: old.state };
+      // Identity must survive runtime recreation. Older read rows did not save
+      // a fingerprint, so their state cannot attest to this request's outcome.
+      if (!old.fingerprint) return { duplicate: true, resultAvailable: false, uncertain: true, state: old.state,
+        code: 'TOOL_CALL_FINGERPRINT_UNVERIFIED', requestIdentity: requestIdentity(old, false) };
+      if (old.fingerprint !== fingerprint) fail('TOOL_CALL_ID_CONFLICT');
+      return duplicate(old);
     }
-    if (rows.length >= 128) fail('TOOL_LEDGER_FULL');
     const sameOperation = request.operationId && rows.find(row => row.operationId === request.operationId);
     if (sameOperation && sameOperation.fingerprint !== fingerprint) fail('TOOL_OPERATION_TARGET_CONFLICT');
-    if (sameOperation) return { duplicate: true, uncertain: sameOperation.state !== 'completed', state: sameOperation.state };
-    const record = { id: event.callId, ...(request.operationId ? { operationId: request.operationId, fingerprint } : {}), state: 'pending' };
+    if (sameOperation) return duplicate(sameOperation);
+    // Write history cannot consume the separate read slots needed to query
+    // original receipts. Reopening clears read slots, never operation history.
+    if (rows.filter(row => Boolean(row.operationId) === Boolean(request.operationId)).length >= API_TOOL_LEDGER_LIMIT) fail('TOOL_LEDGER_FULL');
+    const record = { id: event.callId, sessionId, fingerprint, ...(request.operationId ? { operationId: request.operationId } : {}), state: 'pending' };
     await storage.save([...rows, record]);
-    fingerprints.set(event.callId, fingerprint);
     if (closed || epoch !== generation) fail('TOOL_CANCELLED');
-    const result = await call(request);
+    let result, callFailed = false;
+    try { result = await call(request, { isCurrent: () => !closed && epoch === generation }); }
+    catch (error) {
+      // The page adapter can prove rejection before the actual API dispatch.
+      if (error?.requestDispatched === false) throw error;
+      callFailed = true;
+    }
+    const identity = requestIdentity(record);
     if (closed || epoch !== generation) return { cancelled: true };
+    if (helpView) result = projectApiHelpResult(result, helpView);
     const ok = result?.structuredContent?.ok === true && !result.structuredContent.uncertain && !result.isError;
-    await storage.save([...rows, { ...record, state: ok ? 'completed' : 'uncertain' }]);
+    // Preserve the original identity even when transport diagnostics or the
+    // settlement write fail. Never expose arbitrary exception text to the model.
+    const output = { ...(callFailed ? { uncertain: true, code: 'TOOL_OUTCOME_UNCONFIRMED' } : { result }),
+      requestIdentity: identity, resultAvailable: !callFailed && result !== undefined };
+    try { await storage.save([...rows, { ...record, state: ok ? 'completed' : 'uncertain' }]); }
+    catch (_) { return { ...output, uncertain: true, code: 'TOOL_RECEIPT_SAVE_UNCONFIRMED' }; }
+    if (closed || epoch !== generation) return { cancelled: true };
+    if (callFailed) return output;
     onResult({ result, summary: ok ? 'Rabi 接口已返回，详情可在工具结果查看。' : 'Rabi 接口未确认成功，请查看状态和原回执。' });
-    return { result };
+    return output;
   }
   return { loadTools: async () => copy(RABI_API_TOOLS),
     handleToolCall(event) {

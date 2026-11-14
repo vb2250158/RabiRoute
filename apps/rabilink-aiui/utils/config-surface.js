@@ -102,11 +102,9 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "enabled", label: "是否启用", type: "boolean" },
   { key: "messageAdapterType", label: "旧版消息端", type: "string" },
   { key: "messageInputsDisabled", label: "禁用消息输入", type: "boolean" },
-  { key: "gatewayPort", label: "Gateway 端口", type: "number" },
+  { key: "gatewayPort", label: "Gateway 端口（0 自动）", type: "number" },
   { key: "webhookPort", label: "Webhook 端口", type: "number" },
   { key: "webhookPath", label: "Webhook 路径", type: "string" },
-  { key: "fenneNoteWebhookPort", label: "FenneNote 端口", type: "number" },
-  { key: "fenneNoteWebhookPath", label: "FenneNote 路径", type: "string" },
   { key: "xiaoaiWebhookPort", label: "小爱端口", type: "number" },
   { key: "xiaoaiWebhookPath", label: "小爱路径", type: "string" },
   { key: "rabiLinkWebhookPort", label: "RabiLink 端口", type: "number" },
@@ -146,6 +144,9 @@ export const GATEWAY_SCALAR_FIELDS = [
   { key: "astrbotPassword", label: "AstrBot 密码", type: "string" },
   { key: "astrbotProjectId", label: "AstrBot 项目", type: "string" },
   { key: "astrbotSessionId", label: "AstrBot 会话", type: "string" },
+  { key: "grokBotAgentId", label: "Grok Bot Agent ID", type: "string" },
+  { key: "grokBotSessionId", label: "Grok Bot 会话 ID", type: "string" },
+  { key: "grokBotSessionName", label: "Grok Bot 会话名称", type: "string" },
   { key: "rolesDir", label: "角色目录覆盖", type: "string" },
   { key: "routesDir", label: "路由目录覆盖", type: "string" },
   { key: "agentRoleId", label: "角色 ID", type: "string" },
@@ -206,6 +207,7 @@ export const GATEWAY_JSON_FIELDS = [
   { key: "pipeline", label: "Pipeline 定义" },
   { key: "routeVariables", label: "路由变量" },
   { key: "agentAdapters", label: "Agent 列表" },
+  { key: "agentRecipients", label: "Agent 接收目标" },
   { key: "codexHooks", label: "Codex Hook 设置" },
   { key: "routeProfiles", label: "Route Profiles" },
   { key: "recentMessageLimits", label: "角色各消息端上下文额度" },
@@ -273,8 +275,8 @@ export function createDefaultGateway(next) {
         supportedOutputs: ["text", "image", "voice", "file"]
       }
     },
-    gatewayPort: 8789 + next,
-    napcatHttpUrl: "http://127.0.0.1:3000",
+    gatewayPort: 0,
+    napcatHttpUrl: "",
     heartbeatIntervalSeconds: 900,
     heartbeatMessage: defaultHeartbeatMessage(),
     heartbeatSkipWhenAgentBusy: false,
@@ -310,9 +312,10 @@ export function duplicateSelectedGateway(gateways, index) {
     name: `${routeLabel(current)} 副本`,
     routeName: current.routeName ? `${current.routeName} 副本` : undefined,
     enabled: false,
-    gatewayPort: 8789 + number,
+    gatewayPort: 0,
+    napcatInstances: Array.isArray(current.napcatInstances)
+      ? cloneJson(current.napcatInstances).map(instance => ({ ...instance, gatewayPort: 0 })) : undefined,
     webhookPort: undefined,
-    fenneNoteWebhookPort: undefined,
     xiaoaiWebhookPort: undefined,
     rabiLinkWebhookPort: undefined,
     codexThreadName: current.codexThreadName ? `${current.codexThreadName} 副本` : `路由配置 ${number}`,
@@ -788,7 +791,7 @@ function parseOptionalPort(value, label) {
   const text = String(value ?? "").trim();
   if (!text) return undefined;
   const port = Number(text);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`${label} 必须是 1-65535 的整数。`);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`${label} 必须是 0-65535 的整数（0 自动）。`);
   return port;
 }
 
@@ -816,9 +819,9 @@ export function normalizeNapcatInstance(instance, index = 0, gateway = {}) {
     id: normalizeNapcatId(raw.id, index === 0 ? "default" : `napcat-${index + 1}`),
     name: String(raw.name || raw.id || (index === 0 ? "默认 NapCat" : `NapCat ${index + 1}`)).trim(),
     enabled: raw.enabled !== false,
-    gatewayPort: parseOptionalPort(raw.gatewayPort ?? gateway.gatewayPort ?? 8789, "NapCat WS 端口") ?? 8789,
-    httpUrl: validateOptionalUrl(raw.httpUrl || gateway.napcatHttpUrl || "http://127.0.0.1:3000", "NapCat HTTP"),
-    webuiUrl: validateOptionalUrl(raw.webuiUrl || gateway.napcatWebuiUrl || "http://127.0.0.1:6099/webui", "NapCat WebUI"),
+    gatewayPort: parseOptionalPort(raw.gatewayPort ?? gateway.gatewayPort ?? 0, "NapCat WS 端口") ?? 0,
+    httpUrl: validateOptionalUrl(raw.httpUrl ?? (index === 0 ? gateway.napcatHttpUrl : undefined) ?? "", "NapCat HTTP"),
+    webuiUrl: validateOptionalUrl(raw.webuiUrl ?? (index === 0 ? gateway.napcatWebuiUrl : undefined) ?? "", "NapCat WebUI"),
     accessToken: String(raw.accessToken ?? gateway.napcatAccessToken ?? ""),
     webuiToken: String(raw.webuiToken ?? gateway.napcatWebuiToken ?? ""),
     launchCommand: String(raw.launchCommand ?? ""),
@@ -854,17 +857,6 @@ export function nextNapcatInstanceNumber(gateway) {
   return next;
 }
 
-function localUrlWithPort(baseUrl, fallbackPort, offset) {
-  let parsed;
-  try {
-    parsed = new URL(baseUrl || `http://127.0.0.1:${fallbackPort}`);
-  } catch {
-    parsed = new URL(`http://127.0.0.1:${fallbackPort}`);
-  }
-  const port = Number(parsed.port || fallbackPort) + offset;
-  parsed.port = String(Math.max(1, Math.min(65535, port)));
-  return parsed.toString().replace(/\/$/, "");
-}
 
 export function createDefaultNapcatInstance(gateway) {
   const next = nextNapcatInstanceNumber(gateway);
@@ -872,9 +864,9 @@ export function createDefaultNapcatInstance(gateway) {
     id: next === 1 ? "default" : `napcat-${next}`,
     name: next === 1 ? "默认 NapCat" : `NapCat ${next}`,
     enabled: true,
-    gatewayPort: Number(gateway?.gatewayPort || 8789) + Math.max(0, next - 1),
-    httpUrl: localUrlWithPort(gateway?.napcatHttpUrl, 3000, Math.max(0, next - 1)),
-    webuiUrl: localUrlWithPort(gateway?.napcatWebuiUrl, 6099, Math.max(0, next - 1)),
+    gatewayPort: 0,
+    httpUrl: next === 1 ? gateway?.napcatHttpUrl ?? "" : "",
+    webuiUrl: next === 1 ? gateway?.napcatWebuiUrl ?? "" : "",
     accessToken: gateway?.napcatAccessToken || "",
     webuiToken: gateway?.napcatWebuiToken || ""
   }, next - 1, gateway);

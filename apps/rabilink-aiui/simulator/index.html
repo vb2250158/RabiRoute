@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RabiLink · AIUI 测试台</title>
+<style>
+:root{color-scheme:dark;font:15px/1.6 system-ui,sans-serif;background:#101716;color:#dfebe5}*{box-sizing:border-box}body{margin:0}main{max-width:1120px;margin:auto;padding:28px}h1{font-size:26px;margin:0}h2{font-size:17px;margin:0 0 14px}.muted{color:#9eafa6}header{margin-bottom:24px}header p{margin:6px 0}.layout{display:grid;grid-template-columns:minmax(480px,1.2fr) minmax(290px,1fr);gap:22px}.panel{background:#18221e;border:1px solid #33463b;border-radius:14px;padding:22px;margin-bottom:20px}.screen{background:#000;border:1px solid #42624f;border-radius:12px;overflow:hidden;width:100%;max-width:482px}canvas{display:block;width:100%;height:auto}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}button,input,select,textarea{font:inherit;border-radius:7px;border:1px solid #52675a;padding:9px;background:#101915;color:inherit}button{cursor:pointer}button.primary{background:#7be7ab;color:#0b2416;font-weight:650;border-color:#7be7ab}button:disabled{opacity:.4;cursor:wait}button:focus-visible,input:focus,select:focus,textarea:focus{outline:2px solid #7be7ab;outline-offset:2px}label{display:block;margin:12px 0 4px;font-size:13px;color:#c7d8cd}input,textarea,select{width:100%}textarea{resize:vertical;min-height:75px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}#status{min-height:24px;color:#9df4be}#events{height:290px;overflow:auto;font:13px/1.6 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}#events p{margin:0 0 8px;border-bottom:1px solid #293a30;padding-bottom:8px}summary{cursor:pointer;color:#bcd5c6}.badge{font-size:12px;border:1px solid #52675a;border-radius:20px;padding:3px 10px;display:inline-block}small{color:#9eafa6}#config-result{min-height:24px}@media(max-width:850px){.layout{grid-template-columns:1fr}main{padding:16px}.panel{padding:16px}}
+</style></head><body><main>
+<header><span class="badge">官方 Ink 0.19.1 · 本地测试宿主</span><h1>RabiLink 对话测试</h1><p class="muted">运行眼镜端同一份页面，逐段检查输入、回复和声音。</p></header>
+<div class="layout"><section>
+<div class="panel"><h2>眼镜画面</h2><div class="screen"><canvas id="ink" width="480" height="352" tabindex="0" aria-label="AIUI 眼镜页面"></canvas></div>
+<p id="status" role="status">正在加载官方运行时…</p>
+<label for="input-mode">输入来源</label><select id="input-mode"><option value="text">模拟文字输入（不使用麦克风）</option><option value="microphone">真实麦克风 → ASR API</option></select>
+<div class="controls"><button id="wake" class="primary" disabled>唤醒 / 开始听</button><button id="speech-start" disabled>模拟开口打断</button><button id="enter" disabled>镜腿确认键</button><button id="stop" disabled>停止并释放</button></div>
+<form id="text-form"><label for="utterance">模拟识别结果</label><textarea id="utterance" placeholder="输入一句测试话，例如：请用一句话介绍自己。" maxlength="2000"></textarea><div class="controls"><button id="send" class="primary" disabled>发送到 AIUI 对话</button><button id="reload" type="button">重新加载页面</button></div></form>
+<small>文字从 ASR 宿主事件进入原页面。真实麦克风模式会把录音发到你配置的 API；浏览器播放成功仍需你确认听见。</small></div>
+<div class="panel"><h2>调用记录</h2><div id="events" role="log" aria-live="polite"></div><small>仅保留本页最近 100 条，刷新即清除。</small></div>
+</section><aside><div class="panel"><h2>API 连接</h2><p class="muted">支持 OpenAI 兼容接口。配置只存本机服务进程内存，停止服务后清除。</p>
+<form id="config-form"><label for="baseUrl">Base URL（含 /v1 等接口前缀）</label><input id="baseUrl" name="baseUrl" type="url" placeholder="https://你的服务地址/v1" required autocomplete="off">
+<label for="apiKey">API Key</label><input id="apiKey" name="apiKey" type="password" autocomplete="off" placeholder="输入后仅传给本机中间件">
+<label for="model">对话模型</label><input id="model" name="model" required placeholder="服务商的模型 ID" autocomplete="off">
+<details><summary>语音服务（可稍后配置）</summary><label for="asrModel">ASR 模型</label><input id="asrModel" name="asrModel" placeholder="audio/transcriptions 模型 ID" autocomplete="off">
+<label for="ttsModel">TTS 模型</label><input id="ttsModel" name="ttsModel" placeholder="audio/speech 模型 ID" autocomplete="off"><label for="voice">TTS 音色</label><input id="voice" name="voice" autocomplete="off" placeholder="服务商的音色 ID"><small>TTS 需返回 24 kHz、16-bit、单声道裸 PCM。当前语音与对话共用 Base URL / Key。</small></details>
+<div class="controls"><button class="primary" id="apply">应用到本次测试</button></div><p id="config-result" role="status"></p></form></div>
+<div class="panel"><h2>验证范围</h2><p>页面、生命周期、按键、模型调用和独立播放器使用官方 Ink。浏览器宿主补充 API 与输入。</p><p class="muted">这不是 Studio 云端模拟器，也不能证明眼镜固件、蓝牙、麦克风或扬声器正常。</p></div></aside></div>
+</main><script type="module" src="/client.js"></script></body></html>

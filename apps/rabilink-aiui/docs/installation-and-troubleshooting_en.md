@@ -6,11 +6,68 @@ English | <a href="./installation-and-troubleshooting.md">简体中文</a>
 
 # RabiLink AIUI Installation, Usage, and Troubleshooting
 
+Reviewed: 2026-11-06. App version comes from `../craft-release.json` (`1.0.39` in this review). The current cloud debug project is **拉比连续对话联调**, form version `1.0.1`, Agent ID `521911add4924faca1daae75e6e4a451`. It has been saved in Studio, but phone synchronization and glasses installation remain pending. See [current voice and device troubleshooting](aiui-voice-current_en.md) for hashes, SDK versions, checks and outstanding acceptance. Cloud form and app versions are separate identifiers.
+
+Tool-wait input is saved locally before an independent answer; new work queues under its original ID. Restart displays the pending count and last text without replay. The footer record entry opens original inputs, saved answers and status: left/right selects records, up/down pages, confirm/back closes. Viewing never replays work; unknown tool outcomes still require original receipts. See [input receipts](input-receipts_en.md).
+
+## First verification of current conversation
+
+1. Open/import this AIX project in [AIUI Studio](https://aiui.rokid.com/). Enter an interactive full-screen Page; a display card in the conversation stream is not proof that the Page has opened.
+2. Use `modelProbe=true` to check host model availability. It answers a fixed arithmetic question without recording or PC tools; it does not test the voice chain.
+3. Enter ordinary conversation and start capture through a supported touch, confirmation or wake interaction. Verify recognition text, model response text and audible playback separately. A waiting label or response text does not establish microphone/player operation.
+4. Speak again during playback: audio should stop promptly while ASR and already-dispatched work remain active, and complete input should reach the next decision. Tool-wait replies are now connected in source and synthetic page tests; actual model/acoustic behavior remains unverified, so these tests do not establish the desired duplex experience.
+5. Close/reopen the Page and verify resource cleanup and rejection of late callbacks. Microphone denial, unavailable models and offline errors must produce a diagnosable state rather than indefinite waiting.
+
+The default chain is Rokid ASR → AIUI host `LanguageModel` → Rokid TTS. Basic conversation needs neither a Rabi Token nor an online PC; host services still require their network, permissions and availability. Names and `agentId` are local configuration, not arbitrary Lingzhu platform Agent binding. Phone profile instructions apply after the active turn; authenticated adapters discover and invoke actual interfaces.
+
+## Build, debug and installation evidence
+
+Run in `apps/rabilink-aiui`:
+
+```powershell
+npm run check:skill
+npm run package:aix
+npm run check
+npm run delivery:verify
+```
+
+The final artifact is `dist/rabilink-aiui.aix`. Before upload, verify version, SHA256, packaged routes/assets and absence of credentials. Current `app.json` declares only `RECORD_AUDIO`; the official Skill states that ASR needs no separate `SPEECH_RECOGNITION` permission. CLI/embedded helpers derive permissions from the selected AIX manifest, and the CLI rejects mismatched overrides. The ordinary file-picker helper's defaults are checked against the source manifest; selecting a different artifact still requires permission verification.
+
+| Stage | Evidence provided | Not established |
+| --- | --- | --- |
+| Build and final AIX audit | Compilation and contents match this source | Cloud project updated |
+| Studio simulation | Page runs in that simulated host | Glasses ASR, TTS or network available |
+| Studio device debugging | Actual connection, loaded version and runtime logs | A button alone does not prove synchronization |
+| Cloud upload | Complete success receipt for the target project | Review approval or device installation |
+| Phone synchronization and glasses operation | Target version, real input, reply and sound | Old-version success cannot certify this version |
+
+The in-app Studio is signed in. The cloud draft “拉比连续对话联调” reports ready for debugging but still contains the owner-storage candidate. The protocol-scope package was imported through the new-agent AIX menu and passed two text turns plus local-tool dispatch; it remains a local draft pending upload. Select artifacts by [current delivery status](aiui-voice-current_en.md#current-delivery-and-acceptance-status). The last ADB check listed no devices, so phone synchronization and glasses connection remain unverified. Before later updating resources through Rokid AI App → Settings → Developer → Update glasses resources, confirm the intended candidate is saved in the cloud, then verify the actual device version, reply and sound. Studio's Web host lacks `speech.synthesize`; its silence cannot establish device TTS behavior.
+
+`npm run craft:upload:dryrun` only previews metadata. Public distribution/review and development debugging are distinct. The historical store flow below does not establish that every debug installation requires public release.
+
+## No sound or waiting for speech
+
+| Observed symptom | Evidence to inspect next |
+| --- | --- |
+| Waiting with no recognition text | Interactive Page, microphone permission, ASR capability and start/error callbacks; do not first change the model API key |
+| Recognition text but no reply | Host model availability, creation deadline and request error |
+| Reply text without sound | Synthesis task, `SpeechAudioPlayer.play()` and native canplay/ended/error callbacks; synthesis alone is silent |
+| Cannot speak after playback | Current ASR round, end/error callbacks, hidden-page cleanup and next interaction; the old stop-ASR-during-TTS rule does not apply to current ordinary conversation |
+| Interface operation has no result | Bound target, tool contract and original receipt; reconcile uncertain writes before replaying |
+
+The test bench uses injected models and software voice fixtures. After the system-prompt ordering fix, live OpenAI tests passed endpoint discovery/invocation, randomized receipt verification and the final-answer prefix. An isolated official Studio diagnostic also verified prefix compliance and local close-tool dispatch by the real Rokid model. The host accepted the close request while the page remained visible. These results do not establish real-device PC API execution or audible speech.
+
+## Historical troubleshooting (through 2026-07-16)
+
+The following retains old field evidence and store workflow for traceability. PC record-first, setup gating, ASR suspension, versions and statements of current status belong to that historical context; they are not deployment instructions for this candidate. Use the current workflow above and [current voice notes](aiui-voice-current_en.md).
+
 Last verified: 2026-07-16
 
 This document covers the complete RabiLink AIUI path from local source to Rokid glasses, together with issues reproduced in Craft, the Rokid AI App, ADB, the Ink runtime, and RabiLink Relay. When an installation or runtime problem occurs, first use the stage model below to identify the last completed stage, then find the matching symptom.
 
-## 1. Distinguish the Five Stages
+> Voice contract reviewed 2026-11-05: the 1.0.16 and 1.0.23 implementation and acceptance notes below are historical, not evidence of the installed version. See [current voice and device troubleshooting](aiui-voice-current_en.md) for the current source. No glasses runtime logs or playback acceptance were obtained in this review.
+
+### 1. Distinguish the Five Stages
 
 ```text
 Local AIX generated
@@ -28,9 +85,9 @@ These stages are not equivalent:
 - RabiLink appearing in Agent management proves that it has been added on the phone.
 - Physical-device runtime is complete only after the glasses display the HUD, access Relay, and leave application behavior events.
 
-## 2. Official Installation and Release Flow
+### 2. Official Installation and Release Flow
 
-### 2.1 Generate and Accept Locally
+#### 2.1 Generate and Accept Locally
 
 Run the following in `apps/rabilink-aiui`:
 
@@ -54,7 +111,7 @@ Before uploading, confirm that:
 - The package contains no real `rabilinkToken`, Craft token, Cookie, log, screenshot, or private configuration.
 - Upload permissions include only microphone, speech recognition, and network access; the current UI does not require camera permission.
 
-### 2.2 Configure the PC RabiLink Active-Intelligence Route
+#### 2.2 Configure the PC RabiLink Active-Intelligence Route
 
 The global PC "Connect to Server" control only registers the computer and proxies the remote WebGUI. An enabled RabiLink Route is also required for AIUI observations to enter the unified ledger and for Codex to proactively deliver without a preceding task:
 
@@ -66,7 +123,7 @@ The global PC "Connect to Server" control only registers the computer and proxie
 
 The Relay address and token belong only in local global configuration and the Agent variable `rabilinkToken`; do not put them in the Route template. A running Route is required for input to reach the ledger. Proactive downlink also passes through the Rabi output policy and Action Gate at `/api/agent/send`.
 
-### 2.3 Upload to Craft
+#### 2.3 Upload to Craft
 
 1. Open [Craft](https://js.rokid.com/craft?region=cn&lang=zh-CN).
 2. Select "Local .aix" from the import menu.
@@ -77,7 +134,7 @@ The Relay address and token belong only in local global configuration and the Ag
 
 Step 4 must still complete when no local device credential exists. On physical hardware, the page first opens a separate `RabiLink Setup` page. It does not show the mode rail, ASR, or Agent conversation; it shows only the full glasses SN, the Relay `/manage` address, and binding status. The glasses ignore a legacy application token even if the outer Agent still supplies it. The user signs in to the server administration page, enters the SN in the "Glasses SN" field on the target application card, and selects "Bind / Reset." The glasses attempt their one-time device-credential claim every five seconds. After success, they store the credential in `localStorage` isolated to the current Agent and automatically switch to the normal RabiLink HUD. No second enter action or Agent memory variable is required. The page tool's `token` parameter exists only for Craft debugging compatibility when no device SN is available.
 
-#### Two Craft Browser Debug Entry Points
+##### Two Craft Browser Debug Entry Points
 
 The "Run Agent" control at the top of Craft and `/debug simulate glasses device running the current page` in the chat box are different paths:
 
@@ -108,7 +165,7 @@ The Agent has been uploaded.
 
 This message does not mean that review has passed or that the Agent has been installed on the glasses.
 
-### 2.4 Switch from the Local Project to the Cloud Project
+#### 2.4 Switch from the Local Project to the Cloud Project
 
 After upload, Craft may remain in the local project:
 
@@ -132,7 +189,7 @@ Correct procedure:
 
 This is a key distinction confirmed during troubleshooting: a local AIX can be byte-for-byte equivalent to the cloud version, but the local project has no binding to the Rokid Agent. Only the cloud project can be submitted for review.
 
-### 2.5 Submit for Review
+#### 2.5 Submit for Review
 
 Craft review submission has two steps:
 
@@ -149,7 +206,7 @@ No matching Agent found
 
 That means the publishing stage is incomplete; it is not a phone Bluetooth or ADB failure.
 
-### 2.6 Add on the Phone and Synchronize to the Glasses
+#### 2.6 Add on the Phone and Synchronize to the Glasses
 
 After approval, use the public UI in the Rokid AI App:
 
@@ -175,9 +232,9 @@ Do not treat either of the following as installation:
 
 An `.aix` is not an Android APK. The current Rokid AI App exposes no `.aix` file-opening handler; a file in Downloads is useful only for delivery and hash verification.
 
-## 3. Using RabiLink on the Glasses
+### 3. Using RabiLink on the Glasses
 
-### Connected Conversation
+#### Connected Conversation
 
 - Default mode name: `Connected Conversation`.
 - While the page is in the foreground, it uses AIUI-native `SpeechRecognition` for one recognition round at a time and automatically starts the next round after `onend`.
@@ -190,7 +247,7 @@ An `.aix` is not an Android APK. The current Rokid AI App exposes no `.aix` file
 - The page continuously waits on the downlink stream by cursor. Ordinary replies from Codex/other Agents and proactive messages from timers or planners are displayed and played sequentially with native glasses TTS.
 - Relay downlink outbox is independent of ten-minute task cleanup and retains data for 48 hours by default. First connection reads retained backlog instead of jumping to the current tail, so Codex may deliver before the glasses page opens.
 - When AIUI receives a batch, it first persists up to 2,000 pending playback items for up to 48 hours under the token, then saves `nextCursor`. Hiding the page, switching to Configuration Assistant, or interrupting playback does not remove unfinished items. Returning to Connected Conversation resumes in original cursor order, and an item is removed only after successful TTS.
-- Before TTS starts, the page releases ASR; it restores the next recognition round only after the TTS state machine completes, preventing acoustic feedback. The official `speechSynthesis` API currently exposes only `speak(utterance, mode?)` and does not promise complete utterance lifecycle events or `cancel()`. The page uses `enqueue` mode and, when the host does not call `onend/onerror`, applies a conservative watchdog of 1.8 to 90 seconds based on text length so `speechActive` cannot remain stuck forever. The estimate only guarantees state-machine progress; actual playback end time still requires physical-glasses acceptance.
+- Historical versions released ASR before TTS and used `speak()` with an estimated watchdog. The current conversation path uses a separate synthesis task and player, and attempts to retain ASR during playback. Actual concurrency and playback timing require device verification; see [current voice and device troubleshooting](aiui-voice-current_en.md).
 - After one TTS item fails three consecutive times, it remains in the persistent queue but yields the queue head so later ordinary/proactive messages continue. The HUD shows `TTS failed; click to retry`; a touchpad click in Connected Conversation resets and retries the failed item.
 
 Unified conversation data on the PC:
@@ -201,7 +258,7 @@ Unified conversation data on the PC:
 - Rotation and index writes use a cross-process lock, and the index is replaced through a temporary file. Even if a process exits immediately after moving a file, timeline reads discover and recover an unregistered date volume instead of hiding unreviewed observations behind a damaged index.
 - Archiving creates no summary and does not rewrite original text. When the Agent needs context, it reads the current file first, then reads relevant dated archives through the index.
 
-### Configuration Assistant
+#### Configuration Assistant
 
 - Swipe backward from Connected Conversation, or let the bound Rokid Agent invoke the page with `mode=configuration`.
 - The same InkView switches its rail and HUD directly without exiting or requiring another enter action.
@@ -210,7 +267,7 @@ Unified conversation data on the PC:
 - Configuration ASR is released while an API executes, the model interprets, or TTS plays. The next round begins automatically after the operation and TTS state machine complete. When uncertain, the model asks a clarification question instead of executing incorrectly or remaining stuck in a processing state.
 - Swipe forward, or say "Switch to Connected Conversation." Configuration ASR recognizes this control phrase before invoking `LanguageModel` and immediately restores Connected Conversation ASR on the same page.
 
-### Proactive Delivery
+#### Proactive Delivery
 
 Proactive producers reuse the RabiRoute output safety gate:
 
@@ -236,13 +293,13 @@ After policy checks, the message is written directly to the continuous queue and
 
 Upstream and downstream are independent queues. Once PC Rabi records glasses input, it releases the upstream item; Codex reviews the record while the thread is idle or when guided by the touchpad. A timer, planner, or Codex can also write proactive downlink at any time without upstream input. Downlink uses a stable `deliveryId`, so retry after a lost network response does not duplicate TTS. `taskId` remains only for legacy direct-message compatibility and does not participate in record-only upstream, proactive delivery, blocking, or stream closure.
 
-### Status Badges
+#### Status Badges
 
 - Bottom left: clock icon and `HH:mm`.
 - Bottom right: `v<release version>`, battery icon, and percentage; a charging marker appears while charging.
 - Display `--` when all real battery sources are unavailable or Relay status is more than three minutes old.
 
-## 4. Reproduced Problems and Confirmed Remedies
+### 4. Reproduced Problems and Confirmed Remedies
 
 | Symptom | Confirmed cause | Correct remedy |
 | --- | --- | --- |
@@ -278,7 +335,7 @@ Upstream and downstream are independent queues. Once PC Rabi records glasses inp
 | Production device-status request returns 404 | Production Relay is still on an old version | Deploy a service containing `/api/rabilink/mobile/device-status`; an unauthorized probe should return 401, not 404 |
 | Transcription stops after the page remains quiet for a while | AIUI promises foreground page continuation only, not a background resident service | Keep the page in the foreground; use FenneNote or an Android foreground-service design for lock-screen/background residency |
 
-### Collect Glasses Runtime Logs
+#### Collect Glasses Runtime Logs
 
 Since `1.0.17`, AIUI asynchronously uploads its own runtime state, ASR/TTS/LanguageModel errors, and safe console summaries to Relay. Sign in to Relay at `/manage/<account>` and open "Glasses Cloud Logs" to filter by device, source, level, and keyword. Each record also shows AIX version, mode, and session. Offline logs remain on the glasses for at most 500 entries and seven days, then upload automatically after connectivity returns.
 
@@ -297,7 +354,7 @@ $adb = Resolve-Path ..\rabi-mobile-android\out\tools\android-sdk\platform-tools\
 
 Reproduce one cycle of "swipe to Configuration Assistant -> speak -> wait for the next round," then stop with `Ctrl+C`. If the device list is empty, do not present PC/Relay logs as glasses logs. In that case, use whether Relay received new input only to narrow the investigation.
 
-## 5. Hang Regression Testing
+### 5. Hang Regression Testing
 
 Historical hangs correlated with:
 
@@ -333,7 +390,7 @@ Do not proceed to physical release if any command fails or if logs contain `appl
 
 Craft online redraw acceptance is recorded in `dist/craft-render-acceptance.json`. Mode switching and simulated ASR writeback are sampled continuously for three seconds and classified every 10 ms. Since 1.0.16, a black frame is not treated as an acceptable masking interval; acceptance requires both `partial_frames = 0` and `black_frames = 0`. The current file still describes a historical AIX whose package size, AIX VERSION, and SHA256 do not match the 1.0.23 package listed here. It cannot be used to claim that the current package passed Craft; generate a report for the same package after re-upload. Even an updated report proves only the Craft browser Interactive InkView, not execution on physical glasses.
 
-## 6. Battery and Charging Chain
+### 6. Battery and Charging Chain
 
 The page accepts only a status chain demonstrably originating from the glasses:
 
@@ -353,7 +410,7 @@ The report saves only battery level, charging boolean, source, and time; it does
 
 Completed chain evidence includes the phone CXR callback, compiled AIUI reading Relay status, and deployment of the device-status route to the public production Relay. When the phone or glasses are offline, or status is older than three minutes, the page honestly displays `--` instead of impersonating glasses state with browser or phone battery.
 
-## 7. Final Acceptance Checklist
+### 7. Final Acceptance Checklist
 
 Release and installation:
 
@@ -388,7 +445,7 @@ Business flow:
 - [ ] `npm run runtime:proof` produces `proved=true`.
 - [ ] `npm run goal:evidence` shows complete.
 
-## 8. Current Field Status
+### 8. Current Field Status
 
 See [acceptance-report_en.md](acceptance-report_en.md) for the complete original-requirements matrix, automated evidence, and final steps after the devices return.
 
@@ -407,7 +464,7 @@ As of 2026-07-14:
 - The phone and glasses were physically disconnected on 2026-07-13. Final phone add, glasses runtime, real ASR, and real battery/charging evidence remain incomplete, so the current status must not be described as fully accepted.
 - Optional FenneNote resident transcription provides record-first input from the PC microphone and reuses the same JSONL and reviewer. It does not change the AIUI foreground lifecycle and cannot substitute for glasses microphone, background recording, or physical runtime evidence.
 
-## 9. Related Material
+### 9. Related Material
 
 - [RabiLink AIUI project README](../README_en.md)
 - [AIUI framework and logic development notes](aiui-framework-and-logic-development_en.md)

@@ -119,7 +119,7 @@ export const agentProfilePageMethods = {
       if (this.deviceAgentProfile && profile.revision < this.deviceAgentProfile.revision) throw new Error("INVALID_PROFILE");
       if (this.deviceAgentProfile && profile.revision === this.deviceAgentProfile.revision) {
         if (JSON.stringify(profile) !== JSON.stringify(this.deviceAgentProfile)) throw new Error("INVALID_PROFILE");
-        if (this.chatModel && this.chatModelDeviceProfile === this.deviceAgentProfile) await this.acknowledgeDeviceAgentProfile(this.deviceAgentProfile);
+        if (this.chatAssistant && this.chatModelDeviceProfile === this.deviceAgentProfile) await this.acknowledgeDeviceAgentProfile(this.deviceAgentProfile);
         return { ok: true, scope, applied: true };
       }
       this.pendingDeviceAgentProfile = { profile, scope: this.agentProfileScope(config) };
@@ -162,7 +162,7 @@ export const agentProfilePageMethods = {
     const current = () => !this.destroyed && epoch === this.deviceAgentProfileAckEpoch && scope === this.currentAgentProfileScope() && this.deviceAgentProfile === profile;
     const enabledServices = profile.mcp.filter(item => item.enabled);
     const readToolsReady = enabledServices.every(item => ["rabi-knowledge", "rabi-api"].includes(item.id))
-      && !!this.chatModel && this.chatModelDeviceProfile === profile
+      && !!this.chatAssistant && this.chatModelDeviceProfile === profile
       && !!this.rabiApiRuntime && this.chatModelApiRuntime === this.rabiApiRuntime
       && this.chatModelApiScope === scope && this.chatModelApiToolsCount > 0;
     const unavailable = !readToolsReady;

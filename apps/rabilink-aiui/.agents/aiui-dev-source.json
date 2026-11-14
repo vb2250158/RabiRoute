@@ -1,0 +1,240 @@
+{
+  "repository": "https://github.com/yodaos-project/AIUI",
+  "commit": "00c6ec71ee313817705683248b3ebe2acf0937f0",
+  "path": "skills/aiui-dev",
+  "verifiedAt": "2026-11-07",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "gitBlobSha1": "937e05bf6bcf47382fd2f6f6899ae3c17a1d9989"
+    },
+    {
+      "path": "assets/minimal-agent-worker.js",
+      "gitBlobSha1": "204e7d6958ca69e20855cfb60a711f02b72997f9"
+    },
+    {
+      "path": "assets/minimal-page.ink",
+      "gitBlobSha1": "d469305aa7739ff18d0ffead08d8e3ae10be7df8"
+    },
+    {
+      "path": "assets/minimal-widget.ink",
+      "gitBlobSha1": "099a4537844478e70c005461a495e96f3d840833"
+    },
+    {
+      "path": "references/animation.md",
+      "gitBlobSha1": "68b801d5ce402e3638182802773c4afa4f3bb83d"
+    },
+    {
+      "path": "references/apis/agent-worker.md",
+      "gitBlobSha1": "27b03799cbc238402507b0692cff441b41c9371b"
+    },
+    {
+      "path": "references/apis/ai.md",
+      "gitBlobSha1": "76fa3baecbaa523f235d1b055ef8d17da63720a7"
+    },
+    {
+      "path": "references/apis/canvas.md",
+      "gitBlobSha1": "31307dc951e055b245439c121c61d10c0d3518f4"
+    },
+    {
+      "path": "references/apis/device.md",
+      "gitBlobSha1": "4f31cc1a63ac2578862b875c65ac68a7ab061858"
+    },
+    {
+      "path": "references/apis/framework.md",
+      "gitBlobSha1": "cf31bb1fac595d8bd792c4b7fd9490ea7b203f80"
+    },
+    {
+      "path": "references/apis/geo/geolocation.md",
+      "gitBlobSha1": "62b4ef68c256ecc2d7d994c3c385de9fa7b984b4"
+    },
+    {
+      "path": "references/apis/geo/gpx-document.md",
+      "gitBlobSha1": "f418e282f632cd588dff5f1404f91d4615dbf537"
+    },
+    {
+      "path": "references/apis/geo/index.md",
+      "gitBlobSha1": "716339a3958f77f6043e56fa42776bcedcfd8988"
+    },
+    {
+      "path": "references/apis/index.md",
+      "gitBlobSha1": "f7384da48ad5fd2c2b4ae34547755d0a79d032a6"
+    },
+    {
+      "path": "references/apis/media.md",
+      "gitBlobSha1": "114d81ee89e9921a486293a143816cb410854ac4"
+    },
+    {
+      "path": "references/apis/navigator.md",
+      "gitBlobSha1": "a9375ba8adbc4a6c050e7a9912ca92bef6a7759a"
+    },
+    {
+      "path": "references/apis/web.md",
+      "gitBlobSha1": "9808cee50e06afad8d077dc6593226ea0149a426"
+    },
+    {
+      "path": "references/apis/widget.md",
+      "gitBlobSha1": "14104d57f888bc4d01d9a5fdf54b755e3f0c2e55"
+    },
+    {
+      "path": "references/apis/window.md",
+      "gitBlobSha1": "b97991230e85ff158c2a77bc29937585f5842043"
+    },
+    {
+      "path": "references/apis/wx.md",
+      "gitBlobSha1": "0a8fea365c0c67d5ddacc24560f020395ffe9085"
+    },
+    {
+      "path": "references/checklist.md",
+      "gitBlobSha1": "9cdf9bf5ec7187bc2c1330294c7b4c79601e48a4"
+    },
+    {
+      "path": "references/components.md",
+      "gitBlobSha1": "d82f80906fc0173cd607cb7a7c3a7d356e3c2cb7"
+    },
+    {
+      "path": "references/components/a2ui.md",
+      "gitBlobSha1": "ea7de5fbe7343310d049a535da2866a334b5fd8f"
+    },
+    {
+      "path": "references/components/b.md",
+      "gitBlobSha1": "2d54abf018fbb058bf0352c5873bae27af90ca80"
+    },
+    {
+      "path": "references/components/blockquote.md",
+      "gitBlobSha1": "6e76a440bf7a14be9a74720a2ab7530eaf97eb64"
+    },
+    {
+      "path": "references/components/button.md",
+      "gitBlobSha1": "8b4e42adb6734a3643a391be99be3920cb321f1f"
+    },
+    {
+      "path": "references/components/calendar.md",
+      "gitBlobSha1": "b0bf229c53b334c014f1d8aa7935626ef38a42d5"
+    },
+    {
+      "path": "references/components/canvas.md",
+      "gitBlobSha1": "14ddc8cab279461423e898fe77128bd8eaf33a83"
+    },
+    {
+      "path": "references/components/card.md",
+      "gitBlobSha1": "c6591b13bc1f27a2d10d15986a25dda4b3ce508e"
+    },
+    {
+      "path": "references/components/chart.md",
+      "gitBlobSha1": "483382935bbd4f0256d216246f3bc9359acc7e7b"
+    },
+    {
+      "path": "references/components/error-state.md",
+      "gitBlobSha1": "76c0d715d956ea281c52abf9df82402b398694cb"
+    },
+    {
+      "path": "references/components/formula.md",
+      "gitBlobSha1": "0ddf0eaa0b7d3b66188f1e2b039642c0441520a6"
+    },
+    {
+      "path": "references/components/header.md",
+      "gitBlobSha1": "9b76ed8e619618aa31751f9929043329ce3b112a"
+    },
+    {
+      "path": "references/components/i.md",
+      "gitBlobSha1": "a4312813e0fe06e63d06853bc348c538fce49a99"
+    },
+    {
+      "path": "references/components/icon.md",
+      "gitBlobSha1": "51248e3f892c12994264ad8f982f4d0e8a3618f7"
+    },
+    {
+      "path": "references/components/image.md",
+      "gitBlobSha1": "c7c50fab74301add33bf613c98a7e055829d5533"
+    },
+    {
+      "path": "references/components/input.md",
+      "gitBlobSha1": "3c0d0be60b0515e3d61a222709eedfcc9e0459ff"
+    },
+    {
+      "path": "references/components/list-item.md",
+      "gitBlobSha1": "060c2a3537ae8b3501d2975bc9e0fa4bfc3f6d67"
+    },
+    {
+      "path": "references/components/list.md",
+      "gitBlobSha1": "b242b54480e403d7db9d04dba061be1ce00e2070"
+    },
+    {
+      "path": "references/components/lottie-view.md",
+      "gitBlobSha1": "de62372930e6bfeedabb887fe76dde5fc23822b0"
+    },
+    {
+      "path": "references/components/map.md",
+      "gitBlobSha1": "fda9615a074f6625bfba19b3e5779ce826576f9d"
+    },
+    {
+      "path": "references/components/p.md",
+      "gitBlobSha1": "ca3bc98f88a75aa5488e54499116ce5c221bf37d"
+    },
+    {
+      "path": "references/components/scroll-view.md",
+      "gitBlobSha1": "5a244a31cfbe1c80404ce96b97002ff9ff45d02d"
+    },
+    {
+      "path": "references/components/snippet.md",
+      "gitBlobSha1": "662320d6f95a7cb861801ba650cefb3ccba2ed91"
+    },
+    {
+      "path": "references/components/streamdown.md",
+      "gitBlobSha1": "051bcb086e47b6f0e3f22143263fec6334e07edf"
+    },
+    {
+      "path": "references/components/swiper.md",
+      "gitBlobSha1": "34be81a22333a6500bf7e8618c4f004b330e57ef"
+    },
+    {
+      "path": "references/components/switch.md",
+      "gitBlobSha1": "3edc070c93f00a6727d2cd44c87ab0690c179ea7"
+    },
+    {
+      "path": "references/components/table.md",
+      "gitBlobSha1": "dd1c35453fd821f5bfbb7eadfd2acf2159e0b026"
+    },
+    {
+      "path": "references/components/text.md",
+      "gitBlobSha1": "194ed36ce65688d24fe1cb826a3d8b798b5f23e3"
+    },
+    {
+      "path": "references/components/textarea.md",
+      "gitBlobSha1": "e8cef19fcf48fa9d690b66b206218d196721a0a8"
+    },
+    {
+      "path": "references/components/timed-text.md",
+      "gitBlobSha1": "977242adfa0a12ee9963175d6016ab26dcf9a60d"
+    },
+    {
+      "path": "references/components/video.md",
+      "gitBlobSha1": "35ba79953514f42b5115fee92c9e8c19e82590a4"
+    },
+    {
+      "path": "references/components/view.md",
+      "gitBlobSha1": "2be7946a354504edf0ad873257277026aa70b881"
+    },
+    {
+      "path": "references/design/full-color.md",
+      "gitBlobSha1": "185a80d156df5898772c5f6f22eda13d09a6019a"
+    },
+    {
+      "path": "references/design/monochrome-green.md",
+      "gitBlobSha1": "79ad4ca9762033e8b10188be5ff287f8881ba26d"
+    },
+    {
+      "path": "references/events.md",
+      "gitBlobSha1": "61f7e6f816a14333eec8eb276ae1aee3c7ee615e"
+    },
+    {
+      "path": "references/framework.md",
+      "gitBlobSha1": "75344e156b73047251eac9bcb355075d3a45d41f"
+    },
+    {
+      "path": "references/wxss.md",
+      "gitBlobSha1": "30caebbcd93370246f7bde9ccfd25357425e0b37"
+    }
+  ]
+}

@@ -10,5 +10,20 @@
   "apps/rabilink-aiui/pages/home/index.ink",
   "apps/rabilink-aiui/utils/config-surface.js",
   "apps/rabilink-aiui/utils/rabilink-api.js",
-  "apps/rabilink-aiui/utils/voice-runtime.js"
+  "apps/rabilink-aiui/utils/voice-runtime.js",
+  "apps/rabilink-aiui/utils/aiui-input-ledger.js",
+  "apps/rabilink-aiui/utils/input-review-page.js",
+  "apps/rabilink-aiui/utils/guidance-page.js",
+  "packages/rokid-voice/src/voice-runtime.js",
+  "packages/rokid-voice/src/transcript-policy.js",
+  "packages/rokid-voice/src/task-input.js",
+  "packages/rokid-voice/src/task-input-handoff.js",
+  "packages/assistant-runtime/src/decision-protocol.js",
+  "packages/assistant-runtime/src/turn-runtime.js",
+  "packages/assistant-runtime/src/assistant-session.js",
+  "packages/assistant-runtime/src/conversation-runtime.js",
+  "packages/assistant-runtime/src/assert-current.js",
+  "packages/assistant-runtime/src/interjection.js",
+  "packages/assistant-runtime/src/aiui-runtime.js",
+  "apps/rabilink-aiui/utils/rabi-agent-tool-policy.js"
 ]

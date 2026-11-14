@@ -67,7 +67,7 @@ $helperPath = Join-Path $PSScriptRoot "craft-browser-upload-helper.js"
 if (-not (Test-Path -LiteralPath $helperPath)) {
   throw "Browser helper is missing: $helperPath"
 }
-$helperText = Get-Content -LiteralPath $helperPath -Raw
+$helperText = Get-Content -LiteralPath $helperPath -Raw -Encoding UTF8
 
 if (-not $NoClipboard) {
   Set-Clipboard -Value $helperText
