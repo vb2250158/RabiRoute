@@ -3,7 +3,7 @@ import { definePlugin, ownMessageEndpointEgress, ownMessageEndpoint } from "@rab
 import { createEndpoint, hostModules } from "./runtime.mjs";
 import { projectRouteTransport } from "./route-config.mjs";
 export const activate = definePlugin({ async activate(context) {
-  const runtime = context.services.require("host.message-endpoints@2");
+  const runtime = context.services.require("host.message-endpoints@3");
   await runtime.prepareModules(hostModules);
   const transport = projectRouteTransport(context.config, runtime.module("config").config);
   const host = runtime.forActivation(transport ? { ...context.config, __routeTransport: transport, __routeInheritedFields: [] } : context.config);

@@ -3,13 +3,13 @@ import { definePlugin, ownMessageEndpointEgress, ownMessageEndpointScan } from "
 import { createImplementation, hostModules } from "./manager-runtime.mjs";
 
 export const activate = definePlugin({ async activate(context) {
-  const host = context.services.require("host.message-endpoints@2");
+  const host = context.services.require("host.message-endpoints@3");
   await host.prepareModules(egressModules);
   const egress = createEgress(host);
   ownMessageEndpointEgress(context, { type: "napcat", operations: egress });
   await host.prepareModules(hostModules);
   const implementation = createImplementation(host);
-  const owner = implementation.createNapcatManagerOwner(host.manager, host.managers.current("napcat"));
+  const owner = implementation.createNapcatManagerOwner(host.manager, host.managers.current("napcat"), context.lifecycle.signal);
   context.services.provide("endpoint.napcat@1", Object.freeze({ type: "napcat", instanceId: context.identity.instanceId }));
   context.contributions.register({
   "kind": "message-endpoint-settings",

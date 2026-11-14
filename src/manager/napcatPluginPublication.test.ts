@@ -18,7 +18,7 @@ test("the actual bundled NapCat manager owns its API, scan and process records; 
     const activation = f.kernel.current().records[0]!.identity.activationId;
     const provider = f.scanProviders.snapshot()[0];
     assert.equal(provider.type, "napcat");
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 19);
+    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 22);
     const recordPath = path.join(f.root, "data/.runtime/napcat-process-ownership.json");
     const records = await fs.readFile(recordPath, "utf8");
     await f.kernel.switch([f.candidate("failed", { activate(context) { context.effects.add(() => { throw new Error("controlled candidate failure"); }); } })]);
@@ -48,7 +48,7 @@ test("the combined NapCat endpoint waits for the exact previous owner retirement
     assert.equal(f.kernel.current().records[0]?.identity.revision, "new");
     assert.equal(f.kernel.current().records[0]?.status, "active");
     assert.equal(f.scanProviders.snapshot().length, 1);
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 19);
+    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 22);
   } finally { release(); await f.dispose(); }
 });
 
@@ -64,7 +64,7 @@ test("a synchronous publication failure restores the original NapCat operations 
     } })]), /controlled publication failure/);
     assert.equal(f.kernel.current().records[0]!.identity.activationId, activation);
     assert.equal(f.scanProviders.snapshot()[0], provider);
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 19);
+    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 22);
   } finally { await f.dispose(); }
 });
 
@@ -134,4 +134,45 @@ test("NapCat disable preserves failed process retirement and fences a replacemen
     assert.match(replacement.generation.records[0]?.error?.message ?? "", /retirement is unconfirmed/);
     await assert.rejects(owner.run(binding, async () => {}), /未绑定/);
   } finally { await f.dispose().catch(error => { assert.match(String(error), /retirement|cleanup|dispos/i); }); }
+});
+
+test("the real NapCat SDK scan helper enforces its declared @1 dependency alongside direct @3", { timeout: 60000 }, async () => {
+  const f = await napcatEndpointFixture();
+  try {
+    await f.kernel.switch([f.candidate("undeclared-scan-service", undefined, ["host.message-endpoints@3"])]);
+    assert.equal(f.kernel.current().records[0]?.status, "failed");
+    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@1/);
+    assert.deepEqual(f.scanProviders.snapshot(), []);
+    assert.deepEqual(f.operations.snapshot(), []);
+  } finally { await f.dispose(); }
+});
+
+test("the actual NapCat @1 and @3 dependencies share one host and retire both SDK publications", { timeout: 60000 }, async () => {
+  const f = await napcatEndpointFixture();
+  let sameOwner = false;
+  try {
+    await f.kernel.switch([f.candidate("declared-real-services", { activate(context) {
+      sameOwner = context.services.require("host.message-endpoints@1") === context.services.require("host.message-endpoints@3");
+    } })]);
+    assert.equal(f.kernel.current().records[0]?.status, "active", JSON.stringify(f.kernel.current()));
+    assert.equal(sameOwner, true);
+    assert.equal(f.scanProviders.snapshot().length, 1);
+    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), 22);
+    assert.ok(f.kernel.current().contributions);
+    await f.kernel.switch([]);
+    assert.deepEqual(f.scanProviders.snapshot(), []);
+    assert.deepEqual(f.operations.snapshot(), []);
+    assert.equal(f.kernel.pendingRetirements().length, 0);
+  } finally { await f.dispose(); }
+});
+
+test("NapCat still enforces the new @3 listener dependency", { timeout: 60000 }, async () => {
+  const f = await napcatEndpointFixture();
+  try {
+    await f.kernel.switch([f.candidate("undeclared-listener-service", undefined, ["host.message-endpoints@1"])]);
+    assert.equal(f.kernel.current().records[0]?.status, "failed");
+    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@3/);
+    assert.deepEqual(f.scanProviders.snapshot(), []);
+    assert.deepEqual(f.operations.snapshot(), []);
+  } finally { await f.dispose(); }
 });

@@ -4,9 +4,43 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { runWindowsTaskkill } from "@rabiroute/host-api/runtime/windowsProcessTree";
-import type { NapcatBinding, NapcatProcessDriver, NapcatProcessIdentity, NapcatLaunchScope, NapcatStoppedProof } from "./napcatLifecycleOwner.js";
+import type { NapcatBinding, NapcatProcessDriver, NapcatProcessIdentity, NapcatLaunchScope, NapcatStoppedProof, NapcatPortInspection } from "./napcatLifecycleOwner.js";
 
 const execute = promisify(execFile);
+
+/** Strict local bundled layout only. The configured ports are observations, not ownership. */
+export async function inspectBundledNapcatPorts(binding: NapcatBinding, plan: NapcatLaunchScope): Promise<NapcatPortInspection | undefined> {
+  if (process.platform !== "win32" || !binding.workingDir || !path.isAbsolute(binding.workingDir)) return;
+  const directory = path.resolve(binding.workingDir);
+  const same = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  if (!fs.existsSync(directory) || !same(fs.realpathSync(directory), directory) || !same(plan.cwd, directory)
+    || !same(plan.commandPath, path.join(directory, "NapCatWinBootMain.exe"))
+    || !["QQ.exe", "NapCatWinBootMain.exe", "NapCatWinBootHook.dll"].every(file => fs.existsSync(path.join(directory, file)))) return;
+  const ports = [binding.httpUrl, binding.webuiUrl].filter((url): url is string => Boolean(url)).map(value => {
+    const url = new URL(value);
+    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) throw new Error("NapCat port recovery requires a local HTTP endpoint.");
+    const port = Number(url.port || 80);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid NapCat recovery port.");
+    return port;
+  });
+  const script = `$ErrorActionPreference='Stop'; $dir=[IO.Path]::GetFullPath($env:RABI_NAPCAT_RECOVERY_DIR).TrimEnd('\\')+'\\';
+    $all=@(Get-CimInstance -Query 'SELECT ProcessId,ParentProcessId,Name,CreationDate,ExecutablePath,CommandLine FROM Win32_Process');
+    $unknown=@($all | Where-Object {$_.Name -match '^(QQ|NapCatWinBootMain|cmd|powershell|pwsh)\\.exe$' -and (!$_.ExecutablePath -or !$_.CommandLine)});
+    $matching=@($all | Where-Object {($_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir,[StringComparison]::OrdinalIgnoreCase)) -or ($_.CommandLine -and $_.CommandLine.Replace('/','\\').IndexOf($dir,[StringComparison]::OrdinalIgnoreCase) -ge 0)});
+    $ports=@($env:RABI_NAPCAT_RECOVERY_PORTS.Split(',') | ForEach-Object {[int]$_});
+    $listeners=@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {$_.LocalPort -in $ports} | ForEach-Object {
+      $listener=$_; $owner=$all | Where-Object {$_.ProcessId -eq $listener.OwningProcess} | Select-Object -First 1;
+      [pscustomobject]@{port=$listener.LocalPort;process=[pscustomobject]@{pid=$listener.OwningProcess;parentPid=$owner.ParentProcessId;
+        startedAt=$(if($owner.CreationDate){$owner.CreationDate.ToUniversalTime().ToString('o')}else{''});executable=[string]$owner.ExecutablePath}}
+    }); [pscustomobject]@{complete=($unknown.Count -eq 0);matching=$matching.Count;listeners=$listeners} | ConvertTo-Json -Compress -Depth 5`;
+  const { stdout } = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, RABI_NAPCAT_RECOVERY_DIR: directory, RABI_NAPCAT_RECOVERY_PORTS: ports.join(",") }
+  });
+  const observed = JSON.parse(stdout) as { complete: boolean; matching: number; listeners: NapcatPortInspection["listeners"] };
+  if (!observed.complete || !Array.isArray(observed.listeners) || observed.listeners.some(value => !value.process?.pid || !value.process.startedAt || !value.process.executable)) return;
+  return { checkedAt: new Date().toISOString(), commandPath: plan.commandPath, instanceStopped: observed.matching === 0, listeners: observed.listeners };
+}
 /** One script is used by the native driver and executable inspection fixtures. */
 export function napcatStoppedInspectionScript(): string {
   return `$ErrorActionPreference='Stop'; $dir=[IO.Path]::GetFullPath($env:RABI_NAPCAT_RECOVERY_DIR).TrimEnd('\\')+'\\';
@@ -71,6 +105,7 @@ export async function napcatProcessSnapshot(): Promise<NapcatProcessIdentity[]> 
 export function createNapcatProcessDriver(requestExit?: (binding: NapcatBinding) => Promise<void>): NapcatProcessDriver {
   return {
     snapshot: napcatProcessSnapshot,
+    inspectBundledPorts: inspectBundledNapcatPorts,
     confirmBundledInstanceStopped: confirmBundledNapcatStopped,
     async requestExit(binding, processes) {
       if (!requestExit || process.platform !== "win32" || !binding.httpUrl) return;

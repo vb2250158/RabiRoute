@@ -11,6 +11,7 @@ import { NapcatState, NapcatLifecycleError, type NapcatLoginInfo, type NapcatHea
 import { KeyedAsyncLock } from "@rabiroute/host-api/shared/keyedAsyncLock";
 import { NapcatWebuiSessions, type NapcatWebuiSession } from "./napcatWebuiSession.js";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
+import { atomicWriteFileSync } from "@rabiroute/host-api/shared/filePersistence";
 import { adaptLinuxNapcatLaunch, filterLinuxNapcatProcesses, LINUX_NAPCAT_APP_DIR, type LinuxProcessEntry } from "./napcatPlatform.js";
 
 const execFileAsync = promisify(execFile);
@@ -86,6 +87,9 @@ export type NapcatManagerContext = {
   appendLog(runtime: GatewayRuntime, line: string): void;
   checkHttpEndpoint(url: string, timeoutMs?: number): Promise<boolean>;
   launchNapcatProcess?(plan: NapcatLaunchPlan, visible: boolean, request: NapcatLaunchRequest): ChildProcess | void | Promise<ChildProcess | void>;
+  assertWsEndpointCurrent?(): void;
+  recoverExternalPorts?(request: NapcatLaunchRequest, instance: NapCatInstanceDefinition, plan: NapcatLaunchPlan,
+    launch: (instance: NapCatInstanceDefinition) => Promise<Record<string, unknown>>): Promise<Record<string, unknown> | undefined>;
   runBindingOperation?<T>(request: NapcatLaunchRequest, operation: () => Promise<T>): Promise<T>;
   stopOwnedInstance?(request: NapcatStopRequest): Promise<void>;
   stopOwnedInstanceForRestart?(request: NapcatLaunchRequest): Promise<void>;
@@ -680,7 +684,7 @@ function writeManagedNapcatConfigs(instance: NapCatInstanceDefinition): { steps:
   steps.push(`WebUI 端口：${webuiPort}`);
 
   const httpPort = portFromUrl(instance.httpUrl) || 3000;
-  const wsUrl = `ws://127.0.0.1:${instance.gatewayPort}`;
+  const wsUrl = instance.gatewayPort > 0 ? `ws://127.0.0.1:${instance.gatewayPort}` : "";
   const onebotPath = path.join(configDir, `onebot11_rabiroute_${instance.id}.json`);
   fs.writeFileSync(onebotPath, JSON.stringify({
     network: {
@@ -698,8 +702,8 @@ function writeManagedNapcatConfigs(instance: NapCatInstanceDefinition): { steps:
       httpSseServers: [],
       httpClients: [],
       websocketServers: [],
-      websocketClients: [{
-        enable: true,
+      websocketClients: wsUrl ? [{
+        enable: Boolean(wsUrl),
         name: "RabiRoute",
         url: wsUrl,
         reportSelfMessage: false,
@@ -709,7 +713,7 @@ function writeManagedNapcatConfigs(instance: NapCatInstanceDefinition): { steps:
         heartInterval: 30000,
         reconnectInterval: 30000,
         verifyCertificate: true
-      }],
+      }] : [],
       plugins: []
     }
   }, null, 2), "utf8");
@@ -1762,6 +1766,17 @@ function writeRabiRouteOneBotConfig(
   if (fs.existsSync(onebotPath)) {
     parsed = JSON.parse(fs.readFileSync(onebotPath, "utf8").replace(/^\uFEFF/, "")) as NapcatOneBotNetworkConfig;
   }
+  const { changed, config } = rabiRouteOneBotConfig(parsed, httpPort, wsUrl, accessToken);
+  fs.writeFileSync(onebotPath, JSON.stringify(config, null, 2), "utf8");
+  recordDataMutationAudit({
+    group: "napcat", event: "napcat_onebot_config_written", owner: "napcat-manager", action: "configure-onebot",
+    target: { type: "napcat-config", id: path.basename(onebotPath) }, dataSource: { kind: "file", id: "napcat/config/onebot.json" },
+    outcome: changed ? "committed" : "no_change"
+  });
+  return { changed, config };
+}
+
+function rabiRouteOneBotConfig(parsed: NapcatOneBotNetworkConfig, httpPort: number, wsUrl: string, accessToken?: string) {
   const config = normalizeOneBotNetworkConfig(parsed);
   const changedHttp = upsertByNameOrEndpoint(config.network.httpServers, {
     enable: true,
@@ -1786,16 +1801,6 @@ function writeRabiRouteOneBotConfig(
     reconnectInterval: 30000,
     verifyCertificate: true
   }, "url");
-  fs.writeFileSync(onebotPath, JSON.stringify(config, null, 2), "utf8");
-  recordDataMutationAudit({
-    group: "napcat",
-    event: "napcat_onebot_config_written",
-    owner: "napcat-manager",
-    action: "configure-onebot",
-    target: { type: "napcat-config", id: path.basename(onebotPath) },
-    dataSource: { kind: "file", id: "napcat/config/onebot.json" },
-    outcome: changedHttp || changedWs ? "committed" : "no_change"
-  });
   return { changed: changedHttp || changedWs, config };
 }
 
@@ -1833,19 +1838,91 @@ function writeRabiRouteNapcatProtocolConfig(
 
 function prepareOneBotConfigForLaunch(
   instance: NapCatInstanceDefinition,
-  tokenInfo: NapcatWebuiTokenInfo | null
+  tokenInfo: NapcatWebuiTokenInfo | null,
+  assertCurrent?: () => void
 ): string[] {
   const botUserId = String(instance.botUserId || "").trim();
   const httpPort = portFromUrl(instance.httpUrl);
   const wsUrl = Number(instance.gatewayPort || 0) > 0 ? `ws://127.0.0.1:${instance.gatewayPort}` : "";
   const onebotPath = onebotConfigPathForWebuiConfig(tokenInfo?.configPath, botUserId);
   if (!botUserId || !httpPort || !wsUrl || !onebotPath) return [];
+  assertCurrent?.();
   const { config } = writeRabiRouteOneBotConfig(onebotPath, httpPort, wsUrl, instance.accessToken);
+  assertCurrent?.();
   writeRabiRouteNapcatProtocolConfig(
     napcatProtocolConfigPathForWebuiConfig(tokenInfo?.configPath, botUserId),
     config
   );
   return [`已预写 QQ ${botUserId} 的 OneBot 配置：HTTP ${httpPort}，WS ${wsUrl}。`];
+}
+
+/** Only changes ports of an already inspected bundled instance; never runs the new-instance/token writer. */
+export function prepareNapcatExternalPortCandidate(instance: NapCatInstanceDefinition, assertCurrent: () => void): void {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(instance.id) || (instance.botUserId && !/^\d+$/.test(String(instance.botUserId))))
+    throw new Error("Invalid original NapCat configuration identity.");
+  const directory = instance.workingDir && path.resolve(instance.workingDir);
+  const configDir = directory && findNapcatConfigDir(directory);
+  if (!directory || !configDir) throw new Error("No owned NapCat configuration directory for port recovery.");
+  const realRoot = fs.realpathSync(directory), realConfig = fs.realpathSync(configDir);
+  const relative = path.relative(realRoot, realConfig);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("NapCat configuration is outside its original directory.");
+  const filename = path.join(realConfig, "webui.json");
+  if (!fs.existsSync(filename) || fs.lstatSync(filename).isSymbolicLink()) throw new Error("No original local WebUI configuration.");
+  const original = fs.readFileSync(filename, "utf8");
+  const webui = JSON.parse(original.replace(/^\uFEFF/, ""));
+  if (typeof webui.token !== "string" || !webui.token.trim() || (instance.webuiToken && instance.webuiToken !== webui.token))
+    throw new Error("Original NapCat WebUI credential is unconfirmed; port recovery stopped.");
+  const port = Number(new URL(instance.webuiUrl!).port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("NapCat WebUI requires a positive candidate port.");
+  const wsUrl = `ws://127.0.0.1:${instance.gatewayPort}`;
+  if (instance.gatewayPort < 1) throw new Error("Original NapCat WS listener is not ready.");
+  // The managed template is retained for first login; per-account configuration is retained for quick login.
+  const paths = [path.join(realConfig, `onebot11_rabiroute_${instance.id}.json`),
+    ...(instance.botUserId ? [path.join(realConfig, `onebot11_${instance.botUserId}.json`)] : [])];
+  const writes: Array<{ filename: string; before: string | undefined; after: string }> = [{ filename, before: original, after: JSON.stringify({ ...webui, port }, null, 2) }];
+  for (const configPath of paths) {
+    if (fs.existsSync(configPath) && fs.lstatSync(configPath).isSymbolicLink()) throw new Error("NapCat OneBot configuration cannot be a redirected file.");
+    const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : undefined;
+    const parsed = before ? JSON.parse(before.replace(/^\uFEFF/, "")) as NapcatOneBotNetworkConfig : {};
+    const existing = normalizeOneBotNetworkConfig(parsed).network.httpServers.find(value => value.name === "RabiRoute HTTP");
+    if (existing && String(existing.token || "") !== String(instance.accessToken || "")) throw new Error("Original OneBot credential is unconfirmed; port recovery stopped.");
+    const { config } = rabiRouteOneBotConfig(parsed, portFromUrl(instance.httpUrl), wsUrl, instance.accessToken);
+    writes.push({ filename: configPath, before, after: JSON.stringify(config, null, 2) });
+  }
+  const applied: typeof writes = [];
+  try {
+    for (const write of writes) {
+      assertCurrent();
+      const current = fs.existsSync(write.filename) ? fs.readFileSync(write.filename, "utf8") : undefined;
+      if (current !== write.before) throw new Error("NapCat configuration changed during port recovery.");
+      atomicWriteFileSync(write.filename, write.after); applied.push(write);
+    }
+    recordDataMutationAudit({ group: "napcat", event: "napcat_external_ports_candidate_written",
+      owner: "napcat-manager", action: "recover-ports", target: { type: "napcat-instance", id: instance.id },
+      dataSource: { kind: "file", id: "napcat/config" }, outcome: "committed" });
+  } catch (error) {
+    for (const write of applied.reverse()) {
+      if (fs.readFileSync(write.filename, "utf8") !== write.after) continue;
+      if (write.before === undefined) fs.unlinkSync(write.filename);
+      else atomicWriteFileSync(write.filename, write.before);
+    }
+    throw error;
+  }
+}
+
+/** Invoke only after the original process owner has verified the actual listener PID/start/path. */
+export async function verifyNapcatRecoveredAuthorization(ctx: NapcatManagerContext, instance: NapCatInstanceDefinition, httpReady: boolean): Promise<boolean> {
+  const token = await readNapcatWebuiToken(ctx, instance.webuiUrl!, instance.webuiToken, [instance]);
+  const session = await loginNapcatWebui(instance.webuiUrl!, token);
+  if (!session) return false;
+  const response = await session.request("/api/QQLogin/GetQQLoginInfo");
+  const body = await response.json().catch(() => ({})) as NapcatWebuiResponse<{ uin?: string | number }>;
+  const expected = String(instance.botUserId || "").trim(), observed = String(body.data?.uin || "").trim();
+  if (!response.ok || (expected && observed && observed !== expected)) return false;
+  if (!httpReady) return true; // Authenticated WebUI may need the user's initial QQ login; HTTP remains unready.
+  const health = await testNapcatHealth(ctx, { ...instance, readWebuiLoginInfo: false, inspectProcesses: false });
+  const actual = String((health.http as { userId?: unknown } | undefined)?.userId || "");
+  return health.http?.ok === true && (!expected || actual === expected);
 }
 
 async function napcatHttpOk(httpUrl: string, token: string | undefined, timeoutMs = getTimeoutMs("backend.messageEndpoints.napcatManager.napcatHttpOk.timeoutMs", 4000)): Promise<boolean> {
@@ -1935,11 +2012,13 @@ function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function applyOneBotConfigViaWebui(webuiUrl: string, tokenInfo: NapcatWebuiTokenInfo, config: NormalizedNapcatOneBotNetworkConfig): Promise<string[]> {
+async function applyOneBotConfigViaWebui(webuiUrl: string, tokenInfo: NapcatWebuiTokenInfo, config: NormalizedNapcatOneBotNetworkConfig, assertCurrent?: () => void): Promise<string[]> {
   try {
+    assertCurrent?.();
     const session = await loginNapcatWebui(webuiUrl, tokenInfo);
     if (!session) return ["未能登录 NapCat WebUI，无法调用 WebUI API 应用配置。"];
     const steps: string[] = [];
+    assertCurrent?.();
     const setResp = await session.request("/api/OB11Config/SetConfig", { config: JSON.stringify(config) });
     const setBody = await setResp.json().catch(() => ({})) as NapcatWebuiResponse<unknown>;
     if (setResp.ok && setBody.code === 0) {
@@ -1949,18 +2028,21 @@ async function applyOneBotConfigViaWebui(webuiUrl: string, tokenInfo: NapcatWebu
     }
     return steps;
   } catch {
+    assertCurrent?.();
     // WebUI is optional for the process-level recovery path.  Keep transport
     // failures out of logs because a lower-level error may echo credentials.
     return ["NapCat WebUI 当前不可达，跳过 WebUI 配置应用。"];
   }
 }
 
-async function restartNapcatViaWebui(webuiUrl: string, tokenInfo: NapcatWebuiTokenInfo): Promise<string[]> {
+async function restartNapcatViaWebui(webuiUrl: string, tokenInfo: NapcatWebuiTokenInfo, assertCurrent?: () => void): Promise<string[]> {
   try {
+    assertCurrent?.();
     const session = await loginNapcatWebui(webuiUrl, tokenInfo);
     if (!session) return ["未能登录 NapCat WebUI，改用进程级恢复。"];
     const steps: string[] = [];
     for (const endpoint of ["/api/QQLogin/RestartNapCat", "/api/Process/Restart"]) {
+      assertCurrent?.();
       const resp = await session.request(endpoint);
       const body = await resp.json().catch(() => ({})) as NapcatWebuiResponse<{ message?: string }>;
       if (resp.ok && body.code === 0) {
@@ -1971,6 +2053,7 @@ async function restartNapcatViaWebui(webuiUrl: string, tokenInfo: NapcatWebuiTok
     }
     return steps;
   } catch {
+    assertCurrent?.();
     // Do not let a refused WebUI connection abort restartNapcatInstance:
     // its caller owns the safe PID/port check and launchCommand fallback.
     return ["NapCat WebUI 当前不可达，改用进程级恢复。"];
@@ -2154,7 +2237,9 @@ async function configureNapcatOneBotBound(ctx: NapcatManagerContext, request: Na
   }
 
   const wsUrl = `ws://127.0.0.1:${gatewayPort}`;
+  ctx.assertWsEndpointCurrent?.();
   const { changed, config } = writeRabiRouteOneBotConfig(onebotPath, httpPort, wsUrl, request.accessToken);
+  ctx.assertWsEndpointCurrent?.();
   const protocolChanged = writeRabiRouteNapcatProtocolConfig(
     napcatProtocolConfigPathForWebuiConfig(tokenInfo.configPath, webuiLoginInfo.userId),
     config
@@ -2165,13 +2250,15 @@ async function configureNapcatOneBotBound(ctx: NapcatManagerContext, request: Na
   if (protocolChanged) {
     steps.push("已同步写入 NapCat 新协议配置，并启用 HTTP/WS 网络项。");
   }
-  steps.push(...await applyOneBotConfigViaWebui(webuiUrl, tokenInfo, config));
+  ctx.assertWsEndpointCurrent?.();
+  steps.push(...await applyOneBotConfigViaWebui(webuiUrl, tokenInfo, config, ctx.assertWsEndpointCurrent));
   await wait(1200);
   let httpReady = await napcatHttpOk(httpUrl, request.accessToken, 3000);
   let restartRequested = false;
   if (!httpReady) {
     steps.push("保存/应用后 HTTP 仍未开放，正在调用 NapCat 重启接口。");
-    steps.push(...await restartNapcatViaWebui(webuiUrl, tokenInfo));
+    ctx.assertWsEndpointCurrent?.();
+    steps.push(...await restartNapcatViaWebui(webuiUrl, tokenInfo, ctx.assertWsEndpointCurrent));
     restartRequested = true;
     for (let i = 0; i < 12; i += 1) {
       await wait(1500);
@@ -2475,6 +2562,17 @@ function napcatLifecycleKey(ctx: NapcatManagerContext, request: NapcatLaunchRequ
   return botUserId ? `qq:${botUserId}` : `instance:${gatewayId}:${instanceId}`;
 }
 
+async function launchRecoveredNapcatCandidate(ctx: NapcatManagerContext, request: NapcatLaunchRequest, instance: NapCatInstanceDefinition): Promise<Record<string, unknown>> {
+  if (!ctx.launchNapcatProcess) throw new Error("NapCat candidate launch requires its original process owner.");
+  ctx.assertWsEndpointCurrent?.();
+  await ctx.launchNapcatProcess(resolveNapcatLaunchPlan(instance, ctx.rootDir), request.visible === true, request);
+  ctx.assertWsEndpointCurrent?.();
+  // Candidate addresses are not trusted yet. The process owner first verifies
+  // listener PID/start/path; only then may recovery send account credentials.
+  return { processStarted: true, instance: { id: instance.id, name: instance.name,
+    gatewayPort: instance.gatewayPort, httpUrl: instance.httpUrl, webuiUrl: instance.webuiUrl } };
+}
+
 async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {
   const gatewayId = request.gatewayId?.trim();
   const instanceId = request.instanceId?.trim();
@@ -2489,6 +2587,12 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
     .find((item) => item.id === instanceId);
   if (!instance) {
     throw new Error(`未找到 NapCat 实例：${instanceId}`);
+  }
+  const plan = resolveNapcatLaunchPlan(instance, ctx.rootDir);
+  if (!request.forceRestart && ctx.recoverExternalPorts) {
+    const recovered = await ctx.recoverExternalPorts(request, instance, plan,
+      candidate => launchRecoveredNapcatCandidate(ctx, request, candidate));
+    if (recovered) return recovered;
   }
   if (!request.forceRestart) {
     const currentHealth = await testNapcatHealth(ctx, {
@@ -2552,11 +2656,11 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
       }
     };
   }
-  const plan = resolveNapcatLaunchPlan(instance, ctx.rootDir);
   const tokenInfo = instance.webuiUrl
     ? await readNapcatWebuiToken(ctx, instance.webuiUrl, instance.webuiToken, [instance])
     : null;
-  const preflightSteps = prepareOneBotConfigForLaunch(instance, tokenInfo);
+  ctx.assertWsEndpointCurrent?.();
+  const preflightSteps = prepareOneBotConfigForLaunch(instance, tokenInfo, ctx.assertWsEndpointCurrent);
   const ports = [
     portFromUrl(instance.httpUrl),
     portFromUrl(instance.webuiUrl)
@@ -2597,8 +2701,15 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
   }
   if (request.forceRestart) {
     if (!ctx.stopOwnedInstanceForRestart) throw new Error("NapCat 进程归属管理尚未就绪，不能停止实例。");
+    ctx.assertWsEndpointCurrent?.();
     await ctx.stopOwnedInstanceForRestart(request);
+    if (ctx.recoverExternalPorts) {
+      const recovered = await ctx.recoverExternalPorts(request, instance, plan,
+        candidate => launchRecoveredNapcatCandidate(ctx, request, candidate));
+      if (recovered) return recovered;
+    }
   }
+  ctx.assertWsEndpointCurrent?.();
   if (ctx.launchNapcatProcess) {
     await ctx.launchNapcatProcess(plan, request.visible === true, request);
   } else {
@@ -3215,7 +3326,12 @@ export function runNapcatLoginAction(ctx: NapcatManagerContext, request: NapcatL
 }
 
 export function configureNapcatOneBot(ctx: NapcatManagerContext, request: NapcatConfigureRequest): Promise<Record<string, unknown>> {
-  return runBoundNapcatOperation(ctx, request, () => configureNapcatOneBotBound(ctx, request));
+  return runBoundNapcatOperation(ctx, request, () => {
+    const runtime = [...ctx.getRuntimes()].find(item => item.definition.id === request.gatewayId);
+    const bound = runtime && napcatInstancesFor(ctx, runtime).find(item => item.id === request.instanceId);
+    ctx.assertWsEndpointCurrent?.();
+    return configureNapcatOneBotBound(ctx, ctx.assertWsEndpointCurrent && bound ? { ...request, gatewayPort: bound.gatewayPort } : request);
+  });
 }
 
 export function ensureNapcatInstanceReady(ctx: NapcatManagerContext, request: NapcatEnsureReadyRequest): Promise<Record<string, unknown>> {

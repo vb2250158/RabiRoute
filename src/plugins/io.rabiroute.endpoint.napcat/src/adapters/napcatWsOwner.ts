@@ -99,7 +99,7 @@ export async function startNapCatWsOwner(context: NapCatWsOwnerContext) {
       if (!upgraded && !input.socket.destroyed) await new Promise<void>(resolve => input.socket.once("close", resolve));
     }, server.options.maxPayload, operationId));
     context.publish?.(binding.publication());
-    return { listener, server, binding, run, close };
+    return { listener, server, binding, port: address.port, run, close };
   } catch (error) {
     try { await close(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "NapCat startup and listener cleanup failed."); }

@@ -18,7 +18,10 @@ export type NapcatBinding = {
 export type NapcatProcessIdentity = { pid: number; parentPid: number; startedAt: string; executable: string; napcatRoot?: boolean };
 export type NapcatLaunchScope = { commandPath: string; cwd: string };
 export type NapcatStoppedProof = { checkedAt: string; commandPath: string };
+export type NapcatPortInspection = NapcatStoppedProof & { instanceStopped: boolean;
+  listeners: Array<{ port: number; process: NapcatProcessIdentity }> };
 export type NapcatOwnedProcess = { binding: NapcatBinding; processes: NapcatProcessIdentity[]; launchPending?: boolean;
+  recoveredEndpoints?: { previousHttpUrl: string; previousWebuiUrl?: string; httpUrl: string; webuiUrl: string };
   recoveredLaunch?: { archive: string; proof: NapcatStoppedProof };
   launchAttempt?: { id: string; requestedAt: string; pid?: number; spawnedAt?: string; closedAt?: string; exitCode?: number | null; signal?: string | null } };
 export type NapcatProcessDriver = {
@@ -26,6 +29,7 @@ export type NapcatProcessDriver = {
   terminate(process: NapcatProcessIdentity): Promise<void>;
   requestExit?(binding: NapcatBinding, processes: NapcatProcessIdentity[]): Promise<void>;
   confirmBundledInstanceStopped?(binding: NapcatBinding, plan: NapcatLaunchScope): Promise<NapcatStoppedProof | undefined>;
+  inspectBundledPorts?(binding: NapcatBinding, plan: NapcatLaunchScope): Promise<NapcatPortInspection | undefined>;
 };
 
 export const napcatBindingKey = (binding: Pick<NapcatBinding, "gatewayId" | "instanceId">): string =>
@@ -100,6 +104,13 @@ export class NapcatLifecycleOwner {
   private persist(): void {
     fs.mkdirSync(path.dirname(this.options.statePath), { recursive: true });
     atomicWriteFileSync(this.options.statePath, JSON.stringify({ schemaVersion: 1, records: [...this.records.values()], removals: [...this.removals] }));
+  }
+
+  private updateRecordBinding(record: NapcatOwnedProcess, binding: NapcatBinding): void {
+    const receipt = record.recoveredEndpoints;
+    if (receipt && !((binding.httpUrl === receipt.previousHttpUrl && binding.webuiUrl === receipt.previousWebuiUrl)
+      || (binding.httpUrl === receipt.httpUrl && binding.webuiUrl === receipt.webuiUrl))) delete record.recoveredEndpoints;
+    record.binding = binding;
   }
 
   assertBound(request: { gatewayId?: string; instanceId?: string }): NapcatBinding {
@@ -282,7 +293,7 @@ export class NapcatLifecycleOwner {
       if (this.initialized && !this.revoked.size && desired.size === this.bindings.size
         && [...desired].every(([key, binding]) => this.bindings.has(key) && sameBinding(this.bindings.get(key)!, binding))) {
         this.bindings = desired;
-        for (const [key, record] of this.records) if (desired.has(key)) record.binding = desired.get(key)!;
+        for (const [key, record] of this.records) if (desired.has(key)) this.updateRecordBinding(record, desired.get(key)!);
         this.persist();
         return;
       }
@@ -303,7 +314,7 @@ export class NapcatLifecycleOwner {
         if (!desired.has(key) || !sameBinding(record.binding, desired.get(key)!) || this.removals.has(key)) await this.stopRecord(key, record);
       }
       this.bindings = desired;
-      for (const [key, record] of this.records) if (desired.has(key)) record.binding = desired.get(key)!;
+      for (const [key, record] of this.records) if (desired.has(key)) this.updateRecordBinding(record, desired.get(key)!);
       for (const key of this.removals) if (!desired.has(key)) this.removals.delete(key);
       this.persist();
       this.revoked = new Set(this.removals);
@@ -333,5 +344,79 @@ export class NapcatLifecycleOwner {
     if (this.leases.getStore() !== key) throw new Error("NapCat restart must hold its binding lease.");
     const record = this.records.get(key);
     if (record) await this.stopRecord(key, record);
+  }
+
+  /** A foreign listener is a conflict, never a process that this owner may terminate. */
+  async inspectPortRecovery(request: { gatewayId?: string; instanceId?: string }, plan: NapcatLaunchScope,
+    endpoints?: { httpUrl: string; webuiUrl?: string }): Promise<NapcatPortInspection | undefined> {
+    const binding = this.assertBound(request), key = napcatBindingKey(binding);
+    if (this.leases.getStore() !== key) throw new Error("NapCat port recovery must hold its binding lease.");
+    const inspection = await this.options.driver.inspectBundledPorts?.({ ...binding, ...endpoints }, plan);
+    const current = this.assertBound(request);
+    if (!sameBinding(current, binding) || current.httpUrl !== binding.httpUrl || current.webuiUrl !== binding.webuiUrl)
+      throw new Error("NapCat binding changed during port inspection.");
+    return inspection;
+  }
+
+  async confirmPortRecoveryStopped(request: { gatewayId?: string; instanceId?: string }, plan: NapcatLaunchScope): Promise<NapcatPortInspection | undefined> {
+    const binding = this.assertBound(request), key = napcatBindingKey(binding);
+    const inspection = await this.inspectPortRecovery(request, plan);
+    if (!inspection?.instanceStopped) return;
+    const child = this.launchChildren.get(key);
+    if (child && child.exitCode === null && child.signalCode === null) return;
+    const record = this.records.get(key);
+    const snapshot = await this.options.driver.snapshot();
+    this.assertInspectable(record?.processes ?? [], snapshot);
+    if (record?.processes.some(saved => snapshot.some(live => sameProcess(saved, live)))) return;
+    this.assertBound(request);
+    if (record) {
+      const archive = path.join(`${this.options.statePath}.history`, `${randomUUID()}.json`);
+      fs.mkdirSync(path.dirname(archive), { recursive: true });
+      atomicWriteFileSync(archive, JSON.stringify({ schemaVersion: 1, resolution: "stopped-before-port-recovery", proof: inspection, record }));
+      this.records.delete(key); this.persist();
+    }
+    return inspection;
+  }
+
+  async verifyRecoveredPorts(request: { gatewayId?: string; instanceId?: string }, plan: NapcatLaunchScope,
+    endpoints: { httpUrl: string; webuiUrl: string }): Promise<{ httpReady: boolean } | undefined> {
+    const binding = this.assertBound(request), record = this.records.get(napcatBindingKey(binding));
+    if (!record || record.launchPending || !record.processes.length) return;
+    const inspection = await this.inspectPortRecovery(request, plan, endpoints);
+    if (!inspection || inspection.instanceStopped) return;
+    const [httpPort, webuiPort] = [endpoints.httpUrl, endpoints.webuiUrl].map(value => Number(new URL(value).port));
+    const owned = (port: number) => inspection.listeners.filter(listener => listener.port === port);
+    const belongs = (listener: NapcatPortInspection["listeners"][number]) => record.processes.some(saved => sameProcess(saved, listener.process));
+    if (!owned(webuiPort!).length || !owned(webuiPort!).every(belongs) || !owned(httpPort!).every(belongs)) return;
+    return { httpReady: owned(httpPort!).length > 0 };
+  }
+
+  recordRecoveredEndpoints(request: { gatewayId?: string; instanceId?: string }, endpoints: { httpUrl: string; webuiUrl: string }): void {
+    const binding = this.assertBound(request), key = napcatBindingKey(binding), record = this.records.get(key);
+    if (this.leases.getStore() !== key || !record || record.launchPending || !record.processes.length)
+      throw new Error("Recovered endpoints require the original confirmed process owner.");
+    record.recoveredEndpoints = { previousHttpUrl: binding.httpUrl, previousWebuiUrl: binding.webuiUrl, ...endpoints };
+    this.persist();
+    this.options.log("napcat_external_ports_recovered", key);
+  }
+
+  async hasForeignPortConflict(request: { gatewayId?: string; instanceId?: string }, plan: NapcatLaunchScope,
+    endpoints: { httpUrl: string; webuiUrl: string }): Promise<boolean> {
+    const binding = this.assertBound(request), record = this.records.get(napcatBindingKey(binding));
+    const inspection = await this.inspectPortRecovery(request, plan, endpoints);
+    return Boolean(inspection?.listeners.some(listener => !record?.processes.some(saved => sameProcess(saved, listener.process))));
+  }
+
+  recoveredEndpoints(request: { gatewayId?: string; instanceId?: string }) {
+    const key = napcatBindingKey({ gatewayId: request.gatewayId || "", instanceId: request.instanceId || "" });
+    if (!this.initialized || this.closing || this.revoked.has(key) || !this.bindings.has(key)) return;
+    const value = this.records.get(key)?.recoveredEndpoints;
+    return value ? { ...value } : undefined;
+  }
+
+  acknowledgeRecoveredEndpoints(request: { gatewayId?: string; instanceId?: string }): void {
+    const binding = this.assertBound(request), key = napcatBindingKey(binding), record = this.records.get(key);
+    if (this.leases.getStore() !== key) throw new Error("NapCat endpoint commit must hold its binding lease.");
+    if (record) { delete record.recoveredEndpoints; this.persist(); }
   }
 }

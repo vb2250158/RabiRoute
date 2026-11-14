@@ -51,10 +51,10 @@ export async function napcatEndpointFixture() {
       routeVersion: () => "test", syncRoutes() {}, gatewayPayload: () => ({}), log() {} }
   };
   const modules = new Map<PluginCandidate, PluginModule>();
-  const kernel = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.message-endpoints@1", value: host }, { capability: "host.message-endpoints@2", value: host }],
+  const kernel = new GenerationRuntime({ host: "manager", hostServices: [{ capability: "host.message-endpoints@1", value: host }, { capability: "host.message-endpoints@2", value: host }, { capability: "host.message-endpoints@3", value: host }],
     executor: { async prepare(candidate) { return modules.get(candidate)!; } } });
-  const candidate = (revision: string, extra?: PluginModule): PluginCandidate => {
-    const candidate: PluginCandidate = { instanceId: "endpoint:napcat", revision, manifest: parsePluginManifest(source.manifest), config: {}, entry: { execution: "in_process", path: path.join(root, "manager.mjs") } };
+  const candidate = (revision: string, extra?: PluginModule, requires?: readonly string[]): PluginCandidate => {
+    const candidate: PluginCandidate = { instanceId: "endpoint:napcat", revision, manifest: { ...parsePluginManifest(source.manifest), ...(requires ? { requires } : {}) }, config: {}, entry: { execution: "in_process", path: path.join(root, "manager.mjs") } };
     modules.set(candidate, extra ? { async activate(context) { await module.activate(context); await extra.activate(context); } } : module);
     return candidate;
   };

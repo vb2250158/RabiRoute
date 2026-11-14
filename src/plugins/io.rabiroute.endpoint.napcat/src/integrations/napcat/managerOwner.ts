@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { GatewayListenerAccess } from "@rabiroute/plugin-sdk";
+import { createNapcatWsEndpointAccess } from "./wsEndpointLease.js";
+import { napcatListenerLocalName } from "@rabiroute/host-api/adapters/platformNativeOperations";
+import { recoverNapcatExternalPorts, napcatExternalPortCandidate } from "./externalPortRecovery.js";
 import { getTimeoutMs } from "@rabiroute/host-api/shared/timeoutSettings";
 import { definitionUsesNapcat as sharedDefinitionUsesNapcat, normalizeNapCatInstances as sharedNormalizeNapCatInstances, autoAssignGatewayPorts as sharedAutoAssignGatewayPorts, validateGatewayPortConflicts as sharedValidateGatewayPortConflicts, validateNapcatRouteCardinality, type GatewayDefinition, type NapCatInstanceDefinition, type LegacyMessageAdapterType as MessageAdapterType } from "@rabiroute/host-api/shared/gatewayConfigModel";
 import type { GatewayRuntime } from "@rabiroute/host-api/manager/runtimeRegistry";
@@ -9,10 +14,10 @@ import { createNapcatProcessDriver } from "../../manager/napcatProcessDriver.js"
 import { roleStorageOperationKey } from "@rabiroute/host-api/manager/roleStorageApplication";
 import type { ScanDiagnostic } from "@rabiroute/host-api/manager/scanController";
 import { scanNapcatHealthReadOnly, type NapcatHealthScanPayload } from "../../messageEndpoints/napcatHealthScan.js";
-import { configureNapcatOneBot, launchNapcatInstance as launchNapcatInstanceEndpoint, launchNapcatProcess as launchManagedNapcatProcess, nextFreeLocalPort, prepareManagedNapcatInstance, requestNapcatBotExit, scanNapcatEndpoint, stopNapcatInstance as stopNapcatInstanceEndpoint, testNapcatHealth as testNapcatHealthEndpoint, type NapcatLaunchPlan, type NapcatLaunchRequest as ManagedNapcatLaunchRequest } from "../../messageEndpoints/napcatManager.js";
+import { configureNapcatOneBot, launchNapcatInstance as launchNapcatInstanceEndpoint, launchNapcatProcess as launchManagedNapcatProcess, prepareManagedNapcatInstance, prepareNapcatExternalPortCandidate, verifyNapcatRecoveredAuthorization, resolveNapcatLaunchPlan, requestNapcatBotExit, scanNapcatEndpoint, stopNapcatInstance as stopNapcatInstanceEndpoint, testNapcatHealth as testNapcatHealthEndpoint, type NapcatLaunchPlan, type NapcatManagerContext, type NapcatLaunchRequest as ManagedNapcatLaunchRequest } from "../../messageEndpoints/napcatManager.js";
 import type { NapcatAddRequest, NapcatRemoveRequest } from "../../manager/napcatControlRoutes.js";
 
-export type NapcatManagerHostPorts = {
+export type NapcatManagerHostPorts = GatewayListenerAccess & {
   rootDir: string; managerPort: number; readOnly: boolean;
   readRuntimes(): Array<{ definition: GatewayDefinition; running: boolean; status: Record<string, unknown> }>;
   appendRouteLog(routeId: string, line: string): void;
@@ -28,7 +33,7 @@ export type NapcatManagerHostPorts = {
 };
 
 /** The plugin owns platform protocols, configuration actions and exact managed process identities. */
-export function createNapcatManagerOwner(host: NapcatManagerHostPorts, previous?: { resources: NapcatManagerResources }) {
+export function createNapcatManagerOwner(host: NapcatManagerHostPorts, previous?: { resources: NapcatManagerResources }, signal = new AbortController().signal) {
   const { rootDir, managerPort, checkHttpEndpoint, normalizeDefinition } = host;
   const runtimes = { get: (id: string) => host.readRuntimes().find(runtime => runtime.definition.id === id), values: () => host.readRuntimes() };
   const appendLog = (runtime: { definition: GatewayDefinition }, line: string) => host.appendRouteLog(runtime.definition.id, line);
@@ -39,6 +44,8 @@ export function createNapcatManagerOwner(host: NapcatManagerHostPorts, previous?
   const standaloneGatewayPayload = () => host.gatewayPayload();
   const NAPCAT_HEALTH_SCAN_DEADLINE_MS = 6500;
   const resources: NapcatManagerResources = previous?.resources ?? {};
+  const wsEndpoints = createNapcatWsEndpointAccess({ listeners: host, signal,
+    timeoutMs: getTimeoutMs("napcat.gatewayListenerReady", 10000), assertBound: request => { napcatProcessOwner().assertBound(request); } });
   const napcatProcessOwner = () => resources.processOwner ??= new NapcatLifecycleOwner({
     statePath: path.join(rootDir, "data", ".runtime", "napcat-process-ownership.json"),
     driver: createNapcatProcessDriver(async binding => {
@@ -103,9 +110,9 @@ async function addManagedNapcatInstance(
   }
 
   const steps = ["正在准备 NapCat 实例...", "正在查找合适端口..."];
-  const webuiPort = await nextFreeLocalPort(6099 + instances.length, used);
-  const httpPort = await nextFreeLocalPort(3000 + instances.length, used);
-  const wsPort = await nextFreeLocalPort(Number(definition.gatewayPort || 8789) + instances.length, used);
+  const webuiPort = await napcatExternalPortCandidate(used);
+  const httpPort = await napcatExternalPortCandidate(used);
+  const wsPort = 0;
   steps.push(`已分配端口：WebUI ${webuiPort} / HTTP ${httpPort} / WS ${wsPort}`);
 
   const prepared = prepareManagedNapcatInstance(context, {
@@ -219,21 +226,98 @@ function routeNapcatBindings(definitions: GatewayDefinition[]): NapcatBinding[] 
 }
 
 function napcatManagerCtx(beforeLaunch?: () => void) {
-  return {
+  const bindingScope = new AsyncLocalStorage<string>();
+  const context: NapcatManagerContext = {
     rootDir,
-    getRuntimes: () => [...runtimes.values()].map(runtime => ({ ...runtime, process: runtime.running || undefined })),
+    getRuntimes: () => [...runtimes.values()].map(runtime => {
+      const instances = sharedNormalizeNapCatInstances(runtime.definition).map(instance => {
+        const descriptor = wsEndpoints.read(runtime.definition.id, instance.id);
+        const recovered = napcatProcessOwner().recoveredEndpoints({ gatewayId: runtime.definition.id, instanceId: instance.id });
+        return { ...instance, ...(descriptor ? { gatewayPort: descriptor.address.port } : {}),
+          ...(recovered ? { httpUrl: recovered.httpUrl, webuiUrl: recovered.webuiUrl } : {}) };
+      });
+      return { ...runtime, definition: { ...runtime.definition, napcatInstances: instances,
+        gatewayPort: instances.find(instance => instance.enabled !== false)?.gatewayPort ?? runtime.definition.gatewayPort }, process: runtime.running || undefined };
+    }),
     normalizeNapCatInstances: sharedNormalizeNapCatInstances,
     appendLog,
     checkHttpEndpoint,
-    runBindingOperation: <T>(request: ManagedNapcatLaunchRequest, operation: () => Promise<T>) => napcatProcessOwner().run(request, operation),
+    runBindingOperation: async <T>(request: ManagedNapcatLaunchRequest, operation: () => Promise<T>) => {
+      const key = JSON.stringify([request.gatewayId, request.instanceId]);
+      const nested = bindingScope.getStore() === key;
+      const result = await bindingScope.run(key, () => napcatProcessOwner().run(request, () => wsEndpoints.run(request, operation)));
+      if (!nested) await commitRecoveredEndpoints(request);
+      return result;
+    },
+    recoverExternalPorts: async (request: ManagedNapcatLaunchRequest, instance: Parameters<NonNullable<NapcatManagerContext["recoverExternalPorts"]>>[1],
+      plan: NapcatLaunchPlan, launch: (instance: Parameters<NonNullable<NapcatManagerContext["recoverExternalPorts"]>>[1]) => Promise<Record<string, unknown>>) => {
+      const proof = wsEndpoints.read(request.gatewayId!, request.instanceId!);
+      if (!proof) throw new Error("No original NapCat listener for external port recovery.");
+      const assertCurrent = () => { beforeLaunch?.(); proof.assertCurrent(); napcatProcessOwner().assertBound(request); signal.throwIfAborted(); };
+      return recoverNapcatExternalPorts({ instance, assertCurrent,
+        stopped: () => napcatProcessOwner().confirmPortRecoveryStopped(request, plan),
+        writeCandidate: candidate => prepareNapcatExternalPortCandidate(candidate, assertCurrent), launch,
+        conflicted: candidate => napcatProcessOwner().hasForeignPortConflict(request, plan, { httpUrl: candidate.httpUrl, webuiUrl: candidate.webuiUrl! }),
+        verify: async candidate => {
+          const deadline = Date.now() + getTimeoutMs("napcat.externalPorts.ownerReady", 15000);
+          do {
+            assertCurrent();
+            await napcatProcessOwner().recordLaunch(request);
+            const owned = await napcatProcessOwner().verifyRecoveredPorts(request, plan, { httpUrl: candidate.httpUrl, webuiUrl: candidate.webuiUrl! });
+            assertCurrent();
+            if (owned) return await verifyNapcatRecoveredAuthorization(context, candidate, owned.httpReady) ? owned : undefined;
+            if (await napcatProcessOwner().hasForeignPortConflict(request, plan, { httpUrl: candidate.httpUrl, webuiUrl: candidate.webuiUrl! })) return;
+            assertCurrent();
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } while (Date.now() < deadline);
+          return;
+        },
+        stopOwned: async () => {
+          if (!await napcatProcessOwner().confirmPortRecoveryStopped(request, plan)) await napcatProcessOwner().stopForRestart(request);
+        },
+        publish: candidate => { assertCurrent(); napcatProcessOwner().recordRecoveredEndpoints(request,
+          { httpUrl: candidate.httpUrl, webuiUrl: candidate.webuiUrl! }); }
+      });
+    },
+    assertWsEndpointCurrent: () => { beforeLaunch?.(); wsEndpoints.assertCurrent(); },
     stopOwnedInstance: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner().remove(request),
     stopOwnedInstanceForRestart: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner().stopForRestart(request),
     launchNapcatProcess: async (plan: NapcatLaunchPlan, visible: boolean, request: ManagedNapcatLaunchRequest) => {
       beforeLaunch?.();
-      return await napcatProcessOwner().launch(request, () => launchManagedNapcatProcess(plan, visible), plan);
+      wsEndpoints.assertCurrent();
+      return await napcatProcessOwner().launch(request, () => { wsEndpoints.assertCurrent(); return launchManagedNapcatProcess(plan, visible); }, plan);
     },
     recordNapcatLaunchPids: (request: ManagedNapcatLaunchRequest) => napcatProcessOwner().recordLaunch(request)
   };
+  async function commitRecoveredEndpoints(request: ManagedNapcatLaunchRequest) {
+    const receipt = napcatProcessOwner().recoveredEndpoints(request);
+    if (!receipt) return;
+    await napcatProcessOwner().run(request, async () => {
+      const route = host.readRoutes().find(value => value.id === request.gatewayId);
+      const original = route && sharedNormalizeNapCatInstances(route).find(value => value.id === request.instanceId);
+      if (!route || !original) throw new Error("NapCat route changed before recovered endpoint commit.");
+      if (original.httpUrl === receipt.httpUrl && original.webuiUrl === receipt.webuiUrl) {
+        napcatProcessOwner().acknowledgeRecoveredEndpoints(request); return;
+      }
+      if (original.httpUrl !== receipt.previousHttpUrl || original.webuiUrl !== receipt.previousWebuiUrl)
+        throw new Error("NapCat endpoint configuration changed before recovered endpoint commit.");
+      const descriptor = host.readListener(route.id, napcatListenerLocalName(original.id));
+      if (!descriptor) throw new Error("No current Gateway generation for recovered endpoint commit.");
+      const candidate = { ...original, httpUrl: receipt.httpUrl, webuiUrl: receipt.webuiUrl, gatewayPort: descriptor.address.port };
+      const owned = await napcatProcessOwner().verifyRecoveredPorts(request, resolveNapcatLaunchPlan(candidate, rootDir), receipt);
+      if (!owned || !await verifyNapcatRecoveredAuthorization(context, candidate, owned.httpReady)) throw new Error("Recovered NapCat endpoint proof expired before commit.");
+      descriptor.assertCurrent(); beforeLaunch?.(); signal.throwIfAborted();
+      const next = structuredClone(route);
+      next.napcatInstances = sharedNormalizeNapCatInstances(route).map(value => value.id === original.id
+        ? { ...value, httpUrl: receipt.httpUrl, webuiUrl: receipt.webuiUrl } : value);
+      const primary = next.napcatInstances.find(value => value.enabled !== false);
+      if (primary?.id === original.id) { next.napcatHttpUrl = receipt.httpUrl; next.napcatWebuiUrl = receipt.webuiUrl; }
+      // This intentional route commit may replace Gateway's WS generation. The original WS operation already drained.
+      await writeAdapterConfigFile(next);
+      napcatProcessOwner().acknowledgeRecoveredEndpoints(request);
+    });
+  }
+  return context;
 }
 
 async function repairGatewayConfigsForScan(

@@ -44,6 +44,7 @@ type GroupRoute = {
 const gatewayProcessStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
 
 type GatewayStatus = {
+  gatewayGenerationId?: string;
   pid?: number;
   startedAt?: string;
   updatedAt?: string;
@@ -60,6 +61,9 @@ type GatewayStatus = {
     updatedAt?: string;
   }>;
   napcat?: {
+    listenerReady?: boolean;
+    listenerLeaseId?: string;
+    gatewayGenerationId?: string;
     connected?: boolean;
     activeConnections?: number;
     connectionCount?: number;
@@ -106,6 +110,7 @@ function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir)
   const statusPath = gatewayStatusPath(dataDir);
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(statusPath, JSON.stringify({ ...nextStatus, pid: process.pid,
+    gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID,
     startedAt: gatewayProcessStartedAt, updatedAt: new Date().toISOString() }, null, 2), "utf8");
 }
 
@@ -816,9 +821,9 @@ export function createNapCatAdapter(
       writeGatewayStatus({
         ...status,
         // Retained counters are diagnostics; no connection survives this adapter owner.
-        napcat: status.napcat ? { ...status.napcat, connected: false, activeConnections: 0 } : undefined,
+        napcat: status.napcat ? { ...status.napcat, listenerReady: false, connected: false, activeConnections: 0 } : undefined,
         napcatInstances: Object.fromEntries(Object.entries(pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances) ?? {})
-          .map(([id, previous]) => [id, { ...previous, connected: false, activeConnections: 0 }]))
+          .map(([id, previous]) => [id, { ...previous, listenerReady: false, connected: false, activeConnections: 0 }]))
       }, lifecycle.dataDir());
 
       let disposalPromise: Promise<void> | undefined;
@@ -866,14 +871,19 @@ export function createNapCatAdapter(
       }
 
       try {
-        for (const instance of instances) {
+        for (const configuredInstance of instances) {
+          const instance = { ...configuredInstance };
           const server = lifecycle.createServer({ noServer: true });
           const activeSockets = new Set<WebSocket>();
           const owner = await startNapCatWsOwner({ instanceId: instance.id, port: instance.gatewayPort, server,
             operations: dependencies.apiOperations,
             connected: (socket, request, track) => setupNapCatSession(lifecycle, instance, activeSockets, socket, request, track),
             reportError: error => appendNapCatRuntimeLog(lifecycle, { event: "callback_error", level: "error", instanceId: instance.id, message: error.message }),
-            publish: publication => dependencies.publishListener?.(instance.id, publication) });
+            publish: publication => {
+              if (!publication?.active) patchNapcatInstanceStatus(instance, { listenerReady: false }, lifecycle.dataDir(), lifecycle.configuredInstances);
+              dependencies.publishListener?.(instance.id, publication);
+            } });
+          instance.gatewayPort = owner.port;
           lifecycle.servers.push({ instance, owner });
           server.on("error", (error) => {
             if (!lifecycle.active) return;
@@ -906,6 +916,9 @@ export function createNapCatAdapter(
           console.log(`[${instance.name}] NapCat HTTP API: ${instance.httpUrl}`);
           console.log("Target group: controlled by notification rules");
           patchNapcatInstanceStatus(instance, {
+            listenerReady: true,
+            listenerLeaseId: owner.binding.binding.leaseId,
+            gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID,
             connected: false,
             activeConnections: 0,
             loginInfoError: ""

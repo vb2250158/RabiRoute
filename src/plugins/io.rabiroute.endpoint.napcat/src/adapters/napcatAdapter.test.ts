@@ -77,6 +77,38 @@ function readStatus(dataDir: string) {
   return JSON.parse(fs.readFileSync(path.join(dataDir, "gateway-status.json"), "utf8"));
 }
 
+test("automatic WS owns a distinct real socket, publishes its port and preserves the saved zero", async t => {
+  const previousGeneration = process.env.RABIROUTE_GATEWAY_GENERATION_ID;
+  process.env.RABIROUTE_GATEWAY_GENERATION_ID = "fixture-dynamic-generation";
+  t.after(() => { if (previousGeneration === undefined) delete process.env.RABIROUTE_GATEWAY_GENERATION_ID;
+    else process.env.RABIROUTE_GATEWAY_GENERATION_ID = previousGeneration; });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "napcat-automatic-ws-"));
+  const blocker = net.createServer(); const occupiedPort = await listen(blocker);
+  t.after(async () => { await close(blocker); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const saved = instance("automatic", 0), registry = new ManagerPluginRouteRegistry();
+  let received!: () => void;
+  const event = new Promise<void>(resolve => { received = resolve; });
+  const adapter = createNapCatAdapter({ instances: () => [saved], dataDir: () => dataDir, apiOperations: registry,
+    refreshProfile() {}, async handleEvent() { received(); } });
+  const dispose = await adapter.start(); t.after(() => dispose?.());
+  const publication = registry.catalogSnapshot().listeners[0]!;
+  assert.ok(publication.binding.address.port > 0);
+  assert.notEqual(publication.binding.address.port, occupiedPort);
+  assert.equal(saved.gatewayPort, 0);
+  assert.equal(readStatus(dataDir).napcatInstances.automatic.gatewayPort, publication.binding.address.port);
+  assert.equal(readStatus(dataDir).napcatInstances.automatic.listenerReady, true);
+  assert.equal(readStatus(dataDir).napcatInstances.automatic.listenerLeaseId, publication.binding.leaseId);
+  assert.equal(readStatus(dataDir).gatewayGenerationId, "fixture-dynamic-generation");
+  assert.equal(readStatus(dataDir).napcatInstances.automatic.gatewayGenerationId, "fixture-dynamic-generation");
+  const socket = await connect(publication.binding.address.port);
+  socket.send(JSON.stringify({ post_type: "message", message_type: "private", user_id: 12345, message: "controlled" }));
+  await event;
+  const closed = waitForClose(socket); const stopping = dispose?.();
+  assert.equal(readStatus(dataDir).napcatInstances.automatic.listenerReady, false);
+  await stopping; await closed;
+  assert.equal(registry.catalogSnapshot().listeners.length, 0);
+});
+
 function definition(dependencies: NapCatAdapterDependencies): MessageAdapterDefinition {
   return {
     manifest: {

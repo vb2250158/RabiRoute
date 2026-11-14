@@ -22,7 +22,7 @@
   ],
   "requires": [
     "host.message-endpoints@1",
-    "host.message-endpoints@2"
+    "host.message-endpoints@3"
   ],
   "optional": [],
   "permissions": [],

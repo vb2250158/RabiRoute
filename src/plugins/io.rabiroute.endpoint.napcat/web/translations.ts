@@ -1,5 +1,11 @@
 export const pluginTranslations = {
   "en": {
+    "等待监听就绪": "Waiting for the listener",
+    "0 表示自动分配，监听就绪后显示实际地址。": "0 assigns a port automatically. The actual address appears when the listener is ready.",
+    "WS 端口必须是 0-65535 的整数；0 表示自动分配": "WS port must be an integer from 0 to 65535; 0 assigns automatically",
+    "自动分配设置已保存，但连接尚未就绪。": "Automatic port allocation was saved, but the connection is not ready.",
+    "自动分配设置已保存；实际地址会在监听就绪后显示，QQ 登录状态请查看当前卡片。": "Automatic port allocation was saved. The actual address appears when the listener is ready; check this card for QQ sign-in status.",
+    "NapCat WebSocket 监听尚未就绪；就绪后会显示当前连接地址。": "The NapCat WebSocket listener is not ready. Its current address appears when ready.",
     "NapCat 会话": "NapCat session",
     "一键启动并在当前卡片管理登录；只有 QQ 安全验证需要你确认": "Start NapCat and manage sign-in on this card. Only QQ security verification needs your confirmation.",
     "账号在别处在线": "Account online elsewhere",
@@ -110,6 +116,12 @@ export const pluginTranslations = {
     "NapCat 进程归属管理尚未就绪，不能停止实例。": "NapCat process ownership is not ready. The instance cannot be stopped."
   },
   "ja": {
+    "等待监听就绪": "リスナーの準備を待っています",
+    "0 表示自动分配，监听就绪后显示实际地址。": "0 は自動割り当てです。リスナーの準備ができると実際のアドレスが表示されます。",
+    "WS 端口必须是 0-65535 的整数；0 表示自动分配": "WS ポートは 0〜65535 の整数にしてください。0 は自動割り当てです",
+    "自动分配设置已保存，但连接尚未就绪。": "自動ポート割り当ては保存されましたが、接続はまだ準備できていません。",
+    "自动分配设置已保存；实际地址会在监听就绪后显示，QQ 登录状态请查看当前卡片。": "自動ポート割り当てを保存しました。リスナーの準備ができると実際のアドレスが表示されます。QQ のログイン状態はこのカードで確認してください。",
+    "NapCat WebSocket 监听尚未就绪；就绪后会显示当前连接地址。": "NapCat WebSocket リスナーはまだ準備できていません。準備ができると現在の接続先が表示されます。",
     "NapCat 会话": "NapCat セッション",
     "一键启动并在当前卡片管理登录；只有 QQ 安全验证需要你确认": "NapCat を起動し、このカードでサインインを管理します。 QQ セキュリティ検証のみ、あなたの確認が必要です。",
     "账号在别处在线": "オンラインの別の場所にあるアカウント",
