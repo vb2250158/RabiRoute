@@ -98,3 +98,29 @@ test("new verified authorization can bind a VM, while ordinary replacement clear
     assert.equal(store.write("new-secret", "http://127.0.0.1:8123", {}).metadata?.managedVmId, undefined);
   } finally { fs.rmSync(runtimeDir, { recursive: true, force: true }); }
 });
+
+test("legacy VM metadata binding preserves ciphertext and keeps external-origin and revision fences", () => {
+  const runtimeDir = temporaryDirectory();
+  try {
+    const store = new XiaomiHomeCredentialStore(runtimeDir, protector);
+    const vmId = "a0000000-0000-0000-0000-000000000001";
+    const original = store.write("fixture-token", "http://127.0.0.1:8123", {});
+    const before = JSON.parse(fs.readFileSync(store.credentialPath, "utf8"));
+    const request = { expectedRevision: original.metadata!.revision, managedVmId: vmId,
+      verifiedLegacyForward: { baseUrl: "http://127.0.0.1:8123", vmId } };
+    store.bindVerifiedLegacyManagedVm(request);
+    const after = JSON.parse(fs.readFileSync(store.credentialPath, "utf8"));
+    assert.equal(after.protectedCredential, before.protectedCredential);
+    assert.equal(after.endpointAccountId, before.endpointAccountId);
+    assert.equal(after.boundBaseUrl, before.boundBaseUrl);
+    assert.equal(after.managedVmId, vmId);
+    const committed = fs.readFileSync(store.credentialPath, "utf8");
+    assert.throws(() => store.bindVerifiedLegacyManagedVm(request));
+    assert.equal(fs.readFileSync(store.credentialPath, "utf8"), committed, "stale CAS must not rewrite the envelope");
+
+    const external = store.write("external-fixture-token", "http://127.0.0.1:8123", { credentialOrigin: "external" });
+    const externalBytes = fs.readFileSync(store.credentialPath, "utf8");
+    assert.throws(() => store.bindVerifiedLegacyManagedVm({ ...request, expectedRevision: external.metadata!.revision }));
+    assert.equal(fs.readFileSync(store.credentialPath, "utf8"), externalBytes, "external origin must not be relabelled managed");
+  } finally { fs.rmSync(runtimeDir, { recursive: true, force: true }); }
+});

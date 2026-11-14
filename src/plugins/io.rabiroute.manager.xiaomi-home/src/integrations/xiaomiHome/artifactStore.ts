@@ -40,6 +40,7 @@ type ArtifactIndex = {
   schemaVersion: 1;
   byArtifactId: Record<string, XiaomiHomeArtifactRecord>;
   bySourceEventId: Record<string, string>;
+  latestVideoByRole: Record<string, string>;
   blockedArtifacts: Record<string, true>;
   blockedSources: Record<string, true>;
   coverage: {
@@ -150,7 +151,7 @@ export class XiaomiHomeArtifactStore {
   }
 
   private readLedgerIndex(): ArtifactIndex {
-    const index: ArtifactIndex = { schemaVersion: 1, byArtifactId: Object.create(null), bySourceEventId: Object.create(null),
+    const index: ArtifactIndex = { schemaVersion: 1, byArtifactId: Object.create(null), bySourceEventId: Object.create(null), latestVideoByRole: Object.create(null),
       blockedArtifacts: Object.create(null), blockedSources: Object.create(null),
       coverage: { state: "complete", invalidRecords: 0, identityComplete: true, sourceIdentityComplete: true, artifactIdentityComplete: true, samples: [] } };
     const block = (artifactId?: string, sourceEventId?: string) => {
@@ -204,7 +205,33 @@ export class XiaomiHomeArtifactStore {
         index.bySourceEventId[artifactSourceKey(record.sourceEventId, record.ownerRoleId)] = record.artifactId;
       }
     }
+    // This is part of the original ledger rebuild, after conflicts have removed
+    // invalid identities. Clicks never enumerate the artifact collection.
+    for (const id of Object.keys(index.byArtifactId)) this.rememberLatestVideo(index, index.byArtifactId[id]!);
     return index;
+  }
+
+  private rememberLatestVideo(index: ArtifactIndex, record: XiaomiHomeArtifactRecord): void {
+    if (!record.ownerRoleId || record.mediaKind !== "video/mp4" || record.byteLength <= 0) return;
+    const previous = index.byArtifactId[index.latestVideoByRole[record.ownerRoleId] ?? ""];
+    const newer = !previous || Date.parse(record.occurredAt) > Date.parse(previous.occurredAt)
+      || (Date.parse(record.occurredAt) === Date.parse(previous.occurredAt) && (Date.parse(record.ingestedAt) > Date.parse(previous.ingestedAt)
+        || (Date.parse(record.ingestedAt) === Date.parse(previous.ingestedAt) && record.artifactId > previous.artifactId)));
+    if (newer) index.latestVideoByRole[record.ownerRoleId] = record.artifactId;
+  }
+
+  latestVideoForRole(roleId: string): XiaomiHomeArtifactPublicRecord | undefined {
+    if (!stableIdentity(roleId)) throw new Error("A bound role is required.");
+    const coverage = this.index.coverage;
+    if (coverage.state !== "complete" || !coverage.identityComplete || !coverage.sourceIdentityComplete || !coverage.artifactIdentityComplete) throw new XiaomiHomeArtifactEvidenceError();
+    const id = this.index.latestVideoByRole[roleId];
+    if (!id) return undefined;
+    const record = this.checkedRecord(id);
+    if (!record || record.ownerRoleId !== roleId || record.mediaKind !== "video/mp4") throw new XiaomiHomeArtifactEvidenceError();
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(record.localPath); } catch { throw new XiaomiHomeArtifactEvidenceError(); }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size !== record.byteLength) throw new XiaomiHomeArtifactEvidenceError();
+    return publicRecord(record);
   }
 
   coverage() { return { ...structuredClone(this.index.coverage), availableRecords: Object.keys(this.index.byArtifactId).length,
@@ -264,6 +291,7 @@ export class XiaomiHomeArtifactStore {
     atomicWrite(ledgerPath, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${JSON.stringify(record)}\n`);
     this.index.byArtifactId[record.artifactId] = record;
     this.index.bySourceEventId[sourceKey] = record.artifactId;
+    this.rememberLatestVideo(this.index, record);
     atomicWrite(this.indexPath, `${JSON.stringify(this.index, null, 2)}\n`);
     recordDataMutationAudit({
       group: "xiaomi-home",

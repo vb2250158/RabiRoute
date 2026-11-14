@@ -33,3 +33,32 @@ test("native artifact content exposes original range headers and audited bytes, 
   assert.ok(fs.readdirSync(path.join(root, "artifacts", "access")).length > 0);
   request.headers.range = "bytes=30-40"; assert.throws(() => owner.open(request, record.artifactId), /invalid/);
 });
+
+test("recording context is checked before file and audit access and remains revocable while streaming", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-recording-fence-"));
+  t.after(() => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const store = new XiaomiHomeArtifactStore(root), bytes = Buffer.alloc(160000, 7), occurredAt = "2026-10-21T00:00:00.000Z";
+  const file = store.allocateMediaPath("fenced", occurredAt, ".mp4"); fs.writeFileSync(file, bytes);
+  const record = store.register({ sourceEventId: "fenced", ownerRoleId: "RoleA", resourceId: "camera", eventKind: "motion", occurredAt,
+    mediaKind: "video/mp4", localPath: file, sha256: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.length });
+  const request = { headers: {}, socket: { remoteAddress: "192.0.2.1" } } as unknown as http.IncomingMessage;
+  markAuthenticatedConnectionRequest(request);
+  const access = new XiaomiHomeArtifactAccess(store);
+  let descriptorReads = 0, audits = 0;
+  const descriptor = store.contentDescriptor.bind(store), audit = store.recordAccess.bind(store);
+  store.contentDescriptor = id => { descriptorReads++; return descriptor(id); };
+  store.recordAccess = input => { audits++; return audit(input); };
+  const stale = () => { throw new Error("recording context changed"); };
+  assert.throws(() => access.open(request, record.artifactId, stale), /context changed/);
+  assert.equal(descriptorReads, 0); assert.equal(audits, 0);
+  let current = true;
+  const assertion = () => { if (!current) stale(); };
+  const content = access.open(request, record.artifactId, assertion), iterator = content.frames[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).done, false);
+  current = false;
+  await assert.rejects(iterator.next(), /context changed/);
+  await content.cancel();
+  const previousAudits = audits;
+  assert.throws(() => access.open(request, record.artifactId, assertion), /context changed/);
+  assert.equal(audits, previousAudits);
+});

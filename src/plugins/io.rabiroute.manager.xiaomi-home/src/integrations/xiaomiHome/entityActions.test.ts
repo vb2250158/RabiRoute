@@ -177,7 +177,7 @@ test("Agent catalog exposes all-device discovery and single-resource actions wit
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const request = (suffix: string, init: RequestInit = {}) => fetch("http://127.0.0.1:" + address.port + "/api/agent/xiaomi-home" + suffix, { ...init, headers: { authorization: "Bearer " + credential.token, "content-type": "application/json", ...init.headers } });
   const catalog = registry.catalogSnapshot().operations;
-  assert.equal(catalog.length, 53); assert.ok(catalog.every(row => row.contract.exposure === "public"));
+  assert.equal(catalog.length, 54); assert.ok(catalog.every(row => row.contract.exposure === "public"));
   for (const name of ["resources.list", "entity-actions.read"]) assert.ok(catalog.some(row => row.contract.operationId === "manager.xiaomi-home." + name));
   const all = await request("/resources?includeActions=1"); assert.equal(all.status, 200);
   const page = (await all.json()).data; assert.equal(page.items.length, resources.length);

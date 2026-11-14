@@ -348,6 +348,50 @@ test("legacy managed credential is migrated only with verified forwarding owners
   } finally { await controller.stop(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("DHCP legacy binding sends the original credential only through the current verified proxy and preserves logical address/origin fences", async () => {
+  for (const scenario of ["verified", "changed-logical-url", "external-origin"] as const) {
+    const root = temporaryDirectory();
+    const calls: Array<{ url: string; expectedAuthorization: boolean }> = [];
+    const vmId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    fs.writeFileSync(path.join(root, "home-assistant-deployment.json"), JSON.stringify({ schemaVersion: 1,
+      config: { mode: "haos", autoStart: false, containerName: "homeassistant" } }));
+    const credentials = new XiaomiHomeCredentialStore(root, testProtector);
+    credentials.write("fixture-token", "http://127.0.0.1:8123", scenario === "external-origin" ? { credentialOrigin: "external" } : {});
+    const before = JSON.parse(fs.readFileSync(credentials.credentialPath, "utf8"));
+    const settings = new XiaomiHomeSettingsStore(root, { eventMonitorEnabled: false,
+      baseUrl: scenario === "changed-logical-url" ? "http://127.0.0.1:7700" : "http://127.0.0.1:8123" });
+    const controller = new XiaomiHomeRuntimeController(settings, new XiaomiHomeArtifactStore(root), {
+      env: {}, deliverEvent: async () => undefined, fetchImpl: async (input, init) => {
+        calls.push({ url: String(input), expectedAuthorization: new Headers(init?.headers).get("authorization") === "Bearer fixture-token" });
+        return new Response(JSON.stringify({ message: "API running." }), { status: 200 });
+      }
+    }, credentials);
+    controller.deployment.start = () => undefined;
+    controller.deployment.managedBaseUrl = () => "http://127.0.0.1:51234";
+    const identity = { address: "192.0.2.42", port: 80 as const, vmId, legacyBindingVerified: true };
+    controller.deployment.managedIdentity = () => identity;
+    try {
+      controller.start();
+      Reflect.get(controller.deployment, "changes").emit("target", identity);
+      await Reflect.get(controller, "replaceRuntime").call(controller,
+        Reflect.get(controller, "createRuntime").call(controller, controller.settings().settings));
+      const health = await controller.health();
+      const after = JSON.parse(fs.readFileSync(credentials.credentialPath, "utf8"));
+      assert.equal(after.protectedCredential, before.protectedCredential);
+      assert.equal(after.boundBaseUrl, before.boundBaseUrl);
+      if (scenario === "verified") {
+        assert.equal(after.managedVmId, vmId);
+        assert.equal(health.tokenConfigured, true);
+        assert.deepEqual(calls, [{ url: "http://127.0.0.1:51234/api/", expectedAuthorization: true }]);
+      } else {
+        assert.equal(after.managedVmId, undefined);
+        assert.equal(health.tokenConfigured, false);
+        assert.deepEqual(calls, [], "mismatched logical URL or external origin must not send the stored credential");
+      }
+    } finally { await controller.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("exhausted managed recovery reconnects the event monitor when the owned Core returns", { timeout: 15000 }, async () => {
   const root = temporaryDirectory();
   const vmId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";

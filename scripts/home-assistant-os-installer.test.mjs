@@ -54,10 +54,22 @@ foreach($port in @(80,8123)) {
   if(-not $result.ready -or $result.address -ne '192.0.2.42' -or $result.port -ne $port -or -not $result.legacyBindingVerified){throw 'Owned ready VM was not observed'}
 }
 $script:vm.State='Off'; $before=$script:probes
-if($null -ne (Get-OwnedReadyEndpoint) -or $script:probes -ne $before){throw 'Stopped VM was probed or started'}
+$stopped=Get-OwnedReadyEndpoint
+if($stopped.ready -or $stopped.diagnostics.reason -ne 'vm_not_running' -or $stopped.diagnostics.vmState -ne 'Off' -or $script:probes -ne $before){throw 'Stopped VM was probed or its diagnostic was lost'}
+$script:vm.State='Running'; $script:readyPort=443
+$unready=Get-OwnedReadyEndpoint
+if($unready.ready -or $unready.diagnostics.reason -ne 'core_unready' -or $unready.diagnostics.guestAddresses[0] -ne '192.0.2.42'){throw 'Core readiness failure was not diagnosed'}
+function Get-VMNetworkAdapter { param($VM) return @{IPAddresses=@()} }
+$noAddress=Get-OwnedReadyEndpoint
+if($noAddress.ready -or $noAddress.diagnostics.reason -ne 'no_guest_address' -or $noAddress.diagnostics.guestAddresses.Count){throw 'Missing guest address was not diagnosed'}
+function Get-VMNetworkAdapter { throw 'Foreign VM network details must not be queried' }
 $script:vm.State='Running'; $script:vm.Notes='foreign'; $before=$script:probes; $rejected=$false
 try { Get-OwnedReadyEndpoint } catch { $rejected=$true }
 if(-not $rejected -or $script:probes -ne $before){throw 'Foreign VM was accepted or probed'}
+function Get-VM { param($Name,$ErrorAction) if($ErrorAction -ne 'Stop'){throw 'Query errors may be hidden'}; throw [UnauthorizedAccessException]::new('test-denied') }
+$rejected=$false
+try { Get-OwnedReadyEndpoint } catch { $rejected=$_.Exception.Message -eq 'test-denied' }
+if(-not $rejected){throw 'A VM query failure was mislabeled as vm_not_found'}
 `;
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
   assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), "unchanged");
@@ -102,7 +114,7 @@ if(Test-HomeAssistantCore '127.0.0.1' ${server.address().port}) { 'ready' } else
   mode = "redirect"; assert.equal(await check(), "not-ready");
 });
 
-test("legacy credential migration requires the matching VM receipt and current OS mapping", { skip: process.platform !== "win32" }, t => {
+test("legacy credential migration preserves historical VM ownership after DHCP and requires the exact old mapping", { skip: process.platform !== "win32" }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-legacy-binding-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
@@ -119,12 +131,78 @@ function Get-VMNetworkAdapter { param($VM) return @{IPAddresses=$script:addresse
 if(-not (Test-OwnedLegacyLoopback @{Id='test-vm'})){throw 'Matching receipt rejected'}
 if(Test-OwnedLegacyLoopback @{Id='foreign-vm'}){throw 'Foreign VM accepted'}
 $script:addresses=@('192.0.2.2')
-if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Address no longer belongs to VM'}
+if(-not (Test-OwnedLegacyLoopback @{Id='test-vm'})){throw 'DHCP discarded historical forwarding ownership'}
 $script:addresses=@('192.0.2.1')
 $script:mapping='192.0.2.2/80'
 if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Changed mapping accepted'}
+$script:mapping='192.0.2.1/8123'
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Changed old port accepted'}
+$script:mapping=$null
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Missing mapping accepted'}
+$receiptFile=Join-Path $Root 'loopback-proxy.json'
+foreach($invalid in @('localhost','127.0.0.1','0.0.0.0','169.254.1.1','224.0.0.1','::1','192.0.2.1/24','192.0.2.1 ')) {
+  @{address=$invalid;port=80;vmId='test-vm'}|ConvertTo-Json|Set-Content -LiteralPath $receiptFile
+  $script:mapping=$invalid+'/80'
+  if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Invalid historical address accepted'}
+}
+@{address='192.0.2.1';port=443;vmId='test-vm'}|ConvertTo-Json|Set-Content -LiteralPath $receiptFile
+$script:mapping='192.0.2.1/443'
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Invalid historical port accepted'}
+Set-Content -LiteralPath $receiptFile -Value '{broken'
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Malformed receipt accepted'}
+@{address='192.0.2.1';port=80;vmId='test-vm'}|ConvertTo-Json|Set-Content -LiteralPath $receiptFile
+$script:mapping='192.0.2.1/80'
+function Get-Item {param($LiteralPath,[switch]$Force)return @{Attributes=[IO.FileAttributes]::ReparsePoint}}
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Reparse-point receipt accepted'}
+Remove-Item -LiteralPath $receiptFile
+if(Test-OwnedLegacyLoopback @{Id='test-vm'}){throw 'Missing receipt accepted'}
 `;
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+});
+
+test("DHCP legacy proof follows the current owned Core and never probes the recycled old IP or trusts cached endpoints", { skip: process.platform !== "win32" }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "haos-dhcp-owned-"));
+  t.after(() => { assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const vmId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  fs.writeFileSync(path.join(root, "image.json"), JSON.stringify({ endpoint: { vmId: "foreign", address: "192.0.2.99", port: 80 } }));
+  const status = JSON.stringify({ endpoint: { vmId: "foreign", address: "192.0.2.99", port: 80, legacyBindingVerified: true } });
+  fs.writeFileSync(path.join(root, "status.json"), status);
+  fs.writeFileSync(path.join(root, "loopback-proxy.json"), JSON.stringify({ address: "192.0.2.1", port: 80, vmId }));
+  const source = fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1", import.meta.url));
+  const literal = value => `'${value.replaceAll("'", "''")}'`;
+  const script = `
+$ErrorActionPreference='Stop';$tokens=$null;$errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile(${literal(source)},[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Installer syntax errors'}
+foreach($name in @('Test-OwnedLegacyLoopback','Get-OwnedReadyEndpoint')) {
+ $fn=$ast.Find({param($n)$n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+$Root=${literal(root)};$script:probes=@();$script:ownedDisk=$true;$script:coreReady=$true;$script:networkReads=0
+$script:vm=@{Id='${vmId}';Notes=('RabiRoute Home Assistant OS: '+$Root);State='Running'}
+function Get-VM {param($Name,$ErrorAction)return $script:vm}
+function Get-VMHardDiskDrive {param($VM)return @{Path=(Join-Path $Root 'home-assistant.vhdx')}}
+function Test-InstallationDisk {param($AttachedPath,$ExpectedPath,$RejectReparse)if(-not $RejectReparse){throw 'Owned observation must reject reparse'};return $script:ownedDisk}
+function Get-VMNetworkAdapter {param($VM)$script:networkReads++;return @{IPAddresses=@('192.0.2.42')}}
+function Get-ItemProperty {param($LiteralPath,$ErrorAction)return @{'127.0.0.1/8123'='192.0.2.1/80'}}
+function Test-HomeAssistantCore {param($Address,$Port)$script:probes+=($Address+':'+$Port);if($Address -ne '192.0.2.42'){throw 'Old/recycled/cache IP was probed'};return $script:coreReady -and $Port -eq 80}
+function Start-VM {throw 'Readonly observation cannot start VM'}
+function Stop-VM {throw 'Readonly observation cannot stop VM'}
+function Set-VM {throw 'Readonly observation cannot modify VM'}
+$result=Get-OwnedReadyEndpoint
+if(-not $result.ready -or -not $result.legacyBindingVerified -or $result.vmId -ne '${vmId}' -or $result.address -ne '192.0.2.42'){throw 'DHCP owner proof was not retained'}
+if(($script:probes -join ',') -ne '192.0.2.42:80'){throw 'Unexpected endpoint probe'}
+$script:coreReady=$false;$result=Get-OwnedReadyEndpoint
+if($result.ready -or $result.ContainsKey('legacyBindingVerified')){throw 'Unready Core granted legacy proof'}
+$script:coreReady=$true;$script:ownedDisk=$false;$before=$script:networkReads;$rejected=$false
+try{Get-OwnedReadyEndpoint}catch{$rejected=$true}
+if(-not $rejected -or $script:networkReads -ne $before){throw 'Untrusted VHD reached network discovery'}
+$script:ownedDisk=$true;$script:vm.Notes='foreign';$rejected=$false
+try{Get-OwnedReadyEndpoint}catch{$rejected=$true}
+if(-not $rejected -or $script:networkReads -ne $before){throw 'Foreign notes reached network discovery'}
+`;
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+  assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), status);
 });
 
 test("Core recovery uses one graceful owned-VM restart and refuses a failed shutdown", { skip: process.platform !== "win32" }, () => {
@@ -136,13 +214,19 @@ if($errors.Count){throw 'Installer syntax errors'}
 $function=$ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Restore-HomeAssistantCore'},$true)
 if(-not $function){throw 'Core recovery is missing'}
 Invoke-Expression $function.Extent.Text
+foreach($name in @('Get-StartMemoryAdmission','Get-StartMemoryErrorCode','Start-OwnedHomeAssistantVm')) {
+ $fn=$ast.Find({param($node)$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+function Get-CimInstance { param($ClassName,$ErrorAction) return @{FreePhysicalMemory=4194304} }
+function Set-VM { param($VM,$AutomaticStartAction,$AutomaticStopAction) }
 $script:checks=0; $script:stops=0; $script:starts=0; $script:fail=$false
 function Wait-HomeAssistantCore { param($Vm,$TimeoutSeconds) $script:checks++; if($script:checks -gt 1){return @{address='192.0.2.42';port=80}} }
 function Stop-VM { param($VM,[switch]$AsJob) $script:stops++; return @{State='Completed'} }
 function Wait-Job { param($Job,$Timeout) if($script:fail){return $null}; return $Job }
 function Receive-Job { param($Job,[switch]$ErrorAction) }
 function Remove-Job { param($Job) }
-function Get-VM { param($Id) return @{Id=$Id;State='Off'} }
+function Get-VM { param($Id) return @{Id=$Id;State='Off';MemoryStartup=2GB} }
 function Start-VM { param($VM) $script:starts++ }
 $vm=@{Id='test-vm';State='Running'}
 $endpoint=Restore-HomeAssistantCore $vm $true
@@ -153,6 +237,59 @@ try { Restore-HomeAssistantCore $vm $true } catch { $rejected=$true }
 if(-not $rejected -or $script:starts -ne 1){throw 'Failed shutdown was treated as successful'}
 `;
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, timeout: 15000 });
+});
+
+test("HA startup memory admission defers without starting and handles only the current Start-VM resource race", { skip: process.platform !== "win32" }, () => {
+  const source=fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1",import.meta.url));
+  const script=`
+$ErrorActionPreference='Stop';$t=$null;$e=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'","''")}',[ref]$t,[ref]$e)
+if($e.Count){throw 'PS parse errors'}
+foreach($name in @('Get-StartMemoryAdmission','Get-StartMemoryErrorCode','Start-OwnedHomeAssistantVm')){
+ $fn=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true);Invoke-Expression $fn.Extent.Text
+}
+$script:free=916436;$script:starts=0;$script:settings=0;$script:race=$false;$script:unknown=$false
+function Get-CimInstance {param($ClassName,$ErrorAction)if($ClassName -ne 'Win32_OperatingSystem'){throw 'Unexpected query'};return @{FreePhysicalMemory=$script:free}}
+function Set-VM {param($VM,$AutomaticStartAction,$AutomaticStopAction)$script:settings++}
+function Start-VM {param($VM,$ErrorAction)$script:starts++;if($script:race){throw [ComponentModel.Win32Exception]::new(1450)};if($script:unknown){throw [UnauthorizedAccessException]::new('denied')}}
+function Stop-VM {throw 'Startup cannot stop any VM'}
+$vm=@{MemoryStartup=2GB;State='Off'}
+$low=Start-OwnedHomeAssistantVm $vm
+if($low.started -or $low.deferred.reason -ne 'host_memory' -or $low.deferred.vmStarted -or $script:starts -ne 0 -or $script:settings -ne 0){throw 'Low memory mutated VM'}
+$script:free=4194304;$script:race=$true;$raced=Start-OwnedHomeAssistantVm $vm
+if($raced.started -or $raced.deferred.nativeCode -ne '0x800705AA' -or $raced.deferred.vmStarted -or $script:starts -ne 1){throw 'Native resource race not deferred'}
+$script:race=$false;$script:unknown=$true;$rejected=$false
+try{Start-OwnedHomeAssistantVm $vm}catch{$rejected=$true}
+if(-not $rejected){throw 'Unknown failure misclassified as memory wait'}
+$script:unknown=$false;$ready=Start-OwnedHomeAssistantVm $vm
+if(-not $ready.started -or $script:starts -ne 3){throw 'Resources returning did not allow original Start'}
+`;
+  execFileSync("powershell.exe",["-NoProfile","-NonInteractive","-EncodedCommand",Buffer.from(script,"utf16le").toString("base64")],{windowsHide:true,timeout:15000});
+});
+
+test("the actual automatic Start branch only observes a running VM and emits one current result", {skip:process.platform!=="win32"}, t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"haos-start-observe-"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const source=fileURLToPath(new URL("../src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1",import.meta.url));
+  const script=`
+$ErrorActionPreference='Stop';$t=$null;$e=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('${source.replaceAll("'","''")}',[ref]$t,[ref]$e)
+foreach($name in @('Write-Status','Write-OperationResult','Complete-DeferredStart')){$fn=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true);Invoke-Expression $fn.Extent.Text}
+$branch=$ast.Find({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.StartsWith('if ($wasRunning -and $Operation')},$true)
+if(-not $branch){throw 'Running Start observation branch missing'}
+$runner=[scriptblock]::Create($branch.Extent.Text)
+$Root='${root.replaceAll("'","''")}';$statusPath=Join-Path $Root 'status.json';$wasRunning=$true;$Operation='Start';$version='fixture';$vm=@{Id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}
+function Get-OwnedReadyEndpoint {if($script:ready){return @{ready=$true;address='192.0.2.42';port=80;legacyBindingVerified=$false}};return @{ready=$false}}
+function Start-VM {throw 'Running automatic Start must not start VM'}
+function Stop-VM {throw 'Running automatic Start must not stop VM'}
+function Set-VM {throw 'Running automatic Start must not rewrite VM'}
+foreach($ready in @($false,$true)){
+ $script:ready=$ready;$OperationId=[guid]::NewGuid().ToString('D');$OperationStartedAt=[DateTime]::UtcNow.ToString('o');$script:ownedVmVerified=$true;$script:operationResultEmitted=$false
+ & $runner
+}
+`;
+  const stdout=execFileSync("powershell.exe",["-NoProfile","-NonInteractive","-EncodedCommand",Buffer.from(script,"utf16le").toString("base64")],{windowsHide:true,timeout:15000,encoding:"utf8"});
+  const results=stdout.split(/\r?\n/).filter(l=>l.startsWith("RABIROUTE_HA_RESULT:")).map(l=>JSON.parse(l.slice("RABIROUTE_HA_RESULT:".length)));
+  assert.equal(results.length,2);assert.equal(results[0].outcome,"deferred");assert.equal(results[0].deferred.vmStarted,false);assert.equal(results[0].code,"core_starting");assert.match(results[0].message,/等待 Core/);assert.equal(results[1].outcome,"ready");assert.notEqual(results[0].operationId,results[1].operationId);
 });
 
 

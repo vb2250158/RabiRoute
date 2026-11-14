@@ -76,6 +76,35 @@ export function createXiaomiHomeOperationsOwner(context: XiaomiHomeManagerRoutes
     },
     key(request: http.IncomingMessage): string { const key = String(request.headers["idempotency-key"] || "").trim(); if (!/^[A-Za-z0-9._:-]{16,200}$/.test(key)) invalid("xiaomi_home_idempotency_key_required", "A stable Idempotency-Key is required."); return key; },
     query(url: URL, fields: readonly string[], code: string) { if ([...url.searchParams.keys()].some(key => !fields.includes(key) || url.searchParams.getAll(key).length !== 1)) invalid(code, "Unexpected or repeated query parameter."); },
+    latestRecording() {
+      const saved = context.runtime.settings();
+      const roleId = saved.settings.agentRoleId.trim();
+      if (!roleId) invalid("xiaomi_home_recording_role_required", "请先在米家设置中配置事件接收角色。", 409);
+      const record = context.runtime.artifacts.latestVideoForRole(roleId);
+      const artifact = record ? { artifactId: record.artifactId, ownerRoleId: record.ownerRoleId, mediaKind: record.mediaKind,
+        occurredAt: record.occurredAt, byteLength: record.byteLength, durationMs: record.durationMs } : null;
+      return { artifact, settingsRevision: saved.revision };
+    },
+    recordingContentFence(url: URL, artifactId: string): (() => void) | undefined {
+      const fields = ["expectedApplicationGenerationId", "expectedManagerInstanceId", "settingsRevision"];
+      if (!fields.some(field => url.searchParams.has(field))) return undefined;
+      const changed = () => invalid("xiaomi_home_recording_context_changed", "录像归属、设置或连接已变化，请重新打开录像。", 409);
+      // The existing Manager authentication layer owns webgui_token. Do not
+      // inspect, copy or reinterpret its value here.
+      if ([...url.searchParams.keys()].some(key => !fields.includes(key) && key !== "webgui_token")
+        || fields.some(field => url.searchParams.getAll(field).length !== 1 || !url.searchParams.get(field))) changed();
+      const generation = url.searchParams.get(fields[0]!)!, instance = url.searchParams.get(fields[1]!)!, revision = url.searchParams.get(fields[2]!)!;
+      const assert = () => {
+        context.assertRuntimeAvailable?.();
+        if (generation !== context.lifecycleFence.applicationGenerationId || instance !== context.lifecycleFence.managerInstanceId) changed();
+        const saved = context.runtime.settings();
+        if (revision !== saved.revision || !saved.settings.agentRoleId.trim()) changed();
+        const artifact = context.runtime.artifacts.get(artifactId);
+        if (!artifact || artifact.ownerRoleId !== saved.settings.agentRoleId || artifact.mediaKind !== "video/mp4") changed();
+      };
+      assert();
+      return assert;
+    },
     async result(authority: XiaomiHomeRequestAuthority, operation: () => unknown | Promise<unknown>, status = 200): Promise<ApiOperationResult> {
       try { authority.assert(); const data = await operation(); authority.assert(); return { status, body: { code: 0, data } }; }
       catch (cause) { try { authority.assert(); } catch (revoked) { cause = revoked; } const { status, ...error } = presentedXiaomiHomeError(cause); return { status, ...(error.outcome === "not_started" || error.outcome === "unknown" ? { mutationOutcome: error.outcome } : {}), body: { code: -1, error } }; }

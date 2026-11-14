@@ -1,11 +1,22 @@
 ﻿param(
     [ValidateSet('Install', 'Start', 'Recover', 'Observe')][string]$Operation = 'Install',
     [Parameter(Mandatory = $true)][string]$Root,
-    [ValidateSet('yes', 'no')][string]$AutoStart = 'no'
+    [ValidateSet('yes', 'no')][string]$AutoStart = 'no',
+    [string]$OperationId = '',
+    [string]$OperationStartedAt = ''
 )
 
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+if (-not $OperationId) { $OperationId = [guid]::NewGuid().ToString('D') }
+if ($OperationId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') { throw 'Invalid operation identity.' }
+if (-not $OperationStartedAt) { $OperationStartedAt = [DateTime]::UtcNow.ToString('o') }
+$operationStarted = [DateTimeOffset]::Parse($OperationStartedAt).UtcDateTime
+if ([Math]::Abs(([DateTime]::UtcNow - $operationStarted).TotalMinutes) -gt 5) { throw 'Operation identity is stale.' }
+$script:operationResultEmitted = $false
+$script:ownedVmVerified = $false
 $Root = [IO.Path]::GetFullPath($Root)
 if ($Root.StartsWith('\\') -or $Root.Contains('"')) { throw 'Installation requires a local directory.' }
 $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$([IO.Path]::GetPathRoot($Root).TrimEnd('\'))'"
@@ -19,6 +30,7 @@ if ($Operation -eq 'Observe') {
 $statusPath = Join-Path $Root 'status.json'
 function Write-Status([string]$State, [string]$Message, [string]$Version = '', [string]$Phase = '', [long]$CompletedBytes = 0, [long]$TotalBytes = 0) {
     $value = @{ state = $State; message = $Message; version = $Version; root = $Root; updatedAt = [DateTime]::UtcNow.ToString('o') }
+    if ($OperationId) { $value.operationId = $OperationId; $value.operationStartedAt = $OperationStartedAt }
     if ($Phase) {
         $value.progress = @{ phase = $Phase }
         if ($TotalBytes -gt 0) {
@@ -102,10 +114,16 @@ function Test-OwnedLegacyLoopback($Vm) {
     $receiptFile = Join-Path $Root 'loopback-proxy.json'
     if (-not (Test-Path -LiteralPath $receiptFile -PathType Leaf)) { return $false }
     try {
+        if ((Get-Item -LiteralPath $receiptFile -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
         $receipt = Get-Content -LiteralPath $receiptFile -Raw | ConvertFrom-Json
         if ([string]$receipt.vmId -cne [string]$Vm.Id -or [int]$receipt.port -notin @(80, 8123)) { return $false }
-        $addresses = @((Get-VMNetworkAdapter -VM $Vm).IPAddresses)
-        if ($addresses -cnotcontains [string]$receipt.address) { return $false }
+        $legacyAddress = $null
+        if (-not [Net.IPAddress]::TryParse([string]$receipt.address, [ref]$legacyAddress) -or
+            $legacyAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+            $legacyAddress.ToString() -cne [string]$receipt.address -or
+            [string]$receipt.address -match '^(0\.|127\.|169\.254\.)' -or $legacyAddress.GetAddressBytes()[0] -ge 224) { return $false }
+        # This is historical forwarding ownership, not the current transport address.
+        # Callers first verify the current VM, disk chain and responding Core; DHCP may change its IP.
         $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
         $mapping = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'127.0.0.1/8123'
         return [bool]($mapping -and $mapping -ceq ([string]$receipt.address + '/' + [int]$receipt.port))
@@ -114,8 +132,9 @@ function Test-OwnedLegacyLoopback($Vm) {
 
 # Read-only discovery: do not start services or VMs, and do not trust a status file as endpoint evidence.
 function Get-OwnedReadyEndpoint {
-    $vm = Get-VM -Name 'RabiRoute-HomeAssistant' -ErrorAction SilentlyContinue
-    if (-not $vm) { return $null }
+    $vm = Get-VM -Name 'RabiRoute-HomeAssistant' -ErrorAction Stop
+    $diagnostics = @{ checkedAt = [DateTime]::UtcNow.ToString('o'); reason = 'vm_not_found'; guestAddresses = @() }
+    if (-not $vm) { return @{ ready = $false; diagnostics = $diagnostics } }
     $disk = Join-Path $Root 'home-assistant.vhdx'
     $receipt = Join-Path $Root 'image.json'
     if (-not (Test-Path -LiteralPath $receipt -PathType Leaf) -or ((Get-Item -LiteralPath $receipt -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Managed HA installation receipt is missing or invalid.' }
@@ -123,16 +142,23 @@ function Get-OwnedReadyEndpoint {
     if ($vm.Notes -ne ('RabiRoute Home Assistant OS: ' + $Root) -or $attached.Count -ne 1 -or -not (Test-InstallationDisk $attached[0].Path $disk $true)) {
         throw 'A VM with this name is not owned by this installation.'
     }
-    if ($vm.State -ne 'Running') { return $null }
+    $diagnostics.vmState = [string]$vm.State
+    if ($vm.State -ne 'Running') {
+        $diagnostics.reason = 'vm_not_running'
+        return @{ ready = $false; diagnostics = $diagnostics }
+    }
     $addresses = @((Get-VMNetworkAdapter -VM $vm).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^(127\.|169\.254\.|0\.)' } | Select-Object -First 8)
+    $diagnostics.guestAddresses = @($addresses)
+    $diagnostics.reason = if ($addresses.Count) { 'core_unready' } else { 'no_guest_address' }
     foreach ($address in $addresses) {
         foreach ($port in @(80, 8123)) {
             if (Test-HomeAssistantCore $address $port) {
-                return @{ ready = $true; address = $address; port = $port; vmId = [string]$vm.Id; legacyBindingVerified = (Test-OwnedLegacyLoopback $vm) }
+                $diagnostics.reason = 'ready'
+                return @{ ready = $true; address = $address; port = $port; vmId = [string]$vm.Id; legacyBindingVerified = (Test-OwnedLegacyLoopback $vm); diagnostics = $diagnostics }
             }
         }
     }
-    return $null
+    return @{ ready = $false; diagnostics = $diagnostics }
 }
 
 function Wait-HomeAssistantCore($Vm, [int]$TimeoutSeconds) {
@@ -149,10 +175,65 @@ function Wait-HomeAssistantCore($Vm, [int]$TimeoutSeconds) {
     return $null
 }
 
+
+function Write-OperationResult([string]$Outcome, [string]$Code, [string]$Message, $Deferred = $null) {
+    if ($script:operationResultEmitted) { throw 'Operation result was already emitted.' }
+    $script:operationResultEmitted = $true
+    $value = @{ schemaVersion = 1; operationId = $OperationId; action = $Operation; startedAt = $OperationStartedAt; completedAt = [DateTime]::UtcNow.ToString('o'); outcome = $Outcome; code = $Code; message = $Message; installed = $script:ownedVmVerified }
+    if ($Deferred) { $value.deferred = $Deferred }
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    Write-Output ('RABIROUTE_HA_RESULT:' + ($value | ConvertTo-Json -Compress))
+}
+
+function Get-StartMemoryAdmission($Vm) {
+    $required = [long]$Vm.MemoryStartup
+    $system = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+    if ($required -le 0 -or $null -eq $system.FreePhysicalMemory -or [long]$system.FreePhysicalMemory -lt 0) { throw 'VM startup memory admission is unavailable.' }
+    return @{ requiredMemoryBytes = $required; availableMemoryBytes = ([long]$system.FreePhysicalMemory * 1KB) }
+}
+
+function Get-StartMemoryErrorCode($Record) {
+    # Inspect only this Start-VM failure, never the global UI status or an old log.
+    $errorObject = $Record.Exception
+    for ($depth = 0; $errorObject -and $depth -lt 8; $depth++) {
+        if ($errorObject -is [ComponentModel.Win32Exception] -and $errorObject.NativeErrorCode -eq 1450) { return '0x800705AA' }
+        if (([long]$errorObject.HResult -band 0xFFFF) -eq 1450) { return '0x800705AA' }
+        if ($errorObject.Message -match '(?i)(?<![0-9a-f])0x800705aa(?![0-9a-f])') { return '0x800705AA' }
+        $errorObject = $errorObject.InnerException
+    }
+    if ($Record.ErrorDetails -and $Record.ErrorDetails.Message -match '(?i)(?<![0-9a-f])0x800705aa(?![0-9a-f])') { return '0x800705AA' }
+    return $null
+}
+
+function Start-OwnedHomeAssistantVm($Vm) {
+    $memory = Get-StartMemoryAdmission $Vm
+    if ($memory.availableMemoryBytes -lt $memory.requiredMemoryBytes) {
+        return @{ started = $false; deferred = @{ reason = 'host_memory'; vmStarted = $false; requiredMemoryBytes = $memory.requiredMemoryBytes; availableMemoryBytes = $memory.availableMemoryBytes } }
+    }
+    Set-VM -VM $Vm -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+    try {
+        Start-VM -VM $Vm -ErrorAction Stop | Out-Null
+        return @{ started = $true }
+    } catch {
+        $code = Get-StartMemoryErrorCode $_
+        if (-not $code) { throw }
+        return @{ started = $false; deferred = @{ reason = 'host_memory'; vmStarted = $false; requiredMemoryBytes = $memory.requiredMemoryBytes; availableMemoryBytes = $memory.availableMemoryBytes; nativeCode = $code } }
+    }
+}
+
+function Complete-DeferredStart($Deferred) {
+    $message = if ($Deferred.reason -eq 'host_memory') {
+        'Home Assistant 等待启动资源：需要 ' + [Math]::Ceiling($Deferred.requiredMemoryBytes / 1MB) + ' MiB，可用 ' + [Math]::Floor($Deferred.availableMemoryBytes / 1MB) + ' MiB；资源恢复后将自动重试。' + $(if ($Deferred.nativeCode) { ' ' + $Deferred.nativeCode } else { '' })
+    } elseif ($Deferred.vmStarted) { 'Home Assistant 虚拟机已启动，正在等待网络和 Core 就绪；不会自动重启虚拟机。' }
+    else { 'Home Assistant 虚拟机正在运行，等待 Core 就绪；不会自动重启或打断更新。' }
+    Write-Status 'installed' $message
+    Write-OperationResult 'deferred' $(if ($Deferred.reason -eq 'host_memory') { 'host_memory_wait' } else { 'core_starting' }) $message $Deferred
+}
+
 function Restore-HomeAssistantCore($Vm, [bool]$AllowRestart) {
     $address = Wait-HomeAssistantCore $Vm 90
     if ($address) { return $address }
-    if (-not $AllowRestart) { throw 'Home Assistant Core is not ready; the VM was preserved.' }
+    if (-not $AllowRestart) { return @{ deferred = @{ reason = 'core_starting'; vmStarted = $false } } }
     $job = Stop-VM -VM $Vm -AsJob
     try {
         $completed = Wait-Job -Job $job -Timeout 90
@@ -160,7 +241,8 @@ function Restore-HomeAssistantCore($Vm, [bool]$AllowRestart) {
         Receive-Job -Job $job -ErrorAction Stop | Out-Null
         $current = Get-VM -Id $Vm.Id
         if ($current.State -ne 'Off') { throw 'HA VM did not stop; it was not reset.' }
-        Start-VM -VM $current | Out-Null
+        $start = Start-OwnedHomeAssistantVm $current
+        if ($start.deferred) { return @{ deferred = $start.deferred } }
     } finally {
         if ($job.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $job }
     }
@@ -204,6 +286,7 @@ try {
             Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart | Out-Null
         }
         Write-Status 'reboot_required' 'Hyper-V 已请求启用。请保存工作并手动重启 Windows，重启后再次点击安装继续。'
+        Write-OperationResult 'reboot_required' 'hyperv_reboot_required' 'Hyper-V 启用后需要重启 Windows。'
         return
     }
     Import-Module Hyper-V
@@ -264,9 +347,24 @@ try {
         Set-VMProcessor -VM $vm -Count 2
         Set-VMFirmware -VM $vm -EnableSecureBoot Off
     }
-    Set-VM -VM $vm -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+    $script:ownedVmVerified = $true
     $wasRunning = $vm.State -eq 'Running'
-    if ($vm.State -eq 'Off') { Start-VM -VM $vm }
+    $vmStarted = $false
+    # Automatic Start observes a running owner without rewriting VM settings or restarting it.
+    if ($wasRunning -and $Operation -eq 'Start') {
+        $observed = Get-OwnedReadyEndpoint
+        if ($observed.ready) {
+            Write-Status 'installed' 'Home Assistant OS 与 Core 已就绪。' $version
+            Write-Output ('RABIROUTE_HA_ENDPOINT:' + (@{ address = $observed.address; port = $observed.port; vmId = [string]$vm.Id; legacyBindingVerified = $observed.legacyBindingVerified } | ConvertTo-Json -Compress))
+            Write-OperationResult 'ready' 'core_ready' 'Home Assistant OS 与 Core 已就绪。'
+        } else { Complete-DeferredStart @{ reason = 'core_starting'; vmStarted = $false } }
+        return
+    }
+    if ($vm.State -eq 'Off') {
+        $start = Start-OwnedHomeAssistantVm $vm
+        if ($start.deferred) { Complete-DeferredStart $start.deferred; return }
+        $vmStarted = $true
+    }
     elseif ($vm.State -ne 'Running') { throw 'The VM is in a state that needs manual attention; it was not reset.' }
     Write-Status 'installing' '虚拟机已启动，正在等待网络地址。' $version 'network'
     $deadline = [DateTime]::UtcNow.AddMinutes(3)
@@ -275,15 +373,19 @@ try {
         $address = (Get-VMNetworkAdapter -VM $vm).IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notmatch '^(127\.|169\.254\.|0\.)' } | Select-Object -First 1
         if (-not $address) { Start-Sleep -Seconds 2 }
     } while (-not $address -and [DateTime]::UtcNow -lt $deadline)
-    if (-not $address) { throw 'VM network address is not ready. Use Start and check later; the VM was preserved.' }
-    Write-Status 'installing' '正在检查 Home Assistant Core；异常时只尝试一次优雅重启虚拟机。' $version 'core-health'
+    if (-not $address) { Complete-DeferredStart @{ reason = 'core_starting'; vmStarted = $vmStarted }; return }
+    Write-Status 'installing' '正在等待 Home Assistant Core 就绪；自动启动不会重启虚拟机。' $version 'core-health'
     $endpoint = Restore-HomeAssistantCore $vm ($wasRunning -and $Operation -eq 'Recover')
+    if ($endpoint.deferred) { if ($vmStarted) { $endpoint.deferred.vmStarted = $true }; Complete-DeferredStart $endpoint.deferred; return }
     Write-Status 'installed' 'Home Assistant OS 与 Core 已就绪。' $version
     Write-Output ('RABIROUTE_HA_ENDPOINT:' + (@{ address = $endpoint.address; port = $endpoint.port; vmId = [string]$vm.Id; legacyBindingVerified = (Test-OwnedLegacyLoopback $vm) } | ConvertTo-Json -Compress))
+    Write-OperationResult 'ready' 'core_ready' 'Home Assistant OS 与 Core 已就绪。'
 } catch {
     if ($Operation -eq 'Observe') { exit 1 }
-    Write-Status 'error' ('安装未完成：' + $_.Exception.Message)
-    exit 1
+    $message = '操作未完成：' + $_.Exception.Message
+    Write-Status 'error' $message
+    Write-OperationResult 'failed' 'operation_failed' $message
+    exit 0
 } finally {
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()

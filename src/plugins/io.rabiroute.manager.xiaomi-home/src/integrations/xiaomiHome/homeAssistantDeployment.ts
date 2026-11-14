@@ -86,6 +86,7 @@ export class HomeAssistantDeployment {
   private readonly operations = new KeyedAsyncLock();
   private stopped = false;
   private failure = "";
+  private waitingMessage = "";
   private flight?: Promise<void>;
   private readonly os: HomeAssistantOsDriver;
   private installing = false;
@@ -134,6 +135,7 @@ export class HomeAssistantDeployment {
       if (config.mode !== "haos") { this.clearManagedTarget(); }
       this.changes.emit("config", config);
       this.failure = "";
+      this.waitingMessage = "";
       this.audit("configure", "committed");
       return this.inspect(authority);
     });
@@ -181,10 +183,11 @@ export class HomeAssistantDeployment {
         const endpoint = this.managedBaseUrl();
         const ready = installed && Boolean(this.managedTarget) && Boolean(endpoint) && await this.ready(endpoint!, authority);
         return { ...base, ...privilegeState, baseUrl: endpoint ?? "", installation: installed ? "installed" : "not_found",
-          state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
-          message: this.failure || (ready ? "Home Assistant OS 已就绪。" : status.message),
+          state: ready ? "ready" : this.failure ? "error" : this.installing ? "installing" : this.waitingMessage ? "starting" : status.state === "installing" ? "installing" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
+          message: ready ? "Home Assistant OS 已就绪。" : this.failure || this.waitingMessage || status.message,
           image: status.version ? `Home Assistant OS ${status.version}` : undefined,
           progress: status.progress,
+          diagnostics: this.os.diagnostics,
           installationPath: status.root, canInstall: !this.installing && status.state !== "installing", canStart: installed && !this.installing };
       } catch (error) {
         authority?.assert();
@@ -225,6 +228,7 @@ export class HomeAssistantDeployment {
       if (this.stopped) invalid("米家模块正在停止，请刷新页面。");
       this.failure = "";
       this.recoveryAttempts = 0;
+      this.waitingMessage = "";
       this.nextRecoveryAt = 0;
       if (this.read().config.mode === "haos") {
         return this.runOs("Start", authority);
@@ -362,31 +366,38 @@ export class HomeAssistantDeployment {
     return () => { this.changes.off("config", listener); };
   }
 
-  private async runOs(operation: "Install" | "Start" | "Recover", authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal): Promise<HomeAssistantDeploymentSnapshot> {
+  private async runOs(operation: "Install" | "Start" | "Recover", authority?: XiaomiHomeRequestAuthority, signal?: AbortSignal, completed?: (result: HomeAssistantOsStatus) => void): Promise<HomeAssistantDeploymentSnapshot> {
     this.installing = true;
     this.failure = "";
+    this.waitingMessage = "";
     this.audit(operation.toLowerCase(), "started");
     try {
       const revision = this.read().revision;
       await this.prepareTransport();
       this.clearManagedTarget();
       const result = await this.checked(() => this.os.run(operation, this.read().config.autoStart, authority, signal), authority, true);
+      let endpointReady = false;
+      if (!this.stopped && !signal?.aborted && this.read().revision === revision) {
+        this.waitingMessage = result.deferred ? result.message : "";
+        this.failure = result.state === "error" ? result.message : "";
+        completed?.(result);
+      }
       if (result.state === "installed" && result.endpoint && !this.stopped && this.managedMode() && this.read().revision === revision) {
         this.assertManagedVm(result.endpoint);
         const healthy = await this.io.ready(`http://${result.endpoint.address}:${result.endpoint.port}`);
         authority?.assert();
         if (healthy && !signal?.aborted && !this.stopped && this.managedMode() && this.read().revision === revision) {
           this.setManagedTarget(result.endpoint);
+          endpointReady = true;
         }
       }
-      if (result.state === "reboot_required") this.audit("enable-hyper-v", "committed");
-      else this.audit(operation.toLowerCase(), result.state === "installed" ? "committed" : "failed");
+      if (result.deferred) { /* Keep the started audit open; a wait is not a committed start. */ }
+      else if (result.state === "reboot_required") this.audit("enable-hyper-v", "committed");
+      else this.audit(operation.toLowerCase(), endpointReady ? "committed" : "failed");
     } catch (error) {
       authority?.assert();
       rethrowXiaomiHomeAuthorityError(error);
-      this.failure = this.stopped ? "恢复等待已取消。" : operation === "Recover"
-        ? "自动恢复未完成，请检查 Rabi Host 的管理员权限及 HA Core 状态。已有虚拟机和磁盘已保留。"
-        : "HA 操作未能完成，请检查 Rabi 启动权限并重新检测；不要删除已有虚拟机或磁盘。";
+      this.failure = this.stopped ? "恢复等待已取消。" : "Home Assistant 操作未确认，请查看本机安装日志。已有虚拟机和磁盘已保留。";
       this.audit(operation.toLowerCase(), "failed");
     } finally {
       this.installing = false;
@@ -429,6 +440,7 @@ export class HomeAssistantDeployment {
           || (saved.config.mode === "haos" && this.managedTarget !== checkedTarget)) return;
         if (healthy) {
           this.failure = "";
+          this.waitingMessage = "";
           this.recoveryAttempts = 0;
           this.healthChanged("ready");
           return;
@@ -470,6 +482,7 @@ export class HomeAssistantDeployment {
             }
             if (!this.stopped && !controller.signal.aborted && observedHealthy) {
               this.failure = "";
+              this.waitingMessage = "";
               this.recoveryAttempts = 0;
               this.healthChanged("ready");
               return;
@@ -480,17 +493,27 @@ export class HomeAssistantDeployment {
         }
         if (Date.now() < this.nextRecoveryAt) return;
         this.nextRecoveryAt = Date.now() + (saved.config.recoveryCooldownMs ?? 300000);
+        const attemptsBefore = this.recoveryAttempts;
         this.recoveryAttempts++;
         attempted = true;
         if (saved.config.mode === "haos") {
           // Installation is never implicit, and background recovery never opens UAC.
           const status = await this.os.inspect();
           if (status.state !== "installed" && status.installed !== true) return;
+          const completedOperation: { result?: HomeAssistantOsStatus } = {};
           await this.operations.run("deployment", async () => {
             if (this.stopped) return;
             this.requireRevision(saved.revision);
-            await this.runOs("Recover", undefined, controller.signal);
+            // Start observes an already-running VM. Automatic recovery never
+            // invokes the explicit native Recover/Stop-VM compatibility path.
+            await this.runOs("Start", undefined, controller.signal, result => { completedOperation.result = result; });
           });
+          const operationResult = completedOperation.result;
+          if (operationResult?.deferred && !this.stopped && !controller.signal.aborted && this.read().revision === saved.revision) {
+            if (!operationResult.deferred.vmStarted && this.recoveryAttempts === attemptsBefore + 1) this.recoveryAttempts = attemptsBefore;
+            if (this.recoveryAttempts >= (saved.config.recoveryMaxAttempts ?? 3)) this.healthChanged("exhausted");
+            return;
+          }
         } else {
           const attempts = this.recoveryAttempts;
           await this.ensureReady(saved.revision);
@@ -503,6 +526,7 @@ export class HomeAssistantDeployment {
           && (saved.config.mode !== "haos" || this.managedTarget === currentTarget) && currentHealthy) {
           becameReady = true;
           this.failure = "";
+          this.waitingMessage = "";
           this.recoveryAttempts = 0;
           this.healthChanged("ready");
         } else if (!this.stopped) {

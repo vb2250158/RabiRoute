@@ -15,6 +15,14 @@ export type HomeAssistantDeploymentConfig = Readonly<{
   recoveryMaxAttempts?: number;
 }>;
 
+/** Latest read-only observation; never evidence for publishing a transport endpoint. */
+export type HomeAssistantOsDiagnostics = Readonly<{
+  checkedAt: string;
+  reason: "vm_not_found" | "vm_not_running" | "no_guest_address" | "core_unready" | "ready";
+  vmState?: string;
+  guestAddresses: readonly string[];
+}>;
+
 export type HomeAssistantDeploymentSnapshot = Readonly<{
   schemaVersion: 1;
   revision: string;
@@ -35,4 +43,5 @@ export type HomeAssistantDeploymentSnapshot = Readonly<{
   recoveryAttempts?: number;
   recoveryExhausted?: boolean;
   privilege?: "administrator" | "limited" | "unknown";
+  diagnostics?: HomeAssistantOsDiagnostics;
 }>;

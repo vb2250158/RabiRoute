@@ -9,6 +9,55 @@ import type { HomeAssistantOsStatus } from "./homeAssistantOs.js";
 
 const verifiedEndpoint = { address: "192.0.2.1", port: 80 as const, vmId: "a0000000-0000-0000-0000-000000000001", legacyBindingVerified: false };
 
+test("memory waits preserve the startup budget and automatically resume after resources return", async t => {
+  const f = fixture(t); let now = Date.now(); t.mock.method(Date, "now", () => now);
+  let available = false; let calls = 0;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "error", installed: true, message: "stale admin suggestion from UI history" }),
+    run: async operation => {
+      assert.equal(operation, "Start"); calls++;
+      if (!available) return { state: "installed", installed: true, message: "等待2048MB资源；0x800705AA", deferred: { reason: "host_memory", vmStarted: false, requiredMemoryBytes: 2147483648, availableMemoryBytes: 900000000 } };
+      f.setRunning(true); return { state: "installed", installed: true, message: "ready", endpoint: verifiedEndpoint };
+    }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true, recoveryMaxAttempts: 3 }, (await owner.inspect()).revision);
+  const settings = fs.readFileSync(path.join(f.root, "home-assistant-deployment.json"));
+  try {
+    owner.start(); await owner.recover();
+    for (let index = 0; index < 5; index++) {
+      const status = await owner.inspect(); assert.equal(status.state, "starting"); assert.match(status.message, /2048MB.*0x800705AA/);
+      assert.equal(status.recoveryAttempts, 0); assert.equal(status.recoveryExhausted, false);
+      const before = calls; await owner.recover(); assert.equal(calls, before, "resource waits remain throttled");
+      now += 300001; await owner.recover();
+    }
+    available = true; now += 300001; await owner.recover();
+    assert.equal((await owner.inspect()).state, "ready"); assert.equal((await owner.inspect()).recoveryAttempts, 0);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, "home-assistant-deployment.json")), settings, "automatic waiting does not rewrite deployment configuration");
+  } finally { await owner.stop(); }
+});
+
+test("a real VM start followed by Core waiting consumes one attempt; running-only waits do not", async t => {
+  const f = fixture(t); let now = Date.now(); t.mock.method(Date, "now", () => now); let calls = 0;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    inspect: async () => ({ state: "installed", message: "installed" }),
+    run: async operation => { assert.equal(operation, "Start"); calls++;return { state: "installed", installed: true, message: "Core正在准备，不重启VM", deferred: { reason: "core_starting", vmStarted: calls === 1 } }; }
+  });
+  await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
+  try { await owner.recover(); assert.equal((await owner.inspect()).recoveryAttempts, 1); for(let index=0;index<4;index++){now+=300001;await owner.recover();assert.equal((await owner.inspect()).recoveryAttempts,1);} }
+  finally { await owner.stop(); }
+});
+
+test("typed current-child failure keeps its actual reason instead of the generic admin hint", async t => {
+  const f=fixture(t);
+  const owner=new HomeAssistantDeployment(f.root,()=>"http://127.0.0.1:8123",f.io,{
+    inspect:async()=>({state:"error",installed:true,message:"stale status"}),
+    run:async()=>({state:"error",installed:true,message:"本次失败：2048MB / 0x800705AA"})
+  });
+  await owner.save({mode:"haos",containerName:"homeassistant",autoStart:true},(await owner.inspect()).revision);
+  try{await owner.recover();const status=await owner.inspect();assert.match(status.message,/本次失败.*0x800705AA/);assert.equal(status.state,"error");assert.equal(status.recoveryAttempts,1);}
+  finally{await owner.stop();}
+});
+
 function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ha-deployment-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -322,7 +371,7 @@ test("HA OS startup and disconnect recovery coalesce, respect cooldown and prese
     inspect: async () => ({ state: "installed", message: "installed" }),
     async run(operation) {
       operations.push(operation);
-      if (operation === "Recover") await new Promise<void>(resolve => { release = resolve; markStarted?.(); });
+      if (operations.length === 1) await new Promise<void>(resolve => { release = resolve; markStarted?.(); });
       f.setRunning(true);
       return { state: "installed", message: "installed", endpoint: verifiedEndpoint };
     }
@@ -332,15 +381,15 @@ test("HA OS startup and disconnect recovery coalesce, respect cooldown and prese
   const sameFailure = owner.recover();
   assert.equal(sameFailure, owner.recover());
   await started;
-  assert.deepEqual(operations, ["Recover"]);
+  assert.deepEqual(operations, ["Start"]);
   release?.();
   await sameFailure;
   assert.equal((await owner.inspect()).state, "ready");
   f.setRunning(false);
   await owner.recover();
-  assert.deepEqual(operations, ["Recover"], "repeated failures are throttled");
+  assert.deepEqual(operations, ["Start"], "repeated failures are throttled");
   await owner.ensureReady(saved.revision);
-  assert.deepEqual(operations, ["Recover", "Start"], "foreground start can authorize the protected helper");
+  assert.deepEqual(operations, ["Start", "Start"], "foreground start can authorize the protected helper");
   await owner.stop();
   f.setRunning(false);
   await owner.recover();
@@ -366,12 +415,12 @@ test("automatic recovery does not install, take over external services or prompt
   const f = fixture(t);
   const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
     inspect: async () => ({ state: "installed", message: "installed" }),
-    run: async operation => { assert.equal(operation, "Recover"); throw new Error("approval absent"); }
+    run: async operation => { assert.equal(operation, "Start"); throw new Error("approval absent"); }
   });
   await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, (await owner.inspect()).revision);
   owner.start();
   await owner.recover();
-  assert.match((await owner.inspect()).message, /Rabi Host 的管理员权限/);
+  assert.match((await owner.inspect()).message, /本机安装日志/);
   assert.equal((await owner.inspect()).installation, "installed");
   await owner.stop();
 });
@@ -434,7 +483,7 @@ test("shutdown cancels its pending recovery wait without restarting or resetting
   const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
     inspect: async () => ({ state: "installed", message: "installed" }),
     run: async (operation, _autoStart, _authority, signal) => {
-      assert.equal(operation, "Recover");
+      assert.equal(operation, "Start");
       return new Promise((_resolve, reject) => {
         signal?.addEventListener("abort", () => {
           cancelled = true;
@@ -707,4 +756,23 @@ test("a different verified VM is never installed as the proxy target", async t =
     await owner.ensureReady(saved.revision);
     assert.deepEqual(owner.managedIdentity(), receipt, "same VM may change address");
   } finally { await owner.stop(); }
+});
+
+test("deployment reads diagnostics without granting endpoint readiness or starting recovery", async t => {
+  const f = fixture(t);
+  const diagnostics = Object.freeze({ checkedAt: "2026-11-07T16:00:00.000Z", reason: "core_unready" as const, vmState: "Running", guestAddresses: ["192.0.2.42"] });
+  let starts = 0, observations = 0;
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    diagnostics,
+    inspect: async () => ({ state: "error", installed: true, message: "Core unavailable" }),
+    run: async () => { starts++; throw new Error("Read must not start HA"); },
+    observe: async () => { observations++; return undefined; }
+  });
+  const snapshot = await owner.inspect();
+  assert.deepEqual(snapshot.diagnostics, diagnostics);
+  assert.notEqual(snapshot.state, "ready");
+  assert.equal(owner.managedIdentity(), undefined);
+  assert.equal(starts, 0);
+  assert.equal(observations, 0);
+  await owner.stop();
 });

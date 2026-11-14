@@ -3,6 +3,8 @@ import { userFacingError } from "../../../../../../ribiwebgui/src/userFacingErro
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { XiaomiHomeRuntimeSettings, XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
 import { registerPageSaveAction } from "../../../../../../ribiwebgui/src/pageSaveAction";
+import { managerResourceUrl } from "../../../../../../ribiwebgui/src/managerApi";
+import { createRecordingRequestScope, readLatestRecording, releaseRecordingVideo } from "../../recordingsClient";
 import { xiaomiHomeSettingsClient, type XiaomiHomeResource } from "../../../../../../ribiwebgui/src/xiaomiHomeSettingsClient";
 
 import type { MessageAdapterScanResult } from "../../../../../../ribiwebgui/src/types";
@@ -30,6 +32,59 @@ const dirty = ref(false);
 const error = ref("");
 const resources = ref<readonly XiaomiHomeResource[]>([]);
 const resourceError = ref("");
+const recordingScope = createRecordingRequestScope();
+const recordingDialog = ref(false);
+const recordingLoading = ref(false);
+const recordingNotice = ref("");
+const recordingError = ref("");
+const recordingUrl = ref("");
+const recordingVideo = ref<HTMLVideoElement | null>(null);
+
+function closeRecording(): void {
+  recordingScope.cancel();
+  releaseRecordingVideo(recordingVideo.value);
+  recordingUrl.value = "";
+  recordingDialog.value = false;
+  recordingLoading.value = false;
+}
+
+function playbackFailed(): void {
+  closeRecording();
+  recordingError.value = "录像无法播放，请重新打开；设置或连接可能已变化。";
+}
+
+async function openLatestRecording(): Promise<void> {
+  closeRecording();
+  recordingNotice.value = "";
+  recordingError.value = "";
+  const current = snapshot.value;
+  if (!current?.settings.agentRoleId?.trim() || draft.value?.agentRoleId.trim() !== current.settings.agentRoleId.trim()) {
+    recordingNotice.value = "请先保存事件接收角色。";
+    return;
+  }
+  const ticket = recordingScope.begin();
+  recordingLoading.value = true;
+  try {
+    const result = await readLatestRecording(fetch, current.revision, current.settings.agentRoleId.trim(), ticket.signal);
+    if (!ticket.isCurrent()) return;
+    if (!result.artifact || !result.mediaPath) {
+      recordingNotice.value = "当前角色还没有可用录像。";
+      return;
+    }
+    recordingUrl.value = managerResourceUrl(result.mediaPath);
+    recordingDialog.value = true;
+  } catch (cause) {
+    if (ticket.isCurrent()) recordingError.value = userFacingError(cause);
+  } finally {
+    if (ticket.isCurrent()) recordingLoading.value = false;
+  }
+}
+
+watch([() => snapshot.value?.revision, () => draft.value?.agentRoleId], () => {
+  closeRecording();
+  recordingNotice.value = "";
+  recordingError.value = "";
+}, { flush: "sync" });
 const speechBindings = ref<Array<{ mediaPlayerEntityId: string; notifyEntityId: string; encoding: "text" | "json-array" }>>([]);
 const speakers = computed(() => resources.value.filter(item => item.kind === "media_player").map(item => ({ title: item.displayName, value: item.entityId })));
 const speechTargets = computed(() => resources.value.filter(item => item.kind === "notify").map(item => ({ title: item.displayName, value: item.entityId })));
@@ -118,7 +173,7 @@ onMounted(() => {
   void load();
 });
 
-onBeforeUnmount(() => unregisterSaveAction?.());
+onBeforeUnmount(() => { closeRecording(); unregisterSaveAction?.(); });
 </script>
 
 <template>
@@ -149,6 +204,9 @@ onBeforeUnmount(() => unregisterSaveAction?.());
         <section aria-label="摄像头事件录像">
           <v-switch v-model="draft.cameraClipCaptureEnabled" label="保存移动事件录像" color="warning" inset hide-details />
           <div class="section-note">{{ draft.cameraClipCaptureEnabled !== snapshot?.settings.cameraClipCaptureEnabled ? '尚未保存' : draft.cameraClipCaptureEnabled ? '已开启' : '已关闭' }}</div>
+          <v-btn size="small" variant="tonal" class="mt-2" :loading="recordingLoading" :disabled="!snapshot || recordingLoading" @click="openLatestRecording">打开最新录像</v-btn>
+          <div v-if="recordingNotice" role="status" class="section-note">{{ recordingNotice }}</div>
+          <v-alert v-if="recordingError" type="error" variant="tonal" density="compact" class="mt-2">{{ recordingError }}</v-alert>
         </section>
       </div>
 
@@ -216,6 +274,17 @@ onBeforeUnmount(() => unregisterSaveAction?.());
       <div class="section-note mt-3">修改由页面顶部“保存”统一提交；保存成功后 Manager 热加载，无需重启正式 Host。</div>
     </template>
   </v-card>
+  <v-dialog :model-value="recordingDialog" max-width="960" @update:model-value="value => { if (!value) closeRecording(); }">
+    <v-card>
+      <v-card-title class="d-flex align-center justify-space-between">
+        最新录像
+        <v-btn variant="text" @click="closeRecording">关闭录像</v-btn>
+      </v-card-title>
+      <v-card-text>
+        <video v-if="recordingUrl" ref="recordingVideo" :src="recordingUrl" class="recording-video" controls preload="none" playsinline @error="playbackFailed" />
+      </v-card-text>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
@@ -233,6 +302,7 @@ onBeforeUnmount(() => unregisterSaveAction?.());
   border-radius: 8px;
   background: rgba(var(--v-theme-surface), 0.4);
 }
+.recording-video { display: block; width: 100%; max-height: 70vh; }
 @media (max-width: 760px) {
   .xiaomi-form-grid,
   .xiaomi-switch-grid { grid-template-columns: 1fr; }

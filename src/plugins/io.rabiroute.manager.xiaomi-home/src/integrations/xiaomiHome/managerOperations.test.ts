@@ -81,9 +81,9 @@ async function fixture(t: test.TestContext) {
     const response = await request("/auth", "POST", { accessToken: "owned-fixture-home-token" /* Public test-only fixture; not a real credential. */, baseUrl: providerBase, settingsRevision: runtime.settings().revision, authorizationRevision: saved.revision }, { ...lifecycle, "idempotency-key": "owned-home-auth-key-0001" });
     assert.equal(response.status, 200); assert.ok(!(await response.text()).includes("owned-fixture-home-token"));
   };
-  const media = (bytes = Buffer.from("0123456789")) => {
+  const media = (bytes = Buffer.from("0123456789"), ownerRoleId?: string) => {
     const occurredAt = "2026-10-21T00:00:00.000Z", file = artifacts.allocateMediaPath("owned-event", occurredAt, ".mp4"); fs.writeFileSync(file, bytes);
-    return artifacts.register({ sourceEventId: "owned-event", resourceId: "owned-camera", eventKind: "owned-fixture", occurredAt, mediaKind: "video/mp4", localPath: file, sha256: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.length });
+    return artifacts.register({ sourceEventId: "owned-event", ownerRoleId, resourceId: "owned-camera", eventKind: "owned-fixture", occurredAt, mediaKind: "video/mp4", localPath: file, sha256: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.length });
   };
   const video = () => { (runtime.vacuumCloud.video as any).active = { snapshot: { sessionId: "fixture-session", state: "streaming" }, baseUrl: sidecarBase, auth: "Basic owned-fixture-video", controller: new AbortController() }; };
   const holdVideo = () => { holdVideoResponse = true; return new Promise<void>(resolve => { closedVideoResponse = resolve; }); };
@@ -92,8 +92,8 @@ async function fixture(t: test.TestContext) {
   return { directory, runtime, artifacts, registry, bundle, operations, proxies, authority, credential, request, authorize, media, video, holdVideo, holdVideoOpening, providerCalls, nativeCalls, holdHealth, unblocks, managerBase };
 }
 
-test("all 53 exact contracts admit an enrolled empty Node; native owned HA credentials, resource reads and dry-run receipts use the original services", async t => {
-  const f = await fixture(t); assert.equal(f.bundle.operations.length, 50); assert.equal(f.bundle.proxies.length, 3); assert.equal(f.registry.catalogSnapshot().operations.length, 53); assert.ok(f.registry.catalogSnapshot().operations.every(operation => operation.contract.exposure === "public"));
+test("all 54 exact contracts admit an enrolled empty Node; native owned HA credentials, resource reads and dry-run receipts use the original services", async t => {
+  const f = await fixture(t); assert.equal(f.bundle.operations.length, 51); assert.equal(f.bundle.proxies.length, 3); assert.equal(f.registry.catalogSnapshot().operations.length, 54); assert.ok(f.registry.catalogSnapshot().operations.every(operation => operation.contract.exposure === "public"));
   assert.equal((await f.request("/settings")).status, 200); assert.equal((await f.request("/health")).status, 200);
   await f.authorize();
   assert.equal((await f.request("/resources?view=summary")).status, 200);
@@ -120,6 +120,53 @@ test("native artifact Range and MP4 stream/frame contracts preserve byte headers
   const invalid = await f.request("/artifacts/" + record.artifactId + "/content", "GET", undefined, { range: "bytes=20-30" }); assert.equal(invalid.status, 416);
   f.video(); for (const suffix of ["frame", "stream"]) { const response = await f.request("/vacuum-cloud/video/" + suffix + "?sessionId=fixture-session"); assert.equal(response.status, 200); assert.equal(response.headers.get("content-type"), "video/mp4"); assert.equal(await response.text(), "owned-mp4-fixture"); }
   assert.equal(f.nativeCalls.length, 2);
+});
+
+test("latest recording uses saved role and current lifecycle and returns only one safe metadata projection", async t => {
+  const f = await fixture(t);
+  const setRole = (role: string) => f.runtime.update({ ...f.runtime.settings().settings, agentRoleId: role }, f.runtime.settings().revision);
+  setRole("");
+  assert.equal((await f.request("/recordings/latest", "GET", undefined, lifecycle)).status, 409);
+  setRole("RoleA");
+  const revision = f.runtime.settings().revision;
+  assert.equal((await f.request("/recordings/latest")).status, 400);
+  assert.equal((await f.request("/recordings/latest", "GET", undefined, { ...lifecycle, "x-rabiroute-expected-manager-instance-id": "old" })).status, 409);
+  const empty = await (await f.request("/recordings/latest", "GET", undefined, lifecycle)).json();
+  assert.deepEqual(empty.data, { artifact: null, settingsRevision: revision });
+  f.media(undefined, "OtherRole");
+  assert.equal((await (await f.request("/recordings/latest", "GET", undefined, lifecycle)).json()).data.artifact, null);
+  const record = f.media(undefined, "RoleA");
+  const latest = await (await f.request("/recordings/latest", "GET", undefined, lifecycle)).json();
+  assert.deepEqual(Object.keys(latest.data.artifact).sort(), ["artifactId", "byteLength", "mediaKind", "occurredAt", "ownerRoleId"]);
+  assert.equal(latest.data.artifact.artifactId, record.artifactId); assert.equal(latest.data.settingsRevision, revision);
+  assert.ok(!JSON.stringify(latest).includes(f.directory));
+  fs.appendFileSync(path.join(f.directory, "artifacts/ledger/2026-10-21.jsonl"), "{broken\n"); f.artifacts.activate();
+  const partial = await f.request("/recordings/latest", "GET", undefined, lifecycle);
+  assert.equal(partial.status, 409); assert.equal((await partial.json()).error.code, "xiaomi_home_artifact_evidence_unavailable");
+  assert.deepEqual(f.providerCalls, []);
+});
+
+test("fenced recording Range requires all three unique fields and rejects changed role or revision before auditing", async t => {
+  const f = await fixture(t);
+  f.runtime.update({ ...f.runtime.settings().settings, agentRoleId: "RoleA" }, f.runtime.settings().revision);
+  const record = f.media(undefined, "RoleA"), revision = f.runtime.settings().revision;
+  const content = "/artifacts/" + record.artifactId + "/content";
+  const fields = { expectedApplicationGenerationId: fence.applicationGenerationId, expectedManagerInstanceId: fence.managerInstanceId, settingsRevision: revision };
+  let audits = 0; const original = f.artifacts.recordAccess.bind(f.artifacts);
+  f.artifacts.recordAccess = value => { audits++; return original(value); };
+  for (const query of ["settingsRevision=" + encodeURIComponent(revision), new URLSearchParams({ ...fields, expectedManagerInstanceId: "stale" }).toString(),
+    new URLSearchParams({ ...fields, settingsRevision: "stale" }).toString(), new URLSearchParams(fields) + "&settingsRevision=" + encodeURIComponent(revision)]) {
+    assert.equal((await f.request(content + "?" + query)).status, 409);
+  }
+  assert.equal(audits, 0);
+  const good = await f.request(content + "?" + new URLSearchParams(fields), "GET", undefined, { range: "bytes=2-5" });
+  assert.equal(good.status, 206); assert.equal(await good.text(), "2345"); assert.equal(audits, 1);
+  f.runtime.update({ ...f.runtime.settings().settings, agentRoleId: "RoleB" }, revision);
+  assert.equal((await f.request(content + "?" + new URLSearchParams(fields))).status, 409); assert.equal(audits, 1);
+  const otherRole = { ...fields, settingsRevision: f.runtime.settings().revision };
+  assert.equal((await f.request(content + "?" + new URLSearchParams(otherRole))).status, 409); assert.equal(audits, 1);
+  // Existing unfenced artifact clients retain their original behavior.
+  assert.equal((await f.request(content, "GET", undefined, { range: "bytes=0-1" })).status, 206);
 });
 
 test("nonce HTML retains CSP and the native deployment SSE source is cancelled on retirement", async t => {

@@ -77,6 +77,38 @@ function ledgerFixture(t: test.TestContext) {
   return { root, store, input, first, last, ledger, rows };
 }
 
+test("latest video is indexed by bound role and event time across registration and ledger rebuild", t => {
+  const f = ledgerFixture(t);
+  assert.equal(f.store.latestVideoForRole("RoleA"), undefined); // Legacy unbound clips are not reassigned.
+  const first = f.store.register({ ...f.input, ownerRoleId: "RoleA", sourceEventId: "role-first" });
+  const latest = f.store.register({ ...f.input, ownerRoleId: "RoleA", sourceEventId: "role-latest", occurredAt: "2026-08-29T13:00:00Z" });
+  f.store.register({ ...f.input, ownerRoleId: "RoleA", sourceEventId: "late-old", occurredAt: "2026-08-29T11:00:00Z" });
+  f.store.register({ ...f.input, ownerRoleId: "RoleA", sourceEventId: "image", mediaKind: "image/jpeg", occurredAt: "2026-08-29T14:00:00Z" });
+  const other = f.store.register({ ...f.input, ownerRoleId: "RoleB", sourceEventId: "other-role", occurredAt: "2026-08-29T15:00:00Z" });
+  for (const store of [f.store, new XiaomiHomeArtifactStore(f.root)]) {
+    // Request-time lookup must not delegate to the all-record listing.
+    store.list = () => { throw new Error("Latest lookup cannot enumerate the directory."); };
+    assert.equal(store.latestVideoForRole("RoleA")?.artifactId, latest.artifactId);
+    assert.notEqual(store.latestVideoForRole("RoleA")?.artifactId, first.artifactId);
+    assert.equal(store.latestVideoForRole("RoleB")?.artifactId, other.artifactId);
+    assert.equal(store.latestVideoForRole("RoleC"), undefined);
+    assert.equal("localPath" in store.latestVideoForRole("RoleA")!, false);
+  }
+});
+
+test("latest video never invents absence or silently falls back from damaged evidence", t => {
+  const f = ledgerFixture(t);
+  f.store.register({ ...f.input, ownerRoleId: "RoleA" });
+  fs.appendFileSync(f.ledger, "{broken\n");
+  assert.throws(() => new XiaomiHomeArtifactStore(f.root).latestVideoForRole("RoleA"), XiaomiHomeArtifactEvidenceError);
+  assert.throws(() => new XiaomiHomeArtifactStore(f.root).latestVideoForRole("UnknownRole"), XiaomiHomeArtifactEvidenceError);
+  fs.writeFileSync(f.ledger, f.rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const repaired = new XiaomiHomeArtifactStore(f.root);
+  repaired.register({ ...f.input, ownerRoleId: "RoleA" });
+  fs.unlinkSync(f.input.localPath);
+  assert.throws(() => repaired.latestVideoForRole("RoleA"), XiaomiHomeArtifactEvidenceError);
+});
+
 test("known damaged artifact rows reserve only their original identities and preserve valid neighbors", t => {
   const f = ledgerFixture(t);
   const damaged = { ...f.rows[0], artifactId: "damaged-artifact", sourceEventId: "damaged-event", occurredAt: null };

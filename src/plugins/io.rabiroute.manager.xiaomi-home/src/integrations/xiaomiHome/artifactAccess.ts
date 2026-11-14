@@ -36,7 +36,8 @@ function safeHeader(value: string | string[] | undefined, fallback: string, maxi
 export class XiaomiHomeArtifactAccess {
   constructor(private readonly artifacts: XiaomiHomeArtifactStore) {}
 
-  open(request: http.IncomingMessage, artifactId: string) {
+  open(request: http.IncomingMessage, artifactId: string, assertContext?: () => void) {
+    assertContext?.();
     const authority = createXiaomiHomeRequestAuthority(request);
     authority.assert();
     if (!localModelSettingsRequestAllowed(request)) throw new XiaomiHomeManagerApiError(401, "xiaomi_home_artifact_unauthorized", "An authenticated Manager connection is required.");
@@ -49,6 +50,7 @@ export class XiaomiHomeArtifactAccess {
     const contentLength = end - start + 1;
     const actor = safeHeader(request.headers["x-rabi-agent-role"], "local-agent", 80);
     const reason = safeHeader(request.headers["x-rabi-read-reason"], "artifact-read", 240);
+    assertContext?.();
     this.artifacts.recordAccess({ artifactId, actor, reason, byteRange: range ? `bytes=${start}-${end}` : undefined });
     authority.assert();
     const headers: Record<string, string> = {
@@ -58,6 +60,7 @@ export class XiaomiHomeArtifactAccess {
       "content-type": descriptor.record.mediaKind,
       ...(range ? { "content-range": `bytes ${start}-${end}/${stat.size}` } : {})
     };
+    assertContext?.();
     const source = fs.createReadStream(descriptor.localPath, { start, end });
     const controller = new AbortController();
     const closed = new Promise<void>(resolve => source.once("close", resolve));
@@ -68,9 +71,10 @@ export class XiaomiHomeArtifactAccess {
         for await (const chunk of source) {
           if (controller.signal.aborted) return;
           authority.assert();
+          assertContext?.();
           yield Buffer.from(chunk);
         }
-        if (!controller.signal.aborted) authority.assert();
+        if (!controller.signal.aborted) { authority.assert(); assertContext?.(); }
       } catch (error) { if (!controller.signal.aborted) throw error; }
       finally { source.destroy(); await closed; }
     })();

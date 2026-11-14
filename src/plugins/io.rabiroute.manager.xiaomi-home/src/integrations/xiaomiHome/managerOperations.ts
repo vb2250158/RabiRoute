@@ -59,6 +59,7 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
   add("auth.refresh", "POST", "/auth/refresh", (input, authority, key) => owner.refresh(input.body as any, key, authority), { configuration: true, lifecycle: true, key: true });
   add("auth.disconnect", "DELETE", "/auth", (input, authority, key) => owner.disconnect(input.body as any, key, authority), { configuration: true, lifecycle: true, key: true });
   add("settings.read", "GET", "/settings", () => runtime.settings(), { configuration: true });
+  add("recordings.latest", "GET", "/recordings/latest", () => owner.latestRecording(), { configuration: true, lifecycle: true, query: [] });
   add("settings.save", "PUT", "/settings", (input, authority) => runtime.update((input.body as any).settings, String((input.body as any).revision || ""), authority), { configuration: true, lifecycle: true });
   add("resources.list", "GET", "/resources", (input, authority) => runtime.client.queryResources(owner.parseDirectory(input.url.searchParams, "resources"), authority));
   add("devices.list", "GET", "/devices", (input, authority) => runtime.client.queryDevices(owner.parseDirectory(input.url.searchParams, "devices"), authority));
@@ -118,7 +119,7 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
       finally { input.signal.removeEventListener("abort", aborted); await content?.cancel(); }
     } });
   };
-  proxy("artifact.content", "/artifacts/:artifactId/content", path("artifactId"), input => runtime.artifactAccess.open(input.request, input.path.artifactId));
+  proxy("artifact.content", "/artifacts/:artifactId/content", path("artifactId"), input => runtime.artifactAccess.open(input.request, input.path.artifactId, owner.recordingContentFence(input.url, input.path.artifactId)));
   for (const operation of ["stream", "frame"] as const) proxy("vacuum-cloud.video-" + operation, cloud + "/video/" + operation, empty, input => runtime.vacuumCloud.video.openStream(input.url.searchParams.get("sessionId") || "", operation === "frame", input.signal), cloudOptions(["sessionId"]));
   return Object.freeze({ operations: definitions, proxies });
 }
