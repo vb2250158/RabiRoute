@@ -22,7 +22,7 @@ export function createDiagnosticsRoutes(context) {
       effects: { mode: "diagnostic-read", description: "Reads current identity/status through the existing diagnostic owners and performance instrumentation. Does not launch a Runtime, scan Agent sessions, change Route state or grant business permissions." },
       recovery: { strategy: "repeatable-read", description: "Rediscover through Host/READY on identity change. Health false, startup or unrelated dependency failure remains diagnostic data; it does not authorize a second Manager or a fallback Runtime." },
       validators: [{ id: "manager.diagnostics.owner-payload", description: "Identity strings are nonempty. Health values are validated by type, never required to be healthy/ready. Provider-specific diagnostic sections remain extensible. The same ingress connection authority applies before and after awaited reads; no separate persona, workspace or feature grant is introduced." }] };
-    return { contract, handler: async () => ({ status: 200, headers: { "cache-control": "private, no-store" }, body: await read() }) };
+    return { contract, discovery: { title: '消息连接与路由目录', summary: '查询当前消息连接、路由和运行状态。', category: { id: 'messages.connections', title: '消息连接', parentId: 'messages' }, tags: ['连接', '路由', '渠道', 'Route', 'Gateway'], provider: '' }, handler: async () => ({ status: 200, headers: { "cache-control": "private, no-store" }, body: await read() }) };
   };
   return { operations: [define("manager.gateways.read", "/api/gateways", gateways, context.gatewayDiagnosticsPayload)] };
 }

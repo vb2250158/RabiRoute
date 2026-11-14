@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "architecture": "win-x64",
+  "inputs": [
+    "desktop/tracking/asset-spec.json",
+    "desktop/tracking/RabiAgent.Computer.Tracking.csproj",
+    "desktop/tracking/packages.lock.json",
+    "desktop/tracking/Engine.cs",
+    "desktop/tracking/THIRD-PARTY-NOTICES.txt"
+  ],
+  "managedFiles": [
+    "RabiAgent.Computer.Tracking.dll",
+    "OpenCvSharp.dll",
+    "System.Buffers.dll",
+    "System.Memory.dll",
+    "System.Numerics.Vectors.dll",
+    "System.Runtime.CompilerServices.Unsafe.dll"
+  ],
+  "nativeFiles": [
+    {
+      "path": "OpenCvSharpExtern.dll",
+      "package": "opencvsharp4.runtime.win",
+      "version": "4.11.0.20250507",
+      "source": "runtimes/win-x64/native/OpenCvSharpExtern.dll"
+    }
+  ],
+  "notices": [
+    {
+      "path": "THIRD-PARTY-NOTICES.computer.txt",
+      "source": "desktop/tracking/THIRD-PARTY-NOTICES.txt"
+    }
+  ]
+}

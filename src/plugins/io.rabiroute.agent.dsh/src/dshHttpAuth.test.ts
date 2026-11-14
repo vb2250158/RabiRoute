@@ -67,3 +67,28 @@ test('launch exchange is origin bound; RPC 401 and redirects never replay writes
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('DSBot native channel is authenticated and never replayed after a 401', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-bot-auth-'));
+  const oldEnv = process.env.RABI_DSH_AUTH_FILE, oldFetch = globalThis.fetch;
+  const origin = 'http://127.0.0.1:39279', log = path.join(dir, 'launch.log'), config = path.join(dir, 'auth.json');
+  process.env.RABI_DSH_AUTH_FILE = config;
+  let writes = 0;
+  try {
+    await fs.writeFile(config, JSON.stringify({ endpoints: [{ baseUrl: origin, launchLogPath: log }] }));
+    await fs.writeFile(log, `dsh web: ${origin}/?token=fixture-bot-token`);
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/') return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': 'dsh-auth-bot=fixture.signature; Path=/; HttpOnly; SameSite=Strict' } });
+      assert.equal(url.pathname, '/api/bot'); assert.equal(init?.method, 'POST');
+      assert.equal(new Headers(init?.headers).get('cookie'), 'dsh-auth-bot=fixture.signature');
+      writes++; return new Response(null, { status: 401 });
+    }) as typeof fetch;
+    await assert.rejects(dshAuthenticatedFetch(origin, 'bot', JSON.stringify({ endpoint: 'rabi-automation-deliver', payload: {} })), /not replayed/);
+    assert.equal(writes, 1);
+  } finally {
+    globalThis.fetch = oldFetch;
+    if (oldEnv === undefined) delete process.env.RABI_DSH_AUTH_FILE; else process.env.RABI_DSH_AUTH_FILE = oldEnv;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

@@ -154,7 +154,7 @@ test("replaySafe only narrows replay and never enables mutation replay", async (
     const result = await client.invoke(method, "/api/example", options);
     assert.equal(operations, 1);
     assert.equal(discoveries, 1);
-    assert.equal(result.uncertain, true);
+    assert.equal(result.uncertain, method !== "GET", "disabling replay does not turn a buffered read into a mutation");
   }
 });
 
@@ -372,4 +372,37 @@ test("unready metadata prevents business request", async () => {
   const client = createManagerClient({ ...settings, fetchImpl: async () => { calls++; return Response.json({ ...meta, health: { state: "starting" } }); } });
   await assert.rejects(client.invoke("POST", "/api/agent/send"), /not ready/);
   assert.equal(calls, 1);
+});
+
+
+test("a missing postflight probe does not revoke a valid directory, while writes remain unconfirmed", async () => {
+  for (const postflight of [() => Response.json({ error: "temporarily unavailable" }, { status: 503 }), () => Response.json({}), () => { throw new Error("probe unavailable"); }]) {
+    let business = 0;
+    const client = createManagerClient({ ...settings, endpointSession: { ensure: async () => ({ managerUrl: settings.managerUrl, meta }) },
+      fetchImpl: async url => {
+        if (new URL(url).pathname === "/meta") return postflight();
+        business++;
+        return Response.json({ code: 0, data: { schemaVersion: "2", ...meta, pluginGenerationId: "plugins", catalogRevision: 1,
+          catalogDigest: "sha256:" + "a".repeat(64), categories: [{ id: "messages", title: "Messages" }] } });
+      } });
+    assert.equal((await client.operations.categories()).categories[0].id, "messages");
+    assert.equal(business, 1);
+    const write = await client.request("POST", "/api/fixture/write", { body: { requestId: "original-write" } });
+    assert.equal(write.statusCode, 200); assert.equal(write.ok, true);
+    assert.equal(write.identityChanged, false); assert.equal(write.identityUnconfirmed, true); assert.equal(write.uncertain, true);
+    assert.equal(business, 2, "neither successful read nor uncertain write is replayed for a failed probe");
+  }
+});
+
+test("a confirmed Manager change still rejects the discovery snapshot without replay", async () => {
+  let business = 0;
+  const client = createManagerClient({ ...settings, endpointSession: { ensure: async () => ({ managerUrl: settings.managerUrl, meta }) },
+    fetchImpl: async url => {
+      if (new URL(url).pathname === "/meta") return Response.json({ ...meta, managerInstanceId: "different-manager" });
+      business++;
+      return Response.json({ code: 0, data: { schemaVersion: "2", ...meta, pluginGenerationId: "plugins", catalogRevision: 1,
+        catalogDigest: "sha256:" + "a".repeat(64), categories: [] } });
+    } });
+  await assert.rejects(client.operations.categories(), error => error.receipt.identityChanged === true && error.receipt.identityUnconfirmed === false);
+  assert.equal(business, 1);
 });

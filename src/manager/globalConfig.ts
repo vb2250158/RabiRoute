@@ -44,6 +44,8 @@ export class RabiGlobalConfigStore {
   readonly rootDir: string;
   readonly configPath: string;
   private current: RabiGlobalConfig;
+  private clientMetadataRevision = 0;
+  getClientMetadataRevision(): number { return this.clientMetadataRevision; }
   private deviceIdentityBinding: unknown;
   // Request-scoped fence: requests never survive a Manager process restart.
   private lanAgentAdmissionIncarnation = randomUUID();
@@ -74,6 +76,17 @@ export class RabiGlobalConfigStore {
 
   private publish(config: RabiGlobalConfig | null, persistConfig?: () => void): void {
     const available = config !== null;
+    // Unrelated settings never publish a connection revocation intent. Their
+    // storage failure leaves the currently published connection owner intact.
+    const connectionChanged = !config || !this.lanAgentAdmissionAvailable
+      || config.webguiLan.enabled !== this.current.webguiLan.enabled;
+    if (config && !connectionChanged) {
+      persistConfig?.();
+      this.current = freezeGlobalConfig(config);
+      this.clientMetadataRevision += 1;
+      configureTimeouts(config.timeoutOverrides);
+      return;
+    }
     try {
       // Publish the durable revocation fence before committing Config. Recovery
       // from any failed publication must not reuse the pre-failure incarnation.
@@ -95,6 +108,7 @@ export class RabiGlobalConfigStore {
     this.lanAgentAdmissionAvailable = available;
     if (config) {
       this.current = freezeGlobalConfig(config);
+      this.clientMetadataRevision += 1;
       configureTimeouts(config.timeoutOverrides);
     }
   }
@@ -168,13 +182,15 @@ export class RabiGlobalConfigStore {
       throw new Error(`agentUploads.maxFileMiB must be an integer between 1 and ${Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2)} (exact byte-count capacity).`);
     }
     const timeoutOverrides = patch.timeoutOverrides === undefined ? this.current.timeoutOverrides : validateTimeoutOverrides(patch.timeoutOverrides);
-    const current = this.current;
+    const current = this.lanAgentAdmissionAvailable ? this.current : this.readExisting();
+    if (!current) throw new Error("The last saved global configuration cannot be confirmed. Repair or reload the original Config.json before changing this record.");
+    const effectiveTimeoutOverrides = patch.timeoutOverrides === undefined ? current.timeoutOverrides : timeoutOverrides;
     const relayPatch = patch.rabiLinkRelay;
     if (relayPatch?.speechServiceMode !== undefined && !["managed", "configured"].includes(relayPatch.speechServiceMode)) throw new Error("Invalid speechServiceMode.");
     const explicitSpeechUrl = relayPatch && Object.hasOwn(relayPatch, "speechServiceUrl") && relayPatch.speechServiceMode === undefined;
     const next: RabiGlobalConfig = {
       ...current,
-      timeoutOverrides,
+      timeoutOverrides: effectiveTimeoutOverrides,
       rabiName: typeof patch.rabiName === "string" && patch.rabiName.trim()
         ? patch.rabiName.trim()
         : current.rabiName,

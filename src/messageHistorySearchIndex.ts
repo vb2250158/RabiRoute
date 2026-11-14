@@ -9,6 +9,7 @@ import type { QqConversation } from './shared/qqConversationHistory.js';
 import { refreshManagedMessageIndex, quarantineMessageIndexProjection } from "./messageHistoryIndexLifecycle.js";
 import { openMessageHistoryReader } from "./messageHistoryIndexReaders.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { normalizeSearchText, searchTerms } from './manager/searchText.js';
 import { readMessageHistoryTail, verifyMessageHistoryPrefix, hasNormalizedMessageHistoryRecord, MESSAGE_HISTORY_TAIL_FORMAT, MESSAGE_HISTORY_INDEX_RECORD_BYTES, type MessageHistoryCursor, type MessageHistoryTailRow } from "./messageHistoryTail.js";
 import { messageHistoryFileVersion as fingerprint, messageHistoryLayoutVersion, messageHistoryObservationProven, messageHistoryCatalogObservationProven,
   type MessageHistoryAppendProof, type MessageHistoryOwnerTarget } from "./messageHistorySourceVersion.js";
@@ -415,7 +416,7 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       }
     }
     const finish = (entries: MessageContextRecord[]): MessageHistorySearchResult => ({ entries,
-      ...(query.page ? { page: { nextCursor: nextPageCursor, ...(adapters ? { adapters } : {}), ...(conversations ? {conversations,nextConversationCursor} : {}) } } : {}),
+      ...(query.page || query.unified ? { page: { nextCursor: query.unified ? null : nextPageCursor, ...(adapters ? { adapters } : {}), ...(conversations ? {conversations,nextConversationCursor} : {}) } } : {}),
       coverage: {
         indexVersion: createHash("sha256").update(`${reader.generation}:${SCHEMA_VERSION}:${ANALYZER_VERSION}:${meta.get("updatedAt")}:${meta.get("snapshot")}`).digest("hex"),
         sourceVersion: createHash("sha256").update(JSON.stringify({ layout: target.owner?.layoutVersion ?? meta.get("layout"),
@@ -494,6 +495,32 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       result.push(record); chars += row.chars;
       } finally { projectionMs += performance.now() - beganProjection; }
     };
+    if (query.unified) {
+      // SQLite orders the existing owner view. Only one requested window is projected into JS.
+      const unifiedTerms=searchTerms(query.query ?? '');
+      db.function('rabi_search_normalize',{deterministic:true},value=>normalizeSearchText(String(value ?? '')));
+      const body="rabi_search_normalize(json_extract(d.payload,'$.text'))";
+      const title="rabi_search_normalize(substr(json_extract(d.payload,'$.text'),1,120))";
+      const hits=unifiedTerms.map(()=>`(instr(${body},?)>0)`);
+      const score=unifiedTerms.length ? '('+hits.join('+')+')*'+Math.max(1000,unifiedTerms.length+1)+'+('+unifiedTerms.map(()=>`(instr(${title},?)>0)`).join('+')+')' : 'CAST(0 AS INTEGER)';
+      const exact=hits.length ? ' AND ('+hits.join(query.queryMatch==='all'?' AND ':' OR ')+')' : '';
+      const kinds=query.unified.kinds.length?' AND d.kind IN ('+query.unified.kinds.map(()=>'?').join(',')+')':'';
+      const stableId="COALESCE(NULLIF(d.id,''),CAST(json_extract(d.payload,'$.messageId') AS TEXT),'sequence:'||d.seq)";
+      const order=query.unified.sort==='recent'?'d.time DESC':score+' DESC';
+      const winnerArgs:(string|number)[]=[],winnerScope=sourceClause(query,'winner_source',winnerArgs);
+      if(currentRecordLimit!==undefined)winnerArgs.push(currentRecordLimit);
+      const winner=' AND d.rowid=(SELECT winner.rowid FROM documents winner JOIN sources winner_source ON winner_source.file=winner.source WHERE winner.recordKey=d.recordKey AND '+winnerScope
+        +(currentRecordLimit===undefined?'':' AND (winner_source.current=0 OR winner.position<?)')+' ORDER BY winner_source.ordinal,winner.position,winner.rowid LIMIT 1)';
+      const sql=select+exact+kinds+winner+' ORDER BY '+order+','+stableId+' COLLATE BINARY ASC,d.adapter COLLATE BINARY ASC,d.conversationKey COLLATE BINARY ASC,d.rowid ASC LIMIT ? OFFSET ?';
+      const parameters=[...args,...unifiedTerms,...query.unified.kinds,...winnerArgs,...(query.unified.sort==='relevance'?[...unifiedTerms,...unifiedTerms]:[]),query.limit+1,query.unified.offset];
+      let more=false;
+      for (const row of db.prepare(sql).iterate(...parameters) as Iterable<SearchRow>) {
+        candidates++;
+        if (result.length>=query.limit || (result.length && chars+row.chars>maxChars)) {more=true;break;}
+        collect(row);
+      }
+      return {...finish(result),page:{nextCursor:more?String(query.unified.offset+result.length):null}};
+    }
     // The source catalog and physical record positions define one stable write
     // order, including legacy rows without a sequence. Duplicate identity belongs
     // to the first write in the eligible source scope, before query filtering.

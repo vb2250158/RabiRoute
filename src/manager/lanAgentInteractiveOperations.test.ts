@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
@@ -175,7 +176,7 @@ test("an old admission cannot disclose a terminal result after disable and re-en
   const f = await fixture(t); let sent!: () => void, held!: typeof f.calls[number]; const entered = new Promise<void>(resolve => { sent = resolve; });
   f.intercept(message => { held = message; sent(); return true; });
   const request = f.execute({ action: "open", shell: "cmd" }); await entered;
-  f.authority.setNodeEnabled(f.instanceId, false); f.authority.setNodeEnabled(f.instanceId, true); f.reply(held);
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.instanceId, replacementCredentialBytes(32).toString("base64url")); f.reply(held);
   const response = await request; assert.equal(response.statusCode, 403); assert.equal(response.uncertain, true);
   assert.equal(String(response.body).includes("fixture-private-cwd"), false); assert.equal(f.calls.length, 1);
 });
@@ -184,7 +185,7 @@ test("revocation after stream creation removes its subscription before returning
   const f = await fixture(t); await f.execute({ action: "open", shell: "cmd" });
   const original = f.computers.terminals.subscribe.bind(f.computers.terminals);
   t.mock.method(f.computers.terminals, "subscribe", (...args: Parameters<typeof original>) => {
-    const remove = original(...args); f.authority.setNodeEnabled(f.instanceId, false); f.authority.setNodeEnabled(f.instanceId, true); return remove;
+    const remove = original(...args); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.instanceId, replacementCredentialBytes(32).toString("base64url")); return remove;
   });
   const response = await f.client.invokeOperation("manager.lan-agent.terminals.events", { path: f.target, onChunk: () => { throw new Error("Revoked output must not escape."); } });
   assert.equal(response.statusCode, 403); t.mock.restoreAll();

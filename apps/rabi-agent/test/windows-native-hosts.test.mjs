@@ -45,7 +45,9 @@ function iconImages(file) {
 test("native Windows hosts carry product names and icons; failed builds preserve the complete prior set", { skip: process.platform !== "win32", timeout: 90_000 }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-native-hosts-"));
   try {
-    for (const relative of ["package.json", "desktop/tray.ps1", "desktop/computer.ps1", "desktop/rabi-agent.ico", "terminal/host.ps1"]) {
+    const trackingSpec = JSON.parse(fs.readFileSync(path.join(packageRoot, "desktop/tracking/asset-spec.json"), "utf8"));
+    const inputs = new Set(["package.json", "desktop/tray.ps1", "desktop/computer.ps1", "desktop/computer-native.cs", "desktop/rabi-agent.ico", "terminal/host.ps1", ...trackingSpec.inputs]);
+    for (const relative of inputs) {
       fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
       fs.copyFileSync(path.join(packageRoot, relative), path.join(root, relative));
     }
@@ -69,7 +71,7 @@ ConvertTo-Json -InputObject @($records) -Compress
     }).sort();
     for (const name of names) assert.deepEqual(iconImages(path.join(native, `RabiAgent.${name}.exe`)), expectedImages);
     const before = hashes(native);
-    const source = path.join(root, "desktop/computer.ps1"), original = fs.readFileSync(source, "utf8");
+    const source = path.join(root, "desktop/computer-native.cs"), original = fs.readFileSync(source, "utf8");
     fs.writeFileSync(source, original.replace("public static class RabiComputer", "invalid native source\npublic static class RabiComputer"));
     const failed = build(root);
     assert.notEqual(failed.status, 0);

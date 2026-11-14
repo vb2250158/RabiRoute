@@ -1,3 +1,4 @@
+import { FsAwaitDiagnostics, traceFsAwait, type SlowFsReporter } from "../shared/fsAwaitDiagnostics.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -23,16 +24,21 @@ export class PluginSettingsConflict extends Error {
 
 /** User settings overlay immutable package defaults; each instance owns its file. */
 export class PluginProfileSettings {
-  constructor(readonly options: Readonly<{ profilePath: string; settingsRoot: string; migrationsPath?: string }>) {}
+  constructor(readonly options: Readonly<{ profilePath: string; settingsRoot: string; migrationsPath?: string; onSlowFs?: SlowFsReporter }>) {}
 
   private settingsPath(instanceId: string): string {
     return path.join(this.options.settingsRoot, createHash("sha256").update(instanceId).digest("hex") + ".json");
   }
 
   async snapshot(): Promise<PluginProfileSettingsSnapshot> {
+    const trace = this.options.onSlowFs ? new FsAwaitDiagnostics("PluginProfileSettings", "snapshot", this.options.onSlowFs) : undefined;
+    try { return await this.readSnapshot(trace); } finally { trace?.finish(); }
+  }
+
+  private async readSnapshot(trace?: FsAwaitDiagnostics): Promise<PluginProfileSettingsSnapshot> {
     let base: PluginProfile;
-    try { base = await readPluginProfile(this.options.profilePath, { migrationsPath: this.options.migrationsPath
-      ?? path.join(applicationRuntimeLayout().packageRoot, "dist", "plugins", "profiles", "package-migrations.json") }); }
+    try { base = await traceFsAwait(trace, "profile.readPluginProfile", readPluginProfile(this.options.profilePath, { migrationsPath: this.options.migrationsPath
+      ?? path.join(applicationRuntimeLayout().packageRoot, "dist", "plugins", "profiles", "package-migrations.json") })); }
     catch (error) {
       if (error instanceof SyntaxError) throw new Error("Plugin profile is invalid JSON.");
       throw error;
@@ -42,14 +48,14 @@ export class PluginProfileSettings {
     const definitions = new Map(base.instances.map(instance => [instance.id, instance]));
     const extraFiles = new Map<string, string>();
     let filenames: string[] = [];
-    try { filenames = await fs.readdir(this.options.settingsRoot); }
+    try { filenames = await traceFsAwait(trace, "settings.readdir", fs.readdir(this.options.settingsRoot)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     const baseNames = new Set(base.instances.map(instance => path.basename(this.settingsPath(instance.id))));
     for (const filename of filenames.sort()) {
       if (!/^[a-f0-9]{64}\.json$/.test(filename) || baseNames.has(filename)) continue;
       let raw: string | undefined;
       try {
-        raw = await fs.readFile(path.join(this.options.settingsRoot, filename), "utf8");
+        raw = await traceFsAwait(trace, "settings.extra.readFile", fs.readFile(path.join(this.options.settingsRoot, filename), "utf8"));
         const saved = JSON.parse(raw);
         if (typeof saved?.instanceId !== "string" || path.basename(this.settingsPath(saved.instanceId)) !== filename) throw new Error("Plugin settings file identity does not match its name.");
         const definition = this.readDefinition(saved.definition, saved.instanceId);
@@ -64,7 +70,7 @@ export class PluginProfileSettings {
     }
     const rows: { instance: PluginProfileEntry; revision: string; error?: string; removed?: boolean }[] = await Promise.all([...definitions.values()].map(async instance => {
       let raw: string | undefined;
-      try { raw = extraFiles.get(instance.id) ?? await fs.readFile(this.settingsPath(instance.id), "utf8"); }
+      try { raw = extraFiles.get(instance.id) ?? await traceFsAwait(trace, "settings.instance.readFile", fs.readFile(this.settingsPath(instance.id), "utf8")); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return { instance, revision: "absent" };
         const message = `Cannot read settings: ${(error as NodeJS.ErrnoException).code ?? "IO_ERROR"}`;

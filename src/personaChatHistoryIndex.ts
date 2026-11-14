@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
@@ -88,18 +89,53 @@ export class PersonaHistoryIndex {
     }
   }
 
-  tasks(options: { category?: ChatHistoryCategory; cursor?: string; query?: string; peerOf?: string; limit?: number }): PersonaHistoryTaskPage {
+  private repairTaskDescriptor(taskKey: string, latest: number) {
+    const row = this.db.prepare('SELECT h.* FROM history h JOIN task_refs r ON r.recordId=h.id WHERE r.taskKey=? AND h.start=? AND h.valid=1').get(taskKey, latest) as HistoryIndexRow | undefined;
+    if (!row || !Number.isSafeInteger(row.start) || !Number.isSafeInteger(row.end) || row.start < 0 || row.end <= row.start || row.end > this.checkpoint.size) throw new Error('The task projection has no readable source row.');
+    const handle = fsSync.openSync(this.file, 'r');
+    let record: PersonaChatReply;
+    try {
+      const before = fsSync.fstatSync(handle);
+      if (before.size !== this.checkpoint.size || before.mtimeMs !== this.checkpoint.mtimeMs || before.ctimeMs !== this.checkpoint.ctimeMs || before.dev !== this.checkpoint.dev || before.ino !== this.checkpoint.ino) throw new Error('The chat ledger changed during projection repair.');
+      const bytes = Buffer.alloc(row.end - row.start);
+      if (fsSync.readSync(handle, bytes, 0, bytes.length, row.start) !== bytes.length) throw new Error('The task source row is incomplete.');
+      record = this.parse(bytes.toString('utf8'));
+      const after = fsSync.fstatSync(handle);
+      if (record.id !== row.id || hash(record.text) !== row.textHash || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.ino !== after.ino) throw new Error('The chat ledger changed during projection repair.');
+    } finally { fsSync.closeSync(handle); }
+    const task = personaHistoryTaskReferences(record).find(value => value.key === taskKey);
+    if (!task) throw new Error('The task identity no longer matches its source row.');
+    const descriptor = JSON.stringify(task);
+    this.db.exec('SAVEPOINT task_descriptor_repair');
+    try {
+      this.db.prepare('UPDATE task_summary SET descriptor=? WHERE taskKey=? AND latest=?').run(descriptor, taskKey, latest);
+      this.db.prepare('UPDATE task_peer_summary SET descriptor=? WHERE taskKey=? AND latest=?').run(descriptor, taskKey, latest);
+      this.db.prepare('UPDATE task_refs SET descriptor=? WHERE taskKey=? AND recordId=?').run(descriptor, taskKey, row.id);
+      this.db.exec('RELEASE task_descriptor_repair');
+    } catch (error) { this.db.exec('ROLLBACK TO task_descriptor_repair; RELEASE task_descriptor_repair'); throw error; }
+    return JSON.parse(descriptor);
+  }
+
+  tasks(options: { category?: ChatHistoryCategory; cursor?: string; query?: string; peerOf?: string; limit?: number }): PersonaHistoryTaskPage & { partial?: boolean; projectionIssues?: Array<{ taskKey: string; message: string }> } {
+    type RepairCursor = { start: number; key: string; failedTaskKey?: string };
+    let pageCursor: { start: number; key: string; scope: string; repair?: RepairCursor } | undefined;
     const args: (string|number)[] = [options.category ?? ''], conditions = ['category=?'];
     const table = options.peerOf ? 'task_peer_summary' : 'task_summary';
     if (options.peerOf) { conditions.push('peerKey=?'); args.push(options.peerOf); }
-    if (options.query) { conditions.push("instr(lower(json_extract(descriptor,'$.title')),lower(?))>0"); args.push(options.query); }
     if (options.cursor) {
-      let cursor: {start:number;key:string;scope:string};
-      try { cursor=JSON.parse(Buffer.from(options.cursor,'base64url').toString()); } catch { throw new Error('Invalid task list cursor.'); }
-      if (!Number.isSafeInteger(cursor.start) || typeof cursor.key!=='string' || cursor.scope!==JSON.stringify([options.category,options.peerOf,options.query])) throw new Error('Invalid task list cursor.');
-      conditions.push('(latest<? OR (latest=? AND taskKey>?))'); args.push(cursor.start,cursor.start,cursor.key);
+      try { pageCursor=JSON.parse(Buffer.from(options.cursor,'base64url').toString()); } catch { throw new Error('Invalid task list cursor.'); }
+      if (!pageCursor || !Number.isSafeInteger(pageCursor.start) || typeof pageCursor.key!=='string' || pageCursor.scope!==JSON.stringify([options.category,options.peerOf,options.query])) throw new Error('Invalid task list cursor.');
+      if (pageCursor.repair && (!Number.isSafeInteger(pageCursor.repair.start) || pageCursor.repair.start < 0 || typeof pageCursor.repair.key !== 'string'
+        || pageCursor.repair.failedTaskKey !== undefined && typeof pageCursor.repair.failedTaskKey !== 'string')) throw new Error('Invalid task repair cursor.');
+      conditions.push('(latest<? OR (latest=? AND taskKey>?))'); args.push(pageCursor.start,pageCursor.start,pageCursor.key);
     }
     const limit=options.limit??50;
+    const issues: Array<{ taskKey: string; message: string }> = [];
+    let repairCursor = pageCursor?.repair;
+    const encodeCursor = (start: number, key: string) => Buffer.from(JSON.stringify({
+      start, key, scope: JSON.stringify([options.category, options.peerOf, options.query]),
+      ...(repairCursor ? { repair: repairCursor } : {})
+    })).toString('base64url');
     // A title search historically matches older recorded names as well as the
     // latest one. Keep that exact scope instead of searching only new summaries.
     let rows;
@@ -107,16 +143,90 @@ export class PersonaHistoryIndex {
       const searchArgs: (string | number)[] = [], searchConditions = ['h.valid=1'];
       if (options.category) { searchConditions.push('h.category=?'); searchArgs.push(options.category); }
       if (options.peerOf) { searchConditions.push('r.taskKey<>? AND EXISTS (SELECT 1 FROM task_refs peer WHERE peer.recordId=r.recordId AND peer.taskKey=?)'); searchArgs.push(options.peerOf, options.peerOf); }
-      searchConditions.push("instr(lower(json_extract(r.descriptor,'$.title')),lower(?))>0"); searchArgs.push(options.query);
+      const scopeConditions = [...searchConditions];
+      const scopeArgs = [...searchArgs];
+      const titleCondition = "instr(lower(json_extract(r.descriptor,'$.title')),lower(?))>0";
+      searchConditions.push(titleCondition);
+      searchArgs.push(options.query);
       let having = '';
-      if (options.cursor) {
-        const cursor = JSON.parse(Buffer.from(options.cursor, 'base64url').toString());
-        having = 'HAVING MAX(r.start)<? OR (MAX(r.start)=? AND r.taskKey>?)'; searchArgs.push(cursor.start, cursor.start, cursor.key);
+      if (pageCursor) {
+        having = 'HAVING MAX(r.start)<? OR (MAX(r.start)=? AND r.taskKey>?)'; searchArgs.push(pageCursor.start, pageCursor.start, pageCursor.key);
       }
-      rows = this.db.prepare('SELECT r.taskKey,r.descriptor,MAX(r.start) AS latest FROM task_refs r JOIN history h ON h.id=r.recordId WHERE '+searchConditions.join(' AND ')+' GROUP BY r.taskKey '+having+' ORDER BY latest DESC,r.taskKey LIMIT ?').all(...searchArgs, limit+1);
+      const readMatches = (conditions: string[]) => this.db.prepare(
+        'SELECT r.taskKey,r.descriptor,MAX(r.start) AS latest '
+        + 'FROM task_refs r JOIN history h ON h.id=r.recordId WHERE '
+        + conditions.join(' AND ') + ' GROUP BY r.taskKey ' + having
+        + ' ORDER BY latest DESC,r.taskKey LIMIT ?'
+      ).all(...searchArgs, limit + 1);
+      try {
+        rows = readMatches(searchConditions);
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'ERR_SQLITE_ERROR'
+          || !/malformed JSON/.test((error as Error).message)) throw error;
+        // Repair only damaged descriptors in this query's existing scope. One
+        // bounded page of point repairs keeps a damaged cache from causing an
+        // unbounded rebuild during a read.
+        const repairConditions = [...scopeConditions, 'NOT json_valid(r.descriptor)'];
+        const repairArgs = [...scopeArgs];
+        if (repairCursor) {
+          repairConditions.push('(h.start<? OR (h.start=? AND r.taskKey>?))');
+          repairArgs.push(repairCursor.start, repairCursor.start, repairCursor.key);
+        }
+        const damaged = this.db.prepare(
+          'SELECT r.taskKey,h.start AS latest '
+          + 'FROM task_refs r JOIN history h ON h.id=r.recordId WHERE '
+          + repairConditions.join(' AND ')
+          + ' ORDER BY h.start DESC,r.taskKey LIMIT ?'
+        ).all(...repairArgs, limit + 1);
+        const repairPage = damaged.slice(0, limit);
+        let failedTaskKey = repairCursor?.failedTaskKey;
+        for (const row of repairPage) {
+          try {
+            this.repairTaskDescriptor(String(row.taskKey), Number(row.latest));
+          } catch (cause) {
+            failedTaskKey ??= String(row.taskKey);
+            issues.push({
+              taskKey: String(row.taskKey),
+              message: cause instanceof Error ? cause.message : String(cause)
+            });
+          }
+        }
+        const lastRepair = repairPage.at(-1);
+        if (lastRepair) repairCursor = { start: Number(lastRepair.latest), key: String(lastRepair.taskKey), ...(failedTaskKey ? { failedTaskKey } : {}) };
+        if (failedTaskKey && !issues.some(issue => issue.taskKey === failedTaskKey)) {
+          issues.push({ taskKey: failedTaskKey, message: 'A task projection from an earlier repair page remains unreadable.' });
+        }
+        if (damaged.length > limit) {
+          issues.push({
+            taskKey: String(damaged[limit].taskKey),
+            message: 'Additional task projections require a repair page. Continue the same search with nextCursor.'
+          });
+          // Keep the main result boundary unchanged until its title projection
+          // has been inspected. Later repairs must not insert matches ahead of
+          // a result page that was already returned.
+          return {
+            items: [], nextCursor: encodeCursor(pageCursor?.start ?? Number.MAX_SAFE_INTEGER, pageCursor?.key ?? ''),
+            invalidRecords: this.invalidRecords, partial: true, projectionIssues: issues
+          };
+        }
+        const safeTitle = "instr(lower(CASE WHEN json_valid(r.descriptor) THEN json_extract(r.descriptor,'$.title') END),lower(?))>0";
+        rows = readMatches([...scopeConditions, safeTitle]);
+      }
     } else rows=this.db.prepare('SELECT taskKey,descriptor,latest FROM '+table+' WHERE '+conditions.join(' AND ')+' ORDER BY latest DESC,taskKey LIMIT ?').all(...args,limit+1);
     const page=rows.slice(0,limit),last=page.at(-1);
-    return {items:page.map(row=>JSON.parse(String(row.descriptor))),nextCursor:rows.length>limit&&last?Buffer.from(JSON.stringify({start:Number(last.latest),key:String(last.taskKey),scope:JSON.stringify([options.category,options.peerOf,options.query])})).toString('base64url'):null,invalidRecords:this.invalidRecords};
+    const items = page.flatMap(row => {
+      try {
+        const task = JSON.parse(String(row.descriptor));
+        if (!task || typeof task !== 'object' || Array.isArray(task) || task.key !== String(row.taskKey)) throw new SyntaxError('The task projection identity is invalid.');
+        return [task];
+      }
+      catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        try { return [this.repairTaskDescriptor(String(row.taskKey), Number(row.latest))]; }
+        catch (cause) { issues.push({ taskKey: String(row.taskKey), message: cause instanceof Error ? cause.message : String(cause) }); return []; }
+      }
+    });
+    return {items,nextCursor:rows.length>limit&&last?encodeCursor(Number(last.latest),String(last.taskKey)):null,invalidRecords:this.invalidRecords,...(issues.length?{partial:true,projectionIssues:issues}:{})};
   }
   taskHistory(taskKey:string, category:ChatHistoryCategory|undefined,cursor:number|undefined,limit:number,newer:boolean) {
     const args:(string|number)[]=[taskKey],conditions=['r.taskKey=?','h.valid=1'];

@@ -16,6 +16,9 @@ import { createCorePublicOperations, type CorePublicOperationsContext } from "./
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
 import { pluginCatalogFixture } from "./pluginCatalogOperations.fixture.js";
+import { PluginPackageCatalog, GenerationRuntime, loadPluginProfile } from "../plugin-kernel/index.js";
+import { WebPluginModuleRegistry } from "./webPluginModules.js";
+import { createPluginCatalogOperations } from "./pluginCatalogOperations.js";
 
 const identity: WebPatchIdentity = { applicationGenerationId: "application", managerInstanceId: "manager", pluginGenerationId: "plugins" };
 
@@ -232,6 +235,9 @@ test("atomic release keeps old HTML, lazy assets, documentation and module entry
   const modules = [{ id: "web-example", pluginId: "example", version: "1", rev: "legacy", entryPath: "web/client.mjs", instances: [] }];
   assert.equal((await sample.service.modules(modules, original.revision))[0]!.rev, original.revision);
   assert.match((await sample.service.module(modules, "web-example", original.revision, "web/client.mjs"))!.source.toString(), new RegExp(original.revision));
+  const selfContained = { ...modules[0]!, resourceMode: "package" as const };
+  assert.equal((await sample.service.modules([selfContained], original.revision))[0], selfContained);
+  assert.equal(await sample.service.module([selfContained], selfContained.id, original.revision, "web/client.mjs"), undefined);
   await assert.rejects(sample.service.publish({ ...request, candidate: original.revision }), /conflict/);
   await assert.rejects(sample.service.publish({ ...request, operationId: "stale" }), /baseline/);
   await assert.rejects(sample.service.publish({ ...request, operationId: "identity", managerInstanceId: "old" }), /identity/);
@@ -674,4 +680,130 @@ test("failed shared verification leaves no failed cache entry and the original r
     assert.equal(sample.service.status().state, "ready"); assert.equal(sample.service.status().revision, 0);
     assert.equal((await sample.service.staticManifest(next.revision)).backend, recovered.backend); assert.equal(reads, 2);
   } finally { mock.mock.restore(); }
+});
+
+
+for (const badRecord of ["entry", "sha256", "size"] as const) test(`mixed full-root baseline keeps self-contained packages and bad neighbors local with all legacy/resource hashes (${badRecord})`, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rabi-mixed-native-web-')), packageRoot = path.join(root, 'package');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const put = async (name: string, bytes: string | Buffer) => { const target = path.join(packageRoot, name); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, bytes); };
+  await put('dist/manager.js', 'export const fixture=true;');
+  await put('ribiwebgui/dist/index.html', '<html><head><link href="./assets/shell.css"></head><body><script type="module" src="./assets/shell.js"></script></body></html>');
+  await put('ribiwebgui/dist/assets/shell.js', 'export const shell=true;'); await put('ribiwebgui/dist/assets/shell.css', 'body{color:red}'); await put('docs/guide.md', 'Fixture guide'); await put('assets/icon.svg', '<svg/>');
+  for (let index=0;index<25;index++) {
+    const id='fixture.legacy-'+index;
+    await put(`dist/plugins/packages/${id}/1.0.0/rabi.plugin.json`, JSON.stringify({id,version:'1.0.0',entries:{web:{module:'web/client.mjs'}}}));
+    await put(`dist/plugins/packages/${id}/1.0.0/web/client.mjs`, `export { activate } from "/assets/legacy-${index}.js";\n`);
+    await put(`ribiwebgui/dist/assets/legacy-${index}.js`, 'export function activate() {}');
+  }
+  const self='fixture.self', bad='fixture.bad-self';
+  const selfFiles=[
+    ['client.mjs',Buffer.from('export {activate} from "./assets/page.mjs";'),'text/javascript; charset=utf-8'],
+    ['assets/page.mjs',Buffer.from('export function activate(){};export const lazy=()=>import("./lazy.mjs");'),'text/javascript; charset=utf-8'],
+    ['assets/lazy.mjs',Buffer.from('export const loaded=true;'),'text/javascript; charset=utf-8'],
+    ['assets/style.css',Buffer.from('.fixture{color:blue}'),'text/css; charset=utf-8'],
+    ['assets/icon.svg',Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),'image/svg+xml'],
+    ['assets/font.woff2',Buffer.from([1,2,3]),'font/woff2'],['assets/worker.mjs',Buffer.from('self.onmessage=()=>self.postMessage(1);'),'text/javascript; charset=utf-8']
+  ] as const;
+  const fullManifest=(id:string)=>({schemaVersion:2,id,version:'1.0.0',entries:{manager:{execution:'in_process',module:'./manager.mjs'},web:{execution:'in_process',module:'./web/client.mjs'}},provides:[],requires:[],optional:[],permissions:[]});
+  const closure={schemaVersion:1,kind:'rabi-plugin-web',pluginId:self,version:'1.0.0',entry:'client.mjs',backend:{pluginId:self,version:'1.0.0'},runtime:{abi:'rabi-web-runtime/1',imports:[]},styles:['assets/style.css'],files:selfFiles.map(([name,bytes,contentType])=>({path:name,size:bytes.length,sha256:webPatchHash(bytes),contentType}))};
+  for(const id of [self,bad]){
+    await put(`dist/plugins/packages/${id}/1.0.0/rabi.plugin.json`,JSON.stringify(fullManifest(id)));await put(`dist/plugins/packages/${id}/1.0.0/manager.mjs`,'export function activate() {}');
+    for(const [name,bytes] of selfFiles)await put(`dist/plugins/packages/${id}/1.0.0/web/${name}`,bytes);
+    await put(`dist/plugins/packages/${id}/1.0.0/web/module.json`,JSON.stringify(id===self?closure:{...closure,pluginId:id,backend:{pluginId:id,version:'1.0.0'},...(badRecord==='entry'?{entry:'../escape.mjs'}:{files:closure.files.map((file,index)=>index?file:{...file,...(badRecord==='sha256'?{sha256:'0'.repeat(64)}:{size:file.size+1})})})}));
+  }
+  await put('dist/plugins/packages/fixture.bad-json/1.0.0/rabi.plugin.json', '{bad package JSON');
+  await put(`dist/plugins/packages/${self}/1.0.0/backend-large.bin`, Buffer.alloc(1024 * 1024));
+  let repeatedBackendReads = 0, repeatedPackageCopies = 0;
+  const originalRead = fs.readFile.bind(fs), originalCopy = fs.copyFile.bind(fs);
+  const read = t.mock.method(fs, 'readFile', (async (...args: Parameters<typeof fs.readFile>) => {
+    const filename = String(args[0]);
+    if (filename.includes('dist' + path.sep + 'plugins' + path.sep + 'packages') && /(?:manager\.mjs|backend-large\.bin)$/.test(filename)) {
+      repeatedBackendReads++; throw new Error('Web collector must not read the backend package again.');
+    }
+    return originalRead(...args);
+  }) as typeof fs.readFile);
+  const copy = t.mock.method(fs, 'copyFile', (async (...args: Parameters<typeof fs.copyFile>) => {
+    if (String(args[0]).includes('dist' + path.sep + 'plugins' + path.sep + 'packages')) { repeatedPackageCopies++; throw new Error('Web collector must not copy packages.'); }
+    return originalCopy(...args);
+  }) as typeof fs.copyFile);
+  const service = new WebPatchService({packageRoot,stateRoot:path.join(root,'state'),identity:()=>identity,serialize:async(_generation,run)=>run()});t.after(()=>service.stop());
+  try { await service.ready; assert.equal(service.status().state,'ready',service.status().error); assert.equal(repeatedBackendReads,0);assert.equal(repeatedPackageCopies,0); }
+  finally { read.mock.restore();copy.mock.restore(); }
+  const revision=service.status().active!;assert.match(revision,/^[a-f0-9]{64}$/);
+  const baseline=await service.staticManifest(revision);assert.equal(baseline.modules.length,25);assert(!baseline.modules.some(item=>item.pluginId===self||item.pluginId===bad));
+  assert(baseline.moduleDiagnostics?.some(item=>item.pluginId===bad));assert(!baseline.moduleDiagnostics?.some(item=>item.pluginId===self));
+  assert(baseline.moduleDiagnostics?.some(item=>item.pluginId==='fixture.bad-json'));
+  const catalog=new PluginPackageCatalog([path.join(packageRoot,'dist/plugins/packages')]);t.after(()=>catalog.dispose());
+  const profilePath=path.join(root,'profile.json');await fs.writeFile(profilePath,JSON.stringify({schemaVersion:2,readyRequires:[],instances:[self,bad].map(id=>({id:'manager:'+id,package:id,version:'1.0.0',enabled:true,config:{},grants:[]}))}));
+  const loaded=await loadPluginProfile({profilePath,packageCatalog:catalog,runtimeRoot:path.join(root,'runtime'),host:'manager'}),runtime=new GenerationRuntime({host:'manager'});t.after(()=>runtime.dispose());
+  const generation=await runtime.switch(loaded.candidates),modules=new WebPluginModuleRegistry();modules.update(loaded,generation.generation);
+  const selfModule=modules.list().find(item=>item.pluginId===self)!;assert.equal(selfModule.resourceMode,'package');
+  const badModule=modules.list().find(item=>item.pluginId===bad)!;assert.equal(badModule.resourceMode,'package');assert.match(badModule.resourceIssue??'',/manifest|entry/i);
+  const staticOwner=new NativeWebguiStaticOwner({packageRoot,webuiDistPath:path.join(packageRoot,'ribiwebgui/dist'),patches:service,isControlPath:value=>value.startsWith('/api/')});
+  const registry=new ManagerPluginRouteRegistry(),statics=createWebguiStaticOperations(staticOwner);
+  const registrations=[registry.registerHttpProxies('mixed.static',[...statics.resources,statics.fallback]),registry.registerOperations('mixed.modules',createPluginCatalogOperations({runtime,renderCatalog:async()=>{throw new Error("This resource fixture does not invoke the contribution catalog.");},root:()=>packageRoot,webModules:{list:release=>service.modules(modules.list(),release),read:async(id,rev,filename)=>await service.module(modules.list(),id,rev,filename)??modules.read(id,rev,filename)}}))];
+  const server=http.createServer((request,response)=>{if(!registry.handle(request,new URL(request.url!,'http://fixture'),response))response.writeHead(404).end();});server.listen(0,'127.0.0.1');await once(server,'listening');
+  t.after(async()=>{server.closeAllConnections();await Promise.all(registrations.map(item=>item.dispose()));await new Promise<void>(resolve=>server.close(()=>resolve()));assert.equal(staticOwner.activeFileCount(),0);});
+  const base='http://127.0.0.1:'+(server.address() as import('node:net').AddressInfo).port;
+  const badResource=await fetch(`${base}/api/plugins/modules/${badModule.id}/${badModule.rev}/web/client.mjs`);assert.equal(badResource.status,404);
+  const document=await fetch(base+'/');assert.equal(document.status,200);assert.equal(document.headers.get('x-rabiroute-web-revision'),revision);assert.match(await document.text(),new RegExp('data-rabi-web-release="'+revision+'"'));
+  for(const query of ['', '?webRelease='+revision]){
+    const response=await fetch(base+'/api/plugins/modules'+query);assert.equal(response.status,200);const listed=(await response.json()).data.modules;
+    const descriptor=listed.find((item:{pluginId:string})=>item.pluginId===self);assert.equal(descriptor.rev,selfModule.rev);assert.equal(descriptor.resourceMode,'package');
+    for(const [filename,bytes,contentType] of selfFiles){const resource=await fetch(`${base}/api/plugins/modules/${descriptor.id}/${descriptor.rev}/web/${filename}`);assert.equal(resource.status,200);assert.equal(resource.headers.get('content-type'),contentType);assert.equal(webPatchHash(Buffer.from(await resource.arrayBuffer())),webPatchHash(bytes));}
+  }
+  for(const record of baseline.files){const response=await fetch(`${base}/_rabiroute/web/${revision}/${record.path}`);assert.equal(response.status,200);assert.equal(response.headers.get('x-rabiroute-web-revision'),revision);const bytes=Buffer.from(await response.arrayBuffer());assert.equal(bytes.length,record.size);assert.equal(webPatchHash(bytes),record.sha256);}
+});
+
+
+test("unprepared Web collector isolates outside links and misplaced package identities", async t => {
+  const sample = await fixture(t);
+  const put = sample.write;
+  const base = "dist/plugins/packages/";
+  const bytes = "export function activate(){}";
+  const closure = (id: string) => ({ schemaVersion: 1, kind: "rabi-plugin-web", pluginId: id, version: "1.0.0",
+    entry: "client.mjs", backend: { pluginId: id, version: "1.0.0" }, runtime: { abi: "rabi-web-runtime/1", imports: [] },
+    styles: [], files: [{ path: "client.mjs", size: Buffer.byteLength(bytes), sha256: webPatchHash(bytes), contentType: "text/javascript" }] });
+  for (const id of ["fixture.healthy", "fixture.link-leaf", "fixture.link-parent", "fixture.link-manifest", "fixture.wrong-directory"]) {
+    const declared = id === "fixture.wrong-directory" ? "fixture.claimed-owner" : id;
+    await put(base + id + "/1.0.0/rabi.plugin.json", JSON.stringify({ id: declared, version: "1.0.0", entries: { web: { module: "web/client.mjs" } } }));
+    await put(base + id + "/1.0.0/web/client.mjs", bytes);
+    await put(base + id + "/1.0.0/web/module.json", JSON.stringify(closure(declared)));
+  }
+  const outside = path.join(sample.root, "outside-web"); await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "client.mjs"), bytes);
+  await fs.writeFile(path.join(outside, "module.json"), JSON.stringify(closure("fixture.link-parent")));
+  // The pre-existing backend fingerprint rejects links. Insert them after that
+  // owner finishes so this fixture specifically exercises the unpacked collector.
+  const originalRealpath = fs.realpath.bind(fs);
+  const realpath = t.mock.method(fs, "realpath", (async (...args: Parameters<typeof fs.realpath>) => {
+    const name = String(args[0]);
+    if (name.endsWith(path.join("fixture.link-leaf", "1.0.0", "web", "client.mjs"))) return path.join(outside, "client.mjs");
+    if (name.endsWith(path.join("fixture.link-manifest", "1.0.0", "web", "module.json"))) return path.join(outside, "module.json");
+    return originalRealpath(...args);
+  }) as typeof fs.realpath);
+  const originalCopy = fs.copyFile.bind(fs); let links: Promise<void> | undefined;
+  const copy = t.mock.method(fs, "copyFile", async (...args: Parameters<typeof fs.copyFile>) => {
+    links ??= (async () => {
+      // Windows file symlinks require a privilege absent from this test user.
+      // Leaf/manifest realpath resolution is injected above, while this parent
+      // junction is an actual filesystem redirect and needs no such privilege.
+      const parent = path.join(sample.packageRoot, base, "fixture.link-parent/1.0.0/web");
+      await fs.rm(parent, { recursive: true }); await fs.symlink(outside, parent, "junction");
+    })();
+    await links; return originalCopy(...args);
+  });
+  try {
+    const output = path.join(sample.root, "collector-paths");
+    const revision = await buildWebPatch(sample.packageRoot, output);
+    const result = await verifyWebPatch(path.join(output, revision), revision);
+    assert(result.modules.some(item => item.pluginId === "example"), "legacy neighbor remains available");
+    assert(!result.moduleDiagnostics?.some(item => item.pluginId === "fixture.healthy"));
+    for (const id of ["fixture.link-leaf", "fixture.link-parent", "fixture.link-manifest"]) {
+      assert(result.moduleDiagnostics?.some(item => item.pluginId === id && /escapes|plain file/.test(item.message)), id);
+    }
+    assert(result.moduleDiagnostics?.some(item => /identity differs/.test(item.message)));
+    assert(result.files.some(item => item.path === "web/index.html"));
+  } finally { copy.mock.restore(); realpath.mock.restore(); }
 });

@@ -183,11 +183,12 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
     const classification = toolPolicy.classify(decision);
     if (typeof classification?.mutation !== 'boolean') throw failure('TURN_TOOL_POLICY_INVALID');
     const { mutation } = classification;
+    const canonicalCall = decision.name === 'rabi_call';
     const fingerprint = canonicalAgentIntent([decision.name, decision.arguments]);
-    if (mutation && writes.has(fingerprint)) return writes.get(fingerprint);
+    if ((mutation || canonicalCall) && writes.has(fingerprint)) return writes.get(fingerprint);
     if (mutation && writesUncertain) return { name: decision.name, dispatched: false, outcome: { uncertain: true, code: 'WRITE_RECONCILIATION_REQUIRED' } };
     if (calls >= maxToolCalls) throw failure('TURN_TOOL_LIMIT');
-    const event = { callId: turnId + ':call-' + (++calls), functionName: decision.name, arguments: decision.arguments, isComplete: true };
+    const event = { callId: turnId + ':call-' + (++calls), functionName: decision.name, arguments: decision.arguments, isComplete: true, ...(canonicalCall ? { writeReconciliationRequired: writesUncertain } : {}) };
     if (decision.say) emit((text ? '\n' : '') + decision.say + '\n');
     if (cancelled) return { cancelled: true };
     publish('executing-tool'); let result, executionFailed = false;
@@ -201,11 +202,12 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
     if (!outcome || ['uncertain', 'failed', 'terminal'].some(key => typeof outcome[key] !== 'boolean')) {
       outcome = { uncertain: true, failed: true, terminal: false };
     }
-    if (outcome.uncertain) { uncertain = true; if (mutation) writesUncertain = true; }
+    const actualMutation = mutation || result?.mutation === true;
+    if (outcome.uncertain) { uncertain = true; if (actualMutation) writesUncertain = true; }
     if (outcome.failed) uncertain = true;
     results.push(result);
     const observation = { callId: event.callId, name: event.functionName, outcome: result, outcomeStatus: outcome };
-    if (mutation) writes.set(fingerprint, observation);
+    if (actualMutation) writes.set(fingerprint, observation);
     return observation;
   }
   async function loop(initialInput) {

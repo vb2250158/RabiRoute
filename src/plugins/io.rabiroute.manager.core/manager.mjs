@@ -5,6 +5,7 @@ export const activate = definePlugin({
         const shared = context.services.require("host.manager.core@2");
         await shared.prepareModules(hostModules);
         const runtime = createImplementation(shared).createOwnedRuntime(shared);
+        context.services.provide("manager.computer-settings-definition@1", runtime.computerSettingsDefinition());
         context.services.provide("manager.core@1", Object.freeze({ instanceId: context.identity.instanceId }));
         for (const contribution of [
             {

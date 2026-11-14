@@ -109,6 +109,7 @@ export type AgentScanResult = {
 };
 
 export type GatewayDefinitionLike = {
+  remoteAgentTargets?: import("../shared/routeAgentTargets.js").RemoteAgentTarget[];
   grokBotProfilePath?: string;
   grokBotBackendUrl?: string;
   grokBotAgentId?: string;

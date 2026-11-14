@@ -71,7 +71,10 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
         body: item.body ? { kind: "json", maxBytes: 0, schema: item.body } : { kind: "none" }
       },
       responses: {
-        "200": { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data: { type: "object" } } } },
+        "200": { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data: { type: "object", ...(item.action.startsWith("packages.") ? { properties: {
+          packages: { type: "array", items: { type: "object" } }, partial: { type: "boolean" }, diagnostics: { type: "array", items: { type: "object", required: ["root", "path", "code", "message"], properties: { root: symbol, path: symbol, code: symbol, message: symbol } } },
+          ...(item.action === "packages.import" ? { importedPackage: { type: "object", required: ["id", "version", "revision"], properties: { id: symbol, version: symbol, revision } } } : {})
+        } } : {}) } } } },
         default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" },
           errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, retryable: { const: false },
           help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: { type: "string" } }, additionalProperties: false } }, additionalProperties: true } }

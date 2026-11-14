@@ -25,6 +25,15 @@ test("receipt lookup finds an accepted user message beyond the old 4 MiB tail", 
   assert.equal(await findRolloutDeliveryReceipt(file, "missing"), false);
 });
 
+test("receipt lookup verifies a recorded task identity when supplied", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-recorded-receipt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "rollout.jsonl");
+  fs.writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: "exact-task" } }) + "\n" + row("user", prompt));
+  assert.equal(await findRolloutDeliveryReceipt(file, deliveryId, "exact-task"), true);
+  await assert.rejects(findRolloutDeliveryReceipt(file, deliveryId, "other-task"), /does not belong/);
+});
+
 test("receipt lookup reads the exact compressed sibling for the requested task", async t => {
   assert.ok(zstdCompressSync, "This regression requires the Node Zstandard runtime used by RabiRoute.");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-compressed-receipt-"));

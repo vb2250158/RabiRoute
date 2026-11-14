@@ -3,8 +3,10 @@ import type { GatewayRuntime } from "./runtimeRegistry.js";
 export type StatusPayloadContext = {
   runtimes: Iterable<GatewayRuntime>;
   runtimeStatus(runtime: GatewayRuntime): Record<string, unknown>;
-  routeDir: string;
-  rolesDir: string;
+  routeDir?: string;
+  rolesDir?: string;
+  directoryDiagnostics?: readonly unknown[];
+  rawDirectoryConfig?: Record<string, unknown>;
 };
 
 export type StatusPayloadOptions = {
@@ -35,6 +37,7 @@ export function standaloneGatewayPayload(
         routeDir: ctx.routeDir,
         rolesDir: ctx.rolesDir
       },
+      ...(ctx.directoryDiagnostics?.length ? {directoryDiagnostics:ctx.directoryDiagnostics,rawDirectoryConfig:ctx.rawDirectoryConfig} : {}),
       manager: runtimes.map(ctx.runtimeStatus)
     }
   };

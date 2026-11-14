@@ -8,7 +8,8 @@ type Source = Readonly<{ agentId: string; provider: AgentAdapterType; sessionId:
 type AdmittedConnection = LanAgentConnectionLease & { agentId: string; source?: Source };
 type AdmissionPolicy = Readonly<{ enabled: boolean; incarnation: string }>;
 type RequestPrincipal = { authority: LanAgentAuthority; token: string; lease: AdmittedConnection;
-  admission: AdmissionPolicy; readAdmission: () => AdmissionPolicy };
+  admission: AdmissionPolicy; readAdmission: () => AdmissionPolicy;
+  sourceHeaders:{provider:unknown;sessionId:unknown} };
 // Only successful credential-first ingress can issue a request principal.
 const principals = new WeakMap<IncomingMessage, RequestPrincipal>();
 const admittedRequests = new WeakSet<IncomingMessage>();
@@ -17,7 +18,7 @@ export function hasTrustedLanAgentPrincipal(request: IncomingMessage): boolean {
 export function assertTrustedLanAgentPrincipal(request: IncomingMessage): AdmittedConnection | undefined {
   const principal = principals.get(request);
   if (!principal) {
-    if (admittedRequests.has(request) || request.headers?.["x-rabiroute-agent-id"] !== undefined || request.headers?.["x-rabiroute-agent-type"] !== undefined || request.headers?.["x-rabiroute-session-id"] !== undefined) throw new Error("Remote Agent request principal is unavailable.");
+    if (admittedRequests.has(request)) throw new Error("Remote Agent request principal is unavailable.");
     return undefined;
   }
   const policy = principal.readAdmission();
@@ -55,7 +56,7 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     // Nested route evaluation must never replace the original request's admission fence.
     const currentBearer = typeof request.headers.authorization === "string"
       ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
-    if (currentBearer !== captured.token || request.headers["x-rabiroute-agent-type"] !== captured.lease.source?.provider || request.headers["x-rabiroute-session-id"] !== captured.lease.source?.sessionId) {
+    if (currentBearer !== captured.token || request.headers["x-rabiroute-agent-type"] !== captured.sourceHeaders.provider || request.headers["x-rabiroute-session-id"] !== captured.sourceHeaders.sessionId) {
       principals.delete(request);
       return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
     }
@@ -64,13 +65,12 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   const admission = captured?.admission ?? readAdmission();
   enabled = enabled && admission.enabled;
   const bearer = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
-  const agentHeader = request.headers["x-rabiroute-agent-id"];
   const provider = request.headers["x-rabiroute-agent-type"];
   const sessionId = request.headers["x-rabiroute-session-id"];
   const legacyHeader = request.headers["x-rabiroute-webgui-token"];
   const target = request.url ?? "/";
   const url = new URL(target, "http://manager.invalid");
-  const candidate = isLanAgentCredentialToken(bearer) || agentHeader !== undefined || provider !== undefined || sessionId !== undefined
+  const candidate = isLanAgentCredentialToken(bearer)
     || (typeof legacyHeader === "string" && isLanAgentCredentialToken(legacyHeader))
     || [...url.searchParams.values()].some(isLanAgentCredentialToken);
   if (!candidate) return { kind: "unrelated" };
@@ -78,14 +78,9 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
     || url.searchParams.has("webgui_token") || url.searchParams.has("token")) {
     return { kind: "denied", status: 401, error: "LAN_AGENT_CREDENTIAL_REQUIRED" };
   }
-  if ((provider !== undefined || sessionId !== undefined)
-    && (!isAgentAdapterType(provider) || typeof sessionId !== "string" || !sessionId || sessionId !== sessionId.trim()
-      || sessionId.length > 4096 || /[\x00-\x1f\x7f]/.test(sessionId))) {
-    return { kind: "denied", status: 400, error: "LAN_AGENT_EXPLICIT_SOURCE_REQUIRED" };
-  }
   const node = captured?.lease ?? authority.acquireConnectionLease(bearer);
   if (!node) return { kind: "denied", status: 403, error: "LAN_AGENT_DISABLED_OR_REVOKED" };
-  const source: Source | undefined = isAgentAdapterType(provider) && typeof sessionId === "string"
+  const source: Source | undefined = isAgentAdapterType(provider) && typeof sessionId === "string" && Boolean(sessionId.trim())
     ? Object.freeze({ agentId: provider, provider, sessionId }) : undefined;
   const identity: AdmittedConnection = captured?.lease ?? Object.freeze({ ...node, agentId: source?.agentId ?? node.nodeId,
     ...(source ? { source } : {}) });
@@ -95,6 +90,6 @@ export function evaluateLanAgentRequest(request: IncomingMessage, authority: Lan
   // An enabled authenticated Agent uses the shared public route policy.
   // The catalog describes contracts, not a second remote-only permission grant.
   admittedRequests.add(request);
-  principals.set(request, captured ?? { authority, token: bearer, lease: identity, admission, readAdmission });
+  principals.set(request, captured ?? { authority, token: bearer, lease: identity, admission, readAdmission,sourceHeaders:{provider,sessionId} });
   return { kind: "agent", nodeId: identity.nodeId, agentId: identity.agentId };
 }

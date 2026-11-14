@@ -1,8 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.endpoint.feishu",
-  "version": "0.1.3",
-  "entries": {
+  "version": "0.1.4",  "entries": {
     "manager": {
       "execution": "in_process",
       "module": "./manager.mjs"

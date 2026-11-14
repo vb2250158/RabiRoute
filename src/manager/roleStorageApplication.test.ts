@@ -449,3 +449,31 @@ test("explicit prepared plan reads do not replace fresh post-commit create updat
   assert.equal(rebound.projection.plan.taskBinding?.sessionId, "new-thread"); assert.equal(explicitReads, 2);
   assert.equal((await application.queries.plan(roleId, "point-plan", { reusePrepared: true }))?.plan.taskBinding?.sessionId, "new-thread"); assert.equal(explicitReads, 3);
 });
+
+test("role storage audit keeps the original error while the public error remains generic", async () => {
+  const original = new Error("private fixture failure");
+  const auditRecords: RecordedDataMutationAudit[] = [];
+  const uninstallAudit = installDataMutationAuditSink(record => auditRecords.push(record));
+  const mutationPool = {
+    status: () => ({ applicationGenerationId: "audit-generation", managerInstanceId: "audit-instance" }),
+    stop: async () => undefined,
+    createRecentMemory: async () => { throw original; }
+  } as unknown as NonNullable<RoleStorageApplicationOptions["mutationPool"]>;
+  const application = new RoleStorageApplication({
+    rolesRoot: "C:/example/roles", applicationGenerationId: "audit-generation", managerInstanceId: "audit-instance", mutationPool
+  });
+  try {
+    await assert.rejects(
+      application.commands.createRecentMemory("ExampleRole", { title: "Fixture", focus: "audit", content: "body", keywords: [] }, { idempotencyKey: "original-error-fixture" }),
+      (error: unknown) => {
+        assert.doesNotMatch(JSON.stringify(roleStorageHttpError(error).body), /private fixture failure/);
+        return true;
+      }
+    );
+    const failed = auditRecords.find(record => record.operationId === "original-error-fixture" && record.outcome === "failed");
+    assert.equal(failed?.error, original);
+  } finally {
+    uninstallAudit();
+    await application.stop();
+  }
+});

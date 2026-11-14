@@ -18,6 +18,10 @@ import { vuetify } from "./plugins/vuetify";
 import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
+import webRuntimeModules from "virtual:rabi-web-runtime";
+import { installWebRuntime } from "./webRuntime";
+
+installWebRuntime(webRuntimeModules);
 
 let routeRenderStartedAt = performance.now();
 router.beforeEach(() => {

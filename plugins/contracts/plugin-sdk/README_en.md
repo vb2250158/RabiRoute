@@ -77,3 +77,19 @@ Use `createPluginTestHarness()` for independent plugin contract tests. Integrati
 `host.message-endpoints@3` retains the common endpoint service and provides `GatewayListenerAccess` through the Manager's `manager` port. `readListener(gatewayId, localName)` reads the current published registry; `waitForListener(gatewayId, localName, { signal, timeoutMs })` observes the original native child publication within a bounded wait. The Host retains `@1` and `@2`; new consumers require `@3` rather than guessing a port on an older Host.
 
 `GatewayListenerDescriptor` carries the original Gateway generation, PID, listener/lease identity and actual address. Call `assertCurrent()` before dependent steps. A descriptor owns no saved configuration and grants no device or process authority; a cache alone is not readiness. Cancellation ends waits, and retirement or generation replacement invalidates old descriptors. See the [complete NapCat path](../../../docs/napcat-dynamic-ws_en.md).
+
+## Standalone Web builder
+
+A Web plugin can import `@rabiroute/plugin-sdk/web-builder` directly without a RabiRoute `src/plugins` or profile source tree. Provide `package.json`, `rabi.plugin.json` and `rabi.webSource` (or an explicit `entry`). The builder loads `vite` and `@vitejs/plugin-vue` from that plugin repository's own development dependencies, or accepts an explicitly supplied toolchain. Native-only SDK consumers do not load these Web tools.
+
+```js
+import { buildPluginWebPackage } from '@rabiroute/plugin-sdk/web-builder';
+
+const result = await buildPluginWebPackage({
+  sourceDirectory: process.cwd(),
+  outputDirectory: './candidate/web',
+  runtimeCatalog: './target-web-runtime.json'
+});
+```
+
+Read `runtimeCatalog` from the target WebGUI's `assets/web-runtime.json`, or pass the parsed object. Declare custom resource MIME by extension in `rabi.webContentTypes` or `contentTypes`; it travels with the package. The output contains its entry, demand-loaded resources and `module.json`. Rebuilding an existing directory owned by the same plugin stages a replacement; a failed build retains the original directory. Source directories, their parents and paths containing input files cannot be cleared as output. Returned `inputs` contain absolute paths for private build verification, not fields in the public resource manifest. Candidate activation checks the shared exports actually required; ordinary API calls do not go through that check.

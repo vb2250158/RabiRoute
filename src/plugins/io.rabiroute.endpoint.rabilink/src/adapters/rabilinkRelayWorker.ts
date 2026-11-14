@@ -739,7 +739,8 @@ async function runRelayWorker(state: RelayWorkerState): Promise<void> {
           dependencies.appendLog(profile.type, {
             level: "error",
             event: "relay_event_drain_failed",
-            message: error instanceof Error ? error.message : String(error)
+            message: error instanceof Error ? error.message : String(error),
+            error
           });
         });
       });

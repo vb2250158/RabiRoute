@@ -1,7 +1,6 @@
 {
   "name": "@rabiroute/host-api",
-  "version": "1.8.0",
-  "type": "module",
+  "version": "1.14.0",  "type": "module",
   "license": "MIT",
   "description": "Public declarations and export signatures for RabiRoute shared host owners.",
   "exports": {
@@ -449,6 +448,9 @@
     },
     "./rolePanelTimeline": {
       "types": "./types/src/rolePanelTimeline.d.ts"
+    },
+    "./routing/agentPacket": {
+      "types": "./types/src/routing/agentPacket.d.ts"
     },
     "./routing/identityContext": {
       "types": "./types/src/routing/identityContext.d.ts"

@@ -14,7 +14,7 @@ export async function recoverAgentResponseDeliveryFromRollout(
   const evidenceHash = initial.inReplyToRequestId
     ? store.get(initial.inReplyToRequestId)?.pendingResponseEvidence?.promptHash : undefined;
   try {
-    for await (const prompt of readRolloutUserMessages(thread.rolloutPath)) {
+    for await (const prompt of readRolloutUserMessages(thread.rolloutPath, thread.id)) {
       if (!prompt.includes(deliveryId) && agentDeliveryPromptHash(prompt) !== evidenceHash) continue;
       const result = await recoverAgentResponseDelivery(store, threadId, deliveryId, () => [prompt]);
       if (result.status !== "delivery_unconfirmed") return result;

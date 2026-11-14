@@ -30,6 +30,8 @@ The stable launcher remains the only main program. A short-lived CLI submits thr
 
 The worker attempts only newly submitted, unattempted sends from its current run. Old pending/sending entries become awaiting confirmation on startup. Restart, reconnect, backoff, ledger scans, repeated submissions and explicit reconcile never send old content. At turn completion, the Stop Hook checks this session's unanswered requests and attempts at most one in-hook prompt per original request. It continues the same turn without sending a chat message or scheduling a wakeup. Later Stops do not repeat the prompt; uncertain replies are checked by their original receipt. Configured completion delivery waits for the actual final result. Historical requests are not supplemented; original IDs and receipts remain outside release directories.
 
+During the current run, a proven pre-send identity or authentication failure retains zero attempts and may proceed with the first send after the original identity recovers. The send boundary is recorded durably before POST; uncertainty is checked against the original receipt without replay. Old uncertain records do not block newly authorized sends to the same target. Task-result ACK and cancellation synchronization retain their own contracts.
+
 Each attempt reloads current configuration and uses EndpointSession to discover and verify the original Manager. Acceptance pins the original Manager GUID; pairing with another Manager does not transfer old records. Callers manage no ports, URLs or generations. Do not scan ports, rebind targets or downgrade HTTPS.
 
 ## Calling
@@ -87,7 +89,7 @@ The real Desktop can provide positive receipt recovery through exact deliveryId 
 | Add nodeId to either API | Read the original computer's durable queue; offline is explicitly unobservable |
 | `GET /api/agent/deliveries/caller/:callerDeliveryId` | Reservation and receipt scoped to the current authenticated source |
 
-Only exact DELIVERY_NOT_RESERVED with canSubmitSameIntent=true proves that this source key has no reservation and may submit the same intent. Reads use the same source-session guard as sends; stale saved connector context cannot replace an explicit source session. Damaged records retain their original fields and reserved IDs while other complete records remain usable. An unreadable ledger or incomplete reservation identity returns unavailable evidence, refuses to overwrite the original file, and never authorizes replay or appears as a successful empty list. Authenticated connections retain existing public API access without another feature grant.
+Exact DELIVERY_NOT_RESERVED with canSubmitSameIntent=true indicates that Manager currently has no reservation for the source key; it does not authorize the connector to replay an attempted send automatically. Reads use the same source-session guard as sends; stale saved connector context cannot replace an explicit source session. Damaged records retain their original fields and reserved IDs while other complete records remain usable. An unreadable ledger or incomplete reservation identity returns unavailable evidence, refuses to overwrite the original file, and never authorizes replay or appears as a successful empty list. Authenticated connections retain existing public API access without another feature grant.
 
 ## Upgrade, rollback and acceptance
 

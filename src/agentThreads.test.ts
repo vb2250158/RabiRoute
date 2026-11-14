@@ -22,6 +22,7 @@ const invokeDshFixture: AgentManagerOperationInvoker = async <T>(type: string, o
   return await handler(payload, invocation) as T;
 };
 import assert from "node:assert/strict";
+import { deliveryIdFromPrompt } from "./shared/deliveryIdentity.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -737,11 +738,13 @@ test("Agent thread send accepts absent attribution without inventing a source ow
   let sends = 0;
   const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
     create: async () => { throw new Error("not used"); }, send: async value => {
-      sends++; assert.match(value.prompt, /补充新证据/); assert.doesNotMatch(value.prompt, /## 消息源/);
+      sends++; assert.match(value.prompt, /^## 消息源\n- 处理端：未知/); assert.match(value.prompt, /## 消息内容\n补充新证据/);
+      assert.match(deliveryIdFromPrompt(value.prompt), /^[0-9a-f-]{36}$/i);
     } };
   const result = await handleAgentThreadRequest({ action: "send", threadId: "019f0000-0000-7000-8000-000000000002",
     prompt: "补充新证据", cwd: process.cwd() }, { allowedWorkspaces: [process.cwd()] }, driver);
   assert.equal(result.data.status, "delivered"); assert.equal(sends, 1);
+  assert.deepEqual(result.data.warnings, ["未提供 messageSource，本次投递使用「未知」来源"]);
 });
 
 test("Agent create accepts a prompt without source attribution", async () => {
@@ -762,6 +765,19 @@ test("Agent create uses declared source without a separate sourceThreadId", asyn
   const result = await handleAgentThreadRequest({ action: "create", title: "调查任务", prompt: "只读调查。", cwd: process.cwd(), messageSource: messageSourceFor("declared-source", "提交的名称") },
     { allowedWorkspaces: [process.cwd()] }, driver);
   assert.equal(result.statusCode, 201); assert.equal(creates, 1);
+});
+
+test("incomplete source emits a generic warning without inventing attribution", async () => {
+  let prompt = "";
+  const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+    create: async value => { prompt = value.prompt; return { id: "019f0000-0000-7000-8000-000000000231", title: value.title,
+      updatedAt: "", source: "test", initialTurnStatus: "started" }; }, send: async () => undefined };
+  const result = await handleAgentThreadRequest({ action: "create", title: "调查", prompt: "正文", cwd: process.cwd(),
+    messageSource: { type: "system", eventType: "manual" } as import("./shared/rabiMessage.js").RabiMessageSource
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+  assert.deepEqual(result.data.warnings, ["messageSource 信息不完整，本次投递使用「未知」来源"]);
+  assert.match(prompt, /^## 消息源\n- 处理端：未知/);
+  assert.doesNotMatch(prompt, /undefined/);
 });
 
 test("legacy create and send record declared sources without reading any source owner", async () => {
@@ -852,6 +868,7 @@ test("Agent thread create without prompt does not require messageSource", async 
   }, { allowedWorkspaces: [process.cwd()] }, driver);
 
   assert.equal(result.statusCode, 201);
+  assert.equal(result.data.warnings, undefined);
   assert.equal((calls[0] as { prompt: string }).prompt, "");
 });
 

@@ -1,8 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.agent-communication",
-  "version": "0.1.4",
-  "displayName": "Agent 通信",
+  "version": "0.1.6",  "displayName": "Agent 通信",
   "description": "提供接口发现、文件上传与 Agent 消息交互",
   "icon": "mdi-message-processing",
   "entries": {

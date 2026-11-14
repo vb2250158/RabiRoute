@@ -296,3 +296,15 @@ test("valid operation aliases have no unrelated count quota and still reject amb
  const contract={...fixtureApiContract(),aliases:Array.from({length:101},(_,i)=>"legacy.operation."+i)};const compiled=compileApiOperation({contract,handler:()=>({status:200,body:{ok:true,value:1}})});assert.equal(compiled.contract.aliases?.length,101);
  assert.throws(()=>compileApiOperation({contract:{...contract,aliases:[contract.operationId]},handler:()=>({status:200,body:{ok:true,value:1}})}),/alias|identifier|ambiguous/i);
 });
+
+
+test("confirmed not_committed stays terminal when a write response cannot be encoded", () => {
+  const operation = compileApiOperation({ contract: fixtureApiContract(), handler: () => ({ status: 200, body: {} }) });
+  const failure = apiContractFailure(operation, new ApiContractError(500, "API_RESPONSE_SCHEMA_INVALID", "response", operation.contract.operationId, true, "not_committed"));
+  assert.ok(failure.body && typeof failure.body === "object");
+  const body = failure.body as Record<string, unknown>;
+  assert.equal(body.uncertain, false);
+  assert.equal(body.mutationOutcome, "not_committed");
+  assert.equal(body.retryable, false);
+  validateApiOperationResult(operation, failure);
+});

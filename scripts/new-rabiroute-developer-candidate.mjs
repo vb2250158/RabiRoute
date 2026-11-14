@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 
 import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibility.mjs";
 
@@ -23,6 +24,7 @@ const relayRuntimePathRules = JSON.parse(fs.readFileSync(new URL('./lib/rabilink
 const relayRuntimePath = new RegExp(relayRuntimePathRules.runtime, 'i');
 const retiredRelayFiles = Object.freeze(['scripts/rabilink-knowledge-grant.mjs', 'scripts/rabilink-knowledge-grant-ui.mjs']);
 const developerMaintenanceFiles = Object.freeze([
+  'scripts/new-rabiroute-developer-candidate.mjs',
   'scripts/lib/rabilink-relay-runtime-paths.ps1',
   'scripts/lib/rabilink-relay-runtime-paths.json',
   'scripts/Invoke-RabiRouteDeveloperApply.ps1',
@@ -59,7 +61,8 @@ function replaceDirectory(source, destination) {
   fs.cpSync(source, destination, { recursive: true, dereference: false, errorOnExist: false });
 }
 
-function assertWebPluginEntries(root) {
+function assertWebPluginEntries(root, resourceOwnerRoot = root) {
+  let readResources;
   const profile = JSON.parse(fs.readFileSync(requireFile(root, "dist/plugins/profiles/desktop.json"), "utf8"));
   if (!Array.isArray(profile.instances) || !profile.instances.some(instance => instance.enabled !== false)) {
     throw new Error("Developer candidate plugin profile has no enabled instances.");
@@ -95,6 +98,17 @@ function assertWebPluginEntries(root) {
     const relative = path.relative(path.dirname(manifestPath), entryPath);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Invalid Web Bundle entry: ${manifest.id}`);
     if (!fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Web Bundle entry is missing: ${manifest.id}`);
+    if (fs.existsSync(path.join(path.dirname(manifestPath), "web/module.json"))) {
+      // Keep the synchronous public producer API and reuse the matching compiled
+      // resource owner. Legacy-only candidates need no additional compiled owner.
+      readResources ??= createRequire(path.join(resourceOwnerRoot, "package.json"))(requireFile(resourceOwnerRoot, "dist/manager/webPluginModules.js")).readPackagedWebResources;
+      if (typeof readResources !== "function") throw new Error("The built Web resource declaration owner is unavailable.");
+      const resources = readResources(path.dirname(manifestPath), { id: manifest.id, version: manifest.version, entry });
+      if (resources) {
+        if (resources.issue) throw new Error(`Web package resources are invalid: ${manifest.id}: ${resources.issue}`);
+        continue;
+      }
+    }
     const source = fs.readFileSync(entryPath, "utf8");
     const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
     if (!match) throw new Error(`Web Bundle wrapper is not supported: ${manifest.id}`);
@@ -197,7 +211,7 @@ function createDeveloperCandidate(options) {
       }
     }
     // Validate the copied snapshot, not the mutable source tree, before sealing it.
-    assertWebPluginEntries(stagingRoot);
+    assertWebPluginEntries(stagingRoot, buildRoot);
     const manifest = writeManifest(stagingRoot, packageVersion);
     const packageRoot = path.join(versionsRoot, manifest.releaseId);
     if (fs.existsSync(packageRoot)) {

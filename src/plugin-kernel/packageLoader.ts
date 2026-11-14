@@ -89,19 +89,25 @@ async function resolveEntry(
   const entry = manifest.entries[host];
   if (!entry) throw new Error(`Plugin does not support host ${host}: ${manifest.id}.`);
   const relativeEntry = entry.execution === "declarative" ? entry.resource : entry.module;
+  const entryPath = await resolvePluginPackageFile(runtimeRoot, relativeEntry);
+  return Object.freeze({ entryPath, execution: entry.execution });
+}
+
+/** Resolve a declared resource through the same immutable package path boundary as its entry. */
+export async function resolvePluginPackageFile(runtimeRoot: string, relativeEntry: string): Promise<string> {
   const runtimeReal = await fs.realpath(runtimeRoot);
   const lexicalEntry = path.resolve(runtimeRoot, relativeEntry);
   if (!inside(path.resolve(runtimeRoot), lexicalEntry)) {
-    throw new Error(`Plugin entry escapes its runtime package: ${manifest.id}.`);
+    throw new Error("Plugin resource escapes its runtime package.");
   }
   const entryReal = await fs.realpath(lexicalEntry);
-  if (!inside(runtimeReal, entryReal)) throw new Error(`Plugin entry escapes its runtime package: ${manifest.id}.`);
+  if (!inside(runtimeReal, entryReal)) throw new Error("Plugin resource escapes its runtime package.");
   const stat = await fs.lstat(entryReal);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Plugin entry is not a plain file: ${manifest.id} (${host}).`);
-  return Object.freeze({ entryPath: entryReal, execution: entry.execution });
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Plugin resource is not a plain file.");
+  return entryReal;
 }
 
-async function verifyRuntimePackage(
+export async function verifyRuntimePackage(
   runtimeRoot: string,
   expected: Readonly<{ revision: string; id: string; version: string }>,
   host: PluginHost
@@ -117,7 +123,7 @@ async function verifyRuntimePackage(
 }
 
 export async function loadPluginPackage(sourceRoot: string, runtimeRoot: string, host: PluginHost,
-  options: Readonly<{ stagingId?: string }> = {}): Promise<LoadedPluginPackage> {
+  options: Readonly<{ stagingId?: string; layout?: "revision" }> = {}): Promise<LoadedPluginPackage> {
   const source = path.resolve(sourceRoot);
   const runtimeBase = path.resolve(runtimeRoot);
   await assertPlainDirectory(source, "Plugin package source");
@@ -139,13 +145,17 @@ export async function loadPluginPackage(sourceRoot: string, runtimeRoot: string,
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(staging, PLUGIN_MANIFEST_FILE), "utf8")) as unknown);
     await resolveEntry(staging, manifest, host);
 
-    const packageRuntimeRoot = path.join(runtimeBase, encodeURIComponent(manifest.id));
-    await fs.mkdir(packageRuntimeRoot, { recursive: true });
-    await assertPlainDirectory(packageRuntimeRoot, "Plugin runtime identity root");
-    const versionRuntimeRoot = path.join(packageRuntimeRoot, manifest.version);
-    await fs.mkdir(versionRuntimeRoot, { recursive: true });
-    await assertPlainDirectory(versionRuntimeRoot, "Plugin runtime version root");
-    const target = path.join(versionRuntimeRoot, revision);
+    let target: string;
+    if (options.layout === "revision") target = path.join(runtimeBase, revision);
+    else {
+      const packageRuntimeRoot = path.join(runtimeBase, encodeURIComponent(manifest.id));
+      await fs.mkdir(packageRuntimeRoot, { recursive: true });
+      await assertPlainDirectory(packageRuntimeRoot, "Plugin runtime identity root");
+      const versionRuntimeRoot = path.join(packageRuntimeRoot, manifest.version);
+      await fs.mkdir(versionRuntimeRoot, { recursive: true });
+      await assertPlainDirectory(versionRuntimeRoot, "Plugin runtime version root");
+      target = path.join(versionRuntimeRoot, revision);
+    }
     try {
       await fs.rename(staging, target);
     } catch (error) {

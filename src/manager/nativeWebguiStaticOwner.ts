@@ -1,3 +1,4 @@
+import { FsAwaitDiagnostics, traceFsAwait, type SlowFsReporter } from "../shared/fsAwaitDiagnostics.js";
 import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
@@ -56,83 +57,83 @@ function documentRewrite(revision: string): Transform {
 export class NativeWebguiStaticOwner {
   private activeFiles = 0;
   constructor(private readonly options: {
-    packageRoot: string; webuiDistPath: string;
+    packageRoot: string; webuiDistPath: string; onSlowFs?: SlowFsReporter;
     patches: Pick<WebPatchService, "candidates" | "status" | "staticManifest">;
     isControlPath(pathname: string): boolean;
   }) {}
 
   activeFileCount(): number { return this.activeFiles; }
 
-  private async open(root: string, relative: string, input: ApiHttpProxyInput): Promise<OpenFile | undefined> {
+  private async open(root: string, relative: string, input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<OpenFile | undefined> {
     input.assertCurrent();
     const filename = path.resolve(root, relative);
     if (!within(root, filename)) return undefined;
     let handle: FileHandle | undefined;
     try {
-      const realRoot = await fs.realpath(root); input.assertCurrent();
-      const rootStat = await fs.stat(realRoot); input.assertCurrent();
-      const realFile = await fs.realpath(filename); input.assertCurrent();
+      const realRoot = await traceFsAwait(trace, "root.realpath", fs.realpath(root)); input.assertCurrent();
+      const rootStat = await traceFsAwait(trace, "root.stat", fs.stat(realRoot)); input.assertCurrent();
+      const realFile = await traceFsAwait(trace, "file.realpath", fs.realpath(filename)); input.assertCurrent();
       if (!within(realRoot, realFile)) return undefined;
-      handle = await fs.open(realFile, "r"); input.assertCurrent();
-      const stat = await handle.stat(); input.assertCurrent();
-      if (!stat.isFile()) { await handle.close(); return undefined; }
+      handle = await traceFsAwait(trace, "file.open", fs.open(realFile, "r")); input.assertCurrent();
+      const stat = await traceFsAwait(trace, "file.fstat", handle.stat()); input.assertCurrent();
+      if (!stat.isFile()) { await traceFsAwait(trace, "file.close", handle.close()); return undefined; }
       const file = { handle, root, realRoot, filename, rootStat, stat };
-      await this.assertFile(file, input);
+      await this.assertFile(file, input, trace);
       this.activeFiles++;
       return file;
     } catch (error) {
-      await handle?.close();
+      handle && await traceFsAwait(trace, "file.close", handle.close());
       if (["ENOENT", "ENOTDIR", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
       throw error;
     }
   }
 
-  private async assertFile(file: OpenFile, input: ApiHttpProxyInput): Promise<void> {
+  private async assertFile(file: OpenFile, input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<void> {
     input.assertCurrent();
-    const realRoot = await fs.realpath(file.root); input.assertCurrent();
-    const rootStat = await fs.stat(realRoot); input.assertCurrent();
+    const realRoot = await traceFsAwait(trace, "root.realpath", fs.realpath(file.root)); input.assertCurrent();
+    const rootStat = await traceFsAwait(trace, "root.stat", fs.stat(realRoot)); input.assertCurrent();
     if (realRoot !== file.realRoot || !sameRoot(rootStat, file.rootStat)) throw new Error("Static resource root changed.");
-    const realFile = await fs.realpath(file.filename); input.assertCurrent();
+    const realFile = await traceFsAwait(trace, "file.realpath", fs.realpath(file.filename)); input.assertCurrent();
     if (!within(file.realRoot, realFile)) throw new Error("Static resource escaped its root.");
-    const stat = await fs.stat(realFile); input.assertCurrent();
+    const stat = await traceFsAwait(trace, "file.stat", fs.stat(realFile)); input.assertCurrent();
     if (!sameFile(stat, file.stat)) throw new Error("Static resource changed while reading.");
   }
 
-  private async close(file: OpenFile): Promise<void> {
-    try { await file.handle.close(); } finally { this.activeFiles--; }
+  private async close(file: OpenFile, trace?: FsAwaitDiagnostics): Promise<void> {
+    try { await traceFsAwait(trace, "file.close", file.handle.close()); } finally { this.activeFiles--; }
   }
 
-  private async verify(file: OpenFile, expected: { size: number; sha256: string }, input: ApiHttpProxyInput): Promise<void> {
+  private async verify(file: OpenFile, expected: { size: number; sha256: string }, input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<void> {
     if (file.stat.size !== expected.size) throw new Error("Web patch asset integrity failed.");
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(64 * 1024);
     let position = 0;
     while (position < expected.size) {
       input.assertCurrent();
-      const { bytesRead } = await file.handle.read(buffer, 0, Math.min(buffer.length, expected.size - position), position); input.assertCurrent();
+      const { bytesRead } = await traceFsAwait(trace, "file.verify.read", file.handle.read(buffer, 0, Math.min(buffer.length, expected.size - position), position)); input.assertCurrent();
       if (!bytesRead) break;
       hash.update(buffer.subarray(0, bytesRead)); position += bytesRead;
     }
-    await this.assertFile(file, input);
+    await this.assertFile(file, input, trace);
     if (hash.digest("hex") !== expected.sha256) throw new Error("Web patch asset integrity failed.");
   }
 
-  private async sendFile(file: OpenFile, input: ApiHttpProxyInput, headers: Record<string, string>, revision?: string): Promise<void> {
+  private async sendFile(file: OpenFile, input: ApiHttpProxyInput, headers: Record<string, string>, revision?: string, trace?: FsAwaitDiagnostics): Promise<void> {
     let source: Readable | undefined, pump: Transform | undefined;
     let transfer: Promise<void> | undefined, responseFinished: Promise<void> | undefined;
     try {
-      await this.assertFile(file, input);
+      await this.assertFile(file, input, trace);
       input.prepareResponse(200, headers); input.assertCurrent(); input.response.writeHead(200, headers);
       if (input.request.method === "HEAD") { input.response.end(); return; }
       const owner = this;
       source = Readable.from((async function* () {
         let position = 0;
         while (true) {
-          await owner.assertFile(file, input);
+          await owner.assertFile(file, input, trace);
           const buffer = Buffer.alloc(64 * 1024);
-          const { bytesRead } = await file.handle.read(buffer, 0, buffer.length, position); input.assertCurrent();
+          const { bytesRead } = await traceFsAwait(trace, "file.stream.read", file.handle.read(buffer, 0, buffer.length, position)); input.assertCurrent();
           if (!bytesRead) break;
-          await owner.assertFile(file, input);
+          await owner.assertFile(file, input, trace);
           position += bytesRead; yield buffer.subarray(0, bytesRead);
         }
       })(), { highWaterMark: 1 });
@@ -149,7 +150,7 @@ export class NativeWebguiStaticOwner {
     } finally {
       pump?.unpipe(input.response); pump?.destroy(); source?.destroy();
       await Promise.allSettled([...(transfer ? [transfer] : []), ...(responseFinished ? [responseFinished] : [])]);
-      await this.close(file);
+      await this.close(file, trace);
     }
   }
 
@@ -161,41 +162,46 @@ export class NativeWebguiStaticOwner {
     this.send(input, status, JSON.stringify(body), { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   }
 
-  private async manifest(revision: string, input: ApiHttpProxyInput): Promise<Readonly<WebPatchManifest>> {
+  private async manifest(revision: string, input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<Readonly<WebPatchManifest>> {
     // Publication identity, compatibility and manifest caching remain with WebPatchService.
-    const manifest = await this.options.patches.staticManifest(revision); input.assertCurrent();
+    const manifest = await traceFsAwait(trace, "patch.staticManifest", this.options.patches.staticManifest(revision)); input.assertCurrent();
     const backend = this.options.patches.status().backend;
     if (backend !== undefined && backend !== manifest.backend) throw new Error("Web patch backend changed; a coordinated full release is required.");
     return manifest;
   }
 
-  private async patchFile(revision: string, filename: string, input: ApiHttpProxyInput): Promise<OpenFile> {
+  private async patchFile(revision: string, filename: string, input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<OpenFile> {
     webPatchPath(filename);
     const root = path.join(this.options.patches.candidates, revision);
-    const realRoot = await fs.realpath(root); input.assertCurrent();
-    const rootStat = await fs.stat(realRoot); input.assertCurrent();
-    const manifest = await this.manifest(revision, input);
+    const realRoot = await traceFsAwait(trace, "root.realpath", fs.realpath(root)); input.assertCurrent();
+    const rootStat = await traceFsAwait(trace, "root.stat", fs.stat(realRoot)); input.assertCurrent();
+    const manifest = await this.manifest(revision, input, trace);
     const record = manifest.files.find(file => file.path === filename);
     if (!record) throw new Error("Web patch asset was not found.");
-    const file = await this.open(root, filename, input);
+    const file = await this.open(root, filename, input, trace);
     if (!file) throw new Error("Web patch asset was not found.");
     try {
       if (file.realRoot !== realRoot || !sameRoot(file.rootStat, rootStat)) throw new Error("Static resource root changed.");
-      await this.verify(file, record, input); return file;
+      await this.verify(file, record, input, trace); return file;
     }
-    catch (error) { await this.close(file); throw error; }
+    catch (error) { await this.close(file, trace); throw error; }
   }
 
   async patch(input: ApiHttpProxyInput): Promise<void> {
+    const trace = this.options.onSlowFs ? new FsAwaitDiagnostics("NativeWebguiStaticOwner", "patch", this.options.onSlowFs) : undefined;
+    try { await this.patchOperation(input, trace); } finally { trace?.finish(); }
+  }
+
+  private async patchOperation(input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<void> {
     if (!["GET", "HEAD"].includes(input.request.method ?? "")) { this.json(input, 405, { code: -1 }); return; }
     const match = input.url.pathname.match(/^\/_rabiroute\/web\/([a-f0-9]{64})\/(.+)$/);
     if (!match) { this.json(input, 404, { code: -1 }); return; }
     let filename: string;
     try { filename = decodeURIComponent(match[2]!); } catch { this.json(input, 400, { code: -1 }); return; }
     try {
-      const file = await this.patchFile(match[1]!, filename, input);
+      const file = await this.patchFile(match[1]!, filename, input, trace);
       await this.sendFile(file, input, { "content-type": patchTypes[path.extname(filename) as keyof typeof patchTypes] ?? "application/octet-stream",
-        "cache-control": immutable, "x-content-type-options": "nosniff", "x-rabiroute-web-revision": match[1]! });
+        "cache-control": immutable, "x-content-type-options": "nosniff", "x-rabiroute-web-revision": match[1]! }, undefined, trace);
     } catch (error) {
       input.assertCurrent(); if (input.response.headersSent) throw error;
       this.json(input, 404, { code: -1, message: "Web patch asset is unavailable or failed integrity verification." });
@@ -203,6 +209,11 @@ export class NativeWebguiStaticOwner {
   }
 
   async fallback(input: ApiHttpProxyInput): Promise<void> {
+    const trace = this.options.onSlowFs ? new FsAwaitDiagnostics("NativeWebguiStaticOwner", "fallback", this.options.onSlowFs) : undefined;
+    try { await this.fallbackOperation(input, trace); } finally { trace?.finish(); }
+  }
+
+  private async fallbackOperation(input: ApiHttpProxyInput, trace?: FsAwaitDiagnostics): Promise<void> {
     const pathname = input.url.pathname;
     // The controller's native API/private boundary must win before the SPA selector.
     if (this.options.isControlPath(pathname) || pathname.startsWith("/_rabiroute/")) {
@@ -210,10 +221,10 @@ export class NativeWebguiStaticOwner {
     }
     const asset = input.request.method === "GET" && pathname.match(/^\/assets\/([a-zA-Z0-9_.-]+)$/);
     if (asset) {
-      const file = await this.open(path.join(this.options.packageRoot, "assets"), asset[1]!, input);
+      const file = await this.open(path.join(this.options.packageRoot, "assets"), asset[1]!, input, trace);
       if (file) {
         const extension = path.extname(asset[1]!).toLowerCase();
-        await this.sendFile(file, input, { "content-type": extension === ".png" ? "image/png" : extension === ".svg" ? "image/svg+xml; charset=utf-8" : "application/octet-stream" }); return;
+        await this.sendFile(file, input, { "content-type": extension === ".png" ? "image/png" : extension === ".svg" ? "image/svg+xml; charset=utf-8" : "application/octet-stream" }, undefined, trace); return;
       }
     }
     if (["GET", "HEAD"].includes(input.request.method ?? "") && (pathname === "/index.html" || !path.extname(pathname))) {
@@ -221,8 +232,8 @@ export class NativeWebguiStaticOwner {
       if (revision !== undefined) {
         try {
           if (!WEB_PATCH_HASH.test(revision)) throw new Error("Invalid Web release revision.");
-          const file = await this.patchFile(revision, "web/index.html", input);
-          await this.sendFile(file, input, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-rabiroute-web-revision": revision }, revision); return;
+          const file = await this.patchFile(revision, "web/index.html", input, trace);
+          await this.sendFile(file, input, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-rabiroute-web-revision": revision }, revision, trace); return;
         } catch (error) {
           input.assertCurrent(); if (input.response.headersSent) throw error;
           this.json(input, 503, { code: -1, message: "Web document integrity is unavailable." }); return;
@@ -237,17 +248,17 @@ export class NativeWebguiStaticOwner {
     if (decoded.includes("\0") || !within(root, path.resolve(root, relative))) {
       this.send(input, 503, missingBuild, { "content-type": "text/plain; charset=utf-8" }); return;
     }
-    const index = await this.open(root, "index.html", input);
+    const index = await this.open(root, "index.html", input, trace);
     if (index) {
-      await this.close(index);
-      const file = await this.open(root, relative, input) ?? (!path.extname(relative) ? await this.open(root, "index.html", input) : undefined);
+      await this.close(index, trace);
+      const file = await this.open(root, relative, input, trace) ?? (!path.extname(relative) ? await this.open(root, "index.html", input, trace) : undefined);
       if (file) {
         if (file.realRoot !== index.realRoot || !sameRoot(file.rootStat, index.rootStat)) {
-          await this.close(file); throw new Error("Static resource root changed.");
+          await this.close(file, trace); throw new Error("Static resource root changed.");
         }
         const indexFile = path.resolve(file.filename) === path.resolve(root, "index.html");
         const cache = indexFile ? "no-store" : /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(path.basename(file.filename)) ? immutable : "no-cache";
-        await this.sendFile(file, input, { "content-type": webTypes[path.extname(file.filename).toLowerCase()] ?? "application/octet-stream", "cache-control": cache }); return;
+        await this.sendFile(file, input, { "content-type": webTypes[path.extname(file.filename).toLowerCase()] ?? "application/octet-stream", "cache-control": cache }, undefined, trace); return;
       }
     }
     this.send(input, 503, missingBuild, { "content-type": "text/plain; charset=utf-8" });

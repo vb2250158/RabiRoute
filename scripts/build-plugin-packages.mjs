@@ -371,14 +371,26 @@ export async function finalizePluginBuildWebArtifacts(root = process.cwd(), opti
   const webFiles = indexed(web.files);
   const roots = [...new Set([...declared.keys()].map(file => file.startsWith("packages/") ? file.split("/").slice(0, 3).join("/") : file.split("/")[0]))];
   const artifacts = await hashInputs(outputRoot, roots.map(file => path.join(outputRoot, file)));
-  const actual = indexed(artifacts.files), wrappers = new Map();
+  const actual = indexed(artifacts.files), wrappers = new Map(), coveredModules = new Set(), packageClosures = [];
   for (const [name, sha256] of declared) {
     if (!name.startsWith("packages/") || !name.endsWith("/rabi.plugin.json")) continue;
     if (actual.get(name) !== sha256) throw new Error(`Plugin manifest changed before Web finalization: ${name}`);
     const manifest = JSON.parse(await fs.readFile(path.join(outputRoot, name), "utf8"));
     const entry = manifest.entries?.web?.module;
     if (!entry) continue;
-    const module = webModules.get(JSON.stringify([manifest.id, manifest.version]));
+    const key = JSON.stringify([manifest.id, manifest.version]), module = webModules.get(key);
+    const packagePrefix = name.slice(0, -"rabi.plugin.json".length), closurePath = packagePrefix + "web/module.json";
+    let closure;
+    if (declared.has(closurePath)) {
+      if (actual.get(closurePath) !== declared.get(closurePath)) throw new Error(`Plugin Web resource changed: ${manifest.id}`);
+      try { closure = JSON.parse(await fs.readFile(path.join(outputRoot, closurePath), "utf8")); } catch { /* A legacy resource is not a platform closure. */ }
+    }
+    if (closure?.kind === "rabi-plugin-web") {
+      if (closure.pluginId !== manifest.id || closure.version !== manifest.version) throw new Error(`Plugin Web closure differs from its package: ${manifest.id}`);
+      packageClosures.push({ pluginId: manifest.id, version: manifest.version, path: closurePath, manifestSha256: actual.get(closurePath) });
+      if (module) coveredModules.add(key);
+      continue;
+    }
     if (!module || typeof module.entry !== "string" || !module.entry.startsWith("web/assets/") || !webFiles.has(module.entry))
       throw new Error(`Web manifest does not cover the plugin module: ${manifest.id}`);
     const packageRoot = path.dirname(path.join(outputRoot, name)), wrapper = path.resolve(packageRoot, entry);
@@ -387,8 +399,9 @@ export async function finalizePluginBuildWebArtifacts(root = process.cwd(), opti
     const expected = `export { activate } from "/${module.entry.slice(4)}";\n`;
     if (await fs.readFile(wrapper, "utf8") !== expected) throw new Error(`Plugin wrapper differs from its verified Web module: ${manifest.id}`);
     wrappers.set(wrapperName, { path: wrapperName, sha256: actual.get(wrapperName), entry: module.entry, assetSha256: webFiles.get(module.entry) });
+    coveredModules.add(key);
   }
-  if (wrappers.size !== webModules.size) throw new Error("Web manifest includes an unrelated plugin module.");
+  if (coveredModules.size !== webModules.size) throw new Error("Web manifest includes an unrelated plugin module.");
   for (const [name, sha256] of declared) if (!wrappers.has(name) && actual.get(name) !== sha256)
     throw new Error(`Plugin backend artifact changed before Web finalization: ${name}`);
   for (const name of actual.keys()) if (!declared.has(name) && !wrappers.has(name))
@@ -398,6 +411,7 @@ export async function finalizePluginBuildWebArtifacts(root = process.cwd(), opti
   const finalized = { ...evidence, artifacts,
     web: { revision, manifestSha256: digest(webBytes), sourceInputHash: options.webSourceInputHash,
       parentArtifactSha256: evidence.artifacts.sha256, wrappers: [...wrappers.values()],
+      ...(packageClosures.length ? { packages: packageClosures } : {}),
       toolchain: { webBuilderSha256: digest(await fs.readFile(path.join(root, "scripts/build-web-patch.mjs"))),
         syncSha256: digest(await fs.readFile(path.join(root, "scripts/sync-plugin-web-bundles.mjs"))),
         inputHasherSha256: digest(await fs.readFile(path.join(root, "scripts/lib/web-patch-inputs.mjs"))) } } };
@@ -406,6 +420,42 @@ export async function finalizePluginBuildWebArtifacts(root = process.cwd(), opti
     await fs.writeFile(staging, JSON.stringify(finalized, null, 2) + "\n", { flag: "wx" });
     await fs.rename(staging, evidencePath);
   } finally { await fs.rm(staging, { force: true }); }
+  return finalized;
+}
+
+/** Finish only selected package Web trees, preserving all original native evidence. */
+export async function finalizeSelectedPluginWebArtifacts(root = process.cwd(), options = {}) {
+  root = path.resolve(root);
+  const outputRoot = path.resolve(options.outputRoot);
+  const filename = path.join(outputRoot, "build-evidence.json");
+  const original = await fs.readFile(filename);
+  const evidence = JSON.parse(original);
+  if (evidence.schemaVersion !== 1 || !["selected-packages", "profile"].includes(evidence.scope) || !options.packages?.length) throw new Error("Selected Web finalization requires original native evidence.");
+  const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+  if (hash(JSON.stringify(evidence.artifacts.files)) !== evidence.artifacts.sha256) throw new Error("Native artifact evidence changed.");
+  if ((await hashInputs(root, evidence.inputSelections.map(name => path.join(root, name)))).sha256 !== evidence.inputs.sha256) throw new Error("Selected backend inputs changed before Web finalization.");
+  for (const item of options.packages) {
+    const expected = `packages/${encodeURIComponent(item.pluginId)}/${item.version}/web/module.json`;
+    if (!evidence.copied.includes(`${item.pluginId}@${item.version}`) || item.path !== expected) throw new Error("Selected Web closure is outside the original native package receipt.");
+  }
+  const prefixes = options.packages.map(item => `packages/${encodeURIComponent(item.pluginId)}/${item.version}/web/`);
+  for (const record of evidence.artifacts.files) if (!prefixes.some(prefix => record.path.startsWith(prefix))) {
+    if (hash(await fs.readFile(path.join(outputRoot, record.path))) !== record.sha256) throw new Error("A selected Web build changed an unrelated native artifact.");
+  }
+  for (const record of options.inputs) if (hash(await fs.readFile(path.join(root, record.path))) !== record.sha256) throw new Error("Selected Web source inputs changed during build.");
+  for (const record of options.packages) if (hash(await fs.readFile(path.join(outputRoot, record.path))) !== record.manifestSha256) throw new Error("Selected Web closure changed before finalization.");
+  const roots = evidence.copied.map(item => {
+    const index = item.lastIndexOf("@");
+    return path.join(outputRoot, "packages", encodeURIComponent(item.slice(0, index)), item.slice(index + 1));
+  });
+  const artifacts = await hashInputs(outputRoot, [...roots, path.join(outputRoot, "contracts"), ...(evidence.scope === "profile" ? [path.join(outputRoot, "profiles")] : [])]);
+  if (!(await fs.readFile(filename)).equals(original)) throw new Error("Native evidence changed during selected Web finalization.");
+  const finalized = { ...evidence, artifacts, web: { ...evidence.web, kind: "package-closures", packages: options.packages,
+    ...(evidence.web?.wrappers ? { wrappers: evidence.web.wrappers.filter(record => !prefixes.some(prefix => record.path.startsWith(prefix))) } : {}),
+    runtimeManifestSha256: options.runtimeManifestSha256, inputs: options.inputs, parentArtifactSha256: evidence.artifacts.sha256 } };
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  try { await fs.writeFile(temporary, JSON.stringify(finalized, null, 2) + "\n", { flag: "wx" }); await fs.rename(temporary, filename); }
+  finally { await fs.rm(temporary, { force: true }); }
   return finalized;
 }
 

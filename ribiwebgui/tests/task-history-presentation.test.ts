@@ -107,6 +107,7 @@ test('an old task moving into the latest page cannot prove the unseen interval i
 
 /** Execute only the fixed repository SFC's actual load body against private in-memory API state. */
 function actualCatalogLoader(component:'PersonaTaskHistory'|'EndpointConversationHistory',bindings:Record<string,unknown>):(more?:boolean)=>Promise<void> {
+  if (component === 'PersonaTaskHistory') bindings = { catalogPartial: { value: false }, ...bindings };
   const file=new URL(`../../src/plugins/io.rabiroute.manager.persona/web/components/${component}.vue`,import.meta.url);
   const {descriptor,errors}=parse(readFileSync(file,'utf8'),{filename:file.pathname});
   assert.deepEqual(errors,[]);assert.ok(descriptor.scriptSetup);
@@ -134,6 +135,44 @@ test('actual task refresh follows the new cursor through a disjoint gap and keep
   assert.deepEqual(tasks.value.map(task=>task.key),[...latest,...gap,...old].map(task=>task.key));
   await load(true);assert.equal(new URLSearchParams(calls[3]).get('cursor'),'gap-boundary');
   assert.equal(tasks.value.length,150);assert.equal(new Set(tasks.value.map(task=>task.key)).size,150);assert.equal(cursor.value,null);assert.equal(selected.value?.key,'old-17');
+});
+
+test('actual task loader preserves a same-query healthy tail and manually advances a repair continuation', async () => {
+  const row = (key: string) => ({ key, title: key, preview: '', receivedAt: '2000-01-01', sessionId: key });
+  const pages = [
+    { items: [row('old')], nextCursor: null },
+    { items: [], nextCursor: 'repair-continuation', partial: true },
+    { items: [row('repaired-match')], nextCursor: null, partial: true }
+  ];
+  const tasks = { value: [] as ReturnType<typeof row>[] };
+  const selectedKey = { value: '' };
+  const cursor = { value: null as string | null };
+  const catalogPartial = { value: false };
+  const error = { value: '' };
+  const calls: string[] = [];
+  const load = actualCatalogLoader('PersonaTaskHistory', {
+    props: { roleId: 'fixture', category: 'agent' }, tasks, selectedKey, cursor, catalogPartial, error,
+    selected: { get value() { return tasks.value.find(task => task.key === selectedKey.value); } },
+    search: { value: 'same-query' }, loading: { value: false }, mergeHistoryTaskPage, userFacingError: String,
+    read: async (query: URLSearchParams) => {
+      calls.push(query.toString());
+      assert.ok(pages.length);
+      return pages.shift()!;
+    }
+  });
+  await load();
+  await load();
+  assert.deepEqual(tasks.value.map(task => task.key), ['old']);
+  assert.equal(catalogPartial.value, true);
+  assert.equal(cursor.value, 'repair-continuation');
+  assert.equal(calls.length, 2, 'a repair page does not start an automatic retry loop');
+  assert.equal(error.value, '');
+  await load(true);
+  assert.equal(new URLSearchParams(calls[2]).get('cursor'), 'repair-continuation');
+  assert.deepEqual(tasks.value.map(task => task.key), ['repaired-match', 'old']);
+  assert.equal(cursor.value, null);
+  assert.equal(catalogPartial.value, true);
+  assert.equal(error.value, '');
 });
 
 test('actual endpoint directory refresh traverses new key pages before the old cursor without losing its selection',async()=>{

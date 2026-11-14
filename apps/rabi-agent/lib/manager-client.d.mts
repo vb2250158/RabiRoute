@@ -8,6 +8,7 @@ export type ManagerRequestOptions = KnowledgeInvokeOptions & {
 };
 export type ManagerReceipt = KnowledgeManagerReceipt & {
   body?: string;
+  bodyJson?: unknown;
   identity?: { applicationGenerationId: string; managerInstanceId: string };
   bodyBytes?: Uint8Array; bytesReceived?: number; responseMode?: "text" | "bytes" | "stream";
   outputCommitted?: boolean; path?: string; sha256?: string;
@@ -58,6 +59,7 @@ export type ManagerClient = {
     watch(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ManagerReceipt>;
   };
 };
+export function decodeManagerJsonReceipt(receipt: ManagerReceipt): ManagerReceipt;
 export function createManagerClient(options: {
   managerUrl: string; localHost: true; timeoutMs?: number; fetchImpl?: typeof fetch;
   endpointSession: { ensure(options?: { diagnostic?: boolean; forceDiscovery?: boolean }): Promise<LocalManagerEndpoint> };

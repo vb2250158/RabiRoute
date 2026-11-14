@@ -3,6 +3,7 @@ import { assertTrustedLanAgentPrincipal } from "@rabiroute/host-api/manager/lanA
 
 /** Explicit request ownership; autonomous monitors and startup never capture this guard. */
 export type XiaomiHomeRequestAuthority = Readonly<{
+  signal?: AbortSignal;
   assert: () => void;
   dispatch: () => void;
 }>;

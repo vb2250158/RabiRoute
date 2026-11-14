@@ -58,3 +58,28 @@ test("once schedule only returns a future time and never backfills", () => {
   assert.equal(nextHeartbeatScheduleTime(schedule, localDate("2026-06-16T09:00:00")), null);
   assert.equal(nextHeartbeatScheduleTime(schedule, localDate("2026-06-10T09:00:00"), { lastScheduledAt: localDate("2026-06-15T09:30:00") }), null);
 });
+
+test("daily multi-time schedule advances within the same rule and across midnight", () => {
+  const schedule = { id: "daily", type: "daily_time", timeOfDay: "08:00", timeOfDays: ["18:00", "10:00", "14:00", "10:00"] } as NotificationScheduleDefinition;
+  for (const [now, last, expected] of [
+    ["2026-06-10T09:00:00", undefined, "2026-06-10T10:00:00"],
+    ["2026-06-10T10:00:00", "2026-06-10T10:00:00", "2026-06-10T14:00:00"],
+    ["2026-06-10T14:00:00", "2026-06-10T14:00:00", "2026-06-10T18:00:00"],
+    ["2026-12-31T18:00:00", "2026-12-31T18:00:00", "2027-01-01T10:00:00"],
+    ["2026-06-10T11:00:00", "2026-06-11T10:00:00", "2026-06-11T14:00:00"],
+  ]) assert.equal(isoLocal(nextHeartbeatScheduleTime(schedule, localDate(now!), { lastScheduledAt: last ? localDate(last) : undefined })), expected);
+});
+
+test("invalid multi-time schedules never partially run or fall back to the legacy time", () => {
+  for (const timeOfDays of [[], ["10:00", "bad"], ["25:00"], ["10:00", 14], null]) {
+    const schedule = { id: "bad", type: "daily_time", timeOfDay: "09:00", timeOfDays } as unknown as NotificationScheduleDefinition;
+    assert.equal(nextHeartbeatScheduleTime(schedule, localDate("2026-06-10T08:00:00")), null);
+  }
+});
+
+test("daily seconds remain precise and missed points are skipped without losing later points", () => {
+  const schedule: NotificationScheduleDefinition = { id: "seconds", type: "daily_time", timeOfDays: ["10:00:05", "14:00:30"] };
+  assert.equal(isoLocal(nextHeartbeatScheduleTime(schedule, localDate("2026-06-10T10:00:04"))), "2026-06-10T10:00:05");
+  assert.equal(isoLocal(nextHeartbeatScheduleTime(schedule, localDate("2026-06-10T13:00:00"), { lastScheduledAt: localDate("2026-06-09T10:00:05") })), "2026-06-10T14:00:30");
+  assert.equal(isoLocal(nextHeartbeatScheduleTime({ id: "old", type: "daily_time", timeOfDay: "09:30:05" }, localDate("2026-06-10T09:30:00"))), "2026-06-10T09:30:05");
+});

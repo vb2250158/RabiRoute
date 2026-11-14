@@ -1,11 +1,42 @@
 import { createImplementation, hostModules } from "./manager-runtime.mjs";
-import { definePlugin } from "@rabiroute/plugin-sdk";
+import { definePlugin, ownPluginAcceptedWork } from "@rabiroute/plugin-sdk";
 export const activate = definePlugin({
     async activate(context) {
         const shared = context.services.require("host.manager.persona@2");
         await shared.prepareModules(hostModules);
         const runtime = createImplementation(shared).createOwnedRuntime(shared);
+        const primitives = shared.module("roleKnowledge").planUpdatePrimitives;
+        const worker = await import("./worker/plan-update.mjs");
+        const preparation = worker.createPlanUpdatePreparation(primitives);
+        if (!primitives || !preparation || typeof preparation.prepare !== "function"
+            || typeof preparation.projectHistory !== "function" || typeof preparation.projectPlan !== "function") {
+            throw new Error("Persona plan-update executor dependencies are unavailable.");
+        }
+        const planWork = ownPluginAcceptedWork(context, "Persona plan updates");
+        const executorPin = Object.freeze({
+            pluginId: context.identity.pluginId,
+            version: context.identity.version,
+            revision: context.identity.revision,
+            entryPath: "worker/plan-update.mjs"
+        });
+        const executorEntryUrl = new URL("./worker/plan-update.mjs", import.meta.url).href;
+        context.services.provide("manager.persona.plan-update@1", Object.freeze({
+            acquirePlanUpdateExecutor() {
+                const lease = planWork.acquire(executorPin);
+                return Object.freeze({
+                    pin: executorPin,
+                    entryUrl: executorEntryUrl,
+                    run: operation => lease.run(operation),
+                    release: () => lease.release()
+                });
+            }
+        }));
         context.services.provide("manager.persona@1", Object.freeze({ instanceId: context.identity.instanceId }));
+        context.services.provide("manager.persona.automation-source@1", Object.freeze({
+            readScheduleSnapshot: () => runtime.dsBotAutomationRuleOwner.readScheduleSnapshot(),
+            acquireTaskLease: (roleId, storageOwner) => runtime.dsBotAutomationRuleOwner.acquireTaskLease(roleId, storageOwner),
+            subscribeChanged: listener => runtime.dsBotAutomationRuleOwner.subscribeChanged(listener)
+        }));
         for (const contribution of [
 {
     "kind": "page",
@@ -213,6 +244,23 @@ export const activate = definePlugin({
         }, "activate Manager role configuration operations");
 
         ctx.effect(async () => {
+            let unsubscribe = () => {};
+            try {
+                unsubscribe = runtime.subscribeRoleAutomationCatalog();
+                const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.dsBotAutomationRuleOperations, context.lifecycle.signal);
+                return async () => {
+                    unsubscribe();
+                    try { await registration.dispose(); }
+                    finally { await runtime.dsBotAutomationRuleOwner.dispose(); }
+                };
+            } catch (error) {
+                unsubscribe();
+                await runtime.dsBotAutomationRuleOwner.dispose();
+                throw error;
+            }
+        }, "activate Manager DSBot automation rule view");
+
+        ctx.effect(async () => {
             const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaResourceOperations, context.lifecycle.signal);
             return () => registration.dispose();
         }, "activate Manager persona resource operations");
@@ -228,6 +276,10 @@ export const activate = definePlugin({
             const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaSkillOperations, context.lifecycle.signal);
             return () => registration.dispose();
         }, "activate Manager persona Skill operations");
+        ctx.effect(async () => {
+            const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaAutomationTemplateOperations, context.lifecycle.signal);
+            return () => registration.dispose();
+        }, "activate Manager persona automation template operations");
         ctx.effect(async () => {
             const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId, runtime.personaKnowledgeOperations, context.lifecycle.signal);
             return () => registration.dispose();

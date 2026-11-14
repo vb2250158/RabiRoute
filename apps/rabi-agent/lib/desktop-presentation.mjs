@@ -39,7 +39,7 @@ export function createDesktopPresentation({ currentEntry, snapshot, command, onF
         try { event = JSON.parse(line); } catch { continue; }
         if (event.type === "ready") { clearTimeout(readyDeadline); publish(); continue; }
         if (event.type !== "command" || pending || child !== owned || closing) continue;
-        if (!["start", "pause", "restart", "reconnect", "open-manager", "startup", "exit"].includes(event.action)) continue;
+        if (!["start", "pause", "restart", "reconnect", "check-update", "open-manager", "startup", "exit"].includes(event.action)) continue;
         pending = true;
         Promise.resolve().then(() => command(event.action, event.enabled)).catch(() => onFailure("操作失败，请查看连接器状态。"))
           .finally(() => { pending = false; publish(); });

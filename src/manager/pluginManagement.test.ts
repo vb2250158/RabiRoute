@@ -32,6 +32,14 @@ async function fixture(t: test.TestContext, readOnly = false, background = false
   return { ...f, settings, list: async () => (await (await f.fetch("/api/plugins/instances")).json()).data };
 }
 
+test('package HTTP returns a partial diagnostic from the same enumeration while healthy packages remain selectable',async t=>{
+ const f=await fixture(t),good=path.join(f.root,'packages'),bad=path.join(f.root,'extra-root-file');await fs.writeFile(bad,'fixture');
+ const store=new PluginPackageStore({roots:[bad,good],managedRoot:good,importRuntimeRoot:path.join(f.root,'imports')});let enumerations=0;const original=store.listResult.bind(store);store.listResult=async()=>{enumerations++;return original();};
+ f.context.management=createPluginManagement({runtime:f.runtime,settings:f.settings,manifest:async()=>{throw Error('not used by package listing');},packages:store,reconcile:async()=>{}});
+ const response=await f.fetch('/api/plugins/packages'),body=await response.json();assert.equal(response.status,200);assert.equal(body.code,0);assert.equal(body.data.partial,true);assert.equal(body.data.diagnostics[0].path,bad);assert.equal(body.data.diagnostics[0].code,'ENOTDIR');assert.ok(body.data.packages.some((p:any)=>p.pluginId==='io.test.catalog'));assert.equal(enumerations,1);
+ await assert.rejects(f.context.management!.packages!({assertCurrent(){throw Error('original caller revoked');}}),/caller revoked/);assert.equal(enumerations,1,'caller authority remains enforced before reading roots');
+});
+
 test("actual management HTTP uninstalls and reinstalls the original plugin instance with its stored config", async t => {
   const f = await fixture(t), original = await fs.readFile(f.profilePath);
   let value = await f.list();
@@ -54,6 +62,10 @@ test("actual HTTP package import and available package listing use the original 
   const response = await f.fetch("/api/plugins/packages", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ sourceDirectory: path.join(f.root, "packages", "io.test.catalog", "1.0.0") }) });
   assert.equal(response.status, 200, await response.clone().text());
+  const imported = await response.json();
+  assert.equal(imported.data.importedPackage.id, 'io.test.catalog');
+  assert.equal(imported.data.importedPackage.version, '1.0.0');
+  assert.match(imported.data.importedPackage.revision, /^[a-f0-9]{64}$/);
   const available = await (await f.fetch("/api/plugins/packages")).json();
   assert.equal(available.data.packages[0]?.pluginId, "io.test.catalog");
   assert.deepEqual(available.data.packages[0]?.instanceIds, ["manager:catalog"]);

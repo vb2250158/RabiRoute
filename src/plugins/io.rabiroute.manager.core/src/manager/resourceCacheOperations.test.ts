@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import http from "node:http";
@@ -148,7 +149,7 @@ test("resource request revocation during temporary object creation or fsync neve
     t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
       const handle = await originalOpen(...args);
       if (String(args[0]).startsWith(final + ".") && String(args[0]).endsWith(".partial")) {
-        const revoke = () => { f.authority.setNodeEnabled("fixture-node", false); f.authority.setNodeEnabled("fixture-node", true); };
+        const revoke = () => { f.authority.enroll(f.authority.issueBootstrapTicket().ticket, "fixture-node", replacementCredentialBytes(32).toString("base64url")); };
         if (stage === "open") revoke(); else { const original = handle.sync.bind(handle); t.mock.method(handle, "sync", async () => { await original(); revoke(); }); }
       }
       return handle;

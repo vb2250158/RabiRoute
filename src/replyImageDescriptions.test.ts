@@ -143,6 +143,21 @@ test("a current text-only platform message plus its exact sent Route record is a
   assert.equal(prepareReplyImageDescriptions(send([]), replyOptions, undefined, platformSource), undefined);
 });
 
+test("an exact managed outbound record takes precedence over a duplicate legacy row", (t) => {
+  const { routeDataDir, replyOptions } = fixture(t, { imageCount: 1 });
+  appendManagedOutbound(routeDataDir);
+  const platformSource: PlatformReplySourceEvidence = {
+    routeId: "route-main",
+    sourceMessageId: "source-1",
+    groupId: "456",
+    instanceId: "qq-main",
+    record: { messageId: "source-1", groupId: "456", instanceId: "qq-main", segments: [] },
+    dataDirs: [routeDataDir]
+  };
+
+  assert.equal(prepareReplyImageDescriptions(send([]), replyOptions, undefined, platformSource), undefined);
+});
+
 test("successful image review creates one same-name Markdown description beside each image", (t) => {
   const { rootDir, mediaDir, replyOptions } = fixture(t);
   const plan = prepareReplyImageDescriptions(send([

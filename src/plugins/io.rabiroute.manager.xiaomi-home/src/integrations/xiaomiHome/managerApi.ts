@@ -26,13 +26,14 @@ export type XiaomiHomeManagerConfigInput = {
 };
 
 export type XiaomiHomeResource = {
+  searchEvidence?: unknown;
   resourceId: string;
   entityId: string;
   kind: string;
   displayName: string;
   available: boolean;
   stateVersion: string;
-  observedAt: string;
+  observedAt: string | null;
   state: string;
   attributes: Record<string, unknown>;
   capabilities: string[];
@@ -226,7 +227,7 @@ export function normalizeHomeAssistantState(state: HomeAssistantState): XiaomiHo
     displayName: String(attributes.friendly_name || state.entity_id),
     available: state.state !== "unavailable" && state.state !== "unknown",
     stateVersion: stateVersion(state),
-    observedAt: state.last_updated || state.last_changed || new Date().toISOString(),
+    observedAt: state.last_updated || state.last_changed || null,
     state: state.state,
     attributes,
     capabilities: capabilitiesFor(state.entity_id, attributes)
@@ -370,7 +371,7 @@ export class XiaomiHomeManagerApiClient {
 
   private async request<T>(pathname: string, init: RequestInit = {}, authority?: XiaomiHomeRequestAuthority): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+    const timeout = authority?.signal ? undefined : setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
     try {
       authority?.assert();
       if (init.method === "POST") authority?.dispatch();
@@ -383,7 +384,7 @@ export class XiaomiHomeManagerApiClient {
       let response: Response;
       for (let redirects = 0; ; redirects++) {
         authority?.assert();
-        response = await this.fetchImpl(url, { ...init, method, body, headers, redirect: "manual", signal: controller.signal });
+        response = await this.fetchImpl(url, { ...init, method, body, headers, redirect: "manual", signal: authority?.signal ? AbortSignal.any([controller.signal, authority.signal]) : controller.signal });
         authority?.assert();
         const location = response.headers.get("location");
         if (![301, 302, 303, 307, 308].includes(response.status) || !location) break;

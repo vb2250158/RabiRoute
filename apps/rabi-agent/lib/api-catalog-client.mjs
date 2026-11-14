@@ -1,6 +1,41 @@
+import { markOperationEffect } from './api-operation-effects.mjs';
 import { parseApiPathTemplate, fillApiPathTemplate, validApiHttpMethod } from "./api-path-template.mjs";
 
 const METHODS = new Set(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "*"]);
+
+export function validateDiscoveredApiOperation(entry, ids = new Set()) {
+  const contract = entry?.contract;
+  if (!contract || !entry.contractDigest || entry.id !== contract.operationId
+    || !METHODS.has(contract.method) || contract.method === "*" && (!contract.httpProxy || contract.transport !== "http" || contract.request?.body?.kind !== "passthrough") || typeof contract.pathTemplate !== "string"
+    || !contract.pathTemplate.startsWith("/") || contract.pathTemplate.startsWith("//")
+    || /[?#\\\s]/.test(contract.pathTemplate) || !/^\d+\.\d+\.\d+$/.test(contract.contractVersion)) {
+    throw new Error("Manager returned an invalid API operation declaration.");
+  }
+  parseApiPathTemplate(contract.pathTemplate, contract.request?.pathTails, contract.request?.pathRemainder);
+  if (entry.binding !== undefined) {
+    const binding = entry.binding, address = binding?.address;
+    if (binding.kind !== "external-listener" || typeof binding.listenerId !== "string" || !binding.listenerId
+      || typeof binding.leaseId !== "string" || !binding.leaseId || !["native", "discovery-only"].includes(binding.invocation)
+      || !["none", "native"].includes(binding.authentication?.kind) || typeof binding.authentication.description !== "string"
+      || !["http", "https"].includes(address?.protocol) || !Number.isSafeInteger(address.port) || address.port < 1 || address.port > 65535) throw new Error("Manager returned an invalid external listener binding.");
+    if (address.hostname !== undefined) {
+      const url = new URL(`${address.protocol}://${address.hostname}:${address.port}`);
+      if (url.hostname !== address.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash
+        || ["0.0.0.0", "[::]"].includes(address.hostname)) throw new Error("Manager returned an invalid external listener address.");
+    }
+  }
+  if (entry.access !== undefined && (!entry.binding || entry.access.kind !== "manager-native-http"
+    || entry.access.pathPrefix !== "/api/native-listeners/" + entry.binding.leaseId
+    || entry.access.contractHeader !== "x-rabiroute-native-proxy-contract"
+    || !/^sha256:[a-f0-9]{64}$/.test(entry.access.contractDigest) || contract.transport !== "http")) throw new Error("Manager returned an invalid native HTTP owner mapping.");
+  if (contract.request?.contractHeader !== undefined && !/^x-rabiroute-[a-z0-9-]+-contract$/.test(contract.request.contractHeader)) throw new Error("Manager returned an invalid operation contract header.");
+  if (contract.aliases !== undefined && (!Array.isArray(contract.aliases))) throw new Error("Manager returned invalid API operation aliases.");
+  for (const id of [entry.id, ...(contract.aliases ?? [])]) {
+    if (typeof id !== "string" || !/^[A-Za-z][A-Za-z0-9._:/-]{0,4095}$/.test(id) || ids.has(id)) throw new Error("Manager returned ambiguous API operation identifiers.");
+    ids.add(id);
+  }
+  return entry;
+}
 
 function parseCatalog(receipt) {
   if (!receipt.ok || receipt.uncertain || receipt.identityChanged) throw new Error("API discovery was not confirmed for the current Manager identity.");
@@ -13,38 +48,7 @@ function parseCatalog(receipt) {
   if (receipt.identity && (receipt.identity.applicationGenerationId !== catalog.applicationGenerationId
     || receipt.identity.managerInstanceId !== catalog.managerInstanceId)) throw new Error("API discovery and transport identities disagree.");
   const ids = new Set();
-  for (const entry of catalog.operations) {
-    const contract = entry?.contract;
-    if (!contract || !entry.contractDigest || entry.id !== contract.operationId
-      || !METHODS.has(contract.method) || contract.method === "*" && (!contract.httpProxy || contract.transport !== "http" || contract.request?.body?.kind !== "passthrough") || typeof contract.pathTemplate !== "string"
-      || !contract.pathTemplate.startsWith("/") || contract.pathTemplate.startsWith("//")
-      || /[?#\\\s]/.test(contract.pathTemplate) || !/^\d+\.\d+\.\d+$/.test(contract.contractVersion)) {
-      throw new Error("Manager returned an invalid API operation declaration.");
-    }
-    parseApiPathTemplate(contract.pathTemplate, contract.request?.pathTails, contract.request?.pathRemainder);
-    if (entry.binding !== undefined) {
-      const binding = entry.binding, address = binding?.address;
-      if (binding.kind !== "external-listener" || typeof binding.listenerId !== "string" || !binding.listenerId
-        || typeof binding.leaseId !== "string" || !binding.leaseId || !["native", "discovery-only"].includes(binding.invocation)
-        || !["none", "native"].includes(binding.authentication?.kind) || typeof binding.authentication.description !== "string"
-        || !["http", "https"].includes(address?.protocol) || !Number.isSafeInteger(address.port) || address.port < 1 || address.port > 65535) throw new Error("Manager returned an invalid external listener binding.");
-      if (address.hostname !== undefined) {
-        const url = new URL(`${address.protocol}://${address.hostname}:${address.port}`);
-        if (url.hostname !== address.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash
-          || ["0.0.0.0", "[::]"].includes(address.hostname)) throw new Error("Manager returned an invalid external listener address.");
-      }
-    }
-    if (entry.access !== undefined && (!entry.binding || entry.access.kind !== "manager-native-http"
-      || entry.access.pathPrefix !== "/api/native-listeners/" + entry.binding.leaseId
-      || entry.access.contractHeader !== "x-rabiroute-native-proxy-contract"
-      || !/^sha256:[a-f0-9]{64}$/.test(entry.access.contractDigest) || contract.transport !== "http")) throw new Error("Manager returned an invalid native HTTP owner mapping.");
-    if (contract.request?.contractHeader !== undefined && !/^x-rabiroute-[a-z0-9-]+-contract$/.test(contract.request.contractHeader)) throw new Error("Manager returned an invalid operation contract header.");
-    if (contract.aliases !== undefined && (!Array.isArray(contract.aliases))) throw new Error("Manager returned invalid API operation aliases.");
-    for (const id of [entry.id, ...(contract.aliases ?? [])]) {
-      if (typeof id !== "string" || !/^[A-Za-z][A-Za-z0-9._:/-]{0,4095}$/.test(id) || ids.has(id)) throw new Error("Manager returned ambiguous API operation identifiers.");
-      ids.add(id);
-    }
-  }
+  for (const entry of catalog.operations) validateDiscoveredApiOperation(entry, ids);
   return catalog;
 }
 
@@ -54,12 +58,12 @@ function freeze(value) {
 }
 
 /** A rebuildable contract cache, never an authorization allowlist or business-state owner. */
-export function createApiCatalogClient({ request, openWebSocket, requestExternal, openExternalWebSocket, onVerifiedCatalog, cachedDelivery }) {
+export function createApiCatalogClient({ request, openWebSocket, requestExternal, openExternalWebSocket, onVerifiedCatalog, cachedDelivery, resolveOperation, onInvalidate }) {
   let cached;
   let etag;
   let epoch = 0;
   let loading;
-  function invalidate() { epoch++; cached = undefined; etag = undefined; }
+  function invalidate() { epoch++; cached = undefined; etag = undefined; onInvalidate?.(); }
   function handleEvent(event) {
     const type = event?.type ?? event?.event;
     if (["ready", "reconnected", "api.catalog.changed"].includes(type)) invalidate();
@@ -95,7 +99,13 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     // real transport and handler still validate identity, access and its digest.
     let catalog = cached, resolved = options;
     const reusedCatalog = Boolean(catalog);
-    try { if (!catalog) catalog = await refresh({ signal: options.signal }); }
+    try {
+      if (resolveOperation) {
+        const selected = await resolveOperation(operationId, options);
+        validateDiscoveredApiOperation(selected.operation);
+        catalog = { ...selected.snapshot, operations: [selected.operation] };
+      } else if (!catalog) catalog = await refresh({ signal: options.signal });
+    }
     catch (error) {
       const cached = await cachedDelivery?.(operationId, options);
       if (!cached) throw error;
@@ -103,7 +113,7 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     }
     const { path: pathValues = {}, query = {}, method: requestedMethod, ...httpOptions } = resolved;
     let entry = catalog.operations.find(value => value.id === operationId || value.contract.aliases?.includes(operationId));
-    if (!entry && reusedCatalog) {
+    if (!entry && reusedCatalog && !resolveOperation) {
       catalog = await refresh({ signal: options.signal });
       entry = catalog.operations.find(value => value.id === operationId || value.contract.aliases?.includes(operationId));
     }
@@ -126,7 +136,7 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     const contractHeader = contract.request?.contractHeader ?? "x-rabiroute-api-contract";
     if (Object.keys(headers).some(name => name.toLowerCase() === contractHeader)) throw new Error("The selected operation owns its API contract header.");
     headers[contractHeader] = entry.contractDigest;
-    return { entry, catalog, method, target: target + (parameters.size ? "?" + parameters : ""), options: { ...httpOptions, headers, replaySafe: false } };
+    return { entry, catalog, method, target: target + (parameters.size ? "?" + parameters : ""), options: markOperationEffect({ ...httpOptions, headers, replaySafe: false }, contract, method) };
   }
 
   async function invokeOperation(operationId, options = {}) {
@@ -193,5 +203,5 @@ export function createApiCatalogClient({ request, openWebSocket, requestExternal
     } finally { invalidate(); }
   }
 
-  return Object.freeze({ refresh, invokeOperation, openOperation, invalidate, handleEvent, watch });
+  return Object.freeze({ getSnapshot: () => cached, prepareOperation: prepare, refresh, invokeOperation, openOperation, invalidate, handleEvent, watch });
 }

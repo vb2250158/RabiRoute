@@ -26,6 +26,7 @@ import {
   normalizePersonaAutomationRules,
   normalizeRecentMessageLimits,
   normalizeRuleDefinitions,
+  normalizeScheduleDefinitions,
   notificationRulesFromPersonaAutomations,
   personaAutomationRulesFromNotificationRules,
   RECENT_MESSAGE_ENDPOINTS,
@@ -1168,4 +1169,18 @@ test("automatic generic Webhook ports survive normalization and assignment witho
   assert.deepEqual(collectGatewayPortClaims(routes), []);
   assert.doesNotThrow(() => validateGatewayPortConflicts(routes));
   assert.throws(() => normalizeGatewayDefinition(gateway({ messageAdapters: ["webhook"], webhookPort: -1 })), /Invalid/);
+});
+
+test("daily lists survive normalization as one rule and invalid persisted lists stay locally inert", () => {
+  const rules = normalizePersonaAutomationRules([
+    { id: "multi", trigger: { type: "schedule", schedule: { id: "daily", type: "daily_time", timeOfDays: ["18:00", "10:00", "10:00", "14:00"], custom: "retained" } }, action: { type: "deliver_agent" } },
+    { id: "broken", trigger: { type: "schedule", schedule: { id: "bad", type: "daily_time", timeOfDay: "09:00", timeOfDays: ["10:00", "bad"] } }, action: { type: "deliver_agent" } },
+    { id: "legacy", trigger: { type: "schedule", schedule: { id: "old", type: "daily_time", timeOfDay: "09:00:05" } }, action: { type: "deliver_agent" } }
+  ]);
+  assert.equal(rules.length, 3);
+  assert.equal(rules[0].trigger.type, "schedule");
+  if (rules[0].trigger.type === "schedule") assert.deepEqual(rules[0].trigger.schedule.timeOfDays, ["10:00", "14:00", "18:00"]);
+  if (rules[1].trigger.type === "schedule") assert.deepEqual(rules[1].trigger.schedule.timeOfDays, []);
+  if (rules[2].trigger.type === "schedule") assert.equal(Object.hasOwn(rules[2].trigger.schedule, "timeOfDays"), false);
+  assert.equal(Object.hasOwn(normalizeScheduleDefinitions([{ id: "changed", type: "interval", intervalSeconds: 60, timeOfDays: ["10:00"] }])![0], "timeOfDays"), false);
 });

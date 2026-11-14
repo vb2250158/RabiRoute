@@ -34,7 +34,7 @@ persistent checkout credentials, and external actions that are not pinned to a
 full commit SHA in every changed GitHub Actions workflow. A local action is
 allowed by path; a Docker action must use a `sha256` digest.
 
-## Host and plugin version contract
+## Host, plugin and application version contract
 
 The user's current plugin architecture decision replaces the former mandatory Host patch increment for every commit. Version the owner whose contract or implementation changed.
 
@@ -42,6 +42,7 @@ The user's current plugin architecture decision replaces the former mandatory Ho
 |---|---|
 | Host framework or extension point | Advance Host SemVer according to impact; patch, minor and major transitions are accepted. This architecture migration uses `0.7.0`. Synchronize root package/lock and both README versions. |
 | Plugin source, web UI, resource, test or documentation | Advance that plugin’s authoritative version; a plugin-only change keeps the Host version. |
+| Independently packaged application | A tracked `apps/<directory>/package.json` with a name and strict SemVer owns that application. Advance its version and synchronize an existing lock in the same scope; keep the Host version for application-only changes. Unowned application paths retain the Host rule. |
 | New native plugin | Initial version `0.1.1`. |
 | First legacy builtin source move | Accept exact old version → `0.1.1` only with the matching `package-migrations.json` declaration and original builtin identity. This exception is unavailable to an already canonical package or an external ecosystem. |
 | Existing external plugin | Continue its published version sequence; never reset it to the native baseline. |
@@ -49,7 +50,7 @@ The user's current plugin architecture decision replaces the former mandatory Ho
 
 `plugins/source-catalog.json` records each canonical source folder and authoritative `versionFile`. Compare that authority against `HEAD`, including its original manifest when the current change moves the source. Synchronize other versioned root/hidden manifests and plugin lock root metadata; do not substitute a secondary package version for the authority.
 
-The staged gate reads Git index objects for the catalog, version files, migration declarations and change records. Worktree-only version edits cannot repair an invalid staged plugin. A metadata mismatch, reused or lower published version, missing source owner, or Host framework change without a Host increase blocks submission. No override or skip switch is provided.
+The staged gate reads Git index objects for the catalog, version files, migration declarations and change records. Worktree-only version edits cannot repair an invalid staged plugin or application. A metadata mismatch, reused or lower published version, missing source owner, or Host framework change without a Host increase blocks submission. No override or skip switch is provided.
 
 After rebase, merge, pull or upstream movement, re-read the original owner versions and re-evaluate the candidate. Source, Git commits, release tags, packages and installed runtime remain separate evidence.
 

@@ -12,7 +12,13 @@ export const activate = definePlugin({
       vacuumVideoWorker: fileURLToPath(new URL("./workers/vacuumVideoWorker.mjs", import.meta.url))
     });
     const manager = host.manager;
-    context.services.provide("manager.xiaomi-home@1", Object.freeze({ instanceId: context.identity.instanceId }));
+    let searchSnapshot;
+    context.services.provide("manager.xiaomi-home@1", Object.freeze({ instanceId: context.identity.instanceId,
+      readSearchSnapshot(request, signal) {
+        if (!searchSnapshot) throw new Error("ENTITY_SOURCE_NOT_READY");
+        return searchSnapshot(request, signal);
+      }
+    }));
     context.contributions.register({
       kind: "message-endpoint-settings",
       id: "xiaomi-home-message-endpoint",
@@ -144,6 +150,7 @@ export const activate = definePlugin({
           deliverEvent: eventDelivery.deliverEvent
         });
         activationStage = "route registration";
+        searchSnapshot = definitions.searchSnapshot;
         registrations.push(await manager.routes.registerOperationsAsync(context.identity.instanceId, definitions.operations, context.lifecycle.signal));
         registrations.push(manager.routes.registerHttpProxies(context.identity.instanceId, definitions.proxies));
         return dispose;

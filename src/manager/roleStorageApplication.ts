@@ -1,3 +1,5 @@
+import type { PlanUpdateExecutorCallbacks, PlanUpdateExecutorSelection } from "./planUpdateExecutor.js";
+import { loadPlanUpdatePreparation } from "./planUpdateExecutorRuntime.js";
 import { createHash, randomUUID } from "node:crypto";
 import { invalidatePlanReads } from "../planReadInvalidation.js";
 import type {
@@ -30,6 +32,7 @@ import {
   ManagerStorageMutationPool,
   type ManagerStorageMutationPoolStatus
 } from "./managerStorageMutationPool.js";
+import type { ManagerStorageMutationReceiptResult } from "./managerStorageMutationProtocol.js";
 import {
   ManagerReadWorkerError,
   ManagerReadWorkerPool,
@@ -124,10 +127,11 @@ export class RoleStorageApplicationError extends Error {
       | "generation_mismatch"
       | "projection_unavailable"
       | "mutation_failed"
+      | "aborted_before_commit"
       | "authorization_revoked",
     readonly statusCode: number,
     readonly operationId?: string,
-    readonly commitState: "not_started" | "unknown" | "committed" = "not_started",
+    readonly commitState: "not_started" | "not_committed" | "unknown" | "committed" = "not_started",
     readonly causeCode?: string
   ) {
     super(message);
@@ -149,6 +153,7 @@ type RoleStorageMutationPool = Pick<
   | "updatePlanStatus"
   | "deletePlanStatus"
   | "updatePlan"
+  | "reconcilePlanUpdateReceipt"
   | "updatePlanSecretaryBinding"
   | "updatePlanTaskBinding"
   | "createRecentMemory"
@@ -164,8 +169,8 @@ type RoleStorageMutationPool = Pick<
   | "appendRolePanelTimeline"
 >;
 
-export type RoleStorageApplicationOptions = Readonly<{
-  rolesRoot: string;
+export type RoleStorageApplicationOptions = PlanUpdateExecutorCallbacks & Readonly<{
+  rolesRoot: string | (() => string);
   applicationGenerationId: string;
   managerInstanceId: string;
   currentIdentity?: () => RoleStorageGenerationIdentity | null;
@@ -275,6 +280,8 @@ function publicMutationError(error: unknown, operationId?: string): RoleStorageA
   switch (error.code) {
     case "authorization_revoked":
       return new RoleStorageApplicationError("Original request authorization was revoked.", "authorization_revoked", 403, operationId, error.commitState ?? "not_started");
+    case "aborted_before_commit":
+      return new RoleStorageApplicationError(error.message, "aborted_before_commit", 409, operationId, "not_committed");
     case "validation_rejected":
       return new RoleStorageApplicationError(error.message, "invalid_request", 400, operationId, "not_started");
     case "revision_conflict":
@@ -359,25 +366,31 @@ function roleStorageMutationOutcome(error: RoleStorageApplicationError): "reject
 }
 
 export class RoleStorageQueries {
-  private readonly rolesRoot: string;
+  private readonly rolesRoot: string | (() => string);
+  private resolvedRolesRoot?: string;
   private readonly identity: RoleStorageGenerationIdentity;
   private readonly currentIdentity: () => RoleStorageGenerationIdentity | null;
+  private readonly acquirePlanUpdateExecutor: PlanUpdateExecutorCallbacks["acquirePlanUpdateExecutor"];
+  private readonly restorePlanUpdateExecutor: PlanUpdateExecutorCallbacks["restorePlanUpdateExecutor"];
 
   constructor(
-    options: Pick<RoleStorageApplicationOptions, "rolesRoot" | "applicationGenerationId" | "managerInstanceId" | "currentIdentity">,
+    options: Pick<RoleStorageApplicationOptions, "rolesRoot" | "applicationGenerationId" | "managerInstanceId" | "currentIdentity" | "acquirePlanUpdateExecutor" | "restorePlanUpdateExecutor">,
     private readonly readPool: RoleStorageReadPool = managerReadWorkerPool,
     private readonly catalogReadPool: RoleStorageReadPool = managerCatalogWorkerPool
   ) {
-    this.rolesRoot = requiredIdentity(options.rolesRoot, "rolesRoot");
+    this.rolesRoot = typeof options.rolesRoot === "function" ? options.rolesRoot : requiredIdentity(options.rolesRoot, "rolesRoot");
     this.identity = Object.freeze({
       applicationGenerationId: requiredIdentity(options.applicationGenerationId, "applicationGenerationId"),
       managerInstanceId: requiredIdentity(options.managerInstanceId, "managerInstanceId")
     });
     this.currentIdentity = options.currentIdentity ?? (() => this.identity);
+    this.acquirePlanUpdateExecutor = options.acquirePlanUpdateExecutor;
+    this.restorePlanUpdateExecutor = options.restorePlanUpdateExecutor;
   }
 
   private roleDir(roleId: string): string {
-    return storageMutationRoleDirectory(this.rolesRoot, roleId);
+    const root = this.resolvedRolesRoot ??= requiredIdentity(typeof this.rolesRoot === "function" ? this.rolesRoot() : this.rolesRoot, "rolesRoot");
+    return storageMutationRoleDirectory(root, roleId);
   }
 
   assertCurrentGeneration(): void {
@@ -419,13 +432,40 @@ export class RoleStorageQueries {
     return value;
   }
 
-  plan(roleId: string, planId: string, options: { signal?: AbortSignal; timeoutMs?: number; reusePrepared?: boolean } = {}): Promise<RoleStoragePlanProjection | null> {
+  async plan(
+    roleId: string,
+    planId: string,
+    options: { signal?: AbortSignal; timeoutMs?: number; reusePrepared?: boolean } = {},
+    executor?: PlanUpdateExecutorSelection | null
+  ): Promise<RoleStoragePlanProjection | null> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    // Pure read optimization intent; omitted on internal post-commit projections.
-    const prepared = options.reusePrepared && this.readPool === managerReadWorkerPool
-      ? (roleDir: string) => managerReadWorkerPool.queryRoleStoragePlanProjection<RoleStoragePlanProjection | null>(roleDir, canonicalPlanId, options)
-      : undefined;
-    return this.run(roleId, roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options, prepared);
+    // An explicit null means an original receipt predates package-pinned execution.
+    if (executor?.error) throw executor.error;
+    const lease = executor === undefined
+      ? this.acquirePlanUpdateExecutor?.()
+      : executor?.pin && !executor.descriptor
+        ? await this.restorePlanUpdateExecutor?.(executor.pin)
+        : undefined;
+    if (executor === undefined && this.acquirePlanUpdateExecutor && !lease) {
+      throw new Error("The selected Persona plan executor is temporarily unavailable.");
+    }
+    if (executor?.pin && !executor.descriptor && !lease) {
+      throw new Error("The original plan executor package resolver is unavailable.");
+    }
+    const read = async (): Promise<RoleStoragePlanProjection | null> => {
+      const prepared = options.reusePrepared && this.readPool === managerReadWorkerPool
+        ? (roleDir: string) => managerReadWorkerPool.queryRoleStoragePlanProjection<RoleStoragePlanProjection | null>(roleDir, canonicalPlanId, options)
+        : undefined;
+      const raw = await this.run<RoleStoragePlanProjection | null>(roleId,
+        roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options, prepared);
+      if (!raw) return null;
+      const preparation = await loadPlanUpdatePreparation(executor?.descriptor ?? lease);
+      const projection = preparation.projectPlan(raw);
+      this.assertCurrentGeneration();
+      return projection;
+    };
+    try { return lease ? await lease.run(read) : await read(); }
+    finally { lease?.release(); }
   }
 
   publishPlan(roleId: string, plan: PlanItem): Readonly<PlanItem> {
@@ -548,7 +588,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -580,7 +620,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -643,7 +683,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -669,7 +709,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -679,9 +719,10 @@ export class RoleStorageCommands {
     roleId: string,
     planId: string,
     context: RoleStorageCommandContext,
-    operationId?: string
+    operationId?: string,
+    executor?: PlanUpdateExecutorSelection | null
   ): Promise<RoleStoragePlanProjection> {
-    const projection = await this.queries.plan(roleId, planId, context);
+    const projection = await this.queries.plan(roleId, planId, context, executor);
     if (!projection) {
       throw new RoleStorageApplicationError(
         "The committed plan projection is unavailable.",
@@ -802,6 +843,7 @@ export class RoleStorageCommands {
 
   async updatePlan(roleId: string, planId: string, patch: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
+    let executor: PlanUpdateExecutorSelection | undefined;
     return this.commitProjection({
       operation: "plan-update",
       roleId,
@@ -809,9 +851,67 @@ export class RoleStorageCommands {
       payload: patch,
       context,
       expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
-      mutate: options => this.mutationPool.updatePlan(roleId, canonicalPlanId, patch, options),
-      project: () => this.requiredPlanProjection(roleId, canonicalPlanId, context)
+      mutate: options => this.mutationPool.updatePlan(roleId, canonicalPlanId, patch, {
+        ...options,
+        onPlanUpdateExecutorSelected: selected => { executor = selected; }
+      }),
+      project: () => this.requiredPlanProjection(roleId, canonicalPlanId, context, undefined, executor)
     });
+  }
+
+  async reconcilePlanUpdateReceipt(
+    roleIdValue: string,
+    planId: string,
+    patch: Record<string, unknown>,
+    context: RoleStorageCommandContext
+  ): Promise<ManagerStorageMutationReceiptResult & Readonly<{ requestId: string }>> {
+    const roleId = canonicalStorageMutationRoleId(roleIdValue);
+    const canonicalPlanId = canonicalStorageMutationPlanId(planId);
+    const requestId = stableRoleStorageOperationId({
+      operation: "plan-receipt-reconcile",
+      roleId,
+      resourceId: canonicalPlanId,
+      explicitIdempotencyKey: context.idempotencyKey
+    });
+    const expectedRevision = parseRoleStorageExpectedRevision(context.expectedRevision) ?? null;
+    const audit = {
+      group: "plan",
+      owner: "role-storage",
+      action: "reconcile-plan-receipt",
+      target: { type: "storage-mutation", id: requestId },
+      dataSource: { kind: "file" as const, id: `roles/${roleId}/runtime/data/storage-mutation-idempotency` },
+      operationId: requestId
+    };
+    let result: ManagerStorageMutationReceiptResult | undefined;
+    recordDataMutationAudit({ ...audit, event: "role_storage_receipt_reconcile_started", outcome: "started" });
+    try {
+      this.assertPoolGeneration();
+      assertManagerStorageMutationAuthorized(context);
+      result = await this.mutationPool.reconcilePlanUpdateReceipt(roleId, canonicalPlanId, patch, {
+        authorize: context.authorize,
+        idempotencyKey: requestId,
+        expectedRevision,
+        actor: context.actor,
+        signal: context.signal,
+        timeoutMs: context.timeoutMs
+      });
+      this.assertPoolGeneration();
+      assertManagerStorageMutationAuthorized(context);
+      recordDataMutationAudit({
+        ...audit,
+        event: "role_storage_receipt_reconciled",
+        outcome: result.state === "completed" ? result.settlement === "committed" ? "committed" : "replayed" : "no_change",
+        result: `${result.state}:${result.operationState}:${result.commitState}`
+      });
+      return Object.freeze({ ...result, requestId });
+    } catch (error) {
+      const mapped = publicMutationError(error, requestId);
+      recordDataMutationAudit({ ...audit, level: "error", event: "role_storage_receipt_reconcile_failed", outcome: "failed", error: mapped });
+      if (result?.state === "completed") {
+        throw new RoleStorageApplicationError(mapped.message, mapped.code, mapped.statusCode, requestId, result.commitState, mapped.causeCode);
+      }
+      throw mapped;
+    }
   }
 
   async updatePlanSecretaryBinding(roleId: string, planId: string, binding: PlanSecretaryBinding | null, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
@@ -1097,7 +1197,7 @@ export class RoleStorageCommands {
         outcome,
         durationMs: Date.now() - startedAt,
         result: publicError.code,
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -1121,7 +1221,7 @@ export class RoleStorageCommands {
         after: afterRevision ? { revision: afterRevision } : undefined,
         durationMs: Date.now() - startedAt,
         result: "mutation_committed",
-        error: publicError
+        error
       });
       throw publicError;
     }
@@ -1161,7 +1261,7 @@ export class RoleStorageApplication {
   private readonly mutationPool: RoleStorageMutationPool;
 
   constructor(options: RoleStorageApplicationOptions) {
-    const rolesRoot = requiredIdentity(options.rolesRoot, "rolesRoot");
+    const rolesRoot = typeof options.rolesRoot === "function" ? options.rolesRoot : requiredIdentity(options.rolesRoot, "rolesRoot");
     const identity = Object.freeze({
       applicationGenerationId: requiredIdentity(options.applicationGenerationId, "applicationGenerationId"),
       managerInstanceId: requiredIdentity(options.managerInstanceId, "managerInstanceId")
@@ -1174,7 +1274,9 @@ export class RoleStorageApplication {
     const queries = new RoleStorageQueries(validatedOptions, options.readPool, options.catalogReadPool);
     const mutationPool = options.mutationPool ?? new ManagerStorageMutationPool({
       rolesRoot,
-      ...identity
+      ...identity,
+      acquirePlanUpdateExecutor: options.acquirePlanUpdateExecutor,
+      restorePlanUpdateExecutor: options.restorePlanUpdateExecutor
     });
     const commands = new RoleStorageCommands(identity, mutationPool, queries);
     this.mutationPool = mutationPool;
@@ -1199,7 +1301,9 @@ export function roleStorageHttpError(error: unknown): Readonly<{
   const mapped = error instanceof RoleStorageApplicationError
     ? error
     : new RoleStorageApplicationError("Role storage request failed.", "mutation_failed", 500, undefined, "unknown");
-  const nextAction = mapped.commitState === "committed"
+  const nextAction = mapped.commitState === "not_committed"
+    ? "The original operation ended before publishing its commit. Its terminal failure is recorded under the original key. A new intended change requires its own explicit request."
+    : mapped.commitState === "committed"
     ? "The write succeeded. Read the resource to confirm its current contents; replay only the original payload with the same Idempotency-Key if the receipt is still needed."
     : mapped.commitState === "unknown"
       ? "Read the resource and original operation receipt. Retry only the original payload with the same Idempotency-Key; do not create a replacement operation."

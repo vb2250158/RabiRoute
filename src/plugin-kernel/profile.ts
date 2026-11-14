@@ -264,8 +264,8 @@ export class PluginPackageCatalog {
     })));
     this.#loader = new PluginPackageLoader(options.loading);
   }
-  loadPackage(packageId: string, packageVersion: string, runtimeRoot: string, host: PluginHost): Promise<LoadedPluginPackage> {
-    return this.#loader.load({ kind: "package", packageId, version: packageVersion, runtimeRoot: path.resolve(runtimeRoot), host, roots: this.#roots }) as Promise<LoadedPluginPackage>;
+  loadPackage(packageId: string, packageVersion: string, runtimeRoot: string, host: PluginHost, options: Readonly<{ layout?: "revision" }> = {}): Promise<LoadedPluginPackage> {
+    return this.#loader.load({ kind: "package", packageId, version: packageVersion, runtimeRoot: path.resolve(runtimeRoot), host, roots: this.#roots, ...(options.layout ? { layout: options.layout } : {}) }) as Promise<LoadedPluginPackage>;
   }
   loadProfile(profilePath: string): Promise<PluginProfile> {
     return this.#loader.load({ kind: "profile", profilePath: path.resolve(profilePath) }) as Promise<PluginProfile>;

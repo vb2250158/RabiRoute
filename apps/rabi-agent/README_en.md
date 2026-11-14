@@ -83,13 +83,13 @@ The tray and status window use the Rabi icon included in the signed release pack
 Login startup and manual launch enter the same main program. The stable launcher is the sole lifecycle owner; the connector and tray are its children. The status window belongs to the tray child. Duplicate launches do not create another connector; normal exit or abrupt main-program death releases the children.
 
 - Double-click the icon for connection status, version, bound tasks, recent delivery results and up to 120 process-local state records. Agent runtime state remains unverified until real delivery; no recurring host/session scans occur.
-- The menu starts/stops/restarts the connector, reconnects to the host, opens host management, changes login startup and exits. Stopping the connector retains the tray; exit ends the application's children. Codex/DSH keep their own lifecycle. Connector controls are temporarily unavailable during updates or known active tasks.
+- The menu starts/stops/restarts the connector, reconnects to the host, checks for updates through the existing signed update flow, opens host management, changes login startup and exits. Stopping the connector retains the tray; exit ends the application's children. Codex/DSH keep their own lifecycle. Connector controls are temporarily unavailable during updates or known active tasks.
 - The main program writes and reads back startup changes, retains the previous file and refuses to overwrite another installation's entry. Management navigation carries no credentials; the browser handles login.
 - The tray consumes sanitized snapshots and submits commands through parent-child pipes. It does not read private configuration, contact Manager or start an Agent Runtime.
 
 Windows native tray, menu, singleton, process-exit and isolated release-asset tests are covered. Real two-computer upgrades and login startup remain pending. After upgrading an older signed release, exit the original main program normally and launch once through the existing launcher to adopt the new owner and tray; keep enrollment and task bindings.
 
-CLI control uses the same owner: `node rabi-agent-launcher.mjs --config <private-config> --command status|start|pause|restart|reconnect|enable-startup|disable-startup`. `--stop` exits the whole application. CLI clients perform one request only.
+CLI control uses the same owner: `node rabi-agent-launcher.mjs --config <private-config> --command status|start|pause|restart|reconnect|check-update|enable-startup|disable-startup`. `--stop` exits the whole application. CLI clients perform one request only.
 
 > Status: experimental. Setup, authorization and upload-to-group-file delivery passed local tests, a full build, and deployment health checks for `0.3.4-4b5d30118b40`. Upload integration used real HTTP and simulated NapCat; real two-computer group delivery remains unverified. This discovery-guidance and content-digest update audit requires separate verification of its final running version. Full Windows ZIP acceptance remains pending.
 
@@ -127,6 +127,22 @@ Provide `RABI_MANAGER_URL`, `RABI_AGENT_BOOTSTRAP_TICKET`, `RABI_NODE_ID`, `RABI
 
 The connector automatically updates from Manager's signed content digest unless explicitly configured with `autoUpdate=false`, including changed content with the same version. One stable launcher supervises one worker. Candidate handoff follows prepared → drain → old connection closed → activate → pointer commit → release execution; failure retains the old release without cancelling or resending business work. Current-user login startup, bounded recovery, legacy migration and real-device acceptance follow the [canonical bootstrap contract](../../docs/lan-rabi-agent-bootstrap_en.md#installation-and-releases). Valid credentials are not redeemed again or rebound; replacing files does not establish host hot loading.
 
+## Category discovery and unified CLI
+
+Terminal Agents and scripts use `node apps/rabi-agent/rabi-cli.mjs`. Local calls discover Manager through the current Host. Enrolled remote calls reuse their existing configuration. CLI and MCP share the operation SDK.
+
+```sh
+node apps/rabi-agent/rabi-cli.mjs categories
+node apps/rabi-agent/rabi-cli.mjs list --category agents --provider codex --limit 20
+node apps/rabi-agent/rabi-cli.mjs search "chat history" --category agents
+node apps/rabi-agent/rabi-cli.mjs describe agent.providers.codex.sessions.history.read --view input
+node apps/rabi-agent/rabi-cli.mjs call agent.providers.codex.sessions.history.read --input-file request.json
+```
+
+For a remote call, append `--config <original-private-config> --agent-type <type> --id <full-session-id>`. `--input-file`, `--input-json` and `--input-stdin` consume the same structure as MCP `input`, retaining `pathParams/query/body/headers`. Supply the original write identity with `--request-id` or `--idempotency-key`, and the original ETag with `--if-match`.
+
+See [Unified CLI and MCP API](../../docs/unified-agent-api_en.md) for categories, custom plugin capabilities, native Codex/DSH histories, files, streams and parameter sources. This section describes source implementation. Installed adoption on each target computer is confirmed by release acceptance.
+
 ## Use Manager from an existing task
 
 **New source capability; installed acceptance pending:** `--operation <operationId>` resolves method/path from schema-v2 `GET /api/agent/help`. `--path-params` and `--query` accept JSON objects; body, output, and idempotency options reuse `--api`. For example, `--operation manager.api.help --agent-type <type> --id <fullSessionId>` reads the new catalog. Each operation reuses verified discovery and refreshes missing or invalidated entries on demand; real connection authentication and server contract checks still run at the request boundary. Catalog changes, event reconnects, and identity changes invalidate it; business calls are never automatically replayed. Older deployments use original `--api` calls with known contracts. A missing discovery entry is not remote disablement. See [target architecture](../../docs/api-contract-discovery-target-architecture_en.md) for full-coverage and migration status.
@@ -141,7 +157,7 @@ node rabi-agent.mjs --api GET /api/lan-agent/resources --agent-type <type> --id 
 node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agent-interfaces.md" --agent-type <type> --id <fullSessionId>
 ```
 
-Reliable Agent sends are durably accepted by the original client and resumed in the background. Local acceptance is distinct from target delivery. The stable launcher supports `--delivery-submit`, `--delivery-query`, and `--delivery-list`; existing `--api POST /api/agent/threads` send calls use the same path. Other mutations do not automatically replay. See [reliable delivery and records](../../docs/reliable-agent-delivery_en.md).
+Agent sends are durably accepted by the original client; local acceptance is distinct from target delivery. Proven pre-send preparation failures can proceed with the first send after the original identity recovers. Uncertain sends and old records after restart are checked by their original receipts without replaying content. Old uncertain records do not block newly authorized sends to the same target. The stable launcher supports `--delivery-submit`, `--delivery-query`, and `--delivery-list`; existing `--api POST /api/agent/threads` send calls use the same path. Other mutations do not automatically replay. See [reliable delivery and records](../../docs/reliable-agent-delivery_en.md).
 
 General syntax: `--api METHOD /path --agent-type TYPE --id FULL_SESSION_ID [--body-stdin] [--if-match ETAG] [--idempotency-key KEY]`. Provide the actual Agent type and full session ID on each call; no registration or binding is required. The CLI reads `nodeCredential` automatically and rejects old shared credentials. Read the current contract before mutations, supply JSON through standard input, and provide the required strong ETag and stable idempotency key. The CLI checks Manager `/meta` before and after calls. On timeout, 503, `uncertain` or a generation change after a write, read authoritative state before acting and never replay automatically. On 412, read again and reconfirm intent.
 

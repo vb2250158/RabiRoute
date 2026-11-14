@@ -24,6 +24,10 @@ export type AgentInstance = {
   ownerDeviceId?: string;
   terminalShells?: string[];
   computerCapabilities?: string[];
+  computerSettingsDefinitionVersions?: number[];
+  computerSettingsIssue?: string;
+  computerSettings?: Record<string,unknown>;
+  platform?: string;
   /** Manager-owned display alias; empty restores the reported hostname. */
   name?: string;
   hostname?: string;
@@ -75,4 +79,10 @@ export function normalizeInstanceAgents(value: unknown): InstanceAgent[] {
       workspace: text(raw.workspace),
       model: text(raw.model, 160), reasoningEffort: text(raw.reasoningEffort, 32), dshBaseUrl: text(raw.dshBaseUrl) };
   });
+}
+
+/** Preserve advertised new desktop capabilities instead of dropping them at the old three-capability boundary. */
+export function normalizeComputerCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((entry): entry is string => typeof entry === "string" && /^[a-z][a-zA-Z0-9.-]{0,63}$/.test(entry)))];
 }

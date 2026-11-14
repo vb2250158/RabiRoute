@@ -16,6 +16,7 @@ import {
   type RabiLinkHomeData
 } from "../../../../../ribiwebgui/src/rabiLinkHomeClient";
 import { createRabiLinkHomeLoader, type RabiLinkHomeState } from "../../../../../ribiwebgui/src/rabiLinkHomeState";
+import ComputerControlPage from "../computer/ComputerControlPage.vue";
 import LanAgentsPage from "../../../../../ribiwebgui/src/pages/LanAgentsPage.vue";
 import RabiLinkSettings from "../components/RabiLinkSettings.vue";
 
@@ -25,6 +26,8 @@ const store = useGatewayStore();
 const { t } = useI18n();
 const tab = computed(() => rabiLinkTab(route.query.tab));
 const ready = ref(false);
+const computerVisited = ref(tab.value === "computer");
+watch(tab, value => { if (value === "computer") computerVisited.value = true; });
 const saving = ref(false);
 const refreshing = ref(false);
 const error = ref("");
@@ -130,6 +133,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
     <v-tabs :model-value="tab" color="primary" class="mb-4" @update:model-value="value => router.replace({ query: { ...route.query, tab: String(value) } })">
       <v-tab value="home">主页</v-tab>
       <v-tab value="agents">远端智能体</v-tab>
+      <v-tab value="computer">电脑控制</v-tab>
       <v-tab value="config">配置</v-tab>
     </v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
@@ -178,7 +182,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
                 <v-chip v-for="label in device.services.known" :key="label" size="small" variant="outlined">{{ label }}</v-chip>
                 <span v-if="!device.services.known.length" class="section-note">{{ device.services.advanced.length ? '其他服务能力' : '未声明服务能力' }}</span>
               </div>
-              <v-btn v-if="device.kind === 'desktop'" class="mt-2" size="small" variant="tonal" prepend-icon="mdi-remote-desktop" :to="{ path: '/rabilink', query: { tab: 'agents', deviceId: device.isLocal ? undefined : device.id } }">操作电脑与智能体</v-btn>
+              <v-btn v-if="device.kind === 'desktop'" class="mt-2" size="small" variant="tonal" prepend-icon="mdi-remote-desktop" :to="{ path: '/rabilink', query: { tab: 'computer', deviceId: device.isLocal ? undefined : device.id } }">查看电脑控制</v-btn>
               <details class="section-note mt-2">
                 <summary>高级信息</summary>
                 <dl class="rabilink-device-details">
@@ -193,6 +197,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       </template>
     </section>
     <LanAgentsPage v-if="tab === 'agents'" />
+    <ComputerControlPage v-if="computerVisited" v-show="tab === 'computer'" :active="tab === 'computer'" />
     <!-- One mounted editor preserves its draft and save registration across tabs. -->
     <RabiLinkSettings v-show="tab === 'config'" :ready="ready" @saving="onSaving" />
   </div>

@@ -10,6 +10,16 @@ import { ComputerService } from "../lib/computer-service.mjs";
 import { computerRequestSchema } from "../lib/interactive-protocol.mjs";
 const sha = value => createHash("sha256").update(value).digest("hex");
 
+test("upload status recovery never reads malformed feature settings or enables new file work", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-bad-computer-settings-"));
+  const service = new ComputerService({ uploadHistoryRoot: path.join(root, "history"), getSettings: () => { throw new Error("Original computer settings are malformed"); } });
+  t.after(async () => { await service.stop(); removePrivateFixture(root); });
+  assert.equal((await service.execute({ action: "upload.status", uploadId: randomUUID() })).state, "absent");
+  await assert.rejects(service.execute({ action: "file.stat", path: path.join(os.tmpdir(), "unopened-fixture-file") }), /settings are malformed/);
+  assert.equal(service.children.size, 0);
+  await service.stop();
+});
+
 test("computer stop joins the actual helper close before confirming cleanup", async t => {
   const child = spawn(process.execPath, ["-e", "console.log('ready');setInterval(()=>{},1000)"], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
   let closed = false;

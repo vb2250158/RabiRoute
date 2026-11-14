@@ -12,13 +12,33 @@ import { createPersonaHealthOperations } from "./src/manager/personaHealthOperat
 import { createPersonaIdentityOperations } from "./src/manager/personaIdentityOperations.js";
 import { createPersonaKnowledgeOperations } from "./src/manager/personaKnowledgeOperations.js";
 import { createPersonaSkillOperations } from "./src/manager/personaSkillOperations.js";
+import { createAutomationTemplateOperations } from "./src/manager/automationTemplateOperations.js";
 import { createPersonaMessagingOperations } from "./src/manager/personaMessagingRoutes.js";
 import { createPersonaDirectoryOperation } from "./src/manager/personaMessagingRoutes.js";
 import { createLanguageStyleOperations } from "./src/manager/languageStyleRoutes.js";
 import { createRolePanelOperations } from "./src/manager/rolePanelOperations.js";
+import { createDsBotAutomationRuleOwner, createDsBotAutomationRuleOperations } from "./src/manager/dsBotAutomationRuleOperations.js";
 export function createOwnedRuntime(ports) {
+    const dsBotAutomationRuleOwner = createDsBotAutomationRuleOwner({
+        rolesRoot: () => ports.rolesRoot,
+        identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId })
+    });
+    let templateSnapshot;
+    let currentTemplates = [];
+    const readAutomationTemplates = () => {
+        const snapshot = ports.managerPluginRoutes.catalogSnapshot();
+        if (snapshot !== templateSnapshot) {
+            currentTemplates = snapshot.operations.flatMap(operation =>
+                Array.isArray(operation.discovery?.automationTemplates) ? operation.discovery.automationTemplates : []);
+            templateSnapshot = snapshot;
+        }
+        return currentTemplates;
+    };
     return Object.freeze({
         ManagerPluginRequestTracker: ports.ManagerPluginRequestTracker,
+        dsBotAutomationRuleOwner,
+        subscribeRoleAutomationCatalog: () => ports.subscribeRoleCatalogChanges(() => dsBotAutomationRuleOwner.invalidate()),
+        dsBotAutomationRuleOperations: createDsBotAutomationRuleOperations(dsBotAutomationRuleOwner),
         roleConfigurationOperations: createRoleConfigurationOperations({
             rolesRoot: () => ports.rolesRoot,
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
@@ -32,6 +52,7 @@ export function createOwnedRuntime(ports) {
             },
             changed: async (roleId, assertCurrent) => {
                 assertCurrent();
+                dsBotAutomationRuleOwner.invalidate();
                 await ports.ensureDataDirs();
                 assertCurrent();
                 ports.publishManagerEvent("role_catalog_changed", { roleId });
@@ -120,11 +141,17 @@ export function createOwnedRuntime(ports) {
         personaKnowledgeOperations: createPersonaKnowledgeOperations({
             get service() { return ports.knowledgeSearchService; },
             roleDirectory: ports.roleDirForApi,
+            roleExists: roleId => ports.routeCatalogPersonas().some(role => role.roleId === roleId && ports.path.resolve(role.rolesRoot) === ports.path.resolve(ports.rolesRoot)),
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
             requestCatalogRefresh: ports.requestRoleKnowledgeCatalogRefresh
         }),
         personaSkillOperations: createPersonaSkillOperations({
             roleDirectory: ports.roleDirForApi,
+            isReadOnly: () => ports.managerReadOnly,
+            onSkillsChanged: (roleId, directory) => {
+                ports.requestRoleKnowledgeCatalogRefresh(directory);
+                ports.publishManagerEvent("role_catalog_changed", { roleId });
+            },
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
             querySkills: (directory, skillId, options) => ports.managerKnowledgePageWorkerPool.run({
                 type: "role_skill_catalog", roleDir: directory, ...(skillId ? { skillId } : {})
@@ -134,6 +161,7 @@ export function createOwnedRuntime(ports) {
             }, options),
             reportCleanupError: () => console.error("[role-skill-download] Private archive cleanup failed.")
         }),
+        personaAutomationTemplateOperations: createAutomationTemplateOperations({ readAutomationTemplates }),
         personaMessagingOperations: createPersonaMessagingOperations(() => {
             let appendTimeline;
             try {

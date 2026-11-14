@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -67,7 +68,7 @@ async function fixture(t: import("node:test").TestContext, publication?: { read(
 
 test("discovery/OpenAPI and actual upgrade use one executable contract without HTTP-only admission", { timeout: 15000 }, async t => {
   const f = await fixture(t), snapshot = f.api.catalogSnapshot();
-  assert.equal(snapshot.operations.length, 4); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
+  assert.equal(snapshot.operations.length, 7); assert.equal(snapshot.coverage.globalCoverage, "not-proven");
   const spec = (await apiCatalogOpenApi(snapshot)) as any, operation = spec.paths["/api/lan-agent/connect"].get;
   assert.equal(operation["x-rabiroute-transport"], "websocket"); assert.equal(operation.responses["101"].content, undefined);
   const selected = snapshot.operations.find(row => row.contract.operationId === "manager.lan-agent.connect")!;
@@ -161,7 +162,7 @@ test("retirement retains the lease for asynchronous owner cleanup after the sock
 
 test("revocation and re-enable cannot revive the original authenticated native channel", { timeout: 15000 }, async t => {
   const f = await fixture(t), connection = await f.open(); await connection.authenticate();
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url"));
   const closed = once(connection.socket, "close"); connection.socket.send(JSON.stringify({ type: "heartbeat" }));
   assert.equal((await closed)[0], 1008); await f.registration.dispose();
   assert.equal(f.nodes.listNodes()[0]!.connected, false);

@@ -193,7 +193,13 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       readReceipt: value => receipts.readReceipt(value), writeReceipt: (value, receipt) => receipts.writeReceipt(value, receipt),
       readNotSent: value => receipts.readNotSentProof(value), writeNotSent: (value, proof) => receipts.writeNotSent(value, proof),
       beginAttempt: value => receipts.beginAttempt(value), recoverReceipt: (value, guard) => withAgentManagerInvocation(options, () => recoverEndpointOwnerReceipt(value, guard)),
-      send: (value, guard) => executeEndpointOnOwner(value, options, guard) }, reconcile));
+      send: (value, guard) => {
+        // The original receipt/reconcile branches above stay readable after a
+        // user disables new tasks. Check only at this target's new-send boundary.
+        try { context.registry.assertComputerFeature(context.registry.localInstanceId, "agentTasks"); }
+        catch (error) { throw new EndpointDeliveryNotSentError(error); }
+        return executeEndpointOnOwner(value, options, guard);
+      } }, reconcile));
   }
   function options(remoteSource?: AgentThreadRemoteSource, requestAuthority?: () => void, deviceSource?: RabiLinkAgentPrincipal,
     serviceSource?: AgentServiceSourcePrincipal, callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"]): EndpointDeliveryOptions {

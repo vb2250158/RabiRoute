@@ -67,8 +67,13 @@ export async function* readCodexRolloutLines(
     verifyIdentity?: boolean;
     requireTerminatedRecords?: boolean;
     onSource?: (source: CodexRolloutSource) => void;
+    /** Resume a plain JSONL stream at an earlier returned complete-record boundary. */
+    startOffset?: number;
+    onLine?: (line: string, position: { startOffset: number; nextOffset: number; terminated: boolean }) => void;
   } = {}
 ): AsyncGenerator<string> {
+  const startOffset = options.startOffset ?? 0;
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0) throw sourceError("Invalid rollout byte offset.", "CODEX_ROLLOUT_OFFSET_INVALID");
   const deadline = AbortSignal.timeout(DEFAULT_SCAN_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
   signal.throwIfAborted();
@@ -100,8 +105,26 @@ export async function* readCodexRolloutLines(
     throw sourceError(`Codex rollout is not a regular file: ${physicalPath}`, "CODEX_ROLLOUT_NOT_FILE");
   }
 
-  options.onSource?.({ physicalPath, stat, fallback });
-  const source = handle.createReadStream({ autoClose: true, signal });
+  if (startOffset > 0) {
+    try {
+      if (physicalPath.endsWith(".zst") || startOffset > stat.size) throw sourceError("The rollout cursor no longer addresses a plain file.", "CODEX_ROLLOUT_CURSOR_CHANGED");
+      const chunks: Buffer[] = [];
+      let offset = 0;
+      for (;;) {
+        signal.throwIfAborted();
+        const bytes = Buffer.alloc(4096);
+        const read = await handle.read(bytes, 0, bytes.length, offset);
+        const end = bytes.subarray(0, read.bytesRead).indexOf(10);
+        chunks.push(bytes.subarray(0, end < 0 ? read.bytesRead : end));
+        if (end >= 0 || !read.bytesRead) break;
+        offset += read.bytesRead;
+      }
+      if (!provesTaskIdentity(Buffer.concat(chunks).toString("utf8"), expectedThreadId)) throw sourceError("The rollout cursor belongs to another task.", "CODEX_ROLLOUT_IDENTITY_MISMATCH");
+    } catch (error) { await handle.close(); throw error; }
+  }
+  try { options.onSource?.({ physicalPath, stat, fallback }); }
+  catch (error) { await handle.close(); throw error; }
+  const source = handle.createReadStream({ autoClose: true, signal, start: startOffset });
   let input: AsyncIterable<Buffer | string> = source;
   let decompressor: DestroyableReadWriteStream | undefined;
   let failDecompressor: ((error: Error) => void) | undefined;
@@ -121,10 +144,11 @@ export async function* readCodexRolloutLines(
     input = source.pipe(decompressor);
   }
 
-  let first = true;
+  let first = startOffset === 0;
+  let nextOffset = startOffset;
   let pendingParts: Buffer<ArrayBufferLike>[] = [];
   let pendingBytes = 0;
-  const accept = (lineBytes: Buffer): string => {
+  const accept = (lineBytes: Buffer, terminated = true): string => {
     const normalized = lineBytes.at(-1) === 13 ? lineBytes.subarray(0, -1) : lineBytes;
     const line = normalized.toString("utf8");
     if (first) {
@@ -133,6 +157,9 @@ export async function* readCodexRolloutLines(
         throw sourceError("The exact Codex rollout sibling does not belong to the requested task.", "CODEX_ROLLOUT_IDENTITY_MISMATCH");
       }
     }
+    const previousOffset = nextOffset;
+    nextOffset += lineBytes.length + (terminated ? 1 : 0);
+    options.onLine?.(line, { startOffset: previousOffset, nextOffset, terminated });
     return line;
   };
   try {
@@ -165,7 +192,7 @@ export async function* readCodexRolloutLines(
         throw sourceError("Codex rollout ended with an incomplete record.", "CODEX_ROLLOUT_INCOMPLETE_RECORD");
       }
       const pending = pendingParts.length === 1 ? pendingParts[0]! : Buffer.concat(pendingParts, pendingBytes);
-      yield accept(pending);
+      yield accept(pending, false);
     }
     if ((fallback || options.verifyIdentity) && first) {
       throw sourceError("The exact Codex rollout sibling has no complete identity record.", "CODEX_ROLLOUT_IDENTITY_MISSING");

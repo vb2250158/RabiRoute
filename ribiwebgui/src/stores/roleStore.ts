@@ -30,6 +30,8 @@ export async function findFirstAvailableRole(source: string): Promise<RoleSummar
 export const useRoleStore = defineStore("roles", () => {
   const routes = useGatewayStore();
   const catalog = ref<RoleSummary[]>([]);
+  const catalogPartial = ref(false), catalogError = ref("");
+  let catalogSource: string | undefined;
   const selectedRoleId = ref("");
   const sourceDeviceId = ref("");
   const detail = ref<RoleDetail | null>(null);
@@ -60,17 +62,33 @@ export const useRoleStore = defineStore("roles", () => {
   async function loadCatalog(): Promise<void> {
     const generation = ++catalogVersion;
     const source = sourceDeviceId.value;
-    if (source) await bootstrapRemotePersonaService(source);
+    if (catalogSource !== undefined && catalogSource !== source) catalog.value = [];
+    catalogSource = source;
+    const previous = [...catalog.value];
+    catalogError.value = "";
+    catalogPartial.value = false;
     const collected: RoleSummary[] = [];
     let cursor = "";
-    do {
+    try {
+      if (source) await bootstrapRemotePersonaService(source);
+      do {
       const url = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
       if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
       collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));
       cursor = page.nextCursor || "";
-      catalog.value = [...collected];
-    } while (cursor);
+        catalogPartial.value = Boolean(cursor);
+        const received = new Set(collected.map(role => role.roleId));
+        catalog.value = cursor ? [...collected, ...previous.filter(role => !received.has(role.roleId))] : [...collected];
+      } while (cursor);
+    } catch (failure) {
+      if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
+      const status = (failure as { status?: number }).status;
+      if (status === 401 || status === 403) { catalog.value = []; catalogPartial.value = false; }
+      else catalogPartial.value = catalog.value.length > 0;
+      catalogError.value = failure instanceof Error ? failure.message : String(failure);
+      throw failure;
+    }
   }
   async function load(): Promise<void> {
     const id = selectedRoleId.value;
@@ -132,6 +150,6 @@ export const useRoleStore = defineStore("roles", () => {
     }
     await routes.openConfigFile(type, "", roleId);
   }
-  return { catalog, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,
+  return { catalog, catalogPartial, catalogError, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,
     selectedGateway, selectedRuntime, gateways, meta, loadCatalog, load, select, save, touch, openConfigFile, ...actions };
 });

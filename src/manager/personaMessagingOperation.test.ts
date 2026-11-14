@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -104,7 +105,7 @@ test("HTTP disconnection joins accepted delivery, audit and the persistent compl
 
 test("original-node revocation suppresses accepted results and source proof is checked before actual dispatch", { timeout: 15000 }, async t => {
   const f = await fixture(t), hold = f.hold(); const pending = f.send("revoked-original"); await hold.started;
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url")); hold.release();
   const response = await pending; assert.equal(response.status, 403); assert.ok(!(await response.text()).includes("original message")); assert.equal(f.state.accepted, 1);
   const other = await fixture(t); other.state.rejectRenewedProof = true;
   assert.equal((await other.send("expired-source-proof")).status, 403); assert.equal(other.state.accepted, 0);

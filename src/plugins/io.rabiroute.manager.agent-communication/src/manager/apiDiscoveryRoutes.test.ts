@@ -23,7 +23,7 @@ test("discovery, OpenAPI, conditional reads and revision-bound pagination use th
   const help = await fetch(root + "/api/agent/help");
   assert.equal(help.status, 200);
   const body = await help.json() as { data: { schemaVersion: string; operations: { id: string }[]; coverage: { complete: boolean } } };
-  assert.equal(body.data.schemaVersion, "2"); assert.equal(body.data.operations.length, 4);
+  assert.equal(body.data.schemaVersion, "2"); assert.equal(body.data.operations.length, 7);
   assert.ok(body.data.operations.some(value => value.id === "example.record.write"));
   assert.equal(body.data.coverage.complete, false);
   const aliasHelp = await (await fetch(root + "/api/agent/help?operationId=" + encodeURIComponent(alias))).json();
@@ -52,4 +52,45 @@ test("discovery, OpenAPI, conditional reads and revision-bound pagination use th
   const spec = await (await fetch(root + "/api/agent/openapi")).json() as { openapi: string; paths: Record<string, unknown> };
   assert.equal(spec.openapi, "3.1.0"); assert.ok(spec.paths["/api/agent/help"]);
   assert.equal((await fetch(root + "/api/lan-agent/capabilities")).status, 200);
+});
+
+
+test("lightweight discovery HTTP routes expose categories, search and exact descriptions through the active registry", async t => {
+  const registry = new ManagerPluginRouteRegistry();
+  const discovery = registry.registerOperations("discovery", createApiDiscoveryOperations(registry));
+  const declaration = { title: "读取群聊历史", summary: "Read selected group history", category: { id: "messages.qq", title: "QQ", parentId: "messages" },
+    tags: ["QQ"], keywords: ["群消息"], provider: "napcat", inputSources: [{ field: "query.routeId", operationId: "fixture.routes", resultPath: "/data/items", valuePath: "/id" }] };
+  const operation = registry.registerOperations("example", [{ contract: fixtureApiContract({ operationId: "fixture.group.history", aliases: ["legacy:group:history"] }), discovery: declaration,
+    handler: () => ({ status: 200, body: { ok: true, value: 1 } }) }]);
+  declaration.title = "Caller mutation must not leak";
+  const server = http.createServer((request, response) => {
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const root = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { await operation.dispose(); await discovery.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const categories = await (await fetch(root + "/api/agent/categories")).json();
+  assert.equal(categories.code, 0); assert.equal(categories.data.resultScope, "api-categories"); assert.match(categories.data.usageHint, /not a business resource list/); assert.equal(categories.data.categories.find((row: { id: string }) => row.id === "messages").count, 1);
+  assert.equal(categories.data.categories.find((row: { id: string }) => row.id === "messages.qq").parentId, "messages");
+  const response = await fetch(root + "/api/agent/operations?category=messages&query=" + encodeURIComponent("QQ 群消息") + "&provider=napcat&method=post&owner=example&pathPrefix=%2Fapi%2Fexample");
+  assert.equal(response.status, 200);
+  const page = await response.json(); assert.equal(page.data.resultScope, "api-operations"); assert.match(page.data.usageHint, /Totals count matching APIs/); assert.equal(page.data.count, 1); assert.equal(page.data.items[0].operationId, "fixture.group.history");
+  assert.equal(page.data.items[0].title, "读取群聊历史"); assert.equal(Object.hasOwn(page.data.items[0], "contract"), false);
+  assert.equal((await fetch(response.url, { headers: { "if-none-match": response.headers.get("etag")! } })).status, 304);
+  const detail = await (await fetch(root + page.data.items[0].describe.path)).json();
+  assert.equal(detail.data.resultScope, "api-operation-description"); assert.equal(detail.data.operation.id, "fixture.group.history"); assert.ok(detail.data.operation.contract.request); assert.equal(Object.hasOwn(detail.data.operation, "help"), false);
+  assert.equal(detail.data.operation.discovery.inputSources[0].valuePath, "/id");
+  const input = await (await fetch(root + page.data.items[0].describe.path + "?view=input")).json();
+  assert.ok(input.data.operation.request); assert.equal(Object.hasOwn(input.data.operation, "contract"), false);
+  const result = await (await fetch(root + page.data.items[0].describe.path + "?view=result")).json();
+  assert.ok(result.data.operation.responses); assert.equal(Object.hasOwn(result.data.operation, "request"), false);
+  assert.equal((await fetch(root + "/api/agent/operations/" + encodeURIComponent("legacy:group:history"))).status, 200);
+  assert.equal((await fetch(root + "/api/agent/operations/unknown")).status, 404);
+  for (const query of ["limit=0", "unknown=value", "method=GET&method=POST"]) assert.equal((await fetch(root + "/api/agent/operations?" + query)).status, 400);
+  assert.equal((await fetch(root + page.data.items[0].describe.path + "?view=unsupported")).status, 400);
+  const initial = await (await fetch(root + "/api/agent/operations?limit=1")).json();
+  assert.equal(initial.data.total, 7); assert.ok(initial.data.nextCursor);
+  await operation.dispose();
+  assert.equal((await fetch(root + "/api/agent/operations?limit=1&cursor=" + encodeURIComponent(initial.data.nextCursor))).status, 409);
 });

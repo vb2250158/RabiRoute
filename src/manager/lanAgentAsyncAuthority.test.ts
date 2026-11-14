@@ -25,8 +25,8 @@ function deferred() {
 const json = (response: http.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body));
 };
-type Revocation = "disable" | "instance-aba" | "global-aba"  | "reenroll";
-const revocations: Revocation[] = ["disable", "instance-aba", "global-aba", "reenroll"];
+type Revocation = "credential-revoked" | "credential-replaced" | "global-aba"  | "reenroll";
+const revocations: Revocation[] = ["credential-revoked", "credential-replaced", "global-aba", "reenroll"];
 async function fixture(t: TestContext, handler: http.RequestListener) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-async-authority-"));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
@@ -57,10 +57,10 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
         authority.revokeNode("fixture-node");
         const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
       } else {
-        authority.setNodeEnabled("fixture-node", false);
-        if (mode === "instance-aba") {
-          authority.setNodeEnabled("fixture-node", true);
-          assert.ok(authority.acquireConnectionLease(credential.token), "fresh admission remains available after re-enable");
+        authority.revokeNode("fixture-node");
+        if (mode === "credential-replaced") {
+          const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+          assert.ok(authority.acquireConnectionLease(replacement.token), "fresh replacement admission remains available");
         }
       }
     }

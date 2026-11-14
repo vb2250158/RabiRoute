@@ -14,7 +14,7 @@ const limits={type:'object',required:Object.keys(DEFAULT_ROLE_KNOWLEDGE_WRITE_LI
 const validation=json({type:'object',required:['ok','limits','issues'],properties:{ok:{type:'boolean'},limits,issues:{type:'array',items:{type:'object',required:['type','id','message'],properties:{type:{enum:['plan','plan_storage','recent_memory','consolidated_memory']},id:str,message:str}}}}});
 const failure:ApiResponseContract={mediaType:'application/json; charset=utf-8',schema:{type:'object',required:['code','message'],properties:{code:{const:-1},message:str,error:str,errorCode:str,reason:str,repair:str,
   help:{type:'object',required:['method','path'],additionalProperties:false,properties:{method:{const:'GET'},path:str}}}}};
-const errors=Object.fromEntries([400,403,409,503].map(code=>[String(code),failure]));
+const errors=Object.fromEntries([400,403,404,409,503].map(code=>[String(code),failure]));
 function failed(error:unknown,contract:ApiOperationContract,input:Pick<ApiOperationInput,'path'>):ApiOperationResult {
   if(error instanceof ApiContractError)throw error;
   const message=error instanceof Error?error.message:String(error),cause=error as {statusCode?:number;publicCode?:string};
@@ -35,6 +35,7 @@ export function createPersonaKnowledgeOperations(context:PersonaKnowledgeContext
   const owner=createKnowledgeSearchOwner(context),published=createPersonaKnowledgeValidationOwner(context);
   const base=(id:string,method:ApiOperationContract['method'],path:string,body:ApiOperationContract['request']['body'],responses:ApiOperationContract['responses']):ApiOperationContract=>({
     operationId:'manager.personas.knowledge.'+id,aliases:[(path.startsWith('/roles/')?'knowledge-alias':id.startsWith('validation')?'knowledge':'persona')+':'+method+':'+path],contractVersion:'1.0.0',method,pathTemplate:path,exposure:'public',transport:'http',description:'Use the current selected persona’s original Manager-owned knowledge index or published catalog validation.',
+    ...(id === 'search' ? { searchable: { scope: 'knowledge', legend: '角色计划、近期记忆与沉淀记忆 / plans and memories', kinds: ['plan','recent','consolidated'] } } : {}),
     request:{path:{type:'object',required:['roleId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1}}},query:{type:'object',...(id==='search'?{properties:{
       query:{description:'Native normalization requires 1–512 nonempty characters.'},mode:{description:'First native value is keywords (default) or fulltext.'},
       kind:{description:'First native value is plan, recent or consolidated; absent/empty means no kind filter.'},archived:{description:'First value 1 includes archived entries; other values retain the original exclusion.'},

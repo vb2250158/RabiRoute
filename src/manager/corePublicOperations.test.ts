@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { nativeHttpTestFetch as fetch } from "./nativeHttpTestClient.js";
@@ -160,7 +161,7 @@ test("revocation during source await prevents native operation disclosure", asyn
   const f = await fixture(t, { sourcePatches: { status: () => ({}) as any, operation: async () => { entered(); await gate; return { private: "must-not-disclose" } as any; } } });
   const abort = new AbortController(), pending = f.send("/api/source-patches/operations/pending", "GET", undefined, abort.signal);
   await withHandlerEntry(started, pending, () => { release(); abort.abort(); }, async () => {
-  f.authority.setNodeEnabled(f.credential.nodeId, false); release();
+  f.authority.revokeNode(f.credential.nodeId); release();
   const reply = await pending; assert.equal(reply.status, 403); assert.equal(JSON.stringify(reply.body).includes("must-not-disclose"), false);
   });
 });
@@ -202,7 +203,7 @@ test("reset captures authorization before body, and rejects disable/re-enable AB
     wire.once("error", reject); wire.write(payload.slice(0, 10));
   });
   await withHandlerEntry(prepared, reply, () => { if (!wire.writableEnded) wire.destroy(); }, async () => {
-  f.authority.setNodeEnabled(f.credential.nodeId, false); f.authority.setNodeEnabled(f.credential.nodeId, true);
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url"));
   wire.end(payload.slice(10)); assert.equal(await reply, 403); assert.equal(calls, 0);
   });
 });
@@ -214,7 +215,7 @@ test("revoked reset result retains unknown mutation evidence and hides the queue
     enqueue: async () => { entered(); await gate; return { operationId, state: "queued" }; } } } });
   const abort = new AbortController(), pending = f.send(resetPath, "POST", { operationId, expectedGuid: guid, confirmed: true }, abort.signal);
   await withHandlerEntry(started, pending, () => { release(); abort.abort(); }, async () => {
-  f.authority.setNodeEnabled(f.credential.nodeId, false); release();
+  f.authority.revokeNode(f.credential.nodeId); release();
   const reply = await pending; assert.equal(reply.status, 403); assert.equal(reply.body.mutationOutcome, "unknown"); assert.equal(reply.body.uncertain, true);
   assert.equal(reply.body.data, undefined); assert.equal(JSON.stringify(reply.body).includes('"queued"'), false);
   });

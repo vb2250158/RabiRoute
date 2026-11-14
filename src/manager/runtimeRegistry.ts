@@ -20,8 +20,14 @@ export type GatewayRuntime = {
   log: string[];
 };
 
+export type RuntimeRegistryOptions = {
+  appendLine?: (runtimeId: string, line: string) => void;
+};
+
 export class RuntimeRegistry {
   private readonly runtimes = new Map<string, GatewayRuntime>();
+
+  constructor(private readonly options: RuntimeRegistryOptions = {}) {}
 
   values(): GatewayRuntime[] {
     return [...this.runtimes.values()];
@@ -86,6 +92,11 @@ export class RuntimeRegistry {
     runtime.log.push(stamped);
     if (runtime.log.length > 200) {
       runtime.log.splice(0, runtime.log.length - 200);
+    }
+    try {
+      this.options.appendLine?.(runtime.definition.id, stamped);
+    } catch {
+      // Log persistence must not interrupt the Gateway lifecycle.
     }
   }
 }

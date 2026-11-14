@@ -301,7 +301,7 @@ export async function dshAuthenticatedFetch(baseUrl: string, method: string, bod
 async function authenticatedFetch(baseUrl: string, method: string, body: string, assertAuthorized: (() => void | Promise<void>) | undefined, signal: AbortSignal | undefined, recoverRead: boolean): Promise<Response> {
   await assertAuthorized?.();
   const origin = originOf(baseUrl);
-  if (!/^[A-Za-z][A-Za-z0-9]*(?:[./][A-Za-z][A-Za-z0-9]*)+$/.test(method)) throw new Error('DSH RPC method is invalid.');
+  if (method !== 'bot' && !/^[A-Za-z][A-Za-z0-9]*(?:[./][A-Za-z][A-Za-z0-9]*)+$/.test(method)) throw new Error('DSH RPC method is invalid.');
   const store = currentConnectionStore();
   let saved = store.resolve(origin);
   if (saved?.state === 'disconnected') throw new DshConnectionError('DSH authorization was explicitly disconnected; reconnect in WebGUI.', 401);

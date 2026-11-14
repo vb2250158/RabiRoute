@@ -53,7 +53,7 @@ Do not proceed with unresolved private/runtime paths, real credentials, private 
 
 ### 3. Version the owner that changed
 
-The current user-directed plugin architecture supersedes the previous per-commit Host patch rule. Host versions describe framework and extension-point changes; plugin versions describe each plugin's implementation and resources. A plugin-only commit keeps the Host version when its architecture is unchanged.
+The current user-directed plugin architecture supersedes the previous per-commit Host patch rule. Host versions describe framework and extension-point changes; plugin versions describe each plugin's implementation and resources. Independently packaged applications use their tracked `apps/<directory>/package.json` version. Changes owned by plugins or these applications keep the Host version when its architecture is unchanged.
 
 Changes confined to test/spec files or test directories do not publish a Host or plugin version and need no release metadata. Security and diff checks still run. In mixed changes, only production owners require version changes; another plugin's tests do not release that plugin.
 
@@ -61,7 +61,8 @@ Changes confined to test/spec files or test directories do not publish a Host or
 2. Advance the Host SemVer for framework or extension-point changes. Choose patch, minor or major from the changed contract; this architecture migration uses Host `0.7.0`. Synchronize `package.json`, both root lock versions, and both README version statements when the Host version changes.
 3. For each changed plugin, read its canonical source owner and authoritative `versionFile` from `plugins/source-catalog.json`. Advance that plugin's own version and synchronize its other versioned manifests and lock metadata. Do not infer an external plugin's version from the Host or from a package.json that is not its authority.
 4. New native plugins start at `0.1.1`. The first move from legacy builtin source/version folders to canonical source accepts that baseline only for the exact package/version transition in `plugins/profiles/package-migrations.json`. Published external plugins retain their own version sequence; a source move does not authorize a downgrade or reused release number.
-5. Maintain concrete Chinese and English change records in `版本更新日志.md` and `版本更新日志_en.md`. Plugin-only records state the affected plugin and its version under the current Host section; they do not require a new Host version. Re-read `HEAD` after history changes and compare each affected owner again.
+5. For an independently packaged application, advance its tracked `apps/<directory>/package.json` version and synchronize its existing lock root metadata in the same scope. The gate reports these transitions in `versionGate.applications`; an unowned application path retains the Host rule.
+6. Maintain concrete Chinese and English change records in `版本更新日志.md` and `版本更新日志_en.md`. Plugin-only records state the affected plugin and its version under the current Host section; they do not require a new Host version. Re-read `HEAD` after history changes and compare each affected owner again.
 
 Version checks do not authorize tags, releases, installers, deployment or installation. Those remain separate actions.
 

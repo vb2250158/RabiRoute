@@ -95,7 +95,7 @@ test("group choices obey source scope and resolve conflicting account aliases by
   assert.deepEqual(automationQqContactChoices("group", groupRule, routes, [directory()]), []);
 });
 
-const pickerPage = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
+const pickerPage = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const pickerScript = parse(pickerPage).descriptor.scriptSetup!.content;
 const pickerAst = ts.createSourceFile("picker.ts", pickerScript, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const emit = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;

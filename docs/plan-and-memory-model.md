@@ -799,3 +799,28 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶�
 当前步骤直接显示计划的真实状态。待审批、待补充信息和分析中的步骤不显示为“正在执行”，审批等待也不显示为技术故障式的“已阻塞”。已完成的步骤显示“已完成”。
 
 跨实例 Hook 状态采用互不冲突的本机/远端身份键；已有本机投递编号保持原输入。旧格式在原写入边界保留原始备份后升级到版本 9，无法归属的旧条目保留并单独诊断，不阻断正常 Stop 或完成处理。回退前核对实际格式；旧写入者不能安全处理新增的远端、转义键及保留桶，不得用切换前的整份状态覆盖后续写入。
+
+## 原计划写入回执独立收口
+
+通过 `GET /api/agent/help?operationId=manager.personas.storage.plans.mutations.reconcile` 读取当前精确合同。分类、搜索与 describe 使用同一公开目录。
+
+```http
+POST /api/roles/:roleId/plans/:planId/mutations/:requestId/reconcile
+Content-Type: application/json
+```
+
+正文包含原 `patch` 及原请求确有的 `actor`。原 receipt audit 提供 expectedRevision，调用方可选提供原 `expectedRevision` 或 If-Match 进行交叉核对。path 中的 requestId 是原幂等键。提供 Idempotency-Key header 时使用同一原值。expectedRevision 可使用原强 If-Match 值，它是原请求证明锚点。存储拥有者在原计划租约下核对 receipt、原提交历史和同计划 WAL，并以 receipt 自身快照 CAS 收口。
+
+```json
+{
+  "patch": { "currentStep": "Original frozen progress text" },
+  "expectedRevision": "inventory-sha256:<original inventory hash>",
+  "actor": { "kind": "unknown" }
+}
+```
+
+actor 使用原存储请求中的精确值。正常 HTTP 请求省略 messageSource 时，原解析结果为 `{kind: "unknown"}`。明确声明过来源的原请求继续保留当时的 actor，避免从当前已改名会话重新生成旧记录。
+
+响应的 `state: completed` 表示回执已终结。`operationState: succeeded` 与 `commitState: committed` 返回原成功结果。`operationState: failed` 与 `commitState: not_committed` 表示原操作已确证在提交前结束，结果带 `retryable: false`。相同原 key 继续读取这个终态。原正常 PATCH 若遇这个终态，返回 HTTP 409、`aborted_before_commit` 和 `not_committed`。
+
+活动执行返回 in_progress，prepared WAL 或证明不足返回 uncertain，payload 不匹配返回 conflict。该操作只更新已有 receipt，原计划、附件、历史、WAL 与临时 candidate 保留。需要继续恢复 prepared 事务时，由原存储维护任务处理该具体事务。

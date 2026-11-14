@@ -336,6 +336,51 @@ test("new instance owners with different package versions use their own declarat
   }
 });
 
+test("startup prepares a selected package found only in the managed package root", async t => {
+  const { layout, temporary } = fixture(t), pluginId = "io.fixture.managed-storage";
+  const packages = path.join(layout.stateRoot, "data", "plugins", "packages");
+  write(path.join(packages, pluginId, "1.0.0/storage-migrations.json"), JSON.stringify({ schemaVersion: 1, scope: "plugin", migrations: [
+    { id: "move", kind: "file", source: { root: "state", path: "data/managed-original.json" }, target: "state.json" }
+  ] }));
+  write(path.join(packages, "io.fixture.unselected", "1.0.0/storage-migrations.json"), "invalid unselected declaration");
+  const source = path.join(layout.stateRoot, "data/managed-original.json");
+  write(source, "managed-owner-data");
+  const profilePath = path.join(temporary, "managed-profile.json");
+  write(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [
+    { id: "managed-instance", package: pluginId, version: "1.0.0", enabled: true, config: {}, grants: [] }
+  ] }));
+  const result = await prepareApplicationPluginStorage({ phase: "owners-retired", layout, profilePath, environment: {} });
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.status, "migrated");
+  assert.equal(fs.readFileSync(path.join(pluginStorageRoot(pluginId, undefined, layout), "state.json"), "utf8"), "managed-owner-data");
+  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.existsSync(pluginStorageRoot("io.fixture.unselected", undefined, layout)), false);
+});
+
+test("explicit package roots exclude the default managed and environment package roots", async t => {
+  const { layout, temporary } = fixture(t), pluginId = "io.fixture.excluded-storage";
+  const managed = path.join(layout.stateRoot, "data", "plugins", "packages"), external = path.join(temporary, "environment-packages");
+  for (const packages of [managed, external]) {
+    write(path.join(packages, pluginId, "1.0.0/storage-migrations.json"), JSON.stringify({ schemaVersion: 1, scope: "plugin", migrations: [
+      { id: "move", kind: "file", source: { root: "state", path: "data/excluded-original.json" }, target: "state.json" }
+    ] }));
+  }
+  const source = path.join(layout.stateRoot, "data/excluded-original.json");
+  write(source, "excluded-owner-data");
+  const profilePath = path.join(temporary, "excluded-profile.json");
+  write(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [
+    { id: "excluded-instance", package: pluginId, version: "1.0.0", enabled: true, config: {}, grants: [] }
+  ] }));
+  await assert.rejects(prepareApplicationPluginStorage({ phase: "owners-retired", layout, profilePath, packageRoots: [],
+    environment: { RABIROUTE_PLUGIN_PACKAGE_ROOTS: external } }), /At least one plugin package root is required/);
+  const result = await prepareApplicationPluginStorage({ phase: "owners-retired", layout, profilePath,
+    packageRoots: [path.join(temporary, "explicit-packages")], environment: { RABIROUTE_PLUGIN_PACKAGE_ROOTS: external } });
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.status, "failed");
+  assert.equal(fs.readFileSync(source, "utf8"), "excluded-owner-data");
+  assert.equal(fs.existsSync(pluginStorageRoot(pluginId, undefined, layout)), false);
+});
+
 test("startup reads exact version migrations from its explicit application package root and leaves the original profile unchanged", async t => {
   const { layout, temporary } = fixture(t), id = "io.fixture.old-version", packages = path.join(temporary, "packages");
   fs.mkdirSync(path.join(packages, id, "0.1.1"), { recursive: true });

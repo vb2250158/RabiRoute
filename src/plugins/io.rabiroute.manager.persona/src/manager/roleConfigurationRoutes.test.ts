@@ -120,6 +120,68 @@ test("unbound roles are listed and save without creating a Route; clearing role 
   assert.equal(stale.response.status, 412);
 }));
 
+test("daily time points save through one role rule with its original identity and extensions", async () => fixture(async f => {
+  const before = await f.get();
+  const rule = { id: "daily-review", enabled: true, privateRule: { retained: true },
+    trigger: { type: "schedule", schedule: { id: "daily-clock", type: "daily_time", timeOfDays: ["18:00", "10:00", "14:00", "10:00"], privateSchedule: { retained: true } } },
+    action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "Review progress", privateAction: { retained: true } } };
+  const saved = await f.post("configuration", { expectedRevision: before.revision, config: { ...before.config, automationRules: [rule] } }, "multi-daily");
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  const after = await f.get();
+  const scheduled = after.config.automationRules.filter((item: { trigger: { type: string } }) => item.trigger.type === "schedule");
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].id, rule.id);
+  assert.equal(scheduled[0].trigger.schedule.id, "daily-clock");
+  assert.deepEqual(scheduled[0].trigger.schedule.timeOfDays, ["10:00", "14:00", "18:00"]);
+  assert.deepEqual(scheduled[0].trigger.schedule.privateSchedule, { retained: true });
+  assert.deepEqual(scheduled[0].action.privateAction, { retained: true });
+}));
+
+test("invalid daily lists reject before changing any rule or configuration revision", async () => fixture(async f => {
+  const before = await f.get();
+  const lists: unknown[] = [[], ["10:00", "25:00"], ["10:00", 14], "10:00", null];
+  for (const [index, timeOfDays] of lists.entries()) {
+    const rule = { id: "bad-clock", trigger: { type: "schedule", schedule: { id: "clock", type: "daily_time", timeOfDay: "09:00", timeOfDays } },
+      action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "Review" } };
+    const rejected = await f.post("configuration", { expectedRevision: before.revision, config: { ...before.config, automationRules: [rule] } }, `invalid-daily-${index}`);
+    assert.equal(rejected.response.status, 400, JSON.stringify(rejected.body));
+    assert.equal((await f.get()).revision, before.revision);
+  }
+}));
+
+test("unrelated preference saves retain legacy invalid single-time behavior", async () => fixture(async f => {
+  const before = await f.get();
+  const action = { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" } };
+  const stored = { ...before.config, automationRules: [
+    { id: "legacy-invalid", trigger: { type: "schedule", schedule: { id: "old", type: "daily_time", timeOfDay: "not-a-time" } }, action }
+  ] };
+  await fs.writeFile(path.join(f.root, "roles", "Example", "personaConfig.json"), JSON.stringify(stored));
+  const legacy = await f.get();
+  const saved = await f.post("configuration", { expectedRevision: legacy.revision, config: { ...legacy.config, languageStyle: { styleSkillUrl: "updated" } } }, "legacy-preferences");
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  assert.equal((await f.get()).config.languageStyle.styleSkillUrl, "updated");
+}));
+
+test("unrelated preference saves do not newly fail on a legacy missing trigger", async () => fixture(async f => {
+  const before = await f.get();
+  const stored = { ...before.config, automationRules: [{ id: "legacy-trigger", action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" } } }] };
+  await fs.writeFile(path.join(f.root, "roles", "Example", "personaConfig.json"), JSON.stringify(stored));
+  const legacy = await f.get();
+  const saved = await f.post("configuration", { expectedRevision: legacy.revision, config: { ...legacy.config, languageStyle: { styleSkillUrl: "updated" } } }, "legacy-missing-trigger");
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+}));
+
+test("unused daily extensions on interval and one-off schedules do not newly block a save", async () => fixture(async f => {
+  const before = await f.get();
+  const action = { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" } };
+  const config = { ...before.config, automationRules: [
+    { id: "interval", trigger: { type: "schedule", schedule: { id: "interval", type: "interval", intervalSeconds: 60, timeOfDays: [] } }, action },
+    { id: "once", trigger: { type: "schedule", schedule: { id: "once", type: "once_at", onceAt: "2030-01-01T10:00", timeOfDays: [] } }, action }
+  ] };
+  const saved = await f.post("configuration", { expectedRevision: before.revision, config }, "unused-daily-extension");
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+}));
+
 test("role list reads a bounded batch concurrently and preserves cursor order", async () => fixture(async f => {
   for (const id of ["Alpha", "Beta", "Gamma"]) {
     const directory = path.join(f.root, "roles", id);
@@ -273,9 +335,9 @@ test("role file publication emits audit evidence without configuration contents"
   } finally { release(); }
 }));
 
-test("all eight registrations serve authenticated empty bindings and the same local role owner", async () => fixture(async f => {
+test("all role and automation registrations serve authenticated empty bindings and the same local role owner", async () => fixture(async f => {
   const definitions = createRoleConfigurationOperations(f.context);
-  assert.equal(definitions.length, 8);
+  assert.equal(definitions.length, 16);
   assert.ok(definitions.every(definition => definition.prepare && definition.contract.exposure === "public"));
   assert.equal((await f.call("/Example/configuration", "GET", undefined, undefined, false)).response.status, 200);
   const created = await f.call("", "POST", { roleId: "新角色", title: "New role\nTitle" });
@@ -379,7 +441,8 @@ test("multi-file role creation with a publication failure remains uncertain", as
   const inspected = await f.call("/Partial/configuration");
   assert.equal(inspected.response.status, 200);
   const repeated = await f.call("", "POST", { roleId: "Partial", title: "Partial fixture" });
-  assert.equal(repeated.response.status, 500);
+  assert.equal(repeated.response.status, 409);
+  assert.equal(repeated.body.error, "ROLE_EXISTS");
 }));
 
 test("a persisted pending receipt followed by generation change stops the configuration write and recovers only with the original payload", async () => fixture(async f => {

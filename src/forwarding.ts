@@ -3,7 +3,7 @@ import { beginRoleWork, RoleLifecycleError } from "./roleLifecycle.js";
 import { getTimeoutMs } from "./shared/timeoutSettings.js";
 import { executeAgentDelivery } from "./automation/agentDelivery.js";
 import { deliverSessionOnce } from "./automation/sessionDelivery.js";
-import { resolveAgentDeliveryExecutor, type AgentSessionDestination } from "./shared/agentDeliveryTarget.js";
+import { resolveAgentDeliveryExecutor, type AgentSessionDestination, type AgentDsBotDestination } from "./shared/agentDeliveryTarget.js";
 import { getPlan } from "./roleKnowledge.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
@@ -274,6 +274,7 @@ async function referencedAgentSendersForMessageGroup(
       event: "message_processing_reply_sender_lookup_failed",
       level: "warning",
       message: `Could not resolve the Agent sender for referenced message ${group.replyToMessageId}; routing continues without that preference.`,
+      error,
       data: {
         routeId,
         replyToMessageId: group.replyToMessageId,
@@ -457,6 +458,7 @@ async function deliverPacketToMessageAgent(
         event: "message_processing_board_update_failed",
         level: "warning",
         message: `Message group reached the Agent but its board dispatch state could not be updated requirementId=${canonicalRequirementId}`,
+        error,
         data: { requirementId: canonicalRequirementId, error: error instanceof Error ? error.message : String(error) }
       }, config.dataDir);
     }
@@ -593,6 +595,7 @@ async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind, skip
       event: "heartbeat_agent_busy_check_failed",
       level: "warning",
       message: `Heartbeat busy check failed; delivery will continue: ${error instanceof Error ? error.message : String(error)}`,
+      error,
       data: { routeKind }
     }, config.dataDir);
     return false;
@@ -686,18 +689,19 @@ export async function deliverPacketToPrimaryAgentAdapter(
 }
 
 async function deliverPacketToSession(
-  routeId: string, ruleId: string, target: AgentSessionDestination,
+  routeId: string, ruleId: string, target: AgentSessionDestination | AgentDsBotDestination,
   envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string
 ): Promise<ForwardAdapterOutcome[]> {
-  const remote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
-  if (remote ? remote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
-    || !config.agentAdapters.includes(target.agentAdapter)) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const configuredRemote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
+  if (target.kind !== "ds_bot" && (configuredRemote ? configuredRemote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
+    || !config.agentAdapters.includes(target.agentAdapter))) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const remote = target.kind === "ds_bot" ? target.instanceBinding : configuredRemote;
   const deliveryId = `automation-${createHash("sha256").update(JSON.stringify([routeId, ruleId, envelope.deliveryId ?? messageId, target])).digest("hex")}`;
   await deliverSessionOnce(path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`), target, envelope, deliveryId,
     payload => remote ? requestInstanceThread(remote, payload) : requestMessageAgentManager(managerBaseUrl(), payload),
     { remote: Boolean(remote), imagePaths, model });
-  appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.sessionId}`,
-    data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, sessionId: target.sessionId } }, config.dataDir);
+  appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.kind === "ds_bot" ? target.botId : target.sessionId}`,
+    data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, ...(target.kind === "ds_bot" ? { botScopeId: target.botScopeId, botId: target.botId } : { sessionId: target.sessionId }) } }, config.dataDir);
   return [{ routeId, ruleId, adapter: target.agentAdapter, status: "delivered" }];
 }
 
@@ -896,6 +900,7 @@ function appendRecordToPersonaConversation(route: RouteProfile, routeKind: Forwa
       event: "message_context_append_failed",
       level: "warning",
       message: `Failed to append persona conversation context route=${route.id}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
       data: { routeKind, routeId: route.id, messageId: record.messageId }
     }, config.dataDir);
     return false;
@@ -1050,6 +1055,7 @@ async function forwardMessageToRouteInternal(
       appendAdapterLogToDir("router", {
         event: "remote_persona_resolve_failed", level: "error",
         message: `Remote persona is unavailable; Agent delivery stopped route=${route.id}`,
+        error,
         data: {
           routeId: route.id, deviceId: route.agentRoleDeviceId, roleId: route.agentRoleId,
           routeKind, messageId: recordId(record),
@@ -1136,6 +1142,7 @@ async function forwardMessageToRouteInternal(
           event: "identity_endpoint_observation_failed",
           level: "warning",
           message: `Could not retain the stable sender as a candidate identity for route=${route.id}`,
+          error,
           data: {
             routeId: route.id,
             routeKind,
@@ -1165,6 +1172,7 @@ async function forwardMessageToRouteInternal(
           event: "conversation_situation_record_failed",
           level: "warning",
           message: `Could not retain a conversation situation for route=${route.id}`,
+          error,
           data: { routeId: route.id, routeKind, error: error instanceof Error ? error.message : String(error) }
         }, roleContext.personaDataDir);
       }
@@ -1224,12 +1232,13 @@ async function forwardMessageToRouteInternal(
         message_pool: () => deliverPacketToMessageAgent(route.id, rule.id, packet.content, packet.messageSource,
           String(packet.templateValues.replyContextJson || "{}"), roleContext.roleId,
           options.messageGroup ?? immediateMessageAgentGroup(routeKind, record, extraValues)),
+        ds_bot: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths),
         session: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths,
           replayPacket.model),
         plan_secretary: async () => { throw new Error("The original secretary target was not resolved; replay cannot choose a different secretary."); }
       }));
     } catch (error) {
-      adapterOutcomes.push({ routeId: route.id, ruleId: rule.id, adapter: rule.agentTarget?.kind === "session" ? rule.agentTarget.agentAdapter : configuredPrimaryAgentAdapter() || "codex",
+      adapterOutcomes.push({ routeId: route.id, ruleId: rule.id, adapter: (rule.agentTarget?.kind === "session" || rule.agentTarget?.kind === "ds_bot") ? rule.agentTarget.agentAdapter : configuredPrimaryAgentAdapter() || "codex",
         status: "failed", error: error instanceof Error ? error.message : String(error) });
     }
   }
@@ -1415,6 +1424,7 @@ export function forwardMessage(
         event: "delivery_error",
         level: "error",
         message: `Failed to deliver routed message routeKind=${routeKind} messageId=${recordId(record)}`,
+        error,
         data: {
           routeKind,
           messageId: recordId(record),

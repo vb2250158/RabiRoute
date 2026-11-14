@@ -37,14 +37,23 @@ export async function buildArtifact(output) {
   const inputs = new Map();
   for (const name of required) inputs.set(name, await regular(path.join(appRoot, name)));
   const packageJson = JSON.parse(inputs.get('package.json'));
+  const cliPackageBytes = await regular(path.resolve(appRoot, '../rabi-agent/package.json'));
+  const licenseBytes = await regular(path.resolve(appRoot, '../../LICENSE'));
   const lock = JSON.parse(inputs.get('package-lock.json'));
   if (lock.packages?.['']?.dependencies?.['@modelcontextprotocol/sdk'] !== packageJson.dependencies?.['@modelcontextprotocol/sdk']) throw new Error('Lock does not match the SDK dependency.');
-  const { build } = await import('esbuild');
+  const { build, version: esbuildVersion } = await import('esbuild');
   await fs.mkdir(destination); // Exclusive: never remove or reuse a prior artifact.
-  const result = await build({ absWorkingDir: appRoot, entryPoints: ['knowledge-mcp.mjs'], outfile: path.join(destination, 'knowledge-mcp.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node22', packages: 'external', metafile: true, logLevel: 'silent' });
-  for (const [name, bytes] of inputs) if (name !== 'knowledge-mcp.mjs') await fs.writeFile(path.join(destination, name), bytes, { flag: 'wx' });
-  const bundled = await fs.readFile(path.join(destination, 'knowledge-mcp.mjs'), 'utf8');
-  if (/(?:from\s*|import\s*\()\s*['"]\.\.?\//.test(bundled)) throw new Error('Artifact retains a relative runtime import.');
+  const result = await build({ absWorkingDir: appRoot, entryPoints: { 'knowledge-mcp': path.join(appRoot, 'knowledge-mcp.mjs'), 'rabi-cli': path.resolve(appRoot, '../rabi-agent/rabi-cli.mjs') }, outdir: destination, outExtension: { '.js': '.mjs' }, bundle: true, platform: 'node', format: 'esm', target: 'node22', packages: 'external', metafile: true, logLevel: 'silent' });
+  for (const [name, bytes] of inputs) if (name !== 'knowledge-mcp.mjs') {
+    const outputBytes = name.startsWith('README')
+      ? Buffer.from(bytes.toString('utf8').replaceAll('../../docs/', 'https://github.com/vb2250158/RabiRoute/blob/main/docs/')) : bytes;
+    await fs.writeFile(path.join(destination, name), outputBytes, { flag: 'wx' });
+  }
+  for (const entry of ['knowledge-mcp.mjs', 'rabi-cli.mjs']) {
+    const bundled = await fs.readFile(path.join(destination, entry), 'utf8');
+    if (/(?:from\s*|import\s*\()\s*['"]\.\.?\//.test(bundled)) throw new Error('Artifact retains a relative runtime import.');
+  }
+  await fs.writeFile(path.join(destination, 'LICENSE'), licenseBytes, { flag: 'wx' });
   const npm = await npmCommand();
   const install = spawnSync(npm.executable, [...npm.args, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false'], { cwd: destination, stdio: 'inherit', windowsHide: true });
   if (install.error || install.status !== 0) throw new Error('Artifact dependency installation failed; incomplete output retained for inspection.');
@@ -65,7 +74,9 @@ export async function buildArtifact(output) {
   }
   await visit(destination);
   const packagingInputs = [...inputs].map(([name, bytes]) => ({ path: name, sha256: digest(bytes), size: bytes.length }));
-  const manifest = { schemaVersion: 1, packagingInputs, name: packageJson.name, version: packageJson.version, entry: 'knowledge-mcp.mjs', localHostOnly: true, installed: false, sourceInputs, files };
+  packagingInputs.push({ path: '../rabi-agent/package.json', sha256: digest(cliPackageBytes), size: cliPackageBytes.length },
+    { path: '../../LICENSE', sha256: digest(licenseBytes), size: licenseBytes.length });
+  const manifest = { schemaVersion: 1, clientVersions: { cli: JSON.parse(cliPackageBytes).version, mcp: packageJson.version }, toolchain: { node: process.version, esbuild: esbuildVersion }, packagingInputs, name: packageJson.name, version: packageJson.version, entry: 'knowledge-mcp.mjs', entries: { mcp: 'knowledge-mcp.mjs', cli: 'rabi-cli.mjs' }, localHostOnly: true, installed: false, sourceInputs, files };
   await fs.writeFile(path.join(destination, 'artifact-manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' });
   return { output: destination, files: files.length };
 }

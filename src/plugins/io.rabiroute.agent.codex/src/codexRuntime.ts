@@ -537,7 +537,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
   async function codexDesktopThreadRuntimeStatus(thread: CodexDesktopThread): Promise<CodexThreadRuntimeStatus> {
     const desktopReady = await desktopBridge.isReady();
     const rollout = thread.rolloutPath
-      ? await readCodexRolloutActivity(thread.rolloutPath)
+      ? await readCodexRolloutActivity(thread.rolloutPath, { threadId: thread.id })
       : { state: "unknown", observedAtMs: 0 } satisfies CodexRolloutActivity;
     return codexThreadRuntimeStatusFromSourcesForTest(desktopReady, desktopBridge.threadActiveSince(thread.id), rollout);
   }

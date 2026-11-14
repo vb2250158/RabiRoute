@@ -73,6 +73,114 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Synchronize project and installed `aiui-dev` skills to all 58 official files at `00c6ec71`, remove the old layout from active loading paths and retain recovery backups outside the project. Add exact file-set/Git-blob validation to Agent checks; the global RabiLink skill now points to current rules instead of stale forwarding prompts.
 
 - Pin AIUI to Ink `0.19.1`, AIX `0.10.0`, AIX CLI `0.10.1`; update CXR-L to `1.1.2`, bridge to `1.8`, Phone/Glass3 SDKs to `2.6.2-P` and adapt Context constructors. Add microphone permission, ASR capability negotiation/startup timeout and native playback callbacks. Add an official-Ink local simulator with user API middleware and bilingual docs. Glasses conversation and audible playback still require device acceptance.
+## 0.15.2 - 2026-11-14
+
+- Allow a later call to initialize request persistence again after a confirmed startup-process exit, while preserving the original ledger and uncertain-commit fence.
+- Agent SDK/CLI `0.4.5` preserves terminal session events received before dispatch returns, preventing late progress from replacing completion or failure. Remote node adoption remains independently managed.
+- Correct maintenance ownership discovery. Keep unresolved historical plan pointers and continue through the original maintenance conversation explicitly assigned by the user.
+
+## 0.15.1 - 2026-11-13
+
+- Compact the desktop control indicator into a rounded capsule with transparent window corners, a 46-pixel standard height and bounded long labels. Retain large text, themes, centered placement and stop actions, verified across two displays and 1×/2× hit testing.
+
+- `rabi-agent` SDK/CLI `0.4.4` retains native control admission when Qt confirmation fails, reports the presentation warning separately, preserves an earlier exit across late acknowledgements, and passes the original requestId to native feedback.
+- Merge Agent search, role configuration and automation operations from the earlier workspace while retaining the current plugin architecture, concurrency controls and receipts.
+- Correct message reference and Codex session recovery identity handling, preserving actionable error logs and native control receipts.
+- Update MCP 0.2.5, Host API 1.14.0 and affected plugin versions; Agent SDK/CLI 0.4.4 installation and node updates remain independently managed.
+
+- Affected plugins: `io.rabiroute.agent.codex` 0.1.7; `io.rabiroute.endpoint.feishu` 0.1.4; `io.rabiroute.endpoint.heartbeat` 0.1.5; `io.rabiroute.endpoint.napcat` 0.1.8; `io.rabiroute.endpoint.rabilink` 0.1.4; `io.rabiroute.endpoint.wecom` 0.1.4; `io.rabiroute.manager.agent-communication` 0.1.6; `io.rabiroute.manager.persona` 0.1.14; `io.rabiroute.manager.xiaomi-home` 0.1.4.
+
+## 0.15.0 - 2026-11-13
+
+- Host API `1.13.0` records the registered-response media extension. The generic Host response owner consumes registered schema media declarations and publishes image metadata. Computer captures and attached result images use the same client contract.
+- `io.rabiroute.manager.core` `0.1.8` adds display discovery, display／region capture and layout identity. WebGUI presents actual images and observation, operation and return phases. The desktop bar follows the current display at top-center or bottom-center using the existing theme.
+- Agent SDK／CLI `0.4.3` and MCP `0.2.4` return validated images as media while text retains original request and business receipts. `source.imageView` maps host preview coordinates automatically.
+- Native whole-batch input releases its owned resources and returns the cursor and foreground after the logical batch. Cancellation and physical takeover preserve actual outcomes. Legacy individual actions retain continuous focus, and ordinary legacy capture uses its original protocol.
+- Fixed attached control captures losing region, window, layout revision and output width. Added mixed-native-version and selector regressions.
+
+## 0.14.2 - 2026-11-12
+
+- Preserve recorded start times when focus moves between plan steps, while honoring explicit clears. Continuing a plan retains its history and leaves unfinished steps without an invented completion time.
+- Host API 1.12 defines plan-update executor package references and version leases. Persona 0.1.13 supplies independently versioned plan preparation and history projection, while the original storage service owns queues, CAS, WAL and shared publication.
+- Carry the original schedule occurrence through Heartbeat, Agent requests and the native DSH channel. `io.rabiroute.endpoint.heartbeat` 0.1.4 and `io.rabiroute.manager.agent-thread-control` 0.1.5 support optional original UTC scheduledAt.
+- Migrate the remaining 25 cataloged Web plugins to complete independent resource packages. The shared shell owns the existing Vue, state and UI-registration services. Selected and full builds use one producer, retiring global multi-entry wrapper generation.
+- Repair task-title search interruption from a damaged projection and false empty results after synchronous memory-directory read failures. Preserve raw ledgers and memory files, using the original query cursor and same-source snapshots for local failures.
+- Compare execution dependencies against pinned automatic-update inputs, allowing equivalent root versions, descriptions and configuration formatting. Actual module compatibility remains decisive. Remove the unused inner computer-settings patch implementation.
+- The Manager payload is 0.14.2. Host API 1.12 and plugin SDK 1.3.1 preserves the contracts and fixes shared-instance identity for Windows absolute imports. Migrated plugin versions follow.
+
+- `io.rabiroute.agent.antigravity` 0.1.3.
+- `io.rabiroute.agent.astrbot` 0.1.3.
+- `io.rabiroute.agent.codex` 0.1.6.
+- `io.rabiroute.agent.copilot-cli` 0.1.3.
+- `io.rabiroute.agent.device-agent` 0.1.3.
+- `io.rabiroute.agent.dsh` 0.1.5.
+- `io.rabiroute.agent.grok-bot` 0.1.3.
+- `io.rabiroute.agent.marvis` 0.1.3.
+- `io.rabiroute.agent.workbuddy` 0.1.3.
+- `io.rabiroute.endpoint.feishu` 0.1.3.
+- `io.rabiroute.endpoint.napcat` 0.1.7.
+- `io.rabiroute.endpoint.rabilink` 0.1.3.
+- `io.rabiroute.endpoint.speech` 0.1.3.
+- `io.rabiroute.endpoint.webhook` 0.1.3.
+- `io.rabiroute.endpoint.wecom` 0.1.3.
+- `io.rabiroute.endpoint.weixin` 0.1.3.
+- `io.rabiroute.manager.core` 0.1.7.
+- `io.rabiroute.manager.desktop` 0.1.3.
+- `io.rabiroute.manager.message-adapter-control` 0.1.3.
+- `io.rabiroute.manager.performance` 0.1.4.
+- `io.rabiroute.manager.persona` 0.1.13.
+- `io.rabiroute.manager.route-control` 0.1.4.
+- `io.rabiroute.manager.speech` 0.1.4.
+- `io.rabiroute.manager.video` 0.1.4.
+- `io.rabiroute.manager.xiaomi-home` 0.1.3.
+
+## 0.14.1 - 2026-11-12
+
+- Add independent reconciliation for existing plan-mutation receipts. Verify commit evidence under the original requestId, payload digest, plan lease and receipt CAS, then record the proven committed or not-committed outcome.
+- Keep prepared WAL and insufficient evidence pending for that request. Preserve the original plan, attachments, history and staged candidates. Receipt reconciliation updates only its receipt while other plans and requests continue.
+- Storage-child protocol 3 explicitly separates ordinary execution from receipt-only work. Older protocols reject the new command. Proven precommit failures return typed `aborted_before_commit` / `not_committed` results and same-key reads retain the terminal outcome.
+- `io.rabiroute.manager.persona` 0.1.12 registers the public operation for category discovery, search and describe. Host API 1.11 supplies the result types. Remote SDK, CLI/MCP and native Host programs reuse their existing implementations.
+
+## 0.14.0 - 2026-11-11
+
+- Add stable boundaries for independent plugin definitions, complete Web resources and desktop execution resources. Host API 1.10, plugin SDK 1.3 and lightweight Windows SDK 0.4.2 supply the corresponding extensions. Existing connectors retain their supported execution paths.
+- Fix connection revocation after unrelated configuration save failures, advanced settings blocking files/terminals/original receipts, and failures spreading from a single directory, package root, memory record or derived history descriptor. Failed pagination retains loaded same-source roles and reports the affected items.
+- Derive Core computer schemas, action metadata and defaults from one plugin-owned definition. Separate raw overrides from effective settings, add explicit per-field default restoration, dynamic providers, request snapshots and live feature disabling. Native execution consumes actual request snapshots and supports scoped settings updates.
+- Official selected-plugin Web builds include complete resources, lazy chunks, CSS and MIME metadata while sharing the page runtime. Preserve mounted pages across versions, restore retained resources and expose the SDK Web builder.
+- Desktop Native/Qt resources use imported package Pins, scoped selection CAS, persistent restoration and rollback. Replacement retires the target desktop worker while files, terminals, uploads and original receipts retain their owners. Fix late Qt startup and duplicate candidate cleanup.
+- CLI/MCP share actual operation effects and data contracts. Fix read-only POST classification, skill downloads and generic sessionless calls. Modern Manager response identity facts and metadata revisions allow clients to reuse endpoint discovery results.
+- Automation supports multiple daily times and explicit DSH DSBot targets. Roles without Routes use the existing scheduler, request deduplication and exact target references. Invalid rules report local diagnostics and incomplete target drafts remain editable until corrected for saving.
+- Release `io.rabiroute.agent.dsh` 0.1.4, `io.rabiroute.endpoint.heartbeat` 0.1.3, `io.rabiroute.manager.agent-thread-control` 0.1.4, `io.rabiroute.manager.core` 0.1.6, `io.rabiroute.manager.persona` 0.1.11 `io.rabiroute.manager.route-control` 0.1.3 and `io.rabiroute.manager.diagnostics` 0.1.6. Standalone MCP 0.2.3 shares the CLI client contract.
+
+## 0.13.1 - 2026-11-11
+
+- Fix KCF tracking pausing after first enablement because its default memory budget was below the stable executor footprint. Raise the default from 256 MiB to 512 MiB while preserving explicit user budgets and scoped pausing; dynamic tracking remains disabled by default.
+- Align shared settings, Native and KCF defaults; release `io.rabiroute.manager.core` 0.1.5 and Windows lightweight SDK 0.4.1. Host API 1.9 contracts and standalone CLI/MCP behavior remain unchanged.
+
+## 0.13.0 - 2026-11-11
+
+- `io.rabiroute.manager.core` `0.1.4` adds a separate Computer control tab with local PCs, full hosts and nodes in one flat directory. Target settings retain their original owner, strong ETag and local failure scope. Storage confirmation and unconfirmed executor application remain distinct.
+- Host API `1.9.0` and `rabi-agent` `0.4.0` extend the shared computer protocol with a visible master switch and six features, persistent mouse/keyboard control, ordered Unicode input, original request-status queries and cancellation. Preserve connection authentication, accepted receipts and cleanup/status after disabling new work.
+- Six annotation shapes use the existing Qt engine on a full Host and native drawing on Windows lightweight nodes. Dynamic tracking defaults to off and loads the pinned CPU KCF/template library only when explicitly started. Source frames, lost targets, effective resource budgets and cleanup have separate evidence. Official builds, signed assets and notices include the runtime closure.
+- CLI and independent MCP `0.2.2` share request-effect declarations for reads and mutations within mixed POST operations. No-replay policy remains separate from write uncertainty. The UI uses small state-invalidation events without capture polling; real plan termination cleans tracking for its exact bound source.
+- The shared persona picker displays avatars, source PCs and selection, improves long-name and narrow layouts, and uses the original source for remote avatars and the existing pagination contract.
+
+## 0.12.1 - 2026-11-10
+
+- `io.rabiroute.manager.agent-communication` `0.1.5` fixes shared capability search: remove category-wide keyword pollution, rank actual titles/keywords/full phrases, supply navigation and parameter sources for existing computer/host/execution-node directories, and map Chinese query terms to their corresponding English capability tokens. Responses distinguish API counts from actual resources. Clients share these results without a Host or execution-owner update.
+- Pin the independent MCP artifact to protocol SDK `1.32.2` and refresh the identified transitive dependency fixes; both production and complete dependency audits report no known vulnerabilities.
+- Independent clients `rabi-agent` `0.3.3` and `rabi-knowledge-mcp` `0.2.1` route local generic Agent sends to the original Manager ledger while enrolled remote clients retain their durable delivery owner. Ship CLI and MCP from the same SDK, include WebSocket/discovery dependencies, and validate independent application versions from existing manifests without a Host bump.
+- Read cached data-upgrade status once after the event stream reconnects, recovering completion missed while the page was offline. Initial connection reuses the first read; older responses and errors cannot replace newer state. Preserve the original upgrade request identity and background execution.
+
+## 0.12.0 - 2026-11-10
+
+- Share one operation SDK across CLI and MCP for categories, compact lists, keyword search, individual contracts and structured calls. Capability IDs and per-request idempotency identities remain explicit while HTTP, SSE, WebSocket, downloads and receipts reuse their original owners.
+- Publish seven business categories, plugin-defined categories, Chinese keywords, parameter sources and related operations from the active catalog. Discovery revisions and executable contract digests are distinct. Snapshot caches and cooperative preparation reduce context size and CPU work.
+- `io.rabiroute.manager.agent-communication` `0.1.4` adds progressive discovery. `io.rabiroute.agent.codex` `0.1.5` exposes paginated native conversation history. `io.rabiroute.agent.dsh` `0.1.3` bridges native history and plugin listing, installation, update and removal.
+- `io.rabiroute.manager.persona` `0.1.10` adds role Skill creation, update, deletion, complete source reads and original command receipts. Automation creation offers six editable presets, including memory consolidation with Skill maintenance, and plugin-provided templates through the existing scheduler.
+- `io.rabiroute.endpoint.napcat` `0.1.6` and `io.rabiroute.manager.diagnostics` `0.1.5` describe actual message-history, contact and connection-directory parameter sources for Agent discovery.
+- Advance Host API to `1.8.0`, Plugin SDK to `1.2.0`, and standard MCP to `0.2.0`. Update public declarations and CLI/MCP guides, and include the unified command and MCP entry in portable packages.
+- Separate application startup and old-data format upgrades at their owners. After readiness, WebGUI displays a cached upgrade overview. Confirmation uses a durable operation and the formal Host lifecycle. Ordinary transaction recovery remains independent. Add original filesystem-await stage diagnostics.
 
 ## 0.11.4 - 2026-11-10
 

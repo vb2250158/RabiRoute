@@ -79,3 +79,19 @@ export const activate = definePlugin({ async activate(context) {
 `host.message-endpoints@3` 保留通用消息端服务，并在 Manager 的 `manager` 端口上提供 `GatewayListenerAccess`：`readListener(gatewayId, localName)` 只读当前正式 registry；`waitForListener(gatewayId, localName, { signal, timeoutMs })` 在有界等待内观察原子进程发布。Host 同时保留 `@1`、`@2` 服务，新消费者声明 `@3`，不在旧 Host 上降级猜端口。
 
 `GatewayListenerDescriptor` 包含原 Gateway generation、PID、listener/lease 标识和实际地址。`assertCurrent()` 在每个依赖步骤前验证原 owner；描述符不拥有持久配置，不授予设备或进程权限，也不能把缓存单独当作就绪。停止时取消等待，原 listener 退役或换代后拒绝旧描述符。见[NapCat 完整调用链](../../../docs/napcat-dynamic-ws.md)。
+
+## 独立 Web 构建入口
+
+Web 插件可直接从 SDK 使用 `@rabiroute/plugin-sdk/web-builder`，无需 RabiRoute 的 `src/plugins` 或 profile 源码树。插件仓库提供 `package.json`、`rabi.plugin.json` 和 `rabi.webSource`（或显式 `entry`）。构建工具从该插件自己的 `devDependencies` 加载 `vite`、`@vitejs/plugin-vue`；也可显式传入同一工具链。仅使用原生 SDK 的消费者不需要额外加载这些 Web 工具。
+
+```js
+import { buildPluginWebPackage } from '@rabiroute/plugin-sdk/web-builder';
+
+const result = await buildPluginWebPackage({
+  sourceDirectory: process.cwd(),
+  outputDirectory: './candidate/web',
+  runtimeCatalog: './target-web-runtime.json'
+});
+```
+
+`runtimeCatalog` 来自目标 WebGUI 的 `assets/web-runtime.json`，也可传已解析对象。自定义资源格式在 `rabi.webContentTypes` 或 `contentTypes` 按扩展名声明 MIME，随包生效。产物自带入口、按需资源与 `module.json`；已有同插件构建目录通过暂存/替换更新，构建失败保留原目录。输入源目录、其父目录和包含输入文件的路径不能被当作输出清空。返回的 `inputs` 是供私有构建核验使用的绝对路径，不写入公共资源清单。Web 依赖在候选激活时核对实际共享导出，正常 API 调用不经过该检查。

@@ -8,6 +8,11 @@ English | <a href="./README.md">简体中文</a> | <a href="./README_ja.md">日�
 
 Start with the user guide for everyday operation, use the API reference for integrations, and find architecture, builds, and migration records in the maintainer section. Experimental and historical material keeps its own status.
 
+- [Computer control](user-guide/computer-control_en.md): flat computer directory, visible feature settings, input, capture and static/dynamic annotations.
+- [Visual computer operation](computer-control-visual-workflow_en.md) covers display and region capture, image delivery, batch return and operation feedback.
+
+- [Host and plugin boundaries](host-plugin-boundaries_en.md)
+
 ## Start here
 
 - [RibiWebGUI user guide](user-guide/README_en.md): find setup, operation, and troubleshooting instructions by task.
@@ -49,6 +54,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 ## Developer: routing, roles, and Agent interfaces
 
+- [Unified CLI and MCP API](unified-agent-api_en.md) — Categories, keyword discovery, shared input, native Agent capabilities and templates.
+
 - [API errors and parameter recovery](api-error-recovery_en.md): workspace mismatch, valid parameter discovery, error examples and coverage by API family.
 
 - [API reference and discovery](api-reference_en.md): browse running operations in the documentation page, search contracts, inspect parameters and responses, copy request templates, and download OpenAPI.
@@ -60,6 +67,9 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 - [Delivery templates and ownership](message-delivery-templates_en.md): renderer ownership, scenario differences and historical receipt retirement for developers.
 - [Plan and memory summary search](knowledge-search_en.md)
+- [Unified agent search](agent-search-architecture_en.md) — Discover plans, memories, messages, operations, and devices with source coverage.
+- [Role configuration and document API](role-configuration-api-contracts_en.md) — Reads, updates and concurrency recovery.
+- [Role automation API](role-automation-api-contracts_en.md) — Rules, schedule times and operation receipts.
 - [Automation Agent delivery](automation-agent-delivery_en.md) — Recipient references, session selection, migration and retries.
 - [Routing configuration](routing-configuration_en.md) — **Current guide** for `personaConfig.json`, route kinds, regex, pipelines, and template variables.
 - [Routing and roles](routing-and-personas_en.md) — **Current guide** for route/role boundaries and role decision templates.

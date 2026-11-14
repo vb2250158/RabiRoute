@@ -28,7 +28,7 @@ foreach ($required in @($icon,$compiler)) { if (-not (Test-Path -LiteralPath $re
 $iconHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($icon))).Replace('-', '').ToLowerInvariant()
 $modules = @(
     @{ id='terminal'; name='Terminal'; type='RabiTerminalHost'; source='terminal/host.ps1'; references=@('System.Web.Extensions') },
-    @{ id='computer'; name='Computer'; type='RabiComputer'; source='desktop/computer.ps1'; references=@('System.Web.Extensions','System.Drawing','System.Windows.Forms') },
+    @{ id='computer'; name='Computer'; type='RabiComputer'; source='desktop/computer-native.cs'; rawSource=$true; references=@('System.Web.Extensions','System.Drawing','System.Windows.Forms') },
     @{ id='tray'; name='Tray'; type='RabiAgentPresentation'; source='desktop/tray.ps1'; references=@('System.Web.Extensions','System.Drawing','System.Windows.Forms') }
 )
 try {
@@ -36,11 +36,17 @@ try {
     if (Test-Path -LiteralPath $outputDirectory) {
         Get-ChildItem -LiteralPath $outputDirectory -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $stage -Recurse -Force }
     }
+. (Join-Path $PSScriptRoot 'lib/build-computer-tracking.ps1')
+Build-ComputerTrackingAssets -AgentRoot $agentDirectory -Stage $stage
 foreach ($module in $modules) {
     $source = [IO.File]::ReadAllText((Join-Path $agentDirectory $module.source))
-    $definition = [regex]::Match($source, '(?s)\$nativeSource = @''\r?\n(.*?)\r?\n''@')
-    if (-not $definition.Success) { throw "Native source declaration missing: $($module.id)" }
-    $code = $definition.Groups[1].Value.Replace("`r`n", "`n")
+    if ($module.rawSource) {
+        $code = $source.Replace("`r`n", "`n")
+    } else {
+        $definition = [regex]::Match($source, '(?s)\$nativeSource = @''\r?\n(.*?)\r?\n''@')
+        if (-not $definition.Success) { throw "Native source declaration missing: $($module.id)" }
+        $code = $definition.Groups[1].Value.Replace("`r`n", "`n")
+    }
     $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($code))).Replace('-', '').ToLowerInvariant()
     $assembly = Join-Path $stage "$($module.id)-$hash.dll"
     if (-not (Test-Path -LiteralPath $assembly)) {

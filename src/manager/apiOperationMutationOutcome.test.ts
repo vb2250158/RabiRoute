@@ -18,7 +18,7 @@ for (const phase of ['prepare-not-started', 'handler-not-started', 'handler-unkn
     const authority = new LanAgentAuthority({ statePath: path.join(root, 'authority.json') });
     const credential = authority.enroll(authority.issueBootstrapTicket().ticket, 'evidence-node');
     const registry = new ManagerPluginRouteRegistry();
-    const revoke = () => authority.setNodeEnabled(credential.nodeId, false, true);
+    const revoke = () => authority.revokeNode(credential.nodeId);
     let executions = 0;
     const registration = registry.registerOperations('evidence', [{ contract: fixtureApiContract(), prepare: () => {
       if (phase !== 'prepare-not-started') return input => {
@@ -54,3 +54,19 @@ for (const phase of ['prepare-not-started', 'handler-not-started', 'handler-unkn
     else { assert.equal(result.body.uncertain, true); assert.equal(result.body.mutationOutcome, phase === 'handler-unknown' ? 'unknown' : undefined); }
   });
 }
+
+for (const action of ["status", "execute"] as const) test(`mixed operation ${action} failure describes the selected request effect`, async t => {
+  const original = fixtureApiContract();
+  const registry = new ManagerPluginRouteRegistry();
+  const registration = registry.registerOperations("mixed-effect", [{ contract: { ...original,
+    request: { ...original.request, body: {kind:"json", maxBytes:4096, schema:{type:"object",required:["action"],properties:{action:{enum:["status","execute"]}},additionalProperties:false}} },
+    effects: {mode:"write",description:"Request effect belongs to its declared action.",request:{bodyPath:["action"],modes:{status:"read",execute:"write"}}} },
+    handler: () => { throw new Error("fixture interrupted"); } }]);
+  const server = http.createServer((request,response)=>{markAuthenticatedConnectionRequest(request);if(!registry.handle(request,new URL(request.url!,"http://fixture"),response))response.writeHead(404).end();});
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+  t.after(async()=>{await registration.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
+  const response=await fetch(`http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/example/records/one`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action})});
+  const data=await response.json() as {uncertain?:boolean;repair:string};
+  assert.equal(response.status,500);assert.equal(data.uncertain===true,action==="execute");
+  if(action==="status")assert.doesNotMatch(data.repair,/Inspect the original operation receipt/);
+});

@@ -47,7 +47,7 @@ async function fixture(t: TestContext) {
   const url = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/resource-cache/archive-settings`;
   const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "agent", "content-type": "application/json", "if-match": etag, "idempotency-key": "operation", "x-rabiroute-expected-application-generation-id": "gen", "x-rabiroute-expected-manager-instance-id": "instance" };
   return { dir, role, authority, global, bindings, admitted, options, url, headers,
-    revoke: () => authority.setNodeEnabled("node", false),
+    revoke: () => authority.revokeNode("node"),
     put: () => nativeHttpTestFetch(url, { method: "PUT", headers, body: JSON.stringify(input) }) };
 }
 
@@ -83,7 +83,7 @@ test("archive waits never disclose a revoked or ABA-replaced original principal"
       const pending = nativeHttpTestFetch(value.url, { headers: value.headers });
       await entered.promise;
       value.revoke();
-        value.authority.setNodeEnabled("node", true);
+        value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "node");
       if (mode === "global-aba") {
         value.global.patch({ webguiLan: { enabled: false } });
         value.global.patch({ webguiLan: { enabled: true } });

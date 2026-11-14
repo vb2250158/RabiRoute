@@ -30,6 +30,7 @@ import {
   readRecentMemoryFromStorageInWorker,
   readRoleMemoryCatalogsInWorker,
   readRecentMemoryCatalogInWorker,
+  readRoleMemoryCatalogDiagnostics,
   publishedRolePlanPackageRecoverySnapshot,
   type RoleMemoryCatalogs,
   type RoleKnowledgeCatalogSnapshot
@@ -497,13 +498,16 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
         );
       return paginateRoleMemory(items, task.cursor, task.limit, task.query, catalog.counts);
     }
-    case "role_memory_overview":
-      return {
+    case "role_memory_overview": {
+      const overview = {
         recent: presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(listActiveRecentMemories(task.roleDir)), "recent"),
         consolidated: presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(task.roleDir)), "consolidated"),
         archived: presentRoleMemories(task.roleDir, sortKnowledgeByUpdatedAt(listArchivedMemories(task.roleDir)), "recent"),
         consolidationRuns: listConsolidationRuns(task.roleDir)
       };
+      const issues = readRoleMemoryCatalogDiagnostics(task.roleDir);
+      return { ...overview, partial: issues.length > 0, issues };
+    }
     case "role_memory_counts":
       return (await readRoleMemoryCatalogsInWorker(task.roleDir)).counts;
     case "role_memory_catalogs":

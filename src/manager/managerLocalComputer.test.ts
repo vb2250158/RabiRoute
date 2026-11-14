@@ -1,3 +1,4 @@
+import { normalizeComputerSettings, patchComputerSettings } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -21,7 +22,8 @@ test("host with no connector or Agent exposes real platform capabilities and chu
   const f = await fixture(t), [instance] = f.registry.listInstances();
   assert.equal(instance.local, true); assert.deepEqual(instance.agents, []); assert.deepEqual(f.registry.listNodes(), []);
   assert.ok(instance.terminalShells?.length);
-  assert.deepEqual(instance.computerCapabilities, ["files", ...(process.platform === "win32" ? ["windows", "screenshots"] : [])]);
+  const tracking = await fs.access(new URL("../../apps/rabi-agent/dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url)).then(() => true, () => false);
+  assert.deepEqual(instance.computerCapabilities, ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...(tracking ? ["tracking"] : [])] : [])]);
   const bytes = Buffer.alloc(65_537, 211), uploadId = randomUUID(), target = path.join(f.directory, "roundtrip.bin");
   const sha256 = (data: Buffer) => createHash("sha256").update(data).digest("hex");
   await f.computer({ action: "upload.begin", uploadId, path: target, size: bytes.length, sha256: sha256(bytes) });
@@ -73,4 +75,34 @@ test("host terminal reuses native execution, ordered input and Registry output w
   assert.equal(state.nextInputSequence, 2);
   await f.owner.stop();
   assert.throws(() => process.kill(opened.pid, 0));
+});
+
+test("disabled terminal feature retains metadata and close but rejects new input without output leakage",async t=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),"terminal-feature-recovery-"));let settings=normalizeComputerSettings();
+ const owner=new ManagerLocalComputer({stateDirectory:directory,getSettings:()=>settings,emit:()=>{}});t.after(async()=>{await owner.stop();await fs.rm(directory,{recursive:true,force:true});});
+ const terminalId=randomUUID(),shell=owner.terminalShells[0]!;
+ await owner.execute("terminal",{action:"open",terminalId,shell});settings=patchComputerSettings(settings,{enabled:false,features:{terminal:false}});
+ const listed=await owner.execute("terminal",{action:"list"}) as {sessions:Record<string,unknown>[]};assert.equal(listed.sessions[0]!.terminalId,terminalId);assert.equal("outputEvents" in listed.sessions[0]!,false);
+ const snapshot=await owner.execute("terminal",{action:"get",terminalId}) as Record<string,unknown>;assert.equal(snapshot.terminalId,terminalId);assert.equal("data" in snapshot,false);assert.equal("outputEvents" in snapshot,false);
+ await assert.rejects(owner.execute("terminal",{action:"input",terminalId,sequence:1,data:"must not run"}),{code:"COMPUTER_FEATURE_DISABLED"});
+ assert.equal((await owner.execute("terminal",{action:"close",terminalId}) as {state:string}).state,"exited");
+});
+
+test("bad tracking parameters do not block local files, terminal admission or Agent policy", async t => {
+ const {ManagerConfigRepository}=await import("./configRepository.js");
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),"local-settings-isolation-"));
+ await fs.mkdir(path.join(directory,"data"));
+ const managerFile=path.join(directory,"data","manager.json");
+ const raw=JSON.stringify({computerSettings:{enabled:true,features:{files:true,terminal:true,agentTasks:true},annotation:{tracking:{matchThreshold:"broken"}},performance:{memoryBudgetBytes:"broken"}}});
+ await fs.writeFile(managerFile,raw);
+ const repository=new ManagerConfigRepository({rootDir:directory,managerPort:31337});
+ const owner=new ManagerLocalComputer({stateDirectory:path.join(directory,"computer"),getSettings:()=>repository.readComputerSettingsRaw(),emit:()=>{}});
+ t.after(async()=>{await owner.stop();await fs.rm(directory,{recursive:true,force:true});});
+ const target=path.join(directory,"sample.txt");await fs.writeFile(target,"sample");
+ const stat=await owner.execute("computer",{action:"file.stat",path:target}) as {size:number};
+ assert.equal(stat.size,6);
+ assert.equal(repository.readComputerFeaturePolicy("agentTasks").allowed,true);
+ await assert.rejects(owner.execute("terminal",{action:"open",terminalId:randomUUID(),shell:"fixture-unavailable-shell",cwd:directory,cols:80,rows:24}),/shell/i);
+ assert.equal(repository.readComputerSettings().diagnostics.length,2);
+ assert.equal(await fs.readFile(managerFile,"utf8"),raw);
 });

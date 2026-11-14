@@ -1,4 +1,5 @@
 // Plugin-owned feature construction. Shared state enters through host ports.
+import { createComputerSettingsDefinition as createDefinition } from "./computer-settings-definition.mjs";
 import { createLanAgentManagementOperations } from "./src/manager/lanAgentRoutes.js";
 import { createLanAgentConnectionOperation } from "./src/manager/lanAgentConnectionOperation.js";
 import { createLanAgentTerminalOperations } from "./src/manager/lanAgentTerminalRoutes.js";
@@ -7,14 +8,16 @@ import { createLanAgentReadOperations } from "./src/manager/lanAgentReadOperatio
 import { AgentResourceCatalog } from "./src/manager/agentResourceCatalog.js";
 import { createResourceCacheOperations } from "./src/manager/resourceCacheOperations.js";
 export function createOwnedRuntime(ports) {
+    const definition = createDefinition(ports.createComputerSettingsDefinition);
     return Object.freeze({
+        computerSettingsDefinition: () => definition,
         ManagerPluginRequestTracker: ports.ManagerPluginRequestTracker,
-        createLanAgentManagementOperations: (context) => createLanAgentManagementOperations(context),
+        createLanAgentManagementOperations: (context) => createLanAgentManagementOperations({...context,computerSettingsDefinition:definition}),
         createLanAgentConnectionOperation: () => createLanAgentConnectionOperation(ports.lanAgentRegistry, {
             getToken: () => ports.rabiGlobalConfig.read().webguiLan.accessToken, enabled: () => ports.rabiGlobalConfig.read().webguiLan.enabled
         }),
         createLanAgentTerminalOperations: (context) => createLanAgentTerminalOperations(context),
-        createLanAgentComputerOperations: (context) => createLanAgentComputerOperations(context),
+        createLanAgentComputerOperations: (context) => createLanAgentComputerOperations({...context,computerSettingsDefinition:definition}),
         createLanAgentReadOperations: (context) => createLanAgentReadOperations(context),
         lanAgentAuthority: ports.lanAgentAuthority,
         agentResourceCatalog: new AgentResourceCatalog({ rootDir: ports.packageRoot }),

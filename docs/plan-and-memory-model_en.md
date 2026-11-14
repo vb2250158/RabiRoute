@@ -585,3 +585,28 @@ See [knowledge search](knowledge-search_en.md) for summary search and automatic 
 The current step displays the plan’s actual status. Steps awaiting approval or information, and steps under analysis, are not labeled as executing. Approval waits are not labeled as technical blocks. Completed steps remain marked as completed.
 
 Cross-instance Hook state uses disjoint local and remote identity keys while preserving original local delivery-ID inputs. The original write boundary retains a raw backup before upgrading legacy storage to version 9. Unattributed legacy entries remain preserved and diagnosed individually without blocking normal Stop or completion handling. Verify actual format before rollback: old writers cannot safely process new remote/escaped keys and retained buckets; never replace subsequent writes with a whole pre-cut store snapshot.
+
+## Reconcile an existing plan-mutation receipt
+
+Read the current contract with `GET /api/agent/help?operationId=manager.personas.storage.plans.mutations.reconcile`. Categories, search and describe use the same public catalog.
+
+```http
+POST /api/roles/:roleId/plans/:planId/mutations/:requestId/reconcile
+Content-Type: application/json
+```
+
+Supply the original `patch` and the `actor` when the original storage request included one. The existing receipt audit supplies expectedRevision. Callers may optionally provide the original `expectedRevision` or If-Match as a cross-check. The path requestId is the original idempotency key. When sending the Idempotency-Key header, use the same value. expectedRevision accepts the original strong If-Match value as evidence for that request. The storage owner checks the receipt, original commit history and this plan's WAL under its existing lease, then settles through the receipt snapshot CAS.
+
+```json
+{
+  "patch": { "currentStep": "Original frozen progress text" },
+  "expectedRevision": "inventory-sha256:<original inventory hash>",
+  "actor": { "kind": "unknown" }
+}
+```
+
+Preserve the exact original storage actor. A normal HTTP request without messageSource records `{kind: "unknown"}`. For requests that declared a source, retain the actor resolved at that time, including its original attribution.
+
+`state: completed` indicates a terminal receipt. `operationState: succeeded` with `commitState: committed` returns the original successful result. `operationState: failed` with `commitState: not_committed` records a proven precommit failure with `retryable: false`. Same-key calls retain that terminal result. An ordinary PATCH encountering this terminal receipt returns HTTP 409, `aborted_before_commit` and `not_committed`.
+
+An active execution returns in_progress, prepared WAL or insufficient evidence returns uncertain, and a different payload returns conflict. This operation updates only the existing receipt. The plan, attachments, history, WAL and staged candidates retain their contents. The original storage-maintenance task handles any required recovery of a specific prepared transaction.

@@ -6,6 +6,7 @@ import {
   ensureDefaultPersonaAutomations,
   mergePersonaAutomationRules,
   normalizePersonaAutomationRules,
+  projectGatewayAutomationRules,
   normalizeCodexHookSettings,
   normalizeRecentMessageLimits,
   normalizeSpeechTriggerKeywords,
@@ -116,7 +117,8 @@ function personaRulesFromValue(parsed: unknown): NotificationRuleDefinition[] | 
   return extractNotificationRules(parsed);
 }
 
-export function personaConfigFragmentFromValue(parsed: unknown): Partial<GatewayDefinition> {
+export function personaConfigFragmentFromValue(parsed: unknown, options: { gatewayProjection?: boolean } = {}): Partial<GatewayDefinition> {
+  if (options.gatewayProjection && isJsonObject(parsed)) parsed = { ...parsed, automationRules: projectGatewayAutomationRules(parsed.automationRules) };
   const rules = personaRulesFromValue(parsed);
   const fragment: Partial<GatewayDefinition> = {};
   if (isJsonObject(parsed)) {
@@ -147,12 +149,12 @@ export function personaConfigFragmentFromValue(parsed: unknown): Partial<Gateway
   return fragment;
 }
 
-export function readPersonaConfigFragment(personaConfigPath: string): Partial<GatewayDefinition> {
-  return personaConfigFragmentFromValue(readJsonFile(personaConfigPath));
+export function readPersonaConfigFragment(personaConfigPath: string, options: { gatewayProjection?: boolean } = {}): Partial<GatewayDefinition> {
+  return personaConfigFragmentFromValue(readJsonFile(personaConfigPath), options);
 }
 
-export async function readPersonaConfigFragmentAsync(personaConfigPath: string): Promise<Partial<GatewayDefinition>> {
-  return personaConfigFragmentFromValue(await readJsonFileAsync(personaConfigPath));
+export async function readPersonaConfigFragmentAsync(personaConfigPath: string, options: { gatewayProjection?: boolean } = {}): Promise<Partial<GatewayDefinition>> {
+  return personaConfigFragmentFromValue(await readJsonFileAsync(personaConfigPath), options);
 }
 
 function normalizedPersonaConfigValue(

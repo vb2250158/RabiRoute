@@ -1,3 +1,4 @@
+import {normalizeComputerSettings as normalizeSettingsForAssertion} from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -611,3 +612,26 @@ test("ordinary repository persona saves retain the stored schedule migration bou
     }
   } finally { fs.rmSync(rootDir, { recursive: true, force: true }); }
 });
+
+test("invalid directory fields remain local and can be repaired without defaulting their paths", t => {
+ const rootDir=fs.mkdtempSync(path.join(os.tmpdir(),"manager-domain-root-"));
+ t.after(()=>fs.rmSync(rootDir,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(rootDir,"data"));
+ const file=path.join(rootDir,"data","manager.json");
+ const raw=JSON.stringify({rolesDir:42,routeDir:"data/healthy-route",computerSettings:{enabled:true}});
+ fs.writeFileSync(file,raw);
+ const repository=new ManagerConfigRepository({rootDir,managerPort:31337});
+ assert.equal(repository.domainRoot("roles").value,undefined);
+ assert.equal(repository.domainRoot("roles").error?.field,"rolesDir");
+ assert.throws(()=>repository.rolesRoot,error=>(error as {code?:string}).code==="MANAGER_DIRECTORY_INVALID");
+ assert.equal(checkedSettings(repository.readComputerSettings()).enabled,true);
+ repository.ensureDataDirs();
+ assert.equal(fs.readFileSync(file,"utf8"),raw);
+ assert.equal(fs.existsSync(path.join(rootDir,"data","healthy-route")),true);
+ assert.equal(fs.existsSync(path.join(rootDir,"data","roles")),false);
+ repository.writeManagerConfig({...repository.readManagerConfig(),rolesDir:"data/repaired-roles"});
+ assert.equal(repository.requireDomainRoot("roles"),path.join(rootDir,"data","repaired-roles"));
+ assert.equal(repository.domainRoot("roles").error,undefined);
+});
+
+function checkedSettings(read:{settings:unknown;diagnostics?:readonly unknown[]}) {assert.equal(read.diagnostics?.length??0,0);return normalizeSettingsForAssertion(read.settings);}

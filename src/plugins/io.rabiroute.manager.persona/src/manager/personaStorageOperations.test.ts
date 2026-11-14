@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { durableDeliveryReceiptPath, durableDeliveryRequestDigest } from "../../../../manager/durableDeliveryIdempotency.js";
+import { readPlanStoragePackage } from "../../../../planStorageRepository.js";
 import { createPlan } from "../../../../roleKnowledge.js";
 import { planDirectory } from "../../../../planStorageLayout.js";
 import assert from "node:assert/strict";
@@ -65,6 +68,14 @@ async function fixture(t: test.TestContext, customize?: (context: PersonaStorage
     get reschedules() { return reschedules; }, setReadOnly: (value: boolean) => { readOnly = value; }, changeApplication: (value: RoleStorageApplication) => { currentApplication = value; }, changeDirectory: (value: string) => { currentDirectory = value; }, identity };
 }
 
+test('memory overview HTTP reports a local bad row while preserving healthy memories and original bytes',async t=>{
+ const f=await fixture(t),directory=path.join(f.roleDir,'memory/recent');fs.mkdirSync(directory,{recursive:true});
+ const healthy={id:'healthy-overview',title:'Healthy overview',content:'Synthetic memory',keywords:['healthy']};
+ fs.writeFileSync(path.join(directory,'good.json'),JSON.stringify(healthy));const bad=path.join(directory,'bad.json');fs.writeFileSync(bad,JSON.stringify({...healthy,id:'bad-overview',title:{toString:null}}));const before=fs.readFileSync(bad);
+ const response=await f.send('memory');assert.equal(response.status,200,JSON.stringify(response.body));assert.equal(response.body.partial,true);assert.equal(response.body.data.recent[0].id,'healthy-overview');assert.equal(response.body.diagnostics[0].code,'MEMORY_CATALOG_ENTRY_UNREADABLE');assert.equal(response.body.diagnostics[0].file,'memory/recent/bad.json');assert.deepEqual(fs.readFileSync(bad),before);
+ const page=await f.send('memory?limit=20');assert.equal(page.status,200);assert.equal(page.body.data.items[0].id,'healthy-overview');
+});
+
 test('native page parameters identify safe fields and current discovery without a mutation', async t => {
   const f = await fixture(t);
   for (const [suffix, field] of [['plans?limit=1&view=wrong', 'query.view'], ['plans?limit=1&sort=wrong', 'query.sort'], ['memory?limit=1&kind=wrong', 'query.kind']]) {
@@ -91,10 +102,10 @@ test('non-Codex binding repair keeps the explicit original adapter and complete 
   assert.equal(writes, 2); assert.equal((await f.send('plans')).body.data.length, 0);
 });
 
-test("58 exact contracts retain both role prefixes, ignored counts IDs and derived manual IDs", async t => {
+test("60 exact contracts retain both role prefixes, ignored counts IDs and derived manual IDs", async t => {
   const f = await fixture(t);
-  assert.equal(f.definitions.length, 58);
-  assert.equal(new Set(f.definitions.map(value => value.contract.operationId)).size, 58);
+  assert.equal(f.definitions.length, 60);
+  assert.equal(new Set(f.definitions.map(value => value.contract.operationId)).size, 60);
   for (const { contract } of f.definitions) {
     assert.deepEqual(contract.aliases, ["persona:" + contract.method + ":" + contract.pathTemplate]);
     assert.equal(contract.pathTemplate.includes("*"), false);
@@ -105,8 +116,11 @@ test("58 exact contracts retain both role prefixes, ignored counts IDs and deriv
   // Routing coverage uses a controlled action; native persistence behavior is exercised below.
   f.owner.execute = async (spec, input) => ({ status: 200, body: { code: 0, data: { action: spec.id, path: input.path } } });
   for (const { contract } of f.definitions) {
-    const url = contract.pathTemplate.replace(":roleId", "Fixture").replace(/:(planId|statusKey|memoryId|runId|ignoredItemId)/g, "fixture-id");
-    const response = await f.send(url, contract.method, contract.request.body.kind === "json" ? {} : undefined, {}, "");
+    const url = contract.pathTemplate.replace(":roleId", "Fixture").replace(/:(planId|requestId|statusKey|memoryId|runId|ignoredItemId)/g, "fixture-id");
+    const jsonBody = contract.operationId.startsWith("manager.personas.storage.plans.mutations.reconcile")
+      ? { patch: {}, expectedRevision: "fixture-original-revision" }
+      : {};
+    const response = await f.send(url, contract.method, contract.request.body.kind === "json" ? jsonBody : undefined, {}, "");
     assert.equal(response.status, 200, contract.operationId + ": " + JSON.stringify(response.body)); assert.equal(response.body.data.path.roleId, "Fixture");
   }
 });
@@ -212,17 +226,17 @@ test("native memory creation, touching, read-only reads and overview keep their 
   const consolidated = await f.send("memory/consolidated/consolidated-fixture"); assert.equal(consolidated.status, 200); assert.equal(consolidated.body.data.title, "Consolidated Fixture");
 });
 
-for (const change of ["directory", "application", "identity", "disable-enable"] as const) {
+for (const change of ["directory", "application", "identity", "credential-revocation"] as const) {
   test(`capture rejects ${change} changes after actor await before native writes`, async t => {
     const entered = deferred(), release = deferred();
     const f = await fixture(t, () => ({ planHistoryContext: async (_request, _body, command) => { entered.resolve(); await release.promise; return command; } }));
-    const pending = f.send("plans", "POST", { id: "plan-fenced", title: "Fenced" }, { "idempotency-key": "fixture-fenced-create" }); await Promise.race([entered.promise, pending.then(() => { throw new Error("Request settled before reaching the controlled owner."); })]);
+    const pending = f.send("plans", "POST", { id: "plan-fenced", title: "Fenced", keywords: ["fixture"] }, { "idempotency-key": "fixture-fenced-create" }); await Promise.race([entered.promise, pending.then(() => { throw new Error("Request settled before reaching the controlled owner."); })]);
     if (change === "directory") { const other = path.join(f.root, "Other"); fs.mkdirSync(other); f.changeDirectory(other); }
     if (change === "application") f.changeApplication({} as RoleStorageApplication);
     if (change === "identity") f.identity.managerInstanceId = "replacement-manager";
-    if (change === "disable-enable") { f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); }
+    if (change === "credential-revocation") { f.authority.revokeNode(f.credential.nodeId); }
     release.resolve(); const result = await pending;
-    assert.equal(result.status, change === "disable-enable" ? 403 : 409, JSON.stringify(result.body));
+    assert.equal(result.status, change === "credential-revocation" ? 403 : 409, JSON.stringify(result.body));
     assert.equal(await f.application.queries.plan("Fixture", "plan-fenced").catch(() => null), null);
   });
 }
@@ -239,7 +253,7 @@ test("a revoked source suppresses native failure details while retaining trusted
   f.application.commands.createPlan = async () => { entered.resolve(); await release.promise; throw new RoleStorageApplicationError("private native fixture diagnostic", "indeterminate", 503, "fixture-uncertain-operation", "unknown", "timeout"); };
   t.after(() => { f.application.commands.createPlan = command; });
   const pending = f.send("plans", "POST", { id: "plan-uncertain", title: "Controlled" }, { "idempotency-key": "fixture-uncertain-operation" }); await Promise.race([entered.promise, pending.then(() => { throw new Error("Request settled before reaching the controlled owner."); })]);
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); release.resolve(); const response = await pending;
+  f.authority.revokeNode(f.credential.nodeId); release.resolve(); const response = await pending;
   assert.equal(response.status, 403); assert.equal(response.body.mutationOutcome, "unknown"); assert.equal(response.body.uncertain, true);
   assert.equal(response.body.errorCode, "API_REQUEST_AUTHORITY_REVOKED"); assert.doesNotMatch(JSON.stringify(response.body), /private native|fixture-uncertain-operation/);
 });
@@ -486,4 +500,133 @@ test("workflow post-commit projection failure retains the committed receipt and 
   } finally { mocked.mock.restore(); if (committed) fs.writeFileSync(config, committed); }
   const replay = await f.send("plan-statuses", "POST", input, headers); assert.equal(replay.status, 201, JSON.stringify(replay.body));
   assert.equal(replay.headers.get("idempotency-key"), headers["idempotency-key"]); assert.ok(committed && fs.readFileSync(config).equals(committed));
+});
+
+function receiptOnlyFixture(f: Awaited<ReturnType<typeof fixture>>, requestId: string) {
+  const planId = "receipt-only-plan";
+  createPlan(f.roleDir, {
+    id: planId, title: "Receipt-only fixture", focus: "Original frozen request", status: "分析中",
+    currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: ["receipt"]
+  });
+  const expectedRevision = `inventory-sha256:${readPlanStoragePackage(f.roleDir, planId, "active").inventoryHash}`;
+  const patch = { focus: "Original intended change" };
+  const actor = { kind: "unknown" as const };
+  const receiptPath = durableDeliveryReceiptPath(path.join(f.roleDir, "runtime"), "storage-mutation-idempotency", requestId);
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  fs.writeFileSync(receiptPath, JSON.stringify({
+    version: 1, deliveryId: requestId,
+    requestDigest: durableDeliveryRequestDigest({ roleId: "Fixture", planId, task: { type: "plan_update", patch }, actor }),
+    state: "sending", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    executionId: "fixture-old-execution", ownerHost: os.hostname(), ownerPid: 2147483647,
+    leaseExpiresAt: "2026-01-01T00:00:01.000Z", audit: { expectedRevision }
+  }));
+  const orphan = path.join(f.roleDir, "plans/quarantine/plan-storage-lifecycle-transactions", planId, "fixture-staging", ".payload.fixture.candidate", "original.md");
+  fs.mkdirSync(path.dirname(orphan), { recursive: true }); fs.writeFileSync(orphan, "Preserve interrupted staging bytes.");
+  const beforePackage = readPlanStoragePackage(f.roleDir, planId, "active");
+  return { planId, requestId, patch, actor, expectedRevision, receiptPath, orphan,
+    originalPackage: beforePackage.files.map(file => [file.path, file.sha256]),
+    orphanSha: createHash("sha256").update(fs.readFileSync(orphan)).digest("hex") };
+}
+
+test("receipt-only HTTP settles a failed original receipt without changing or publishing its plan", async t => {
+  const f = await fixture(t), item = receiptOnlyFixture(f, "receipt-only-http-original");
+  const body = { patch: item.patch, expectedRevision: item.expectedRevision, actor: item.actor };
+  const url = `plans/${item.planId}/mutations/${item.requestId}/reconcile`;
+  const first = await f.send(url, "POST", body);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.data.state, "completed");
+  assert.equal(first.body.data.operationState, "failed");
+  assert.equal(first.body.data.commitState, "not_committed");
+  assert.equal(first.body.data.requestId, item.requestId);
+  assert.equal(first.body.data.retryable, false);
+  const terminal = fs.readFileSync(item.receiptPath);
+  const second = await f.send(url, "POST", body, { "idempotency-key": item.requestId });
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.equal(second.body.data.settlement, "not_attempted");
+  assert.deepEqual(fs.readFileSync(item.receiptPath), terminal);
+  const replay = await f.send(`plans/${item.planId}`, "PATCH", item.patch, { "if-match": `"${item.expectedRevision}"`, "idempotency-key": item.requestId });
+  assert.equal(replay.status, 409, JSON.stringify(replay.body));
+  assert.equal(replay.body.state, "aborted_before_commit");
+  assert.equal(replay.body.commitState, "not_committed");
+  assert.equal(replay.body.retryable, false);
+  assert.equal(replay.body.retry, undefined);
+  assert.deepEqual(readPlanStoragePackage(f.roleDir, item.planId, "active").files.map(file => [file.path, file.sha256]), item.originalPackage);
+  assert.equal(createHash("sha256").update(fs.readFileSync(item.orphan)).digest("hex"), item.orphanSha);
+  assert.equal(f.events.length, 0); assert.equal(f.scheduled.length, 0);
+  assert.deepEqual(fs.readFileSync(item.receiptPath), terminal);
+});
+
+test("receipt-only HTTP preserves the original digest and exposes its exact discovery contract", async t => {
+  const f = await fixture(t), item = receiptOnlyFixture(f, "receipt-only-http-conflict");
+  const before = fs.readFileSync(item.receiptPath);
+  const response = await f.send(`plans/${item.planId}/mutations/${item.requestId}/reconcile`, "POST", {
+    patch: { focus: "Different frozen intent" }, expectedRevision: item.expectedRevision, actor: item.actor
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.data.state, "conflict");
+  assert.equal(response.body.data.operationState, "conflict");
+  assert.deepEqual(fs.readFileSync(item.receiptPath), before);
+  const definition = f.definitions.find(value => value.contract.operationId === "manager.personas.storage.plans.mutations.reconcile");
+  assert.ok(definition);
+  assert.equal(definition.contract.exposure, "public");
+  const requestBody = definition.contract.request.body;
+  assert.ok(requestBody.kind === "json");
+  assert.ok(requestBody.schema && typeof requestBody.schema === "object");
+  assert.deepEqual(requestBody.schema.required, ["patch"]);
+  assert.match(definition.contract.description, /without executing the original write/);
+});
+
+test("receipt-only HTTP validates the recovery envelope without changing its original key", async t => {
+  const f = await fixture(t), item = receiptOnlyFixture(f, "receipt-only-http-parameters");
+  const before = fs.readFileSync(item.receiptPath), url = `plans/${item.planId}/mutations/${item.requestId}/reconcile`;
+  const missing = await f.send(url, "POST", { expectedRevision: item.expectedRevision });
+  assert.equal(missing.status, 400, JSON.stringify(missing.body));
+  assert.equal(missing.body.field, "body.patch");
+  const differentKey = await f.send(url, "POST", { patch: item.patch, expectedRevision: item.expectedRevision, actor: item.actor }, { "idempotency-key": "another-request" });
+  assert.equal(differentKey.status, 400, JSON.stringify(differentKey.body));
+  assert.equal(differentKey.body.retry, "same_original_request_only");
+  assert.equal(differentKey.body.field, "headers.idempotency-key");
+  assert.match(differentKey.body.help.path, /manager.personas.storage.plans.mutations.reconcile/);
+  assert.equal(differentKey.body.retryable, false);
+  assert.deepEqual(fs.readFileSync(item.receiptPath), before);
+});
+
+
+test("receipt-only HTTP presents original successful attachments with the existing public DTO", async t => {
+  const f = await fixture(t), planId = "receipt-original-success";
+  const created = await f.send("plans", "POST", {
+    id: planId, title: "Original successful receipt", focus: "Create", status: "分析中", currentStepId: "verify",
+    steps: [{ id: "verify", title: "Verify" }], keywords: ["receipt"],
+    attachments: [{ name: "synthetic-proof.md", mimeType: "text/markdown", contentBase64: Buffer.from("Synthetic proof.").toString("base64") }]
+  }, { "idempotency-key": "receipt-public-create" });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const expectedRevision = created.headers.get("etag")!;
+  const patch = { focus: "Original successful update" }, requestId = "receipt-public-update";
+  const changed = await f.send(`plans/${planId}`, "PATCH", patch, { "if-match": expectedRevision, "idempotency-key": requestId });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const before = readPlanStoragePackage(f.roleDir, planId, "active").inventoryHash;
+  const receiptPath = durableDeliveryReceiptPath(path.join(f.roleDir, "runtime"), "storage-mutation-idempotency", requestId);
+  const originalReceipt = fs.readFileSync(receiptPath);
+  assert.equal(typeof JSON.parse(originalReceipt.toString("utf8")).result.value.attachments[0].path, "string");
+  const result = await f.send(`plans/${planId}/mutations/${requestId}/reconcile`, "POST", { patch, expectedRevision, actor: { kind: "unknown" } });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.data.operationState, "succeeded");
+  assert.equal(result.body.data.commitState, "committed");
+  assert.equal(result.body.data.value.id, planId);
+  assert.equal(result.body.data.value.attachments.length, 1);
+  assert.equal(Object.hasOwn(result.body.data.value.attachments[0], "path"), false);
+  assert.equal(result.body.data.value.attachments[0].sha256, changed.body.data.attachments[0].sha256);
+  assert.deepEqual(fs.readFileSync(receiptPath), originalReceipt);
+  assert.equal(readPlanStoragePackage(f.roleDir, planId, "active").inventoryHash, before);
+});
+
+
+test("receipt-only HTTP derives the original version from its existing receipt audit", async t => {
+  const f = await fixture(t), item = receiptOnlyFixture(f, "receipt-only-http-audit-anchor");
+  const response = await f.send(`plans/${item.planId}/mutations/${item.requestId}/reconcile`, "POST", { patch: item.patch, actor: item.actor });
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.data.state, "completed");
+  assert.equal(response.body.data.operationState, "failed");
+  assert.equal(response.body.data.commitState, "not_committed");
+  assert.deepEqual(readPlanStoragePackage(f.roleDir, item.planId, "active").files.map(file => [file.path, file.sha256]), item.originalPackage);
 });

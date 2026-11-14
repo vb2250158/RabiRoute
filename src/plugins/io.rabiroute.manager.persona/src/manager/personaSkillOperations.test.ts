@@ -35,8 +35,8 @@ async function fixture(t:test.TestContext) {
   return {directory,roleDir,root,identity,context,definitions,temporaryRoot,admission,call};
 }
 
-test('all six Skill operations permit an authenticated empty node and preserve native catalog/content/ZIP bytes',async t=>{
-  const f=await fixture(t);assert.equal(f.definitions.length,6);
+test('Skill read operations permit an authenticated empty node and preserve native catalog/content/ZIP bytes',async t=>{
+  const f=await fixture(t);assert.equal(f.definitions.length,11);
   for(const prefix of ['/api/roles','/roles']) {
     const list=await f.call('',prefix);assert.equal(list.status,200);assert.equal(list.json().data[0].id,'selected');
     const detail=await f.call('/selected',prefix);assert.equal(detail.status,200);assert.match(detail.json().data.content,/Original content/);

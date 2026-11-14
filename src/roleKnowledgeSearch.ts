@@ -1,3 +1,5 @@
+import type { SearchEvidence } from './shared/searchEvidence.js';
+import { searchTerms, textMatches } from './manager/searchText.js';
 import type { ConsolidatedMemoryItem, PlanItem, RecentMemoryItem } from "./roleKnowledge.js";
 
 export type KnowledgeKind = "plan" | "recent" | "consolidated";
@@ -7,6 +9,7 @@ export type KnowledgeSummary = {
   id: string; kind: KnowledgeKind; title: string; focus: string; keywords: string[];
   status?: string; archived: boolean; updatedAt: string; viewedAt?: string;
   revision?: string; excerpt: string; detailUrl: string;
+  searchEvidence?: SearchEvidence;
 };
 type Entry = { summary: KnowledgeSummary; terms: string[]; text: string; contentKey: string };
 export type KnowledgeSearchOptions = {
@@ -60,6 +63,7 @@ export class RoleKnowledgeSearchIndex {
         ? `/api/roles/${encodeURIComponent(this.roleId)}/memory?kind=archived&limit=10&query=${encodeURIComponent(item.id)}`
         : `/api/roles/${encodeURIComponent(this.roleId)}/${kind === "plan" ? "plans" : `memory/${kind}`}/${encodeURIComponent(item.id)}`
     };
+    if (item.searchEvidence) summary.searchEvidence = structuredClone(item.searchEvidence);
     if (old?.contentKey === contentKey && JSON.stringify(old.summary) === JSON.stringify(summary)) return;
     if (!old || JSON.stringify(old.terms) !== JSON.stringify(terms)) {
       this.removeTerms(ref, old);
@@ -91,6 +95,22 @@ export class RoleKnowledgeSearchIndex {
   }
 
   references(): string[] { return [...this.entries.keys()]; }
+
+  /** Read the existing published index without changing the legacy search contract. */
+  candidates(options: { query?: string; mode?: "keywords" | "fulltext"; match?: "any" | "all"; signal?: AbortSignal; deadlineAt?: number }) {
+    if (!this.ready) throw new Error("KNOWLEDGE_INDEX_WARMING");
+    const terms = searchTerms(options.query ?? "");
+    const items: (KnowledgeSummary & { searchText: string })[] = [];
+    for (const entry of this.entries.values()) {
+      options.signal?.throwIfAborted();
+      if (options.deadlineAt !== undefined && performance.now() >= options.deadlineAt) {
+        throw Object.assign(new Error("DEADLINE_EXCEEDED"), { code: "DEADLINE_EXCEEDED" });
+      }
+      const text = options.mode === "fulltext" ? entry.text : entry.terms.join("\n");
+      if (textMatches(text, terms, options.match)) items.push({ ...entry.summary, keywords: [...entry.summary.keywords], searchText: text });
+    }
+    return { version: this.generation, items };
+  }
   /** Complete a verified inventory with cached entries and expire even an unchanged full-refresh cursor. */
   completeRefresh(references: ReadonlySet<string>): void {
     for (const ref of this.entries.keys()) if (!references.has(ref)) this.remove(ref);

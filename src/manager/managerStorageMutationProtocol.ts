@@ -1,3 +1,4 @@
+import type { PlanUpdateExecutorDescriptor, PlanUpdateExecutorPin } from "./planUpdateExecutor.js";
 import path from "node:path";
 import { normalizePlanHistoryActor } from "../shared/planHistoryActor.js";
 import type {
@@ -17,7 +18,7 @@ import type { RolePanelTimelineMessage } from "../rolePanelTimeline.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { storageRevisionToken } from "../shared/storageRevision.js";
 
-export const MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION = 2 as const;
+export const MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION = 4 as const;
 
 /**
  * Durable mutation receipt ledger contract.
@@ -130,13 +131,22 @@ export type ManagerStorageMutationTask =
 export type ManagerStorageMutationRequest = Readonly<{
   protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
   requestId: string;
+  mode?: "mutation" | "receipt_only";
   fence: ManagerStorageMutationFence;
   expectedRevision: string | null;
   task: ManagerStorageMutationTask;
+  /** Parent-resolved immutable package entry, outside the business payload digest. */
+  planUpdateExecutor?: PlanUpdateExecutorDescriptor;
+  planUpdateExecutorUnavailable?: true;
   /** Fresh per dispatch; present only when the parent must recheck request authority. */
   admissionNonce?: string;
   actor?: import("../shared/planHistoryActor.js").PlanHistoryActor;
 }>;
+
+export type ManagerStorageMutationReceiptResult =
+  | Readonly<{state:"completed";operationState:"succeeded";commitState:"committed";value:unknown;settlement:"committed"|"not_attempted"}>
+  | Readonly<{state:"completed";operationState:"failed";commitState:"not_committed";reason:string;reasonCode:string;retryable:false;stage?:"precommit_staging";settlement:"committed"|"not_attempted"}>
+  | Readonly<{state:"in_progress"|"uncertain"|"conflict";operationState:"in_progress"|"unknown"|"conflict";commitState:"unknown";reason:string}>;
 
 export type ManagerStorageMutationAdmission = Readonly<{
   protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
@@ -150,13 +160,26 @@ export type ManagerStorageMutationAdmission = Readonly<{
   | Readonly<{ kind: "authorization_decision"; allowed: boolean }>
 );
 
+export type ManagerStorageMutationExecutorResolution = Readonly<{
+  protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
+  requestId: string;
+  fence: ManagerStorageMutationFence;
+  admissionNonce?: string;
+  stage: "executor_resolution";
+  sequence: 1;
+}> & (
+  | Readonly<{ kind: "executor_resolution_request"; pin: PlanUpdateExecutorPin }>
+  | Readonly<{ kind: "executor_resolution_decision"; allowed: true; executor: PlanUpdateExecutorDescriptor }>
+  | Readonly<{ kind: "executor_resolution_decision"; allowed: false }>
+);
+
 export type ManagerStorageMutationResponse = Readonly<{
   protocolVersion: typeof MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION;
   requestId: string;
   fence: ManagerStorageMutationFence;
   admissionNonce?: string;
 }> & (
-  | Readonly<{ ok: true; value: unknown }>
+  | Readonly<{ ok: true; value: unknown; planUpdateExecutorPin?: unknown }>
   | Readonly<{ ok: false; message: string; stack?: string; code?: "authorization_revoked" }>
 );
 
@@ -207,6 +230,8 @@ export function validateManagerStorageMutationRequest(
   if (request?.protocolVersion !== MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION) {
     throw new Error("Storage mutation protocol version is invalid.");
   }
+  if (request.mode !== undefined && request.mode !== "mutation" && request.mode !== "receipt_only") throw new Error("Storage mutation execution mode is invalid.");
+  if (request.mode === "receipt_only" && request.task?.type !== "plan_update") throw new Error("Receipt-only recovery requires the original plan_update task.");
   if (request.admissionNonce !== undefined
     && (typeof request.admissionNonce !== "string" || !/^[a-f0-9]{64}$/.test(request.admissionNonce))) {
     throw new Error("Storage mutation admission nonce is invalid.");

@@ -4,15 +4,34 @@ import path from "node:path";
 import ts from "typescript";
 import { createHash } from "node:crypto";
 import { compileAutomaticCode } from "./lib/automatic-code-compiler.mjs";
+import { automaticConfigurationChangeReason } from "./lib/automatic-configuration-compatibility.mjs";
 import { captureAutomaticInputs, automaticInputsUnchanged } from "./lib/automatic-update-inputs.mjs";
 import { captureAutomaticWebInputs, buildIsolatedWebUpdate, removeIsolatedWebWorkspace } from "./lib/automatic-web-build.mjs";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
+function hasNoEmittedRuntime(source, filename, options, host) {
+  // transpileModule's isolated host does not discover package.json for NodeNext
+  // .ts files. Preserve the actual frozen ESM context through its .mts form.
+  const nodeModuleMode = options.module === ts.ModuleKind.NodeNext || options.module === ts.ModuleKind.Node16;
+  const implied = nodeModuleMode ? ts.getImpliedNodeFormatForFile(filename, undefined, host, options) : undefined;
+  const emittedFilename = implied === ts.ModuleKind.ESNext ? filename.slice(0, -3) + ".mts" : filename;
+  const emitted = ts.transpileModule(source, { fileName: emittedFilename, compilerOptions: options, reportDiagnostics: true });
+  if (emitted.diagnostics?.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) return false;
+  const parsed = ts.createSourceFile(filename + ".emitted.js", emitted.outputText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  if (parsed.parseDiagnostics.length) return false;
+  return parsed.statements.every(statement =>
+    ts.isEmptyStatement(statement)
+    || ts.isExportDeclaration(statement) && !statement.moduleSpecifier
+      && statement.exportClause && ts.isNamedExports(statement.exportClause)
+      && statement.exportClause.elements.length === 0);
+}
+
 export async function prepareAutomaticCodeUpdate({ sourceRoot, packageRoot }) {
   const catalog = JSON.parse(await fs.readFile(path.join(packageRoot, "dist/automatic-code/catalog.json"), "utf8"));
   if (!catalog.inputHashes) throw new Error("The installed compiler baseline has no frozen input inventory; install a baseline with inventory support.");
   const input = await captureAutomaticInputs(sourceRoot, ["src", "package.json", "package-lock.json", "tsconfig.json"]);
   const changes = [];
+  const addedSources = [];
   const reasons = [];
   const snapshots = new Map();
   for (const entry of catalog.modules) {
@@ -26,23 +45,44 @@ export async function prepareAutomaticCodeUpdate({ sourceRoot, packageRoot }) {
   for (const [relative, bytes] of input.files) {
     snapshots.set(path.resolve(sourceRoot, relative).replaceAll("\\", "/").toLowerCase(), bytes.toString("utf8"));
     if (relative.startsWith("src/") && relative.endsWith(".ts") && !relative.endsWith(".test.ts") && !relative.endsWith(".d.ts") && !Object.hasOwn(catalog.inputHashes, relative)) {
-      reasons.push({ file: relative, reason: "A new executable module has no running import, state or lifecycle owner; source-patch plugin modules use their discovery contract, other initialization changes require a controlled switch." });
+      addedSources.push({ file: relative, source: bytes.toString("utf8") });
     }
   }
   for (const filename of ["package.json", "package-lock.json", "tsconfig.json"]) {
     const expected = catalog.inputHashes[filename];
     const actual = input.files.get(filename);
-    if (expected !== (actual === undefined ? undefined : hash(actual))) reasons.push({ file: filename, reason: "Compiler or package dependencies changed; a controlled switch is required." });
+    if (expected !== (actual === undefined ? undefined : hash(actual))) {
+      const reason = await automaticConfigurationChangeReason(packageRoot, filename, expected, actual);
+      if (reason) reasons.push({ file: filename, reason });
+    }
+  }
+  if (reasons.length) return { state: "requires_switch", reasons };
+  let configuration;
+  const readConfiguration = () => {
+    if (configuration) return configuration;
+    const configFile = path.join(sourceRoot, "tsconfig.json");
+    const config = ts.readConfigFile(configFile, filename => snapshots.get(path.resolve(filename).replaceAll("\\", "/").toLowerCase()));
+    if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, sourceRoot);
+    if (parsed.errors.length) throw new Error(ts.flattenDiagnosticMessageText(parsed.errors[0].messageText, "\n"));
+    configuration = { ...parsed, options: { ...parsed.options, noEmit: false, incremental: false } };
+    return configuration;
+  };
+  const formatHost = {
+    ...ts.sys,
+    readFile: filename => snapshots.get(path.resolve(filename).replaceAll("\\", "/").toLowerCase()) ?? ts.sys.readFile(filename),
+    fileExists: filename => snapshots.has(path.resolve(filename).replaceAll("\\", "/").toLowerCase()) || ts.sys.fileExists(filename)
+  };
+  for (const added of addedSources) {
+    if (!hasNoEmittedRuntime(added.source, path.join(sourceRoot, added.file), readConfiguration().options, formatHost)) {
+      reasons.push({ file: added.file, reason: "A new executable module has no running import, state or lifecycle owner; source-patch plugin modules use their discovery contract, other initialization changes require a controlled switch." });
+    }
   }
   if (reasons.length) return { state: "requires_switch", reasons };
   const definitions = catalog.modules.filter(entry => entry.definition).map(entry => entry.definition);
   if (changes.length) {
-    const configFile = path.join(sourceRoot, "tsconfig.json");
-    const config = ts.readConfigFile(configFile, filename => snapshots.get(path.resolve(filename).replaceAll("\\", "/").toLowerCase()));
-    if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
-    const configuration = ts.parseJsonConfigFileContent(config.config, ts.sys, sourceRoot);
-    if (configuration.errors.length) throw new Error(ts.flattenDiagnosticMessageText(configuration.errors[0].messageText, "\n"));
-    const options = { ...configuration.options, noEmit: false, incremental: false };
+    const configuration = readConfiguration();
+    const options = configuration.options;
     const host = ts.createCompilerHost(options);
     const read = host.readFile.bind(host);
     host.readFile = filename => {

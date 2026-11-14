@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.persona",
-  "version": "0.1.9",
+  "version": "0.1.14",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -11,6 +11,7 @@
     "config.schema.json",
     "*.mjs",
     "src",
+    "worker",
     "web",
     "assets",
     "docs",

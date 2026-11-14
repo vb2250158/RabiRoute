@@ -8,6 +8,11 @@
 
 第一次使用从使用手册开始；接入开发者查看接口参考；架构、构建和迁移资料位于维护开发分组。实验功能与历史资料保留各自状态。
 
+- [电脑控制](user-guide/computer-control.md)：平级电脑目录、可见功能开关、输入、截图和静态/动态标注。
+- [电脑视觉操作](computer-control-visual-workflow.md)：单屏与区域截图、图像送达、整批输入归还和操作提示。
+
+- [宿主与插件边界](host-plugin-boundaries.md)
+
 ## 先看这里
 
 - [RibiWebGUI 使用手册](user-guide/README.md)：按任务找到配置、操作和排障步骤。
@@ -49,6 +54,8 @@
 
 ## 接入开发：路由、角色与 Agent 接口
 
+- [CLI 与 MCP 统一接口](unified-agent-api.md) — 分类、关键词、同一结构化输入、原生 Agent 能力和模板入口。
+
 - [接口错误与参数恢复](api-error-recovery.md)：工作区不匹配、合法参数发现、错误样例与各接口族覆盖范围。
 
 - [接口参考与自动发现](api-reference.md)：在文档页浏览当前运行接口，搜索合同、查看参数与响应、复制请求模板并下载 OpenAPI。
@@ -60,6 +67,9 @@
 
 - [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
 - [计划与记忆摘要搜索](knowledge-search.md)
+- [Agent 统一搜索](agent-search-architecture.md) — 发现计划、记忆、聊天记录、操作和设备，并核对来源与覆盖。
+- [角色配置与正文接口](role-configuration-api-contracts.md) — 读取、修改与并发恢复。
+- [角色自动化接口](role-automation-api-contracts.md) — 规则管理、时间点和操作回执。
 - [自动化 Agent 投递](automation-agent-delivery.md) — 接收者引用、指定会话、迁移和重试。
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与角色](routing-and-personas.md) — **现行指南**。route 与 role 的边界、角色包和消息模板判断框架。

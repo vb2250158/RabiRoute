@@ -199,7 +199,8 @@ function currentTimeValues(now = new Date()): ForwardTemplateValues {
     currentSecond: second
   };
 }
-function renderTemplate(template: string, values: ForwardTemplateValues): string {
+/** Replaces available message variables while preserving unknown placeholders. */
+export function renderTemplate(template: string, values: ForwardTemplateValues): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) => {
     const value = values[key];
     return value == null ? match : String(value);
@@ -1169,7 +1170,16 @@ function buildAgentMessage(
     optionalLine("事件时间", values.time),
     optionalLine("触发", values.triggerName || values.triggerId),
     optionalLine("处理主机", values.voiceSourceHostName || values.voiceSourceHostId),
-    optionalLine("声纹", values.voiceprintIds || values.voiceprintId)
+    optionalLine("声纹", values.voiceprintIds || values.voiceprintId),
+    messageSource.type === "message_adapter" ? "" : optionalLine("消息 ID", record.messageId),
+    optionalLine("引用消息", [...new Set([
+      ...("repliedMessageId" in record ? [record.repliedMessageId] : []),
+      ...("replyContext" in record && Array.isArray(record.replyContext?.messageIds)
+        ? record.replyContext.messageIds : []),
+      ...("replyContext" in record ? [record.replyContext?.messageId] : [])
+    ].map(value => String(value ?? "").trim()).filter(Boolean))].join("、")),
+    optionalLine("消息组", [...new Set((record.messageGroupMessageIds ?? [])
+      .map(value => String(value).trim()).filter(Boolean))].join("、"))
   ]));
   if (!companion && Number(values.recentMessageLimit || 0) > 0) {
     const recent = String(values.recentMessages || "").split(/(?=^- )/m)

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import ts from "typescript";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +47,7 @@ const knowledgeRuntimeFiles = [
   "apps/rabi-mcp/lib/knowledge-tools.mjs",
   "apps/rabi-mcp/lib/knowledge-receipt.mjs"
 ];
-const developerMaintenanceFiles = ['scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json', 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'];
+const developerMaintenanceFiles = ['scripts/new-rabiroute-developer-candidate.mjs', 'scripts/lib/rabilink-relay-runtime-paths.ps1', 'scripts/lib/rabilink-relay-runtime-paths.json', 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'scripts/Publish-RabiRouteDeveloperCandidate.ps1', 'src/plugins/io.rabiroute.manager.xiaomi-home/scripts/Install-HomeAssistantOs.ps1'];
 function writeKnowledgeRuntime(build) {
   for (const relative of developerMaintenanceFiles) {
     write(build, relative, fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8'));
@@ -101,6 +103,7 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, 'scripts/rabilink-knowledge-grant.mjs', 'retired grant owner\n');
     write(base, 'scripts/rabilink-knowledge-grant-ui.mjs', 'retired grant editor\n');
     write(base, 'scripts/local-maintenance.ps1', 'keep local maintenance\n');
+    write(base, 'scripts/new-rabiroute-developer-candidate.mjs', 'obsolete candidate validator\n');
     write(base, 'scripts/lib/rabilink-relay-runtime-paths.ps1', 'obsolete path helper\n');
     write(base, 'scripts/lib/rabilink-relay-runtime-paths.json', 'obsolete path rules\n');
     write(base, 'scripts/Invoke-RabiRouteDeveloperApply.ps1', 'obsolete activation budget\n');
@@ -187,6 +190,32 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     fs.rmSync(path.join(baseWithoutMcp, "packages/rabi-knowledge-contract"), { recursive: true });
     const addedRuntime = createDeveloperCandidate({ baseRoot: baseWithoutMcp, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.base-without-mcp" });
     for (const relative of knowledgeRuntimeFiles) assert.equal(fs.readFileSync(path.join(addedRuntime.packageRoot, relative), "utf8"), fs.readFileSync(path.join(build, relative), "utf8"));
+    // Use the exact production declaration reader compiled as a fixture owner.
+    const resourceSource = fs.readFileSync(new URL('../src/manager/webPluginModules.ts', import.meta.url), 'utf8');
+    const ast = ts.createSourceFile('webPluginModules.ts', resourceSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const selected = ast.statements.filter(node => ts.isFunctionDeclaration(node) && ['safeRelativePath', 'readPackagedWebResources'].includes(node.name?.text));
+    assert.equal(selected.length, 2);
+    const readerModule = "import {createHash} from 'node:crypto';import {readFileSync,statSync} from 'node:fs';import path from 'node:path';\n" + selected.map(node => node.getFullText(ast)).join('\n');
+    write(build, 'dist/manager/webPluginModules.js', ts.transpileModule(readerModule, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText);
+    const selfRoot = 'dist/plugins/packages/example.self/1.0.0', clientBytes = Buffer.from('export function activate() {}');
+    write(build, selfRoot + '/rabi.plugin.json', JSON.stringify({ id: 'example.self', version: '1.0.0', entries: { web: { module: './web/client.mjs' } } }));
+    write(build, selfRoot + '/web/client.mjs', clientBytes);
+    const declaration = { schemaVersion: 1, kind: 'rabi-plugin-web', pluginId: 'example.self', version: '1.0.0', entry: 'client.mjs',
+      backend: { pluginId: 'example.self', version: '1.0.0' }, runtime: { abi: 'rabi-web-runtime/1', imports: [] }, styles: [],
+      files: [{ path: 'client.mjs', size: clientBytes.length, sha256: createHash('sha256').update(clientBytes).digest('hex'), contentType: 'text/javascript; charset=utf-8' }] };
+    write(build, selfRoot + '/web/module.json', JSON.stringify(declaration));
+    const selfOptions = { baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: '0.2.2-dev.self-web' };
+    const selfCandidate = createDeveloperCandidate(selfOptions);
+    assert.equal(selfCandidate instanceof Promise, false, 'the official public producer remains synchronous');
+    assert.deepEqual(fs.readFileSync(path.join(selfCandidate.packageRoot, selfRoot, 'web/client.mjs')), clientBytes);
+    assert.equal(fs.readFileSync(path.join(selfCandidate.packageRoot, 'scripts/new-rabiroute-developer-candidate.mjs'), 'utf8'), fs.readFileSync(new URL('./new-rabiroute-developer-candidate.mjs', import.meta.url), 'utf8'));
+    const beforeInvalid = fs.readdirSync(versions).sort();
+    for (const bad of [ { ...declaration, entry: '../escape.mjs' }, { ...declaration, files: [{ ...declaration.files[0], sha256: '0'.repeat(64) }] }, { ...declaration, files: [{ ...declaration.files[0], size: clientBytes.length + 1 }] } ]) {
+      write(build, selfRoot + '/web/module.json', JSON.stringify(bad));
+      assert.throws(() => createDeveloperCandidate(selfOptions), /Web package resources are invalid: example.self/);
+      assert.deepEqual(fs.readdirSync(versions).sort(), beforeInvalid, 'invalid selected-package bytes cannot publish a partial candidate');
+    }
+    fs.rmSync(path.join(build, selfRoot), { recursive: true });
     const receiptFile = path.join(build, "packages/rabi-knowledge-contract/receipt.mjs");
     const receiptSource = fs.readFileSync(receiptFile);
     fs.unlinkSync(receiptFile);

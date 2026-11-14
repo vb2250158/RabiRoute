@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
@@ -83,7 +84,7 @@ async function resourceAuthorityFixture(t: import("node:test").TestContext) {
   };
   const store = new ResourceCache(path.join(root, "state"));
   const handler = resourceCacheHandler(store, { local: () => true, tunnelKey: () => "fixture-key", readOnly: () => false });
-  const revoke = () => { authority.setNodeEnabled("fixture-node", false); authority.setNodeEnabled("fixture-node", true); };
+  const revoke = () => { authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node", replacementCredentialBytes(32).toString("base64url")); };
   return { root, store, handler, make, revoke, config };
 }
 

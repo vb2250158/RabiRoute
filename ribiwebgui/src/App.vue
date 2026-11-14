@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { translateText } from "./i18n/index";
 import { userFacingError } from "./userFacingError";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import DataUpgradeDialog from "./components/DataUpgradeDialog.vue";
+import { createDataUpgradeController, type DataUpgradeView } from "./dataUpgradeClient";
+import { DATA_UPGRADE_STATUS_EVENT, type DataUpgradeStatus } from "../../src/shared/dataUpgradeContract";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { findFirstAvailableRole, useRoleStore } from "./stores/roleStore";
@@ -54,6 +57,11 @@ const roleSourceQuery = computed(() => roles.sourceDeviceId ? { source: roles.so
 const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
 const isPluginManagementPage = computed(() => route.path === "/plugins");
 const bootstrapManagerConnected = ref(false);
+const dataUpgradeView = reactive<DataUpgradeView>({ status: null, open: false, pending: false, error: "", uncertain: false });
+const dataUpgradeController = createDataUpgradeController(dataUpgradeView);
+watch(() => Boolean(store.meta?.applicationGenerationId) || bootstrapManagerConnected.value, ready => {
+  if (ready) void dataUpgradeController.ready();
+}, { immediate: true });
 const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<WebThemeId>("system");
@@ -333,8 +341,15 @@ onMounted(() => {
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
   managerEvents = managerEventSource("/api/events");
+  managerEvents.addEventListener(DATA_UPGRADE_STATUS_EVENT, event => {
+    try { dataUpgradeController.event(JSON.parse((event as MessageEvent<string>).data) as DataUpgradeStatus); }
+    catch { /* Ignore an incomplete event; the next server status remains authoritative. */ }
+  });
   managerEvents.addEventListener("api.catalog.changed", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
-  managerEvents.addEventListener("open", () => { window.dispatchEvent(new Event(API_REFERENCE_CHANGED)); });
+  managerEvents.addEventListener("open", () => {
+    window.dispatchEvent(new Event(API_REFERENCE_CHANGED));
+    void dataUpgradeController.reconnected();
+  });
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
   managerEvents.addEventListener("role_catalog_changed", () => { void roles.loadCatalog(); if (!roles.dirty && showRoleSwitcher.value) void roles.load(); });
   managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });
@@ -368,6 +383,7 @@ watch(drawer, value => {
 });
 
 onBeforeUnmount(() => {
+  dataUpgradeController.dispose();
   releaseRoleGuard();
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
@@ -594,6 +610,8 @@ function selectGateway(id: string): void {
     </v-main>
 
     <QuickSetupDialog v-model="store.quickSetupDialogOpen" />
+    <v-alert v-if="dataUpgradeView.error && !dataUpgradeView.open" type="warning" variant="tonal" class="ma-4" closable @click:close="dataUpgradeView.error = ''">{{ t(dataUpgradeView.error) }}</v-alert>
+    <DataUpgradeDialog :view="dataUpgradeView" @close="dataUpgradeController.close" @confirm="dataUpgradeController.confirm" />
     <RoleManagementActions ref="roleCreation" create-only />
     <v-snackbar :model-value="!!snackbar" timeout="1800" @update:model-value="value => { if (!value) snackbar = '' }">
       {{ snackbar }}

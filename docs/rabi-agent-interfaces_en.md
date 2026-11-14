@@ -1,1937 +1,3902 @@
 <!-- docs-language-switch -->
+
 <div align="center">
+
 English | <a href="./rabi-agent-interfaces.md">简体中文</a>
+
 </div>
+
 <!-- /docs-language-switch -->
+
+
 
 # Rabi Interfaces for Handlers
 
+
+
+See [Unified CLI and MCP API](unified-agent-api_en.md) for categories, keyword search, shared CLI/MCP input and current native Agent capabilities. Use short summaries and single-operation input descriptions for normal discovery. Complete Help supports compatible clients and exports.
+
+
+
 See [API errors and parameter recovery](api-error-recovery_en.md) for read-only discovery, workspace mismatch examples and coverage by API family. Preserve the original intent and receipt; obtain valid parameters from the current operation contract named by the error.
 
+
+
 ## Preflight for a new remote conversation
+
+
 
 A first creation reads the target SDK creation receipt before reserving a new caller intent. An unsupported old client or failed read-only preflight freezes no new intent, creates no conversation and sends no initial message. Existing intents recover with the original source, target, caller ID and initial text. `DELIVERY_NOT_RESERVED` describes the later message-delivery ledger only; it does not prove the creation intent is absent. `canSubmitSameIntent` does not authorize changing a frozen intent. Reconcile an uncertain result through its original receipt without a new key or replay.
 
 
+
+
+
 ## Newly executable interfaces
+
+
 
 The six device profile operations are described in [device Agent profiles](aiui-agent-profile-http_en.md#executable-contracts-and-discovery). They save configuration and device acknowledgements without executing an Agent. Independent owners also register:
 
+
+
 - `manager.agent-state.report`: merge the original gateway/adapter state. HTTP 200 means merged; 202 `ignored` means a duplicate or older sequence. Config persistence can fail after state mutation. With `uncertain=true`, inspect the original gateway's `agentStates`; a 202 does not prove persistence.
+
 - `manager.performance.*`: seven operations for configuration, samples, summary, logs, status and native SSE; see [performance monitoring](performance-monitoring_en.md). Sample admission at 202 only proves memory acceptance. SSE has no disconnected-event replay.
+
 - `manager.agent.marvis.open`: reuse the original host opener. HTTP 200 means a launch attempt, not readiness, login or message delivery. No idempotency receipt exists; inspect the host after an uncertain result.
 
+
+
 - `manager.bilibili-history.*`: eight business endpoints plus generic OPTIONS, retaining browser producer identity and persona-private date shards; see [history bridge contracts](bilibili-history-bridge_en.md). Manager does not access a real signed-in website account directly.
+
 - `manager.agent.copilot.install/login/status` and `manager.agent.astrbot.login-test`: reuse native installation, device-code login, status and Dashboard verification owners. Installation/login is not automatically replayed. A device-code child remains owned by the original service and retirement waits for actual close.
+
 - The five public YeYu plan interfaces are described in the [integration guide](../src/plugins/io.rabiroute.manager.yeyu-gamer/README_en.md). Submission stays in plan mode with the original state version and idempotency key; an accepted receipt does not mean game execution.
+
 - Seven mobile-state and capability operations are described in the [mobile owner API](rabilink-mobile-owner-api_en.md). Source-PC identity, device ownership and native idempotency receipts remain; these operations do not start a device Agent.
+
 - Ten `manager.napcat.*` operations use native NapCat health, login, configuration and process owners. Each operation retains its native success semantics. There is no local idempotency receipt; uncertain actions are not automatically replayed.
+
 - Fourteen Route, instance-identity and Manager configuration operations are described in the [Route control contract](route-control-api-contract_en.md), retaining strong ETags, idempotency keys and native persistence/runtime boundaries.
+
 - Thirteen device-Agent operations are described in the [device execution contract](device-agent-api-contracts_en.md), retaining original loaded sessions, claims, wake nonces, prepared ledgers and receipts. Queueing is not model acceptance.
+
 - Fifteen gateway operations are described in the [gateway control contract](gateway-control-api-contract_en.md). Persistence, runtime activation, manual triggers and replay retain separate native outcomes.
+
 - Adapter scanning and desktop settings are described in the [scan plugin](../src/plugins/io.rabiroute.manager.message-adapter-control/README_en.md) and [desktop plugin](../src/plugins/io.rabiroute.manager.desktop/README_en.md). Scan timeout does not prove offline; opener dispatch does not prove a visible window.
+
 - Source contracts for two thread, seven message-processing and twelve pet operations are described in [threads](agent-thread-api-contracts_en.md), [message processing](message-processing-api-contract_en.md) and [desktop pets](../src/plugins/io.rabiroute.manager.desktop-pet/README_en.md). Consult the implementation record for full-build and runtime acceptance progress.
 
+
+
 - Speech has 39 executable contracts, home 53 and video 35; each plugin retains native owners and discovery aliases. The dynamic video model proxy takes an explicit native HTTP method from the generic client (`options.method`, or CLI `--operation <ID> --method PROPFIND`); method-filtered discovery includes wildcard contracts, while native CONNECT/TRACE transport restrictions remain; see [target architecture](api-contract-discovery-target-architecture_en.md).
+
 - Persona resource/history/plan/Skill contracts are documented under [resources](persona-resource-api-contracts_en.md), [history](persona-history-api-contracts_en.md), [plan controls](persona-plan-api-contracts_en.md) and [Skills](persona-skill-api-contracts_en.md). [Knowledge](persona-knowledge-api-contracts_en.md), [identity](persona-identity-api-contracts_en.md) and [health](persona-health-api-contracts_en.md) retain native indexing, ledgers and lifecycle fencing. Storage registers both role prefixes (58 contracts), retaining native CAS, stable idempotency keys and the original feedback queue. Check the implementation record for compiled acceptance status.
 
+
+
 - The nine [core public services](core-public-api-operations_en.md) and five [plugin catalog operations](plugin-catalog-api-contract_en.md) share the core plugin's executable registration. [Role configuration](role-configuration-api-contracts_en.md) retains eight native role-lifecycle operations. Each native revision, receipt and Host-private boundary remains distinct.
+
+
 
 Discovery contracts are not per-feature authorization. Installed-runtime, real external-business and physical two-computer evidence remain separate; see the [implementation record](api-contract-discovery-implementation-progress_en.md).
 
 
+
+
+
 Remote connector 0.2.6 authenticates the entire computer with its enrollment credential. Enable Agent is one instance-wide switch, enabled by default. An enabled instance can use all public host APIs, including renaming, plans, memory, Skills, files and tasks, without browser login, a primary Agent, session registration, binding or per-feature grants. Calls with an existing session retain its actual type and complete session ID; sessionless calls record the real connection; directories and session lists are discovery, not permissions.
+
+
 
 ## Address-free local discovery
 
+
+
 Agents do not need to enter a Manager address. Run `node scripts/resolve-manager.mjs` from the source checkout to obtain `managerBaseUrl`, `applicationGenerationId` and `managerInstanceId`. In PowerShell, use `$rabi = node scripts/resolve-manager.mjs | ConvertFrom-Json` for the current request batch.
+
+
 
 On successful startup and lifecycle transitions, Windows Host atomically publishes `manager-endpoint.json` in its state directory (default `%LOCALAPPDATA%\Programs\RabiRoute\manager-endpoint.json`). This public identity hint contains no credentials. Stopping or recovering clears the endpoint; a replacement generation publishes its new identity. `RABIROUTE_MANAGER_ENDPOINT_FILE` can override the cache path. No environment configuration is required: an already running Agent reads the current generation on its next resolution instead of inheriting an old address.
 
+
+
 The resolver verifies cached identity and business readiness against `/meta`. A missing or stale cache falls back to one Host status query, waits for process exit, captures stdout and validates `/meta` again. This also works with older Hosts that do not publish the cache. Calling the GUI executable directly with PowerShell `& RabiRouteHost.exe --command status --json` may return empty output without waiting; empty output is not proof that Host is offline. Explicit `RABIROUTE_MANAGER_URL` / `GATEWAY_MANAGER_URL` overrides remain supported and still require live verification. Enrolled remote Agents continue using their existing transport rather than a local cache.
+
+
 
 Resolve again for each request batch. Existing post-write identity checks, idempotency and uncertain-result reconciliation remain required. Publishing the cache requires an updated Host release; a Manager source hot patch cannot replace the running .NET Host.
 
+
+
 Once a connection is authenticated, use its provided APIs without another feature or persona grant. Sends follow actual target, message format and idempotency contracts; source information records attribution only. See [Connections and API access](connection-access_en.md).
+
+
 
 Local Agents, authenticated RabiLink connections and enabled remote Agents share configuration API access. `POST/DELETE /api/agent-adapters/dsh/connection` accepts trusted local Agent requests without a browser `Origin`; cross-site browser requests, forged connection markers and revoked connections are still rejected. Configuration revisions, parameter validation and authoritative readback remain required.
 
+
+
 The connector release manifest at `GET /api/lan-agent/releases/manifest` and files at `GET /api/lan-agent/releases/<version>/node/<assetPath>` also accept current authenticated local, RabiLink and enabled remote Agent connections without acquiring a separate node credential. Downloads using initial bootstrap tickets or existing node credentials remain supported; unauthenticated requests, disabled Agents and revoked connections cannot use that channel to bypass their original identity checks.
+
+
 
 For home devices, announcements and media controls, use the [home device Agent API](home-device-agent-api_en.md): discover resources and arguments, submit a state-versioned, lifecycle-fenced action with a stable key, and query the original receipt read-only. Acceptance does not prove audible playback.
 
+
+
 For persona computer/mobile timelines, source selection and capture controls, see [Persona all-day recording API](persona-all-day-recording_en.md#public-manager-api). Reading events does not start capture; an empty result does not prove no activity throughout the day.
+
+
 
 > Status: current Agent-interface guide. The Remote Agent device path remains experimental; other interfaces have been checked against the current Manager API and tests.
 
+
+
 These are local RabiRoute interfaces used by a handler after it receives an `AgentPacket`. They let the handler return a normal reply, work with Codex threads, maintain role plans and memories, read role skills, and optionally delegate to a connected Remote Agent device.
+
+
 
 RabiRoute owns storage, policy checks, delayed plan archiving, explicit memory-consolidation runs, context injection, and Outbox delivery. The handler decides when a plan or memory should change and what response or task is appropriate.
 
+
+
 ### Model settings for Agent handoffs
+
+
 
 For `POST /api/agent/threads` with `action=send`, an explicit request `model` takes precedence. Otherwise use `agentModel` from the Route uniquely owning the target task; if unset, omit model fields and inherit the target Desktop Agent's native default. Missing task model metadata must not stop a handoff, and the current coding Agent's configuration must not substitute for the target's configuration. The primary persona can choose a different `model` and optional `reasoningEffort` on the original task delivery while retaining `taskBinding`. This selection applies to new turns; active turns continue through `steer`. Reconcile uncertain receipts before retrying; do not automatically reroute or resend.
 
 
+
+
+
 ## Plan and memory mutation contract
+
+
 
 A `focused` packet links to this contract instead of repeating it. Before mutating plans, recent memories, feedback or consolidation results, read this section and the target endpoint section. Stop that operation if the documentation is unavailable. Writes reuse connection authentication and follow current task authorization and delivery contracts. Read the persona's `plan-statuses` before choosing a status key; submit files through plan `attachments`.
 
+
+
 1. Discover the complete current Manager URL from Host status (installed), structured READY output (source), or explicit test injection. Use the current bounded timeout for the target operation; reads, long operations and uploads retain their respective budgets. Before writing, GET `/meta` and verify nonempty `applicationGenerationId` and `managerInstanceId` against the current Host/READY identity. Ordinary business requests require `health.live=true` and `health.state` of either `healthy` or `degraded`. Neither `health.requiredReady=false`, `businessReady=false`, nor an unrelated degraded Route blocks all requests; the corresponding Manager endpoint checks dependencies such as plan recovery and the target Route.
+
 2. Save a stable `Idempotency-Key` and complete body for each logical mutation. Before PATCHing a plan/recent memory, POSTing plan feedback or returning consolidation results, GET the individual resource or feedback and pass its strong ETag unchanged in `If-Match`. Never substitute a weak ETag, `*`, or `updatedAt`. Creating plans/recent memories or requesting consolidation requires an idempotency key without `If-Match`.
+
 3. On timeout, HTTP 503 or uncertain outcome, retain the original request/key and read authoritative state first. Retry only the identical body and key; never create a second operation. HTTP 412 means the old precondition did not commit: discard the old key and `If-Match`, GET fresh state, and, if the original intent still applies, save a new key and submit with the new strong ETag.
+
 4. Success must echo the exact requested `Idempotency-Key`, return a strong ETag and identify the intended resource in the body. Missing evidence prevents a success claim.
+
 5. After the response, GET `/meta` again with a bounded timeout and check only that both identities match the pre-write values; unrelated health changes do not constitute a generation change. Missing identity fields, failed reads, or changed identities make the result uncertain: rediscover the endpoint and preserve the original request/key for authoritative readback, without automatic replay. Matching identities do not remove uncertainty already caused by a write timeout, 5xx response, or similar failure. Read back the resource to verify the actual result.
+
+
 
 Exact `GET /meta` is a diagnostic entry point: after obtaining a valid response and verifying the current identity, return the health details without requiring `live`, `requiredReady`, or business readiness. Origin restrictions, authentication, timeouts, redirect rejection, and identity checks still apply. Do not extend this exception to other GET requests; some reads update `viewedAt`. This degraded-access and post-write identity-separation contract requires an updated client. Older plugins that still demand aggregate `healthy` status must be upgraded; this documentation update does not establish that a running plugin has been installed or verified.
 
+
+
 Command-line discovery retries Host status within a bounded total deadline during startup or generation changes. A temporarily unpublished endpoint indicates a service transition, not missing Agent permission. Once a complete endpoint is available, Host aggregate state is not a second permission gate; ordinary requests still use the `/meta` readiness contract above. Timeout diagnostics preserve the latest startup, connection or identity-mismatch reason. Both Windows `healthy` and `degraded` can publish endpoints, and callers must wait for the GUI Host process and capture its standard output. Validate legitimate aliases for the same instance by generation and instance identity rather than URL string equality. Rediscover after a transition without reusing an old port or automatically replaying writes.
+
+
 
 For cross-persona delivery, also read the persona messaging section and preserve deliveryId, source capability, target Route and hop limits. For remote tasks, read the Remote Agent device section. Loading instructions on demand does not relax these contracts.
 
+
+
 ## Manager events (connected in source; installed acceptance pending)
+
+
 
 `GET /api/events` is discovered from the same executable registration snapshot with transport `sse`. It starts with the reconnect interval and `ready`, followed by JSON-data events and protocol keepalives. After disconnection, verify Manager identity and refresh current resources/catalogs. The stream has no durable replay cursor; a missed event never justifies replaying a business request.
 
+
+
 Streaming validates frames and respects backpressure. All admitted callers share resource limits: 128 subscriptions, and at most 64 queued frames/4 MiB per subscriber. Queue overflow closes that connection for reconnect-and-refresh; exhausted subscription capacity returns 429 `MANAGER_EVENT_CAPACITY`. These are resource limits, not feature grants. In-flight leases remain until cleanup completes after disconnect, plugin retirement, or source closure. Existing browser EventSource query authentication stays at ingress; credential fields never enter business schemas, discovery, or ETags. Remote Agents retain their existing connection credentials.
+
+
 
 ## Executable WebGUI access contracts (source connected; installed acceptance pending)
 
+
+
 `GET /api/webgui-access`, `PATCH /api/webgui-access` and the compatible `POST /api/webgui-access` are discoverable as `manager.webgui-access.read`, `manager.webgui-access.update` and `manager.webgui-access.update-post`. They reuse the existing global configuration owner. Authenticated connections require no extra persona grant or Agent registration. Reads may return existing credentials and connection links according to the original management identity; responses use `private, no-store`, and discovery contains no credential values.
+
+
 
 Writes retain existing decoding semantics: an empty body becomes `{}`; Content-Type does not select decoding; the body remains UTF-8 JSON even when the header is absent or uses another media type. Only boolean `enabled` changes the setting, and only literal `regenerateToken: true` explicitly rotates the credential. Other non-null JSON values and unknown fields remain ignored; `null` or invalid JSON returns 400. Bodies are bounded to 64 KiB. The shared contract declares `emptyValue` and `allowAnyContentType`; OpenAPI also marks the body optional. Read settings after an uncertain rotation instead of automatically replaying it. `restartRequired` retains existing Host/listener semantics; this operation does not restart Manager. After existing authentication and runtime-mode checks, unsupported methods on registered paths return 405 with `Allow` without calling the configuration owner.
 
+
+
 ## Executable resource-cache and recording-archive contracts (source connected; installed acceptance pending)
+
+
 
 One registry publishes these 13 operations with the `manager.resources.` ID prefix. Discovery, request validation and dispatch use the same contracts; fields and limits are shared with the existing storage owners.
 
+
+
 | Operation suffix | Method and path |
+
 | --- | --- |
+
 | `settings.read` / `settings.update` | GET / PUT `/api/resource-cache/settings` |
+
 | `archive-settings.read` / `archive-settings.update` | GET / PUT `/api/resource-cache/archive-settings` |
+
 | `object.read` / `object.write` | GET / PUT `/api/resource-cache/data/objects/:objectHash` |
+
 | `archive.capabilities` | GET `/api/resource-cache/data/archive-capabilities` |
+
 | `archive.recordings.list` | GET `/api/resource-cache/data/recordings` |
+
 | `archive.processing.read` | GET `/api/resource-cache/data/recordings/:recordId/processing` |
+
 | `archive.manifest.read` | GET `/api/resource-cache/data/recordings/:recordId/manifest` |
+
 | `archive.manifest.commit` | PUT `/api/resource-cache/data/recordings/:recordId/manifests/:manifestHash` |
+
 | `archive.receipt.read` | GET `/api/resource-cache/data/recordings/:recordId/receipts/:manifestHash` |
+
 | `recording-events.write` | PUT `/api/resource-cache/data/recording-events` |
+
+
 
 Authenticated public connections use the shared management ingress without another resources key, persona binding or Agent preregistration. On object, archive and mobile-event operations, `x-rabilink-resource-owner` selects existing data ownership. It is a business target header, not the connection identity. Existing device resources transports retain their identity and credential checks; internal forwarding headers alone do not establish public management admission.
 
+
+
 For archive-settings PUT, first GET the strong ETag, then supply the exact `If-Match` and a stable `Idempotency-Key`. The generic connector fills generation/instance headers from verified `/meta`; callers cannot override them. Preserve the original request and key after an uncertain outcome and read back the settings and original operation result first.
+
+
 
 Object PUT/GET transfers actual bytes, bounded at 1 MiB. Module callers use `bodyBytes`, `responseMode: "bytes"` and response `bodyBytes`; CLI callers use `--body-file` / `--output`. Existing object and legacy JSON decoding remains independent of Content-Type. Archive-settings PUT still requires `application/json` and at most 8192 body bytes. The contracts describe these differences.
 
+
+
 Shared object paths select existing archive bindings first. Only an unbound object target uses legacy cache storage. Disabled bindings, missing NAS storage, namespace errors and uncertain commits retain their original result without changing storage targets. The archive manifest and exact receipt confirm archive commits; legacy object or mobile-event `durable: true` only acknowledges persistence by its original owner and does not permit deleting phone originals. See [mobile recording archive](mobile-recording-archive_en.md) for device and physical NAS acceptance.
+
+
 
 ## Remote Agent resources and release contracts (source connected; installed acceptance pending)
 
+
+
 These four read operations share the original resource catalog and signed-release owners:
 
+
+
 | Operation ID | GET path |
+
 | --- | --- |
+
 | `manager.lan-agent.resources.list` | `/api/lan-agent/resources` |
+
 | `manager.lan-agent.resources.read` | `/api/lan-agent/resources/read?id=<returned-resource-ID>` |
+
 | `manager.lan-agent.releases.manifest` | `/api/lan-agent/releases/manifest` |
+
 | `manager.lan-agent.releases.asset` | `/api/lan-agent/releases/:version/:platform/:assetPath` |
+
+
 
 Authenticated RabiLink connections and enabled remote nodes reuse their connection without Agent-session registration or persona binding. Bootstrap tickets retain their original release-download entry; a ticket alone does not permit management-resource reads. Awaited resource reads revalidate the original connection before disclosure. Registration retirement waits for the actual owner even after client disconnection.
 
+
+
 `request.pathTails: ["assetPath"]` declares a final parameter that captures one or more path segments; the template still uses `:assetPath`. For example, `assetPath: "lib/manager-client.mjs"` retains separators and URL-encodes each segment independently. Manager, the generic connector and OpenAPI use one parsing module. OpenAPI shows `{assetPath}` and declares its behavior through `x-rabiroute-path-tails`. Empty segments, dot segments, backslashes and control characters are rejected, with one decoding pass. Existing single-segment encoding remains supported. Previous generic connectors that encode the complete value, including `%2F` separators, can still call the operation without a per-API upgrade.
+
+
 
 Release files preserve their original bytes, including JSON whitespace and formatting. They are never converted into Buffer metadata or reserialized JSON. Existing version, platform, published-file membership and directory constraints remain effective. Before installation, the original download workflow still verifies the pinned public-key digest, manifest signature and file hash; discovery or download is not an installation receipt. Resource discovery retains published documents, Skill entry files and same-package references. Legacy `resources/read` queries still use the first `id` value and ignore other fields.
 
+
+
 ## Direct-video signalling contracts (source connected; installed acceptance pending)
+
+
 
 `manager.rabilink.video.status` reads `/api/rabilink/video/status`; `manager.rabilink.video.offer` negotiates the original WebRTC receiver through POST `/api/rabilink/video/offer`. Authenticated remote callers reuse their connection without Agent preregistration or another grant. HTTP accepts bounded SDP and deviceId only. Media still goes directly to the original receiver, never through Relay. Negotiation, recording completion and physical glasses capture require separate verification. Never automatically replay an offer after disconnection. See [direct phone-to-PC video](rabilink-direct-video_en.md#public-manager-contracts-source-connected-installed-acceptance-pending).
 
+
+
 ## Role-panel message contracts (source connected; installed acceptance pending)
 
+
+
 | Operation ID | Method and path |
+
 | --- | --- |
+
 | `manager.role-panel.messages.list` | GET `/api/roles/:roleId/role-panel/messages` |
+
 | `manager.role-panel.messages.send` | POST `/api/role-panel/messages` |
+
+
 
 Authenticated remote callers reuse their connection without Agent-session preregistration or persona grants. GET preserves the discovery alias `persona:GET:/api/roles/:roleId/role-panel/messages`, resolved to the same contract. Reads retain Number conversion of the first `limit`, defaulting to 120 unless it is finite and positive. Legacy nonfinite timestamps become null, preserving the previous JSON wire representation. Disconnection cancels an unfinished read and joins its original owner's cleanup.
 
+
+
 POST uses the original local-persona delivery owner. An omitted `gatewayId` selects the first runtime entry; supplied values retain native sanitization. The target must satisfy existing local-persona object ownership. Text retains `String(text || "").trim()`; attachments use the native normalizer, and at least text or one valid attachment is required. JSON parsing remains independent of Content-Type, and `maxBytes: 0` retains the original absence of an application-level byte limit. Audit uses the route identity and storage owner captured at acceptance even if configuration changes during delivery.
+
+
 
 A 202 `status=delivered` reports acceptance by the original delivery owner; inspect the original task for business completion. `timelineRecorded=false` reports an audit failure and never causes a resend. Delivery errors return 502 with the original `messageId`, `replyContext`, `uncertain=true` and `commitState=uncertain`. Validation before dispatch returns 400 with `commitState=not_started`. There is no request-level idempotency: each new submission creates a new message ID. After timeout, failure, a missing row or audit failure, reconcile the original ID and task without automatic resubmission.
 
+
+
 The original child execution budget defaults to 45 seconds and can be changed in shared timeout settings. Termination still joins actual process close, stdout/stderr and accepted log callbacks. Accepted delivery and audit retain their lease after HTTP disconnection. Result disclosure revalidates original admission and stops after connection revocation.
+
+
 
 ## Remote terminal and computer contracts (source connected; installed acceptance pending)
 
+
+
 Five operations reuse the existing target-computer connection and executors. Authenticated callers need no Agent-session registration or persona binding. Advertised shells, file, window and screenshot capabilities describe actual implementation, not a second permission grant. These terminal operations select a remote computer; local terminals remain with their local host.
 
+
+
 | Operation ID | Method and path |
+
 | --- | --- |
+
 | `manager.lan-agent.terminals.list` | GET `/api/lan-agent/instances/:instanceId/terminals` |
+
 | `manager.lan-agent.terminals.execute` | POST the same path |
+
 | `manager.lan-agent.terminals.read` | GET `/api/lan-agent/instances/:instanceId/terminals/:terminalId` |
+
 | `manager.lan-agent.terminals.events` | GET `/api/lan-agent/instances/:instanceId/terminals/:terminalId/events`, SSE |
+
 | `manager.lan-agent.computer.execute` | POST `/api/lan-agent/instances/:instanceId/computer` |
+
+
 
 Terminal POST actions are `open/list/get/input/resize/close`. Preserve `terminalId`, input `sequence` and original text. A conflicting sequence or expired receipt stops replay. The original executor validates advertised shells, absolute target directories, UTF-8 input bytes, dimensions and capacities. Computer POST supports `file.stat/read`, `upload.begin/write/commit/status/abort`, `windows.list` and `screen.capture`; windows and screenshots require Windows. File versions, upload IDs, offsets, chunk hashes, non-overwriting publication and status queries retain their original protocol. Native desktop fields retain conversion and cross-field rules; unknown body fields still reach the original executor. UTF-8 JSON decoding remains independent of Content-Type.
 
+
+
 Output `after` and `waitMs` preserve Number conversion of the first query value. The replay owner validates cursor ordering and the 0–25000 ms wait range. Each terminal shares at most four viewers and retains at most 256 KiB / 2048 events. Each SSE viewer queues at most 512 KiB with a 25-second protocol keepalive that stops immediately on exit or disconnect. A stale cursor receives `gap`; `exit` or `disconnected` drains accepted queued output before EOF. SSE retains its original `id` and JSON `data` framing without buffering the full stream.
+
+
 
 Viewer disconnect, original-connection revocation or registration retirement removes the subscription and completes cleanup before releasing the lease; these actions do not close or reopen the remote terminal. The original owner settles accepted input/computer operations even after HTTP disconnection. Awaited results and streamed disclosure revalidate original admission. After an uncertain result, read that terminal's `nextInputSequence` or the original `upload.status` without changing UUID, sequence or target and resending. Old boolean HTTP wrappers are removed; resource and release reads remain described above.
 
+
+
 ## Node enrollment and instance management contracts (source connected; installed acceptance pending)
+
+
 
 These fifteen operations reuse the original authority, registry and local configuration owners. Their ID prefix is `manager.lan-agent.`. Authenticated remote connections need no per-feature grant or Agent registration. Public capabilities use the version 2 active snapshot; the version 1 summary and core legacy prefix dispatch are removed.
 
+
+
 | Operation suffix | Method and path |
+
 | --- | --- |
+
 | `self.read` | GET `/api/lan-agent/self` |
+
 | `enrollments.create` | POST `/api/lan-agent/enrollments` |
+
 | `enroll.exchange` | POST `/api/lan-agent/enroll` |
+
 | `instances.list` | GET `/api/lan-agent/instances` |
+
 | `instances.enabled` | PUT `/api/lan-agent/instances/:instanceId/enabled` |
+
 | `instances.name` | PUT `/api/lan-agent/instances/:instanceId/name` |
+
 | `agents.create` | POST `/api/lan-agent/instances/:instanceId/agents` |
+
 | `agents.tasks` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/tasks` |
+
 | `agents.configure` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/configure` |
+
 | `agents.scan` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/scan` |
+
 | `agents.threads` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/threads` |
+
 | `agents.hooks` | POST `/api/lan-agent/instances/:instanceId/agents/:agentId/hooks` |
+
 | `nodes.list` | GET `/api/lan-agent/nodes` |
+
 | `nodes.update` | POST `/api/lan-agent/nodes/:nodeId/update` |
+
 | `nodes.tasks` | POST `/api/lan-agent/nodes/:nodeId/tasks` |
+
+
 
 Ticket issuance ignores bodies, including non-JSON and empty input, declared as optional raw input. Ticket and credential responses prohibit caching. Enrollment uses an existing ticket or valid recovery proof: current nodeId and enrollmentSecret recover the same credential without requiring another ticket. Discovery publishes only field structure.
 
+
+
 Renaming carries current expectedName. Enabled changes carry boolean enabled and expectedEnabled and retain original compare-and-set and repeated-state semantics. Disabling the caller's own node revokes disclosure through that connection; use an existing management connection to read back state rather than assuming the mutation failed and replaying it. Historical node/task lists retain records and extensions that predate newer protocol fields.
+
+
 
 Provider owners retain configure/scan/threads/hooks extension fields and result shapes. Path agentId overrides the same body field; remote Agent creation forwards no body agentId. Thread operations, including listing, require explicit agentAdapter. Hooks retain the original 90-second owner timeout; other remote management actions retain 30 seconds. Instance tasks explicitly provide provider, full threadId, message and a stable idempotencyKey; node tasks select the provider with targetAgent. Responses await original-owner acceptance. Repeated keys for the same target and content reuse the original task without another dispatch.
 
+
+
 An update without a nonempty version uses the original signed release manifest version. HTTP 202 means the update request was submitted; read back actual update state. Awaited management passes original-admission fences to its owner; task/update owners revalidate after persistence and before sending. Client abort never replays accepted work, and retirement waits for actual owner completion. Installed deployment, feature-specific in-place upgrade and real two-computer acceptance remain outstanding.
+
+
 
 ## LAN Agent WebSocket connection contract (source connected; installed acceptance pending)
 
+
+
 `manager.lan-agent.connect` binds GET `/api/lan-agent/connect` through `registerUpgrades()`, sharing discovery, contract digest and the active snapshot with the actual upgrade. An ordinary HTTP GET returns 426. Real WebSocket handshakes retain first-message `authenticate/token`, followed by native hello/node metadata, with no additional HTTP identity, persona binding or Agent-session registration. Commands, terminal events, tasks and update results retain their native protocol; discovery never replays them.
+
+
 
 Discovery declares `transport: websocket` and a `websocket` descriptor, exported through OpenAPI's `x-rabiroute-websocket`. Status 101 has no HTTP body. Messages retain the original 100 MiB bound; buffered outgoing bytes are capped at 200 MiB. First authentication waits ten seconds; close grace is two seconds. The native state machine retains message-kind, field and ownership validation, including native closure for invalid first-message credentials. Disabling then re-enabling a node or the global switch cannot revive an old connection. Reconnect with the original computer identity and query original task state.
 
+
+
 Before the native library writes handshake headers, the binding calls `prepareHandshake()`, supplies actual socket lifetime through `accept({closed, close})`, and calls `validateIncoming/validateOutgoing` for native frames. Retirement first calls `stopAccepting()`, waits for accepted HTTP commands and their actual results, then calls `dispose()` to close owned sockets; leases remain until cleanup promises settle. Idle channels do not occupy automatic-source-publication business-request counts. The production central listener is removed. Standalone compatibility `attach()` delegates to the shared registrar without a second path dispatcher.
+
+
 
 The generic client supports WebSockets through `openOperation(operationId, options)`, sharing discovery, aliases and path/query resolution with HTTP `invokeOperation()`. The HTTP method still rejects WebSockets; CLI supports explicit streaming JSONL frames through `--operation ID --websocket --output FILE [--frames-stdin]`; see [connector CLI](../apps/rabi-agent/README_en.md#websocket-cli-source-connected-installed-acceptance-pending) for options. The actual connector calls `openOperation("manager.lan-agent.connect", ...)`, then retains its own authenticate/hello state machine. Its old path builder is removed.
 
+
+
 `options.onMessage(value, {signal})` is required. JSON mode delivers decoded values; bytes mode delivers Buffers. Optional `onOpen(channel, {signal})` lets the protocol owner send native first messages; `onClose(result)` cleans owned resources. Use `channel.sendJson(value)` for JSON, `send(text)` for validated serialized JSON, or `send(bytes)` with Uint8Array in bytes mode. Schemas and message, outgoing-buffer and receive-queue bounds come from discovery. Consumption is serial with backpressure. Call `close()` to request closure and await `closed` outside callbacks, after all started callbacks complete. Cancellation signals owner cleanup. Transport never reconnects or replays, and errors do not echo credentials.
+
+
 
 `sendAsync(data)` and `sendJsonAsync(value)` await accepted native write callbacks and backpressure continuous input. A completed callback does not acknowledge business receipt or execution. `closed` also joins these callbacks. Data capture may explicitly set `drainOnRemoteClose: true`: normal remote 1000 closure drains validated frames before `onClose`; cancellation, abnormal closure or consumer failure stops draining. The default remains false, preserving disconnect cancellation for the connector's command consumer. CLI file capture enables it so a missing tail cannot be reported as successful output.
 
+
+
 CLI `--frames-stdin` accepts JSONL `{"type":"json","data":...}`, `{"type":"text","data":"..."}`, `{"type":"binary","data":"<standard Base64>"}` or `{"type":"close","code":1000,"reason":"done"}`. Target schemas/protocols own valid frames and authentication first messages; CLI invents no login or task. Output uses matching json/text/binary JSONL, with Base64 binary data. Stdin EOF only stops sending; omit `--frames-stdin` for receive-only use. `--timeout-ms` defaults to a 30-second total deadline, and `--ws-max-output-bytes` defaults to a 256 MiB local file budget. Opaque consumers can adjust local capacity with `--ws-max-message-bytes`/`--ws-max-buffered-bytes` and select subprotocols with `--ws-protocols '["protocol.v1"]'`.
+
+
 
 CLI commits output without overwrite only after normal closure and original generation/instance verification. Cancellation, deadline, capacity and write errors do not commit. Stdout contains the digest and transport receipt. `businessOutcome: "not-evaluated"` requires the original protocol's business receipt; `inputComplete` reports input consumption, and a send callback is not a business acknowledgment. JSON/text redact the connection credential; binary reflection of it fails. HTTP bodies, `--upload` and `--stream` cannot mix with WebSocket frame mode.
 
+
+
 Manager identity is verified before and after the handshake; a post-handshake health fluctuation alone is not an identity change. Contract conflicts invalidate discovery without retrying the connection. Unsupported schemas, missing consumers or an older Manager lacking a connection contract produce compatibility errors while retaining node/task identity, without guessing legacy URLs. Other public entries, closure/listener migration in an existing Manager, feature-specific in-place upgrade, installed deployment and real two-computer acceptance remain outstanding.
+
+
 
 ## Connected-host native delivery (source connected)
 
+
+
 A full Rabi host provides local computer and Agent APIs through its existing RabiLink Peer connection, without a self-connected client, target Route, session enrollment or per-feature grants. Each Peer target saves `ownerDeviceId + instanceId + agentId` and its original `sessionId/sessionName/workspace`; an unselected session never borrows the caller PC's default task.
+
+
 
 Agent-to-Agent messages retain `/api/agent/threads` and original formal receipts; `instanceBinding.ownerDeviceId` addresses the target host. A native Agent on a connected PC may initiate a message. Formal replies and caller lookups retain `ledgerOwnerDeviceId`. The originating Manager owns the formal intent; target `/api/agent/prepared-deliveries` and `/reconcile` record execution evidence only.
 
+
+
 Ordinary Routes, explicit-session deliveries and workers use native delivery for their original packets, without inventing an Agent source for user/system events. Call through the caller's Manager and its existing Peer path:
 
+
+
 ```http
+
 POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries
+
 Content-Type: application/json
 
+
+
 {"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>","cwd":"<targetWorkspace>","prompt":"<renderedRabiEnvelope>"}
+
 ```
+
+
 
 Original-receipt queries need neither the prompt nor a currently unarchived task:
 
+
+
 ```http
+
 POST /api/rabilink/peer/http/<targetDeviceId>/manager/api/agent/route-deliveries/reconcile
+
 Content-Type: application/json
 
+
+
 {"instanceId":"<targetLocalInstanceId>","provider":"codex","threadId":"<fullSessionId>","deliveryId":"<originalDeliveryId>"}
+
 ```
+
+
 
 `200` confirms the original execution receipt; `202` retains uncertainty and the original ID. A business `409` with `commitState: "not_started"` reports that this attempt did not start; a prior success never masks a different payload. Only persisted original no-frame proof permits another attempt with the same ID; unknown outcomes only reconcile. B supplies the source-A API context, reusing native execution and receipt storage. Discover exact fields, responses and platform capabilities from the target's current operation catalog. Source, isolated candidates, installed versions and physical two-computer acceptance remain separate.
 
+
+
 ## Peer connection-control contract (source connected; installed acceptance pending)
+
+
 
 These entries use the original connection owner through `registerOperations()` and retain the original JSON bodies. `events` uses the same registry's SSE lifecycle.
 
+
+
 | Operation ID | Method and path | Purpose |
+
 | --- | --- | --- |
+
 | `manager.rabilink.peer.servers.read` | GET `/api/rabilink/peer/servers` | Read discovered devices, selection and connection/RTT status |
+
 | `manager.rabilink.peer.selection.read` | GET `/api/rabilink/peer/selection` | Read the saved target |
+
 | `manager.rabilink.peer.identity.read` | GET `/api/rabilink/peer/identity` | Read local device ID, generation and public key; no private key |
+
 | `manager.rabilink.peer.probe` | POST `/api/rabilink/peer/probe` | Body `{deviceIds: [...]}`; probe at most ten devices |
+
 | `manager.rabilink.peer.selection.update` | PUT `/api/rabilink/peer/selection` | Body `{deviceId: "..."}`; an empty string explicitly clears selection |
+
 | `manager.rabilink.peer.events` | GET `/api/rabilink/peer/events?ids=...` | JSON-encoded `ids` array with at most ten entries; first repeated value wins |
+
+
 
 Both writes retain the 8 KiB JSON-body bound and tolerate unknown extension fields without requiring JSON media type. Original admission is rechecked before selection persistence and after awaited results. Probing and trust bootstrap retain their original shared connection owner; cancelling a request does not revoke all shared connections. Read-only mode still blocks probe and selection changes. Authenticated Agents need no persona or Agent preregistration.
 
+
+
 Events retain `: connected`, filtered device `status`, all `selection` changes and a 15-second `: keepalive`. Heartbeats only measure live-channel RTT and never poll the directory or business state. Frame and queued-event budgets are each 64 KiB; slow consumers close on overflow. Cancellation, retirement or original-admission revocation detach listeners/timers and join accepted RTT callbacks before lease release. There is no durable replay cursor. Reconnect by reading current directory/selection, never by replaying business writes.
+
+
 
 ## Peer HTTP passthrough contract (source connected; installed acceptance pending)
 
+
+
 Ordinary HTTP and WebSocket share the URL; HTTP binds its native owner through `registerHttpProxies()`. Generic clients discover these operations:
 
+
+
 | Method | Operation ID |
+
 | --- | --- |
+
 | GET | `manager.rabilink.peer.http.get` |
+
 | HEAD | `manager.rabilink.peer.http.head` |
+
 | OPTIONS | `manager.rabilink.peer.http.options` |
+
 | POST | `manager.rabilink.peer.http.post` |
+
 | PUT | `manager.rabilink.peer.http.put` |
+
 | PATCH | `manager.rabilink.peer.http.patch` |
+
 | DELETE | `manager.rabilink.peer.http.delete` |
+
+
 
 The path is `/api/rabilink/peer/http/:deviceId/:service/:path`. `pathRemainder: "path"` retains the raw URI suffix; an empty value selects the service root. The target owns schemas, object rules, limits and receipts. Proxy `request.body.kind: passthrough` and `responses.default.passthrough: true` explicitly avoid JSON decoding, reserialization and whole-body buffering. OpenAPI publishes `*/*` and `x-rabiroute-http-proxy`.
 
+
+
 `httpProxy.wire` reuses native 12,000-byte data chunks, a 65,536-byte stream window and 16 concurrent streams per session, without declaring whole-request or whole-response limits. Target statuses, media types and repeated public headers are retained. Existing credential, private identity and hop-header filters remain. The target owner rebuilds HTTP framing, including DELETE bodies.
+
+
 
 The proxy precondition uses `x-rabiroute-proxy-contract`. Target `x-rabiroute-api-contract`, `If-Match` and `Idempotency-Key` retain their meaning. The same `x-rabiroute-target-headers` JSON object as upgrades carries target generation/instance conditions. Outer version conditions address the current Manager; version headers are not permission grants.
 
+
+
 Binary responses require explicit `responseMode: "bytes"`. SSE and long responses use `responseMode: "stream"` with `onChunk`, or existing file output:
 
+
+
 ~~~js
+
 await client.invokeOperation("manager.rabilink.peer.http.put", {
+
   path: { deviceId: "peer-target", service: "manager", path: "api/example/object" },
+
   bodyBytes: bytes,
+
   responseMode: "bytes",
+
   headers: {
+
     "x-rabiroute-api-contract": "<target-contract-digest>",
+
     "idempotency-key": "<original-request-key>"
+
   }
+
 });
+
 ~~~
+
+
 
 Cancellation, retirement and original-admission revocation stop further dispatch. The lease joins target acquisition, accepted writes, input/output streams and reset callbacks. It never reconnects, replays writes or closes healthy shared sessions. Read-only acceptance retains 423, and the persona compatibility alias uses the same public paths and methods as manager. Authenticated connections receive no new per-feature permission. Installed and real two-computer acceptance remain incomplete.
 
+
+
 ## Peer transparent upgrade contract (source connected; installed acceptance pending)
+
+
 
 `manager.rabilink.peer.websocket.proxy` uses WebSocket Upgrade on GET `/api/rabilink/peer/http/:deviceId/:service/:path`. `pathRemainder: "path"` denotes the already encoded raw URI suffix: `path: ""` selects service root `/`; other values are not encoded again. Original ingress/target path validation remains. Ordinary HTTP GET keeps a separate owner. When both dispatches are registered, OpenAPI exports the full upgrade contract under the ordinary method's `x-rabiroute-upgrades`.
 
+
+
 The contract declares `framing: passthrough` without decoding the target application protocol. Native bounds are 12000 data bytes per chunk, a 65536-byte stream window and sixteen streams per connection. These are tunnel bounds, not application message sizes. `handshakeMs: 10000` starts after acquiring the native target session; discovery budgets remain separate. Generic `openOperation()` delivers text as string and binary as Buffer, with binary in callback context. `protocols` selects native subprotocols. The SDK defaults to local 100 MiB message and 200 MiB buffering budgets for transparent messages, adjustable through options.maxMessageBytes/maxBufferedBytes; the server pipeline gains no corresponding aggregate message limit.
+
+
 
 `request.contractHeader` is `x-rabiroute-proxy-contract`, set by discovery for the current proxy digest. Original `x-rabiroute-api-contract` can still carry the target digest. Current-Manager identity preconditions added by transport are not forwarded as target identity preconditions. Supply original target-version headers in the JSON object `x-rabiroute-target-headers`. Existing public-header filters still strip credentials, proxy identity and hop framing; the target transport owner generates actual identity proofs. This object can also express next-hop target headers without per-business forwarding branches.
 
+
+
 Original Node/RabiLink admission, pinned peer keys, scope, generation, service and resource rules remain with their owners. The persona compatibility alias uses the same public read, write and upgrade contract as manager, without a second path or method permission. Queued open, data and end frames revalidate original admission before actual encryption/dispatch. Rejection cancels only that request without spending a cipher sequence or corrupting the shared session. Retirement stops admission and awaits sockets, tunnel streams, guards and accepted write/reset callbacks. It never switches to local execution or replays messages. Ordinary Peer HTTP and other public entries remain under migration. Installed, feature-specific in-place and real two-computer acceptance remain incomplete.
+
+
 
 ## Remote Agent Hub contracts (source connected; installed acceptance pending)
 
+
+
 These are public HTTP entry points for the existing experimental v3 bridge, with operation prefix `manager.remote-agent.`. The Hub and the `/api/lan-agent/` computer-credential/explicit-session protocol retain their separate original owners. Migration starts no fallback processing runtime and introduces no per-feature or persona grant.
 
+
+
 | Operation suffix | Method and path |
+
 | --- | --- |
+
 | `devices.list` | GET `/api/remote-agent/devices` |
+
 | `scan` | POST `/api/remote-agent/scan` |
+
 | `connect` | POST `/api/remote-agent/connect` |
+
 | `disconnect` | POST `/api/remote-agent/disconnect` |
+
 | `tasks.list` | GET `/api/remote-agent/tasks` |
+
 | `tasks.create` | POST `/api/remote-agent/tasks` |
+
 | `task-events.receive` | POST `/api/remote-agent/task-events` |
+
+
 
 `devices.list` and `scan` return current devices and the latest twenty tasks; `tasks.list` returns the latest hundred. Other queries retain their ignored semantics. Scan ignores non-JSON and empty bodies. Other writes retain UTF-8 JSON decoding, empty-object defaults and independence from Content-Type. Original String/default conversions, event statuses and extension interpretation remain Hub-owned; TypeScript annotations do not introduce new runtime rejection rules.
 
+
+
 Connect still requires discovery and the original v3 nonce/mutual HMAC-SHA256 authentication before saving the bridge password in its existing local store. This authenticates the target bridge. Original caller admission is revalidated before proof transmission and password persistence, and failure awaits the new socket closing. Discovery contains no actual passwords; responses prohibit caching. Disconnect retains native target conversion and no-target behavior; socket cleanup participates in Hub retirement.
+
+
 
 An inline sha256 is checked against decoded bytes before dispatch; mismatch returns 400 without creating a task or writing the socket. Task creation retains original device, Gateway, working-directory and thread-name defaults. Only native array fields participate in file collection, with existing decoded-byte limits, path and digest checks. Returned tasks strip file content; actual socket payloads carry the original bytes. Events must belong to the task device. Terminal repeats return the original task without saving files or invoking callbacks again. The original Hub settles accepted callbacks, and retirement waits for actual completion.
 
+
+
 Hub task/event records are in memory and have no durable idempotency key. HTTP 202 means socket dispatch; completion requires later status. Preserve the returned taskId. After uncertainty, inspect the original devices and bounded task window without claiming receipt recovery or automatically resending. Restart can lose records. Published IDs `agent:GET:/api/remote-agent/devices`, `agent:GET:/api/remote-agent/tasks` and `agent:POST:/api/remote-agent/tasks` resolve through the same contract aliases.
+
+
 
 ## Message delivery: use Rabi whenever it is available
 
+
+
 This rule covers Rabi-managed group/private messages, attachments, cross-persona messages, persistent Agent task prompts and follow-ups, task results, callback / knowledge-callback, and Outbox delivery. Ordinary replies to the user in the current UI, read-only task inspection, and temporary sub-agent collaboration within the same task are outside this delivery boundary. Sending still requires authorization for the original action.
+
+
 
 In current source, `GET /api/agent/help` returns `schemaVersion: "2"` and projects operations from the active executable registration snapshot. Each `contract` contains request/response schemas, effects, recovery, and named business validators. Previous discovery IDs resolve through `contract.aliases` to the same canonical operation without another route. `help.contractLevel: declared` and `auditLevel: runtime-schema` mean declared structural validation, not real-environment acceptance. Coverage uses `scope: registered-routes` and `globalCoverage: not-proven`; `complete` does not mean full-project acceptance. `data.coverage.gaps` lists legacy registrations still lacking executable contracts; it cannot establish coverage of branches outside the registry. Older installed releases may return version 1 baseline/verified summaries; interpret their returned version instead of combining those counts with version 2. Installed updates and two-computer acceptance of current source remain pending.
 
+
+
 In version 2, `catalogDigest` hashes complete executable contracts and known coverage gaps as canonical JSON with SHA-256 (`sha256:` prefix). Filters and pagination do not change the catalog digest. `catalogRevision` and application/Manager/plugin identities identify the snapshot; `ETag` identifies the queried representation and supports `If-None-Match`. Neither digest nor ETag replaces authentication, business conditions, or `/meta` identity checks.
+
+
 
 Send capabilities expose `data.requestContract` (`version: 2`, `kind: runtime-json-schema`): `schema` is the JSON Schema executed by the send operation, while `validators` name the server-side text normalization, target combinations, media, source/state, and idempotency rules. `src/agentSendContracts.ts` owns field names and limits; the old partial field table has been retired. `requestContractDigest` hashes the complete request contract as canonical JSON with SHA-256; `channelsDigest` uses the same canonical algorithm for channel definitions. `GET /api/agent/send/capabilities` has `schemaVersion: "2"`. Clients must read the schema version and named rules; successful discovery does not establish that all business conditions hold or that the platform delivered a message. This describes current source and isolated HTTP checks; installed and two-computer updates remain unverified.
 
+
+
 Version 2 Help accepts `operationId`, `path`, `method`, `limit`, and `cursor`, once each. The first three intersect after trimming surrounding whitespace; `method` is case-insensitive and `path` is the exact template. `limit` ranges from 1 to 200. Unknown, repeated, blank, or schema-invalid values return 400 `API_REQUEST_SCHEMA_INVALID`; an unmatched operation ID returns 404 `AGENT_HELP_NOT_FOUND`, while unmatched path/method searches return 200 with an empty list. Pagination cursors bind the snapshot and filters; an expired identity/revision returns 409 `API_CATALOG_SNAPSHOT_CHANGED` and requires restarting the read. Never join different snapshots or place credentials in query parameters. Errors do not echo query values.
+
+
 
 The plugin layer also provides `node scripts/agent-api-route-inventory.mjs`, which separates exact method/path entries, `dispatchScopes` (prefixes), and `unresolved` wildcard or unexpanded entries. It uses the TypeScript AST without executing plugins, handles reordered/quoted properties, ignores commented declarations, and reports dynamic paths/methods or spread declarations as unresolved. Legacy objects with explicit routeId properties are expanded; `executableRegistrations` separately reports registerOperations/registerUpgrades call sites and requires the active runtime catalog for actual operation contracts. Call counts are not operation counts. Fully imported legacy declarations remain outside its coverage. Exact counts distinguish file and routeId, not globally unique URLs. Do not treat prefixes or the single Agent catalog as all Rabi APIs. Use `POST /api/agent/send` for group/private messages and files. Before sending, call `GET /api/agent/send/capabilities` to obtain current channels, parameter guidance, and examples. The built-in catalog's `params` keys also drive the send field allowlist; actual validators still enforce types, conditional requirements, and authority. Descriptive text is not a complete JSON Schema. QQ/NapCat uses `channel: "napcat"`; `channel: "qq"` is not supported. Unknown channels return structured `errorCode`, `help`, `repair`, and supported-channel guidance. Help coverage for other parameter errors depends on the specific handler. Use `POST /api/personas/{targetPersonaId}/messages` for cross-persona delivery, and the Rabi thread bridge `POST /api/agent/threads` for persistent task prompts and follow-ups. Submit formal callbacks according to the source requirement contract. Preserve taskBinding, source identity, requestId, tracking, reply references, and stable idempotency fields. Rabi adapters calling NapCat, Desktop IPC, or another platform are part of the managed path; callers skipping Rabi constitute a bypass.
 
+
+
 A bypass is allowed within the original authorization only after current dynamic discovery, identity verification, and bounded retries establish that Rabi is unavailable. A refused old port, generic Hook warning, invalid parameters, permission/policy denial, an unloaded owner, or missing endpoint capability alone does not establish a Rabi outage. An address in a screenshot or old task is not current-generation evidence. Fix the specific interface issue while Rabi is healthy instead of switching channels for convenience.
+
+
 
 Timeouts, disconnections, and 5xx responses can occur after acceptance. Read formal receipts and target acceptance evidence first. Do not switch channels, change IDs, or resend while the original outcome remains uncertain. Before bypassing, confirm that the original message was not delivered or establish deduplication across channels, and verify target identity. Do not start a second Runtime, write session files, change targets, or evade approvals.
 
+
+
 A bypass receipt proves platform acceptance only, not a recorded callback, knowledge-callback, Outbox result, or plan state. Preserve original identifiers, target, time, summary, and actual platform receipts. After recovery, read state before reconciling through supported interfaces; never resend delivered content merely to obtain a receipt or directly edit authoritative storage. If reconciliation is unsupported, report that bypass delivery succeeded while the formal callback remains pending. Start with Rabi for each independent delivery.
+
+
 
 ### Read-only QQ diagnostics (parity source contract; deployment and live QQ unverified)
 
+
+
 `GET /api/agent/qq/diagnostics?routeId=<exact-Route-ID>` accepts a still-enabled Agent principal authenticated at the shared ingress, or trusted local management passing existing socket, Host, Origin and proxy checks. No body or other query parameter is accepted. Route-primary, provider and source metadata are not additional remote-only gates. Shared authentication still validates the original credential, Agent enablement, computer credential incarnation and instance enablement; recheck original authority around awaited probes and disclosure. Forged Agent headers, DSH session names and request parameters do not authorize access, and revoked requests never fall back to local identity. Source implementation and regressions do not prove running nodes are updated; never bypass an authentication denial.
+
+
 
 After authorization, the Route must be enabled, its QQ input enabled, exactly one configured instance enabled, and its Gateway process running. Only then does Manager make a short, uncached, non-redirecting, body-free `GET /get_status` against that instance's configured OneBot HTTP(S) origin, including a user-configured LAN or remote endpoint. It does not visit WebUI, another Route, or another QQ instance. The response projects only `routeId`, `instanceId`, `wsConnected`, and `oneBot.reachable/online/good` booleans; it excludes QQ IDs, nicknames, URLs, tokens, message bodies, raw errors, and paths. WS state comes from the selected Route's instance runtime state and is true only if `lastConnectedAt` is no earlier than the current Gateway `startedAt`; historical state alone never proves a live connection; a failed OneBot probe returns HTTP 503/unknown, not an offline conclusion. This endpoint **does not grant send permission**, backfill login/account configuration, or establish live QQ acceptance. A live QQ smoke test needs separate explicit authorization and current connection evidence; source tests do not authorize it.
 
+
+
 ### QQ group-file metadata (source contract; live runtime unverified)
+
+
 
 `GET /api/agent/qq/group-files?routeId=<exact-Route-ID>&groupId=<exact-group-ID>[&folderId=<folder-ID>]` uses the same trusted Agent/local-management identity boundary as QQ diagnostics, without a Route-primary prerequisite or extra trusted source metadata. When `messageAdapterPolicies.napcat.readableGroupFileIds` is absent, local and enabled remote Agents may query metadata for groups accessible to the configured account. An explicit array restricts reads to its exact group IDs; `[]` denies all. Configuration reads and saves preserve the distinction between an absent field and an empty array, without deriving restrictions from target groups or upload roots. The endpoint selects only the uniquely enabled NapCat instance in the exact Route, never falling back across Routes, accounts, or groups; extra or duplicate query parameters and request bodies are rejected. The original connection authority and current restrictions are checked before and after reading. Credentials, upstream raw errors, and other groups' metadata are not exposed; files are neither downloaded nor sent.
 
+
+
 One directory is queried at a time: the root uses read-only `get_group_root_files`, while `folderId` uses read-only `get_group_files_by_folder`. Upstream `file_count` is fixed at 50, with a three-second timeout, a 256 KiB response cap, and at most 50 projected entries of bounded metadata. `completenessUnknown: true` and `potentiallyTruncated: true` always mean that exhaustive coverage is unproven; invalid entries may be discarded and `projectionTruncated` only describes local projection clipping. An exact match establishes presence, but an empty result or no match **cannot establish absence** and must never trigger an automatic resend. Proving an APK is missing would additionally require verified complete platform pagination/search coverage, or a closed per-file comparison of trustworthy self-send events covering the relevant interval, original Outbox terminal states, and platform evidence. Without such evidence, report unknown and stop the absence decision; do not broaden the group scope or bypass authority. Source wiring and tests do not prove the installed version, DSH tool capability, or live QQ status.
+
+
 
 ## Message queries: Rabi first, bypass only when necessary
 
+
+
 ### QQ messages, history pages, and attachment downloads
+
+
 
 Attachments and favorite stickers use HTTP(S) URLs supplied by the selected NapCat, including custom CDN domains, explicit ports and resource redirects, without a built-in Tencent domain allowlist.
 
+
+
 Local Agents can read a conversation through its current Route without obtaining the NapCat address or token:
 
+
+
 ```http
+
 GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&limit=50
+
 GET /api/agent/qq/history?routeId=<routeId>&kind=group&target=<groupId>&cursor=<nextCursor>&limit=50
+
 GET /api/agent/qq/messages/<messageId>?routeId=<routeId>&kind=group&target=<groupId>
+
 GET /api/agent/qq/messages/<messageId>/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+
 GET /api/agent/qq/messages/<messageId>/forwards/0?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+
 GET /api/agent/qq/messages/<messageId>/forwards/0.104.1?routeId=<routeId>&kind=group&target=<groupId>&offset=0&limit=100
+
 GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104?routeId=<routeId>&kind=group&target=<groupId>
+
 GET /api/agent/qq/messages/<messageId>/forwards/0/nodes/104/attachments/0?routeId=<routeId>&kind=group&target=<groupId>
+
 ```
+
+
 
 Merged-forward reads first verify the original message in the selected conversation. Paths contain forward occurrence indices and alternating node/forward indices, never caller-supplied provider resource IDs or URLs. Only the forward list accepts `offset` (default 0) and `limit` (1–100, default 100). It returns the true `total`, `offset`, `nextOffset`, original `nodeIndex`, and `skippedCount`; an unreadable page retains its continuation. Follow `nextOffset` rather than renumbering filtered nodes. Nested forwards remain reachable on demand without a fixed depth limit, under the existing read timeout and media limits. Forward-node media links are scoped to the original message and path; node reply IDs do not establish membership in the outer conversation. The upstream operation returns a bundle before page projection; this is not provider streaming or upstream pagination. Existing stored labels remain unchanged and the persona plugin projects them into cards.
 
 
+
+
+
 For direct messages, use `kind=private` and the peer account as `target`. Discover the current Manager and validate `/meta` first. Find these operations through `GET /api/agent/help?path=/api/agent/qq/history`. Every request requires an exact Route, conversation kind, and target. `limit` is 1–100, default 50. History returns `data.entries`, `nextCursor`, `cursorStalled`, and `completenessUnknown: true`. Follow the cursor; stop on an empty page or stalled cursor. Pages do not guarantee complete QQ history. A single-message read tries `get_msg` first, then, on upstream cache failure, reads at most ten messages anchored on that same message ID in the same conversation. A missing match returns 404 `QQ_MESSAGE_NOT_IN_PAGE`, without scanning the whole group.
+
+
 
 Messages include `messageId`, time, sender, text, safe structured display `parts[]`, and `attachments[]`. Display parts preserve literal text, mentions, replies and media indices without exposing transport URLs. Each attachment has a zero-based `index`, `kind`, `name`, and Manager-relative `contentUrl`; append that URL to the current Manager address to download binary content. Downloads recheck the source message and conversation, then call `get_file` with the message resource ID. Images, videos, audio, and files share this endpoint; a video thumbnail is never treated as the video. Responses hide NapCat URLs, credentials, and local paths. Caller-supplied URLs, paths, resource IDs, and arbitrary OneBot actions are rejected.
 
+
+
 Attachment indices accept 1–9 decimal digits; returned indices above 99 are also downloadable. In source, the three endpoints register as `agent.qq.history.read`, `agent.qq.message.read` and `agent.qq.attachment.read`; favorites register as `agent.qq.stickers.read` and `agent.qq.sticker.preview`. Their request shapes and JSON projections or finite binary responses come from executable contracts. OpenAPI includes effective attachment/preview byte bounds and supported image media types. Media sizes default to no application quota, while runtime Buffer capacity still applies. The business owner fully reads these downloads before returning bytes; this does not imply continuous streaming. Inspect the installed instance's catalog to determine whether its release includes these contracts.
+
+
 
 Attachment size, read deadlines and concurrency use the [public QQ environment settings](connection-access_en.md#requests-must-still-follow-their-contracts). Attachments and upstream JSON have no application byte quota by default (JSON uses RABIROUTE_QQ_JSON_MAX_BYTES); message reads default to eight seconds, downloads to thirty seconds, and concurrency to two. Busy calls return 429 `QQ_READ_BUSY` with the setting; deadline errors return `QQ_READ_TIMEOUT` and the applicable variable, and configured byte-quota errors return 413 with the adjustment entry. Downloading may populate NapCat's own media cache; Rabi does not create another business record. An empty file path without a supported download URL returns 422 `QQ_MEDIA_REFERENCE_UNAVAILABLE`, excessive size returns 413, mismatched message/conversation or a changed Route returns 409, and upstream failure returns 503 without its raw error. Save the binary response where needed and verify that it is nonempty.
 
+
+
 These endpoints accept still-enabled LAN Agent principals authenticated at the shared ingress, with trusted direct local-management-equivalent authority. Unauthenticated Relay/tunnel calls and forged Agent headers never authorize access. Recheck original authority around awaited reads, fallback upstream reads and disclosure; revocation returns 403 without falling back to local identity. Only the specified Route's single enabled NapCat instance is selected; ambiguous configurations fail without switching Route or account. Read access does not grant send access. Existing `message-endpoint-history` remains the search endpoint for messages Rabi has recorded across sources; use the managed endpoints above for original QQ messages and attachments.
+
+
 
 Query Rabi first for group chats, private messages, and recent feedback. Installed clients obtain `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId` through `RabiRouteHost.exe --command status --json`; source mode uses the structured READY address. Read `<managerBaseUrl>/meta` and verify the generation/instance identity under the contract above. Ordinary queries require `health.live=true`, accept either `healthy` or `degraded`, and leave dependency checks to the target endpoint. Rediscover and retry within a bounded attempt when an address is stale or a failure is transient. A generic Hook message saying the Host is not running is not a substitute for the actual discovery failure. Do not scan ports, read retired instance locks, or directly start/stop Manager.
 
+
+
 Currently, `GET <managerBaseUrl>/api/gateways` provides Route diagnostics with recent message summaries in `messageFiles`. The NapCat summary merges group and private messages and returns only the latest 8 entries. Filter by the target Route, group/private conversation, message ID, and time; this is not a complete history search API. `GET /api/roles/{roleId}/chat-history` contains Agent final replies, not QQ group history.
+
 ### Querying message-endpoint history
+
+
 
 **Coverage and cost limits (read before Agent calls)**
 
+
+
 - This endpoint searches messages saved by the selected persona. Archives are excluded by default; `includeArchives=1` includes saved archives, without guaranteeing the platform's complete history.
+
 - Results are the latest matching excerpt in the existing record order. `limit` defaults to 50 and is capped at 200. `maxChars` defaults to and is capped at 200,000; its budget includes text, segments and record overhead, and the first record may exceed it. `count` is the number returned in this response. `coverage` labels the role, archive flag and filters; neither provides a total or proof of completeness. The character budget may also produce fewer than `limit` entries.
+
 - There is no `cursor`, `offset`, `nextCursor` or complete-history end marker. Do not compute monthly distributions from this excerpt or simulate pagination by subtracting one second from its earliest timestamp: messages sharing that second would be lost. Verify the source and time coverage before full-history statistics; managed QQ history pagination also does not guarantee all platform history.
+
 - Response `coverage` explicitly includes `recordScope=saved_role_messages`, `resultMode=latest_matches`, `completenessUnknown=true`, `paginationSupported=false`, effective `limit/maxChars/from/to` and `limitReducesArchiveScan=false`. Supplying `cursor` or `offset` returns 400 `MESSAGE_HISTORY_PAGINATION_UNSUPPORTED` before storage access, preventing repeated retrieval of the same excerpt.
+
 - Supplied `from/to` must be finite Unix-second numbers, with `from <= to` when both are present. Empty values, formatted dates, `NaN` and reversed ranges return 400 `MESSAGE_HISTORY_TIME_RANGE_INVALID` before storage access, preventing invalid bounds from being silently ignored and scanning every archive. Omitted bounds remain supported.
+
 - Queries use a persistent local inverted index without scanning source archives. Short CJK terms, numbers and literal substrings retain existing semantics. An unready index returns 503 and builds in the background; this is not an empty result. See [persistent message search](message-history-search_en.md).
+
 - Use a 3000ms total client budget. The Manager response deadline defaults to 2500ms including queueing and execution, with a default 500ms search-queue deadline; both are adjustable in timeout settings. Busy, unready, uncovered source-version and deadline failures return 503; there is no source-scan fallback. A disconnected query does not cancel background indexing.
+
 - Pass `budgetMs=1..2147483647` as the client's remaining milliseconds. An explicit value takes precedence over the server default; queue, execution and visibility stages still honor their configured budgets and the original request's remaining time. Successful requests and failures that enter the read service include `requestId`. `coverage.indexVersion/sourceVersion/indexedAt/sourceSnapshotIndexed` identify the index and coverage of the captured source snapshot; they do not make a bounded excerpt exhaustive. Visibility waiting defaults to 1500ms, is adjustable in timeout settings, and stays within the original request deadline.
+
 - `coverage.indexCoverage=partial` indicates skipped records, a pending final line, or unknown legacy coverage. Inspect `sourceRecordsSkipped`, `sourceRecordIssues`, `pendingRecordBytes` and `legacyCoverageUnknown`; zero results then do not prove that the full history has no match. `maxIndexedRecordBytes` reports the derived index's per-record work budget, currently 8 MiB. Only that record is omitted from the index; message writes, original body reads and normal neighboring records remain available, and source data is not deleted. See [persistent message search](message-history-search_en.md).
+
 - `GET /api/agent/help?path=/api/roles/%3AroleId/message-endpoint-history` exposes these limits. The Help `path` filter takes the catalog's `pathTemplate`, retaining `:roleId` rather than substituting a real role ID.
+
+
 
 Knowledge-index updates use a separate normal-priority reader pool, with at most 1 process, 16 queued tasks and a maximum 30-second execution budget. It still shares the global limit of 6 active reads. It does not inherit idle priority or unconfirmed termination from the background catalog pool, so a catalog refresh failure cannot block search initialization.
 
+
+
 Readers load dependencies per task. Message querying and indexing use separate bounded process pools. The local persistent index retains unchanged current-file records; queries validate source fingerprints without reading message bodies. Plan/memory search retains its existing index service.
+
+
 
 Knowledge indexing publishes completed file-read batches and replays newer committed records by identity; filesystem notifications schedule incremental reconciliation. Continuous plan or memory updates no longer discard every batch and prevent initial readiness. Read failures retain the published result and error state rather than pretending to produce a complete empty index.
 
+
+
 History indexing normalizes records and retains source variants. Queries select the deduplication winner within the eligible source scope before matching keywords; time windows, character budgets and result ordering remain compatible. Synchronous internal calls in production builds reuse the request's code-revision lease, while asynchronous work and iterators retain independent leases. Performance acceptance must use the production reader process rather than uninstrumented source timings.
+
+
 
 Processing agents recovering QQ group, QQ private-chat, or other message-endpoint context use the read-only API:
 
+
+
 ```http
+
 GET /api/roles/{roleId}/message-endpoint-history
+
 ```
+
+
 
 Common parameters include `query` (multiple terms separated by whitespace, ASCII comma, Chinese comma, or enumeration comma), `match=any|all` (default `any`), `adapter`, `kind=group|private`, `sender`, `target`, `conversationKey`, `from`, `to`, `includeArchives=1`, and `limit`. When the user says “the last hour” or another relative time range, convert it to Unix-second `from` (and `to` when needed); when the user asks for “all messages”, omit `query` rather than inventing keywords. `limit` is only a response cap, not proof of complete coverage; unbounded archive queries also use the index, but a bounded response still does not prove complete history. The response contains `entries`, `count`, and `coverage`; records retain endpoint, group/private conversation key, sender, target, message ID, reply ID, and attachment summaries. `kind=group` limits results to inbound group messages and `kind=private` to inbound private messages; do not treat `reply_sent` outbound replies as original user feedback.
 
+
+
 Queries run in a bounded interactive reader process, separate from catalog maintenance work. Client disconnects cancel queued work or terminate a process still performing the read. `channel` and `maxChars` are also supported: `limit` defaults to 50 and is capped at 200; `maxChars` defaults to and is capped at 200,000. Existing entries/count fields and filters remain compatible; coverage adds the limits above. A busy reader pool, timeout, or unconfirmed child termination returns HTTP 503; business-input errors remain 400. Failures never become a false zero-record result. Isolation does not guarantee that arbitrary history sizes finish before the deadline, nor establish that other synchronous paths or live health have been verified.
+
+
 
 For a new session, extract the object and keywords from the user message first, then query this API for endpoint history. Query `knowledge/search` separately for plans, memory, or original-task ownership, and finally verify current files, configuration, code, or runtime evidence. Always inspect coverage with the result; an empty result does not prove that the message never existed.
 
 
+
+
+
 Use the current NapCat connection or official logs only when Rabi is unreachable, an endpoint is unavailable, or the verified summary window cannot cover the requested history. When Rabi is available, obtain the connection from the current Route binding and status. Otherwise, use only a connection explicitly supplied for the current task, configuration belonging to the running instance, or a verified official log location. Before direct queries, verify online status and account identity with `get_status` and `get_login_info`, then call read-only history/message APIs. Do not try accounts or ports from old tasks, memory, or leftover installations. Never echo credentials or bypass an authorization denial.
+
+
 
 Check the target and time coverage before interpreting an empty result. Distinguish connection failure, a successful empty result, and missing historical coverage. Explain the reason, actual source, and time range when bypassing Rabi. Query authorization does not authorize sending or replaying messages, configuration changes, or service restarts. Start with Rabi again for each independent query.
 
+
+
 ## Browse persona messages by channel
 
+
+
 - `GET /api/roles/:roleId/message-history-conversations[?cursor=<original-continuation>]` reads QQ conversations and latest previews from the original role index, at most 100 per page, returning `data.conversations/nextConversationCursor`. Full Route, account and conversation keys remain distinct. The channel catalog also returns credential-free `qqRoutes` references.
+
 - `GET /api/agent/qq/contacts?routeId=<exact-route>` returns safe group/friend display fields and `time/preview` from up to 50 recent conversations for ordering; a failure in one list preserves the other with `warnings`. `GET /api/agent/qq/group-members?routeId=<exact-route>&kind=group&target=<group-id>` returns `entries {id,name,role}` and rejects private-chat parameters. Both reuse the original QQ read owner’s authority, exact-account selection, concurrency, deadline and post-await revocation checks. Neither sends messages. Upstream methods follow the [official NapCat API](https://napneko.github.io/onebot/api).
 
+
+
 - `GET /api/roles/:roleId/message-history-channels` returns `data.adapters/chatCategories/warnings` from the selected role's configured Route endpoints. System messages, Agent deliveries, role-panel messages and task replies retain separate built-in entries. Disabled channels retain history. Metadata queries do not project message bodies. An unavailable ledger leaves other channels usable with warnings; revoked authority or a replaced role directory still prevents disclosure.
+
 - `GET /api/roles/:roleId/message-endpoint-timeline?adapter=napcat&includeArchives=1&limit=50` returns `requestId` and `data.entries/count/coverage/nextCursor`. Incoming and outgoing records share a channel; existing filters such as `conversationKey` apply. Entries follow stable write order, oldest first in each response; the UI displays newest first.
+
 - Encode a non-null `nextCursor` unchanged as the next `cursor`, retaining role, channel and filters. Cursors bind index generation, source layout and physical position, including legacy records without sequences. Ordinary appends in the same generation do not shift previous pages. An index rebuild, source replacement or changed filter expires the cursor with `409 + MESSAGE_HISTORY_CURSOR_EXPIRED`; refresh the channel. A record exceeding the remaining character budget stays for the next page; the first record may exceed that budget. A final full page may require an empty read to confirm the end.
+
 - `chat-history` accepts optional `category=agent|panel|replies|aiui` inside its original bounded byte-cursor read, retaining damaged-record counts and ID-based body reads. Omission preserves its original contract. The UI has no All tab and retains per-tab pages, filters and reading positions.
+
 - The source candidate adds `GET /api/roles/:roleId/chat-history/tasks`, also under `/roles`, using existing persona read authentication. Parameters are `category`, `query` (recorded task name), `limit=1..100` (default 50), opaque `cursor` and `peerOf` (task key). It returns `data={items,nextCursor,invalidRecords}` with task fields `key/sessionId/title/owner?/taskUrl?/receivedAt/preview`. `peerOf` lists distinct counterpart tasks across complete recorded history, excluding self. Cursors bind category, search and peerOf; restart pagination after changing them. Invalid parameters return 400. Reads never deliver messages, need no idempotency key and do not retry automatically.
+
 - Optional `taskKey` on `chat-history` matches a task as either sender or recipient, preserving category filtering, byte cursors and ID-based body reads. The original ledger owns the rebuildable index. Receive-only tasks enter the catalog; equal names or IDs on different hosts stay separate. `sourceTaskKey/targetTaskKey` preserve grouping identity when later metadata enrichment supplies names or hosts.
+
 - `message-history-conversations` accepts optional `adapter`, defaulting to napcat. Other endpoint conversations use the original indexed pagination and `nextConversationCursor`. Non-QQ entries may include `title`; existing QQ group/private fields remain unchanged.
+
 - Original `message-endpoint-history` remains a bounded Agent-context excerpt, rejecting `cursor/offset`. Browsing does not change that endpoint's coverage, deadlines, authority, worker-pool or cancellation responsibilities.
+
+
 
 ## Context supplied to the handler
 
+
+
 The packet normally includes:
 
+
+
 ```text
+
 Rabi interface guide: docs/rabi-agent-interfaces.md
+
 Send API: `<managerBaseUrl>/api/agent/send`; installed clients discover this generation through Host `status --json`, while source mode uses Manager stdout.
+
 Current reply context: {...}
+
 ```
+
+
 
 It also includes active-plan, recent-memory, and skill indexes plus `[Pre-action context confirmation]`. The handler must fetch every required-read item before replying, modifying role knowledge, publishing a task, or taking an external action.
 
+
+
 ### Local Manager mode for knowledge APIs only
+
+
 
 When a direct Codex task needs the role plan or memory APIs but must not let Manager automatically start enabled gateways, the RabiLink Relay, or LAN discovery, set this before starting Manager:
 
+
+
 ```powershell
+
 $env:RABIROUTE_MANAGER_AUTOSTART = "0"
+
 npm run manager
+
 ```
+
+
 
 The Manager still serves `/meta`, plan, memory, and validation APIs; `GET /meta` reports `managerAutostart: false`. This mode disables automatic startup for stopped Routes and disables the file watcher, but explicit runtime-control endpoints remain available. If a caller has explicitly started a Route and then saves its configuration through Manager, Manager still restarts that running Route so new task, model, and message-input settings become the real delivery state; otherwise the saved UI state could diverge from the live child process. A caller must not request start, restart, trigger, reply, or outbound actions without the corresponding authorization. Production tray startup and normal message routing remain unchanged when the variable is unset.
 
+
+
 ### Executable identity and Gateway diagnostics
+
+
 
 Source registers `GET /meta` and `GET /api/gateways` as `manager.meta.read` and `manager.gateways.read`. The old `agent:GET:/meta` ID resolves to the same operation. Meta can return identity and health while dependencies are unready; diagnostic reads do not require `live`, `requiredReady` or `businessReady` to be true. Ordinary calls retain current-identity and target-dependency checks. Existing connection authentication still applies; diagnostic access is not another business grant.
 
+
+
 Responses use `Cache-Control: private, no-store`. Query parameters ignored by the existing diagnostic owner remain compatible; identity discovery still uses exact `/meta`. Gateway provider fields remain extensible, with `messageFiles` keyed by message endpoint. Recent excerpts do not establish complete platform history. Inspect the active catalog for installed support.
+
+
 
 ### Adapter discovery, explicit scans and connection management
 
+
+
 Source publishes nine operations under `agent.adapters.<key>.<method>`: `catalog.get`, `all.get`, `dsh.get`, `grokBot.get`, `connection.get`, `connections.get`, `connect.post`, `disconnect.delete` and `hooks.post`. Inspect the active catalog for installed availability. Adapter capabilities describe implemented behavior. Scanning requires an explicit request, with no background polling, replacement sessions or real prompt execution. New APIs reuse the authenticated connection without a second persona/workspace grant.
+
+
 
 DSH connect and disconnect still require reading the current `revision` and sending `expectedRevision`. Re-read the original connection after conflicts or uncertainty; never replay automatically. Bodies retain the 16 KiB limit and a ninety-second total budget covering body waiting and connection verification. `launchUrl` is write-only and never appears in discovery or connection metadata. The existing protected store retains credential ownership. Hook updates may change installed integration files; their response does not prove Agent task execution. Scan closure, capacity and absent hosts retain existing cancellation, queue and failure semantics.
 
+
+
 ### Codex Hook context API
+
+
 
 Source now publishes Hook context, persona-list, diagnostic and session-binding endpoints through executable contracts. Canonical operation IDs are `agent.hook.<context|roles|doctor|sessions|session|bind|unbind>.<method>`; previous `hook:METHOD:/path` IDs resolve to the same handlers. JSON bodies retain the 256 KiB limit and existing alias/normalization rules. Unknown or repeated query parameters are rejected before business work. `/context` can change state or trigger existing completion delivery and is never replayed automatically; uncertain results require retaining the original session/turn and inspecting bindings, plans and delivery records. Inspect the installed instance's active catalog for deployment status.
 
+
+
 Enabled authenticated remote Agents can use Hook persona discovery, diagnostics, and session-binding management without workspace, persona, or Route bindings. A `/context` event must identify a session actually owned by the Agent and its matching `agentType`, which defaults to `codex`. The original connection authority is checked again after reading the body and before writing, so revoked requests cannot continue to write. Message-group registration also uses the public API without a separate remote-caller restriction.
+
+
 
 Generic ingress accepts `GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS` without applying Windows filename rules to resource IDs or using the operation catalog to reject future paths. Ordinary business bodies can be arrays, scalars, or target configuration fields named `sender` or `worker`; each target handler validates its own schema. Source-identity checks apply only to actual message delivery, processing decisions, and Hook events.
 
+
+
 The Codex plugin must send raw Hook events to Manager instead of duplicating persona, plan, memory, or recall logic inside the plugin:
 
+
+
 ```http
+
 POST /api/codex-hook/context
+
 ```
+
+
 
 The body uses Codex Hook fields and must contain `hook_event_name` plus the real `session_id`. Current events provide:
 
+
+
 - `SessionStart`: `source`;
+
 - `UserPromptSubmit`: `turn_id` and `prompt`;
+
 - `PreToolUse`: `turn_id`, `tool_name`, `tool_use_id`, and `tool_input`;
+
 - `PostToolUse`: those fields plus `tool_response`.
+
+
 
 Manager interprets strict `[rabi:*]` controls, owns the session binding, and normalizes these events as `session_start`, `user_prompt`, `reasoning_pre_tool`, or `reasoning_post_tool`. They and normal RabiRoute `message_delivery` enter the same `RabiContextManager`; it is the sole caller of `roleKnowledgeSnapshot()` and owns plan archival and `viewedAt` policy. Manager returns model-visible text in `data.additionalContext`; an unbound session returns an empty string.
 
+
+
 Reasoning triggers return only newly relevant knowledge for the current turn. Within one `turn_id`, Manager deduplicates by item type, ID, and revision time, so repeated Pre/Post hits neither inject nor refresh `viewedAt` again. The `preview` policy does not archive plans, refresh `viewedAt`, or create a consolidation run.
+
+
 
 Rabi PC may manage exact session bindings proactively:
 
+
+
 ```text
+
 GET    /api/codex-hook/roles
+
 GET    /api/codex-hook/sessions
+
 GET    /api/codex-hook/sessions/:sessionId
+
 PUT    /api/codex-hook/sessions/:sessionId  { "roleId": "YeYu" }
+
 DELETE /api/codex-hook/sessions/:sessionId
+
 GET    /api/codex-hook/doctor
+
 ```
+
+
 
 Binding state is private Manager runtime data. The plugin must not keep another binding, role-root registry, keyword index, or memory body cache. If Manager is unavailable, fail open and say that no fresh context was injected; never fabricate success from plugin-local state.
 
+
+
 ### Wearable health queries
+
+
 
 With the `wearable` endpoint enabled, structured observations enter a role-scoped health timeline rather than ordinary chat history. Agents query the local Manager API instead of copying complete health records into every prompt:
 
+
+
 ```text
+
 GET   /api/roles/:roleId/health/state
+
 GET   /api/roles/:roleId/health/history?metric=heart_rate&from=<ISO>&to=<ISO>&limit=100&order=desc
+
 GET   /api/roles/:roleId/health/summary
+
 GET   /api/roles/:roleId/health/config
+
 PATCH /api/roles/:roleId/health/config
+
 POST  /api/roles/:roleId/health/observations
+
 ```
+
+
 
 `state` and `summary` include staleness. An Agent must not interpret `unknown` or stale data as a definite sleeping, awake, or medical state. Relay observations that match heart-rate or sleep rules become `wearable_health_alert` Agent events. Wearable authentication keys, Relay tokens, and raw sensitive metadata must never be submitted as observation fields. See [`rabilink-wearable-health_en.md`](./rabilink-wearable-health_en.md) for the full contract and acceptance boundary.
 
+
+
 ### Reading remote persona configuration (experimental in 0.3.19)
+
+
 
 When a local Route's `agentRoleDeviceId` is nonempty, its `agentRoleId` belongs to that remote PC. Version 0.3.19 adds the following experimental source endpoint. Upgrade a source PC that lacks it rather than reading a same-name local persona:
 
+
+
 ```http
+
 GET /api/roles/:roleId/persona-reference?file=persona.md
+
 ```
+
+
 
 `file` accepts one `.md` or `.markdown` filename inside the persona directory. Success returns `{code:0,data}` with `schemaVersion:1`, the actual `roleId`, `file`, `document`, normalized `personaConfig`, SHA-256 `revision`, `applicationGenerationId` and `managerInstanceId`. Text and configuration have no application byte quota by default. Set `RABIROUTE_PERSONA_DOCUMENT_MAX_BYTES` and `RABIROUTE_PERSONA_CONFIG_MAX_BYTES` on the source Manager to apply quotas; 0 or removing the variable removes that quota. Path escapes, malformed JSON and explicitly configured limits fail the affected read without presenting truncated content as complete. Invalid configuration returns 503 with the field name only for affected capabilities.
 
+
+
 Use `/api/rabilink/peer/http/<device>/persona/...` on the current local Manager to access the source PC. On first use, submit `{deviceId}` to `POST /api/rabilink/peer/persona/bootstrap`. This reuses the authenticated RabiLink application connection, signed handshake, and P2P / Relay transport, and pins both public keys. An enabled authenticated application connection can use all public Manager APIs on the source PC by default, without per-persona or per-service grants. Existing application-connection migration removes obsolete manual service lists. Explicit application disablement, credential changes, or connection revocation denies access. Gateway resolution also checks the current Route capability, persisted reference, and both Manager identities to establish the correct context and destination. Generation changes, offline state, failed authentication, or changed bindings stop delivery without a same-name local fallback.
+
+
 
 Peer discovery and bootstrap use the following executable contracts. Read the target Manager's active catalog to establish which version is published:
 
+
+
 | Operation ID | Endpoint | Existing execution rules |
+
 | --- | --- | --- |
+
 | `manager.rabilink.peer.list` | `GET /api/rabilink/peer/list` | Filter by the first `deviceKind` and `online=true|false` query values, count registrations, and retain provider extension fields |
+
 | `manager.rabilink.peer.persona.bootstrap` | `POST /api/rabilink/peer/persona/bootstrap` | Accept only `{deviceId}`, retain the 8192-byte body limit, and recheck original connection and Manager identity |
+
 | `manager.rabilink.peer.device-bootstrap` | `POST /api/rabilink/peer/device-bootstrap` | Verify the actual Relay device source before reading a body; retain original `authenticatedAt`, signature, nonce, and absolute 45-second lease. `maxBytes:0` preserves the native reader's absence of an application byte limit |
+
+
 
 Device bootstrap provenance is an existing device-identity contract: an ordinary Agent cannot claim a Relay device in its request body. Encrypted private `/api/rabilink/peer/receive` remains transport signaling and is excluded from public discovery. The common registry reports structural, media-type, and method errors; original owners retain device-expiry, signature, and business errors.
 
+
+
 Local handling Agents and message inputs retain their Route configuration while using remote persona text, message rules and recent-message budgets. Query plans, memories and skills on demand through the source entry. Local `roleDir` and `rolePath` are empty, and delivery auditing stays in the local Route directory. Remote schedules, scripts, plan secretaries, memory consolidation and Hook permissions are not enabled locally by the reference. The local persona directory does not attach the Route to a same-name local persona, and the local cross-persona API refuses to impersonate a remote sender.
+
+
 
 When outbound replies require language-style validation, read the current remote persona configuration and submit only `{text,file,revision}` to the source PC's `POST /api/roles/:roleId/persona-reference/language-style`. The source reads style material from that persona's saved configuration and rejects caller-supplied style addresses. Never read source-owned paths locally. Both Manager identities and the source snapshot revision are checked before and after validation. An explicit one-send `styleValidation=0` follows the existing contract but cannot bypass remote configuration reads, offline state or failed authentication. The persona channel permits only limited reads and this validation, without remote knowledge writes or full management operations. See [remote persona references](remote-persona-reference_en.md) for the page and full boundaries. Delivery across two real PCs still requires separate acceptance.
 
+
+
 ### Discovering and messaging other personas
+
+
 
 “Persona” is the user-facing and Agent-facing term. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain as compatibility-oriented internal identifiers. Call the dedicated directory instead of decoding Route-management payloads:
 
+
+
 ```http
+
 GET /api/personas
+
 GET /api/personas?addressable=true
+
 GET /api/personas/:personaId
+
 ```
+
+
 
 The list entry now uses executable contract `manager.personas.list`, retaining discovery alias `agent:GET:/api/personas`; installed acceptance is pending. Authenticated remote callers need no session preregistration or persona grant. The native presentation snapshot and runtime registry include personas from the current storage root only. Remote-owned Routes do not count toward local reachability. Filtering recognizes only the first `addressable` value equal to the exact string `true`; other query fields remain ignored. A read neither starts Routes nor delivers messages. A native catalog snapshot that has not been installed returns 503; wait for catalog readiness before reading.
 
+
+
 The directory returns each persona's `personaId`, display name, reachability, and bound Routes. `addressable=true` keeps only personas with at least one enabled Route. A persona with exactly one enabled Route also exposes `defaultRouteId`.
+
+
 
 Persona detail, delivery and receipt reads now use `manager.personas.read`, `manager.personas.messages.send` and `manager.personas.messages.receipt`. Legacy `agent:METHOD:/path` discovery IDs resolve to the same contracts; installed acceptance is pending. Delivery preserves the 65536-byte JSON limit, trimmed text limit of 32768 UTF-16 code units and 200-code-unit conversation/reference limits. JSON remains independent of Content-Type. Preparation captures the original storage owner before body consumption. Persistent processing revalidates original admission, and actual dispatch rechecks source proof and the original enabled/local source and target object conditions.
 
+
+
 Delivery errors retain the original message ID, reply context and `uncertain=true`; the failed result may already be persisted under the original `deliveryId`. Receipt `state=completed` means the idempotency record is complete; `result.status` reports delivery success or failure. Audit failure never causes redispatch. After HTTP disconnection, the original process, logs, audit and persistent record still settle under their original owner.
+
+
 
 To contact another persona, address the target persona and read `runtimeRouteId` plus `personaMessagingCapability` from the current `AgentPacket.replyContext`. The capability is bound to both the Route and persona and cannot be reused as another identity:
 
+
+
 ```http
+
 POST /api/personas/:targetPersonaId/messages
+
 Content-Type: application/json
 
+
+
 {
+
   "deliveryId": "stable-unique-delivery-id",
+
   "sourceRouteId": "source-route",
+
   "sourceCapability": "value-from-replyContext.personaMessagingCapability",
+
   "targetRouteId": "optional-when-target-has-one-enabled-route",
+
   "conversationId": "optional-stable-conversation-id",
+
   "inReplyToMessageId": "optional-message-id-being-answered",
+
   "hopCount": 0,
+
   "text": "Please check today's build status."
+
 }
+
 ```
+
+
 
 `deliveryId` is required and must remain stable for one business delivery. The same ID and request execute once and retries return the completed result; the same ID with changed content returns `409`. If the outcome is uncertain, query the receipt before creating a new ID:
 
+
+
 ```http
+
 GET /api/personas/messages/receipts/:deliveryId
+
 ```
+
+
 
 Both source and target Routes must be enabled. If the target persona has multiple enabled Routes, `targetRouteId` is required and Manager does not guess. Self-delivery is rejected. `hopCount` must be a non-negative integer and cannot exceed `8`. HTTP `202` with `status=delivered` means the target handler accepted the message through that Route's existing `role_panel_message` path. The service records `status=sent` only after handler acceptance; a failed timeline entry records an attempt only.
 
+
+
 Cross-persona delivery is explicitly one-way and does not create an automatic two-way chat. The target persona's ordinary reply remains in its own role panel. To answer the source persona, it must POST again with a new reply `deliveryId`, reuse the received `personaConversationId`, set `inReplyToMessageId` to the current message ID, and increment `personaMessageHopCount`. Stop when `personaMessageMaxHops` would be exceeded.
+
+
 
 ## Identity-relation memory API
 
+
+
 Identity relations record which participant an endpoint account may represent and which person, organization, or project relations are confirmed or unresolved. Relation records do not split into long-term and short-term types; temporary roles in the current message belong to Situation records. Identity relations are persona-private. Automatic “getting to know” candidates are created only when a supported endpoint supplies a stable `senderStableId` and `endpointIdentityNamespace` from its actual sender fields and the message enters a real matched Route delivery. A nickname, group privilege, one self-description, or an identity claim quoted in message content can never trigger confirmation. An account lookup requires all of `platform`, `endpointIdentityNamespace`, and `senderStableId`; do not substitute a Route ID for any of them.
 
+
+
 ```text
+
 GET /api/roles/:roleId/identity-relations
+
 GET /api/roles/:roleId/identity-relations?platform=<platform>&endpointIdentityNamespace=<namespace>&senderStableId=<id>&conversationKey=<optional>
+
 PUT /api/roles/:roleId/identity-relations
+
 POST /api/roles/:roleId/identity-relations/observations
+
 ```
+
+
 
 `GET` without query parameters returns the current account, participant, and relation-card views. With a complete account key, it returns that account's resolution context. A `PUT` writes exactly one `endpoint_account`, `participant`, or `relation_card` for explicit confirmation, correction, or conflict handling. `POST .../observations` is for new identity clues found by a processing Agent during conversation: it can update only the candidate participant and candidate relations already linked to that endpoint account, never write `confirmed`, and never overwrite a conflicted record. Include minimal evidence references such as a message ID, endpoint, conversation, or short verification note; never copy a private chat body in full. After multi-PC synchronization, a record with disagreeing concurrent event heads is marked with `conflicted`, exposes `conflictEventIds`, and retains each complete candidate record in `conflictCandidates` for the persona page to compare before correction; it cannot take part in automatic confirmation. To converge it, a `PUT` must explicitly provide every material field for that record, and its new event replaces all current heads.
 
+
+
 A stable account key proves only that messages came from the same endpoint account, not that one person always controlled it. A shared account or contradictory evidence may therefore retain several candidate `participantLinks`. When the endpoint account has exactly one candidate participant, an observation may omit `participantId`; with several candidates, the caller must first use `GET` with the complete account key and then name one returned candidate ID explicitly. The system never chooses from nickname similarity, recent activity, or the highest confidence value.
+
+
 
 Evidence has different roles. An explicit user correction, verifiable cross-endpoint ownership, and a persistent stable-account fact may support manual confirmation. A self-reported name, another person's claim, a display name, or consistency in vocabulary, sentence patterns, and response rhythm is supporting candidate evidence only. Repetition does not make those signals sufficient for a confirmed mapping. If the source cannot supply a stable sender identity, or the claim appears only inside forwarded, quoted, or attached content, the Agent must leave the identity unresolved and must not use the observation API to merge it into an existing person.
 
+
+
 A speaking-habit profile belongs to a participant record. It can be changed only through a reviewed `PUT`; the observation endpoint must not learn it automatically from unattributed messages. Each `speakingHabits` item contains a `dimension`, natural-language `description`, optional `confidence`, and `evidenceRefs`, with at least one `messageId` whose author has already been confirmed. Allowed dimensions are `sentence_opening`, `sentence_length`, `stance_expression`, `emotion_threshold`, `analogy_source`, `punctuation`, `reader_relationship`, `value_preference`, `information_order`, `avoidance`, `imperfection`, and `scene_boundary`. A message from a shared account must not enter anyone's profile while its author remains unresolved.
 
-```json
-{
-  "kind": "participant",
-  "participantId": "participant-example",
-  "speakingHabits": [
-    {
-      "dimension": "sentence_opening",
-      "description": "Usually states the current judgment before adding conditions and unknowns.",
-      "confidence": 0.75,
-      "evidenceRefs": [
-        { "messageId": "confirmed-author-message-id", "note": "The author was confirmed by review." }
-      ]
-    }
-  ]
-}
-```
+
 
 ```json
+
 {
-  "platform": "napcat",
-  "endpointIdentityNamespace": "bot:example",
-  "senderStableId": "example-user",
-  "participantKind": "person",
-  "participantDisplayName": "a name explicitly stated by the speaker",
-  "aliases": ["a new form of address from this message"],
-  "conversationKey": "napcat:group:example",
-  "evidenceRefs": [
+
+  "kind": "participant",
+
+  "participantId": "participant-example",
+
+  "speakingHabits": [
+
     {
-      "messageId": "example-message-id",
-      "conversationKey": "napcat:group:example",
-      "note": "Keep only the identity clue and reasoning; do not copy the full chat."
+
+      "dimension": "sentence_opening",
+
+      "description": "Usually states the current judgment before adding conditions and unknowns.",
+
+      "confidence": 0.75,
+
+      "evidenceRefs": [
+
+        { "messageId": "confirmed-author-message-id", "note": "The author was confirmed by review." }
+
+      ]
+
     }
+
   ]
+
 }
+
 ```
+
+
+
+```json
+
+{
+
+  "platform": "napcat",
+
+  "endpointIdentityNamespace": "bot:example",
+
+  "senderStableId": "example-user",
+
+  "participantKind": "person",
+
+  "participantDisplayName": "a name explicitly stated by the speaker",
+
+  "aliases": ["a new form of address from this message"],
+
+  "conversationKey": "napcat:group:example",
+
+  "evidenceRefs": [
+
+    {
+
+      "messageId": "example-message-id",
+
+      "conversationKey": "napcat:group:example",
+
+      "note": "Keep only the identity clue and reasoning; do not copy the full chat."
+
+    }
+
+  ]
+
+}
+
+```
+
+
 
 The Persona page projects the same read model into **Recognized identities** and **Unrecognized identities**. A recognized person uses the whole card as its entry point, and one identity workspace displays and edits participant details, speaking habits, endpoint accounts, and relations. Participants, accounts, and relations still use separate `PUT` requests and do not form one transaction. An exclusive account appears for one person, while a shared account with a known user set appears for every possible user with a **Shared** marker even though resolution remains ambiguous. **Unrecognized identities** groups accounts by endpoint type when their people are still unknown, their candidates do not yet point to recognized people, or their evidence is conflicted. The page refreshes after an identity correction or persona-sync event. Per-message attribution for shared accounts, other candidates, and conflicts remain verification material only and must not appear as project ownership or execution authorization.
 
+
+
 Conceptually, a voiceprint is also an endpoint account. The current generic key uses `platform=voice`, `endpointIdentityNamespace=host:<processing-host-id>`, and `senderStableId=voiceprintId`; one multi-speaker recording may reference several accounts. The current UI places voice classification inside **Identity positioning**, while existing data still uses the compatibility `voice-identities` API and file described below. Do not write the same decision through both APIs. Until the data migration is complete, “This is me / Another person”, coverage, and conflict readback remain authoritative through the compatibility interface below.
+
+
 
 ### Situation records
 
+
+
 ```text
+
 GET /api/roles/:roleId/conversation-situations?limit=20
+
 GET /api/roles/:roleId/conversation-situations/:situationId
+
 ```
+
+
 
 Actual message delivery creates this read-only situation record. It contains no chat text: only conversation and message identifiers, project leads derived from relation cards, attachment or identity ambiguity, and `mayParticipate=true` with `mayCreateOrUpdateCurrentProjectRecords=false`. It lets a reviewer see whether proactive intelligence confused “may join a discussion” with “should manage the current project.” The interface cannot create, confirm, or authorize a project action.
 
+
+
 ```json
+
 {
+
   "kind": "endpoint_account",
+
   "platform": "napcat",
+
   "endpointIdentityNamespace": "instance:qq-main",
+
   "senderStableId": "example-user-id",
+
   "participantLinks": [
+
     {
+
       "participantId": "participant-example",
+
       "status": "confirmed",
+
       "confidence": 1,
+
       "evidenceRefs": [{ "messageId": "example-message-id" }]
+
     }
+
   ]
+
 }
+
 ```
+
+
 
 A candidate is for verification only and cannot support real-name address, authorization, project attribution, or execution. `confirmed` establishes only the identity or relation itself; it never bypasses explicit delegation, project scope, or approval for external action. Identity relations do not enter `knowledgeMatches` and do not need a `knowledge-callback` for every message.
 
+
+
 ## Explicit send API
+
+
 
 All outbound endpoint messages use one API. The legacy `/api/agent/replies` endpoint is removed. `/api/agent/send` does not accept an unchanged `replyContext` and infer a destination from it.
 
+
+
 ```http
+
 POST /api/agent/send
+
 ```
 
+
+
 ```json
+
 {
+
   "deliveryId": "send-example-001",
+
   "sender": {
+
     "agentType": "primary_persona",
+
     "sessionId": "019f0000-0000-7000-8000-000000000001"
+
   },
+
   "routeId": "main",
+
   "channel": "napcat",
+
   "styleValidation": 1,
+
   "params": {
+
     "target": "group",
+
     "groupId": "example-group-id",
+
     "instanceId": "default",
+
     "replyToMessageId": "example-message-id",
+
     "replyImageDescriptions": [
+
       "The image shows the background growing with a longer dynamic label, indicating that its width must follow the text."
+
     ]
+
   },
+
   "payload": {
+
     "type": "text",
+
     "text": "Received. I will investigate."
+
   },
+
   "tracking": {
+
     "requirementId": "message-requirement-001",
+
     "sendContextReviewToken": "<token returned by POST send-context>"
+
   }
+
 }
+
 ```
+
+
 
 For authenticated remote sends and thread delegation, source attribution uses the explicitly supplied type and full session ID for this request. The chat need not appear in the connector's saved sessionId/managedSessionIds, and no rebinding occurs. Node credentials, revocation and explicit disables remain effective. GET /api/agent/uploads/:uploadId reuses Manager connection authentication: host callers and other authenticated connections can read the original upload DTO. References by fileId plus fileSha256 still validate expiry and actual bytes; the original uploader identity is not an additional grant. File sending remains subject to the channel capabilities contract.
 
+
+
 ### QQ stickers
+
+
 
 Built-in QQ faces remain available in text as `[CQ:face,id=<QQ face ID>]`. Query account favorites with `GET /api/agent/qq/stickers?routeId=<Route ID>&instanceId=<instance ID>&count=1000`. The instance may be omitted when exactly one account is enabled; count is 1–1000. Each item contains `id`, `name`, `description`, and a same-Manager `previewUrl`; the name comes from QQ's native favorite description. Native media URLs and credentials are not exposed. Older NapCat versions can use the [name compatibility plugin](../src/plugins/napcat-stickers/README_en.md). Without it, or for unnamed favorites, inspect the preview before choosing. The bound and `completenessUnknown` do not establish a complete collection.
 
+
+
 Use the existing `POST /api/agent/send`, original source, and stable `deliveryId` with `channel=napcat`, ordinary group/private parameters, and `"payload":{"type":"sticker","stickerId":"<ID from the list>","text":"optional caption"}`. The sender resolves the ID against that account's current favorites and preserves the sticker image subtype. Removed favorites fail without switching accounts. This uses the existing `image` output policy, quoting, text-length and style checks, idempotency, and receipt verification. Do not combine it with `path`, `url`, or `segments`. Adding or removing QQ favorites is reflected in the next read; no persona, fixed album, or random sending schedule is built into the implementation.
+
+
 
 For ordered text and multiple images in one NapCat group or private message, use `payload.type=image` with `payload.segments`:
 
+
+
 ```json
+
 {
+
   "deliveryId": "send-mixed-001",
+
   "sender": { "agentType": "primary_persona", "sessionId": "<current full session ID>" },
+
   "routeId": "main",
+
   "channel": "napcat",
+
   "params": { "target": "group", "groupId": "456", "replyToMessageId": "", "replyImageDescriptions": [] },
+
   "payload": {
+
     "type": "image",
+
     "segments": [
+
       { "type": "text", "text": "First image: " },
+
       { "type": "image", "path": "<first image under an allowed root>" },
+
       { "type": "text", "text": "Second image: " },
+
       { "type": "image", "path": "<second image under an allowed root>" },
+
       { "type": "text", "text": "The difference is shown above." }
+
     ]
+
   }
+
 }
+
 ```
+
+
 
 `segments` is available only for NapCat image sends. It preserves a nonempty ordered list of `text`, `image`, or `markdown` segments with at least one image or Markdown segment. Counts are unlimited by default. Configure Manager environment variables `RABIROUTE_AGENT_SEND_MAX_SEGMENTS` and `RABIROUTE_AGENT_SEND_MAX_IMAGES` to set quotas; set 0 or remove a variable to cancel its quota on the next Manager load. Public Help shows the current values, and quota errors identify the setting and how to remove it. Each image segment supplies exactly one `path` or `url`; each local path is checked for existence, ordinary-file type and readability before any platform send; no directory allowlist applies. Do not combine `segments` with top-level `payload.text`, `path`, `url`, or `planAttachment`. The original single-image `payload.text + path/url/planAttachment` remains supported. Text and Markdown source segments are combined for language-style validation. `replyImageDescriptions` still describes images in the **quoted source message**, not outgoing images.
 
+
+
 To render one Markdown document as an image, send `"payload":{"type":"markdown","text":"# Title\n\n| Item | Result |\n|---|---|\n| A | Passed |"}`. To interleave it with text and existing images, add `{"type":"markdown","text":"# Title\n\n**Body**"}` to the ordered `segments` array. That segment becomes an image at its original position, and the whole platform message is sent once. Both forms require the NapCat Route to allow `image` output; do not include top-level media fields with a Markdown payload.
+
+
 
 Rabi renders Markdown with a local script-disabled Chromium, Chrome, or Edge process. Common installation locations are detected automatically; `RABIROUTE_MARKDOWN_BROWSER_PATH` may specify an absolute browser executable path. Headings, lists, tables, quotes, and code blocks appear in the PNG. Raw HTML is escaped, links are inert, and Markdown image syntax produces an alt-text placeholder without loading local or remote resources. Markdown source, image height, PNG bytes, and combined message image bytes have no application quota by default. Operators can explicitly configure the public `RABIROUTE_MARKDOWN_*` environment settings in [Connection access](./connection-access_en.md). Chromium viewport integer range, memory, and actual screenshot capacity remain runtime constraints and failures are reported. If the browser is unavailable or rendering fails, nothing is sent to NapCat.
 
+
+
 `styleValidation` is the enum `1 | 0` and defaults to `1`. A persona may bind its own style Skill through `personaConfig.json.languageStyle.styleSkillUrl`; different personas may use different URLs. The URL may point to a Skill directory, `SKILL.md`, or `references/style-data.json`.
+
+
 
 ### NapCat long-message confirmation
 
+
+
 Set `messageAdapterPolicies.napcat.textConfirmationThreshold` under **NapCat → Long-message confirmation** on the message Route. It accepts an integer from `0` to `200000`; `0` is the default and disables this check until the user explicitly configures it. An over-threshold `/api/agent/send` returns HTTP `409`, `status=message_length_confirmation_required`, and `messageLengthValidation` before creating any Outbox send or idempotency receipt. The warning goes to the calling Agent, not QQ.
+
+
 
 Count Unicode code points, including numbers, letters, punctuation and interior spaces, after removing surrounding whitespace and CQ control tags. Text, image/file captions, Markdown, and all text in ordered media segments participate. Automatically generated quote and mention controls do not count.
 
+
+
 Review and shorten first. If one message cannot explain the point, continue in a few separate messages at natural breaks, as in conversation. Each message receives its own length and style checks; do not cut mechanically by character count or repeat background. The original `deliveryId` may identify the first message while it has no receipt. Give later messages distinct stable IDs and retain the source, destination and topic context. To continue replying to the same source message, explicitly set `params.allowAdditionalReply=true` under the existing contract. Retry each message with its own original ID; reconcile sent or uncertain content before splitting it again.
+
+
 
 While no send receipt exists, retain the `deliveryId`, change the text and check again without the old confirmation. If a single message must retain the original wording, submit the full original request with the same `deliveryId` a second time, adding only `messageLengthConfirmation=messageLengthValidation.confirmationToken`. The token lasts ten minutes and binds the sender, destination, text, attachment and current threshold. Changes to any of those, a different delivery ID, expiry or a Manager restart require another check. Read successful delivery by its original ID; reconcile timeout or uncertainty before any retry.
 
+
+
 Length confirmation and style validation are independent. An over-length response also includes the current style result. A failed style check still requires rewriting or the explicit review below; `styleValidation=0` cannot skip length confirmation. This is a single-message review parameter, not a change to connection permissions, Route output policy or persona style binding.
+
+
 
 ### Outbound style validation
 
+
+
 With `styleValidation=1`, a failed check returns `409` with `status=style_confirmation_required`, rule IDs, paragraphs, reasons, and evidence. No Outbox send has started. After confirming that the wording is intentional for this message, the Agent may retry the same `deliveryId` with `styleValidation=0`. This bypass applies only to that request and does not remove the persona binding.
+
+
 
 The generic analysis endpoint does not send a message:
 
+
+
 Its executable operation ID is `manager.language-style.validate`; consult the target Manager's active catalog. The request body limit is 512 KiB, and trimmed text is limited to 200,000 UTF-16 code units. File addresses resolve on the target Manager's computer. `scope` defaults to `outbound_message`, and `prompt` retains native string coercion and clipping. An HTTP 200 can carry `data.status=passed`, `failed`, or `unavailable`; inspect `passed` and the detailed result.
 
+
+
 ```http
+
 POST /api/language-style/validate
+
 ```
 
+
+
 ```json
+
 {
+
   "text": "text to inspect",
+
   "styleSkillUrl": "file:///path/to/style-skill",
+
   "scope": "outbound_message",
+
   "prompt": "optional source prompt"
+
 }
+
 ```
+
+
 
 The response contains `passed`, `status`, `violations`, `checkedRuleIds`, and `skippedRuleIds`. The Codex Stop Hook uses the same endpoint only for a failure notice; it never blocks or rewrites Codex output.
 
+
+
 `deliveryId`, `sender.agentType`, `sender.sessionId`, and the exact enabled `routeId` are required. `sender.agentType` identifies the sending Agent role and `sender.sessionId` identifies its complete session. The injected request template is the source of truth. All Agents identify their actual role and complete session ID under the same delivery contract. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. Source context remains available for auditing, but it cannot override `channel` or `params`. A reply associated with a message-processing requirement also carries `tracking.requirementId` and a short-lived `tracking.sendContextReviewToken` obtained for that exact sender session, destination, and payload.
+
+
 
 For NapCat, use `target=group + groupId` or `target=private + userId`. Ordinary group sends may omit `replyToMessageId` or use an empty string for an unquoted message. Replies to a specific source should use its real message ID; actual `message_processing` group replies still require a valid source reference. When the quoted message contains images, `replyImageDescriptions` must contain one concrete description per image in original order, covering both visible content and intended meaning. A missing source record, unreadable image, count mismatch, empty description, or generic acknowledgement is rejected before idempotent delivery. WeCom and Feishu require `chatId`; Weixin requires `sessionId`; RabiLink requires `targetDeviceIds` or `targetDeviceKinds`; speech explicitly selects RabiSpeech and never proves a QQ send.
 
+
+
 ### Message-processing requirements and board API
+
+
 
 With Message Agent mode enabled, Manager assigns each delivered message group a `messageProcessingRequirementId` and includes it in AgentPacket `replyContext` and the worker instructions. The Agent closes a turn through a structured interface; a Codex final message alone is not a processing outcome.
 
+
+
 ```http
+
 POST /api/message-processing/requirements/:requirementId/outcome
+
 ```
+
+
 
 For a reply, submit the decision first so the requirement enters `awaiting_send`, complete the pre-send context review, and then call the explicit send API. Manager completes the board item only when the selected channel matches the source endpoint and the result contains the receipt required by that channel:
 
+
+
 ```json
+
 {
+
   "decision": "reply",
+
   "reason": "The user explicitly requested confirmation of the name and prefab location."
+
 }
+
 ```
+
+
 
 The Agent must not rely only on the recent messages captured when AgentPacket was created. During processing, another person or Agent may already have answered. Read Manager's current bounded bidirectional context first:
 
+
+
 ```http
+
 GET /api/message-processing/requirements/:requirementId/send-context?sourceMessageId=:sourceMessageId
+
 ```
+
+
 
 A single reply must pass the `sourceMessageId` it will quote. The response retains bounded context while narrowing `requiredReviewIds` to that main message and the explicit reply chain derived from message records. Other messages in the aggregate requirement still contribute to the context version but do not need to be declared as evidence for this body. After deciding that the exact proposed reply still fits the conversation, submit that request for approval:
 
+
+
 If an older source has fallen outside the recent window, Manager may recover only one record with the same Route and `sourceMessageId` from the formal `group-messages.jsonl` for that requirement's persona. A missing record, duplicate records, or conflicting Route evidence fails the GET instead of expanding to another group or historical requirement.
+
+
 
 Context reads use the same bounded interactive reader pool. Only send validation additionally recovers complete source and attachment evidence, together with recent context in one read task; GET and approval do not add this extra recovery. The recent window retains its 80-record, 24,000-character budget and may append one exact source record. The UTF-8 JSON projection, including records, source and attachment metadata, is capped at 1 MiB; oversized evidence is rejected rather than truncated. Detected changes to the relevant file inventory or metadata across the read fail closed. This is not an atomic cross-file snapshot.
 
+
+
 After waiting, Manager rereads the requirement and checks its version, source ownership, token expiry, reviewing session, context version and send fingerprint. Changes or read failures require another review, not an automatic validation loop. The send entry freezes the request and authoritatively rereads the same `deliveryId` receipt after either successful or failed validation. Only a persisted `completed` receipt with a result reaches the existing idempotent send service for fingerprint/sender validation and replay. `reserved`, `sending` and `uncertain` cannot authorize a new send through this path, and a receipt disappearing during replay does not cause another send. Retain the original `deliveryId` and inspect its receipt rather than bypassing pending state with a new ID.
 
+
+
 ```http
+
 POST /api/message-processing/requirements/:requirementId/send-context
+
 ```
 
+
+
 ```json
+
 {
+
   "contextVersion": "<version returned by GET>",
+
   "reviewedContextIds": ["<requiredReviewIds for this sourceMessageId and explicit reply chain>"],
+
   "reviewedByThreadId": "<complete current session ID>",
+
   "reason": "No one has answered yet and the proposed text still addresses the current question.",
+
   "proposedSend": {
+
     "deliveryId": "send-example-001",
+
     "sender": {
+
       "agentType": "primary_persona",
+
       "sessionId": "019f0000-0000-7000-8000-000000000001"
+
     },
+
     "routeId": "main",
+
     "channel": "napcat",
+
     "params": {
+
       "target": "group",
+
       "groupId": "example-group-id",
+
       "instanceId": "default",
+
       "replyToMessageId": "example-message-id"
+
     },
+
     "payload": {
+
       "type": "text",
+
       "text": "Received. I will investigate."
+
     },
+
     "tracking": {
+
       "requirementId": "message-requirement-001"
+
     }
+
   }
+
 }
+
 ```
+
+
 
 Add the returned `sendContextReviewToken` to `tracking` and send the unchanged request. The token expires after two minutes. A new conversation item, a changed requirement state, sender session, destination, quoted message, or payload invalidates the approval and requires another read. A paraphrase is still a duplicate when another Agent already replied to the same source. A genuine follow-up with new facts must explicitly use `allowAdditionalReply=true` and explain why.
 
+
+
 During reference and image validation, a tracked send uses only the exact formal source evidence bound to this approval. A stale requirement `conversationKey` or `replyContext.groupId` cannot redirect the source to another group. A mismatch between the formal group, Route, instance, and send target, a non-unique source record, or an image attachment not marked reviewed blocks the send. Ordinary untracked sends keep the original Route-history lookup and do not use this recovery.
+
+
 
 This gate applies to every Agent type. When `replyToMessageId` points to the source of a known message-processing requirement, a Primary Persona or another Agent cannot omit `tracking.requirementId` to bypass the board and context review.
 
+
+
 Ordinary group discussion may use `no_reply` with a reason. Explicit mentions, direct replies, private messages, and plan-progress notifications cannot be closed by a generic `agent_judgement`; only constrained reasons such as duplicate, already answered, withdrawn, or invalid source are accepted.
+
+
 
 Before replying or closing any new requirement, the Message Agent must inspect the source messages, attachments, and necessary reply chain and submit `projectFactAssessment`. First read `GET /api/message-processing/requirements/{requirementId}`. Its `knowledgeMatches` are plan and memory candidates derived by Manager; the Agent reads each candidate and reports the result through `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`. An `updated` or `created` callback still carries `recordType`, `recordId`, and `verifiedAt`, and the referenced plan or memory must contain the original message ID.
 
+
+
 New requirements also carry `source.evidenceReviewRequired=true`. Manager retains the aggregate requirement's complete evidence in `source.messageIds`, `source.replyChainMessageIds`, and `source.attachments`. NapCat images are saved immediately at ingress and delivered to the Desktop turn as `localImage` input. A CQ marker, filename, or URL alone is not an image review. Before reply or closure, the outcome also submits:
 
+
+
 ```json
+
 {
+
   "sourceEvidenceReview": {
+
     "reviewedMessageIds": ["source-message-id", "quoted-message-id"],
+
     "replyChainChecked": true,
+
     "attachmentReviews": [
+
       {
+
         "attachmentId": "source-message-id:image:1",
+
         "status": "reviewed",
+
         "observation": "The image shows a dynamic-text backing panel whose current text is shorter than its maximum width."
+
       }
+
     ],
+
     "evidence": "Reviewed the current message, quoted message, and image attached to the Desktop turn.",
+
     "reviewedAt": "2026-08-11T12:00:00.000Z",
+
     "reviewedByThreadId": "complete Message Agent task ID"
+
   }
+
 }
+
 ```
+
+
 
 A `reply` outcome may submit the evidence already reviewed and enter `awaiting_send`. POST send-context recalculates the exact subset from `proposedSend.params.replyToMessageId`: the selected main message, its explicit reply chain, and attachments carried by that quoted message or explicitly referenced by the body. `sourceEvidenceReview` and `projectFactAssessment` must cover that subset. Quoted group-reply ownership is calculated only among requirements with `kind=message_reply`; derived notifications such as `plan_progress_notification` do not own the right to quote-reply to the original group message. Historical duplicates with the same Route, message group, and source message allow only the canonical `message_reply` with the latest `createdAt` to continue. If no `message_reply` exists, ownership fails closed instead of falling through to a plan notification. Different groups or Routes, a non-unique newest item, a missing reply-chain record, an unavailable relevant attachment, or body evidence outside the fact assessment also fails closed. An unavailable attachment on an unrelated message in the same aggregate requirement does not block this reply. Closing the whole requirement with `no_reply` still requires complete message and attachment coverage. Source-evidence review remains separate from project-fact classification.
 
+
+
 When the source contains a durable schedule, scope, approval, ownership, or release fact, `criticalFactDisposition` uses a typed record reference:
 
+
+
 ```json
+
 {
+
   "decision": "no_reply",
+
   "reason": "No repeated group reply is needed, but the internal release target was recorded in the shared plan.",
+
   "projectFactAssessment": {
+
     "status": "critical",
+
     "reviewedMessageIds": ["msg-schedule-1"],
+
     "replyChainChecked": true,
+
     "evidence": "The source describes an internal target, not a public launch commitment.",
+
     "assessedAt": "2026-08-05T06:00:00.000Z",
+
     "facts": [
+
       { "kind": "schedule", "evidence": "The team is currently targeting 2030-10-15 internally." }
+
     ]
+
   },
+
   "criticalFactDisposition": {
+
     "status": "recorded",
+
     "record": {
+
       "type": "plan",
+
       "planId": "plan-example-release"
+
     },
+
     "evidence": "messageId=msg-schedule-1; source and reply chain verified.",
+
     "verifiedAt": "2026-08-05T06:00:00.000Z"
+
   }
+
 }
+
 ```
+
+
 
 Plan references use `{ "type": "plan", "planId": "..." }`; memory references use `{ "type": "memory", "memoryId": "..." }`; project documents use `{ "type": "document", "relativePath": "docs/..." }`. Document paths are relative to the current project. Absolute paths, parent traversal, and filesystem-link escapes are rejected. Manager reads the typed target and verifies that it exists and contains at least one original source message ID. A plausible ID, path, or self-reported evidence alone cannot close the item. Existing records use `status=duplicate`; incomplete assessment or recording must remain a structured handoff.
 
+
+
 A handoff to a Secretary, Plan Agent, or Primary Persona uses `/api/agent/threads` action `send` with a structured field. Manager marks the board as handed off only after the target Desktop owner accepts the request. Include `planId` when known so later progress can return to the source group or private conversation:
 
+
+
 ```json
+
 {
+
   "action": "send",
+
   "threadId": "<target-task-id>",
+
   "cwd": "C:/Path/To/Project",
+
   "messageSource": {
+
     "type": "agent",
+
     "agentAdapter": "codex",
+
     "sessionId": "<message-agent-task-id>",
+
     "sessionName": "current Message Agent task name"
+
   },
+
   "sourceThreadId": "<message-agent-task-id>",
+
   "sourceAgentType": "message_processing",
+
   "prompt": "Handle this plan item and return the result to the source Message Agent task.",
+
   "messageProcessing": {
+
     "requirementId": "<requirement-id>",
+
     "outcome": "handoff",
+
     "targetAgentType": "plan_agent",
+
     "planId": "<plan-id>",
+
     "planTitle": "<plan-title>"
+
   }
+
 }
+
 ```
+
+
 
 No extra endpoint is required. The same request returns the delivery result directly. The target Codex Desktop task has accepted the message only when all three values below are present; this does not mean the target has completed the work:
 
+
+
 ```json
+
 {
+
   "code": 0,
+
   "status": "delivered",
+
   "delivery": {
+
     "status": "delivered",
+
     "targetThreadId": "<target-task-id>",
+
     "acceptedBy": "codex_desktop_owner",
+
     "action": "started",
+
     "transport": "desktop-ipc"
+
   },
+
   "handoff": {
+
     "status": "recorded",
+
     "requirementId": "<requirement-id>"
+
   }
+
 }
+
 ```
+
+
 
 If `prompt`, `sourceThreadId`, or another required value is missing, the same response returns `code=-1`, `status=failed`, and actionable `error.field`, `error.message`, and `error.retryable` values. If the target task accepted the message but the message-processing board update failed, the response uses `status=delivered_tracking_failed`. Do not resend the same content to the target; handle or report `handoff.status=tracking_failed` instead.
 
+
+
 Maintainers and WebGUI read the same Manager-owned state:
 
+
+
 ```http
+
 GET /api/message-processing/board?routeId=<gateway-id>&limit=100
+
 ```
+
+
 
 Items expose the stage, source message group, worker task, handoff, decision, send receipt, failure, overdue duration, and an idle-worker-without-outcome flag. This is a read-only view of Manager state, not a reconstruction from logs.
 
+
+
 ### Controlled outbound idempotency receipts
+
+
 
 `deliveryId`, `sender.agentType`, and `sender.sessionId` are required. Before entering Outbox, Manager persists a reservation under runtime `data/agent-send-idempotency/`, and the completed result preserves the sender identity. The same ID with the same request executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different sender or any other changed request returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
 
+
+
 After a POST timeout or an empty receipt, query the original ID first. An absent receipt returns HTTP `404` with `idempotency.state=missing`; keep reading `in_progress`, and never automatically resend `uncertain` or `conflict`. One controlled retry is allowed only when the original `deliveryId` and payload are unchanged and Manager authoritatively finds neither a request record nor a terminal record in the same Route's Outbox. A request record without a terminal result, a different payload digest, or a recovery retry without a terminal result becomes `uncertain`:
 
+
+
 ```http
+
 GET /api/agent/send/receipts/:deliveryId
+
 ```
+
+
 
 `in_progress` means the durable receipt has no terminal result and its execution lease remains active; it is not byte-level progress. When the original execution has ended or its lease expired without a terminal result, read-only queries return `uncertain` without rewriting the durable receipt. A successful file upload with an unconfirmed caption does not prove completion of the entire request. Never automatically resend with a new ID.
 
+
+
 Receipt maintenance uses `POST /api/agent/send/receipts/:deliveryId/verify` (read-only observation) or `POST /api/agent/send/receipts/:deliveryId/settle` (controlled settlement using complete original evidence). The JSON body must contain exactly `{ "originalRequest": <original POST /api/agent/send request> }`. Preserve every original field and deliveryId; a digest mismatch is a conflict. Neither endpoint sends files or captions. `platformVerification=unknown` does not prove non-delivery; incomplete original evidence cannot settle a receipt. `503 AGENT_SEND_MAINTENANCE_UNAVAILABLE` means the running release has not wired maintenance capabilities, not a QQ rejection or missing feature permission.
+
+
 
 Verification diagnostics use `evidence.historyState` to distinguish `missing`, `read_failed`, `oversized`, `changed`, `damaged`, `request_not_found`, `terminal_missing`, and `completed`. A readable original request without the complete terminal operation is `reason=terminal_unproven`, not a read failure. `binding_missing` and `missingBindingFields` describe absent fields in the original upload owner's record; `binding_capability_unavailable` and `platform_capability_unavailable` describe unwired capabilities, not a remote Agent identity error. Original account and binding revision come only from owner upload records matching the original ID and digest; current accounts cannot backfill legacy evidence. New upload records capture identity and configuration evidence checked before and after the upload. File presence still proves neither content SHA nor the caption. `state=verified` means the observation completed, not delivery success.
 
+
+
 Connector 0.2.12 uses the file-upload waiting budget (30 minutes by default) for `POST /api/agent/send`, including file verification and platform upload. Explicit `--timeout-ms` takes precedence. Cancellation or timeout does not prove failure: query the original deliveryId receipt and never replay automatically. NapCat failures retain the action, HTTP status, retcode or safe transport error code, without raw upstream text, credentials or host paths. Missing diagnostics cannot be reconstructed for historical generic 502 receipts.
+
+
 
 Confirm upload and external delivery separately: `PUT /api/agent/uploads/:uploadId` accepts raw bytes; `GET` on the same path returns committed file metadata only, with no percentage, speed, or ETA. After upload, call `POST /api/agent/send` with `payload.fileId` and `payload.fileSha256`, then query the original deliveryId receipt above.
 
+
+
 When only the endpoint receipt ID is available, query up to 100 matching records by channel:
 
+
+
 ```http
+
 GET /api/agent/send/traces?channel=napcat&sentMessageId=:platformMessageId&routeId=:optionalRouteId
+
 ```
+
+
 
 Each match includes the `deliveryId`, completion time, Route, target, and `sender.agentType + sender.sessionId`. Older receipts have no sender field, so this attribution applies only to sends created after this contract is enabled. The sender fields are caller-declared and durably recorded for audit; they are not cryptographic authentication of an Agent session.
 
+
+
 The caller may mark delivery only when the receipt returns `status=sent` with the real identifier required by the target channel (`sentMessageId` for QQ text), followed by any required platform readback. `deliveryId` provides Outbox request idempotency; it does not replace NapCat/external-platform existence verification and is not an automatic retry queue. Public examples use placeholders, and runtime receipt files stay out of Git.
+
+
 
 ### Character reply for the speech message endpoint
 
+
+
 When source context contains `routeKind=voice_transcript`, `adapterType=speech`, and `characterTtsDialogue=true`, the turn came from the RabiPC speech endpoint. Use the injected send template with `channel=speech`, the exact `routeId`, `params.sessionId`, and a text payload. A successful result means the request reached RabiSpeech synthesis or its host-wide FIFO; it does not claim speaker playback and cannot complete a QQ requirement.
+
+
 
 Only `speech` / RabiSpeech transcript ingress injects this state. Do not mark QQ, role-panel, or ordinary text requests as speech dialogue, and do not bypass Outbox to call a worker directly, because that loses source binding, policy enforcement, and session isolation.
 
+
+
 Outbox returns one of:
 
+
+
 ```text
+
 sent    delivered, queued to a supported local endpoint, or intentionally retained in the Agent session
+
 draft   a non-sendable draft result
+
 blocked rejected by policy, missing target, or missing configuration
+
 failed  a real delivery attempt failed
+
 ```
+
+
 
 There is no generic persistent approval center or automatic retry queue. Callers must inspect the returned status; a supplied `deliveryId` adds fail-closed request deduplication and receipt lookup only.
 
+
+
 Phone audio may reuse the same RabiSpeech ASR chain, but its outbound channel is `rabilink`. The send request explicitly carries `params.sourceMessageId` and stable `targetDeviceIds`; the transient PCM `sourceStreamId` is never a downlink target. This cannot be redirected into the standalone `speech` channel.
+
+
 
 ### Voiceprint evidence and persona identity interpretation
 
+
+
 Speech delivered to a persona contains only opaque voiceprint/cluster IDs, diarization labels such as `Speaker 1`, scores, and decision evidence. It carries no person names and marks no voiceprint as “the user.” The receiving persona interprets identity through its own relationships, memory, and conversation context; different personas may hold different relationship interpretations for the same voiceprint.
+
+
 
 Every new voice message also carries `sourceHostId/sourceHostName`. A voiceprint ID is interpreted only within the processing host that produced it, so the persona identity key is **processing host + voiceprint ID**; equal cluster strings from two PCs must not be treated as one person. The persona's append-only source of truth is `data/roles/<RoleId>/voice/voice-identities.jsonl`. It travels with persona synchronization, while RabiSpeech, Manager, and Routes never fill `displayName`, `relationship`, or `isUser` on the persona's behalf.
 
+
+
 Read or update the current persona's interpretation:
 
+
+
 ```http
+
 GET /api/roles/:roleId/voice-identities
+
 GET /api/roles/:roleId/voice-identities?sourceHostId=<host>&voiceprintId=<voiceprint>
+
 PUT /api/roles/:roleId/voice-identities
+
 Content-Type: application/json
+
 ```
 
+
+
 ```json
+
 {
+
   "sourceHostId": "example-host-guid",
+
   "sourceHostName": "Studio PC",
+
   "voiceprintId": "unknown-cluster-7",
+
   "displayName": "Boss",
+
   "relationship": "my user",
+
   "isUser": true,
+
   "aliases": ["Boss"],
+
   "notes": "Confirmed by this persona from continuing conversation"
+
 }
+
 ```
+
+
 
 `isUser` has no system default. Omit it while unknown instead of writing `false`. Repeating an identical interpretation adds no event; corrections append a new event, and `deleted=true` appends a tombstone rather than rewriting shared history. Every new event automatically records the previous event heads it converges; callers neither need nor control that lineage.
 
+
+
 When two PCs modify the same `sourceHostId + voiceprintId` concurrently from one common version, JSONL union keeps both event heads instead of silently selecting the last file row. `GET` returns `conflicted=true`, `conflictFields`, and `conflictCandidates` containing `eventId/deleted`. A disagreement in `isUser` or deletion state classifies matching transcript segments as `conflict`. If only names, relationship text, or notes diverge while every branch agrees on `isUser`, user/other classification remains usable but the relationship metadata stays marked unresolved. A later persona `PUT` automatically supersedes every current head with the persona's explicit final interpretation, allowing the next multi-PC sync to converge. AgentPacket includes the relationship file, processing host, all voiceprints, known mappings, and unresolved fields. Those rows remain persona records, never host inference.
+
+
 
 To distinguish the current persona's confirmed user, other speakers, unknown voices, or conflicting mappings across a day or time range, use the persona-scoped read view instead of modifying raw messages:
 
+
+
 ```http
+
 GET /api/roles/:roleId/voice-transcripts?from=<ISO>&to=<ISO>&speaker=user&limit=200&includeArchives=true
+
 ```
+
+
 
 `speaker` accepts `user`, `other`, `unknown`, or `conflict`. At read time, the result joins `conversation/current.jsonl` (and optionally archives) with the current persona's `voice/voice-identities.jsonl`, returning record-level `personaClassification`, per-segment `classification`, and matching identity evidence. `mixed` means one recording contains several segment conclusions. The view never writes names or `isUser` into host raw messages or the persona conversation ledger; correcting a persona relationship changes the next query immediately.
 
+
+
 `matchedCount` and `summary` are computed from the complete filtered result and are not truncated by the detail `limit`. `summary` reports total recordings and segments, recording duration, speaker duration, `user/other/unknown/conflict` statistics, classified duration, and `coverageRate`. `unresolvedVoiceprints` groups still-unknown or conflicting evidence by `sourceHostId + voiceprintId`, including segment count, duration, and last-seen time. These fields are a query-time coverage view, not another ledger, and are never written back into persona files.
+
+
 
 When the current routed message explicitly asks about voiceprints, speakers, which recordings came from the user versus other people, or all-day classification, AgentPacket injects the time-range query, four speaker filters, relationship GET/PUT, and append-only event rules into the current persona task. Ordinary messages receive no such prompt. The Agent performs only the query required by the current request and never polls coverage. Unknown or conflicting evidence may converge only from this persona's own conversation, memory, and user confirmation, never directly from a host candidate name or high score.
 
+
+
 The following local endpoint remains as a RabiSpeech operator-diagnostic compatibility surface. Once a human has confirmed one recording label, it may create or reuse diagnostic metadata and bind the current `recordId + speakerLabel`. These names never enter RabiRoute's host-wide ingress record or persona ledger and are not an Agent source of truth for user identity:
 
+
+
 ```http
+
 PUT /api/speech/speaker-identities
+
 Content-Type: application/json
+
 ```
 
+
+
 ```json
+
 {
+
   "sessionId": "meeting-one",
+
   "recordId": "speech-0123456789abcdef",
+
   "speakerLabel": "Speaker 1",
+
   "displayName": "Qiu Yu",
+
   "aliases": ["秋雨"]
+
 }
+
 ```
+
+
 
 Supply `speakerId` when a stable profile ID is already known. Otherwise the endpoint performs a case-insensitive display-name and alias lookup, reuses the unique match and merges aliases, creates a profile when there is no match, and returns `409` when several profiles match so the caller can retry with an explicit ID. Lookup or creation, alias merging, and the `recordId + speakerLabel` binding are persisted as one host-local registry transaction; repeated requests are idempotent.
 
+
+
 The human entry remains under **Speech Service → ASR → Speaker / voiceprint settings** and shares `output/speaker-profiles.json` with the Agent API. The page separates unknown and known speakers into collapsible cards and previews the latest ten utterances for each diarization cluster to support human confirmation and correction.
+
+
 
 This endpoint writes RabiSpeech-local diagnostic metadata and an explicit recording binding. Manager removes names at the host-wide ingress boundary and forwards only opaque voiceprint/cluster evidence. The bound persona owns the final interpretation of who someone is and whether they are the user. Calibrated capability discovery may justify describing a score as voiceprint-match evidence, but a host match still must not be equated with a persona relationship.
 
+
+
 ### Agent-triggered multi-PC persona synchronization
+
+
 
 PCs using the same RabiLink application token can be discovered and explicitly synchronized by a local Agent:
 
+
+
 ```http
+
 GET /api/persona-sync/peers
+
 POST /api/persona-sync/sync
+
 Content-Type: application/json
+
 ```
 
+
+
 ```json
+
 {
+
   "peerId": "office-pc",
+
   "roleId": "Rabi"
+
 }
+
 ```
+
+
 
 Omit `roleId` to synchronize every persona. The coordinator prefers direct LAN transfer and falls back to restricted Relay transit. The Agent must inspect per-file results, `fileConflicts`, and `semanticConflicts`. The latter is returned by the same sync request when JSONL union succeeds but compatibility voice-account classifications or general identity relations still have concurrent branches. Voice items include host, voiceprint, fields, and candidate events; identity-relation items include record kind, record ID, and candidate events. No follow-up coverage polling is required. `conflicts > 0` or HTTP `409` means unresolved conflict remains and completion must not be claimed.
 
+
+
 A local Agent resolves ordinary-file conflicts through `GET /api/persona-sync/conflicts`, `GET /api/persona-sync/conflicts/content`, and `POST /api/persona-sync/conflicts/resolve`. Actions are `keep_local`, `use_remote`, and `use_merged`; resolution should include the listed `expectedLocalHash` to avoid overwriting a newer local edit. These three control endpoints are loopback-only and are not exposed through the LAN listener or Relay. See [Multi-PC persona data synchronization](persona-data-sync_en.md) for complete manifest, file, merge, and resolution contracts.
+
+
 
 When the current routed message explicitly mentions multiple PCs, persona/role synchronization, or persona sync, AgentPacket injects these loopback URLs, the current `roleId`, the one-shot execution rule, and terminal-conflict criteria into the bound persona's current task. Ordinary conversation receives no such capability prompt. The default scope is the current persona; omit `roleId` only when the user explicitly requests every persona. If peer discovery is not unique, the Agent must confirm the target instead of guessing or polling for coverage.
 
+
+
 ### NapCat send with an explicit reply reference
+
+
 
 Set `channel=napcat` and name the group. Ordinary group sends may omit `params.replyToMessageId` or use an empty string. Replies to a specific source should use its real QQ message ID; actual `message_processing` group replies still require a valid source reference. RabiRoute avoids adding a duplicate reply segment.
 
+
+
 ```json
+
 {
+
   "deliveryId": "send-qq-progress-001",
+
   "sender": { "agentType": "primary_persona", "sessionId": "<current Codex Primary Persona session ID>" },
+
   "routeId": "main",
+
   "channel": "napcat",
+
   "params": {
+
     "target": "group",
+
     "groupId": "example-group-id",
+
     "instanceId": "default",
+
     "replyToMessageId": "example-message-id",
+
     "replyImageDescriptions": [
+
       "The first image shows compact spacing for a short dynamic label.",
+
       "The second image shows the background expanding with longer text, indicating that the width must adapt to content."
+
     ]
+
   },
+
   "payload": { "type": "text", "text": "I have taken the issue and will update this thread." }
+
 }
+
 ```
+
+
 
 `replyImageDescriptions` must match the quoted message's image count and order. Each item states what the Agent actually saw and what the image communicates; `reviewed` or another generic acknowledgement is not sufficient. After a successful send, RabiRoute creates or appends a same-name `.md` beside every local image. It records the source message, image position, Agent type and complete session, delivery ID, QQ receipt ID, and description. The send receipt exposes only archive mappings rather than copying description text into operational trace results. An unquoted ordinary group send may omit `replyToMessageId` or use an empty string and does not need source-image descriptions.
 
+
+
 Local QQ group-file upload uses the same endpoint with `payload.type: "file"`, a local `payload.path`, and a route policy whose NapCat `supportedOutputs` includes `file`. Local file sends do not use a directory allowlist or require directory-permission configuration. Files must exist, resolve to ordinary files and be readable.
+
+
 
 ### Uploading from a remote Agent before sending a group file (experimental contract)
 
+
+
 > Upload passed local real-HTTP and simulated-NapCat integration, a full build and deployment health checks for `0.3.4-4b5d30118b40`. Real two-computer group-file acceptance remains pending. Check the running instance's capabilities and version; a local simulated-channel test is not a real-group receipt.
+
+
 
 Remote Agents should prefer the installed connector's `--api` command supplied by the Hook. Local Host discovery applies only on the Manager computer; absence of Host remotely does not mean Manager is offline. Use `GET /api/lan-agent/capabilities` for operations, `GET /api/lan-agent/resources` for readable documents and references, then `/api/lan-agent/resources/read?id=...` with a returned ID. Public contracts include English counterparts; arbitrary Markdown links are not readable-resource grants. See [Remote setup and updates](./lan-rabi-agent-bootstrap_en.md#installation-and-releases) for content-digest updates and the first-bootstrap/DSH-reload requirement.
 
+
+
 A primary Agent enrolled with an independent node credential and approved by the controlling Manager may upload a remote file to Manager, then explicitly call the send API. The CLI reads the credential and exact Agent identity from private configuration; do not use a shared WebGUI Token or put credentials in command arguments. Uploading never sends automatically:
 
+
+
 ```bash
+
 node rabi-agent.mjs --upload <file> --agent-type codex --id "<FULL_SESSION_ID>" --upload-id <UUID>
+
 node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent-type codex --id "<FULL_SESSION_ID>"
+
 ```
+
+
 
 `--upload-id` is a required stable UUID saved by the caller beforehand; it is not generated automatically. The underlying request is `PUT /api/agent/uploads/<UUID>` with raw file bytes, `Content-Type: application/octet-stream`, and an `Idempotency-Key` exactly matching the path UUID. `x-rabiroute-file-name` is the URI-encoded basename without directories; `x-rabiroute-content-sha256` is the content SHA-256. Authentication uses the Bearer node credential and `x-rabiroute-agent-type` + `x-rabiroute-session-id`. `GET` on the same path reads metadata. Successful responses have the following shape and never expose Manager's local `path`:
 
+
+
 ```json
+
 {
+
   "code": 0,
+
   "data": {
+
     "id": "00000000-0000-4000-8000-000000000001",
+
     "fileName": "report.zip",
+
     "size": 1234,
+
     "sha256": "<64 hexadecimal characters>",
+
     "expiresAt": "2030-01-02T00:00:00.000Z"
+
   }
+
 }
+
 ```
+
+
 
 #### Partial machine-readable upload Help contract
 
+
+
 `GET /api/agent/help?path=%2Fapi%2Fagent%2Fuploads%2F%3AuploadId` exposes optional `help.machineReadable` for PUT/GET (`version:1`, `kind:partial-upload-contract`), defined in `src/manager/agentUploadContract.ts`. It is neither an all-API OpenAPI document nor an execution validator or authorization rule.
 
+
+
 - `request.path.uploadId.schema` describes lowercase UUIDs (versions 1–8, RFC variant); `request.query.allowed=[]` means the Agent catalog permits no query parameters.
+
 - `request.headers` lists upload business headers, not a complete authentication-header contract. Required PUT headers must be single-valued; `idempotency-key.equalsPathParameter=uploadId` expresses cross-field equality. Content-Type values are case-insensitive but accept no parameters; `content-encoding` is forbidden. The request SHA-256 accepts either case and the receipt uses lowercase. File names are URI-decoded and then checked by both route and store for basename, safe-name and UTF-8 byte constraints; these semantics are not fully modeled as schemas. Optional Content-Length is converted with Number and checked by the store as a nonnegative safe integer matching the received byte count.
+
 - PUT `request.body` is `{kind:binary,mediaType:application/octet-stream,encoding:raw,emptyAllowed:true}`, with **no JSON Schema**; it is not a JSON string or Base64. GET uses `kind:none`: the handler does not read the body, without claiming to actively reject every request carrying one.
+
 - `responses["200"].schema` uses JSON Schema 2020-12 and describes only the successful JSON body shape `{code:0,data:{id,fileName,size,sha256,expiresAt}}`, with all fields required and no additional fields. PUT/GET share this shape. GET does not return upload progress, a full state machine, file bytes, owner or local path. `scope:success-body-shape` does not claim coverage of all value semantics or HTTP boundaries.
+
+
 
 Both operations remain `contractLevel:baseline`, `coverage.exactRequestSchema=false`, and `coverage.exactResponseSchema=false`. `coverage.missing` equals the machine contract's `missing`: authentication/authorization boundaries, error-response schemas, response headers, storage DTO value semantics, plus PUT filename/stream-integrity/runtime-limit checks or GET ownership/expiry/integrity checks remain explicitly incomplete. Consumers must not promote an operation to verified, bypass ownership checks or replay uploads merely because a 200 schema exists.
 
+
+
 Upload errors preserve the existing string `code` and add the matching `errorCode`, `help { method, path }`, `repair`, and `retryable:false`. This forbids automatic replay, not a later explicitly corrected request. For 415, correct the binary format; for 403, check the original identity and enabled state; for 409 or uncertain results, GET the original ID before proceeding, without changing IDs to bypass the conflict. Help links grant no additional authority. HTTP 408 `upload_timeout` and disconnected-stream `upload_aborted` have specific repair guidance, retain `retryable:false`, and require GET on the original ID before proceeding, never automatic re-upload. A disconnected client is not guaranteed to receive error JSON.
+
+
 
 Default storage settings are 2048 MiB per file (configurable), max(16 GiB, the single-file quota) total, 100 files and a 24-hour TTL. Total bytes, count and retention use the [public environment settings](./connection-access_en.md). Uploader identity supports auditing and accounting, not a second access grant. Other authenticated connections can query the original upload ID and reference fileId plus SHA-256. Actual-byte integrity, TTL, concurrency and capacity checks still apply. Retain original IDs after uncertainty; do not replay uploads or sends automatically. See the Agent interface contract for transport and channel receipts.
 
+
+
 If disk permissions or file locks prevent temporary reservation cleanup, its quota remains conservatively reserved and an audit event is recorded rather than deleting possibly active data. Repair the storage fault and trigger cleanup again after a Host restart; automatic recovery from every storage failure is not guaranteed.
+
+
 
 Large files use backpressured binary streaming, disk writes, and incremental SHA-256 verification, not whole-package buffers or JSON/Base64 bodies. The upload deadline is 30 minutes. In RabiLink → Configuration, save `agentUploads.maxFileMiB` as an integer from `1..8589934591` (default `2048`); it is persisted in `data/Config.json` and takes effect after Manager restarts. Authenticated connections may also configure the limit through `PATCH /api/rabi/identity`; uploads continue following the current server limit. Manager applies no additional 2 GiB hard cap; use a client that supports the configured size. Default storage capacity accommodates at least one maximum-size file. Storage bytes, file count, and expiry are configurable through [public environment settings](./connection-access_en.md).
 
+
+
 A controlled integration test transferred **734 MiB (769654784 bytes)** through the real client → loopback HTTP → file storage → simulated NapCat and verified size and SHA-256. The source was generated in 64 KiB chunks, Buffer allocations/concatenations above 8 MiB were guarded, and the sink checked chunks incrementally. Enable this case in `src/manager/agentUploadFlow.test.ts` with `RABI_TEST_LARGE_UPLOAD=1`; routine runs skip it. This is not a QQ-platform acceptance test: actual QQ/NapCat size, account/group permission, filesystem access and response deadlines still require channel receipts. Legacy connectors need the new bootstrap described in the onboarding guide, and hosts caching the old Hook must reload; raising the server quota does not update old clients.
+
+
 
 Minimal send example: complete the upload and verify its receipt first, then supply this JSON through standard input to `node rabi-agent.mjs --api POST /api/agent/send --agent-type codex --id "<FULL_SESSION_ID>" --body-stdin`. Replace identities and targets from the current injected template, use upload `data.id` as `fileId`, and save a separate stable `deliveryId` for this send:
 
+
+
 ```json
+
 {
+
   "deliveryId": "send-upload-example-001",
+
   "sender": { "agentType": "primary_persona", "sessionId": "<complete-session-id>" },
+
   "routeId": "<exact-route-id>",
+
   "channel": "napcat",
+
   "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
+
   "payload": { "type": "file", "fileId": "00000000-0000-4000-8000-000000000001", "fileSha256": "<upload-data.sha256>", "text": "Report file." }
+
 }
+
 ```
 
+
+
 - A `fileId` requires `fileSha256=upload data.sha256` (64 lowercase hexadecimal characters), binding the reference to its original content so UUID reuse after TTL expiry cannot replace the bytes behind an old reference. The send callback checks the actual hash inside the lease and rejects any mismatch.
+
 - `payload.text` is optional. Ordinary group sends may omit `replyToMessageId` or use an empty string; quoted replies use a concrete source message ID. Actual `message_processing` group replies still require a valid source reference. Existing reference-review and tracking requirements remain unchanged.
+
 - `fileId` is limited to `channel=napcat`, `target=group`, `type=file` and is mutually exclusive with `path`/`url`/`fileName`. It cannot send images, voice, or another channel. The display filename (`displayName`) comes from upload metadata, not a send-request override.
+
 - Manager's internal trusted resolver rechecks authorization, ownership, integrity and TTL per request, holding an inflight lease against cleanup. Ordinary local `path` sends still check existence, ordinary-file type and readability without a directory allowlist.
+
 - The channel must still permit sending and support `file`. Sender identities still follow the delivery contract. Upload success does not prove group delivery: inspect both Manager and NapCat send receipts, and query the original `deliveryId` receipt if the send is uncertain.
+
 - If NapCat accepted the group file but its caption failed, retain `status=sent` and send only the missing text, never the file again. The current NapCat API reads the path supplied by Manager. NapCat on another machine therefore needs a shared directory that makes that path readable. This feature uploads from a remote Agent to Manager; it does not solve arbitrary cross-machine NapCat file access.
+
 - Remote thread delivery uses the original Manager ledger and supports `none`, `required`, formal replies with `inReplyToRequestId`, and remote-to-remote delivery. Admission reuses the current authenticated connection. Source nodes and available session fields record attribution; changing descriptions or sessions does not require another grant. The specified target owner executes the request and returns a receipt for the original delivery ID.
+
+
 
 ### WeCom
 
+
+
 Use `channel=wecom` and provide the exact `params.chatId`. A source response may also include `params.reqId`; a proactive send omits it. Source context does not select the channel. The WeCom adapter remains experimental.
+
+
 
 ### RabiLink proactive output
 
+
+
 Use `channel=rabilink`, `params.proactive=true`, and at least one explicit `targetDeviceIds` or `targetDeviceKinds` selector to enqueue a proactive device message when the selected Route enables RabiLink output and has a Relay configured. A non-proactive send also requires `params.sourceMessageId`. The local handler still goes through Outbox; it must not bypass RabiRoute and call the Relay directly.
+
+
 
 ## Explicit remote Agent targets and list queries
 
+
+
 Query `GET /api/lan-agent/instances` on the current Manager to obtain each computer's `instanceId`, `agentId`, `provider` and connection state. `agentId` identifies the connector's Agent configuration; the full session ID is a separate `threadId`.
+
+
 
 List sessions with `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/threads`:
 
+
+
 ```json
+
 {"action":"list","agentAdapter":"codex","limit":100,"offset":0}
+
 ```
+
+
 
 Use `limit/offset` to page through results; DSH uses `agentAdapter:"dsh"`. After selecting the full ID, call `POST /api/lan-agent/instances/{instanceId}/agents/{agentId}/tasks`:
 
+
+
 ```json
+
 {"provider":"codex-desktop","threadId":"<full session ID>","message":"<task text>","cwd":"<remote workspace>","idempotencyKey":"<stable delivery key>"}
+
 ```
+
+
 
 AgentType is the `provider` field and the session Id is `threadId`; both are required for every delivery. Missing identity fails without selecting `default`, the first provider or the configured session. Requests select their own target without rebinding configuration. Existing catalog identities remain intact; legacy single-task settings no longer synthesize a `default` Agent. Configured message Routes also submit their selected provider and full session ID explicitly.
 
+
+
 The older `POST /api/lan-agent/nodes/{nodeId}/tasks` likewise requires `targetAgent`, `threadId` and `message`; `agentId` is optional target metadata, without provider inference. Idempotency binds the complete target and payload; reconcile an uncertain original operation before another send. Connector 0.2.3 declares `taskTargeting:"explicit-session-v1"` in hello. Task delivery to older clients without this declaration fails with an upgrade message, preventing them from ignoring the new field and sending to their configured session. Computer APIs retain their existing contract.
+
+
 
 ## Codex thread bridge
 
+
+
 ### Read-only discovery after an exact ID returns 404
+
+
 
 This is a caller troubleshooting procedure; it does not automatically rebind or resend:
 
+
+
 1. Distinguish a missing resource from a generic route-not-found response. For the latter, verify the path, method, and available capability against current help. A timeout, permission denial, unloaded owner, or unready index does not prove absence.
+
 2. Keep the original machine, Agent adapter, and workspace scope. Use `action=list` with the known name as `query`. If no clear match is found, omit the name condition and inspect recently updated or currently active sessions. Use only supported fields, filter by returned `updatedAt` and status, and follow `nextOffset` pagination. Do not invent sorting, activity filters, or scan parameters.
+
 3. Use `action=read` for each candidate and check its full ID, workspace, business goal, recent context, and original plan binding. Continue the original ID when it still exists. A different ID requires a verified relationship to the original task and scope consistent with the user's authorization; record both IDs. Matching names or the newest timestamp only narrow discovery. Ask the user only about ambiguity that remains.
+
 4. If a plan detail returns 404, search its name and recently updated plans within the same persona, including archives when needed. Check `planId/taskBinding` and history; do not replace the original record with a new empty plan.
+
 5. Discovery does not create tasks, alter bindings, or send messages. After `202/delivery_unconfirmed`, a timeout, or another uncertain delivery, preserve the original `deliveryId`, source, and target and check its receipt and actual acceptance evidence. A search result does not justify resending to another target. Record unavailable query capabilities and continue independent work.
+
+
 
 Failure guidance should name the currently available next steps, such as name search, recent-session lists, or archive lookup. If the original object is confirmed to exist but remains unreadable, investigate and repair the original interface or storage fault; a candidate list does not close that fault.
 
+
+
 ### External Agent sources and stable delivery IDs
+
+
 
 `POST /api/agent/threads` with `action=send` reuses connection authentication and delivers to the target in `agentAdapter/threadId`. `sourceThreadId`, `messageSource` and `sourceAgentType` record the existing session context and role; they do not establish another source qualification or permission.
 
+
+
 The SDK and ingress reuse authenticated connection context and existing attribution. They do not query whether a source owner is registered, archived or loaded, or require source names, directories, role labels and duplicate fields to match. Existing metadata supports records and reply routing. `sourceAgentType` defaults to `agent` and may retain a descriptive caller role.
+
+
 
 Destination session IDs are opaque strings: retain their complete values and execute through the destination protocol. Source IDs are attribution, so UUID shape, directory, display name and current source lookup availability do not decide whether sending is allowed.
 
+
+
 Creation, local, connector, Peer and device-Agent delivery share the same attribution semantics. Source-owner directory reads, ID shapes, archive/load state and assignment lookups are not admission conditions. The destination uses its actual host and execution parameters; deliveries and receipts keep their original IDs.
+
+
 
 System, message-adapter, plan and Agent metadata describe attribution and presentation. Ingress authenticates the connection; message fields do not create another permission layer. Original receipt reconciliation needs only the actual returned deliveryId, without declaring an original sender or recipient: `{"action":"reconcile_delivery","deliveryId":"<original deliveryId>"}`.
 
+
+
 The Bot-to-Codex example below uses source context already available and the actual destination session ID, without another source-owner lookup:
 
+
+
 ```json
+
 {
+
   "action": "send",
+
   "agentAdapter": "codex",
+
   "threadId": "<complete target Codex session ID>",
+
   "deliveryId": "bot-to-codex-check-001",
+
   "prompt": "Confirm receipt of this integration check.",
+
   "sourceThreadId": "<complete source Bot session ID returned by scan>",
+
   "sourceAgentType": "agent",
+
   "messageSource": {
+
     "type": "agent",
+
     "agentAdapter": "grokBot",
+
     "sessionId": "<complete source Bot session ID returned by scan>",
+
     "sessionName": "Integration Bot session"
+
   },
+
   "responsePolicy": "none"
+
 }
+
 ```
+
+
 
 Creating a Codex or DSH session from a Bot records the same existing source context. Top-level `agentAdapter` selects the created destination. The submitted display name remains attribution and is not replaced through a mandatory source-owner request.
 
+
+
 ```json
+
 {
+
   "action": "create",
+
   "agentAdapter": "codex",
+
   "title": "Task started by the Bot",
+
   "cwd": "C:/Path/To/Your/Project",
+
   "prompt": "Handle this new task.",
+
   "sourceThreadId": "<complete source Bot session ID returned by scan>",
+
   "sourceAgentType": "agent",
+
   "messageSource": {
+
     "type": "agent",
+
     "agentAdapter": "grokBot",
+
     "sessionId": "<complete source Bot session ID returned by scan>",
+
     "sessionName": "Optional source name for attribution display"
+
   }
+
 }
+
 ```
+
+
 
 A DSH target changes `agentAdapter` to `dsh` and keeps the same source fields.
 
+
+
 Public endpoint delivery accepts a stable body `deliveryId`: non-empty, no leading or trailing whitespace, at most 100 characters, and no NUL or line separators. Save the ID and complete payload before the first request. Manager scopes the key to the verified source and persists the original target, request digest, execution options and acceptance state. The same source, ID and payload reuse the operation; a changed target or payload returns `AGENT_DELIVERY_ID_CONFLICT` with `error.field=deliveryId`. Omitting the field generates a new ID per request and cannot make repeated POSTs idempotent. The plan API's `Idempotency-Key` header does not replace this field.
+
+
 
 Response `communication.deliveryId` is Manager's actual delivery identifier and may differ from the submitted ID; save it for `reconcile_delivery`. A same-key retry of `prepared` can finish the original, not-yet-started delivery; `dispatching` only reconciles its receipt, and a committed delivery returns its original result. After HTTP 202, a timeout or `delivery_unconfirmed`, retain the original payload and ID. Do not use a new key or start another turn. Missing evidence keeps the outcome unconfirmed. Formal replies retain `inReplyToRequestId/result/nextAction`; the reply request ID is not a source session.
 
+
+
 ### Authenticated cross-instance endpoint delivery (experimental implementation)
+
+
 
 `send`, formal `required` replies and remote-to-remote exchanges share one Manager request store. Use `instanceBinding={instanceId,agentId}` for the destination and preserve the complete raw `threadId`. The Manager includes formal reply parameters in the delivered message; do not replace the destination or shorten session IDs. Enabled-provider authorization is generic, while execution capability is checked separately. Providers without exact owner delivery support fail closed without an alternate Runtime.
 
+
+
 The Manager records the authenticated connection and available source descriptions, resolves the actual target, persists preparation, renders the envelope, invokes the target owner and commits after matching its real receipt. Sources may be session endpoints or connections carrying only a real node/local ID. Target execution endpoints retain their Manager, instance, provider, session and current execution epoch; receipts match the original `deliveryId`, generation and prompt hash. The admission boundary owns credentials and disable settings; source-session and source-owner lookups do not permit or deny sending.
+
+
 
 Stable delivery keys and payload digests use Manager, computer instance, node, provider and full session identity. Changing a catalog `agentId` alias does not create a new delivery. Caller-key queries also recognize existing legacy keys and receipts, retaining the original deliveryId. Damaged or ambiguous reservations return conflicts instead of authorizing another send.
 
 
+
+
+
 Unknown outcomes return HTTP 202, `delivery_unconfirmed` and `retryable=false`, retaining the original formal reply reservation. Never replay the message with another delivery ID. `reconcile_delivery` only checks transport evidence on the original target. Manager does not automatically sweep historical reservations on startup, connection, catalog, receipt or turn events. Callers explicitly reconcile the original actual ID without a replacement owner or automatic replay. Public reconciliation itself does not poll. If the Desktop open-turn IPC succeeds after the caller was released, or the same owner's rollout later shows the original delivery marker, the bridge keeps that one request for a default 60-second window and records the late receipt; a confirmation commits the original delivery. A steer timeout still uses only the existing short receipt grace. Connectors store transport attempts/receipts only, not a second business request ledger. Codex can recover an exact hash from accepted user messages on the same Desktop owner; providers lacking readable acceptance evidence remain unconfirmed.
+
+
 
 This describes source implementation and regression scope, not updated runtime nodes or real two-computer end-to-end acceptance.
 
 
+
+
+
 Background Codex turns may not receive Codex Desktop thread-management tools. RabiRoute therefore exposes a local bridge:
 
+
+
 ```http
+
 GET  /api/agent/threads?action=list&query=<text>&limit=20
+
 POST /api/agent/threads
+
 ```
+
+
 
 POST actions:
 
+
+
 - `list`: list matching threads, optionally restricted by a configured cwd.
+
 - `read`: read a thread by `threadId`. The returned task name always comes from the Codex left-sidebar index; SQLite `threads.title`, an initialization prompt, or a stale Route-cached name cannot override it.
+
 - `resolve`: for Codex, reuse a valid saved ID when the task is unarchived, even if its saved default cwd differs; the request workspace supplies the next execution context. Mutable Desktop/SQLite title metadata and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
+
 - `create`: idempotently resolve by task name plus configured workspace, bootstrap one empty task only when no match exists, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Concurrent calls and retries after an HTTP timeout share or reuse the same creation result instead of creating duplicate tasks. The response uses `resolution=created` for a new task and `resolution=name` for an existing same-name task. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
+
 - Manager persists the create reservation under runtime `data/.runtime/codex-thread-creations/`. It advances through `reserved → creating → thread_created → naming → initial_turn → completed`. A `creating` reservation may move through `failed_before_create` and retry with the same key only after it is older than five minutes, has no `threadId`, and a second `action=list + lookupMode=state_db` check authoritatively finds no task with the same name and workspace. An existing `threadId`, a failed index query, a candidate task, or any other insufficient evidence changes the reservation to `uncertain`; later requests return `409` and automatic recreation is forbidden.
+
 - `rename`: rename a Desktop task by full `threadId`; the configured cwd supplies only the Desktop IPC context and does not change task identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
+
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
+
+
 
 `send` optionally accepts absolute `imagePaths`. Files must exist and use a PNG, JPEG, GIF, WebP, or BMP extension. They may be outside the target `cwd` workspace; Rabi no longer adds an eight-image limit. Manager deduplicates the paths and sends them as Desktop `localImage` input. If the actual handler cannot accept images or rejects the input, report its real error rather than a missing permission.
 
+
+
 ```json
+
 {
+
   "action": "resolve",
+
   "threadId": "019f0000-0000-7000-8000-000000000001",
+
   "title": "Rabi",
+
   "cwd": "C:/Path/To/Your/Project",
+
   "createIfMissing": true
+
 }
+
 ```
+
+
 
 Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation. For Codex, a valid ID remains authoritative across saved-cwd or display-metadata changes, and the request workspace controls the current delivery.
 
+
+
 After a create call times out, first call `list` with the original title and `lookupMode=state_db`. This reads the local Desktop task database and sidebar index without starting the metadata app-server, so it can find an empty task whose first prompt has not started yet. Do not infer “no side effect” from an immediate complete-mode lookup and do not create the same title again.
+
+
 
 Formal Agent responses validate the source and destination by their task IDs and no longer refuse a reply because the directories differ; a task's directory is recorded as identity detail. Equivalent Windows drive, `\\?\` extended-drive, UNC, and extended UNC forms are still compared with the shared path-canonicalization rule, so one directory is not treated as two merely because its string form differs. This comparison does not participate in Codex task identity.
 
-```json
-{
-  "action": "create",
-  "title": "[Example][Research] Compare two integrations",
-  "cwd": "C:/Path/To/Your/Project",
-  "messageSource": {
-    "type": "agent",
-    "agentAdapter": "codex",
-    "sessionId": "019f0000-0000-7000-8000-000000000010",
-    "sessionName": "current investigation session"
-  },
-  "sourceThreadId": "019f0000-0000-7000-8000-000000000010",
-  "sourceAgentType": "agent",
-  "responsePolicy": "none",
-  "prompt": "Inspect the implementation and produce an evidence-backed comparison without modifying files.",
-  "sandbox": "workspace-write"
-}
-```
+
 
 ```json
+
 {
-  "action": "send",
-  "threadId": "019f0000-0000-7000-8000-000000000001",
+
+  "action": "create",
+
+  "title": "[Example][Research] Compare two integrations",
+
   "cwd": "C:/Path/To/Your/Project",
-  "sandbox": "workspace-write",
+
   "messageSource": {
+
     "type": "agent",
+
     "agentAdapter": "codex",
-    "sessionId": "019f0000-0000-7000-8000-000000000002",
-    "sessionName": "Plan Secretary session"
+
+    "sessionId": "019f0000-0000-7000-8000-000000000010",
+
+    "sessionName": "current investigation session"
+
   },
-  "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
-  "sourceAgentType": "plan_secretary",
-  "responsePolicy": "required",
-  "responseInstruction": "Return the result, verification evidence, and next action after completing the next step.",
-  "prompt": "Continue with the new constraints and evidence."
+
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000010",
+
+  "sourceAgentType": "agent",
+
+  "responsePolicy": "none",
+
+  "prompt": "Inspect the implementation and produce an evidence-backed comparison without modifying files.",
+
+  "sandbox": "workspace-write"
+
 }
+
 ```
+
+
+
+```json
+
+{
+
+  "action": "send",
+
+  "threadId": "019f0000-0000-7000-8000-000000000001",
+
+  "cwd": "C:/Path/To/Your/Project",
+
+  "sandbox": "workspace-write",
+
+  "messageSource": {
+
+    "type": "agent",
+
+    "agentAdapter": "codex",
+
+    "sessionId": "019f0000-0000-7000-8000-000000000002",
+
+    "sessionName": "Plan Secretary session"
+
+  },
+
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
+
+  "sourceAgentType": "plan_secretary",
+
+  "responsePolicy": "required",
+
+  "responseInstruction": "Return the result, verification evidence, and next action after completing the next step.",
+
+  "prompt": "Continue with the new constraints and evidence."
+
+}
+
+```
+
+
 
 When a message carries structured attribution, `messageSource.type` selects its display format. These fields record context and do not require source-owner verification:
 
+
+
 | `messageSource.type` | Attribution fields | Optional details |
+
 | --- | --- | --- |
+
 | `message_adapter` | `messageAdapter`, `conversationType`, `conversationId`, `messageId`, and either `senderName` or `senderId` | `conversationName`, `messageGroupId`, Route name/ID |
+
 | `agent` | `agentAdapter`, `sessionName`, complete `sessionId` | `agentType`, `workspace` |
+
 | `plan` | `planName`, `planId` | Existing `sourceAgent` context, when available |
+
 | `system` | `eventType`, `eventName`, `eventId` | `actorType`, `actorName`, `actorId`, Route name/ID |
+
+
 
 Every rendered RabiRoute delivery starts with these two wire sections. Collaboration rules, response contracts, event details, and recent messages follow them:
 
+
+
 ```text
+
 ## 消息源
+
 - 消息源类型：<消息端 | Agent | 计划 | 系统>
+
 - <type-specific name, complete ID, session, plan, or Route fields>
 
+
+
 ## 消息内容
+
 <prompt>
+
 ```
+
+
 
 Formal replies use a compact template: `## 消息内容` contains one `[回复结果]` (result) and one `[下一步]` (next action). Exact copies of those fields in `prompt` are omitted; other text remains under `[相关上下文]` (additional instructions). Evidence is neither summarized nor truncated. The response contract retains delivery and request IDs, response instructions, and complete POST parameters, without repeating the receiving task identity or the no-reply explanation. Workspace restrictions come from the target `AGENTS.md`; the template adds neither generic collaboration reminders nor project-name branches.
 
+
+
 New deliveries use `[回传参数]` with a complete JSON request. The request store persists structured results and the actual prompt digest before delivery; `reconcile_delivery` matches accepted text and restores results from the record rather than parsing headings. Old formats serve outstanding historical reservations only; see [ownership and retirement](message-delivery-templates_en.md).
+
+
 
 For thread bridge calls, the SDK and ingress record existing session context automatically. Source provider, session ID, name, workspace and role labels describe attribution; they do not require session registration, owner lookup or duplicate source-field matching. Without session metadata, record the real node or local connection without inventing a task. `sourceAgentType` is an optional descriptive label, defaulting to `agent`. `responsePolicy` defaults to `none`; explicit values are `required` or `none`. For `required`, supply `responseInstruction`; Manager stores the original request and provides formal reply parameters. Actual targets, content and original delivery IDs follow their execution and ledger contracts.
 
+
+
 Creation and sending record existing attribution without another source-owner request, source-ID shape check or display-name replacement. Plan and platform metadata retain their own display formats. Source lookup availability does not grant permission.
+
+
 
 `contextBlocks` follow the message content, and `controlBlocks` follow context. Reply parameters and current delivery requirements belong in control blocks; generic collaboration blocks are no longer injected. Neither field may contain `## 消息源`, `## 消息内容`, `[消息源]`, `[消息内容]`, or `[投递源]`. Legacy source wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. A replay whose old record lacks structured provenance is labeled `历史投递记录`; RabiRoute does not guess the source identity.
 
+
+
 A formal response uses the same `send` action. The responder submits `result` and `nextAction` with the original `inReplyToRequestId`; when the original task address exists, replies reach that task. Use `required` plus a new `responseInstruction` when that requester must act and report back, or `none` when the exchange ends. Without an original task address, only record the result on the original Manager request with `responsePolicy: "none"`; a further delivery specifies its actual task target. When the responder has existing session context, retain that actual replying session's `messageSource.agentAdapter`, complete `messageSource.sessionId`, `sourceThreadId`, and workspace. Without a session, record the real connection without inventing a task. `inReplyToRequestId` alone points to the original request; the requester or reply destination must not be presented as the reply source.
 
+
+
 ```json
+
 {
+
   "action": "send",
+
   "threadId": "019f0000-0000-7000-8000-000000000002",
+
   "cwd": "C:/Path/To/Your/Project",
+
   "messageSource": {
+
     "type": "agent",
+
     "agentAdapter": "codex",
+
     "sessionId": "019f0000-0000-7000-8000-000000000001",
+
     "sessionName": "Plan Agent session"
+
   },
+
   "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
+
   "sourceAgentType": "plan_agent",
+
   "inReplyToRequestId": "requestId from the incoming delivery",
+
   "result": "The investigation and evidence checks are complete.",
+
   "nextAction": "The secretary updates the plan and decides whether implementation continues.",
+
   "responsePolicy": "none",
+
   "prompt": "Investigation result and evidence summary."
+
 }
+
 ```
+
+
 
 Ordinary Agent final text is not a formal response. At the end of each target turn, the `Stop` Hook reads unanswered requests for that session and presents each original request ID once within the current task. Later turns and Hook restarts do not repeat that request's prompt. This presentation does not record a formal reply, create a delivery, or start a five-minute timer or background reminder. Request state is available through `GET /api/agent/requests` and `GET /api/agent/requests/:requestId`; maintainers can cancel an obsolete request with `POST /api/agent/requests/:requestId/cancel`.
 
+
+
 Desktop can report a start/steer timeout after the message reaches the target task. After an open-turn timeout, the same request can still accept a late Desktop success within a bounded window, or record a receipt when the rollout shows the original delivery marker. Manager checks the target rollout for the exact `deliveryId`. A confirmed marker commits request/response state. If bounded receipt verification remains inconclusive, the bridge returns HTTP `202`, `code=-1`, `status=delivery_unconfirmed`, and `error.retryable=false`. It retains the original delivery ID, request ID, and `pending_delivery` record without deleting or resending it. Read the original request and target task; HTTP `202` alone does not confirm delivery. A connection that closes in flight keeps the same payload and ID for this late check or an explicit `reconcile_delivery`; do not retry under a new key.
+
+
 
 When the original target formally replies to a `pending_delivery` request, the bridge verifies both task IDs, workspaces, and the exact accepted user message by streaming that task's rollout on demand, without the former 4 MiB tail cutoff. Verified evidence restores `awaiting_response` before continuing the reply. Otherwise `error.code=agent_reply_state_conflict` includes `requestId`, `currentState`, `expectedState`, `reason`, `commitState`, and `nextAction`. Reasons distinguish sender, destination and workspace mismatches from missing or unreadable receipt evidence. `not_started` refers only to this reply, not the original delivery. A late original delivery commit cannot reopen an answered request.
 
+
+
 #### Reconcile the original delivery receipt: `reconcile_delivery`
+
+
 
 Any connected, authenticated Agent can inspect an original delivery without switching to its sender or recipient session. Call `POST /api/agent/threads`:
 
+
+
 ```json
+
 {"action":"reconcile_delivery","deliveryId":"<actual original deliveryId>"}
+
 ```
+
+
 
 The original persisted record supplies the destination, payload, execution options and receipt. Reconciliation does not read the current caller owner or replace the destination from request fields. Real acceptance evidence returns HTTP 200 with `status=delivered` and `delivery.status=accepted`; missing evidence returns HTTP 202 with `status=delivery_unconfirmed`. This operation only inspects original execution evidence: it does not resend content or create a second delivery.
 
+
+
 **Legacy reservation boundary:** old local handlers without `endpointDelivery` and historical recovery helpers still inspect reply rollouts by recipient `threadId`, returning `receipt_recovered` or `already_recorded`. Reads use the initial file length and a 30-second deadline. Those are not current public endpoint-branch statuses; the old three-field body is no longer a public example. Legacy reply-text parsing serves only existing reservations without `pendingResponseEvidence`; structured new records never fall back after failed verification. Endpoint-bound records return `endpoint_receipt_required` through the old recovery helper, and the current public branch never falls back merely because endpoint evidence is missing. Recover old reservations through the original version's formal evidence-checking entrance or normal cancellation, without editing storage or resending. Remove legacy parsing only after every affected reservation closes and compatibility tests pass; see [legacy compatibility and exit criteria](message-delivery-templates_en.md#historical-compatibility-and-retirement).
+
+
 
 Receipt-log capability is required on the original source task that actually receives the reply (`original.source`). A sender without a receipt log is recoverable only with persisted structured SHA-256 evidence. The accepted message must match exactly, together with both adapters, task IDs, workspaces, the original request, and the follow-up direction. Legacy replies without structured evidence still fail closed with `adapter_has_no_receipt_log`.
 
+
+
 Explicit reconciliation follows the same evidence requirements. Incomplete evidence retains the original reservation for callers to inspect using its original ID, without background retries or requests to resend. Read timeouts, identity/contract mismatches, and deleted legacy `404` requests are not reconstructed by guessing; keep the missing formal-response record explicit.
+
+
 
 Agent creation and sending reuse the current connection. Source metadata supplies presentation, records and reply routing; lookup failure, archive/load state, registration, role changes and original-party identity do not grant permission to send or inspect an original receipt. Structured attribution uses the existing message-source envelope.
 
+
+
 Destination execution uses its real host, workspace and supported parameters. Source metadata does not require another owner lookup or matching role/name/directory fields. The `sandbox` field retains the target host contract; destination failures report their actual result.
+
+
 
 Message content may quote `[rabi:bind]`, source headers and initialization text using the existing rendering rules. Sending to the same task is allowed without another source-versus-target restriction.
 
+
+
 The fixed developer instructions for `create` and every `send` follow-up add a workspace-delivery guard. Unless the current user explicitly authorizes it, the Agent must not create an additional working copy, sparse checkout, copied project, or side workspace; stricter rules in the workspace `AGENTS.md` take precedence. The current workspace rules determine permitted working copies, synchronization direction, and whether historical instructions remain valid. The Agent may say “fixed” or “ready for acceptance” only after the change is present in the workspace the user actually runs or reviews and the applicable resource binding, build or compilation, and runtime checks are complete.
+
+
 
 When the current Route enables **Require the RabiAgent message delivery API**, Codex Hooks deny persistent-task tools that bypass RabiRoute. The DSH `RabiRoute Agent` plugin denies Shell calls that directly access `/api/agent/threads`, `/api/agent/send`, or `session.prompt`. Both adapters use the thread bridge, retaining source session and labels when available; without a session, ingress records the real connection without registering or inventing a source task. Ephemeral local subagent collaboration is not covered. Turning the switch off disables only the bypass check; existing required-response requests remain active. The bridge delivers to the same target owner and never starts a fallback Runtime.
 
+
+
 ## Plan API
+
+
 
 Agents may create and adjust plans, revise steps and update actual progress within their authorized task without requesting approval for every plan edit. Business-action authorization and acceptance evidence remain separate. Revision checks prevent concurrent overwrites; they do not prohibit Agent-owned plan maintenance.
 
+
+
 Plan, status-catalog and feedback mutation failures return `message`, `reason`, `commitState` (`not_started/unknown/committed`), `nextAction`, and `retryable`. For `412 revision_conflict`, read the latest plan and merge changes. `committed` means the write succeeded but readback is unavailable; `unknown` requires the original payload and idempotency key, not a replacement plan. Feedback submission and background transitions read only the target plan after committing, so an unrelated catalog read cannot turn that commit into a reported failure.
+
+
 
 Approval, QA continuation and completion notifications check the bridge's structured delivery result. HTTP 202 with `delivery_unconfirmed` or `delivered_tracking_failed` stays pending; it must not be marked delivered or automatically resent.
 
+
+
 `plan.status` stores only an enabled key from the owning persona's `personaConfig.json.planWorkflow.statuses`. The following entries are defaults, not a code enum:
 
+
+
 ```text
+
 `分析中`  analyzing
+
 `待补充信息` awaiting information
+
 `待审批`  awaiting approval
+
 `执行中`  executing
+
 `等待打包` awaiting package
+
 `等待 QA` awaiting QA
+
 `待讨论` awaiting discussion
+
 `暂停`    paused
+
 `完成`    completed
+
 `关闭`    closed
+
 ```
+
+
 
 In the default template, the stable status key `等待 QA` is displayed as `等待 QA 验收` / `Awaiting QA acceptance`; the key does not change.
 
+
+
 The stock information-needed status means that analysis is complete but the available information still cannot support a concrete approvable proposal, and the missing fact affects the cause, fix, implementation scope, or acceptance contract. It is not used for a current reproduction gap, a suspected historical fix, a missing target package, pending QA, or a pending closure decision; those cases remain in analysis or move, with evidence, to the package, QA, or closed role.
 
-```http
-GET   /api/roles/:roleId/plans
-GET   /api/roles/:roleId/plans/:planId
-POST  /api/roles/:roleId/plans
-PATCH /api/roles/:roleId/plans/:planId
-```
+
 
 ```http
-GET    /api/roles/:roleId/plan-statuses
-POST   /api/roles/:roleId/plan-statuses
-PATCH  /api/roles/:roleId/plan-statuses/:statusKey
-DELETE /api/roles/:roleId/plan-statuses/:statusKey
+
+GET   /api/roles/:roleId/plans
+
+GET   /api/roles/:roleId/plans/:planId
+
+POST  /api/roles/:roleId/plans
+
+PATCH /api/roles/:roleId/plans/:planId
+
 ```
+
+
+
+```http
+
+GET    /api/roles/:roleId/plan-statuses
+
+POST   /api/roles/:roleId/plan-statuses
+
+PATCH  /api/roles/:roleId/plan-statuses/:statusKey
+
+DELETE /api/roles/:roleId/plan-statuses/:statusKey
+
+```
+
+
 
 Status mutations require both `If-Match` and `Idempotency-Key`. Keys are immutable. DELETE requires `replacementKey`; Manager migrates unarchived plans first and retains the old definition as `retired` so archived plans and history remain readable.
 
+
+
 ```json
+
 {
+
   "title": "Refresh routing documentation",
+
   "focus": "routing documentation accuracy",
+
   "status": "分析中",
+
   "archiveStatus": "未归档",
+
   "priority": "medium",
+
   "kind": "documentation",
+
   "currentStepId": "verify-schema",
+
   "currentStep": "verify the active configuration schema",
+
   "nextAction": "update the bilingual guide",
+
   "blockedBy": "",
+
   "attachments": [
+
     { "name": "plan-preview.png", "mimeType": "image/png", "contentBase64": "<base64>" },
+
     { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
+
   ],
+
   "steps": [
+
     { "id": "inspect-current", "title": "Inspect the existing plan API", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
+
     { "id": "verify-schema", "title": "Verify the structured step contract", "startedAt": "2026-07-27T08:10:00.000Z" },
+
     { "id": "update-guides", "title": "Update both language guides" }
+
   ],
+
   "keywords": ["routing", "configuration", "documentation"],
+
   "source": {
+
     "kind": "agent",
+
     "summary": "Created from the current documentation review"
+
   },
+
   "taskBinding": {
+
     "agentType": "codex",
+
     "sessionId": "exact-source-session-id",
+
     "sessionTitle": "Plan execution task",
+
     "workspace": "C:/Path/To/Project",
+
     "completionHook": {
+
       "enabled": true,
+
       "gatewayId": "Role__reminder"
+
     }
+
   }
+
 }
+
 ```
+
+
 
 New plans must provide ordered `steps`. `plan.status` accepts only an enabled key from the persona's current status catalog. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps store no separate status; `currentStepId` identifies the current step and `completedAt` records completion. Manager returns the key with configured label, description, palette, order, and views; WebGUI and the tray consume those fields.
 
+
+
 Ongoing analysis, completed analysis that still cannot form a concrete approvable proposal, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.informationNeeded`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
+
+
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
+
+
 `attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. Each request may add up to 8 new attachments, limited to 10 MiB each and 25 MiB of new content. Retained attachments do not consume this batch budget. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
+
+
 
 Read one attachment through:
 
+
+
 ```http
+
 GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId
+
 ```
+
+
 
 Image and video attachments use an `inline` response. WebGUI renders PNG, JPEG, WebP, GIF, MP4/M4V, WebM, Ogg Video, and MOV/QuickTime in compact, fixed-width 16:9 thumbnails that shrink only for a narrower container, then opens images in a large-image preview or videos in an in-page player with controls. Video reads support HTTP byte ranges, while actual codec support depends on the browser. Ordinary files use a download response. The endpoint serves only metadata-registered files whose real paths still remain inside that plan's managed directory.
 
+
+
 Before requesting approval, the Agent must PATCH the current step with a complete `approvalRequest`. Manager completeness checks do not reject the plan write, but missing fields return `presentation.approval.state=incomplete`, `enabled=false`, and `missing[]`. The plan card lists those missing fields and disables approval input, attachments, and submission. Formal approval becomes available only after the Agent completes the approver, decision, recommendation and alternatives, reason, real paths, complete commands, external targets, validation, rollback, exclusions, request provenance, and receipt state on the same plan.
+
+
 
 `taskBinding` may be written through POST or PATCH to bind the original execution session. Use a supported plan `agentType` and the complete original `sessionId`. For a remote session, also retain `instanceBinding={instanceId,agentId,ownerDeviceId?}` and its actual `workspace`. Omitting `instanceBinding` preserves local semantics; Manager does not scan remote machines or guess a same-named session. Discover the actual node and Agent with `GET /api/lan-agent/instances`, then verify the original workspace through `POST /api/agent/threads` with `action=read`, the complete session ID and that same binding. Correct invalid parameters through those discovery endpoints rather than dropping coordinates to target the local machine. Update the existing plan with its current ETag and a stable idempotency key, then read back the binding, steps and attachments.
 
+
+
 `completionHook.enabled` must be boolean. The Codex `Stop` Hook forwards the official `last_assistant_message`; its source node comes from the authenticated connection, never body-supplied coordinates. Completion, feedback, status and open operations use the original bound endpoint. Deduplication and busy state distinguish full node/session identities while retaining legacy local keys. `gatewayId` is required when the persona has multiple Routes. Completion notifications do not automatically patch plans, advance steps or write memory. Cross-Manager Hook attribution still requires trusted host provenance from that actual connection; plan fields alone do not prove that path is accepted.
+
+
 
 The reminder comes from the plan's independent business task. In the same turn, the main persona assigns a plan secretary to consume the result, update plan and memory, and continue the exact business `taskBinding.sessionId + workspace + instanceBinding` when actionable. A secretary ID is never stored in `taskBinding`, and secretary rotation or plan pause never clears the business binding. The main persona inspects all non-terminal plans, secretary slots, and business tasks and ends only when both `actionable plans without management = 0` and `actionable but idle business tasks = 0`. These decisions and writes belong to the Agent; neither the Stop Hook nor Manager performs them automatically.
 
+
+
 A reminder failure does not block the source Codex final answer, but Manager records the failure and the Hook may return a non-blocking system warning. Workspace, persona, gateway, and source-equals-target task conflicts fail closed. This interface remains experimental until verified between two real Desktop tasks.
+
+
 
 ### Plan guidance and approval feedback API
 
+
+
 ```http
+
 GET  /api/roles/:roleId/plans/:planId/feedback
+
 POST /api/roles/:roleId/plans/:planId/feedback
+
 ```
+
+
 
 RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.acceptsGuidance=true` outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both support save-only submission; only **Submit and deliver** requests Agent notification through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
 
+
+
 ```json
+
 {
+
   "feedbackId": "webgui-guidance-12345",
+
   "gatewayId": "route-id",
+
   "text": "Narrow the overall scope first, then adjust later steps from the result.",
+
   "kind": "guidance",
+
   "author": "user",
+
   "source": "webgui",
+
   "notifyAgent": true
+
 }
+
 ```
+
+
 
 Approval feedback remains associated with its approval step. Durably saving a user `approval_suggestion` publishes feedback, attachments, and the plan marker change in one WAL transaction. `markerStatus` uses the key referenced by the persona's `planWorkflow.roles.approved`, while `activationStatus` is unchanged. `presentation.approval.state=approved` means feedback was submitted, not that every option was authorized or implementation should start automatically. `notifyAgent=false` saves only; `notifyAgent=true` saves before delivery and changes the marker to `roles.analysis` only when a confirmed successful receipt matches the same `feedbackId` and the plan version has not changed. Pending, failed, or uncertain receipts cannot trigger that transition, and stale receipts cannot overwrite newer submissions or plan changes. Guidance and Agent responses do not trigger these transitions.
 
+
+
 Structured approval forms use optional `formData: { questions: PlanQuestion[], approvalContract?: PlanApprovalRequest, answers: Record<string, PlanQuestionAnswer>, text: string }`, with shared types in `src/shared/planFeedbackFormData.ts`. `questions` snapshots the source `currentStep.questions`; `answers` uses `question:<id>` and the default `approval-decision` answer IDs, and `text` preserves supplementary text. Approval forms must match `approvalContract` against the current `step.approvalRequest`; restoration requires both question and approval-contract snapshots to match. Manager generates authoritative `feedback.text` from `formData` instead of accepting conflicting handwritten text. Optional `reuseFeedbackId` reuses all attachments from an earlier feedback record in the same plan and accepts no local paths. Resubmission appends a new record; retries of the same submission retain its original `feedbackId`, form, and complete body. A changed approval contract requires renewed confirmation instead of reusing old selections. This example submits feedback without a structured form:
 
+
+
 ```json
+
 {
+
   "feedbackId": "qq-message-12345",
+
   "gatewayId": "route-id",
+
   "stepId": "review-plan",
+
   "text": "Approve the direction, but add the regression scope first.",
+
   "attachments": [
+
     { "name": "review.png", "mimeType": "image/png", "contentBase64": "<base64>" }
+
   ],
+
   "planAttachmentIds": ["attachment-design-preview"],
+
   "kind": "approval_suggestion",
+
   "author": "user",
+
   "source": "qq",
+
   "notifyAgent": false
+
 }
+
 ```
+
+
 
 `attachments` is optional. Each item uses `name`, optional `mimeType`, and `contentBase64`; a request may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager validates and materializes the content under the persona-private `plans/feedback/attachments/<feedbackId>/` directory. The audit record and Agent notification retain only safe metadata and the local path. A retry with the same `feedbackId` must keep the same text, step, and attachment content.
 
+
+
 `planAttachmentIds` is also optional and references uploaded files already present in the current plan's top-level `attachments`. It accepts up to 8 unique IDs. Typing `@` in RibiWebGUI's approval field opens a list of the current plan attachments; choosing one inserts a readable `@attachment` token and submits its stable ID. Manager verifies that every ID belongs to the current plan, stores the referenced metadata and local path as an audit snapshot for this feedback, and delivers the files through the same `plan_feedback` event. WebGUI never reads or submits an arbitrary local path. A retry with the same `feedbackId` must keep the same plan-attachment references.
+
+
 
 When feedback targets the current structured `qa-* / verify-*` step, Manager treats only a user or external-source `approval_suggestion` as a QA-verdict candidate. `guidance`, `guidance_response`, `approval_response`, `author=agent` execution reports, and bare `passed / verified` test counters remain ordinary feedback records and cannot complete or reopen QA. An explicit failure or reproduction reuses or inserts `investigate-<qaStepId>` on the same plan, resets the QA step to not started, writes the issue-type-specific minimum missing evidence to `waitingFor`, and continues the original `taskBinding.sessionId + workspace + instanceBinding` after the evidence is complete. Only an explicit verdict such as `QA passed`, `acceptance passed`, or `confirmed no longer reproducible` completes the current QA step.
 
+
+
 With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`. Guidance and approval feedback reuse the same exact `taskBinding` delivery path. A complete binding uses `/api/agent/threads` and Desktop IPC to the original business task; only an incomplete binding sends the full feedback to the persona Agent. An unloaded owner remains `pending` under bounded retries, and only an accepted `start/steer` becomes `delivered`. The event does not enter the role-panel timeline or unified conversation ledger, and terminal state is announced as `plan_feedback_changed`.
+
+
 
 Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected later steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both Agent responses are stored as `record_only` without changing status, unlike the configured marker transitions triggered by saving and confirming delivery of user approval feedback.
 
+
+
 The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
+
+
 
 An unarchived plan is eligible for delayed archival only when its configured status has both `terminal=true` and `archiveEligible=true`. After its latest `updatedAt` exceeds `personaConfig.json.planWorkflow.archiveAfterHours`, a role-knowledge snapshot changes only `archiveStatus` to `已归档`, preserves the status key, and moves the plan directory into the archive bucket. The default template uses 72 hours, while each persona may configure a different delay. Archived plans do not participate in keyword recall.
 
+
+
 ## Recent-memory API
 
+
+
 ```http
+
 GET   /api/roles/:roleId/memory/recent
+
 GET   /api/roles/:roleId/memory/recent/:memoryId
+
 GET   /api/roles/:roleId/memory?counts=1
+
 POST  /api/roles/:roleId/memory/recent
+
 PATCH /api/roles/:roleId/memory/recent/:memoryId
+
 ```
+
+
 
 `counts=1` returns only recent-memory, consolidated-memory, archived-source-memory, and consolidation-run counts. It does not read or return memory card bodies; WebGUI uses it to populate tab counts when Plans & Memory is opened directly.
 
+
+
 ```json
+
 {
+
   "title": "Documentation must follow implementation",
+
   "focus": "documentation fact-source rule",
+
   "content": "Verify code, schemas, APIs, WebGUI, and tests before translating or publishing a guide.",
+
   "keywords": ["documentation", "fact source", "tests"],
+
   "source": {
+
     "kind": "agent",
+
     "summary": "Confirmed during the documentation audit"
+
   }
+
 }
+
 ```
+
+
 
 `focus` must be a single line and `keywords` must contain at least one item. Reading by ID refreshes `viewedAt`; updating refreshes both `updatedAt` and `viewedAt`. A true title/keyword recall hit refreshes both `viewedAt` and `recalledAt`. Recent-memory editing uses the later of `updatedAt` and `viewedAt` inside the current fixed 24-hour window. Consolidation instead uses the later of `updatedAt` and `recalledAt`, so a direct read does not postpone the 24/72-hour clock. These windows are not yet public persona configuration fields.
 
+
+
 For recent-memory lists, Manager dynamically supplies `lifecycle.triggersNextConsolidation` for the memory that reaches 72 hours first and `lifecycle.willEnterNextConsolidation` for each memory that will be older than the 24-hour input threshold at that same trigger time. The projection is cached with the memory catalog and invalidated after a create, update, or recall hit. Clients must not derive the candidate set from their local clocks.
+
+
 
 ## Write limits and validation
 
+
+
 Plan and memory writes are validated for one focused subject, title/body lengths, source-summary length, per-keyword length, keyword count, and total text. Defaults can be overridden through `personaConfig.json` under `knowledgeLimits.plan` and `knowledgeLimits.memory`.
+
+
 
 Validate all existing role knowledge with:
 
+
+
 ```http
+
 GET /api/roles/:roleId/knowledge-validation
+
 ```
+
+
 
 Old hand-written files remain readable, but a later write must satisfy the active limits.
 
+
+
 ## Consolidated memory
 
+
+
 ```http
+
 GET /api/roles/:roleId/memory/consolidated
+
 GET /api/roles/:roleId/memory/consolidated/:memoryId
+
 ```
+
+
 
 Consolidated memories have no normal PATCH endpoint. If a stable memory is wrong, write a corrective recent memory and let a later consolidation produce a new stable record. Reading a consolidated item by ID refreshes `viewedAt`.
 
+
+
 ## Automatic or explicit memory consolidation
+
+
 
 Current entry points:
 
+
+
 - Trigger the built-in `manual_trigger` item with `triggerId=memory-consolidation`.
+
 - Call the Manager API:
 
+
+
 ```http
+
 POST /api/roles/:roleId/memory/consolidation-requests
+
 ```
 
+
+
 ```json
+
 {
+
   "triggerOlderThanHours": 72,
+
   "includeOlderThanHours": 24,
+
   "force": false
+
 }
+
 ```
+
+
 
 The default request is due only when an unconsolidated recent memory has not been updated or recalled for 72 hours. Its input contains unconsolidated memories whose latest update or recall is more than 24 hours old. `force` skips the due check but does not include memories still inside the input window. Manager automatically arms the earliest deadline and reevaluates activity when it fires.
 
+
+
 Submit the handler result to:
 
+
+
 ```http
+
 POST /api/roles/:roleId/memory/consolidation-runs/:runId/result
+
 ```
 
+
+
 ```json
+
 {
+
   "type": "memory_consolidation_result",
+
   "memories": [
+
     {
+
       "title": "Stable documentation rule",
+
       "focus": "documentation fact-source rule",
+
       "content": "Public guides are calibrated against implementation before their English versions are maintained.",
+
       "keywords": ["documentation", "fact source"]
+
     }
+
   ]
+
 }
+
 ```
+
+
 
 RabiRoute writes the consolidated items, completes the run, and marks input memories with `consolidatedAt` and `consolidationRunId`.
 
+
+
 ## Remote Agent device API
+
+
 
 > Maturity: experimental. The protocol and Manager API are implemented and tested, while real LAN/VPN/TLS/device environments still need end-to-end acceptance.
 
+
+
 ```http
+
 GET  /api/remote-agent/devices
+
 POST /api/remote-agent/tasks
+
 ```
+
+
 
 Remote Agents now enroll as execution targets; see [remote enrollment](lan-rabi-agent-bootstrap_en.md). The message-endpoint setup UI is removed. The following describes legacy bridge compatibility only.
 
+
+
 The Manager discovers a remote `plugin-adapters/remote-agent-rabiroute` bridge and connects after the user supplies its password. Protocol v3 uses per-connection role-separated HMAC-SHA256 challenges and does not send the plaintext password over the WebSocket. Plain `ws://` authenticates peers but does not encrypt the link; use a trusted VPN or properly terminated `wss://` across untrusted networks.
+
+
 
 Remote tasks are restricted to `REMOTE_AGENT_ALLOWED_CWDS`, use workspace-write behavior, and do not expose a danger-full-access path. File transfers have default single-file and per-task limits. Results return to the local RabiRoute personality thread; the remote device must not reply to QQ directly.
 
+
+
 ## Role skills
+
+
 
 Role skills live under:
 
+
+
 ```text
+
 data/roles/<RoleId>/skills/*.md
+
 data/roles/<RoleId>/skills/<skill-folder>/SKILL.md
+
 ```
 
+
+
 ```http
+
 GET /api/roles/:roleId/skills
+
 GET /api/roles/:roleId/skills/:skillId
+
 ```
+
+
 
 The list returns metadata; the item endpoint returns the complete Markdown body. Skill bodies are not injected into every packet. If a skill appears in required reads, the handler must fetch it before acting.
 
+
+
 ### Download one complete skill folder
+
+
 
 `GET /api/roles/:roleId/skills/:skillId/download` returns one complete Skill ZIP. `GET /roles/:roleId/skills/:skillId/download` is an alias with identical authorization. No query parameters, arbitrary file paths, or whole-persona export are accepted. Remote callers reuse registered node credentials and the exact Agent identity without another persona Route binding or per-Skill grant; local callers use their current connection.
 
+
+
 Directory Skills preserve all regular files, subdirectories and bytes, including `scripts/`, `references/`, `agents/`, hidden files and binary support files, beneath one `<skillId>/` ZIP root. A flat Markdown Skill produces only `<skillId>/SKILL.md`. Resolution follows the indexed Skill ID rather than assuming that frontmatter `id` equals the folder name; duplicate IDs are conflicts. Markdown references never pull in files outside the root or another Skill. Download another Skill separately when needed. Private persona content is not copied into public `resources` or release packages.
+
+
 
 Example (Bash; use the installed connector path supplied by the Hook and replace placeholders, without using a local Host or guessing ports on a remote computer):
 
+
+
 The installed launcher uses the current immutable release directory as its working directory; `./` does not refer to your shell or project directory. Explicitly choose an existing parent directory on this computer outside the Rabi Agent installation and pass an absolute file path to `--output`; the final file must not exist. Use the Bash example below only if you have chosen and confirmed that `$HOME/Downloads` exists and is outside the installation; otherwise substitute your chosen existing directory. Do not create directories automatically. The shell expands `$HOME` to an absolute path.
 
+
+
 ```bash
+
 node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent-type codex --id "<FULL_SESSION_ID>" --output "$HOME/Downloads/selected-skill.zip"
+
 ```
+
+
 
 The connector reads `managerUrl` and node credentials from private configuration, checks `/meta` generation and instance identity before and after the request, and rejects redirects. `--output` is limited to this GET download. The parent directory must exist; existing files are never overwritten, and nothing is extracted, installed or executed automatically. Streaming validation checks `Content-Length`, `x-rabiroute-content-sha256` and the ZIP signature before committing the local file without replacement. The receipt contains `ok`, the local path, byte count and SHA-256. Failures remove temporary files and never save JSON errors as ZIPs. Ordinary JSON `--api` output is not a binary download mechanism. Atomic non-replacement commit requires hard-link support in the destination filesystem; unsupported Mac/NAS filesystems fail explicitly without a potentially overwriting copy/rename fallback. If the destination was committed but temporary cleanup failed, the fixed error includes `committed:true` and states that the complete target may already exist: inspect it and compare against a trusted SHA-256 rather than retrying automatically. Download errors preserve fixed local codes and allowlisted HTTP statuses, never server bodies, transport exceptions or credentials.
 
+
+
 Responses use `application/zip`, safe `Content-Disposition: attachment`, `Content-Length`, `x-rabiroute-content-sha256`, a strong ETag and `Cache-Control: private, no-store`. Range/resume is not promised. A bounded interactive worker fully generates and validates the private artifact before HTTP streaming; IPC carries no whole-package Buffer/base64. Defaults are 16 MiB per file, 64 MiB total source bytes, 4096 file/directory entries, depth 32 and 68 MiB ZIP output. Traversal, symlinks/junctions, hard links, non-regular files, unsafe cross-platform names and case/Unicode-normalization collisions fail the entire archive. Limits never truncate or silently omit dependencies. Changes detected during generation return a conflict. Skill roots must remain writable only by trusted local owners; Node path checks do not provide complete protection against an adversary with local write permission replacing ancestors concurrently.
 
+
+
 | HTTP | Meaning and recovery |
+
 | --- | --- |
+
 | 401 | Missing or invalid credentials; check enrolled configuration without exposing secrets. |
+
 | 403 | Disabled Node/Agent connection, expired source proof, or unsafe Skill paths/links; check the current connection or have the Skill owner inspect the directory. No additional persona binding is required. |
+
 | 404 | Persona or Skill does not exist; refresh the list and verify the ID. |
+
 | 409 | Conflicting Skill IDs/archive names, or source changes during generation; the owner must resolve them before a new download. |
+
 | 413 | File, entry, depth or archive limit exceeded; explicitly reduce the package, never accept partial content. |
+
 | 503 | Busy queue, deadline or unconfirmed worker exit; not an empty package and not a reason for automatic repeated retries. |
+
 | 500 | Internal generation or transfer failure; retain the error code for the Manager owner. |
+
+
 
 Manager admits at most four live download leases, covering generation, slow transfers and quarantined workers. Excess requests return 503 before creating a temporary directory. Transfer after generation has a 30-second deadline: timeout destroys the stream and cleans the artifact, so slow clients cannot accumulate unbounded disk usage. Disconnects cancel generation/transfer and remove private temporary artifacts. An unconfirmed worker exit retains both the artifact and its admission slot until actual close; cleanup failure also retains admission. Node on macOS can download `.ps1` files, but this does not establish that PowerShell is installed, paths are portable, or execution gates passed. Download success proves content integrity, not execution permission. This contract targets registered Rabi Agent connections to their configured Manager; public RabiLink large-binary forwarding and real cross-machine downloads need separate acceptance, not an inference from local tests.
 
+
+
 ## Local YeYu Gamer Manager facade
+
+
 
 The experimental YeYu Gamer integration is not a general Agent executor. When enabled, authenticated enabled remote Agents and trusted local callers can read `/api/agent/yeyu-gamer/{health,meta,snapshot,capabilities}` through RabiRoute Manager and dispatch a work item with `mode: "plan"` to `/api/agent/yeyu-gamer/work-items`. Callers must supply the `stateVersion` from a fresh snapshot and a stable idempotency key. A successful receipt proves only that Manager recorded the plan item.
 
+
+
 The facade exposes the same public operations to authenticated enabled remote Agents. Local callers without Agent credentials retain the original loopback, Host, Origin and forwarded-header checks. Its downstream destination remains fixed at `http://127.0.0.1:8877/api/v1`. Its credential comes from the dedicated `rabiroute.token` in the local YeYu Gamer runtime and must never enter RabiRoute configuration or a response. There is no claim, decision, capability-invocation, shell, path, click, or legacy-script surface. See [Local YeYu Gamer Manager integration](yeyu-gamer-manager-integration_en.md) for configuration, requests, and acceptance without starting a game.
+
+
 
 ## Error boundary
 
+
+
 Handlers should not directly modify consolidated memory, copy raw chat logs into memory, fetch all historical context without need, bypass Outbox, or treat RabiRoute as an Agent OS or executor queue. They should maintain focused plans and recent memories, read required evidence by ID, return consolidation results through the run API, and submit ordinary replies through `/api/agent/send`.
+
+
 
 Plans accept optional `messageChannels`, set during creation or PATCH. Omission and `[]` are valid and never block plan creation, execution, or persona event delivery. Each entry uses `{channel, gatewayId, params}` with the same NapCat group/private or speech parameters as event destinations. Plan channels receive the bound Codex task final result and merge with persona rules, deduplicated by task, turn, and destination. Hook notifications do not require a source group-message ID and are not vetoed by failures of the legacy quoted progress notification. Agents should still quote the source when replying directly.
 
 
+
+
+
 See [knowledge search](knowledge-search_en.md) for summary search and automatic incremental cache APIs.
+
+
 
 ### Error causes and language
 
+
+
 Manager failure responses include `errorMessages` in zh-CN and `en` while preserving the original message, machine code, commit state, and request ID. WebGUI displays the current language. Registered parameter, attachment, revision, and storage errors have localized causes; unregistered third-party failures retain their diagnostic text without inventing a cause.
 
+
+
 Formal replies may omit prompt when inReplyToRequestId identifies a managed request; result and nextAction remain required. Ordinary sends still require prompt. New replies omit the historical end delimiter.
+
+
 
 For step resource records and batched archiving, see [plan resources](plan-resources_en.md).
 
 
+
+
+
 ## Desktop-pet movement
 
+
+
 Use `POST /api/desktop-pet/roles/:roleId/motion`, then read the actual result at
+
 `GET /api/desktop-pet/roles/:roleId/motion/:requestId`. This moves only the pet;
+
 it does not focus/move application windows or change wander settings.
+
 See [the desktop-pet motion contract](desktop-pet-agent-motion_en.md).
+
+
 
 ## Conversation index review before sending
 
+
+
 Conversation review is disabled by default. Only explicit `messageAdapterPolicies.<endpoint>.conversationReview.enabled=true` enables it. Omitted or false values skip history reads and confirmation entirely; historical count settings alone do not enable review. Change this switch under Route → message endpoint settings → conversation review.
+
+
 
 Manager read timeouts return HTTP 503, `status=failed`, and `errorCode=MANAGER_READ_TIMEOUT`, with the read task type in the error, rather than HTTP 400 invalid request. Query the original delivery receipt without resending. Source tests cover this classification and the removed default history dependency; the original affected machine still needs acceptance.
 
+
+
 When explicitly enabled, chat channels (QQ, WeCom, WeChat, Feishu, RabiLink, speech and persona chat panels) share `/api/agent/send` and its `conversationContext` object:
 
+
+
 ```json
+
 { "conversationContext": { "lastReadMessageIndex": "c1.<conversation-scope>.<ledger-sequence>", "confirmationToken": "<token returned when confirmation is required>" } }
+
 ```
 
+
+
 - A current read index proceeds to the other send checks. The index belongs to Rabi's bidirectional conversation ledger, including Agent replies; it is not a platform message ID. AgentPacket exposes an index for messages actually shown in that packet.
+
 - If the request omits the index, Manager uses the reviewed cache for the same `sender.agentType + sender.sessionId + persona/account/conversation`. Without a cache, it returns the latest 50 messages for confirmation. This derived cache expires after 24 hours of inactivity and resets on Manager restart. Merely returning a warning, or receiving messages during delivery, does not mark messages as read.
+
 - A stale index returns subsequent messages, up to 100 by default. Larger deltas return the first 50 after the read index and the latest 50, with the omitted count and `omittedRange`. Odd limits allocate one extra message to the first segment. Foreign or future indexes restart the initial review.
+
 - HTTP 409 with `conversation_context_confirmation_required` returns `conversationContext.messages`, `latestMessageIndex`, `confirmationToken`, `expiresAt` and search bounds. No new send receipt or Outbox item is created. Read the messages, reassess the draft and search omitted content when necessary; retry with the latest index and token while preserving deliveryId. Changed content needs a new confirmation. Tokens last ten minutes and bind the Agent, deliveryId, channel, target and content. New messages after confirmation require another review.
+
 - Sends in one conversation are reviewed and executed in order; unrelated conversations remain concurrent. Agent caches and confirmation tokens are independent. Another Agent's reply also invalidates an old index. Existing receipts keep their original idempotency behavior and never trigger duplicate delivery; results report the current index or `conversationContextError` without hiding a committed receipt. Messages arriving during delivery are returned with the result and remain subject to review on the next send.
+
 - Configure `messageAdapterPolicies.<endpoint>.conversationReview.initialMessageCount` (1–500, default 50) and `maxIncrementalMessages` (2–500, default 100), also editable in the endpoint's conversation review settings. Individual returned bodies are capped at 6000 characters and marked `textTruncated`; history search provides the full record.
+
 - Search omitted content through `search.path` (`GET /api/agent/chat-history`), with `routeId`, `channel`, JSON-encoded `params`, exclusive `afterSequence`, inclusive `beforeSequence`, `query` and `limit` (maximum 200). It reads the same authoritative ledger for the send destination, without requiring a persona binding. Returned counts do not prove full historical coverage. The existing `message-endpoint-history` endpoint also accepts these sequence bounds.
+
 - History queries and pre-send checks return an error if an initialized ledger is missing `conversation/current.jsonl` or its archive index, or if a read encounters a corrupt index, corrupt records or a missing archive shard. Restore the original ledger before retrying. A first-use conversation with no ledger still supports empty-conversation confirmation. Existing send receipts retain their original idempotent handling.
+
+
 
 Plan approval feedback does not use conversation indexes. Legacy FenneNote arguments migrate to speech and follow its conversation-review configuration. Existing source, image, project fact, style, length and idempotency checks still apply. Conversation review does not change API permissions.
 
+
+
 ## Remote terminal API
+
+
 
 Host Agents use these APIs as well. `GET /api/lan-agent/instances/:instanceId/terminals/:terminalId?after=0&waitMs=25000` returns `terminal`, `outputEvents`, `nextOutputSequence` and `truncated`, waiting for events up to 25 seconds when no new output exists. File transfer, window queries and captures use `POST /api/lan-agent/instances/:instanceId/computer` independently of associated Agent backends. See [computer APIs](remote-computer-client_en.md) for complete parameters and limits.
 
+
+
 Existing authenticated connections may use these operations. Windows connector 0.2.2 provides CMD and PowerShell by default.
 
+
+
 - GET /api/lan-agent/instances/:instanceId/terminals returns data.shells and data.sessions, including terminalId, shell, cwd, state, pid, createdAt, nextInputSequence and exitCode.
+
 - POST the same path with action open, list, get, input, resize or close. Open requires a stable UUID terminalId and shell cmd|powershell, with optional existing absolute cwd. Get/close require terminalId. Input requires terminalId, a sequence starting at 1 and up to 16 KiB of data. Resize requires cols 20..400 and rows 5..200.
+
 - GET /api/lan-agent/instances/:instanceId/terminals/:terminalId/events?after=0 streams SSE events with increasing sequence, type output|exit|gap|disconnected and data or exitCode. The after cursor recovers missed output, without polling. A cursor older than the bounded 256 KiB replay window receives a gap first.
+
+
 
 Repeated open with the same identity returns the original session; a changed shell or directory is rejected. Repeated input with the same sequence and bytes returns the original acceptance, while conflicting, expired or out-of-order inputs fail. Acceptance means input reached the original terminal, not successful command completion. After timeouts, 5xx or disconnection, query list/get and nextInputSequence; do not change identity, recreate the session or replay input automatically. Closing a viewer only detaches it; close ends the shell and descendants. Manager connection changes end old streams while retaining terminals, IDs and input receipts in the original connector process; the new connection still authenticates. Output produced while disconnected has no SDK replay cache and may be missing. After a Host switch, query the same terminalId and use the cursor returned by the new Manager; never replay input. Read any business output already redirected to a file through its original file path. Commands/output are not written to personas, plans or persistent logs. See [connector documentation](../apps/rabi-agent/README_en.md) for capacity and lifecycle.
 
+
+
 ## Create a remote Codex task with an initial message
+
+
 
 For `action=create`, `agentAdapter=codex`, an explicit remote `instanceBinding` and an initial `prompt`, the Manager verifies the actual source. Connector 0.2.14 creates native task metadata only; existing prepared delivery sends the message. The remote computer does not look up a source session owned by another computer or trust caller-supplied identity fields.
 
+
+
 An explicit `deliveryId` binds the source, target, title, workspace, initial message, execution options and reply semantics. The same key and intent reuse the original task; conflicts fail before creation. When omitted, the response exposes this operation's `callerDeliveryId`; retain it for recovery. An unknown result does not permit a new key or title-based recreation. Create still defaults an omitted `responsePolicy` to `none`; reply-dependent `messageProcessing` still requires explicit `required`.
+
+
 
 Both Manager and target connector need this implementation. Older connectors return a specific capability gap before creation. Internal `creation_status/create_metadata` operations use the existing trusted management channel, not public `threads` actions. Source and isolated tests do not establish installed adoption: verify the node version, running modules and original receipt separately.
 
+
+
 Cancellation reuses the original request-lifetime fence before prepare/bind. In-flight writes still join their original acknowledgement before cleanup. Aborting a prepared reservation differs from dispatching or sent records; an absent actual ID alone is not proof that nothing was sent.
 
+
+
 ## Reliable Agent delivery records
+
+
 
 `GET /api/agent/deliveries` and `GET /api/agent/deliveries/:deliveryId` read formal records; nodeId selects the original client queue. `GET /api/agent/deliveries/caller/:callerDeliveryId` reads the current authenticated source key without sending. The client durably accepts explicit Agent sends and recovers the same ID; other HTTP mutation replay contracts remain unchanged. See [the full contract, GUI and limitations](reliable-agent-delivery_en.md).
 
 
+
+
+
 ### Agent Hook message source
+
+
 
 Agent deliveries initiated by automatic hooks use `messageSource.type="agent_hook"` and display as `AgentHook`; ordinary Agent messages retain `agent`. Both record existing source context without source-owner or workspace qualification. `sourceAgentType` remains a descriptive role. Local, connector and Peer delivery preserve attribution while the actual destination and original receipt follow their execution contract. Existing records retain their original type.
 
 
+
+
+
 ### Read-only recovery guidance when an original plan or thread is not found
+
+
 
 A definite plan-detail or history 404 preserves its original status, `code` and `message`. Its existing `nextAction` points to name search within the same role: `GET /api/roles/:roleId/plans?limit=20&query=<URL-encoded-name>&sort=updated`. Omit `query` to list recently updated plans and follow `nextCursor`. Keep `limit`: the legacy full-catalog branch does not apply these page filters. An empty result only describes the selected scope; it does not authorize a replacement plan or changed binding.
 
+
+
 A definite thread 404 with `resolution=missing` supplies read-only guidance for the original instance and Agent binding: `POST /api/agent/threads` with `action:list`, the original `agentAdapter`, `query`, `limit:20` and `offset:0`. An empty `query` lists discoverable threads; inspect returned `updatedAt` values for recent activity and follow `nextOffset`. Natural ordering is not guaranteed to be identical for every adapter. Verify the full `threadId`, name and workspace before reading the original task. Preserve the original `deliveryId/actual`; do not automatically create a replacement task or replay an unconfirmed message.
+
+
 
 Only definite missing branches receive this guidance. Existing thread-read 400 responses, management timeouts, connection failures and unknown receipts are not relabeled as404. Name-search guidance does not itself repair underlying storage or indexing failures.
 
+
+
 ### Formal replies without a source session
 
+
+
 When the connected source has no native task, the target still uses `POST /api/agent/threads` with `action: "send"`, the original `inReplyToRequestId`, `result`, `nextAction` and `responsePolicy: "none"`. Ingress records the actual replying source and atomically writes the result to the original Manager request. Success is `response_recorded`; this operation sends no native task frame and creates no task address. `GET /api/agent/requests/:requestId` reads that record. Cross-host replies retain `ledgerOwnerDeviceId` from the supplied reply parameters to reach the original Manager. A subsequent task send specifies its real target.
+
+## Reconcile an existing plan-mutation receipt
+
+Read the current contract with `GET /api/agent/help?operationId=manager.personas.storage.plans.mutations.reconcile`. Categories, search and describe use the same public catalog.
+
+```http
+POST /api/roles/:roleId/plans/:planId/mutations/:requestId/reconcile
+Content-Type: application/json
+```
+
+Supply the original `patch` and the `actor` when the original storage request included one. The existing receipt audit supplies expectedRevision. Callers may optionally provide the original `expectedRevision` or If-Match as a cross-check. The path requestId is the original idempotency key. When sending the Idempotency-Key header, use the same value. expectedRevision accepts the original strong If-Match value as evidence for that request. The storage owner checks the receipt, original commit history and this plan's WAL under its existing lease, then settles through the receipt snapshot CAS.
+
+```json
+{
+  "patch": { "currentStep": "Original frozen progress text" },
+  "expectedRevision": "inventory-sha256:<original inventory hash>",
+  "actor": { "kind": "unknown" }
+}
+```
+
+Preserve the exact original storage actor. A normal HTTP request without messageSource records `{kind: "unknown"}`. For requests that declared a source, retain the actor resolved at that time, including its original attribution.
+
+`state: completed` indicates a terminal receipt. `operationState: succeeded` with `commitState: committed` returns the original successful result. `operationState: failed` with `commitState: not_committed` records a proven precommit failure with `retryable: false`. Same-key calls retain that terminal result. An ordinary PATCH encountering this terminal receipt returns HTTP 409, `aborted_before_commit` and `not_committed`.
+
+An active execution returns in_progress, prepared WAL or insufficient evidence returns uncertain, and a different payload returns conflict. This operation updates only the existing receipt. The plan, attachments, history, WAL and staged candidates retain their contents. The original storage-maintenance task handles any required recovery of a specific prepared transaction.

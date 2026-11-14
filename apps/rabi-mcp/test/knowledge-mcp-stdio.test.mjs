@@ -34,7 +34,7 @@ test('official stdio SDK initializes, lists, calls and exits cleanly with protoc
   client.onerror = error => protocolErrors.push(error);
   t.after(async () => { await client.close(); });
   await client.connect(transport);
-  assert.equal(client.getServerVersion().name, 'rabi-knowledge');
+  assert.equal(client.getServerVersion().name, 'rabiroute');
   const catalog = await client.listTools();
   assert.ok(catalog.tools.some(tool => tool.name === 'knowledge_search'));
   assert.ok(catalog.tools.some(tool => tool.name === 'plan_create'));

@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -90,7 +91,10 @@ async function fixture(t: import("node:test").TestContext) {
 }
 
 test("seven executable Hub contracts retain shared remote admission, schema projections and ignored scan input", { timeout: 15000 }, async t => {
-  const f = await fixture(t); assert.equal(f.api.catalogSnapshot().operations.length, 10);
+  const f = await fixture(t); assert.deepEqual(f.api.catalogSnapshot().operations.map(row => row.contract.operationId).sort(), [
+    "manager.remote-agent.devices.list","manager.remote-agent.scan","manager.remote-agent.connect","manager.remote-agent.disconnect","manager.remote-agent.tasks.list","manager.remote-agent.tasks.create","manager.remote-agent.task-events.receive",
+    "manager.api.categories.list","manager.api.operations.list","manager.api.operations.describe","manager.api.help","manager.api.capabilities","manager.api.openapi"
+  ].sort());
   assert.equal((await fetch(f.base + "/api/remote-agent/devices")).status, 401);
   assert.equal((await fetch(f.base + "/api/remote-agent/devices", { headers: { authorization: "Bearer fixture-link" } })).status, 200);
   const scan = await fetch(f.base + "/api/remote-agent/scan", { method: "POST", headers: { authorization: `Bearer ${f.credential.token}`, "content-type": "text/plain" }, body: "{ignored-invalid-json" });
@@ -153,7 +157,7 @@ test("scan cancellation retains the lease until native discovery settles without
   const controller = new AbortController(); const request = f.invoke("scan", { signal: controller.signal }); await entered.promise;
   controller.abort(); await request; let retired = false; const stopped = f.registration.dispose().then(() => { retired = true; });
   await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(retired, false);
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url"));
   release.resolve([f.discovered]); await stopped; assert.deepEqual(f.hub.listDevices(), []);
 });
 
@@ -162,7 +166,7 @@ test("ABA revocation during HMAC handshake prevents password persistence and wai
   f.holdRegistration(callback => { finish = callback; entered.resolve(); });
   assert.equal((await f.invoke("scan")).statusCode, 200);
   const connecting = f.invoke("connect", { body: { deviceId: f.deviceId, password: f.password } }); await entered.promise;
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); finish();
+  f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId, replacementCredentialBytes(32).toString("base64url")); finish();
   const denied = await connecting; assert.equal(denied.statusCode, 403); assert.equal(await fs.stat(path.join(f.root, "connections.json")).then(() => true, () => false), false);
   assert.equal(f.hub.listDevices().find(row => row.deviceId === f.deviceId)!.connected, false); assert.equal(f.wireTasks.length, 0);
 });

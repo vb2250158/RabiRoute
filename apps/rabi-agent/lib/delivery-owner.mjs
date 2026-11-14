@@ -99,7 +99,7 @@ export class DeliveryOwner {
       // This durable tombstone stops local recovery, not an already dispatched
       // remote task. It is written before returning, without joining that task.
       this.store.cancel(intentId);
-      await this.synchronizeCancellation(this.store.raw(intentId));
+      this.wake();
     } else if (row.state === "cancelled" && row.manager_cancel_pending) {
       await this.synchronizeCancellation(row);
     } else if (this.isActive(intentId) && row.kind === "agent-delivery" && row.state !== "pending") {
@@ -198,6 +198,13 @@ export class DeliveryOwner {
         if (this.stopped) return;
         if (row.state === "cancelled" && row.manager_cancel_pending) { await this.synchronizeCancellation(row); return; }
         if (!this.isActive(row.id)) return;
+        if (row.kind === "agent-delivery") {
+          if (row.attempts !== 0) return;
+          if (row.state === "blocked" && ["DELIVERY_HTTP_401", "DELIVERY_HTTP_403", "DELIVERY_MANAGER_CHANGED", "DELIVERY_MANAGER_IDENTITY_UNAVAILABLE"].includes(row.last_error)) {
+            this.store.update(row.id, "pending"); row.state = "pending";
+          }
+          if (row.state !== "pending") return;
+        }
         if (row.payload.nodeId && row.payload.nodeId !== this.config.nodeId) {
           this.store.update(row.id, "blocked", { error: "DELIVERY_NODE_ID_CHANGED" }); return;
         }
@@ -246,37 +253,8 @@ export class DeliveryOwner {
     // Carry the immutable owner binding into the actual transport. A config
     // replacement between ensureManagerBinding and here must never choose B.
     const client = this.client(agentType, sessionId, row.manager_guid);
-    if (row.state !== "pending") {
-      const query = await client.request("GET", `/api/agent/deliveries/caller/${encodeURIComponent(row.id)}`, { replaySafe: false });
-      if (!this.isActive(row.id)) return;
-      const data = dataOf(query);
-      if ([401, 403].includes(query.statusCode) && !query.uncertain && !query.identityChanged) {
-        this.store.update(row.id, "blocked", { error: `DELIVERY_HTTP_${query.statusCode}`, delayMs: this.backoff(row), attempt: true }); return;
-      }
-      if (query.uncertain || query.identityChanged || query.statusCode === 0 || query.statusCode >= 500) {
-        this.store.update(row.id, "unknown", { error: "DELIVERY_RECEIPT_UNAVAILABLE", delayMs: this.backoff(row), attempt: true }); return;
-      }
-      if (query.ok && data.state === "committed" && data.receipt?.accepted === true) {
-        this.store.update(row.id, "delivered", { receipt: { deliveryId: data.deliveryId, state: data.state } }); return;
-      }
-      if (query.ok && data.state === "cancelled") {
-        this.store.update(row.id, "cancelled", { error: "DELIVERY_CANCELLED", receipt: { deliveryId: data.deliveryId, state: "cancelled" } }); return;
-      }
-      const absent = query.statusCode === 404 && data.errorCode === "DELIVERY_NOT_RESERVED" && data.canSubmitSameIntent === true;
-      const prepared = query.ok && data.state === "prepared" && data.canSubmitSameIntent === true;
-      if (!absent && !prepared) {
-        if (query.ok && data.deliveryId) {
-          const reconciled = await client.request("POST", "/api/agent/threads", { body: { action: "reconcile_delivery", deliveryId: data.deliveryId,
-            sourceThreadId: sessionId, sourceAgentType: request.sourceAgentType, messageSource: request.messageSource, agentAdapter: request.agentAdapter }, replaySafe: false });
-          if (!this.isActive(row.id)) return;
-          const proof = dataOf(reconciled);
-          if (reconciled.ok && !reconciled.uncertain && !reconciled.identityChanged && proof.status === "delivered" && proof.delivery?.status === "accepted") {
-            this.store.update(row.id, "delivered", { receipt: { deliveryId: data.deliveryId, state: "committed" } }); return;
-          }
-        }
-        this.store.update(row.id, "unknown", { error: "DELIVERY_ACCEPTANCE_UNCONFIRMED", delayMs: this.backoff(row), attempt: true }); return;
-      }
-    }
+    // Persist the single attempt immediately before handing the request to the
+    // transport. Preparation failures are proven not sent and remain pending.
     this.store.update(row.id, "sending", { attempt: true });
     const result = await client.request("POST", "/api/agent/threads", { body: request, replaySafe: false });
     if (!this.isActive(row.id)) return;

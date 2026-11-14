@@ -321,6 +321,7 @@ function Test-StrictVersion {
     return $Version -match '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'
 }
 $pluginVersions = [System.Collections.Generic.List[object]]::new()
+$applicationVersions = [System.Collections.Generic.List[object]]::new()
 $hostVersionRequired = $false
 if ($versionGateApplicable) {
     $headPackage = Read-VersionJson -File "package.json" -Head
@@ -386,12 +387,48 @@ if ($versionGateApplicable) {
         elseif ($source.ecosystem -eq "rabiroute" -and $current -ne "0.1.1") { Add-VersionFinding "plugin-initial-version-required" $versionPath "A new native plugin starts at 0.1.1." }
         $pluginVersions.Add([pscustomobject]@{ sourceId = $id; versionFile = $versionPath; headVersion = $previous; candidateVersion = $current; initialSourceMigration = $migrationAccepted })
     }
+    # An existing package-managed root application owns its implementation version.
+    # HEAD establishes ownership; a new nested package cannot exempt an apps path.
+    $applicationDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $changedApplicationRoots = @($versionChanges | Where-Object { -not (Test-ValidationOnlyPath $_) -and $_ -match '^apps/[^/]+/' } |
+        ForEach-Object { ($_ -split '/')[0..1] -join '/' } | Sort-Object -Unique)
+    foreach ($directory in $changedApplicationRoots) {
+        $versionPath = "$directory/package.json"
+        $previousMetadata = Read-VersionJson -File $versionPath -Head -OptionalHistorical
+        if ($previousMetadata -isnot [System.Collections.IDictionary] -or [string]::IsNullOrWhiteSpace([string]$previousMetadata.name) -or
+            -not (Test-StrictVersion ([string]$previousMetadata.version))) { continue }
+        [void]$applicationDirectories.Add($directory)
+        $metadata = Read-VersionJson -File $versionPath
+        $previous = [string]$previousMetadata.version
+        $current = [string]$metadata.version
+        if ($metadata -isnot [System.Collections.IDictionary] -or -not (Test-StrictVersion $current) -or [string]::IsNullOrWhiteSpace([string]$metadata.name)) {
+            Add-VersionFinding 'application-version-invalid' $versionPath 'The changed application needs its readable name and strict authoritative version.'
+        } elseif ([version]$current -le [version]$previous) {
+            Add-VersionFinding 'application-version-increase-required' $versionPath "Changed application $directory must advance its own version from $previous."
+        }
+        if ($changed -notcontains $versionPath) {
+            Add-VersionFinding 'application-version-file-missing' $versionPath 'Include the application version authority in the submitted scope.'
+        }
+        $lockPath = "$directory/package-lock.json"
+        $previousLock = Get-GitObjectText -ObjectPath "HEAD:$lockPath"
+        $candidateLock = Get-ScopedFileText -RelativePath $lockPath
+        if ($previousLock -or $candidateLock) {
+            $lock = Read-VersionJson -File $lockPath
+            if ($lock -isnot [System.Collections.IDictionary] -or [string]$lock.version -ne $current -or
+                ($lock.ContainsKey('packages') -and (-not $lock.packages -or -not $lock.packages.ContainsKey('') -or [string]$lock.packages[''].version -ne $current))) {
+                Add-VersionFinding 'application-lock-version-mismatch' $lockPath 'The application lock metadata must match its authoritative application version.'
+            }
+        }
+        $applicationVersions.Add([pscustomobject]@{ name = [string]$metadata.name; directory = $directory; versionFile = $versionPath; headVersion = $previous; candidateVersion = $current })
+    }
+
     foreach ($file in $versionChanges) {
         $owned = @($pluginDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
         if ($file.StartsWith("src/plugins/", [StringComparison]::Ordinal) -and -not $owned) { Add-VersionFinding "plugin-source-unindexed" $file "Changed plugin source must have a source-catalog owner and authoritative versionFile." }
         # Validation files follow the production owner's version; their location alone is not a Host extension change.
         $testOnly = Test-ValidationOnlyPath $file
-        if (-not $owned -and -not $testOnly -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
+        $applicationOwned = @($applicationDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
+        if (-not $owned -and -not $applicationOwned -and -not $testOnly -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
     }
     $hostAdvanced = $false
     if ((Test-StrictVersion $headVersion) -and (Test-StrictVersion $candidateVersion)) {
@@ -434,6 +471,7 @@ $versionGate = [pscustomobject]@{
     candidateVersion = $candidateVersion
     hostVersionRequired = $hostVersionRequired
     plugins = @($pluginVersions)
+    applications = @($applicationVersions)
     findings = @($versionFindings)
 }
 

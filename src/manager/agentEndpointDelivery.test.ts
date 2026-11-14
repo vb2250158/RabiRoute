@@ -378,3 +378,24 @@ test("a source-free Peer delivery carries the original ledger address in its for
   assert.equal(reply.threadId,undefined,"connection replies do not invent a native task destination");
   assert.equal(reply.agentAdapter,undefined);
 });
+
+test("local computer task switch applies only to new native dispatch, retaining accepted receipts and no-frame evidence",async t=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"computer-local-delivery-"));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+ let enabled=true,checks=0,sends=0;
+ const store=new AgentRequestStore({read:()=>undefined,write:()=>{}});
+ const context={store,authority:{},config:{},receiptDirectory:path.join(directory,"receipts"),
+ registry:{localInstanceId:"manager",assertComputerFeature:(id:string,feature:string)=>{checks++;assert.equal(id,"manager");assert.equal(feature,"agentTasks");if(!enabled)throw new Error("Computer features.agentTasks is disabled");}},
+ readLocal:async(_type:string,id:string)=>({id,title:"isolated fixture",cwd:directory,archived:false}),
+ localOptions:()=>({invokeAgentOperation:async <T>(type:string,operation:string,payload:unknown)=>{
+  assert.equal(type,"dsh");assert.equal(operation,"endpoint.execute");sends++;
+  const delivery=(payload as {delivery:PreparedEndpointDelivery}).delivery;
+  return {threadId:delivery.target.sessionId,action:"send",transport:"isolated-native-owner"} as T;
+ }})} as unknown as AgentEndpointDeliveryContext;
+ const factory=createAgentEndpointDelivery(context),options=factory.options();
+ const request:AgentThreadRequest={action:"send",agentAdapter:"dsh",threadId:"fixture-target",sourceThreadId:"fixture-source",cwd:directory,prompt:"synthetic fixture only",deliveryId:"local-accepted-original",responsePolicy:"none"};
+ const accepted=await executeEndpointAgentDelivery(request,options);assert.equal(accepted.statusCode,200);assert.equal(sends,1);assert.equal(checks,1);
+ enabled=false;
+ const same=await executeEndpointAgentDelivery(request,options);assert.equal(same.statusCode,200);assert.equal(sends,1);assert.equal(checks,1,"the original accepted receipt bypasses only new-work admission");
+ const blocked=await executeEndpointAgentDelivery({...request,deliveryId:"local-new-disabled"},options);assert.equal(blocked.statusCode,503);assert.equal(sends,1);assert.equal(checks,2);
+ const rows=store.listEndpointDeliveryMetadata();assert.equal(rows.length,2);assert.equal(rows.find(row=>row.callerDeliveryId==="local-new-disabled")?.state,"prepared");
+});

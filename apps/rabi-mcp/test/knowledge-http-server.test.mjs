@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startKnowledgeHttpServer, MAX_KNOWLEDGE_HTTP_BODY } from '../lib/knowledge-http-server.mjs';
 import { createKnowledgeTools } from '../lib/knowledge-tools.mjs';
+import { createOperationTools, readOperationSessionSettings } from '../lib/operation-tools.mjs';
 const token = 'fixture-secret-not-real-01234567890123456789';
 const tools = { list: () => [{ name: 'read_fixture', readOnly: true, inputSchema: { type: 'object', properties: {}, additionalProperties: false } }], call: async () => ({ ok: true, uncertain: false, data: { value: 'fixture' } }) };
 const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
@@ -77,4 +78,38 @@ test('default origin policy permits authenticated browser requests and aliases',
   assert.equal((await fetch(service.address, { method: 'OPTIONS', headers: { origin: 'https://controller.example' } })).status, 204);
   const oversized = await fetch(service.address, { method: 'POST', headers, body: 'x'.repeat(1025) });
   assert.equal(oversized.status, 413); assert.match(await oversized.text(), /RABI_MCP_HTTP_MAX_BODY_BYTES/);
+});
+
+
+test('independent official HTTP MCP requests retain one shared stream and honor launch budgets', async t => {
+  let starts = 0;
+  const operation = { id: 'fixture.events', contract: { operationId: 'fixture.events', method: 'GET', pathTemplate: '/events', transport: 'sse', effects: { mode: 'read' }, request: { path: { type: 'object' }, query: { type: 'object' }, body: { kind: 'none' } } } };
+  const sdk = { describe: async () => ({ operation }),
+    async invokeOperation(_id, options) {
+      starts++;
+      await options.onChunk(Buffer.from('fixture stream'));
+      await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
+      return { ok: false, transportError: 'CANCELLED', uncertain: false };
+    }, async openOperation() { throw new Error('Not a socket fixture'); } };
+  const api = createOperationTools({ client: { operations: sdk }, ...readOperationSessionSettings({ RABI_MCP_MAX_SESSIONS: '1', RABI_MCP_MAX_SESSION_BYTES: '128' }) });
+  const service = await startKnowledgeHttpServer({ tools: api, token });
+  t.after(async () => { await api.close(); await service.close(); });
+  async function request(name, args) {
+    const client = new Client({ name: 'independent-http-fixture', version: '1' });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(service.address), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+      return await client.callTool({ name, arguments: args });
+    } finally { await client.close(); }
+  }
+  const opened = (await request('rabi_call', { operation: 'fixture.events' })).structuredContent;
+  assert.ok(opened.sessionId); assert.equal(opened.queueHighWaterBytes, 128);
+  const denied = await request('rabi_call', { operation: 'fixture.events' });
+  assert.equal(denied.isError, true); assert.equal(starts, 1);
+  const read = (await request('rabi_session', { sessionId: opened.sessionId, action: 'read' })).structuredContent;
+  assert.equal(Buffer.from(read.frames[0].data, 'base64').toString(), 'fixture stream');
+  const closed = (await request('rabi_session', { sessionId: opened.sessionId, action: 'close' })).structuredContent;
+  assert.equal(closed.state, 'closed'); assert.equal(closed.receipt.transportError, 'CANCELLED');
+  const again = (await request('rabi_call', { operation: 'fixture.events' })).structuredContent;
+  assert.ok(again.sessionId); assert.equal(starts, 2);
+  await request('rabi_session', { sessionId: again.sessionId, action: 'close' });
 });

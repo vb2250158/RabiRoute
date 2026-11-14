@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -82,7 +83,7 @@ test("four discovered reads use real resource boundaries and signed nested relea
 
 test("revocation after an awaited resource read suppresses its contents without local fallback", async t => {
   const f = await fixture(t); const original = f.resources.read.bind(f.resources);
-  t.mock.method(f.resources, "read", async (id: string) => { const result = await original(id); f.authority.setNodeEnabled("fixture-read-node", false); f.authority.setNodeEnabled("fixture-read-node", true); return result; });
+  t.mock.method(f.resources, "read", async (id: string) => { const result = await original(id); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, "fixture-read-node", replacementCredentialBytes(32).toString("base64url")); return result; });
   const response = await f.client.invokeOperation("manager.lan-agent.resources.read", { query: { id: "docs/public.md" } });
   assert.equal(response.statusCode, 403); assert.equal(String(response.body).includes("fixture public document"), false);
 });
@@ -130,6 +131,6 @@ test("authenticated node selection isolates manifests and immutable downloads wi
   assert.equal((await fetch(f.base + commonEntry.downloadUrl + "?release=" + "f".repeat(64), { headers: headers(other.token) })).status, 404);
   // Version selection is not a per-feature grant: other authenticated nodes retain every public read.
   assert.equal((await fetch(f.base + "/api/lan-agent/resources", { headers: headers(other.token) })).status, 200);
-  f.authority.setNodeEnabled(f.credential.nodeId, false);
+  f.authority.revokeNode(f.credential.nodeId);
   assert.equal((await fetch(f.base + entry.downloadUrl, { headers: headers(f.credential.token) })).status, 403);
 });

@@ -1,8 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.endpoint.heartbeat",
-  "version": "0.1.3",
-  "entries": {
+  "version": "0.1.5",  "entries": {
     "manager": {
       "execution": "in_process",
       "module": "./manager.mjs"
@@ -18,7 +17,10 @@
   "requires": [
     "host.message-endpoints@1"
   ],
-  "optional": [],
+  "optional": [
+    "manager.persona.automation-source@1",
+    "host.manager.agent-thread-control@2"
+  ],
   "permissions": [],
   "displayName": "自动化调度",
   "description": "执行自动化中的定时任务；无需添加消息连接器",

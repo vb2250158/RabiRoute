@@ -17,7 +17,7 @@ import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { observeManagerHttpAbort } from "./managerHttpAbort.js";
 import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
 
-async function fixture(t: test.TestContext, patch = false, linkedRoot = false, script = "export const ready=true;", entryLifecycle = false) {
+async function fixture(t: test.TestContext, patch = false, linkedRoot = false, script = "export const ready=true;", entryLifecycle = false, onSlowFs?: import("../shared/fsAwaitDiagnostics.js").SlowFsReporter) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "webgui-static-owner-"));
   t.after(async () => {
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
@@ -42,7 +42,7 @@ async function fixture(t: test.TestContext, patch = false, linkedRoot = false, s
   assert.equal(patches.status().state, "ready", patches.status().error);
   const servedRoot = linkedRoot ? path.join(root, "web-root") : dist;
   if (linkedRoot) await fs.symlink(dist, servedRoot, process.platform === "win32" ? "junction" : "dir");
-  const owner = new NativeWebguiStaticOwner({ packageRoot: root, webuiDistPath: servedRoot,
+  const owner = new NativeWebguiStaticOwner({ packageRoot: root, webuiDistPath: servedRoot, onSlowFs,
     patches: { candidates: patches.candidates, status: () => ({ ...patches.status(), active: patch ? patches.status().active : undefined }),
       staticManifest: revision => patches.staticManifest(revision) },
     isControlPath: value => value === "/api" || value.startsWith("/api/") || value === "/health" || value === "/meta" });
@@ -327,4 +327,27 @@ test("streamed shell rewriting survives UTF-8 and attribute chunk boundaries", a
     .replace(/((?:src|href)=["'])((?:\.\/|\/)?assets\/[^"']+)/g, (_match, prefix, asset: string) => `${prefix}/_rabiroute/web/${revision}/web/${asset.replace(/^\.?\//, "")}`);
   assert.equal(result.body, expected);
   assert.equal((await f.request(`/_rabiroute/web/${original}/web/assets/main-abcdefgh.js`)).status, 200);
+});
+
+
+test("native HTTP diagnostic names the unresolved filesystem phase and joins release", async t => {
+  const rows: import("../shared/fsAwaitDiagnostics.js").SlowFsDiagnostic[] = [];
+  const f = await fixture(t, false, false, undefined, false, row => rows.push(row));
+  const original = fs.realpath.bind(fs);
+  let release!: () => void, entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  t.mock.method(fs, "realpath", async (...args: Parameters<typeof fs.realpath>) => {
+    if (args[0] === f.dist) { entered(); await blocked; }
+    return original(...args);
+  });
+  const result = f.request("/"); await waiting;
+  try {
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    assert.equal(rows.length, 1); assert.equal(rows[0]!.owner, "NativeWebguiStaticOwner");
+    assert.equal(rows[0]!.operation, "fallback"); assert.equal(rows[0]!.phase, "root.realpath");
+    assert.equal(JSON.stringify(rows).includes(f.root), false);
+    assert.equal(f.owner.activeFileCount(), 0);
+  } finally { release(); }
+  assert.equal((await result).status, 200); assert.equal(rows.length, 1);
 });

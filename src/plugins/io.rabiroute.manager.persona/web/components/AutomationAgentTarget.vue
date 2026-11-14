@@ -1,14 +1,15 @@
 <script setup lang="ts">
+import { createDshConnectionClient, type DshConnection } from "../../../../../ribiwebgui/src/dshConnectionClient";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
-import { normalizeAgentRecipients, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
+import { normalizeAgentRecipients, normalizeAgentDeliveryTarget, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import { postRouteAgentThreadAction } from "../../../../../ribiwebgui/src/routeAgentThreadClient";
 import { usePersonaService } from "../persona/personaServiceClient";
 const personaService = usePersonaService();
 import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "@shared/routeAgentTargets";
 import { agentAdapterSupportsManagedTaskFeature, isAgentThreadCapableAdapter } from "@shared/agentAdapterCapabilities";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
-import { changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "./automationAgentTargetModel";
+import { availableAutomationDsh, automationDsBotDirectory, dsBotDirectoryTargets, chooseDsBot, readDsBotCatalog, type DsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "./automationAgentTargetModel";
 
 const props = defineProps<{ gateway: GatewayDefinition; modelValue?: AgentDeliveryTarget }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentDeliveryTarget] }>();
@@ -24,11 +25,73 @@ const choices = computed(() => [...recipients.value.map(item => {
   return { title: t(item.name), value: item.id, description: reason, props: { disabled: Boolean(reason) } };
 }), { title: t("自定义"), value: "$session", description: t("选择 Agent 和已有会话"), props: { disabled: false } }]);
 const agentName = (provider: string) => provider === "codex" ? "Codex" : provider === "dsh" ? "DSH" : provider === "grokBot" ? "Grok Bot" : provider;
-const agents = computed<Array<RouteAgentTarget & { title: string }>>(() => [
-  ...(props.gateway.agentAdapters ?? []).filter(isAgentThreadCapableAdapter).map(provider => ({ id: `local:${provider}`, provider, title: `${agentName(provider)} · ${t("本机")}` })),
+const localDshAvailable = ref(false);
+const directoryAgents = ref<RouteAgentTarget[]>([]);
+const connections = ref<DshConnection[]>([]);
+const selectedDshOrigin = ref("");
+const providerError = ref("");
+let disposed = false;
+async function loadProviders() {
+  providerError.value = "";
+  const results = await Promise.allSettled([
+    availableAutomationDsh(personaService.fetch),
+    automationDsBotDirectory(personaService.fetch),
+    createDshConnectionClient(personaService.fetch).list()
+  ]);
+  if (disposed) return;
+  const [published, directory, saved] = results;
+  if (published.status === "fulfilled") localDshAvailable.value = published.value;
+  else providerError.value = String(published.reason);
+  if (directory.status === "fulfilled") directoryAgents.value = dsBotDirectoryTargets(directory.value.instances);
+  else providerError.value ||= String(directory.reason);
+  if (saved.status === "fulfilled") connections.value = saved.value;
+}
+void loadProviders();
+const savedDsBotAgent = computed<RouteAgentTarget[]>(() => {
+  if (target.value.kind !== "ds_bot") return [];
+  try {
+    const saved = normalizeAgentDeliveryTarget(target.value);
+    return saved.kind === "ds_bot" ? [{ id: saved.agentTargetId, provider: "dsh", ...(saved.instanceBinding ? { binding: saved.instanceBinding } : {}) }] : [];
+  } catch { return []; }
+});
+const agents = computed<Array<RouteAgentTarget & { title: string }>>(() => [...new Map([
+  ...savedDsBotAgent.value.map(agent => ({ ...agent, title: `${agentName(agent.provider)} · ${agent.id}` })),
+  ...[...new Set([...(props.gateway.agentAdapters ?? []), ...(localDshAvailable.value ? ["dsh" as const] : [])])].filter(isAgentThreadCapableAdapter).map(provider => ({ id: `local:${provider}`, provider, title: `${agentName(provider)} · ${t("本机")}` })),
+  ...directoryAgents.value.map(item => ({ ...item, title: `${agentName(item.provider)} · ${item.binding?.ownerDeviceId ? item.binding.ownerDeviceId + ' / ' : ''}${item.binding?.instanceId} · ${item.binding?.agentId}` })),
   ...(props.gateway.remoteAgentTargets ?? []).filter(item => isAgentThreadCapableAdapter(item.provider)).map(item => ({ ...item, binding: { instanceId: item.instanceId, agentId: item.agentId, ...(item.ownerDeviceId ? { ownerDeviceId: item.ownerDeviceId } : {}) }, title: `${agentName(item.provider)} · ${item.ownerDeviceId ? item.ownerDeviceId + ' / ' : ''}${item.instanceId} · ${item.agentId}` }))
-]);
+].map(item => [item.id, item])).values()]);
+const agentItems = computed(() => {
+  const items = agents.value.map(agent => ({ ...agent, props: { disabled: false } }));
+  const saved = target.value;
+  if ((saved.kind === "session" || saved.kind === "ds_bot") && saved.agentTargetId && !items.some(item => item.id === saved.agentTargetId)) items.unshift({ id: saved.agentTargetId, provider: saved.agentAdapter, title: `${saved.agentTargetId} · ${t("已保存的目标，待核对")}`, props: { disabled: true } });
+  return items;
+});
 const selectedAgentId = ref("");
+const destinationMode = ref<"session" | "ds_bot">("session");
+const botCatalog = ref<DsBotCatalog>();
+const selectedBot = computed(() => target.value.kind === "ds_bot" ? target.value : undefined);
+const isDsh = computed(() => agents.value.find(agent => agent.id === selectedAgentId.value)?.provider === "dsh");
+const botItems = computed(() => {
+  const saved = selectedBot.value;
+  const catalog = botCatalog.value;
+  const items = (catalog?.bots ?? []).filter(bot => !query.value || `${bot.botName} ${bot.botId}`.toLocaleLowerCase().includes(query.value.toLocaleLowerCase())).map(bot => ({ title: bot.botName, value: bot.botId, botId: bot.botId, props: { disabled: false } }));
+  if (saved?.botId && (!catalog || catalog.botScopeId !== saved.botScopeId || !catalog.bots.some(bot => bot.botId === saved.botId))) items.unshift({ title: `${saved.botName} · ${t("已保存的目标，待核对")}`, value: "$saved", botId: saved.botId, props: { disabled: true } });
+  return items;
+});
+const localDshSelected = computed(() => isDsh.value && !agents.value.find(agent => agent.id === selectedAgentId.value)?.binding);
+const connectionItems = computed(() => [...new Set([...connections.value.map(connection => connection.baseUrl), ...(selectedDshOrigin.value ? [selectedDshOrigin.value] : [])])]);
+function selectDshConnection(value: string) {
+  if (!localDshSelected.value || !connectionItems.value.includes(value)) return;
+  selectedDshOrigin.value = value; generation++; loading.value = false; searched.value = false; botCatalog.value = undefined; query.value = "";
+  emit("update:modelValue", { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", dshBaseUrl: value, botScopeId: "", botId: "", botName: "" });
+  void scan();
+}
+const botSelectionValue = computed(() => {
+  const saved = selectedBot.value;
+  if (!saved?.botId) return null;
+  return botCatalog.value?.botScopeId === saved.botScopeId && botCatalog.value.bots.some(bot => bot.botId === saved.botId) ? saved.botId : "$saved";
+});
+const missingBot = computed(() => searched.value && selectedBot.value?.botId && botCatalog.value && (botCatalog.value.botScopeId !== selectedBot.value.botScopeId || !botCatalog.value.bots.some(bot => bot.botId === selectedBot.value?.botId)));
 const query = ref("");
 const loading = ref(false);
 const error = ref("");
@@ -44,19 +107,22 @@ const roomSnapshot = ref<Session>();
 let identityGeneration = 0;
 const offset = ref<number | undefined>();
 let generation = 0;
-onBeforeUnmount(() => { generation++; identityGeneration++; clearTimeout(searchTimer); });
+onBeforeUnmount(() => { disposed = true; generation++; identityGeneration++; clearTimeout(searchTimer); });
 watch(() => props.modelValue, value => {
-  if (value?.kind === "session") {
-    if (selectedAgentId.value !== value.agentTargetId) {
+  if (value?.kind === "session" || value?.kind === "ds_bot") {
+    if (selectedAgentId.value !== value.agentTargetId || destinationMode.value !== value.kind) {
       clearTimeout(searchTimer); query.value = ""; generation++; loading.value = false;
       sessions.value = []; offset.value = undefined; searched.value = false; error.value = "";
-      resetIdentities();
+      resetIdentities(); botCatalog.value = undefined;
     }
+    destinationMode.value = value.kind;
+    if (value.kind === "ds_bot") selectedDshOrigin.value = value.dshBaseUrl ?? "";
     selectedAgentId.value = value.agentTargetId;
-    if (value.agentAdapter !== "grokBot" && value.sessionId && !sessions.value.some(item => item.id === value.sessionId)) sessions.value.unshift({ id: value.sessionId, name: value.sessionName, projectPath: value.workspace });
+    if (value.kind === "session" && value.agentAdapter !== "grokBot" && value.sessionId && !sessions.value.some(item => item.id === value.sessionId)) sessions.value.unshift({ id: value.sessionId, name: value.sessionName, projectPath: value.workspace });
   }
 }, { immediate: true });
 function selectRecipient(value: string) {
+  destinationMode.value = "session"; botCatalog.value = undefined;
   resetIdentities();
   clearTimeout(searchTimer); query.value = ""; selectedAgentId.value = ""; searched.value = false;
   generation++; loading.value = false; error.value = ""; sessions.value = []; offset.value = undefined;
@@ -64,16 +130,39 @@ function selectRecipient(value: string) {
   else emit("update:modelValue", { kind: "session", agentTargetId: "", agentAdapter: "codex", sessionId: "", sessionName: "", workspace: "" });
 }
 function selectAgent(value: string) {
+  selectedDshOrigin.value = "";
+  botCatalog.value = undefined;
   resetIdentities();
   clearTimeout(searchTimer); query.value = ""; searched.value = false;
   generation++; loading.value = false; sessions.value = []; offset.value = undefined; error.value = "";
   selectedAgentId.value = value;
   const agent = agents.value.find(item => item.id === value);
   if (agent) {
+    if (agent.provider === "dsh" && destinationMode.value === "ds_bot") {
+      emit("update:modelValue", { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: agent.id, botScopeId: "", botId: "", botName: "" });
+      void scan(); return;
+    }
+    destinationMode.value = "session";
     const next: SessionTarget = { kind: "session", agentTargetId: agent.id, agentAdapter: agent.provider, sessionId: "", sessionName: "", workspace: "", ...(agent.provider === "grokBot" ? { deliveryType: "private" as const, sendMode: "direct" as const } : {}) };
     emit("update:modelValue", next);
     void scan();
   }
+}
+function selectDestinationMode(value: "session" | "ds_bot") {
+  if (!isDsh.value) return;
+  destinationMode.value = value;
+  clearTimeout(searchTimer); query.value = ""; generation++; loading.value = false; searched.value = false;
+  sessions.value = []; botCatalog.value = undefined; offset.value = undefined; error.value = ""; resetIdentities();
+  if (value === "ds_bot") emit("update:modelValue", { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: selectedAgentId.value, botScopeId: "", botId: "", botName: "" });
+  else emit("update:modelValue", { kind: "session", agentAdapter: "dsh", agentTargetId: selectedAgentId.value, sessionId: "", sessionName: "", workspace: "" });
+  void scan();
+}
+function selectBot(value: string) {
+  if (!botCatalog.value || destinationMode.value !== "ds_bot") return;
+  const agent = agents.value.find(item => item.id === selectedAgentId.value);
+  if (!agent) return;
+  try { const next = chooseDsBot(agent, botCatalog.value, value); if (next) emit("update:modelValue", next); }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
 }
 function selectSession(value: string) {
   const session = sessions.value.find(item => item.id === value);
@@ -120,10 +209,19 @@ async function loadIdentities(more = false) {
 }
 async function scan(more = false) {
   const agent = agents.value.find(item => item.id === selectedAgentId.value);
-  if (!agent || loading.value) return;
+  if (!agent) { error.value = t("所选 Agent 已不在当前配置中，请检查连接或重新选择。"); return; }
+  if (loading.value) return;
   const requestGeneration = ++generation;
   loading.value = true; error.value = "";
   try {
+    if (destinationMode.value === "ds_bot") {
+      const result = await postRouteAgentThreadAction({ action: "ds_bot_catalog", ...(!agent.binding && selectedDshOrigin.value ? { dshBaseUrl: selectedDshOrigin.value } : {}) }, agent, { fetch: personaService.fetch, accessToken: () => "" });
+      if (generation !== requestGeneration) return;
+      botCatalog.value = readDsBotCatalog(result.dsBot);
+      if (!agent.binding) selectedDshOrigin.value = botCatalog.value.dshBaseUrl ?? "";
+      searched.value = true; offset.value = undefined;
+      return;
+    }
     const result = await postRouteAgentThreadAction({ action: "list", limit: 50, offset: more ? offset.value ?? 0 : 0, query: query.value,
       ...(agent.provider === "grokBot" && selectedSession.value?.sessionId ? { threadId: selectedSession.value.sessionId } : {}) }, agent, { fetch: personaService.fetch, accessToken: () => "" });
     const found: Session[] = result.threads ?? [];
@@ -164,6 +262,7 @@ const recipientHint = computed(() => {
 function searchSessions(value: string) {
   query.value = value || "";
   clearTimeout(searchTimer);
+  if (destinationMode.value === "ds_bot") return;
   if (!selectedAgentId.value || value === selectedSession.value?.sessionName) return;
   generation++; loading.value = false;
   searchTimer = setTimeout(() => { void scan(); }, 300);
@@ -181,18 +280,29 @@ function openSessions(open: boolean) {
         <v-list-item v-bind="itemProps" :subtitle="item.raw.description" />
       </template>
     </v-select>
-    <p v-if="!selectedSession" class="delivery-hint">{{ recipientHint }}</p>
+    <p v-if="target.kind === 'recipient'" class="delivery-hint">{{ recipientHint }}</p>
     <div v-else class="delivery-custom">
-      <p class="delivery-hint">{{ t('选择 Agent 和已有会话') }}</p>
+      <p class="delivery-hint">{{ t('选择 Agent，再选择接收对象') }}</p>
       <div class="delivery-fields">
-        <v-select :model-value="selectedAgentId" :items="agents" item-title="title" item-value="id"
+        <v-select :model-value="selectedAgentId" :items="agentItems" item-title="title" item-value="id"
           :label="t('Agent 端')" :placeholder="t('选择 Agent')" density="compact" variant="outlined" hide-details
           :no-data-text="t('暂无可用 Agent，请先在 Agent 设置中配置。')" @update:model-value="selectAgent" />
+        <v-select v-if="isDsh" :model-value="destinationMode" :items="[{ title: t('DSH 会话'), value: 'session' }, { title: 'DSBot', value: 'ds_bot' }]"
+          :label="t('接收对象')" density="compact" variant="outlined" hide-details @update:model-value="selectDestinationMode" />
+        <v-select v-if="destinationMode === 'ds_bot' && localDshSelected && connectionItems.length" :model-value="selectedDshOrigin" :items="connectionItems"
+          :label="t('DSH 连接')" density="compact" variant="outlined" hide-details @update:model-value="selectDshConnection" />
+        <v-autocomplete v-if="destinationMode === 'ds_bot'" :disabled="!selectedAgentId" :model-value="botSelectionValue"
+          :items="botItems" :label="t('指定 DSBot')" :loading="loading" :placeholder="t('输入名称或 ID 搜索')" density="compact" variant="outlined" hide-details no-filter
+          @update:model-value="selectBot" @update:search="value => { query = value || ''; }" @update:menu="openSessions">
+          <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps"><template #subtitle><span class="delivery-session-id">{{ item.raw.botId }}</span></template></v-list-item></template>
+          <template #no-data><div class="delivery-empty" role="status">{{ t(loading ? '正在加载 DSBot…' : error ? 'DSBot 暂时无法加载，请重试。' : '未找到 DSBot，请在所选 DSH 中检查 DSBot 插件。') }}</div></template>
+        </v-autocomplete>
+        <template v-if="selectedSession">
         <v-select v-if="isGrok" :model-value="selectedSession.deliveryType || 'private'"
           :items="[{ title: t('私聊'), value: 'private' }, { title: t('群'), value: 'group' }]"
           :label="t('会话类型')" density="compact" variant="outlined" hide-details @update:model-value="selectDeliveryType" />
         <v-autocomplete :disabled="!selectedAgentId" :model-value="selectedSession.sessionId || null"
-          :items="sessionItems" item-title="title" item-value="id" :label="t(isGrok && selectedSession.deliveryType === 'group' ? '目标群' : '指定会话')" :loading="loading"
+          :items="sessionItems" item-title="title" item-value="id" :label="t(isGrok && selectedSession?.deliveryType === 'group' ? '目标群' : '指定会话')" :loading="loading"
           :placeholder="t('输入名称或 ID 搜索')" density="compact" variant="outlined" hide-details no-filter
           @update:model-value="selectSession" @update:search="searchSessions" @update:menu="openSessions">
           <template #item="{ props: itemProps, item }">
@@ -212,22 +322,26 @@ function openSessions(open: boolean) {
         <v-select v-if="isGrok" :model-value="selectedSession.sendMode || 'direct'"
           :items="[{ title: t('直接发送'), value: 'direct' }, { title: t('指定身份'), value: 'identity' }]"
           :label="t('发送方式')" density="compact" variant="outlined" hide-details @update:model-value="selectSendMode" />
-        <v-select v-if="isGrok && selectedSession.sendMode === 'identity'"
+        <v-select v-if="isGrok && selectedSession?.sendMode === 'identity'"
           :model-value="selectedSession.senderAgentId || null" :items="identityItems" :disabled="selectedSession.deliveryType === 'group' && !selectedRoom" :loading="identityLoading"
           :label="t('发送身份')" :no-data-text="t('未找到群成员身份，请刷新或加载更多。')" density="compact" variant="outlined" hide-details
           @update:model-value="selectIdentity" @update:menu="open => { if (open && !identitySessions.length) void loadIdentities(); }">
           <template #append-item><v-btn v-if="identityOffset !== undefined" block variant="text" :loading="identityLoading" @click.stop="loadIdentities(true)">{{ t('加载更多') }}</v-btn></template>
         </v-select>
+        </template>
+        <v-btn v-if="destinationMode === 'ds_bot'" class="delivery-refresh" variant="text" size="small" icon="mdi-refresh" :aria-label="t('刷新 DSBot')" :title="t('刷新 DSBot')" :loading="loading" @click="scan()" />
       </div>
-      <p v-if="isGrok && selectedSession.deliveryType === 'group' && selectedSession.sendMode === 'identity' && !selectedSession.senderAgentId" class="delivery-error" role="alert">{{ t('群消息指定身份发送必须选择群成员身份。') }}</p>
+      <p v-if="missingBot" class="delivery-error" role="alert">{{ t('原 DSBot 在当前目录中不可用，原目标已保留，请检查连接或重新选择。') }}</p>
+      <div v-if="providerError" class="delivery-error" role="alert"><span>{{ t('Agent 目录暂时无法加载。') }}</span><v-btn variant="text" @click="loadProviders()">{{ t('重试') }}</v-btn></div>
+      <p v-if="isGrok && selectedSession?.deliveryType === 'group' && selectedSession.sendMode === 'identity' && !selectedSession.senderAgentId" class="delivery-error" role="alert">{{ t('群消息指定身份发送必须选择群成员身份。') }}</p>
       <div v-if="identityError" class="delivery-error" role="alert"><span>{{ t('身份暂时无法加载，请重试。') }}</span><v-btn variant="text" @click="loadIdentities()">{{ t('重试') }}</v-btn></div>
       <div v-if="error" class="delivery-error" role="alert">
-        <span>{{ t('会话暂时无法加载，请检查 Agent 连接后重试。') }}</span>
+        <span>{{ t(destinationMode === 'ds_bot' ? 'DSBot 暂时无法加载，请检查所选 DSH 的连接与插件。' : '会话暂时无法加载，请检查 Agent 连接后重试。') }}</span>
         <v-btn variant="text" size="small" :loading="loading" @click="scan()">{{ t('重试') }}</v-btn>
         <details><summary>{{ t('错误详情') }}</summary><div>{{ error }}</div></details>
       </div>
       <p v-else-if="!selectedAgentId" class="delivery-hint">{{ t('先选择 Agent，再选择接收消息的会话。') }}</p>
-      <details v-if="selectedSession.sessionId" class="delivery-details">
+      <details v-if="selectedSession?.sessionId" class="delivery-details">
         <summary>{{ t('查看会话详情') }}</summary>
         <dl><dt>{{ t('会话 ID') }}</dt><dd>{{ selectedSession.sessionId }}</dd><dt v-if="selectedSession.workspace">{{ t('工作目录') }}</dt><dd v-if="selectedSession.workspace">{{ selectedSession.workspace }}</dd></dl>
       </details>

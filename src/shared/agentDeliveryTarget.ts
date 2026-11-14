@@ -1,3 +1,5 @@
+import { normalizeAgentInstanceBinding, type AgentInstanceBinding } from "./agentInstance.js";
+import { remoteAgentTargetKey } from "./routeAgentTargets.js";
 import { isAgentAdapterType, type AgentAdapterType } from "./agentAdapterCapabilities.js";
 
 export type AgentDeliveryExecutor = "primary" | "plan_secretary" | "message_pool" | "memory_consolidation";
@@ -14,7 +16,26 @@ export type AgentSessionDestination = {
   senderAgentId?: string;
   senderAgentName?: string;
 };
-export type AgentDeliveryTarget = { kind: "recipient"; recipientId: string } | AgentSessionDestination;
+export type AgentDsBotDestination = {
+  kind: "ds_bot";
+  agentAdapter: "dsh";
+  agentTargetId: string;
+  botScopeId: string;
+  botId: string;
+  botName: string;
+  instanceBinding?: AgentInstanceBinding;
+  dshBaseUrl?: string;
+};
+export type AgentDeliveryTarget = AgentDsBotDestination | { kind: "recipient"; recipientId: string } | AgentSessionDestination;
+
+/** A DSBot owner reference is a clean origin, never an access-bearing login URL. */
+export function normalizeDsBotConnectionOrigin(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("Select the actual DSH connection for this DSBot.");
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("Invalid DSH connection origin."); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("DSH destination requires a clean connection origin without credentials.");
+  return url.origin;
+}
 
 /** Initial configuration only. Runtime selection always reads the saved rule. */
 export function defaultAgentRecipients(): AgentRecipientDefinition[] {
@@ -35,6 +56,20 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Agent delivery target.");
   const raw = value as Record<string, unknown>;
   const text = (key: string) => typeof raw[key] === "string" ? (raw[key] as string).trim() : "";
+  if (raw.kind === "ds_bot") {
+    if (raw.agentAdapter !== "dsh" || !text("agentTargetId") || !text("botScopeId") || !text("botId") || !text("botName")) throw new Error("Select an exact DSH DSBot destination.");
+    const owner = text("agentTargetId") === "local:dsh"
+      ? (() => {
+        if (raw.instanceBinding !== undefined) throw new Error("Local DSBot destination cannot carry a remote binding.");
+        return { dshBaseUrl: normalizeDsBotConnectionOrigin(raw.dshBaseUrl) };
+      })()
+      : (() => {
+        const instanceBinding = normalizeAgentInstanceBinding(raw.instanceBinding);
+        if (!instanceBinding || text("agentTargetId") !== remoteAgentTargetKey(instanceBinding) || raw.dshBaseUrl !== undefined) throw new Error("Remote DSBot destination requires its original instance binding and no local address.");
+        return { instanceBinding };
+      })();
+    return { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: text("agentTargetId"), botScopeId: text("botScopeId"), botId: text("botId"), botName: text("botName"), ...owner };
+  }
   if (raw.kind === "recipient" && text("recipientId")) return { kind: "recipient", recipientId: text("recipientId") };
   if (raw.kind === "session" && isAgentAdapterType(raw.agentAdapter)) {
     const delivery: Partial<AgentSessionDestination> = {};
@@ -55,6 +90,7 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
 }
 
 export function validateAgentDeliveryTarget(target: AgentDeliveryTarget): void {
+  if (target.kind === "ds_bot") normalizeAgentDeliveryTarget(target);
   if (target.kind === "session" && (!target.agentTargetId || !target.sessionId || !target.sessionName)) {
     throw new Error("Select an Agent instance and target session before saving.");
   }
@@ -80,7 +116,8 @@ export function normalizeAgentRecipients(value: unknown): AgentRecipientDefiniti
   });
 }
 
-export function resolveAgentDeliveryExecutor(target: AgentDeliveryTarget, recipients: readonly AgentRecipientDefinition[]): AgentDeliveryExecutor | "session" {
+export function resolveAgentDeliveryExecutor(target: AgentDeliveryTarget, recipients: readonly AgentRecipientDefinition[]): AgentDeliveryExecutor | "session" | "ds_bot" {
+  if (target.kind === "ds_bot") return "ds_bot";
   if (target.kind === "session") return "session";
   const recipient = recipients.find(item => item.id === target.recipientId);
   if (!recipient) throw new Error(`Agent recipient is not configured: ${target.recipientId}`);

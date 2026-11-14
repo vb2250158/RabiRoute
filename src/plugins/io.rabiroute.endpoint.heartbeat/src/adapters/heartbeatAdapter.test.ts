@@ -205,3 +205,61 @@ test("Heartbeat activation failure clears timers created before the failure", as
   assert.equal(status.messageAdapters.heartbeat.status, "error");
   assert.equal(status.heartbeat.enabled, false);
 });
+
+test("one daily rule executes every time today and rearms tomorrow with one timer", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-multi-daily-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const timers = fakeTimers(), task = scheduledTask(1);
+  task.rule.trigger.schedule = { id: "daily", type: "daily_time", timeOfDays: ["10:00", "14:00", "18:00"] };
+  let now = new Date(2026, 5, 10, 9);
+  const runs: Date[] = [];
+  const adapter = createHeartbeatAdapter({ collectTasks: () => [task], dataDir: () => dataDir, now: () => now,
+    setTimer: timers.setTimer, clearTimer: timers.clearTimer, runTask: (_task, at) => { runs.push(at); } });
+  const dispose = await adapter.start() as MessageAdapterDispose;
+  t.after(dispose);
+  for (const [day, hour] of [[10, 10], [10, 14], [10, 18], [11, 10]]) {
+    assert.equal(timers.active.size, 1);
+    assert.equal(readStatus(dataDir).heartbeat.scheduleCount, 1);
+    const timer = [...timers.active][0];
+    const expected = new Date(2026, 5, day, hour);
+    assert.equal(timers.records.get(timer)!.delayMs, expected.getTime() - now.getTime());
+    now = expected; timers.fire(timer);
+  }
+  assert.deepEqual(runs.map(at => [at.getDate(), at.getHours()]), [[10, 10], [10, 14], [10, 18], [11, 10]]);
+  assert.equal(timers.active.size, 1);
+});
+
+test("an invalid daily list leaves another rule's timer running", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-bad-daily-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const timers = fakeTimers(), bad = scheduledTask(1), good = scheduledTask(2);
+  bad.rule.trigger.schedule = { id: "bad", type: "daily_time", timeOfDay: "09:00", timeOfDays: ["10:00", "invalid"] };
+  good.rule.trigger.schedule = { id: "good", type: "daily_time", timeOfDays: ["10:00", "14:00"] };
+  let now = new Date(2026, 5, 10, 9);
+  const runs: string[] = [];
+  const dispose = await createHeartbeatAdapter({ collectTasks: () => [bad, good], dataDir: () => dataDir, now: () => now, setTimer: timers.setTimer, clearTimer: timers.clearTimer, runTask: task => { runs.push(task.rule.id); } }).start() as MessageAdapterDispose;
+  t.after(dispose);
+  assert.equal(timers.active.size, 1);
+  now = new Date(2026, 5, 10, 10); timers.fire([...timers.active][0]);
+  assert.deepEqual(runs, [good.rule.id]); assert.equal(timers.active.size, 1);
+});
+
+test("legacy daily rules arm and execute beside a multi-time rule without an explicit list", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-legacy-daily-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const timers = fakeTimers(), legacy = scheduledTask(1), multi = scheduledTask(2);
+  legacy.rule.trigger.schedule = { id: "legacy", type: "daily_time", timeOfDay: "10:00:05" };
+  multi.rule.trigger.schedule = { id: "multi", type: "daily_time", timeOfDays: ["14:00", "18:00"] };
+  let now = new Date(2026, 5, 10, 9);
+  const runs: string[] = [];
+  const dispose = await createHeartbeatAdapter({ collectTasks: () => [legacy, multi], dataDir: () => dataDir, now: () => now,
+    setTimer: timers.setTimer, clearTimer: timers.clearTimer, runTask: task => { runs.push(task.rule.id); } }).start() as MessageAdapterDispose;
+  t.after(dispose);
+  assert.equal(Object.hasOwn(legacy.rule.trigger.schedule, "timeOfDays"), false);
+  assert.equal(timers.active.size, 2);
+  const legacyTimer = [...timers.active].find(timer => timers.records.get(timer)!.delayMs === 3_605_000)!;
+  assert.ok(legacyTimer);
+  now = new Date(2026, 5, 10, 10, 0, 5); timers.fire(legacyTimer);
+  assert.deepEqual(runs, [legacy.rule.id]); assert.equal(timers.active.size, 2);
+  assert.ok([...timers.active].some(timer => timers.records.get(timer)!.delayMs === 86_400_000));
+});

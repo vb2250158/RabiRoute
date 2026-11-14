@@ -9,7 +9,7 @@ export class ProgressivePlanStorageStartup {
   private readonly recovered = new Map<string, PlanStorageStartupGateSummary>();
 
   constructor(private readonly options: Readonly<{
-    rolesRoot: string;
+    rolesRoot: string | (() => string);
     readOnly: boolean;
     terminateTimeoutMs?: number;
     limits?: StorageStartupLimits;
@@ -36,7 +36,8 @@ export class ProgressivePlanStorageStartup {
     const result = (async () => {
       if (this.options.readOnly) return summary;
       let names: string[] = [];
-      await scope.run([this.options.rolesRoot],
+      const rolesRoot = typeof this.options.rolesRoot === "function" ? this.options.rolesRoot() : this.options.rolesRoot;
+      await scope.run([rolesRoot],
         root => create<string[]>({ kind: "directories", root }),
         (_root, value) => { names = value; summary.roles = names.length; publish(); },
         () => { summary.failures.push("roles:enumeration_unavailable"); publish(); });
@@ -44,7 +45,7 @@ export class ProgressivePlanStorageStartup {
       const discovered = new Set(names);
       for (const roleId of this.recovered.keys()) if (!discovered.has(roleId)) this.recovered.delete(roleId);
       await scope.run(names.filter(roleId => !this.recovered.has(roleId)),
-        roleId => create<PlanStorageStartupGateSummary>({ kind: "plan", rolesRoot: this.options.rolesRoot, roleId }),
+        roleId => create<PlanStorageStartupGateSummary>({ kind: "plan", rolesRoot, roleId }),
         (roleId, value) => {
           if (value.failures.length) summary.failures.push(`${roleId}:recovery_unavailable`);
           else this.recovered.set(roleId, value);

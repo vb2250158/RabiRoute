@@ -10,6 +10,7 @@ export type ProjectDirectoryLayout = {
   performanceLogRoot: string;
   logRoot: string;
   managerLogRoot: string;
+  gatewayLogRoot: string;
   publicExampleDataRoot: string;
 };
 
@@ -28,6 +29,7 @@ export function projectDirectoryLayout(rootDir: string): ProjectDirectoryLayout 
     performanceLogRoot: path.join(runtimeStateRoot, "performance"),
     logRoot,
     managerLogRoot: path.join(logRoot, "manager"),
+    gatewayLogRoot: path.join(logRoot, "gateway"),
     publicExampleDataRoot: path.join(projectRoot, "examples", "data")
   };
 }

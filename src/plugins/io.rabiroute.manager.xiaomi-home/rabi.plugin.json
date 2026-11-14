@@ -1,8 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.xiaomi-home",
-  "version": "0.1.7",
-  "entries": {
+  "version": "0.1.7",  "entries": {
     "manager": {
       "execution": "in_process",
       "module": "./manager.mjs"

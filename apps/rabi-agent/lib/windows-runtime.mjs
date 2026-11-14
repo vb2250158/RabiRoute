@@ -44,8 +44,8 @@ async function verifyRuntime(root, profile) {
       throw Object.assign(new Error(`Windows runtime asset does not match its bundle: ${file.path}`), { code: "RABI_AGENT_RUNTIME_ASSET_MISMATCH" });
   }
 }
-async function ownerLease(configPath) {
-  const target = fs.existsSync(configPath) ? launcherLeaseTarget(configPath) : `\\\\.\\pipe\\rabi-agent-${hash(path.join(await fs.promises.realpath(path.dirname(configPath)), path.basename(configPath)).toLowerCase())}`;
+async function ownerLease(configPath, originalTarget) {
+  const target = originalTarget ?? ( fs.existsSync(configPath) ? launcherLeaseTarget(configPath) : `\\\\.\\pipe\\rabi-agent-${hash(path.join(await fs.promises.realpath(path.dirname(configPath)), path.basename(configPath)).toLowerCase())}`);
   const lease = net.createServer(socket => socket.destroy());
   await new Promise((resolve, reject) => {
     lease.once("error", error => reject(Object.assign(new Error(error.code === "EADDRINUSE"
@@ -61,6 +61,10 @@ async function ownerLease(configPath) {
 export async function prepareWindowsRuntime({ bundleRoot, configPath }) {
   if (process.platform !== "win32") throw new Error("This runtime bundle is for Windows.");
   bundleRoot = path.resolve(bundleRoot); configPath = path.resolve(configPath);
+  // Keep the existing owner's exact launcher identity. Windows async realpath
+  // expands 8.3 segments, while its existing synchronous lease algorithm may
+  // retain them. Filesystem safety still uses the native canonical path below.
+  const originalOwnerTarget = fs.existsSync(configPath) ? launcherLeaseTarget(configPath) : undefined;
   const receiptBytes = await fs.promises.readFile(path.join(bundleRoot, "windows-runtime.json"));
   const profile = JSON.parse(receiptBytes);
   if (profile.schemaVersion !== 1 || profile.platform !== "win32" || profile.architecture !== process.arch
@@ -89,7 +93,7 @@ export async function prepareWindowsRuntime({ bundleRoot, configPath }) {
     }
   }
   if (reusable) return { executable, profile, reused: true, configPath };
-  const lease = await ownerLease(configPath);
+  const lease = await ownerLease(configPath, originalOwnerTarget);
   const stage = path.join(parent, `.windows-runtime-${randomUUID()}`), backup = path.join(parent, `.windows-before-${randomUUID()}`);
   let backedUp = false, committed = false;
   const previousExecutables = [];

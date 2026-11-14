@@ -512,6 +512,8 @@ function sameHostOwnerGone(receipt: DurableDeliveryReceipt<unknown>): boolean {
     && !sameHostOwnerAlive(receipt);
 }
 
+export { sameHostOwnerGone as receiptExecutionOwnerGone };
+
 export function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boolean {
   if (receipt.state !== "sending" || !receipt.executionId) return false;
   if (sameHostOwnerAlive(receipt)) return true;

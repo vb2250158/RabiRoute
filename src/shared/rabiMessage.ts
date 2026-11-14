@@ -54,6 +54,7 @@ export type RabiMessageSource =
 
 export const RABI_MESSAGE_SOURCE_HEADER = "## 消息源";
 export const RABI_MESSAGE_CONTENT_HEADER = "## 消息内容";
+export const RABI_MESSAGE_UNKNOWN = "未知";
 const RABI_MESSAGE_ENVELOPE_HEADER_PATTERN = /^\s*(?:\[(?:消息源|消息内容|投递源)\]|## (?:消息源|消息内容))\s*$/m;
 
 export type RabiDeliveryEnvelope = {
@@ -77,8 +78,8 @@ function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalo
   return [
     `${standalone ? `类型：${standalone}｜` : ""}处理端：${source.agentAdapter === "grokBot" ? "GrokBot" : source.agentAdapter}`,
     source.agentType?.trim().toLowerCase() === "agent" ? undefined : optionalLine("角色", source.agentType),
-    `会话：${source.sessionName}`,
-    `会话 ID：${source.sessionId}`,
+    optionalLine("会话", source.sessionName) ?? `会话：${RABI_MESSAGE_UNKNOWN}`,
+    optionalLine("会话 ID", source.sessionId) ?? `会话 ID：${RABI_MESSAGE_UNKNOWN}`,
     optionalLine("工作目录", source.workspace)
   ];
 }

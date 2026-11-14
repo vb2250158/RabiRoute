@@ -1,9 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
+import { readCodexRolloutLines, statCodexRollout, type CodexRolloutSource } from "./codexRolloutReader.js";
 
 export type CodexRolloutActivityOptions = {
   chunkBytes?: number;
   maxRecordBytes?: number;
+  threadId?: string;
 };
 
 export type CodexRolloutActivity = {
@@ -12,6 +13,7 @@ export type CodexRolloutActivity = {
 };
 
 type RolloutActivityCacheEntry = {
+  dev: number;
   size: number;
   mtimeMs: number;
   ctimeMs: number;
@@ -26,6 +28,11 @@ const cache = new Map<string, RolloutActivityCacheEntry>();
 const scans = new Map<string, Promise<CodexRolloutActivity>>();
 
 const UNKNOWN_ACTIVITY: CodexRolloutActivity = { state: "unknown", observedAtMs: 0 };
+
+function sameFileStat(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
 
 type RelevantRecord =
   | { kind: "turn"; turnId: string; observedAtMs: number }
@@ -67,18 +74,90 @@ async function immediate(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
 
+async function verifyRecordedIdentity(
+  handle: fs.promises.FileHandle,
+  size: number,
+  expectedThreadId: string
+): Promise<void> {
+  if (!expectedThreadId) return;
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  let complete = false;
+  while (offset < size) {
+    const buffer = Buffer.allocUnsafe(Math.min(DEFAULT_CHUNK_BYTES, size - offset));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+    if (!bytesRead) break;
+    const bytes = buffer.subarray(0, bytesRead);
+    const newline = bytes.indexOf(0x0a);
+    if (newline >= 0) {
+      chunks.push(bytes.subarray(0, newline));
+      complete = true;
+      break;
+    }
+    chunks.push(bytes);
+    offset += bytesRead;
+  }
+  if (!complete) throw Object.assign(new Error("The Codex rollout has no complete identity record."), {
+    code: "CODEX_ROLLOUT_IDENTITY_MISSING"
+  });
+  const line = Buffer.concat(chunks).toString("utf8").replace(/^\uFEFF/, "").replace(/\r$/, "");
+  let matches = false;
+  try {
+    const record = JSON.parse(line) as { type?: unknown; payload?: { id?: unknown } };
+    matches = record.type === "session_meta" && record.payload?.id === expectedThreadId;
+  } catch {
+    matches = false;
+  }
+  if (!matches) throw Object.assign(new Error("The Codex rollout does not belong to the requested task."), {
+    code: "CODEX_ROLLOUT_IDENTITY_MISMATCH"
+  });
+}
+
+async function scanForwardRollout(
+  recordedPath: string,
+  fallbackObservedAtMs: number,
+  options: CodexRolloutActivityOptions,
+  onSource: (source: CodexRolloutSource) => void
+): Promise<CodexRolloutActivity> {
+  const maxRecordBytes = Math.max(64, Math.floor(options.maxRecordBytes ?? DEFAULT_MAX_RECORD_BYTES));
+  let latestTurnId = "";
+  let activity = UNKNOWN_ACTIVITY;
+  for await (const line of readCodexRolloutLines(recordedPath, options.threadId ?? "", {
+    verifyIdentity: true,
+    onSource
+  })) {
+    const bytes = Buffer.byteLength(line);
+    if (bytes > maxRecordBytes) continue;
+    const record = relevantRecord(Buffer.from(line));
+    if (!record) continue;
+    if (record.kind === "turn") {
+      latestTurnId = record.turnId;
+      activity = { state: "active", observedAtMs: record.observedAtMs || fallbackObservedAtMs };
+    } else if (!latestTurnId || record.turnId === latestTurnId) {
+      latestTurnId = record.turnId;
+      activity = { state: "inactive", observedAtMs: record.observedAtMs || fallbackObservedAtMs };
+    }
+  }
+  return activity;
+}
+
 async function scanRolloutBackwards(
   filePath: string,
-  size: number,
   fallbackObservedAtMs: number,
-  options: CodexRolloutActivityOptions
+  options: CodexRolloutActivityOptions,
+  onSource: (source: CodexRolloutSource) => void
 ): Promise<CodexRolloutActivity> {
-  if (size <= 0) return UNKNOWN_ACTIVITY;
   const chunkBytes = Math.max(16, Math.floor(options.chunkBytes ?? DEFAULT_CHUNK_BYTES));
   const maxRecordBytes = Math.max(64, Math.floor(options.maxRecordBytes ?? DEFAULT_MAX_RECORD_BYTES));
   const terminals = new Map<string, number>();
   const handle = await fs.promises.open(filePath, "r");
   try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return UNKNOWN_ACTIVITY;
+    onSource({ physicalPath: filePath, stat, fallback: false });
+    const size = stat.size;
+    await verifyRecordedIdentity(handle, size, options.threadId ?? "");
+    if (size <= 0) return UNKNOWN_ACTIVITY;
     const finalByte = Buffer.allocUnsafe(1);
     await handle.read(finalByte, 0, 1, size - 1);
     let ignoreNewestBoundary = finalByte[0] !== 0x0a;
@@ -169,39 +248,53 @@ export async function readCodexRolloutActivity(
   options: CodexRolloutActivityOptions = {}
 ): Promise<CodexRolloutActivity> {
   if (!filePath) return UNKNOWN_ACTIVITY;
-  const resolved = path.resolve(filePath);
-  let stat: fs.Stats;
+  let physical: Awaited<ReturnType<typeof statCodexRollout>>;
   try {
-    stat = await fs.promises.stat(resolved);
+    physical = await statCodexRollout(filePath);
   } catch {
     return UNKNOWN_ACTIVITY;
   }
+  const { physicalPath: resolved, stat, fallback } = physical;
   if (!stat.isFile()) return UNKNOWN_ACTIVITY;
-  const cached = cache.get(resolved);
+  const forwardScan = fallback || resolved.endsWith(".zst");
+  const cacheKey = `${filePath}\0${resolved}\0${fallback ? "fallback" : "recorded"}\0${options.threadId ?? ""}`;
+  const cached = cache.get(cacheKey);
   if (cached
+    && cached.dev === stat.dev
     && cached.size === stat.size
     && cached.mtimeMs === stat.mtimeMs
     && cached.ctimeMs === stat.ctimeMs
     && cached.ino === stat.ino) return cached.activity;
 
-  const existing = scans.get(resolved);
+  const existing = scans.get(cacheKey);
   if (existing) return existing;
-  const scan = scanRolloutBackwards(resolved, stat.size, stat.mtimeMs, options)
-    .then(activity => {
-      cache.set(resolved, {
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        ctimeMs: stat.ctimeMs,
-        ino: stat.ino,
+  let opened: CodexRolloutSource | undefined;
+  const onSource = (source: CodexRolloutSource): void => { opened = source; };
+  const scan = (forwardScan
+    ? scanForwardRollout(filePath, stat.mtimeMs, options, onSource)
+    : scanRolloutBackwards(resolved, stat.mtimeMs, options, onSource))
+    .then(async activity => {
+      const current = await statCodexRollout(filePath);
+      if (!opened || opened.physicalPath !== resolved || current.physicalPath !== resolved
+        || current.fallback !== fallback || !sameFileStat(stat, opened.stat)
+        || !sameFileStat(opened.stat, current.stat)) {
+        return UNKNOWN_ACTIVITY;
+      }
+      cache.set(cacheKey, {
+        dev: opened.stat.dev,
+        size: opened.stat.size,
+        mtimeMs: opened.stat.mtimeMs,
+        ctimeMs: opened.stat.ctimeMs,
+        ino: opened.stat.ino,
         activity
       });
       return activity;
     })
     .catch(() => UNKNOWN_ACTIVITY)
     .finally(() => {
-      scans.delete(resolved);
+      scans.delete(cacheKey);
     });
-  scans.set(resolved, scan);
+  scans.set(cacheKey, scan);
   return scan;
 }
 

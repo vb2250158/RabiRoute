@@ -1,3 +1,4 @@
+import { normalizeComputerSettings } from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { createManagerClient } from "../../apps/rabi-agent/lib/manager-client.mjs";
+import { LAN_AGENT_MANAGEMENT_ROUTES } from "./lanAgentManagementContract.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
@@ -78,7 +80,7 @@ async function fixture(t: import("node:test").TestContext) {
   await fs.writeFile(path.join(root, "nodes.json"), JSON.stringify({ schemaVersion: 2,
     nodes: [{ nodeId: "historical-node", connected: false, historicalExtension: "retained" }],
     tasks: [{ taskId: "historical-task", nodeId: "historical-node", status: "completed", createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z" }] }));
-  const nodes = new LanAgentRegistry({ statePath: path.join(root, "nodes.json"), authenticateNode: token => authority.authenticate(token) });
+  const nodes: LanAgentRegistry = new LanAgentRegistry({ statePath: path.join(root, "nodes.json"), authenticateNode: token => authority.authenticate(token), nodeEnabled:id=>authority.isNodeEnabled(id), computerSettings:id=>id===nodes.localInstanceId?{settings:normalizeComputerSettings(),revision:'"fixture"'}:authority.getComputerSettings(id),patchComputerSettings:(id,patch,revision)=>authority.patchComputerSettings(id,patch,revision) });
   const agentRoot = path.join(root, "release"); await fs.mkdir(agentRoot);
   await fs.writeFile(path.join(agentRoot, "package.json"), JSON.stringify({ version: "fixture-release" }));
   await fs.writeFile(path.join(agentRoot, "rabi-agent.mjs"), "export const fixture = true;\n");
@@ -143,13 +145,15 @@ test('remote lookup transport failure is distinct from invalid adapter parameter
   assert.match(failure.repair, /\/api\/lan-agent\/instances/); assert.equal(f.calls.length, 0);
 });
 
-test("management discovery contains all fifteen real routes, optional ignored bodies and no issued secrets", { timeout: 15000 }, async t => {
+test("management discovery contains all registered routes, optional ignored bodies and no issued secrets", { timeout: 15000 }, async t => {
   const f = await fixture(t);
-  assert.equal(f.api.catalogSnapshot().operations.length, 18);
+  assert.deepEqual(f.api.catalogSnapshot().operations.filter(row => row.contract.operationId.startsWith("manager.lan-agent.")).map(row => row.contract.operationId).sort(), LAN_AGENT_MANAGEMENT_ROUTES.map(route => `manager.lan-agent.${route.key}`).sort());
   const response = await fetch(f.base + "/api/agent/openapi", { headers: f.auth });
   const spec = await response.json() as any;
   assert.equal(spec.paths["/api/lan-agent/enrollments"].post.requestBody.required, false);
   assert.ok(spec.paths["/api/lan-agent/instances/{instanceId}/agents/{agentId}/hooks"].post);
+  assert.ok(spec.paths["/api/lan-agent/instances/{instanceId}/computer-settings"].patch);
+  assert.ok(spec.paths["/api/computers"].get);
   assert.equal(JSON.stringify(spec).includes(f.caller.token), false);
   assert.equal((await fetch(f.base + "/api/lan-agent/nodes")).status, 401);
   assert.equal((await fetch(f.base + "/api/lan-agent/nodes", { headers: { authorization: "Bearer fixture-link" } })).status, 200);
@@ -237,12 +241,12 @@ test("aborted management calls retain the lease until the original remote owner 
   f.reply(held); await stopped; assert.equal(f.calls.length, 1);
 });
 
-test("revocation/re-enable during an awaited operation cannot disclose the old result or replay it", { timeout: 15000 }, async t => {
+test("credential replacement during an awaited operation cannot disclose the old result or replay it", { timeout: 15000 }, async t => {
   const f = await fixture(t); let sent!: () => void, held!: Record<string, any>;
   const entered = new Promise<void>(resolve => { sent = resolve; });
   f.intercept(message => { held = message; sent(); return true; });
   const request = f.invoke("agents.configure", { path: { instanceId: f.worker.nodeId, agentId: "fixture" }, body: {} });
-  await entered; f.authority.setNodeEnabled(f.caller.nodeId, false, true); f.authority.setNodeEnabled(f.caller.nodeId, true, false);
+  await entered; f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.caller.nodeId, randomBytes(32).toString("base64url"));
   f.reply(held); const result = await request;
   assert.equal(result.statusCode, 403); assert.doesNotMatch(String(result.body), /providerExtension/); assert.equal(f.calls.length, 1);
 });

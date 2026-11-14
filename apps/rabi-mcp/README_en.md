@@ -1,28 +1,36 @@
-# Rabi knowledge MCP
+# Rabi MCP
 
 English | [简体中文](README.md)
 
-Status: experimental implementation; installation/release and real Agent, phone and glasses acceptance remain pending.
+This application exposes category discovery, search, descriptions and calls for all public Rabi operations over the official MCP SDK's stdio or Streamable HTTP transport. CLI and MCP share the operation SDK. The current Manager and original plugin owner execute business behavior. The MCP host launches `node knowledge-mcp.mjs`, while local Host discovery supplies the current endpoint and identity.
 
-This application exposes RabiPC plans and memories through the official MCP SDK over stdio or controlled Streamable HTTP. It does not perform inference, own business data or launch a remote Agent. The MCP host launches `node knowledge-mcp.mjs`. Each business call discovers Manager through the local Host and verifies its identity; no fixed Manager port is used.
+This describes the current source implementation. Installed adoption and tool loading in an external Agent host are confirmed by release acceptance. See [Unified CLI and MCP API](../../docs/unified-agent-api_en.md) for contracts and commands.
+
+## Default tools
+
+The default catalog contains six tools: `rabi_categories`, `rabi_list`, `rabi_search`, `rabi_describe`, `rabi_call` and `rabi_session`. Start with category or keyword summaries, inspect a single input contract, then invoke the original operation. Read large result schemas through result/full views as needed.
+
+`rabi_call.operation` is the stable business operation ID. Its `input` is the same JSON consumed by CLI. `requestId/idempotencyKey` identifies this request and `expectedRevision` carries the original strong ETag. HTTP, binary and file results retain status and receipts. Streaming calls return an original `sessionId` for subsequent reads, sends or closure through `rabi_session`.
+
+The ten existing knowledge tool names remain callable for compatibility. The visible catalog presents the shared six actions. New plugin operations become discoverable through the current catalog without adding a separate MCP tool per operation.
 
 ## Configuration
 
-Set these environment variables in the MCP host:
+Configure these values in the MCP host's launch environment.
 
-- `RABIROUTE_HOST_EXE`: optional local Host executable; checks the standard installation first, then discovers a running Host path and verifies its current identity when the standard location is missing.
-- `RABI_MCP_ALLOWED_ROLES`: optional JSON string array, e.g. `["example"]`; omission allows every role, explicit `[]` disables every role, and a supplied list restricts access to its entries.
-- `RABI_MCP_ALLOW_WRITES`: defaults to `true`; only explicit `false` disables mutations and recent details that update view timestamps.
+- `RABIROUTE_HOST_EXE` is optional. Discovery uses the standard installation and current running Host when omitted.
+- `RABI_MCP_ALLOWED_ROLES` is an optional JSON string array. Omission permits every role. An explicit list applies only to that configured scope.
+- `RABI_MCP_ALLOW_WRITES` defaults to `true`. Explicit `false` disables state-changing calls according to current operation effects and reports the setting.
+- `RABI_MCP_MAX_SESSIONS` defaults to `16` and controls concurrent active stream and WebSocket sessions.
+- `RABI_MCP_MAX_SESSION_BYTES` defaults to `1048576` and sets each session frame queue high-water mark; consumption resumes the producer, and an empty queue accepts one larger native-legal frame. Read or close unread terminal results when the retained budget is full. Set both as positive integers in the MCP launch environment.
 
-Default tools provide knowledge search, plan lists/details/status catalogs, memory lists/details, and plan and recent-memory creation/updates. Explicitly disabling writes hides mutations and recent details that update view timestamps. Restriction errors identify the setting and where to change it. Updates require the exact strong ETag; mutations require a previously saved stable idempotency key. Recent details follow the current Manager touch receipt contract; a read-only Manager without that receipt is not confirmed successful.
-
-Deletion, archival writes, consolidation execution, attachments, task bindings and arbitrary HTTP requests are excluded. Timeouts, 503, identity changes or incomplete receipts require authoritative readback, never automatic replay. After 412, reread and confirm intent before using a new key and ETag.
+The catalog provides discovery. Calls retain current connection authentication, resource semantics, CAS and idempotency. Preserve original identifiers and payloads after uncertain writes and inspect their original receipts.
 
 ## Controlled HTTP access
 
 Set `RABI_MCP_TRANSPORT=http` and supply a random `RABI_MCP_HTTP_TOKEN` of at least 32 characters through the launch environment. `RABI_MCP_HTTP_PORT` defaults to `0` (OS allocation); a structured `READY` line reports the actual address without the secret. The listener defaults to `127.0.0.1`; set `RABI_MCP_HTTP_HOST` to select another bind address. Business requests require Bearer authentication; cookies and Host aliases do not add a separate rejection. Optional `RABI_MCP_ALLOWED_ORIGINS` is a JSON array: omission allows all Origins, while an explicit list (including `*` or `null`) is enforced. Browser OPTIONS preflight is supported. `RABI_MCP_HTTP_MAX_BODY_BYTES` sets the body budget (default 65536 bytes); oversized requests identify this setting. Never put the token in URLs, logs or public configuration.
 
-This is standard MCP Streamable HTTP, not arbitrary REST forwarding. Glasses cannot reach PC loopback directly; authenticated PC/Relay transport and device authorization are still required. The user controls the bind address, optional role/Origin restrictions and write policy through launch settings. The HTTP module has official SDK client tests; the earlier stdio artifact predates HTTP changes and must be rebuilt.
+Streamable HTTP uses standard MCP. Remote devices use the existing authenticated PC/Relay connection to the selected computer. Launch configuration owns the bind address, role/Origin scope and write setting. Host tool loading, connectivity and business outcomes are verified separately.
 
 ## Independent local artifact
 
@@ -33,7 +41,9 @@ npm ci
 node scripts/build.mjs --output <new-absolute-directory>
 ```
 
-The output must not exist and its parent must already exist. Accessible local, NAS/UNC and mapped-drive paths are supported; prior output is not overwritten. Windows executes npm CLI through Node, avoiding cmd losing a UNC working directory. The script inlines relative source dependencies, keeps the SDK external and installs production dependencies using the independent lock and `npm ci --ignore-scripts`. It emits the entry, bilingual documentation, dependencies and `artifact-manifest.json` file hashes. Failures retain incomplete output for inspection without automatic deletion. The artifact supports local Host only; an unexecuted LAN branch retains a dynamic `bonjour-service` reference and does not provide remote mode. Windows installation integration and installation itself are not included.
+The artifact includes both `knowledge-mcp.mjs` and `rabi-cli.mjs` from the same SDK. CLI `--config` retains the existing enrolled Agent connection and durable delivery owner. MCP discovers the local Host. Updating these independent clients does not restart Manager.
+
+The output must not exist and its parent must already exist. Accessible local, NAS/UNC and mapped-drive paths are supported; prior output is not overwritten. Windows executes npm CLI through Node, avoiding cmd losing a UNC working directory. The script inlines relative source dependencies, keeps the SDK external and installs production dependencies using the independent lock and `npm ci --ignore-scripts`. It emits the entry, bilingual documentation, dependencies and `artifact-manifest.json` file hashes. Failures retain incomplete output for inspection without automatic deletion. MCP supports local Host startup; CLI also accepts an existing private connection configuration. The Windows runtime source manifest includes the shared CLI/MCP entry and dependencies. The actual packaged bytes and installed adoption are confirmed by release acceptance.
 
 ## Development and packaging boundaries
 

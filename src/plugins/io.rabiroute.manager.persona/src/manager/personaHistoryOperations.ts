@@ -43,7 +43,16 @@ function define<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperatio
     catch(error){parsed.signal?.throwIfAborted();result=fail(error,kind);}
     return kind==='history'?trace(parsed,result):result;
   };}catch(error){input.signal?.throwIfAborted();return fail(error,kind);}};
-  return {contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
+  const taskDirectory = contract.pathTemplate.endsWith('/chat-history/tasks');
+  const endpointDirectory = contract.pathTemplate.endsWith('/message-history-conversations');
+  const title = taskDirectory ? '角色 Agent 会话与往来任务' : endpointDirectory ? '消息端会话目录'
+    : kind === 'chat' ? '角色聊天记录与全文' : kind === 'voice' ? '语音记录' : '角色消息历史';
+  return {contract, discovery: { title, summary: title,
+    category: {id:'messages.history',title:'消息与聊天记录',parentId:'messages'},
+    tags:['会话','聊天记录','消息','全文','任务','往来任务'],
+    keywords:['Agent','角色面板','任务回复','系统消息','NapCat','语音'],
+    inputSources: [{field:'path.roleId',operationId:'manager.personas.list',resultPath:'/personas',valuePath:'/personaId'}]
+  },prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
 }
 
 /** Original ledgers/read workers; exact API and static aliases share the same functional owners. */
@@ -52,6 +61,7 @@ export function createPersonaHistoryOperations(context:PersonaHistoryContext):re
   const messages=createMessageEndpointHistoryOwner({roleDirectory:context.roleDir,identity:context.identity,queryHistory:context.queryHistory});
   const base=(id:string,method:ApiOperationContract['method'],prefix:string,suffix:string,body:ApiOperationContract['request']['body'],response:ApiResponseContract,kind:string):ApiOperationContract=>({
     operationId:'manager.personas.history.'+id+(prefix==='/roles' ? '.alias':''),
+    ...(id === 'messages.timeline' && prefix === '/api/roles' ? { searchable: { scope: 'messages', legend: '所有已保存消息端的原始聊天记录 / saved endpoint messages', kinds: ['group','private','wecom','feishu','voice','heartbeat','manual_trigger','role_panel'] } } : {}),
     ...(kind==='aiui'?{}:{aliases:[(kind==='history'?'persona':prefix==='/roles'?'knowledge-alias':'knowledge')+':'+method+':'+prefix+'/:roleId/'+suffix]}),
     contractVersion:'1.0.0',method,pathTemplate:prefix+'/:roleId/'+suffix,exposure:'public',transport:'http',description:'Read the original selected persona history, transcripts, bounded message excerpt or conversation situation; explicit AIUI ingestion appends only its native stable-turn ledger.',
     request:{path:{type:'object',required:suffix.includes(':situationId')?['roleId','situationId']:['roleId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1},...(suffix.includes(':situationId')?{situationId:{type:'string',minLength:1}}:{})}},query:object,headers:object,body},
@@ -62,7 +72,7 @@ export function createPersonaHistoryOperations(context:PersonaHistoryContext):re
   const operations:ApiOperationDefinition[]=[];
   for(const prefix of ['/api/roles','/roles']) {
     operations.push(define(base('chat.read','GET',prefix,'chat-history',none,chat,'chat'),input=>chats.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams.has('cursor')?Number(input.url.searchParams.get('cursor')):undefined,Number(input.url.searchParams.get('limit')??50), {summary:input.url.searchParams.get('summary')==='true',direction:input.url.searchParams.get('direction')==='newer'?'newer':'older',id:input.url.searchParams.get('id')??undefined,category:input.url.searchParams.get('category') as ChatHistoryCategory || undefined,taskKey:input.url.searchParams.get('taskKey')||undefined}),'chat'));
-    operations.push(define(base('chat.tasks','GET',prefix,'chat-history/tasks',none,json({type:'object',required:['items','nextCursor','invalidRecords'],properties:{items:array(object),nextCursor:{type:['string','null']},invalidRecords:{type:'number'}}}),'chat'),input=>chats.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.tasks({category:input.url.searchParams.get('category') as ChatHistoryCategory||undefined,cursor:input.url.searchParams.get('cursor')||undefined,query:input.url.searchParams.get('query')||undefined,peerOf:input.url.searchParams.get('peerOf')||undefined,limit:Number(input.url.searchParams.get('limit')??50)}),'chat'));
+    operations.push(define(base('chat.tasks','GET',prefix,'chat-history/tasks',none,json({type:'object',required:['items','nextCursor','invalidRecords'],properties:{items:array(object),nextCursor:{type:['string','null']},invalidRecords:{type:'number'},partial:{type:'boolean'},projectionIssues:array({type:'object',required:['taskKey','message'],properties:{taskKey:str,message:str}})}}),'chat'),input=>chats.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.tasks({category:input.url.searchParams.get('category') as ChatHistoryCategory||undefined,cursor:input.url.searchParams.get('cursor')||undefined,query:input.url.searchParams.get('query')||undefined,peerOf:input.url.searchParams.get('peerOf')||undefined,limit:Number(input.url.searchParams.get('limit')??50)}),'chat'));
     operations.push(define(base('chat.aiui.append','POST',prefix,'chat-history/aiui',{kind:'json',schema:true,maxBytes:131072,allowAnyContentType:true,emptyValue:null},aiui,'aiui'),input=>chats.prepare(input.request,input.path.roleId,input.signal),async(owner,input)=>({receipt:await owner.append(input.body)}),'aiui'));
     operations.push(define(base('voice.read','GET',prefix,'voice-transcripts',none,voice,'voice'),input=>voices.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams),'voice'));
     for(const detail of [false,true])operations.push(define(base(detail?'situations.detail':'situations.list','GET',prefix,'conversation-situations'+(detail?'/:situationId':''),none,json(detail?situation:array(situation)),'situation'),input=>situations.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams.get('limit'),input.path.situationId),'situation'));

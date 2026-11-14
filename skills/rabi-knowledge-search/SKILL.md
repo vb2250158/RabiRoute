@@ -1,15 +1,25 @@
 ---
 name: rabi-knowledge-search
-description: 查找项目资料、预定安排、历史决定、任务进展或实现线索时使用。Rabi 在线时优先搜索其计划、近期记忆和沉淀记忆，再按线索搜索文件；离线或查询失败时直接使用普通搜索。
+description: 使用 Rabi 统一搜索发现计划、记忆、聊天记录、接口与设备；核对来源、证据和实际调用入口，按覆盖情况继续查证。
 ---
 
-# Rabi 记忆与计划搜索
+# Rabi 统一搜索
 
 本技能由 RabiRoute 维护，可整目录安装到项目 `.agents/skills/rabi-knowledge-search/`。仅负责查询和定位线索，不创建计划、不绑定角色、不投递任务，也不修改记忆正文。
 
-## 首轮业务查询
+## 统一搜索入口
 
-用户询问项目事实、历史决定、进度或要求根据群聊回复时，先从原话和附件提取主题、对象、平台和少量同义词。完成必要的身份发现后，第一轮业务查询搜索相关计划、近期记忆和沉淀记忆；涉及消息上下文时并行查询消息端历史。当前已知 roleId 时不先列 Agent 会话或扫描插件源码。截图与旧回复用于理解背景；当前请求和原任务中的有效授权持续适用，无需因检索或会话切换重新审批。
+先通过动态发现核验当前 Manager；使用现有鉴权连接调用 `GET /api/search?q=<编码后的关键词>`。默认搜索全部角色和活动目录中已注册的来源；需要特定角色时传 `agent`，不存在返回 404 `AGENT_NOT_FOUND`。调用方的 `x-rabiroute-agent-type` 与 `x-rabiroute-session-id` 是可选元数据，完整时一并提供；它们不替代连接鉴权。用户指定精确文件或禁止 Rabi 查询时直接按用户范围处理。
+
+按 `capabilities` 和 `legend` 选择 `scope`、`kind`；省略 `q` 可浏览，`from`、`to` 使用 Unix 秒。`limit` 为 1–200，默认 20；继续时原样传 `nextCursor` 并保持过滤和 `limit`，来源或 Manager 身份改变返回 409 时从首页重查。`facets` 只统计本页，核对 `coverage`、`degraded` 和 `notQueried`，空结果不代表未覆盖来源中不存在记录。
+
+核对结果的 `origin`、`state`、`observedAt`、`evidenceRefs` 和 `handle`，通过真实详情入口或 operation 合同继续核实；搜索排序分不代表事实可靠度。接口发现使用 `scope=operations`、MCP `rabi_search` 或活动目录；通过 `rabi_describe` 核对合同，再用 `rabi_call`、CLI `--operation manager.search` 或 HTTP 调用。源码辅助入口 `scripts/lib/query-rabi-search.mjs` 的总预算覆盖发现、身份核对、查询及读取正文。旧版本无统一入口时使用下列按角色的兼容入口；某来源故障时保留其他来源结果并说明覆盖缺口。
+
+接口与来源参见 RabiRoute 源码中的 `docs/agent-search-architecture.md`。以下角色查询步骤也是旧版本的兼容路径；无需为统一搜索先确定角色。
+
+## 按角色的兼容查询
+
+用户询问项目事实、历史决定、进度或要求根据群聊回复时，先从原话和附件提取主题、对象、平台和少量同义词。统一入口不可用时，完成必要身份发现后查询相关计划、近期记忆和沉淀记忆；涉及消息上下文时并行查询消息端历史。当前已知 roleId 时不先列 Agent 会话或扫描插件源码。截图与旧回复用于理解背景；当前请求和原任务中的有效授权持续适用，无需因检索或会话切换重新审批。
 
 ```http
 GET /api/roles/:roleId/message-endpoint-history?query=:query&match=any&includeArchives=1&limit=10
@@ -18,7 +28,7 @@ GET /api/roles/:roleId/knowledge/search?query=:query&mode=keywords&limit=10
 
 路径和查询参数 URL 编码。消息 query 支持空格、英文逗号、中文逗号和顿号；match=all 要求全部命中。按已知目标增加 adapter、target、conversationKey、from、to。用户说“最近一小时”“最近 N 小时/天”时，必须把自然语言换算为 Unix 秒 `from`（必要时传 `to`）；用户要求“所有消息”时省略 query，不用臆造关键词，也不能把 limit 当作完整覆盖证明。不得只传 includeArchives=1 扫描全部归档。查群里已有答案时保留出站回复；只查用户原始群反馈时才加 kind=group，私聊反馈用 kind=private。核对 entries、coverage、消息时间、方向及回复链；空结果只说明已覆盖范围。知识与消息是两个独立索引，任一失败不取消另一个成功结果。需要进一步恢复上下文时读 [消息查询](../napcat-qq-gateway/references/message-query.md)。
 
-## 搜索顺序
+## 兼容查询的搜索顺序
 
 消息检索返回持久索引中的最近匹配片段：`limit` 默认 50、最多 200；`maxChars` 默认及最多 200,000，含记录开销且首条可超预算。`count` 仅本次返回数。必须核对 `coverage` 的范围、索引版本与可见性；未覆盖或索引落后不能当成完整空结果。接口没有 `cursor/offset/nextCursor`，不要按最早时间减一秒模拟分页或据此做全量统计。
 
@@ -34,7 +44,7 @@ GET /api/roles/:roleId/knowledge/search?query=:query&mode=keywords&limit=10
 6. 命中后核对正文、时间、来源、适用项目和对象。计划看当前步骤及状态；历史问题再查归档计划或归档记忆。若结果有冲突，保留各自时间与来源，再查当前权威证据；记忆中的路径、版本、完成说法只是待核验线索。
 7. 答案已有足够证据时停止搜索；否则按命中的文件、配置名、ID 或任务线索收窄 `rg` / `rg --files` 等普通搜索。未命中或只查询了部分页面时不说“没有记录”，只说明实际查询范围。预定日期与实际生效日期分开回答。
 
-## 摘要搜索合同
+## 按角色摘要搜索合同
 
 以下路径相对于已验证的 Manager 地址，路径参数和查询参数均须 URL 编码。
 

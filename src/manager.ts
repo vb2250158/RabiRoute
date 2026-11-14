@@ -76,9 +76,11 @@ try {
   // Storage adoption runs under the application's exclusive owner before any
   // plugin opens its stores. Explicit settings retain precedence over .env.
   dotenv.config({ path: path.join(managerRuntimeLayout.stateRoot, ".env") });
-  const { prepareApplicationPluginStorage } = await import("./shared/pluginStorage.js");
-  await prepareApplicationPluginStorage({ phase: "owners-retired", layout: managerRuntimeLayout,
-    readOnly: process.env.RABIROUTE_MANAGER_READ_ONLY === "1" });
+  const { consumeConfirmedDataUpgrades } = await import("./manager/dataUpgradeOperations.js");
+  const { ManagerConfigRepository } = await import("./manager/configRepository.js");
+  const startupConfig = new ManagerConfigRepository({ rootDir: managerRuntimeLayout.stateRoot, managerPort: 0 });
+  await consumeConfirmedDataUpgrades(managerRuntimeLayout, startupConfig.rolesRoot,
+    process.env.RABIROUTE_MANAGER_READ_ONLY === "1");
   void import("./manager/controlPlaneRoutes.js")
     .then(({ startManager }) => startManager({ instanceLock: ownedInstanceLock }))
     .catch(async (error) => {

@@ -38,7 +38,7 @@ The sidebar keeps Message history and removes the duplicate Delivery records ent
 
 ## Switch computers and roles
 
-Open the role menu in the top bar, choose Local PC or another computer, then select a role in the second level. The top bar shows “computer → role”. Browsing computers leaves the current role unchanged. Refresh remote PCs from the same menu; the separate source PC panel has been removed.
+Open the role menu in the top bar, choose Local PC or another computer, then select a role. The top bar displays the current role's avatar, name and source computer. Each role row shows its avatar, name and ID, with a checkmark on the current selection. Missing or unavailable images show the role's initial. Long names wrap, and narrow screens stack computers above roles. Browsing computers keeps the current selection until a role is chosen. Refresh remote PCs from the same menu.
 
 The role configuration page opens directly with section tabs. The current-role, message-rule count, scheduled-task count, and role-directory overview cards have been removed. View role details under Profile and rules and scheduled tasks under Automation.
 

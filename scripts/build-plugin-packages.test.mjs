@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { buildPluginPackages, finalizePluginBuildWebArtifacts } from "./build-plugin-packages.mjs";
+import { buildPluginPackages, finalizePluginBuildWebArtifacts, finalizeSelectedPluginWebArtifacts } from "./build-plugin-packages.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 
@@ -513,4 +513,22 @@ test("runtime packages omit development tests while repository exports retain so
     for (const name of [...blocked, ...publicFiles]) assert.equal(await fs.readFile(path.join(exported, name), "utf8"), name);
     assert.equal(await fs.readFile(path.join(exported, "LICENSE"), "utf8"), "public fixture license");
   } finally { await fs.rm(root, { recursive: true, force: true }); await fs.rm(exported, { recursive: true, force: true }); }
+});
+
+
+test("profile finalization preserves a registered self-contained Web closure beside legacy global modules", async t => {
+  const f = await fixture(t), options = await webRevision(f, "before-closure");
+  await finalizePluginBuildWebArtifacts(f.root, options);
+  const closure = { schemaVersion: 1, kind: 'rabi-plugin-web', pluginId: 'io.test.feature', version: '1.2.3', entry: 'client.mjs', runtime: { abi: 'rabi-web-runtime/1', imports: [] }, styles: [], files: [] };
+  const bytes = JSON.stringify(closure), relative = 'packages/io.test.feature/1.2.3/web/module.json';
+  await put(path.join(f.output, relative), bytes);
+  await put(path.join(f.packageRoot, 'web/client.mjs'), 'export function activate() {}');
+  const selected = await finalizeSelectedPluginWebArtifacts(f.root, { outputRoot: f.output, packages: [
+    { pluginId: closure.pluginId, version: closure.version, path: relative, manifestSha256: digest(bytes) }], inputs: [], runtimeManifestSha256: 'a'.repeat(64) });
+  assert.equal(selected.scope, 'profile'); assert.equal(selected.web.wrappers.length, 0);
+  assert(selected.artifacts.files.some(file => file.path.startsWith('profiles/')));
+  const combined = await finalizePluginBuildWebArtifacts(f.root, options);
+  assert.equal(combined.web.packages[0].manifestSha256, digest(bytes));
+  assert.equal(combined.web.wrappers.length, 0); assert.equal(combined.artifacts.sha256, selected.artifacts.sha256);
+  assert.equal((await inspectPluginBuild(f.output)).candidateSha256, combined.artifacts.sha256);
 });

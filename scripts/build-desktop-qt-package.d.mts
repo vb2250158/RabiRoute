@@ -1,0 +1,1 @@
+export function buildDesktopQtPackage(options: { runtimeRoot: string; outputRoot: string; id?: string; version: string; pythonVersion?: string }): Promise<Readonly<{ id: string; version: string; revision: string; outputRoot: string; files: number; dependencies: number }>>;

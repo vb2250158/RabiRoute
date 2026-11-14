@@ -1,3 +1,4 @@
+import { randomBytes as replacementCredentialBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -52,9 +53,8 @@ async function fixture(t: TestContext, handler: (request: http.IncomingMessage, 
     if(mode === "global-aba") { config.patch({webguiLan:{enabled:false}});config.patch({webguiLan:{enabled:true}}); }
     else if(mode === "node-aba") { authority.revokeNode("fixture-node");const replacement=authority.enroll(authority.issueBootstrapTicket().ticket,"fixture-node"); }
     else if(mode === "instance-aba") {
-      authority.setNodeEnabled("fixture-node", false);
-      authority.setNodeEnabled("fixture-node", true);
-      assert.ok(authority.authenticate(credential.token), "Restored instance admits fresh authentication while the original request lease remains revoked.");
+      const renewed = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node", replacementCredentialBytes(32).toString("base64url"));
+      assert.ok(authority.authenticate(renewed.token), "Restored instance admits fresh authentication while the original request lease remains revoked.");
     }
     else {authority.revokeNode("fixture-node");}
   }};

@@ -6,6 +6,8 @@ English | <a href="./code-architecture.md">简体中文</a>
 
 # RabiRoute Code Architecture
 
+See the Host/plugin, settings, Web resource, desktop adoption and failure boundaries in [Host and plugin boundaries](host-plugin-boundaries_en.md).
+
 `WebPatchService` owns page-resource verification by revision. Concurrent requests for the same revision share its in-progress verification, then reuse the existing completed cache. Failure clears only that verification so later requests can retry.
 
 The history JSONL remains authoritative. SQLite checkpoints, task summaries and peer relations in `personaChatHistoryIndex.ts` are rebuildable projections. The existing writer serializes appends; growth in the same file reads only newly completed lines, while replacement, truncation or a changed recorded boundary rebuilds the projection. Pagination follows physical write positions rather than message timestamps. Historical-title search retains its existing semantics. A damaged row does not block unrelated records; a known damaged ID affects only replay of that ID.

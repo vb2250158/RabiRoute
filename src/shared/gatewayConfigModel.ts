@@ -1,3 +1,5 @@
+import { normalizeDailyScheduleTimes } from "./dailyScheduleTimes.js";
+export { normalizeDailyScheduleTimes } from "./dailyScheduleTimes.js";
 import { type AgentInstanceBinding } from "./agentInstance.js";
 import { normalizeAgentDeliveryTarget, normalizeAgentRecipients, type AgentDeliveryTarget, type AgentRecipientDefinition } from "./agentDeliveryTarget.js";
 import { normalizeRemotePersonaReference } from "./remotePersonaReference.js";
@@ -245,6 +247,8 @@ export type NotificationScheduleDefinition = {
   windowStartTime?: string;
   windowEndTime?: string;
   timeOfDay?: string;
+  /** Daily local times; an explicit list takes precedence over the legacy single time. */
+  timeOfDays?: string[];
   onceAt?: string;
   /** Skip this scheduled delivery while its primary Agent is busy; absent values inherit legacy Route settings. */
   skipWhenAgentBusy?: boolean;
@@ -806,7 +810,7 @@ export function normalizeScheduleDefinitions(schedules: unknown): NotificationSc
     const type = normalizeScheduleType(raw.type);
     const {
       id: _id, name: _name, enabled: _enabled, type: _type,
-      intervalSeconds: _intervalSeconds, windowStartTime: _windowStartTime, windowEndTime: _windowEndTime, timeOfDay: _timeOfDay,
+      intervalSeconds: _intervalSeconds, windowStartTime: _windowStartTime, windowEndTime: _windowEndTime, timeOfDay: _timeOfDay, timeOfDays: _timeOfDays,
       onceAt: _onceAt, skipWhenAgentBusy: _skipWhenAgentBusy,
       ...extensions
     } = raw;
@@ -820,6 +824,7 @@ export function normalizeScheduleDefinitions(schedules: unknown): NotificationSc
       windowStartTime: type === "interval" ? normalizeOptionalTimeString(raw.windowStartTime) : undefined,
       windowEndTime: type === "interval" ? normalizeOptionalTimeString(raw.windowEndTime) : undefined,
       timeOfDay: type === "daily_time" ? normalizeOptionalTimeString(raw.timeOfDay) : undefined,
+      ...(type === "daily_time" && Object.hasOwn(raw, "timeOfDays") ? { timeOfDays: normalizeDailyScheduleTimes(raw) ?? [] } : {}),
       onceAt: type === "once_at" ? normalizeOptionalTimeString(raw.onceAt) : undefined,
       ...(typeof raw.skipWhenAgentBusy === "boolean" ? { skipWhenAgentBusy: raw.skipWhenAgentBusy } : {})
     };
@@ -897,6 +902,15 @@ function personaAutomationRuleExtensions(raw: Partial<PersonaAutomationRuleDefin
     ...extensions
   } = raw;
   return extensions;
+}
+
+/** Gateway execution excludes explicit DSBot rules owned by the Manager role scheduler. */
+export function projectGatewayAutomationRules(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter((item: unknown) => {
+    const action = item && typeof item === "object" ? (item as { action?: { type?: unknown; target?: { kind?: unknown } } }).action : undefined;
+    return !(action?.type === "deliver_agent" && action.target?.kind === "ds_bot");
+  });
 }
 
 export function normalizePersonaAutomationRules(value: unknown): PersonaAutomationRuleDefinition[] {
@@ -1430,7 +1444,7 @@ function normalizeRouteProfile(
 ): RouteProfileDefinition | null {
   const { agentRoleId: roleId, agentRoleDeviceId } = normalizeRemotePersonaReference(profile);
   const id = sanitizeRoleId(profile.id) || roleId || `route-${index + 1}`;
-  const profileAutomations = normalizePersonaAutomationRules(profile.automationRules ?? definition.automationRules);
+  const profileAutomations = normalizePersonaAutomationRules(projectGatewayAutomationRules(profile.automationRules ?? definition.automationRules));
   const baseRules = Array.isArray(profile.automationRules ?? definition.automationRules)
     ? notificationRulesFromPersonaAutomations(profileAutomations)
     : normalizeRuleDefinitions(profile.notificationRules) ?? [];
@@ -1529,7 +1543,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ? applySpeechRouteVariableDefaults(definition.routeVariables, agentRoleId || "Rabi")
     : definition.routeVariables;
   const configuredNotificationRules = normalizeRuleDefinitions(definition.notificationRules) ?? [];
-  const configuredAutomations = normalizePersonaAutomationRules(definition.automationRules);
+  const configuredAutomations = normalizePersonaAutomationRules(projectGatewayAutomationRules(definition.automationRules));
   const hasPersonaOnlyRules = !agentRoleId && configuredNotificationRules.some(sharedIsBuiltinRolePanelRule);
   const baseNotificationRules = (configuredNotificationRules.length > 0 && !hasPersonaOnlyRules) || agentRoleId
     ? configuredNotificationRules

@@ -2,8 +2,10 @@
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { normalizeDailyScheduleTimes } from "@shared/dailyScheduleTimes";
 import SpeechParameterSlider from "../../../../../ribiwebgui/src/components/SpeechParameterSlider.vue";
 import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
+import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, automationTemplatePatch, loadAutomationTemplates, loadAutomationTemplate, type AutomationTemplate, type AutomationTemplateChoice } from "../persona/automationTemplateClient";
 import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
 import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
@@ -63,6 +65,7 @@ import { openXiaomiHomeRecordings, xiaomiHomeSettingsClient, type XiaomiHomeReso
 import {
   adapterLabel,
   automationRulesForGateway,
+  hasIncompleteDsBotTargetDraft,
   configNameFor,
   defaultHeartbeatSchedule,
   gatewayAdapterTypes,
@@ -86,21 +89,38 @@ const personaAvatarClient = createPersonaAvatarClient(personaService.fetch);
 const personaVoiceIdentityClient = createPersonaVoiceIdentityClient(personaService.fetch);
 const personaSpeech = createSpeechControlClient(personaService.fetch);
 const remoteVoiceProfiles = ref<SpeechPersona[]>([]);
+const dailyTimeDrafts = ref<Record<string, string[]>>({});
+const invalidDsBotTarget = computed(() => hasIncompleteDsBotTargetDraft(store.selectedGateway));
+const invalidDailyTimes = computed(() => Object.values(dailyTimeDrafts.value).some(timeOfDays => normalizeDailyScheduleTimes({ timeOfDays }) === null));
+watch(() => [store.selectedRoleId, store.sourceDeviceId, store.draft], () => { dailyTimeDrafts.value = {}; }, { flush: "sync" });
 const PersonaMessages = defineAsyncComponent(() => import("../components/PersonaMessages.vue"));
 const releaseRoleSave = registerPageSaveAction({
-  dirty: computed(() => store.dirty || routeStore.dirty),
-  ready: computed(() => store.ready && !routeStore.loading),
+  dirty: computed(() => store.dirty || routeStore.dirty || Object.keys(dailyTimeDrafts.value).length > 0),
+  ready: computed(() => store.ready && !routeStore.loading && !invalidDailyTimes.value && !invalidDsBotTarget.value),
   saving: computed(() => store.saving || routeStore.saving),
   save: async () => {
+    if (invalidDailyTimes.value) throw new Error(translateText("请先补全有效的每日时间点。"));
+    if (invalidDsBotTarget.value) throw new Error(translateText("请先完成 DSBot 目标选择。"));
     // Role saves refresh Route data, so commit Route drafts first.
     if (routeStore.dirty) await routeStore.saveChangedRoutes();
     if (store.dirty) await store.save();
+    dailyTimeDrafts.value = {};
   }
 });
 const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
+const automationTemplateDialog = ref(false);
+const automationTemplates = ref<AutomationTemplateChoice[]>([...DEFAULT_AUTOMATION_TEMPLATES]);
+const automationTemplateCursor = ref<string | null>(null);
+const selectedAutomationTemplateId = ref(BLANK_AUTOMATION_TEMPLATE_ID);
+const automationTemplateLoading = ref(false);
+const automationTemplateError = ref("");
+let automationTemplateRequest: AbortController | undefined;
+const selectedAutomationTemplate = computed(() => automationTemplates.value.find(item => item.id === selectedAutomationTemplateId.value));
+onBeforeUnmount(() => automationTemplateRequest?.abort());
+watch(automationTemplateDialog, open => { if (!open) automationTemplateRequest?.abort(); });
 const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
 type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
@@ -154,6 +174,15 @@ let personaMarkdownRequestVersion = 0;
 const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
 
 const gateway = computed(() => store.sourceDeviceId === personaService.deviceId ? store.selectedGateway : null);
+const automationTemplateOwner = computed(() => JSON.stringify([store.selectedRoleId, store.sourceDeviceId,
+  gateway.value?.id || "", gateway.value ? personaReferenceIdentity(gateway.value) : ""]));
+watch(automationTemplateOwner, () => {
+  automationTemplateDialog.value = false;
+  automationTemplateRequest?.abort(); automationTemplateRequest = undefined;
+  automationTemplateLoading.value = false; automationTemplateError.value = "";
+  automationTemplateCursor.value = null; automationTemplates.value = [...DEFAULT_AUTOMATION_TEMPLATES];
+  selectedAutomationTemplateId.value = BLANK_AUTOMATION_TEMPLATE_ID;
+}, { flush: "sync" });
 const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
 const personaSecondaryNavItems = computed(() => buildWebNavigation(
   pluginCatalogStore.contributions.value,
@@ -786,12 +815,56 @@ function openAutomation(ruleId: string): void {
   }
 }
 
-function createAutomation(): void {
+async function openAutomationTemplatePicker(): Promise<void> {
+  automationTemplateDialog.value = true;
+  automationTemplateRequest?.abort();
+  const controller = new AbortController(); automationTemplateRequest = controller;
+  const owner = automationTemplateOwner.value;
+  automationTemplateLoading.value = true; automationTemplateError.value = "";
+  try {
+    const page = await loadAutomationTemplates(personaService.fetch, controller.signal);
+    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = page.items; automationTemplateCursor.value = page.nextCursor; }
+  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
+  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+}
+async function loadMoreAutomationTemplates(): Promise<void> {
+  if (!automationTemplateCursor.value || automationTemplateLoading.value) return;
+  const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
+  const owner = automationTemplateOwner.value;
+  try {
+    const page = await loadAutomationTemplates(personaService.fetch, controller.signal, automationTemplateCursor.value);
+    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = [...automationTemplates.value, ...page.items]; automationTemplateCursor.value = page.nextCursor; }
+  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
+  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+}
+async function createAutomation(choice?: AutomationTemplateChoice): Promise<void> {
+  if (choice && !automationTemplateDialog.value) return;
+  const owner = automationTemplateOwner.value;
+  let template = choice as AutomationTemplate | undefined;
+  if (choice && !choice.action) {
+    automationTemplateRequest?.abort();
+    const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
+    try { template = await loadAutomationTemplate(personaService.fetch, controller.signal, choice.id); if (controller.signal.aborted || !automationTemplateDialog.value || owner !== automationTemplateOwner.value) return; }
+    catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); return; }
+    finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
+  }
+  if (owner !== automationTemplateOwner.value) return;
   const endpoint = selectedAutomationEndpoint.value || "napcat";
-  const id = store.addAutomation(endpoint === "schedule" ? "schedule" : "message", "deliver_agent");
-  if (!id) return;
+  const triggerType = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID && template.triggerType ? template.triggerType : endpoint === "schedule" ? "schedule" : "message";
+  let id: string | undefined;
+  try {
+    const patch = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID ? automationTemplatePatch(template) : undefined;
+    id = store.addAutomation(triggerType, "deliver_agent");
+    if (!id) return;
+    if (patch) store.updateAutomation(id, patch);
+  } catch (error) {
+    if (id) store.removeAutomation(id);
+    automationTemplateError.value = userFacingError(error);
+    return;
+  }
+  automationTemplateDialog.value = false;
   openAutomation(id);
-  selectedEndpoint.value = endpoint;
+  selectedEndpoint.value = triggerType === "schedule" ? "schedule" : endpoint;
 }
 
 function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
@@ -799,8 +872,17 @@ function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void 
   store.updateAutomation(activeAutomation.value.id, patch);
 }
 
+function removeActiveAutomation(): void {
+  const rule = activeAutomation.value;
+  if (!rule) return;
+  delete dailyTimeDrafts.value[rule.id];
+  store.removeAutomation(rule.id);
+  automationDialog.value = false;
+}
+
 function setAutomationTriggerType(type: "message" | "schedule"): void {
   if (!activeAutomation.value || !gateway.value || activeAutomation.value.trigger.type === type) return;
+  delete dailyTimeDrafts.value[activeAutomation.value.id];
   patchAutomation({
     trigger: type === "schedule"
       ? { type: "schedule", schedule: defaultHeartbeatSchedule(gateway.value, "触发时间") }
@@ -854,8 +936,44 @@ function patchAutomationSchedule(patch: Partial<NotificationScheduleDefinition>)
   });
 }
 
+function dailyAutomationTimes(): string[] {
+  const rule = activeAutomation.value;
+  if (!rule || rule.trigger.type !== "schedule") return [];
+  if (dailyTimeDrafts.value[rule.id]) return dailyTimeDrafts.value[rule.id];
+  const schedule = rule.trigger.schedule;
+  const canonical = normalizeDailyScheduleTimes(schedule);
+  if (canonical) return canonical;
+  return Array.isArray(schedule.timeOfDays) && schedule.timeOfDays.length
+    ? schedule.timeOfDays.map(value => String(value ?? "")) : [schedule.timeOfDay ?? ""];
+}
+
+function updateDailyAutomationTimes(values: string[]): void {
+  const rule = activeAutomation.value;
+  if (!rule || rule.trigger.type !== "schedule") return;
+  // Keep incomplete text outside the normalizer so typing does not erase a draft.
+  dailyTimeDrafts.value[rule.id] = values;
+  const timeOfDays = normalizeDailyScheduleTimes({ timeOfDays: values });
+  if (timeOfDays) patchAutomationSchedule({ timeOfDays, timeOfDay: undefined });
+}
+
+function updateDailyAutomationTime(index: number, value: unknown): void {
+  const times = [...dailyAutomationTimes()];
+  times[index] = String(value ?? "");
+  updateDailyAutomationTimes(times);
+}
+
+function removeDailyAutomationTime(index: number): void {
+  updateDailyAutomationTimes(dailyAutomationTimes().filter((_, current) => current !== index));
+}
+
 function setAutomationScheduleType(type: string): void {
   if (type !== "interval" && type !== "daily_time" && type !== "once_at") return;
+  const rule = activeAutomation.value;
+  if (rule) delete dailyTimeDrafts.value[rule.id];
+  if (type === "daily_time" && rule?.trigger.type === "schedule" && !normalizeDailyScheduleTimes(rule.trigger.schedule)) {
+    patchAutomationSchedule({ type, timeOfDays: ["09:00"], timeOfDay: undefined });
+    return;
+  }
   patchAutomationSchedule({ type });
 }
 
@@ -867,7 +985,7 @@ function patchAutomationAction(patch: Record<string, unknown>): void {
 function automationSourceSummary(rule: PersonaAutomationRuleDefinition): string {
   if (rule.trigger.type === "schedule") {
     const schedule = rule.trigger.schedule;
-    if (schedule.type === "daily_time") return `每天 ${schedule.timeOfDay || "未设置时间"}`;
+    if (schedule.type === "daily_time") return `每天 ${normalizeDailyScheduleTimes(schedule)?.join("、") || "未设置时间"}`;
     if (schedule.type === "once_at") return schedule.onceAt ? `一次：${schedule.onceAt.replace("T", " ")}` : "一次性时间未设置";
     const window = schedule.windowStartTime && schedule.windowEndTime
       ? `，${schedule.windowStartTime}–${schedule.windowEndTime}`
@@ -895,7 +1013,7 @@ function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] 
   if (rule.trigger.type === "schedule") {
     const schedule = rule.trigger.schedule;
     if (schedule.type === "interval" && Number(schedule.intervalSeconds || 0) <= 0) issues.push("间隔必须大于 0 秒。");
-    if (schedule.type === "daily_time" && !schedule.timeOfDay) issues.push("还没有设置每天执行时间。");
+    if (schedule.type === "daily_time" && !normalizeDailyScheduleTimes(schedule)) issues.push("请先补全有效的每日时间点。");
     if (schedule.type === "once_at" && !schedule.onceAt) issues.push("还没有设置执行日期和时间。");
   }
   if (rule.action.type === "run_script") {
@@ -1869,7 +1987,7 @@ onBeforeUnmount(() => {
               <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
                 <div class="automation-toolbar">
                   <strong>{{ selectedAutomationEndpointTitle }}</strong>
-                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="createAutomation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
+                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationTemplatePicker">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
                 </div>
 
                 <div v-if="visibleAutomations.length === 0" class="empty-state">
@@ -1937,6 +2055,27 @@ onBeforeUnmount(() => {
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="templateVariablesDialog = false">关闭</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="automationTemplateDialog" max-width="720" scrollable aria-label="选择投递模板">
+      <v-card class="app-card">
+        <v-card-title>选择投递模板</v-card-title>
+        <v-card-text>
+          <v-progress-linear v-if="automationTemplateLoading" indeterminate class="mb-3" />
+          <v-alert v-if="automationTemplateError" type="warning" variant="tonal" class="mb-3">{{ automationTemplateError }}</v-alert>
+          <v-select v-model="selectedAutomationTemplateId" :items="automationTemplates" item-title="title" item-value="id" :return-object="false" :disabled="automationTemplateLoading" label="投递模板">
+            <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :title="t(item.raw.title)" :subtitle="t(item.raw.description)" /></template>
+            <template #selection="{ item }">{{ t(item.raw.title) }}</template>
+          </v-select>
+          <v-btn v-if="automationTemplateCursor" variant="text" :disabled="automationTemplateLoading" @click="loadMoreAutomationTemplates">更多模板</v-btn>
+          <p v-if="selectedAutomationTemplate" class="section-note">{{ t(selectedAutomationTemplate.description) }}</p>
+          <p class="section-note">模板会填入普通规则，执行时间、目标 Agent 和正文可继续编辑。</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer /><v-btn variant="text" @click="automationTemplateDialog = false">取消</v-btn>
+          <v-btn color="primary" :disabled="!selectedAutomationTemplate || automationTemplateLoading" @click="createAutomation(selectedAutomationTemplate)">添加规则</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -2332,15 +2471,23 @@ onBeforeUnmount(() => {
                           @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
                         />
                       </template>
-                      <v-text-field
-                        v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'"
-                        :model-value="activeScheduleTrigger?.schedule?.timeOfDay || ''"
-                        type="time"
-                        label="每天执行时间"
-                        density="compact"
-                        variant="outlined"
-                        @update:model-value="value => patchAutomationSchedule({ timeOfDay: String(value || '') })"
-                      />
+                      <div v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'" class="persona-daily-times">
+                        <p class="text-caption text-medium-emphasis">同一条规则会在每天的这些时间运行，共用启停开关。</p>
+                        <div v-for="(time, index) in dailyAutomationTimes()" :key="index" class="persona-daily-time">
+                          <v-text-field
+                            :model-value="time"
+                            :label="`${translateText('执行时间点')} ${index + 1}`"
+                            placeholder="10:00"
+                            density="compact"
+                            variant="outlined"
+                            :disabled="store.saving"
+                            :error-messages="normalizeDailyScheduleTimes({ timeOfDay: time }) ? [] : [translateText('请输入有效时间（HH:mm 或 HH:mm:ss）。')]"
+                            @update:model-value="value => updateDailyAutomationTime(index, value)"
+                          />
+                          <v-btn variant="text" size="small" :disabled="store.saving || dailyAutomationTimes().length <= 1" @click="removeDailyAutomationTime(index)">移除时间点</v-btn>
+                        </div>
+                        <v-btn variant="text" size="small" :disabled="store.saving" @click="updateDailyAutomationTimes([...dailyAutomationTimes(), ''])">添加时间点</v-btn>
+                      </div>
                       <v-text-field
                         v-else
                         :model-value="activeScheduleTrigger?.schedule?.onceAt || ''"
@@ -2402,6 +2549,7 @@ onBeforeUnmount(() => {
                   <template v-if="activeAutomation.action.type === 'deliver_agent'">
                     <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
                       @update:model-value="target => patchAutomationAction({ target })" />
+                    <p v-if="invalidDsBotTarget" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
                     <div v-if="activeAutomation.trigger.type === 'message'" class="mt-4">
                       <v-switch
                         :model-value="automationRecentMessageLimit > 0"
@@ -2496,7 +2644,7 @@ onBeforeUnmount(() => {
             v-if="activeAutomation.id !== 'role-panel-message'"
             color="error"
             variant="text"
-            @click="store.removeAutomation(activeAutomation.id); automationDialog = false"
+            @click="removeActiveAutomation()"
           >删除规则</v-btn>
           <v-spacer />
           <span v-if="automationDeliveryIncomplete" class="text-caption mr-2">请选择 Agent 和会话</span>
@@ -2508,6 +2656,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.persona-daily-times { display: grid; gap: 8px; min-width: 0; }
+.persona-daily-time { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.persona-daily-time > .v-input { flex: 1; min-width: 0; }
 .automation-card-source { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .automation-card-conversation-label { display: grid; gap: 2px; min-width: 0; }
 .automation-card-conversation-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

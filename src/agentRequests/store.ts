@@ -80,6 +80,8 @@ export class AgentRequestStore {
   private readonly timeoutMs: number;
   private readonly maxQueue: number;
   private launch?: () => void;
+  private launchOwner?: () => void;
+  private recovery?: Promise<void>;
 
   constructor(persistence: AgentRequestPersistence | string, private readonly now: () => Date = () => new Date(), options: StoreOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? getTimeoutMs("backend.agentRequests.store.owner.timeoutMs", 60_000);
@@ -97,7 +99,7 @@ export class AgentRequestStore {
     const source = import.meta.url.endsWith(".ts");
     const worker = options.workerURL ? new URL(options.workerURL.href) : new URL(source ? "./persistenceWorker.ts" : "./persistenceWorker.js", import.meta.url);
     const resolvedStatePath = path.resolve(statePath);
-    this.launch = () => { try {
+    this.launch = this.launchOwner = () => { try {
       const launchOptions: ForkOptions & { windowsHide: boolean } = { execArgv: source ? ["--import", "tsx"] : [],
         serialization: "advanced", env: workerEnvironment(), windowsHide: true, stdio: ["ignore", "ignore", "ignore", "ipc"] };
       const child = this.child = fork(fileURLToPath(worker), [resolvedStatePath], launchOptions);
@@ -111,15 +113,31 @@ export class AgentRequestStore {
         off(_event: "message", listener: (value: any) => void) { child.off("message", listener); } };
       this.wire = new AgentRequestPersistenceTransport(port, (id, value) => this.receive(id, value), error => this.fail(
         new AgentRequestStoreUnavailableError("Agent request persistence transport failed.", this.hasUnconfirmedMutation() ? "unknown" : "not_started", { cause: error })));
-      child.once("error", error => this.fail(new AgentRequestStoreUnavailableError("Agent request persistence owner could not start.", "not_started", { cause: error })));
+      child.once("error", error => this.fail(new AgentRequestStoreUnavailableError("Agent request persistence owner failed.",
+        this.hasUnconfirmedMutation() ? "unknown" : "not_started", { cause: error })));
       this.startupTimer = setTimeout(() => this.fail(new AgentRequestStoreUnavailableError("Agent request evidence loading timed out.")), this.timeoutMs);
       this.startupTimer.unref();
     } catch (error) { this.fail(new AgentRequestStoreUnavailableError("Agent request persistence owner could not start.", "not_started", { cause: error })); } };
   }
   ready(): Promise<void> {
+    if (this.closing) return Promise.reject(new AgentRequestStoreUnavailableError("Agent request persistence owner is closing."));
+    if (this.failure && !this.loaded && this.failure.commitState === "not_started" && this.launchOwner) {
+      if (!this.recovery) {
+        this.recovery = (async () => {
+          await this.childClosed;
+          if (this.closing) throw new AgentRequestStoreUnavailableError("Agent request persistence owner is closing.");
+          this.failure = undefined;
+          this.initialized = new Promise((resolve, reject) => { this.resolveReady = resolve; this.rejectReady = reject; });
+          void this.initialized.catch(() => {});
+          this.launchOwner!();
+          await this.initialized;
+        })().finally(() => { this.recovery = undefined; });
+      }
+      return this.recovery;
+    }
+    if (this.failure) return Promise.reject(this.failure);
     const launch = this.launch;
     this.launch = undefined;
-    if (this.closing) return Promise.reject(new AgentRequestStoreUnavailableError("Agent request persistence owner is closing."));
     launch?.();
     return this.initialized;
   }
@@ -216,7 +234,6 @@ export class AgentRequestStore {
     throw error;
   }
   private async mutate<T>(method: string, args: unknown[] | (() => unknown[])): Promise<T> {
-    if (this.failure) throw this.failure;
     const captured = typeof args === "function" ? args : structuredClone(args);
     return this.enqueue(async () => {
       await this.ready(); this.assertComplete();

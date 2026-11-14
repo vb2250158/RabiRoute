@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { withFileLockSync } from "../shared/filePersistence.js";
+import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION, type ComputerSettingsDefinition, type ComputerSettingsRead, type ComputerFeature, type ComputerFeaturePolicy} from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import { migrateAgentDeliveryFiles } from "./agentDeliveryMigrationFiles.js";
 import { normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "../shared/agentDeliveryTarget.js";
 import path from "node:path";
@@ -38,13 +41,20 @@ import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { normalizeRemotePersonaReference, removePersonaOwnedGatewayConfig } from "../shared/remotePersonaReference.js";
 
 export type ManagerConfig = {
+  computerSettings?: unknown;
+  [key: string]: unknown;
   routeDir?: string;
   rolesDir?: string;
 };
 
+
+export type ManagerDataDomain = "roles" | "route";
+export type ManagerDomainRoot = Readonly<{ value?: string; rawValue?: unknown; error?: Readonly<{ code: "MANAGER_DIRECTORY_INVALID"; field: "rolesDir" | "routeDir"; message: string }> }>;
+
 export type ManagerConfigRepositoryOptions = {
   rootDir: string;
   managerPort: number;
+  resolveComputerDefinition?: () => ComputerSettingsDefinition | undefined;
   routeRoot?: string;
   rolesRoot?: string;
 };
@@ -69,38 +79,114 @@ export function migrateLegacyCopilotThreadName(
 export class ManagerConfigRepository {
   readonly rootDir: string;
   private currentManagerPort: number;
-  routeRoot: string;
-  rolesRoot: string;
+  private readonly computerFeaturePolicyCache = new Map<ComputerFeature,ComputerFeaturePolicy>();
+  private computerSettingsRawCache?: { value: unknown };
+  private computerSettingsCache?: ComputerSettingsRead;
+  private computerExecutionSettingsCache?: {value:unknown};
+  private currentComputerDefinition=BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION;
+  private readonly resolveComputerDefinition?:()=>ComputerSettingsDefinition|undefined;
+  private routeRootResolution!: ManagerDomainRoot;
+  private rolesRootResolution!: ManagerDomainRoot;
+  get routeRoot(): string { return this.requireDomainRoot("route"); }
+  set routeRoot(value: string) { this.routeRootResolution = this.resolveDomainRoot("route", value); }
+  get rolesRoot(): string { return this.requireDomainRoot("roles"); }
+  set rolesRoot(value: string) { this.rolesRootResolution = this.resolveDomainRoot("roles", value); }
+  domainRoot(domain: ManagerDataDomain): ManagerDomainRoot { return domain === "roles" ? this.rolesRootResolution : this.routeRootResolution; }
+  requireDomainRoot(domain: ManagerDataDomain): string {
+    const result = this.domainRoot(domain);
+    if (result.error) throw Object.assign(new Error(result.error.message), result.error, { status: 503 });
+    return result.value!;
+  }
+  private resolveDomainRoot(domain: ManagerDataDomain, value: unknown): ManagerDomainRoot {
+    const field = domain === "roles" ? "rolesDir" : "routeDir";
+    if (typeof value !== "string" || !value.trim() || value.includes(String.fromCharCode(0))) return Object.freeze({ rawValue: value, error: Object.freeze({ code: "MANAGER_DIRECTORY_INVALID" as const, field, message: `Invalid manager.json ${field}; repair this directory setting. The original value was preserved.` }) });
+    return Object.freeze({ value: path.resolve(this.rootDir, value), rawValue: value });
+  }
 
   constructor(options: ManagerConfigRepositoryOptions) {
     this.rootDir = options.rootDir;
+    this.resolveComputerDefinition=options.resolveComputerDefinition;
     this.currentManagerPort = options.managerPort;
     const cfg = this.readManagerConfig();
-    this.routeRoot = path.resolve(this.rootDir, options.routeRoot ?? cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
-    this.rolesRoot = path.resolve(this.rootDir, options.rolesRoot ?? cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+    this.routeRoot = options.routeRoot ?? cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route");
+    this.rolesRoot = options.rolesRoot ?? cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles");
   }
 
   get managerConfigPath(): string {
     return path.join(this.rootDir, "data", "manager.json");
   }
 
-  readManagerConfig(): ManagerConfig {
+  readManagerConfig(strict = false): ManagerConfig {
     if (!fs.existsSync(this.managerConfigPath)) return {};
     try {
-      return JSON.parse(fs.readFileSync(this.managerConfigPath, "utf8")) as ManagerConfig;
-    } catch {
+      const value = JSON.parse(fs.readFileSync(this.managerConfigPath, "utf8"));
+      if (strict && (!value || typeof value !== "object" || Array.isArray(value))) throw new Error("Invalid Manager configuration object.");
+      return value as ManagerConfig;
+    } catch (error) {
+      if (strict) throw Object.assign(new Error("The original data/manager.json configuration is invalid or unavailable; its bytes were not changed."),{code:"COMPUTER_SETTINGS_INVALID",field:"computerSettings"});
       return {};
     }
   }
 
+    readComputerFeaturePolicy(feature:ComputerFeature, refresh=false): ComputerFeaturePolicy {
+    const definition=this.getComputerSettingsDefinition();
+    if(refresh)this.computerFeaturePolicyCache.delete(feature);
+    const cached=this.computerFeaturePolicyCache.get(feature);if(cached)return cached;
+    const policy=definition.projectFeaturePolicy(this.readComputerSettingsRaw(refresh),feature);
+    this.computerFeaturePolicyCache.set(feature,policy);return policy;
+  }
+
+  getComputerSettingsDefinition():ComputerSettingsDefinition {
+    const value=this.resolveComputerDefinition?.()??this.currentComputerDefinition;
+    if(value!==this.currentComputerDefinition){this.currentComputerDefinition=value;this.computerSettingsCache=undefined;this.computerExecutionSettingsCache=undefined;this.computerFeaturePolicyCache.clear();}
+    return value;
+  }
+  readComputerExecutionSettings():unknown {
+    const definition=this.getComputerSettingsDefinition();
+    if(!this.computerExecutionSettingsCache)this.computerExecutionSettingsCache={value:definition.materialize(this.readComputerSettingsRaw())};
+    return this.computerExecutionSettingsCache.value;
+  }
+  readComputerSettingsRaw(refresh = false): unknown {
+    if (refresh) this.computerSettingsRawCache = undefined;
+    if (!this.computerSettingsRawCache) this.computerSettingsRawCache = { value: this.readManagerConfig(true).computerSettings };
+    return this.computerSettingsRawCache.value;
+  }
+
+    readComputerSettings(refresh = false): ComputerSettingsRead {
+    const definition=this.getComputerSettingsDefinition();
+    if(refresh){this.computerSettingsCache=undefined;this.computerSettingsRawCache=undefined;this.computerExecutionSettingsCache=undefined;this.computerFeaturePolicyCache.clear();}
+    if(this.computerSettingsCache)return this.computerSettingsCache;
+    const rawSettings=this.readComputerSettingsRaw(),settings=this.readComputerExecutionSettings();
+    const revision='"sha256:'+createHash("sha256").update(JSON.stringify([definition.digest,rawSettings===undefined?{absent:true}:{present:true,value:rawSettings}])).digest("hex")+'"';
+    return this.computerSettingsCache={settings,rawSettings,revision,schema:definition.schema,defaults:definition.defaults,definitionDigest:definition.digest,diagnostics:definition.diagnose(settings)};
+  }
+
+    patchComputerSettings(patch: unknown, expectedRevision: string, restorePaths: readonly string[] = []): ComputerSettingsRead {
+    withFileLockSync(`${this.managerConfigPath}.lock`,()=>{
+      const definition=this.getComputerSettingsDefinition(),current=this.readComputerSettings(true);
+      if(current.revision!==expectedRevision)throw Object.assign(new Error("Computer settings revision conflict. Read the original computer-settings before merging."),{code:"COMPUTER_SETTINGS_CONFLICT"});
+      const config=this.readManagerConfig(true);
+      this.writeManagerConfig({...config,computerSettings:definition.patchRaw(this.readComputerSettingsRaw(),patch,restorePaths)});
+    });
+    return this.readComputerSettings();
+  }
+
   refreshManagerConfig(): ManagerConfig {
+    this.computerSettingsCache = undefined;this.computerSettingsRawCache = undefined;this.computerExecutionSettingsCache = undefined;
+    this.computerFeaturePolicyCache.clear();
     const cfg = this.readManagerConfig();
-    this.routeRoot = path.resolve(this.rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
-    this.rolesRoot = path.resolve(this.rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+    this.routeRoot = cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route");
+    this.rolesRoot = cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles");
     return cfg;
   }
 
   writeManagerConfig(cfg: ManagerConfig): void {
+    if (!Object.hasOwn(cfg,"computerSettings")) {
+      const saved = this.readManagerConfig().computerSettings;
+      if (saved !== undefined) cfg = {...cfg,computerSettings:saved};
+    }
+    this.computerSettingsCache = undefined;this.computerSettingsRawCache = undefined;this.computerExecutionSettingsCache = undefined;
+    this.computerFeaturePolicyCache.clear();
     const existed = fs.existsSync(this.managerConfigPath);
     try {
       fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
@@ -129,8 +215,8 @@ export class ManagerConfigRepository {
       outcome: "committed",
       changes: Object.keys(cfg).sort().map(field => ({ field }))
     });
-    this.routeRoot = path.resolve(this.rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
-    this.rolesRoot = path.resolve(this.rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+    this.routeRoot = cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route");
+    this.rolesRoot = cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles");
   }
 
   ensureDataDirs(): void {
@@ -150,7 +236,7 @@ export class ManagerConfigRepository {
       });
       this.refreshManagerConfig();
     }
-    if (!fs.existsSync(this.rolesRoot) && fs.existsSync(path.join(exampleDataDir, "roles"))) {
+    if (this.domainRoot("roles").value && !fs.existsSync(this.rolesRoot) && fs.existsSync(path.join(exampleDataDir, "roles"))) {
       fs.mkdirSync(path.dirname(this.rolesRoot), { recursive: true });
       fs.cpSync(path.join(exampleDataDir, "roles"), this.rolesRoot, { recursive: true, force: false, errorOnExist: false });
       recordDataMutationAudit({
@@ -163,7 +249,7 @@ export class ManagerConfigRepository {
         outcome: "committed"
       });
     }
-    if (!fs.existsSync(this.routeRoot) && fs.existsSync(path.join(exampleDataDir, "route"))) {
+    if (this.domainRoot("route").value && !fs.existsSync(this.routeRoot) && fs.existsSync(path.join(exampleDataDir, "route"))) {
       fs.mkdirSync(path.dirname(this.routeRoot), { recursive: true });
       fs.cpSync(path.join(exampleDataDir, "route"), this.routeRoot, { recursive: true, force: false, errorOnExist: false });
       recordDataMutationAudit({
@@ -176,8 +262,8 @@ export class ManagerConfigRepository {
         outcome: "committed"
       });
     }
-    fs.mkdirSync(this.rolesRoot, { recursive: true });
-    fs.mkdirSync(this.routeRoot, { recursive: true });
+    if (this.domainRoot("roles").value) fs.mkdirSync(this.rolesRoot, { recursive: true });
+    if (this.domainRoot("route").value) fs.mkdirSync(this.routeRoot, { recursive: true });
     // Do not synchronously traverse and rewrite every role on Manager startup.
     // rolesRoot may be NAS-backed; a broad legacy migration here can prevent the
     // local control-plane listener from ever coming up. Call migrateLegacyConfigs
@@ -217,7 +303,7 @@ export class ManagerConfigRepository {
       }
       this.refreshManagerConfig();
     }
-    if (!await exists(this.rolesRoot) && await exists(path.join(exampleDataDir, "roles"))) {
+    if (this.domainRoot("roles").value && !await exists(this.rolesRoot) && await exists(path.join(exampleDataDir, "roles"))) {
       await fs.promises.mkdir(path.dirname(this.rolesRoot), { recursive: true });
       await fs.promises.cp(path.join(exampleDataDir, "roles"), this.rolesRoot, {
         recursive: true,
@@ -234,7 +320,7 @@ export class ManagerConfigRepository {
         outcome: "committed"
       });
     }
-    if (!await exists(this.routeRoot) && await exists(path.join(exampleDataDir, "route"))) {
+    if (this.domainRoot("route").value && !await exists(this.routeRoot) && await exists(path.join(exampleDataDir, "route"))) {
       await fs.promises.mkdir(path.dirname(this.routeRoot), { recursive: true });
       await fs.promises.cp(path.join(exampleDataDir, "route"), this.routeRoot, {
         recursive: true,
@@ -252,8 +338,8 @@ export class ManagerConfigRepository {
       });
     }
     await Promise.all([
-      fs.promises.mkdir(this.rolesRoot, { recursive: true }),
-      fs.promises.mkdir(this.routeRoot, { recursive: true })
+      ...(this.domainRoot("roles").value ? [fs.promises.mkdir(this.rolesRoot, { recursive: true })] : []),
+      ...(this.domainRoot("route").value ? [fs.promises.mkdir(this.routeRoot, { recursive: true })] : [])
     ]);
   }
 
@@ -276,14 +362,14 @@ export class ManagerConfigRepository {
     if (normalizeRemotePersonaReference({ agentRoleId: roleId, agentRoleDeviceId }).agentRoleDeviceId) return {};
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
-    return readPersonaConfigFragment(this.personaConfigPath(safeRoleId));
+    return readPersonaConfigFragment(this.personaConfigPath(safeRoleId), { gatewayProjection: true });
   }
 
   async readRoleMessageConfigAsync(roleId: string | undefined, agentRoleDeviceId?: string): Promise<Partial<GatewayDefinition>> {
     if (normalizeRemotePersonaReference({ agentRoleId: roleId, agentRoleDeviceId }).agentRoleDeviceId) return {};
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
-    return readPersonaConfigFragmentAsync(this.personaConfigPath(safeRoleId));
+    return readPersonaConfigFragmentAsync(this.personaConfigPath(safeRoleId), { gatewayProjection: true });
   }
 
   personaConfigPath(roleId: string): string {

@@ -39,7 +39,7 @@ export class DeliveryStore {
     if (!columns.includes("manager_cancel_pending")) this.db.exec("ALTER TABLE deliveries ADD COLUMN manager_cancel_pending INTEGER NOT NULL DEFAULT 0");
     this.db.exec("CREATE INDEX IF NOT EXISTS delivery_target_order ON deliveries(target_key,seq,state)");
     // A crashed send is unknown, never reset to a fresh POST.
-    this.db.prepare("UPDATE deliveries SET state='unknown',next_attempt=0 WHERE state='sending'").run();
+    this.db.prepare("UPDATE deliveries SET state='unknown',next_attempt=0 WHERE state='sending' OR (kind='agent-delivery' AND (state='pending' OR (state='blocked' AND attempts=0 AND last_error IN ('DELIVERY_HTTP_401','DELIVERY_HTTP_403','DELIVERY_MANAGER_CHANGED','DELIVERY_MANAGER_IDENTITY_UNAVAILABLE'))))").run();
   }
   submit(id, kind, payload, { managerGuid, managerOrigin, managerHint, targetKey } = {}) {
     if (typeof id !== "string" || !id.trim() || id.length > 512 || /[\x00-\x1f\x7f]/.test(id)) throw new Error("A stable delivery intent ID is required.");
@@ -88,14 +88,15 @@ export class DeliveryStore {
     return { items: items.map(row => this.project(row)), nextCursor: rows.length > limit ? String(items.at(-1).seq) : null, counts };
   }
   due(limit = 32, { ordered = false, activeTargets = [], excludeIds = [], perTarget = limit } = {}) {
-    const earlier = ordered ? " AND (d.manager_cancel_pending=1 OR NOT EXISTS(SELECT 1 FROM deliveries earlier WHERE coalesce(earlier.target_key,earlier.id)=coalesce(d.target_key,d.id) AND earlier.seq<d.seq AND earlier.state NOT IN ('delivered','cancelled')))" : "";
+    const earlier = ordered ? ` AND (d.manager_cancel_pending=1 OR NOT EXISTS(SELECT 1 FROM deliveries earlier WHERE coalesce(earlier.target_key,earlier.id)=coalesce(d.target_key,d.id) AND earlier.seq<d.seq AND earlier.state NOT IN ('delivered','cancelled') AND (earlier.kind<>'agent-delivery' OR earlier.state IN ('pending','sending'))))` : "";
     const excluded = excludeIds.length ? ` AND d.id NOT IN (${excludeIds.map(() => "?").join(",")})` : "";
     const slots = activeTargets.length ? `CASE target_key ${activeTargets.map(() => "WHEN ? THEN ?").join(" ")} ELSE ? END` : "?";
     const ids = this.db.prepare(`WITH ranked AS (
       SELECT d.id,d.seq,d.next_attempt,d.manager_cancel_pending,coalesce(d.target_key,d.id) AS target_key,
         row_number() OVER(PARTITION BY coalesce(d.target_key,d.id) ORDER BY d.manager_cancel_pending DESC,d.seq) AS target_rank
       FROM deliveries d WHERE (d.state NOT IN ('delivered','blocked','cancelled') OR (d.state='cancelled' AND d.manager_cancel_pending=1) OR (d.state='blocked' AND d.last_error IN ('DELIVERY_HTTP_401','DELIVERY_HTTP_403','DELIVERY_MANAGER_CHANGED','DELIVERY_MANAGER_IDENTITY_UNAVAILABLE')))
-        AND d.next_attempt<=?${earlier}${excluded})
+        AND d.next_attempt<=?${earlier}${excluded}
+        AND (d.kind<>'agent-delivery' OR d.manager_cancel_pending=1 OR (d.attempts=0 AND (d.state='pending' OR (d.state='blocked' AND d.last_error IN ('DELIVERY_HTTP_401','DELIVERY_HTTP_403','DELIVERY_MANAGER_CHANGED','DELIVERY_MANAGER_IDENTITY_UNAVAILABLE'))))))
       SELECT id FROM ranked WHERE target_rank<=${slots} ORDER BY manager_cancel_pending DESC,next_attempt,seq LIMIT ?`)
       .all(this.now(), ...excludeIds, ...activeTargets.flatMap(item => [item.targetKey, item.slots]), perTarget, limit);
     // Only scheduling identities enter the window; materialize immutable bodies
@@ -110,7 +111,7 @@ export class DeliveryStore {
   update(id, state, { error = null, receipt, delayMs = 0, attempt = false } = {}) {
     const old = this.raw(id); if (!old || old.state === "delivered" || old.state === "cancelled") return this.get(id);
     this.db.prepare("UPDATE deliveries SET state=?,updated=?,next_attempt=?,last_error=?,receipt=?,attempts=attempts+? WHERE id=?")
-      .run(state, this.now(), this.now() + delayMs, error, receipt === undefined ? old.receipt : JSON.stringify(receipt), attempt ? 1 : 0, id);
+      .run(state, this.now(), old.kind === "agent-delivery" && state !== "pending" && !(state === "blocked" && old.attempts === 0) ? 0 : this.now() + delayMs, error, receipt === undefined ? old.receipt : JSON.stringify(receipt), attempt ? 1 : 0, id);
     return this.get(id);
   }
   cancel(id) {

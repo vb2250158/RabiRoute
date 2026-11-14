@@ -1,5 +1,6 @@
 // Japanese interface copy. Configured names and runtime data keep their original text.
 export const japaneseCatalog: Record<string, string> = {
+  "角色目录暂未完整更新，已有角色仍可选择。": "ロール一覧の更新が一部完了していません。読み込み済みのロールは引き続き選択できます。",
   "插件目录暂时无法刷新，正在显示上次读取的界面。": "プラグイン一覧を更新できませんでした。前回の画面を引き続き表示しています。",
   "部分插件目录项暂不可用，其余功能可继续使用。": "一部のプラグイン項目を表示できません。他の機能は引き続き利用できます。",
 

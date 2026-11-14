@@ -1,4 +1,4 @@
-import {agentNativeFunction,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
+import {agentNativeFunction,invokeScopedAgentManagerOperation,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
 import {isDshSessionId} from './shared/dshSessionIdentity.js';
 import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "./agentRequests/endpointDelivery.js";
@@ -45,6 +45,9 @@ import {
   normalizeRabiDeliveryBlock,
   renderRabiDelivery,
   renderRabiDeliveryContent,
+  RABI_MESSAGE_SOURCE_HEADER,
+  RABI_MESSAGE_CONTENT_HEADER,
+  RABI_MESSAGE_UNKNOWN,
   type RabiMessageSource
 } from "./shared/rabiMessage.js";
 import {
@@ -86,7 +89,7 @@ export type AgentThreadRequest = {
   instanceBinding?: AgentInstanceBinding;
   /** Original business ledger location for a formal cross-PC reply; never grants source authority. */
   ledgerOwnerDeviceId?: string;
-  action?: "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
+  action?: "ds_bot_catalog" | "ds_bot_deliver" | "ds_bot_reconcile" | "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
   agentAdapter?: AgentAdapterType;
   query?: string;
   limit?: number;
@@ -95,6 +98,7 @@ export type AgentThreadRequest = {
   deliveryId?: string;
   title?: string;
   prompt?: string;
+  dsBot?: { botScopeId: string; botId: string; scheduledAt?: string };
   grokBotDelivery?: { deliveryType: "private" | "group"; sendMode: "direct" | "identity"; senderAgentId?: string };
   cwd?: string;
   createIfMissing?: boolean;
@@ -195,6 +199,8 @@ export type AgentThreadRequestOptions = {
   callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"];
   /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
   requestAuthority?: () => void;
+  /** Target-local new-work admission only; original DSBot receipt reads do not call this guard. */
+  assertNewAgentTask?: () => void;
   remoteSource?: AgentThreadRemoteSource;
   /** Build an already-addressed return endpoint from ingress metadata, without source qualification. */
   remoteEndpoint?: (nodeId: string, agentId: string, sessionId: string, provider?: string, authorizationIncarnation?: string) => AgentRequestEndpoint;
@@ -396,9 +402,15 @@ function standaloneWorkspacePolicyPrompt(
   deliveryId?: string
 ): string {
   if (!messageSource) return [
-    ...(deliveryId ? ['[投递编号]\ndeliveryId: ' + deliveryId] : []),
+    RABI_MESSAGE_SOURCE_HEADER,
+    `- 处理端：${RABI_MESSAGE_UNKNOWN}`,
+    `- 会话：${RABI_MESSAGE_UNKNOWN}`,
+    `- 会话 ID：${RABI_MESSAGE_UNKNOWN}`,
+    ...(deliveryId ? [`- 投递 ID：${deliveryId}`] : []),
+    `- 投递时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+    "", RABI_MESSAGE_CONTENT_HEADER,
     renderRabiDeliveryContent({ messageContent: rawPrompt, contextBlocks, controlBlocks })
-  ].join('\n\n');
+  ].join('\n');
   return renderRabiDelivery({
     messageSource,
     messageContent: rawPrompt,
@@ -882,6 +894,17 @@ export async function handleAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const result = await withAgentManagerInvocation(options, () => executeAgentThreadRequest(request, options, driver));
+  if (request.action === "send" || (request.action === "create" &&
+      typeof request.prompt === "string" && request.prompt.trim())) {
+    const source = describeAgentThreadMessageSource(request.messageSource, options.remoteSource);
+    const warnings = Array.isArray(result.data.warnings) ? result.data.warnings : [];
+    if (!source) {
+      warnings.push(request.messageSource == null
+        ? "未提供 messageSource，本次投递使用「未知」来源"
+        : "messageSource 信息不完整，本次投递使用「未知」来源");
+    }
+    result.data.warnings = warnings;
+  }
   if (request.action === "send" && (request.messageSource?.type === "agent" || request.messageSource?.type === "agent_hook")
     && (!options.remoteSource || Boolean(result.data.source && result.data.messageSource))
     && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {
@@ -907,6 +930,11 @@ async function executeAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const action = request.action;
+  if (action === "ds_bot_catalog" || action === "ds_bot_deliver" || action === "ds_bot_reconcile") {
+    if (request.agentAdapter !== "dsh") throw new Error("DSBot operations require the selected DSH provider.");
+    if (request.imagePaths?.length || request.threadId || request.createIfMissing || request.grokBotDelivery) throw new Error("DSBot operations cannot use ordinary session or group delivery options.");
+    return invokeScopedAgentManagerOperation<AgentThreadRequestResult>("dsh", "ds-bot.request", { request, baseUrl: options.dshBaseUrl }, { assertCurrent: options.requestAuthority, nativeArgs: [options.assertNewAgentTask] });
+  }
   if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
     return executeEndpointAgentDelivery(request, options.endpointDelivery);
   }

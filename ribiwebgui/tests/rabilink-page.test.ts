@@ -29,6 +29,7 @@ test("deferred pre-save read cannot replace the successful identity snapshot", a
 });
 test("RabiLink tabs normalize query values without a second route", () => {
   assert.equal(rabiLinkTab("agents"), "agents");
+  assert.equal(rabiLinkTab("computer"), "computer");
   assert.equal(rabiLinkTab("config"), "config");
   for (const value of [undefined, ["config"], "invalid", "home"]) assert.equal(rabiLinkTab(value), "home");
 });

@@ -43,8 +43,9 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
   if (args.includes("--agent")) throw new Error("--agent registration was removed. Use --agent-type TYPE --id FULL_SESSION_ID.");
   const agentType = option("--agent-type");
   const sessionId = option("--id");
-  if (!agentType || !sessionId) throw new Error("Each call requires --agent-type TYPE and --id FULL_SESSION_ID; no registration or binding is required.");
+
   const client = createManagerClient({ config, configPath, agentType, sessionId, fetchImpl, discover });
+  try {
   if (downloading) {
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -58,7 +59,7 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
   }
   if (uploading) {
     if (output || ["--body-stdin", "--raw-stdin", "--body-file", "--header", "--if-match", "--idempotency-key", "--stream"].some(flag => args.includes(flag))) throw new Error("--upload does not accept API body, output or header options; --upload-id is the stable idempotency key.");
-    return client.upload(option("--upload"), option("--upload-id"));
+    return await client.upload(option("--upload"), option("--upload-id"));
   }
   if (args.includes("--upload-id")) throw new Error("--upload-id requires --upload.");
   const headers = Object.create(null);
@@ -164,4 +165,5 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
   }
+  } finally { await client.close(); }
 }

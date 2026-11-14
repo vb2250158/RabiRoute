@@ -22,7 +22,7 @@ An individual scan loads the package implementation in its isolated execution bo
 
 RabiRoute owns the common binding, resolution, delivery and receipt contracts; each adapter translates only the session interface owned by its host. DSH uses its owner API. An additional Rabi tool plugin, pinned plugin version or enhancement status is not a prerequisite for base discovery/delivery. Scanning does not request the retired `rabirouteAgent/status` endpoint or recommend installing retired plugin collections.
 
-Host enhancements are separate and optional. Displaying a bound Rabi plan in a DSH task sidebar is a future UI extension, **not currently implemented**; Codex and future adapters need not reproduce that UI. Enhancements access Manager-owned plans through APIs without duplicating business truth. Lifecycle Hooks are installed, diagnosed and accepted separately as needed. Optional enhancements never waive existing approval, formal sending or permission contracts.
+Host enhancements are separate and optional. A DSH sidebar displaying a bound plan is accepted against the actual host and extension versions; Codex and other Agents need not reproduce that UI. Enhancements read authoritative plans through public Rabi APIs. Base connectivity, API calls and delivery work independently of their enablement. Lifecycle Hooks are installed, diagnosed and accepted as needed, retaining existing host permissions and explicit user configuration.
 
 Migration does not automatically uninstall extensions, change existing task bindings or roll back DSH profiles. First remove extension dependencies from base scanning, then independently verify host discovery, same-task continuation and enhancements. Passing source tests does not prove deployment in the running Manager; real delivery requires separate acceptance.
 
@@ -34,7 +34,7 @@ This section defines feature ownership across Rabi, DSH, Codex and other Agents;
 
 - **Rabi owns business behavior and policies**: persona definitions, context selection, memory management and consolidation scheduling, plan state, secretary and business-task bindings, message routing, reply requests, channel sending and receipts. Rabi may delegate reasoning or tool execution to DSH, Codex or another handler; results return to Rabi without transferring policy or authoritative business state to the handler.
 - **Agents own actual execution**: model calls, answers, file and tool operations, host session lifecycle and local permission enforcement remain with the actual owner. Rabi business authorization neither expands host permissions nor replaces host approval or sandbox rules.
-- **Adapters translate and transmit**: Rabi-side adapters use host session APIs; the DSH tool plugin translates model requests into Manager calls and returns results; lifecycle Hooks report host events and apply context or decisions returned by Manager. Tool registration is not automatic scheduling. Forwarding Hook events does not implement persona or memory policies inside the host.
+- **Adapters translate and transmit**: Rabi-to-Agent delivery, native sessions/history and DSH-native plugin management use a platform adapter to reach the real owner. Codex Desktop delivery retains the exact Desktop task owner. Agent-to-Rabi business calls share one catalog, schema and execution owner; hosts only adapt protocols and present results. Lifecycle Hooks report host events and apply context or decisions returned by Manager.
 - **Host enhancements address host-specific gaps only**: examples include capturing DSH internal events, injecting context through supported extension points, enforcing tool interception and displaying bound plans in local UI. These are ownership examples, not claims that every feature exists. Displays and temporary storage must not become authoritative business state; enhancements must not duplicate the Rabi plan engine, memory store, router or cross-Agent scheduler.
 
 ### Decisions required before implementation
@@ -51,8 +51,18 @@ Record the following in the design or task description before implementation:
 
 - Memory consolidation, plan progression, secretary selection and cross-Agent reply scheduling: Rabi owns policy, scheduling and state; handlers execute authorized delegated work.
 - Capturing a DSH pre-tool event and enforcing Manager's denial: the DSH Hook handles the local event and enforcement, Rabi owns business policy, and the host retains its permission restrictions.
-- Displaying a Rabi plan in the DSH sidebar: DSH may provide optional UI backed by Manager's authoritative state. Codex need not reproduce the UI and must not lose shared plan capabilities because of that difference. This sidebar example is not implemented.
+- Displaying a Rabi plan in the DSH sidebar: DSH may provide optional UI backed by Manager's authoritative state, accepted against its actual version. Codex need not reproduce that UI; public plan capabilities remain independently available.
 - Giving the model access to Rabi APIs: this is tool integration, not an independent DSH plan, memory or messaging system.
+
+### Public capability integration and acceptance
+
+CLI and MCP share the operation SDK. Standard MCP exposes six shared tools. A host with generic HTTP, CLI or MCP tools forwards the same public contracts without registering six native tools mechanically or rebuilding business interfaces. The DSH HTTP bridge can read `/api/agent/categories`, `/api/agent/operations` and a single-operation description, then invoke the described business endpoint. Short host hints come from that same catalog and follow its updates.
+
+Configured, authenticated connections expose all public functions by default. Explicit user restrictions are explained by their visible, editable configuration. Platform session adaptation and public business calls preserve their original target owner, request ID and receipt.
+
+The catalog lists API capabilities, not computers, messages or plans; `total` counts operations. Discover and call the actual resource directory before reporting computer counts or online status. An empty search or terminal-session list describes only that query result.
+
+Acceptance records the current host tools, loaded hints and adapter version. Scenario queries such as “computer list” and “group history” must find real APIs and read their business resources. A Host version, HTTP 200, tool registration or source build alone does not establish that scenario. See [Unified CLI and MCP API](unified-agent-api_en.md) for discovery and input rules.
 
 ## One-sentence standard
 
@@ -89,6 +99,8 @@ Status must come from the actual handler/owner whenever possible, not from a loc
 
 | Term | Meaning |
 | --- | --- |
+| ModelProvider | Vendor providing accounts, models or cloud services |
+| Catalog provider | Capability-provider identity in the public catalog; the wire field remains `provider` |
 | Handler/Agent | Product or service that understands and performs the task |
 | Host | User-facing application or interface |
 | Runtime | Process/service that executes turns |

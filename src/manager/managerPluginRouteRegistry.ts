@@ -1,3 +1,4 @@
+import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
 import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -77,6 +78,7 @@ type NormalizedManagerPluginRoute = {
 
 type ManagerPluginRouteBatch = {
   instanceId: string;
+  pluginId?: string;
   activationId?: string;
   routes: readonly NormalizedManagerPluginRoute[];
   revision?: string;
@@ -266,7 +268,7 @@ export class ManagerPluginRouteRegistry {
         return registry.handleUpgrade(request, url, socket, head);
       },
       stopAccepting,
-      publication: () => ({ active: owner.accepting, binding, operations: owner.accepting ? registry.catalogSnapshot().operations.map(({ contract, contractDigest }) => ({ contract, contractDigest })) : [] }),
+      publication: () => ({ active: owner.accepting, binding, operations: owner.accepting ? registry.catalogSnapshot().operations.map(({ contract, contractDigest, discovery, discoveryIssues }) => ({ contract, contractDigest, ...(discovery ? { discovery } : {}), ...(discoveryIssues ? { discoveryIssues } : {}) })) : [] }),
       activeOperationCount: () => registrations.reduce((total, registration) => total + registration.activeOperationCount(), 0),
       dispose: () => disposing ??= (async () => {
         stopAccepting();
@@ -353,10 +355,11 @@ export class ManagerPluginRouteRegistry {
         // Capture the published contract once. Its async work retains the original activation until completion.
         response.setHeader("x-rabiroute-api-contract", operation.digest);
         let executionStarted = false;
-        let mutationOutcome: "not_started" | "unknown" | undefined;
+        let readOnlyEffect = operationIsReadOnly(operation.contract, request.method);
+        let mutationOutcome: ApiOperationResult["mutationOutcome"];
         const captureMutationOutcome = (result: ApiOperationResult) => {
           if (result.mutationOutcome === undefined) return;
-          if (result.mutationOutcome !== "not_started" && result.mutationOutcome !== "unknown") throw new ApiContractError(500, "API_OPERATION_OUTCOME_INVALID", "mutationOutcome", operation.contract.operationId, true);
+          if (result.mutationOutcome !== "not_started" && result.mutationOutcome !== "not_committed" && result.mutationOutcome !== "unknown") throw new ApiContractError(500, "API_OPERATION_OUTCOME_INVALID", "mutationOutcome", operation.contract.operationId, true);
           mutationOutcome = result.mutationOutcome;
         };
         let pendingStream: ApiOperationStream | undefined;
@@ -381,7 +384,7 @@ export class ManagerPluginRouteRegistry {
         const deadline = configuredDeadlineMs === undefined ? undefined : new AbortController();
         const deadlineAt = deadline ? performance.now() + configuredDeadlineMs! : undefined;
         const deadlineError = () => new ApiContractError(408, "API_REQUEST_DEADLINE_EXCEEDED", "deadlineMs", operation.contract.operationId,
-          mutationOutcome === "not_started" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome);
+          mutationOutcome === "not_started" || mutationOutcome === "not_committed" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome);
         const deadlineTimer = deadline && setTimeout(() => deadline.abort(deadlineError()), configuredDeadlineMs);
         const lifetime = new AbortController();
         const disconnected = () => lifetime.abort(new ApiContractError(499, "API_RESPONSE_CONNECTION_CLOSED", "connection", operation.contract.operationId, executionStarted));
@@ -391,13 +394,13 @@ export class ManagerPluginRouteRegistry {
         const assertAuthority = () => {
           try { hasAuthenticatedConnectionRequest(request); }
           catch { throw new ApiContractError(403, "API_REQUEST_AUTHORITY_REVOKED", "authorization", operation.contract.operationId,
-            mutationOutcome === "not_started" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome); }
+            mutationOutcome === "not_started" || mutationOutcome === "not_committed" ? false : mutationOutcome === "unknown" || executionStarted, mutationOutcome); }
         };
         const failResponse = (error: unknown) => {
           if (response.writableEnded || response.destroyed) return;
           if (response.headersSent) { response.destroy(); return; }
           const failure = apiContractFailure(operation, executionStarted && !(error instanceof ApiContractError)
-            ? new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId, true) : error);
+            ? new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId, true) : error, readOnlyEffect);
           if (!request.complete) {
             response.setHeader("connection", "close");
             request.on("error", () => undefined);
@@ -464,6 +467,7 @@ export class ManagerPluginRouteRegistry {
           let result;
           if (typeof prepared === "function") {
             const input = await readApiOperationInput(operation, request, businessUrl, response, signal);
+            readOnlyEffect = operationIsReadOnly(operation.contract, request.method, input.body);
             assertAuthority();
             if (operation.contract.request.body.kind === "json") {
               try { validateLanAgentRequestBody(request, input.body); }
@@ -492,7 +496,14 @@ export class ManagerPluginRouteRegistry {
             assertDeadline();
             const payload = snapshot.stream || request.method === "HEAD" || snapshot.body === undefined ? undefined
               : descriptor.binary ? snapshot.body : descriptor.mediaType.includes("json") ? preparedApiJson(snapshot.body) ?? JSON.stringify(snapshot.body) : snapshot.body;
-            return { descriptor, stream: snapshot.stream, status: snapshot.status, headers: Object.entries(snapshot.headers ?? {}), payload };
+            const headers = Object.entries(snapshot.headers ?? {}).filter(([name]) => name.toLowerCase() !== "x-rabiroute-media");
+            const responseSchema = descriptor.schema;
+            const declaredMedia = responseSchema && typeof responseSchema === "object" && !Array.isArray(responseSchema)
+              ? responseSchema["x-rabiroute-media"] : undefined;
+            if (!snapshot.stream && request.method !== "HEAD" && snapshot.body !== undefined && Array.isArray(declaredMedia)) {
+              headers.push(["x-rabiroute-media", JSON.stringify(declaredMedia)]);
+            }
+            return { descriptor, stream: snapshot.stream, status: snapshot.status, headers, payload };
           }, `API response ${operation.contract.operationId}`);
           const { descriptor, stream } = output;
           // Validation/serialization can call owner getters. Finish them before
@@ -754,7 +765,8 @@ export class ManagerPluginRouteRegistry {
         );
       }
     }
-    const batch = { instanceId: normalizedInstanceId, activationId, routes, revision: currentPluginActivation()?.revision };
+    const batch = { instanceId: normalizedInstanceId, ...(currentPluginActivation()?.pluginId ? { pluginId: currentPluginActivation()!.pluginId } : {}),
+      activationId, routes, revision: currentPluginActivation()?.revision };
     if (applicationOwned) this.#applicationBatches.add(batch);
     this.batches.push(batch);
     let active = true;
@@ -895,9 +907,11 @@ export class ManagerPluginRouteRegistry {
           if (leases.get(publication.binding.leaseId) !== 1 || listeners.get(publication.binding.listenerId) !== 1) throw new Error("Duplicate external listener publication.");
           const listenerOperations: ApiPublishedOperation[] = [];
           for (const operation of publication.operations) {
-            const compiled = compileApiContract({ contract: operation.contract });
+            const compiled = compileApiContract({ contract: operation.contract, discovery: (operation as ApiPublishedOperation).discovery });
             if (compiled.digest !== operation.contractDigest) throw new Error("External owner contract digest disagrees with its executable contract.");
             if (compiled.contract.exposure === "public") listenerOperations.push({ contract: compiled.contract, contractDigest: compiled.digest,
+              ...(compiled.discovery ? { discovery: compiled.discovery } : {}),
+              ...(compiled.discoveryIssues ? { discoveryIssues: compiled.discoveryIssues } : {}),
               binding: freezeApiData(JSON.parse(JSON.stringify(publication.binding))), owner: { instanceId: source.instanceId, ...(source.activationId ? { activationId: source.activationId } : {}), ...(source.revision ? { revision: source.revision } : {}) } });
           }
           incomingListeners.push({ binding: freezeApiData(JSON.parse(JSON.stringify(publication.binding))),
@@ -923,7 +937,10 @@ export class ManagerPluginRouteRegistry {
     for (const batch of batches) for (const route of batch.routes) {
       if (route.operation) {
         if (route.operation.contract.exposure === "public") operations.push({ contract: route.operation.contract,
-          contractDigest: route.operation.digest, owner: { instanceId: batch.instanceId,
+          contractDigest: route.operation.digest,
+          ...(route.operation.discovery ? { discovery: route.operation.discovery } : {}),
+          ...(route.operation.discoveryIssues ? { discoveryIssues: route.operation.discoveryIssues } : {}),
+          owner: { instanceId: batch.instanceId, ...(batch.pluginId ? { pluginId: batch.pluginId } : {}),
             ...(batch.activationId ? { activationId: batch.activationId } : {}), ...(batch.revision ? { revision: batch.revision } : {}) } });
       } else gaps.push({ instanceId: batch.instanceId, routeId: route.routeId, kind: route.match.kind, methods: [...route.methods],
         ...(route.match.kind === "exact" ? { path: route.match.path } : {}),
@@ -946,7 +963,8 @@ export class ManagerPluginRouteRegistry {
     gaps.push(...sourceGaps);
     const listeners: ApiPublishedListener[] = [...external.map(({ owner }) => ({ binding: owner.binding,
       owner: { instanceId: owner.instanceId, ...(owner.activationId ? { activationId: owner.activationId } : {}), ...(owner.revision ? { revision: owner.revision } : {}) } })), ...sourcedListeners];
-    const nativeKey = apiDigest(operations.map(operation => ({ contract: operation.contractDigest, binding: operation.binding ?? null, owner: operation.owner })));
+    const nativeKey = apiDigest(operations.map(operation => ({ contract: operation.contractDigest, binding: operation.binding ?? null,
+      discovery: operation.discovery ?? null, discoveryIssues: operation.discoveryIssues ?? null, owner: operation.owner })));
     if (!this.nativeHttpDisposal && this.nativeHttpProxy?.key !== nativeKey) {
       if (this.nativeHttpProxy) { this.nativeHttpProxy.proxy.update(operations); this.nativeHttpProxy.key = nativeKey; }
       else this.nativeHttpProxy = { key: nativeKey, proxy: createExternalListenerHttpProxy(operations, (expected, started) => {

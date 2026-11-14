@@ -47,7 +47,7 @@ async function fixture(t: test.TestContext, overrides: Partial<CopilotControlOpe
     return { request, result };
   };
   const send = (endpoint: string, body?: unknown, signal?: AbortSignal) => { const pending = begin(endpoint, signal); pending.request.end(body === undefined ? undefined : JSON.stringify(body)); return pending.result; };
-  return { registration, send, begin, events, calls, result: (value: CopilotLoginResult) => { loginResult = value; }, disable: () => authority.setNodeEnabled(credential.nodeId, false, true) };
+  return { registration, send, begin, events, calls, result: (value: CopilotLoginResult) => { loginResult = value; }, revoke: () => authority.revokeNode(credential.nodeId) };
 }
 
 test("unbound authenticated node reaches original install/login/status operations and native DTOs", async t => {
@@ -97,7 +97,7 @@ test("original connection revocation suppresses an accepted install result", asy
   let entered!: () => void, release!: () => void; const started = new Promise<void>(resolve => { entered = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
   t.after(() => release());
   const f = await fixture(t, { installCopilot: async () => { entered(); await gate; return {}; } });
-  const pending = f.send("copilot-install"); await started; f.disable(); release(); assert.equal((await pending).status, 403);
+  const pending = f.send("copilot-install"); await started; f.revoke(); release(); assert.equal((await pending).status, 403);
 });
 
 test("retirement joins an accepted provider operation after HTTP disconnect", async t => {

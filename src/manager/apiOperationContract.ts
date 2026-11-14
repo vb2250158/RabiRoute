@@ -1,3 +1,4 @@
+import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
 import { createHash } from "node:crypto";
 import { parseApiPathTemplate, validApiTail, type ApiPathSegment } from "../../apps/rabi-agent/lib/api-path-template.mjs";
 import { createRequire } from "node:module";
@@ -41,6 +42,10 @@ export type ApiOperationContract = Readonly<{
   method: ApiMethod;
   pathTemplate: string;
   description: string;
+  searchKeywords?: readonly string[];
+  discovery?: Readonly<{ title?: string; categoryId?: string; tags?: readonly string[]; provider?: string }>;
+  /** Search-source metadata follows its active operation contract. */
+  searchable?: Readonly<{ scope: string; legend: string; kinds: readonly string[] }>;
   exposure: "public" | "internal";
   transport: "http" | "sse" | "websocket";
   httpProxy?: Readonly<{ wire: Readonly<{ dataFrameBytes: number; streamWindowBytes: number; maxConcurrentStreams: number }>;
@@ -67,7 +72,9 @@ export type ApiOperationContract = Readonly<{
     /** Total parser/owner budget. Owners observe input.signal; leases still wait for actual cleanup. */
     deadlineMs?: number }>;
   responses: Readonly<Record<string, ApiResponseContract>>;
-  effects: Readonly<{ mode: string; description: string }>;
+  effects: Readonly<{ mode: string; description: string;
+    /** Effect of a mixed operation selected from its validated request; never changes admission or replay. */
+    request?: Readonly<{ bodyPath: readonly string[]; modes: Readonly<Record<string, string>> }> }>;
   recovery: Readonly<{ strategy: string; description: string; receiptPath?: string; idempotencyHeader?: string }>;
   validators: readonly Readonly<{ id: string; description: string }>[];
 }>;
@@ -85,7 +92,7 @@ export type ApiOperationResult = Readonly<{
   status: number;
   /** Trusted owner evidence about its native mutation dispatch, never copied from request data.
    * Used only to preserve failure metadata across an authority fence; it cannot disclose business data. */
-  mutationOutcome?: "not_started" | "unknown";
+  mutationOutcome?: "not_started" | "not_committed" | "unknown";
   body?: unknown;
   headers?: Readonly<Record<string, string>>;
   stream?: ApiOperationStream;
@@ -97,7 +104,26 @@ export type ApiOperationStream = Readonly<{
   /** Must unblock next(), stop subscriptions and let frames reach EOF after cleanup. Never retries a write. */
   cancel(reason: unknown): void | Promise<void>;
 }>;
+/** Discovery describes navigation and argument sources; it does not change execution validation. */
+export type ApiDiscoveryCategory = Readonly<{
+  id: string; title: string; description?: string; parentId?: string;
+}>;
+export type ApiDiscoveryInputSource = Readonly<{
+  field: string; operationId: string; resultPath: string; valuePath?: string;
+  parameters?: Readonly<Record<string, Readonly<{ from: string }> | Readonly<{ value: unknown }>>>;
+}>;
+export type ApiOperationDiscovery = Readonly<{
+  title?: string; summary?: string; category?: ApiDiscoveryCategory;
+  tags?: readonly string[]; keywords?: readonly string[]; provider?: string;
+  inputSources?: readonly ApiDiscoveryInputSource[]; relatedOperations?: readonly string[];
+  automationTemplates?: readonly Readonly<{
+    id: string; version: string; title: string; description?: string; triggerType?: "message" | "schedule";
+    message?: string; template?: string; [key: string]: unknown;
+  }>[];
+}>;
+
 export type ApiOperationDefinition = Readonly<{
+  discovery?: ApiOperationDiscovery;
   contract: ApiOperationContract;
   handler(input: ApiOperationInput): ApiOperationResult | Promise<ApiOperationResult>;
   /** Capture the original owner admission before body consumption. Preparation performs no business action.
@@ -120,7 +146,7 @@ export type ApiUpgradeInput = Readonly<{
   validateIncoming(value: unknown, sizeBytes: number): void;
   validateOutgoing(value: unknown, sizeBytes: number): void;
 }>;
-export type ApiUpgradeDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
+export type ApiUpgradeDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiUpgradeInput): void | Promise<void> }>;
 export type ApiUpgradeRegistration = ApiOperationRegistration & Readonly<{ stopAccepting(): void }>;
 export type ApiHttpProxyInput = Readonly<{
   request: IncomingMessage; response: ServerResponse; url: URL;
@@ -128,7 +154,7 @@ export type ApiHttpProxyInput = Readonly<{
   assertCurrent(): void;
   prepareResponse(status: number, headers: Readonly<Record<string, string | readonly string[]>>): void;
 }>;
-export type ApiHttpProxyDefinition = Readonly<{ contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
+export type ApiHttpProxyDefinition = Readonly<{ discovery?: ApiOperationDiscovery; contract: ApiOperationContract; handler(input: ApiHttpProxyInput): Promise<void> }>;
 export type ManagerApiOperationsService = Readonly<{
   registerExternalListener(definition: ApiExternalListenerDefinition): ApiExternalListenerRegistration;
   registerOperations(definitions: readonly ApiOperationDefinition[]): ApiOperationRegistration;
@@ -139,7 +165,7 @@ export type ManagerApiOperationsService = Readonly<{
 
 export class ApiContractError extends Error {
   constructor(readonly status: number, readonly code: string, readonly field: string, readonly operationId: string, readonly uncertain = false,
-    readonly mutationOutcome?: "not_started" | "unknown", readonly reason?: string) {
+    readonly mutationOutcome?: "not_started" | "not_committed" | "unknown", readonly reason?: string) {
     super(`${code}: ${field}`);
   }
 }
@@ -150,12 +176,12 @@ const frameworkErrorSchema = {
   required: ["code", "errorCode", "field", "operationId", "contractDigest", "repair", "retryable"],
   properties: { code: { const: -1 }, errorCode: { type: "string" }, field: { type: "string" }, operationId: { type: "string" },
     contractDigest: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }, repair: { type: "string" }, retryable: { const: false }, uncertain: { type: "boolean" },
-    mutationOutcome: { enum: ["not_started", "unknown"] } }
+    mutationOutcome: { enum: ["not_started", "not_committed", "unknown"] }, alternatives: { type: "array", items: { type: "object" } } }
 } as const;
 
-export function apiContractFailure(operation: CompiledApiContract, error: unknown): ApiOperationResult {
+export function apiContractFailure(operation: CompiledApiContract, error: unknown, readOnly = operationIsReadOnly(operation.contract)): ApiOperationResult {
   const failure = error instanceof ApiContractError ? error : new ApiContractError(500, "API_OPERATION_FAILED", "operation", operation.contract.operationId);
-  const uncertain = failure.uncertain || failure.status >= 500;
+  const uncertain = failure.mutationOutcome === "not_committed" ? false : !readOnly && (failure.uncertain || failure.status >= 500);
   const discovery = `Read GET /api/agent/help?operationId=${encodeURIComponent(operation.contract.operationId)}`;
   const repair = failure.status === 403
     ? "The original connection cannot access this operation. Restore its access without changing the target or request. "
@@ -166,6 +192,7 @@ export function apiContractFailure(operation: CompiledApiContract, error: unknow
   return { status: failure.status, body: { code: -1, errorCode: failure.code, field: failure.field,
     operationId: operation.contract.operationId, contractDigest: operation.digest,
     repair, retryable: false,
+    ...(operation.contract.operationId === "manager.api.help" && failure.status === 400 ? { alternatives: [{ method: "GET", path: "/api/agent/operations", query: { query: "<keywords>" }, description: "Search the active operation catalog." }] } : {}),
     ...(failure.mutationOutcome ? { mutationOutcome: failure.mutationOutcome, uncertain } : uncertain ? { uncertain: true } : {}) } };
 }
 
@@ -209,6 +236,7 @@ export function freezeApiData<T>(value: T): T {
 }
 
 const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: true });
+ajv.addKeyword({ keyword: "x-rabiroute-media", schemaType: "array", valid: true });
 const addFormats = createRequire(import.meta.url)("ajv-formats") as FormatsPlugin;
 addFormats(ajv);
 
@@ -261,6 +289,8 @@ function compileApiSchema(schema: ApiSchema): ValidateFunction {
 }
 
 export type CompiledApiContract = Readonly<{
+  discovery?: ApiOperationDiscovery;
+  discoveryIssues?: readonly string[];
   contract: ApiOperationContract;
   digest: string;
   pathPattern: RegExp;
@@ -321,8 +351,20 @@ function captureApiContract(input: ApiOperationContract): ApiOperationContract {
   return freezeApiData(normalized) as ApiOperationContract;
 }
 
-export function compileApiContract(definition: Pick<ApiOperationDefinition, "contract">): CompiledApiContract {
-  return compileCapturedApiContract(captureApiContract(definition.contract));
+/** Invalid navigation metadata stays local to its operation and never rejects its handler. */
+export function captureApiDiscoveryMetadata(value: unknown): Pick<CompiledApiContract, "discovery" | "discoveryIssues"> {
+  if (value === undefined) return {};
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid discovery metadata.");
+    return { discovery: freezeApiData(JSON.parse(JSON.stringify(value))) as ApiOperationDiscovery };
+  } catch {
+    return { discoveryIssues: Object.freeze(["discovery_metadata_invalid"]) };
+  }
+}
+
+export function compileApiContract(definition: Pick<ApiOperationDefinition, "contract" | "discovery">): CompiledApiContract {
+  return Object.freeze({ ...compileCapturedApiContract(captureApiContract(definition.contract)),
+    ...captureApiDiscoveryMetadata(definition.discovery) });
 }
 
 function compileCapturedApiContract(contract: ApiOperationContract): CompiledApiContract {
@@ -338,6 +380,13 @@ function compileCapturedApiContract(contract: ApiOperationContract): CompiledApi
   if (!contract.pathTemplate.startsWith("/") || /[?#\\\s]/.test(contract.pathTemplate) || contract.pathTemplate.startsWith("//")) throw new Error("Invalid API path template.");
   if (!contract.description?.trim() || !contract.effects?.mode || !contract.effects.description?.trim()
     || !contract.recovery?.strategy || !contract.recovery.description?.trim()) throw new Error(`Incomplete API behavior contract: ${contract.operationId}`);
+  const effectSelector = contract.effects.request;
+  if (effectSelector && (!Array.isArray(effectSelector.bodyPath) || !effectSelector.bodyPath.length
+    || effectSelector.bodyPath.some(key => typeof key !== "string" || !key)
+    || !effectSelector.modes || typeof effectSelector.modes !== "object" || Array.isArray(effectSelector.modes)
+    || Object.values(effectSelector.modes).some(mode => typeof mode !== "string" || !mode))) {
+    throw new Error("Invalid API request effect selector.");
+  }
   if (!Array.isArray(contract.validators) || contract.validators.some(rule => !rule.id || !rule.description)) throw new Error("Invalid API business validators.");
   const template = parseApiPathTemplate(contract.pathTemplate, contract.request.pathTails, contract.request.pathRemainder, contract.request.pathCaseInsensitiveLiterals);
   // Equivalence historically parses without tail/raw bindings. In particular,
@@ -428,7 +477,8 @@ export function prepareApiOperation(definition: ApiOperationDefinition): () => C
   const { handler, prepare } = definition;
   if (prepare !== undefined && typeof prepare !== "function") throw new Error("Invalid API request preparation.");
   const contract = captureApiContract(definition.contract);
-  return () => Object.freeze({ ...compileCapturedApiContract(contract), handler, ...(prepare ? { prepare } : {}) });
+  const discovery = captureApiDiscoveryMetadata(definition.discovery);
+  return () => Object.freeze({ ...compileCapturedApiContract(contract), ...discovery, handler, ...(prepare ? { prepare } : {}) });
 }
 
 export function compileApiOperation(definition: ApiOperationDefinition): CompiledApiOperation {

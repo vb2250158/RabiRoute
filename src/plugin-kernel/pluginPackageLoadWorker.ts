@@ -24,7 +24,7 @@ export async function executePluginPackageLoad(request: PluginPackageLoadRequest
       trustedInProcessRoots: task.roots.filter(root => root.inProcessTrusted).map(root => root.path)
     });
     const resolved = await catalog.resolve(task.packageId, task.version);
-    const loaded = await loadPluginPackage(resolved.sourceRoot, task.runtimeRoot, task.host, { stagingId: request.id });
+    const loaded = await loadPluginPackage(resolved.sourceRoot, task.runtimeRoot, task.host, { stagingId: request.id, layout: task.layout });
     if (loaded.manifest.id !== task.packageId || loaded.manifest.version !== task.version) throw new Error(`Plugin profile identity does not match package manifest: ${task.packageId}@${task.version}.`);
     if (loaded.execution === "in_process" && !resolved.inProcessTrusted) {
       throw new Error(`Plugin in_process execution is disabled by the configured trustedInProcessRoots: ${JSON.stringify(task.roots.filter(root => root.inProcessTrusted).map(root => root.path))}; package=${task.packageId}@${task.version}, root=${resolved.sourceRoot}. Change or clear RABIROUTE_PLUGIN_IN_PROCESS_ROOTS in the Manager startup environment (or trustedInProcessRoots in an embedded catalog).`);
