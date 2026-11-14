@@ -74,8 +74,9 @@ test("exact owner recovery accepts a historical suffix only with the original sc
       source: { threadId: source.sessionId, agentType: "agent", agentAdapter: "grokBot", endpoint: source },
       target: { threadId: target.sessionId, agentType: "agent", agentAdapter: "codex", endpoint: target } } };
   const suffix = "\n\n[投递编号]\ndeliveryId: 12345678-1234-4567-8123-123456789abc";
+  const identity = JSON.stringify({ type: "session_meta", payload: { id: target.sessionId } }) + "\n";
   const writeMessage = (text: string, role = "user") => fs.writeFileSync(rolloutPath,
-    JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type: "input_text", text }] } }) + "\n");
+    identity + JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type: "input_text", text }] } }) + "\n");
   for (const altered of ["quoted\n" + prompt + suffix, prompt.replace("Exact", "Altered") + suffix,
     prompt + suffix + suffix, prompt + suffix + "\nextra", prompt.replace(deliveryId, `agent-${"b".repeat(64)}`) + suffix]) {
     writeMessage(altered);
@@ -88,9 +89,9 @@ test("exact owner recovery accepts a historical suffix only with the original sc
   const releaseLate = noteCodexDesktopLateStartForTest("exact-owner", deliveryId);
   fs.writeFileSync(rolloutPath, "");
   assert.equal((await recoverEndpointOwnerReceipt(delivery, () => {}))?.action, "receipt_recovered");
-  assert.equal(await recoverEndpointOwnerReceipt({ ...delivery, deliveryId: `agent-${"c".repeat(64)}` }, () => {}), undefined);
+  await assert.rejects(recoverEndpointOwnerReceipt({ ...delivery, deliveryId: `agent-${"c".repeat(64)}` }, () => {}), { code: "CODEX_ROLLOUT_IDENTITY_MISSING" });
   releaseLate();
-  assert.equal(await recoverEndpointOwnerReceipt(delivery, () => {}), undefined);
+  await assert.rejects(recoverEndpointOwnerReceipt(delivery, () => {}), { code: "CODEX_ROLLOUT_IDENTITY_MISSING" });
   for (const text of [prompt, prompt + suffix, (prompt + suffix).replace(/\n/g, "\r\n")]) {
     writeMessage(text);
     let checks = 0;
@@ -106,7 +107,7 @@ test("exact owner recovery accepts a historical suffix only with the original sc
     payload: { type: "message", role: "user", content: [{ type: "input_text", text: `Unrelated historical message ${index}` }] } }) + "\n").join("");
   for (const matching of [false, true]) {
     writeMessage(matching ? prompt + suffix : "Unrelated final message");
-    fs.writeFileSync(rolloutPath, history + fs.readFileSync(rolloutPath, "utf8"));
+    fs.writeFileSync(rolloutPath, identity + history + fs.readFileSync(rolloutPath, "utf8").slice(identity.length));
     let checks = 0;
     const receipt = await recoverEndpointOwnerReceipt(delivery, async () => { checks++; await Promise.resolve(); });
     assert.equal(receipt?.accepted, matching ? true : undefined);
