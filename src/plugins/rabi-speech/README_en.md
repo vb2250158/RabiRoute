@@ -31,7 +31,7 @@ After preparing the dependencies, start only the installed `RabiRouteHost.exe`. 
 
 Exiting RabiRoute does not require installing optional speech dependencies first. Shutdown still checks actual process ownership: an absent runtime is already offline, and a verified owned process can be stopped even when installation files are missing. Unrelated processes are never terminated. Starting speech still requires a complete runtime installation.
 
-The default address is `http://127.0.0.1:8781`. On first start, `config.example.json` is copied to the machine-local `config.json`, which is not committed to Git.
+New configurations default to `server.port=0` so the OS assigns an available port. The Windows launcher holds the same listening socket and emits a `RABISPEECH_READY` JSON record with the actual host, port and PID after ASGI startup. Rabi's existing speech owner checks the launch nonce and actual listener process before using that endpoint automatically in managed mode. Configured mode preserves the specified address and port. On first start, `config.example.json` is copied to the machine-local `config.json`, which is not committed to Git.
 
 On Windows, the installer places NVIDIA's official CUDA 12 cuBLAS and cuDNN 9 Python wheels in the plugin-private `.deps` directory. Startup adds only those wheel `bin` directories to the RabiSpeech process PATH and does not change the system CUDA PATH. If a DLL or GPU runtime is unavailable, ASR records the capability state and falls back to CPU.
 
@@ -77,7 +77,9 @@ POST /v1/playback/stop
 
 RabiSpeech does not currently own an acoustic echo reference or AEC. The Windows remote voice client also pauses microphone upload while it is playing, so it cannot provide natural barge-in yet. Do not merely disable `suppress_during_playback`; keep `barge_in_mode=off` whenever echo-protection evidence is absent. WebGUI requires an explicit confirmation before selecting `echo_protected`, but that confirmation is only an operator assertion and does not replace real-device acceptance.
 
-LAN remote audio is a separate network sound-card channel. When `remote_audio` is enabled, the lightweight Windows client continuously uploads 16 kHz mono PCM over an automatically assigned TCP port and receives WAV files from the host FIFO; UDP `8783` is discovery-only. Explicit saved TCP ports remain in effect; manual clients use the actual port shown in status. The client never performs VAD, segmentation, ASR, TTS, or Route delivery. Loopback endpoints `GET /v1/audio-streams` and `PUT /v1/audio-streams/selection` own the selection, which defaults to local and never silently falls back after a remote disconnect. Each RabiLink phone registers automatically with a stable per-install device id and stable stream id. The first phone may become the zero-configuration default; later phones join the list without stealing the persisted choice. Several phones may remain online, while only the selected phone feeds VAD/ASR, and reconnecting the selected phone resumes that choice. Each client snapshot also exposes `received_bytes` and `accepted_chunks`, counting only new PCM accepted into the host feed; duplicate chunks do not increase either counter. ADB is only an installation/debug harness and is not a runtime dependency for discovery, connection, selection, streaming, or recovery. See [`../../desktop/rabi-voice-client/README_en.md`](../../desktop/rabi-voice-client/README_en.md). RabiLink is not a configuration dependency for this LAN path.
+The example `worker_url` / `base_url` values are explicit external Worker connection examples, disabled until installed. They do not bind managed workers: `WorkerSupervisor` launches the three managed scripts on port `0` and consumers use the returned actual endpoint. Standalone ONNX-VITS also defaults to port `0`, publishes `RABISPEECH_WORKER_READY` after startup, and preserves an explicit `--port`.
+
+LAN remote audio is a separate network sound-card channel. When `remote_audio` is enabled, the lightweight Windows client continuously uploads 16 kHz mono PCM over an automatically assigned TCP port and receives WAV files from the host FIFO; UDP discovery chooses an available port in `8783-8803` by default. Configure the window with `remote_audio.discovery_port` / `discovery_port_end` or `RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT` / `RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT_END`. The client probes the same default window, configurable with `RABI_VOICE_DISCOVERY_PORT_START` / `RABI_VOICE_DISCOVERY_PORT_END`, using one deadline for the whole scan. Explicit saved TCP ports remain in effect; manual clients use the actual port shown in status. The client never performs VAD, segmentation, ASR, TTS, or Route delivery. Loopback endpoints `GET /v1/audio-streams` and `PUT /v1/audio-streams/selection` own the selection, which defaults to local and never silently falls back after a remote disconnect. Each RabiLink phone registers automatically with a stable per-install device id and stable stream id. The first phone may become the zero-configuration default; later phones join the list without stealing the persisted choice. Several phones may remain online, while only the selected phone feeds VAD/ASR, and reconnecting the selected phone resumes that choice. Each client snapshot also exposes `received_bytes` and `accepted_chunks`, counting only new PCM accepted into the host feed; duplicate chunks do not increase either counter. ADB is only an installation/debug harness and is not a runtime dependency for discovery, connection, selection, streaming, or recovery. See [`../../desktop/rabi-voice-client/README_en.md`](../../desktop/rabi-voice-client/README_en.md). RabiLink is not a configuration dependency for this LAN path.
 
 Loopback control-state changes are pushed through `GET /v1/events` SSE. Manager forwards the stream as `GET /api/speech/events`; `microphone_event`, `playback_changed`, and `audio_stream_changed` refresh only their matching state, while `records_changed` refreshes the records panel only after an ASR/TTS row has been persisted. Throttled `microphone_level` events update the meter directly. SSE reconnect performs one snapshot recovery pass; no fixed-interval status or record polling remains.
 
@@ -92,7 +94,7 @@ POST /api/v1/services/audio/tts/SpeechSynthesizer
 POST /api/v1/services/audio/asr/transcription
 ```
 
-TTS example:
+TTS example (`$speechBaseUrl` is the HTTP origin formed from the current `RABISPEECH_READY` host and port):
 
 ```powershell
 $body = @{
@@ -104,7 +106,7 @@ $body = @{
   speed = 1.0
   play = $false
 } | ConvertTo-Json
-Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8781/v1/audio/speech `
+Invoke-WebRequest -Method Post -Uri "$speechBaseUrl/v1/audio/speech" `
   -ContentType "application/json" -Body $body -OutFile .\output.wav
 ```
 
@@ -113,7 +115,7 @@ When both input and output are WAV, the shared RabiSpeech audio-preparation laye
 ASR example:
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8781/v1/audio/transcriptions `
+curl.exe -X POST "$speechBaseUrl/v1/audio/transcriptions" `
   -F "file=@sample.wav" -F "model=asr-local" -F "response_format=verbose_json"
 ```
 
@@ -244,3 +246,5 @@ The fixed corpus, feature metadata, and HTML template live under `benchmarks/`. 
 ```
 
 Runtime WAV, JSON, CSV, and logs remain in ignored `output/benchmarks/`. The public HTML embeds only sanitized metrics and sentence-level results.
+
+`benchmark_models.py asr-http` uses the project `scripts/resolve-speech.mjs` when `--service-url` is omitted, resolving the online Speech owner from the current verified Manager; Node.js is required. An explicit independent or remote service URL remains supported. No local port is guessed.

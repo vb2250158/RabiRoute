@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+from functools import partial
 import json
 import os
+import socket
 import sys
 import time
 from pathlib import Path
@@ -12,6 +14,15 @@ from typing import MutableMapping, MutableSequence, Sequence
 _RUNTIME_DIRECTORY = "runtime"
 _TRANSIENT_NETWORK_RETRY_COUNT = 5
 _TRANSIENT_NETWORK_RETRY_SECONDS = 2.0
+# WHATWG Fetch's restricted ports must never be published to Manager/WebGUI.
+_FETCH_BLOCKED_PORTS = frozenset((
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77,
+    79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123,
+    135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530,
+    531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995,
+    1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665,
+    6666, 6667, 6668, 6669, 6679, 6697, 10080,
+))
 
 
 def resolve_service_root(
@@ -145,10 +156,120 @@ def is_transient_network_filesystem_error(error: BaseException) -> bool:
     return False
 
 
+def _run_managed_application(*, sockets: list[socket.socket], stop_event=None) -> None:
+    """Run inside the existing native process or Uvicorn reload child/Job."""
+    uvicorn = importlib.import_module("uvicorn")
+    settings = importlib.import_module("rabispeech.config").load_settings()
+    nonce = os.environ.get("RABISPEECH_ENDPOINT_NONCE", "")
+
+    class ReadyServer(uvicorn.Server):
+        async def on_tick(self, counter):
+            if stop_event is not None and stop_event.is_set():
+                self.should_exit = True
+            return await super().on_tick(counter)
+
+        async def startup(self, sockets=None):
+            await super().startup(sockets=sockets)
+            if not self.started or self.should_exit:
+                return
+            address = sockets[0].getsockname()
+            print("RABISPEECH_READY:" + json.dumps({
+                "schemaVersion": 1, "pid": os.getpid(), "nonce": nonce,
+                "host": address[0], "port": address[1],
+            }), flush=True)
+
+    # Preserve Uvicorn's subprocess event-loop policy on Windows. A Proactor
+    # loop cannot safely inherit the listening socket across reload workers.
+    config = uvicorn.Config("rabispeech.app:create_app", factory=True,
+                            host=settings.server.host, port=0, log_level="info", ws="auto",
+                            reload=stop_event is not None,
+                            reload_dirs=[str(resolve_service_root() / "rabispeech")] if stop_event is not None else None)
+    server = ReadyServer(config)
+    server.run(sockets=sockets)
+    if not server.started:
+        raise RuntimeError("RabiSpeech ASGI startup did not complete.")
+
+
+def _bind_automatic_socket(host: str) -> socket.socket:
+    for _attempt in range(128):
+        listener = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if os.name == "nt":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind((host, 0))
+            listener.set_inheritable(True)
+            if listener.getsockname()[1] not in _FETCH_BLOCKED_PORTS:
+                return listener
+        except BaseException:
+            listener.close()
+            raise
+        listener.close()
+    raise RuntimeError("Could not allocate a browser-compatible RabiSpeech port.")
+
+
+def _run_managed_server(uvicorn, settings, *, reload: bool) -> None:
+    host = settings.server.host
+    if os.environ.get("RABISPEECH_ENDPOINT_NONCE") and host not in ("127.0.0.1", "::1"):
+        raise RuntimeError("Managed Speech requires an explicit loopback bind address.")
+    # Bind once and keep the socket held across ASGI startup and reload. The
+    # owner receives the actual endpoint only after Uvicorn reports started.
+    listener = _bind_automatic_socket(host)
+    try:
+        if reload:
+            config = uvicorn.Config("rabispeech.app:create_app", factory=True, host=host, port=0,
+                                    reload=True, reload_dirs=[str(resolve_service_root() / "rabispeech")])
+            # A module-level target is required by Windows multiprocessing spawn.
+            change_reload = importlib.import_module("uvicorn.supervisors").ChangeReload
+            stop_event = importlib.import_module("multiprocessing").get_context("spawn").Event()
+            target = partial(_run_managed_application, stop_event=stop_event)
+
+            class ManagedReload(change_reload):
+                def stop_worker(self):
+                    stop_event.set()
+                    self.process.join(timeout=10)
+                    if self.process.is_alive():
+                        importlib.import_module("logging").getLogger("uvicorn.error").error(
+                            "Speech reload retirement remains unconfirmed; retaining the original worker and starting no replacement.")
+                        self.should_exit.set()
+                        # Keep the original supervisor/process handle while
+                        # application shutdown remains pending. The Host may
+                        # still terminate its owned tree, but no new worker
+                        # may acquire the shared listener before actual exit.
+                        self.process.join()
+
+                def restart(self):
+                    # Hidden Windows processes have no console Ctrl+C channel.
+                    # Request normal ASGI shutdown through inherited IPC instead.
+                    self.stop_worker()
+                    if self.should_exit.is_set():
+                        return
+                    # StatReload clears its observed mtimes before restart;
+                    # WatchFilesReload has no such cache to reset.
+                    if hasattr(self, "mtimes"):
+                        self.mtimes.clear()
+                    stop_event.clear()
+                    get_subprocess = importlib.import_module("uvicorn._subprocess").get_subprocess
+                    self.process = get_subprocess(config=self.config, target=self.target, sockets=self.sockets)
+                    self.process.start()
+
+                def shutdown(self):
+                    self.stop_worker()
+                    super().shutdown()
+
+            ManagedReload(config, target=target, sockets=[listener]).run()
+        else:
+            _run_managed_application(sockets=[listener])
+    finally:
+        listener.close()
+
+
 def run_server(*, reload: bool = False) -> None:
     uvicorn = importlib.import_module("uvicorn")
     config_module = importlib.import_module("rabispeech.config")
     settings = config_module.load_settings()
+    if os.environ.get("RABISPEECH_ENDPOINT_NONCE") or settings.server.port == 0:
+        _run_managed_server(uvicorn, settings, reload=reload)
+        return
     if reload:
         service_root = resolve_service_root()
         uvicorn.run(

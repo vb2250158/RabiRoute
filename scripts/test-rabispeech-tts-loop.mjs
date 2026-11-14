@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { discoverManagerBaseUrl } from "./lib/discover-manager-url.mjs";
+import { discoverManagerIdentity } from "./lib/discover-manager-url.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_TEXT = "这是一条由文本转语音模型生成的系统测试音频，用来验证语音转写、声纹提取和事件记录链路。";
 
 function parseArgs(argv) {
   const options = {
-    speechUrl: "http://127.0.0.1:8781",
+    speechUrl: "",
     managerUrl: "",
     ttsModel: "auto",
     asrModel: "auto",
@@ -54,7 +54,7 @@ function parseArgs(argv) {
 
 function loopbackBaseUrl(value, label) {
   const url = new URL(String(value || ""));
-  const host = url.hostname.toLowerCase();
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (!new Set(["127.0.0.1", "localhost", "::1"]).has(host) || url.username || url.password) {
     throw new Error(`${label} must use a loopback URL without embedded credentials.`);
   }
@@ -413,12 +413,32 @@ function sanitizedError(error) {
     .replace(/[A-Za-z]:\\[^\s]+/g, "<local-path>");
 }
 
+export async function resolveSpeechAcceptanceEndpoints(options = {}, dependencies = {}) {
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  const explicitSpeech = options.speechUrl ? loopbackBaseUrl(options.speechUrl, "RabiSpeech URL") : "";
+  if (options.skipManager && explicitSpeech) return { speechUrl: explicitSpeech, managerUrl: "" };
+  const discover = dependencies.discoverManagerIdentity ?? discoverManagerIdentity;
+  const identity = await discover({ explicit: options.managerUrl, fetch: fetchImpl });
+  const managerUrl = loopbackBaseUrl(identity.managerBaseUrl, "Manager URL");
+  if (explicitSpeech) return { speechUrl: explicitSpeech, managerUrl };
+  const result = await requestJson(fetchImpl, `${managerUrl}/api/speech/status`, { redirect: "error" });
+  if (result.body?.code !== 0 || result.body.data?.state !== "online" || !result.body.data?.configuredUrl) {
+    throw new Error("RabiSpeech has not published an online service address; start the configured service or provide --speech explicitly.");
+  }
+  const speechUrl = loopbackBaseUrl(result.body.data.configuredUrl, "RabiSpeech published URL");
+  const current = await discover({ explicit: managerUrl, fetch: fetchImpl });
+  if (current.managerBaseUrl !== identity.managerBaseUrl || current.applicationGenerationId !== identity.applicationGenerationId
+    || current.managerInstanceId !== identity.managerInstanceId) {
+    throw new Error("Manager identity changed while resolving RabiSpeech; no speech request was sent.");
+  }
+  return { speechUrl, managerUrl: options.skipManager ? "" : managerUrl };
+}
+
 export async function runRabiSpeechTtsLoopAcceptance(options = {}, dependencies = {}) {
   const now = dependencies.now?.() ?? new Date();
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
-  const speechUrl = loopbackBaseUrl(options.speechUrl || "http://127.0.0.1:8781", "RabiSpeech URL");
+  const { speechUrl, managerUrl } = await resolveSpeechAcceptanceEndpoints(options, dependencies);
   const skipManager = Boolean(options.skipManager);
-  const managerUrl = skipManager ? "" : loopbackBaseUrl(options.managerUrl || discoverManagerBaseUrl(), "Manager URL");
   const timeoutMs = Math.max(1_000, Number(options.timeoutMs || 180_000));
   const sessionId = `tts-loop-${timestamp(now)}`;
   const outputPath = path.resolve(options.outputPath || defaultOutputPath(now));
@@ -637,7 +657,7 @@ export async function runRabiSpeechTtsLoopAcceptance(options = {}, dependencies 
 function helpText() {
   return [
     "Usage: node scripts/test-rabispeech-tts-loop.mjs [options]",
-    "  --speech <loopback-url>     RabiSpeech URL (default http://127.0.0.1:8781)",
+    "  --speech <loopback-url>     Optional explicit URL; default: current Manager speech owner address",
     "  --manager <loopback-url>    Manager URL (default: current RabiRoute Host generation)",
     "  --tts-model <id|auto>       Discovered TTS model; auto prefers an available local model",
     "  --asr-model <id|auto>       Discovered ASR model; auto prefers an available local model",

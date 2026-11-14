@@ -31,7 +31,7 @@ cd plugin-adapters\rabi-speech
 
 未安装可选语音依赖时，退出 RabiRoute 不要求先安装依赖。停止操作仍核对实际进程归属；没有对应进程即确认已离线，已确认归属的残留进程即使安装文件缺失也会停止，其他进程不会被结束。启动操作继续要求完整运行依赖。
 
-默认地址：`http://127.0.0.1:8781`。首次启动会从 `config.example.json` 复制本机 `config.json`；后者不提交 Git。
+新配置默认使用 `server.port=0`，由系统分配可用端口。Windows 启动器持有同一监听 socket，ASGI 完成启动后输出 `RABISPEECH_READY` JSON（实际 host、port、PID）；Rabi 的托管模式经原语音 owner 核对启动 nonce 与真实监听进程后自动使用该地址。显式配置模式保留指定的地址和端口。首次启动会从 `config.example.json` 复制本机 `config.json`；后者不提交 Git。
 
 Windows 安装脚本会把 NVIDIA 官方 CUDA 12 cuBLAS / cuDNN 9 Python wheels 放进插件私有 `.deps`，启动时只把对应 `bin` 目录加入 RabiSpeech 进程 PATH，不改系统级 CUDA PATH。若 DLL 或 GPU 运行时不可用，ASR 会记录能力状态并自动降级 CPU。
 
@@ -77,7 +77,9 @@ POST /v1/playback/stop
 
 RabiSpeech 本身目前没有声学回声参考或 AEC。桌面远程语音客户端也会在播放期间暂停上传麦克风，因此它尚不具备自然打断能力。不要为了“能打断”而直接关闭 `suppress_during_playback`；没有回声保护证据时应保持 `barge_in_mode=off`。WebGUI 对 `echo_protected` 的启用带显式确认，但该确认只是操作者声明，不替代真实硬件验收。
 
-局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过自动分配的 TCP 端口持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP `8783` 只用于同网段发现。已保存的显式 TCP 端口继续生效；手动直连时使用状态中显示的实际端口。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。RabiLink 手机使用每台安装独立的稳定设备 ID 和稳定流 ID 自动登记；第一台可作为零配置默认输入，后来连接的手机只加入列表，不抢占已保存选择。多台手机可以同时在线，但只有语音服务页面中选中的一路进入 VAD/ASR；选择会持久化，所选手机断线重连后自动恢复。每个客户端状态同时暴露 `received_bytes` 与 `accepted_chunks`，只统计真正进入主机 PCM feed 的新数据；重复 chunk 不增加计数，可用于无需 ADB 的常驻流健康诊断。ADB 只用于安装和调试，不是发现、连接、选择、推流或恢复链路的运行依赖。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
+模型配置示例中的 `worker_url` / `base_url` 是显式外部 Worker 连接样例（默认未安装），不决定托管 Worker 的监听端口。本机 `WorkerSupervisor` 启动三类受管脚本时使用端口 `0`，后续请求消费其实际端点；独立 ONNX-VITS 脚本也默认端口 `0`，就绪后输出 `RABISPEECH_WORKER_READY`，显式 `--port` 保持生效。
+
+局域网远程音频是独立的网络声卡通道。启用 `remote_audio` 后，轻量 Windows 客户端通过自动分配的 TCP 端口持续上传 16 kHz 单声道 PCM，并接收主机 FIFO 下发的 WAV；UDP 默认在 `8783-8803` 中选择可用端口用于同网段发现；`remote_audio.discovery_port` / `discovery_port_end`（或 `RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT` / `RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT_END`）可配置扫描窗。客户端默认探测同一窗口，可用 `RABI_VOICE_DISCOVERY_PORT_START` / `RABI_VOICE_DISCOVERY_PORT_END` 配置，整轮共用一个发现超时。已保存的显式 TCP 端口继续生效；手动直连时使用状态中显示的实际端口。客户端不执行 VAD、切句、ASR、TTS 或 Route 投递。音频流选择由回环接口 `GET /v1/audio-streams` 与 `PUT /v1/audio-streams/selection` 管理，默认是本机，远程端断线时不静默回退。RabiLink 手机使用每台安装独立的稳定设备 ID 和稳定流 ID 自动登记；第一台可作为零配置默认输入，后来连接的手机只加入列表，不抢占已保存选择。多台手机可以同时在线，但只有语音服务页面中选中的一路进入 VAD/ASR；选择会持久化，所选手机断线重连后自动恢复。每个客户端状态同时暴露 `received_bytes` 与 `accepted_chunks`，只统计真正进入主机 PCM feed 的新数据；重复 chunk 不增加计数，可用于无需 ADB 的常驻流健康诊断。ADB 只用于安装和调试，不是发现、连接、选择、推流或恢复链路的运行依赖。安装见 [`../../desktop/rabi-voice-client/README.md`](../../desktop/rabi-voice-client/README.md)。RabiLink 不是这条局域网链路的配置依赖。
 
 控制面状态通过回环 SSE `GET /v1/events` 推送。Manager 将它转发为 `GET /api/speech/events`；`microphone_event`、`playback_changed`、`audio_stream_changed` 分别刷新对应状态，`records_changed` 只在 ASR/TTS 记录成功落盘后刷新记录面板，麦克风电平使用限频的 `microphone_level` 直接更新。SSE 重连只做一次快照补漏，不运行固定间隔状态或记录轮询。
 
@@ -92,7 +94,7 @@ POST /api/v1/services/audio/tts/SpeechSynthesizer
 POST /api/v1/services/audio/asr/transcription
 ```
 
-TTS 示例：
+TTS 示例（`$speechBaseUrl` 使用当前 `RABISPEECH_READY` 的 host、port 组成的 HTTP origin）：
 
 ```powershell
 $body = @{
@@ -104,7 +106,7 @@ $body = @{
   speed = 1.0
   play = $false
 } | ConvertTo-Json
-Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8781/v1/audio/speech `
+Invoke-WebRequest -Method Post -Uri "$speechBaseUrl/v1/audio/speech" `
   -ContentType "application/json" -Body $body -OutFile .\output.wav
 ```
 
@@ -113,7 +115,7 @@ Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8781/v1/audio/speech `
 ASR 示例：
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8781/v1/audio/transcriptions `
+curl.exe -X POST "$speechBaseUrl/v1/audio/transcriptions" `
   -F "file=@sample.wav" -F "model=asr-local" -F "response_format=verbose_json"
 ```
 
@@ -244,3 +246,5 @@ benchmarks/cases.zh-CN.json
 ```
 
 运行期 WAV、JSON、CSV 和日志继续放在被忽略的 `output/benchmarks/`；公开 HTML 只嵌入脱敏后的指标和逐句结果。
+
+`benchmark_models.py asr-http` 省略 `--service-url` 时调用项目 `scripts/resolve-speech.mjs`，从当前已核验 Manager 取得在线 Speech owner 地址；需要 Node.js。也可显式提供独立或远端服务 URL，脚本不会猜测本机端口。

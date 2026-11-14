@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import socket
 import sys
 from pathlib import Path
 
@@ -14,7 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8764)
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--default-speaker", default="")
     parser.add_argument("--default-speaker-id", type=int)
     parser.add_argument("--providers", default="")
@@ -33,7 +31,6 @@ def main() -> int:
     os.environ["RABISPEECH_ONNX_VITS_MODEL_DIR"] = str(Path(args.model_dir).expanduser().resolve())
     os.environ["RABISPEECH_ONNX_VITS_CONFIG"] = str(Path(args.config).expanduser().resolve())
     os.environ["RABISPEECH_ONNX_VITS_OUTPUT"] = str(Path(args.output_dir).expanduser().resolve())
-    os.environ["RABISPEECH_ONNX_VITS_PORT"] = str(args.port)
     if args.default_speaker:
         os.environ["RABISPEECH_ONNX_VITS_DEFAULT_SPEAKER"] = args.default_speaker
     if args.default_speaker_id is not None:
@@ -43,24 +40,9 @@ def main() -> int:
     if args.open_jtalk_dict_dir:
         os.environ["OPEN_JTALK_DICT_DIR"] = str(Path(args.open_jtalk_dict_dir).expanduser().resolve())
 
-    import uvicorn
-
-    endpoint_file = os.environ.get("RABISPEECH_WORKER_ENDPOINT_FILE")
-    if endpoint_file:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            listener.bind((args.host, args.port))
-            listener.listen(128)
-            endpoint = Path(endpoint_file)
-            temporary = endpoint.with_suffix(".tmp")
-            temporary.write_text(json.dumps({"port": listener.getsockname()[1]}), encoding="utf-8")
-            temporary.replace(endpoint)
-            uvicorn.Server(uvicorn.Config("rabispeech.onnx_vits.server:app", host=args.host, port=args.port)).run(sockets=[listener])
-        finally:
-            listener.close()
-    else:
-        uvicorn.run("rabispeech.onnx_vits.server:app", host=args.host, port=args.port, reload=False)
-    return 0
+    from rabispeech.worker_http import run_http_worker
+    return run_http_worker("rabispeech.onnx_vits.server:app", args.host, args.port,
+                           port_environment="RABISPEECH_ONNX_VITS_PORT")
 
 
 if __name__ == "__main__":

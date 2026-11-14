@@ -35,6 +35,7 @@ class RemoteAudioSettings:
     settings_path: Path
     token_path: Path
     discovery_port: int
+    discovery_port_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -262,10 +263,12 @@ def load_settings(path: str | Path | None = None) -> Settings:
     api_tts = _api_providers(tts.get("api_providers"), "tts")
     api_asr = _api_providers(asr.get("api_providers"), "asr")
 
+    discovery_end_value = remote_audio.get("discovery_port_end")
+    discovery_end = _env("RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT_END", "" if discovery_end_value is None else discovery_end_value).strip()
     return Settings(
         server=ServerSettings(
             host=_env("RABISPEECH_HOST", server.get("host", "127.0.0.1")).strip(),
-            port=int(_env("RABISPEECH_PORT", server.get("port", 8781))),
+            port=int(_env("RABISPEECH_PORT", server.get("port", 0))),
             max_upload_bytes=int(_env("RABISPEECH_MAX_UPLOAD_BYTES", server.get("max_upload_bytes", 25 * 1024 * 1024))),
             temp_dir=_resolve_path(base, os.environ.get("RABISPEECH_TEMP_DIR", server.get("temp_dir")), "temp"),
             ffmpeg=_env("RABISPEECH_FFMPEG", server.get("ffmpeg", "")).strip(),
@@ -293,6 +296,7 @@ def load_settings(path: str | Path | None = None) -> Settings:
             ),
             token_path=_resolve_path(base, remote_audio.get("token_path"), "output/audio-stream-token.txt"),
             discovery_port=int(_env("RABISPEECH_REMOTE_AUDIO_DISCOVERY_PORT", remote_audio.get("discovery_port", 8783))),
+            discovery_port_end=int(discovery_end) if discovery_end else None,
         ),
         default_tts_provider=str(tts.get("default", "local-tts")).strip().lower(),
         default_asr_provider=str(asr.get("default", "faster-whisper")).strip().lower(),

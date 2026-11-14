@@ -444,7 +444,21 @@ def benchmark_asr(args: argparse.Namespace) -> None:
     print(json.dumps({"ok": True, "output": str(Path(args.output).resolve()), **payload["summary"]}, ensure_ascii=False))
 
 
+def resolve_speech_service_url(explicit: str | None) -> str:
+    if explicit and explicit.strip():
+        return explicit.strip().rstrip("/")
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("Node.js is required for RabiSpeech discovery; provide --service-url explicitly.")
+    resolver = Path(__file__).resolve().parents[4] / "scripts" / "resolve-speech.mjs"
+    completed = subprocess.run([node, str(resolver)], capture_output=True, text=True, timeout=30, check=False)
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise RuntimeError(completed.stderr.strip() or "RabiSpeech discovery did not publish a service URL")
+    return completed.stdout.strip()
+
+
 def benchmark_asr_http(args: argparse.Namespace) -> None:
+    service_url = resolve_speech_service_url(args.service_url)
     tts_payloads = [read_json(Path(path)) for path in args.tts_results]
     audio_rows = [record for payload in tts_payloads for record in payload.get("records", [])]
     if not audio_rows:
@@ -457,7 +471,7 @@ def benchmark_asr_http(args: argparse.Namespace) -> None:
         except (OSError, urllib.error.URLError):
             worker_before = {"ok": False, "loaded": False}
     records: list[dict[str, Any]] = []
-    endpoint = f"{args.service_url.rstrip('/')}/v1/audio/transcriptions"
+    endpoint = f"{service_url}/v1/audio/transcriptions"
     for index, source in enumerate(audio_rows):
         audio_path = Path(str(source["benchmark_audio"])).resolve()
         probe = GpuProbe(interval=args.gpu_sample_interval)
@@ -811,7 +825,7 @@ def build_parser() -> argparse.ArgumentParser:
     asr.set_defaults(func=benchmark_asr)
 
     asr_http = subparsers.add_parser("asr-http", help="Benchmark an ASR model through the deployed RabiSpeech API")
-    asr_http.add_argument("--service-url", default="http://127.0.0.1:8781")
+    asr_http.add_argument("--service-url", help="Explicit RabiSpeech URL; omitted uses the current Manager service owner")
     asr_http.add_argument("--worker-url")
     asr_http.add_argument("--provider", required=True)
     asr_http.add_argument("--model", required=True)

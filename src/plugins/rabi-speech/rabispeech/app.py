@@ -208,6 +208,7 @@ def create_app(
             token=current.remote_audio.token,
             settings_path=current.remote_audio.settings_path,
             discovery_port=current.remote_audio.discovery_port,
+            discovery_port_end=current.remote_audio.discovery_port_end,
             service_name=socket.gethostname(),
         ),
         local_player=PlaybackCoordinator._default_player,

@@ -3,12 +3,74 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import http from "node:http";
+import net from "node:net";
 import {
   runRabiSpeechTtsLoopAcceptance,
+  resolveSpeechAcceptanceEndpoints,
   transcriptSimilarity
 } from "./test-rabispeech-tts-loop.mjs";
 
 const TEST_MANAGER_URL = "http://127.0.0.1:8790";
+
+test("default speech acceptance resolves the live owner while the legacy port is occupied", async t => {
+  let legacyRequests = 0;
+  const legacy = net.createServer(socket => { legacyRequests += 1; socket.destroy(); });
+  const ownsLegacy = await new Promise((resolve, reject) => {
+    legacy.once("error", error => error.code === "EADDRINUSE" ? resolve(false) : reject(error));
+    legacy.listen(8781, "127.0.0.1", () => resolve(true));
+  });
+  if (ownsLegacy) t.after(() => new Promise(resolve => legacy.close(resolve)));
+  let speechRequests = 0;
+  const speech = http.createServer((_request, response) => { speechRequests += 1; response.end("owned-speech"); });
+  await new Promise(resolve => speech.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { speech.closeAllConnections(); await new Promise(resolve => speech.close(resolve)); });
+  const speechUrl = `http://127.0.0.1:${speech.address().port}`;
+  let managerUrl;
+  const manager = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(request.url === "/meta" ? { managerBaseUrl: managerUrl,
+      applicationGenerationId: "real-fixture-generation", managerInstanceId: "real-fixture-instance", health: { live: true, state: "degraded" } }
+      : { code: 0, data: { state: "online", configuredUrl: speechUrl } }));
+  });
+  await new Promise(resolve => manager.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { manager.closeAllConnections(); await new Promise(resolve => manager.close(resolve)); });
+  managerUrl = `http://127.0.0.1:${manager.address().port}`;
+  const endpoints = await resolveSpeechAcceptanceEndpoints({ managerUrl });
+  assert.deepEqual(endpoints, { speechUrl, managerUrl });
+  assert.notEqual(new URL(endpoints.speechUrl).port, "8781");
+  assert.equal(await (await fetch(`${endpoints.speechUrl}/health`)).text(), "owned-speech");
+  assert.equal(speechRequests, 1);
+  assert.equal(legacyRequests, 0);
+});
+
+test("unpublished and remote speech owners never fall back to the legacy address", async () => {
+  const identity = { managerBaseUrl: TEST_MANAGER_URL, applicationGenerationId: "g", managerInstanceId: "i" };
+  for (const data of [{ state: "offline", configuredUrl: "" }, { state: "online", configuredUrl: "peer:remote-compute" },
+    { state: "online", configuredUrl: "https://speech.example.invalid" }, { state: "online", configuredUrl: "http://user:secret@127.0.0.1:29481" }]) {
+    const calls = [];
+    await assert.rejects(() => resolveSpeechAcceptanceEndpoints({}, {
+      discoverManagerIdentity: async () => identity,
+      fetchImpl: async url => { calls.push(url); return jsonResponse({ code: 0, data }); }
+    }));
+    assert.deepEqual(calls, [`${TEST_MANAGER_URL}/api/speech/status`]);
+  }
+});
+
+test("a replacement Manager invalidates its predecessor's published speech address", async () => {
+  let generation = 0;
+  await assert.rejects(() => resolveSpeechAcceptanceEndpoints({}, {
+    discoverManagerIdentity: async () => ({ managerBaseUrl: TEST_MANAGER_URL, applicationGenerationId: `g${generation++}`, managerInstanceId: "i" }),
+    fetchImpl: async () => jsonResponse({ code: 0, data: { state: "online", configuredUrl: "http://127.0.0.1:29481" } })
+  }), /Manager identity changed/);
+});
+
+test("explicit direct speech needs no Manager and preserves IPv6 loopback", async () => {
+  const result = await resolveSpeechAcceptanceEndpoints({ speechUrl: "http://[::1]:29481", skipManager: true }, {
+    discoverManagerIdentity: async () => { throw new Error("must not discover a Manager"); }
+  });
+  assert.deepEqual(result, { speechUrl: "http://[::1]:29481", managerUrl: "" });
+});
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -59,6 +121,9 @@ function fakeSpeechRuntime({
   const fetchImpl = async (url, init = {}) => {
     const request = new URL(url);
     calls.push(`${init.method || "GET"} ${request.pathname}`);
+    if (request.pathname === "/meta") return jsonResponse({ managerBaseUrl: TEST_MANAGER_URL,
+      applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, state: "healthy" } });
+    if (request.pathname === "/api/speech/status") return jsonResponse({ code: 0, data: { state: "online", configuredUrl: "http://127.0.0.1:29181" } });
     if (request.pathname === "/api/speech/events" || request.pathname === "/v1/events") {
       if (staleManagerEvents && request.pathname === "/api/speech/events") {
         return new Response("<!doctype html><title>old manager</title>", {

@@ -4,6 +4,7 @@ from .timeout_settings import get_timeout_seconds
 
 
 import asyncio
+import errno
 from contextlib import contextmanager
 import os
 import hashlib
@@ -506,6 +507,16 @@ class RemoteAudioServerConfig:
     settings_path: Path
     discovery_port: int
     service_name: str
+    discovery_port_end: int | None = None
+
+    def discovery_ports(self) -> range:
+        start = self.discovery_port
+        end = self.discovery_port_end
+        if end is None:
+            end = min(65535, start + 20) if start == 8783 else start
+        if type(start) is not int or type(end) is not int or not 0 <= start <= end <= 65535 or end - start > 255 or (start == 0 and end != 0):
+            raise ValueError("Remote audio discovery requires a valid bounded UDP port window.")
+        return range(start, end + 1)
 
 
 @dataclass
@@ -829,6 +840,7 @@ class RemoteAudioHub:
             raise RuntimeError("Remote audio streaming is enabled but no token is configured.")
         from websockets.asyncio.server import serve
 
+        discovery_ports = self.config.discovery_ports()
         self._server = await serve(
             self._handle_client,
             self.config.host,
@@ -843,10 +855,19 @@ class RemoteAudioHub:
                 raise RuntimeError("Remote audio listeners do not share one discoverable port.")
             self._listening_port = ports.pop()
             loop = asyncio.get_running_loop()
-            transport, _protocol = await loop.create_datagram_endpoint(
-                lambda: _DiscoveryProtocol(self.config, self._listening_port),
-                local_addr=("0.0.0.0", self.config.discovery_port),
-            )
+            transport = None
+            for port in discovery_ports:
+                try:
+                    transport, _protocol = await loop.create_datagram_endpoint(
+                        lambda: _DiscoveryProtocol(self.config, self._listening_port),
+                        local_addr=("0.0.0.0", port),
+                    )
+                    break
+                except OSError as error:
+                    if error.errno not in {errno.EADDRINUSE, errno.EACCES}:
+                        raise
+                    if port == discovery_ports.stop - 1:
+                        raise
             self._discovery_transport = transport
         except BaseException:
             self._server.close()
@@ -1660,8 +1681,19 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
         self.transport = transport  # type: ignore[assignment]
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        if data.strip() != b"RABI_VOICE_DISCOVER_V1" or self.transport is None:
+        if self.transport is None or len(data) > 256:
             return
+        nonce = None
+        if data.strip() != b"RABI_VOICE_DISCOVER_V1":
+            try:
+                request = json.loads(data)
+            except (ValueError, UnicodeDecodeError):
+                return
+            if not isinstance(request, dict) or request.get("type") != "RABI_VOICE_DISCOVER_V1":
+                return
+            nonce = request.get("nonce")
+            if not isinstance(nonce, str) or len(nonce) != 32 or any(char not in "0123456789abcdef" for char in nonce):
+                return
         payload = json.dumps({
             "service": "rabi-voice-stream",
             "version": 1,
@@ -1669,5 +1701,6 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
             "port": self.listening_port,
             "transport": "ws",
             "authentication": "bearer",
+            **({"nonce": nonce} if nonce is not None else {}),
         }, ensure_ascii=False).encode("utf-8")
         self.transport.sendto(payload, addr)
