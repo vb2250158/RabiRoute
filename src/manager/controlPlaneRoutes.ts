@@ -1662,7 +1662,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         if (!shares) throw new Error("HTML share plugin is unavailable; enable its dependencies or disable HTML-to-link conversion to send the original file.");
         return shares.publish(file, id);
       },
-      rootDir, routeRoot, rolesRoot, publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
+      rootDir, routeRoot, rolesRoot, publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl,
       runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
     };
     await deliverCompletionToEndpoint(rule, hook, deliveryId,
@@ -1808,7 +1808,7 @@ const desktopSettings = new DesktopSettingsStore(desktopSettingsPath(rootDir));
 const speechComputeTarget = new AsyncLocalStorage<string>();
 const managerSpeechControlPorts: SpeechPluginPorts["control"] = {
   contextKey: () => speechComputeTarget.getStore() ?? (activePeerTunnel?.selected() || ""),
-  serviceUrl: () => speechServiceUrl(),
+  serviceUrl: () => configuredSpeechServiceUrl(),
   personas: routeCatalogPersonas,
   route: (routeId) => {
     const runtime = runtimes.get(routeId);
@@ -2197,7 +2197,8 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
     deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalRelay.deviceId || globalConfig.rabiName || definition.id,
     claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
     replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs,
-    speechServiceUrl: globalRelay.speechServiceUrl
+    speechServiceUrl: globalRelay.speechServiceUrl,
+    speechServiceMode: globalRelay.speechServiceMode
   };
 }
 
@@ -2215,7 +2216,8 @@ function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null 
       deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalConfig.rabiLinkRelay.deviceId || globalConfig.rabiName || definition.id,
       claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
       replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs,
-      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl
+      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl,
+      speechServiceMode: globalConfig.rabiLinkRelay.speechServiceMode
     };
   }
   return null;
@@ -2381,7 +2383,7 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
-    localSpeechUrl: relay.speechServiceUrl
+    localSpeechUrl: speechServiceUrl
   });
   if (lanEnabled && peerLanServer.status().state !== "listening") {
     try {
@@ -2752,6 +2754,12 @@ function childCommand(extraArgs: string[] = []) {
   return resolveGatewayChildCommand(packageRoot, extraArgs);
 }
 
+function reconcileSpeechConfiguration(): void {
+  if (managerReadOnly) return;
+  const service = resolvePublishedPluginService("manager.speech@1") as PublishedSpeechService | undefined;
+  service?.reconcileConfiguration();
+}
+
 function reconcileActiveSpeech(): void {
   const service = resolvePublishedPluginService("manager.speech@1") as PublishedSpeechService | undefined;
   service?.reconcile("manager startup");
@@ -2780,6 +2788,11 @@ function envFor(
   const routeDataDir = path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/");
   const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
   const rabiLinkRelay = rabiLinkRelayConfigFor(definition);
+  const astrbotUrl = definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL?.trim() || "";
+  const inheritAstrbotCredentials = Boolean(astrbotUrl && process.env.ASTRBOT_URL?.trim()
+    && astrbotUrl.replace(/\/+$/, "") === process.env.ASTRBOT_URL.trim().replace(/\/+$/, ""));
+  const inheritAstrbotAccount = inheritAstrbotCredentials && (!definition.astrbotUsername?.trim()
+    || definition.astrbotUsername.trim() === (process.env.ASTRBOT_USERNAME?.trim() || ""));
   const globalConfig = rabiGlobalConfig.read();
   const {
     RABIROUTE_HOST_CONTROL_TOKEN: _hostControlToken,
@@ -2819,7 +2832,7 @@ function envFor(
     NAPCAT_WEBUI_TOKEN: definition.napcatWebuiToken ?? process.env.NAPCAT_WEBUI_TOKEN ?? "",
     NAPCAT_INSTANCES: JSON.stringify(definition.napcatInstances ?? sharedNormalizeNapCatInstances(definition)),
     GATEWAY_PORT: String(definition.gatewayPort),
-    WEBHOOK_PORT: String(definition.webhookPort ?? definition.gatewayPort),
+    WEBHOOK_PORT: String(definition.webhookPort ?? 0),
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
     XIAOAI_WEBHOOK_PORT: String(definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort),
     XIAOAI_WEBHOOK_PATH: definition.xiaoaiWebhookPath ?? "/xiaoai",
@@ -2866,11 +2879,11 @@ function envFor(
     COPILOT_CLI_BIN: definition.copilotCliBin?.trim() || process.env.COPILOT_CLI_BIN || resolveWingetCopilot() || (process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "copilot.cmd") : "") || "copilot",
     COPILOT_CWD: resolvePersistedProjectPath(definition.copilotCwd, rootDir) ?? resolveProjectPath(process.env.COPILOT_CWD, rootDir) ?? rootDir,
     MARVIS_APP_ID: definition.marvisAppId?.trim() || process.env.MARVIS_APP_ID || "Tencent.Marvis",
-    ASTRBOT_URL: definition.astrbotUrl?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185",
-    ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || process.env.ASTRBOT_USERNAME || "",
-    ASTRBOT_PASSWORD: definition.astrbotPassword?.trim() || process.env.ASTRBOT_PASSWORD || "",
-    ASTRBOT_PROJECT_ID: definition.astrbotProjectId?.trim() || process.env.ASTRBOT_PROJECT_ID || "",
-    ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || process.env.ASTRBOT_SESSION_ID || "",
+    ASTRBOT_URL: astrbotUrl,
+    ASTRBOT_USERNAME: definition.astrbotUsername?.trim() || (inheritAstrbotCredentials ? process.env.ASTRBOT_USERNAME : "") || "",
+    ASTRBOT_PASSWORD: definition.astrbotPassword?.trim() || (inheritAstrbotAccount ? process.env.ASTRBOT_PASSWORD : "") || "",
+    ASTRBOT_PROJECT_ID: definition.astrbotProjectId?.trim() || (inheritAstrbotAccount ? process.env.ASTRBOT_PROJECT_ID : "") || "",
+    ASTRBOT_SESSION_ID: definition.astrbotSessionId?.trim() || (inheritAstrbotAccount ? process.env.ASTRBOT_SESSION_ID : "") || "",
     GROK_BOT_PROFILE_PATH: definition.grokBotProfilePath?.trim() || process.env.GROK_BOT_PROFILE_PATH || "",
     GROK_BOT_BACKEND_URL: definition.grokBotBackendUrl?.trim() || process.env.GROK_BOT_BACKEND_URL || "",
     GROK_BOT_AGENT_ID: definition.grokBotAgentId?.trim() || process.env.GROK_BOT_AGENT_ID || "",
@@ -3272,27 +3285,28 @@ function callbackUrlForCopy(url: string, type: MessageAdapterType): string {
 }
 
 function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): MessageAdapterEndpoint | null {
-  if (type !== "webhook" && type !== "xiaoai" && type !== "rabilink") return null;
+  if (type !== "webhook" && type !== "rabilink") return null;
   const definition = runtime.definition;
-  const status = readGatewayStatus(definition) as Record<string, any>;
-  const callback = status.httpCallbacks?.[type];
-  const port = type === "xiaoai"
-      ? definition.xiaoaiWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
-      : type === "rabilink"
-        ? definition.rabiLinkWebhookPort ?? definition.webhookPort ?? definition.gatewayPort
-        : definition.webhookPort ?? definition.gatewayPort;
-  const pathValue = type === "xiaoai"
-      ? definition.xiaoaiWebhookPath ?? "/xiaoai"
-      : type === "rabilink"
-        ? definition.rabiLinkWebhookPath ?? "/rabilink"
-        : definition.webhookPath ?? "/webhook";
+  let listener: ReturnType<NonNullable<typeof gatewayListenerPublicationHost>["readListener"]>;
+  try {
+    listener = gatewayListenerPublicationHost?.readListener(definition.id, `webhook.${type}.listener`);
+    listener?.assertCurrent();
+  } catch { return null; }
+  if (!listener) return null;
+  const pathValue = type === "rabilink" ? definition.rabiLinkWebhookPath ?? "/rabilink" : definition.webhookPath ?? "/webhook";
   const normalized = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
-  const host = type === "rabilink" ? definition.rabiLinkWebhookHost?.trim() || "0.0.0.0" : "127.0.0.1";
-  const url = callbackUrlForCopy(String(callback?.url || `http://${host}:${port}${normalized}`), type);
+  const status = readGatewayStatus(definition) as Record<string, any>;
+  const native = status.messageAdapters?.[type];
+  if (status.pid !== listener.pid || status.gatewayGenerationId !== listener.gatewayGenerationId
+    || native?.listenerReady !== true || native.listenerLeaseId !== listener.leaseId
+    || status.httpCallbacks?.[type]?.path !== normalized) return null;
+  const hostname = listener.address.hostname ?? (type === "rabilink" ? definition.rabiLinkWebhookHost?.trim() || "0.0.0.0" : "127.0.0.1");
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+  const url = callbackUrlForCopy(`http://${host}:${listener.address.port}${normalized}`, type);
   return {
     label: `${sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName} 回调入口`,
     url,
-    healthy: Boolean(runtime.process && callback)
+    healthy: true
   };
 }
 
@@ -4843,7 +4857,7 @@ async function performConversationAgentSend(
     rolesRoot,
     withManagedGroupFile: options.withManagedGroupFile,
     withManagedPlanAttachment: resolveSendManagedPlanAttachment,
-    speechServiceUrl: speechServiceUrl(),
+    speechServiceUrl: speechServiceUrl,
     publishEvent: publishManagerEvent,
     appendRolePanelTimeline,
     submitPlanFeedback: submitAgentPlanFeedback,
@@ -6597,8 +6611,12 @@ function remoteAgentTaskWithGatewayDefaults(request: RemoteAgentTaskRequest): Re
   };
 }
 
-function speechServiceUrl(): string {
+function configuredSpeechServiceUrl(): string {
   return rabiGlobalConfig.read().rabiLinkRelay.speechServiceUrl;
+}
+
+function speechServiceUrl(): string {
+  return currentSpeechService().speechRuntimeControl.serviceUrl();
 }
 
 async function inspectPlanFeedbackDelivery(
@@ -7470,6 +7488,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         lifecycleFence: Object.freeze({ applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId }),
         routes: managerPluginRoutes,
         rootDir, managerPort, readOnly: managerReadOnly, checkHttpEndpoint,
+        readListener: (gatewayId: string, localName: string) => listenerPublicationHost.readListener(gatewayId, localName),
+        waitForListener: (gatewayId: string, localName: string, options: Parameters<typeof listenerPublicationHost.waitForListener>[2]) => listenerPublicationHost.waitForListener(gatewayId, localName, options),
         readRuntimes: () => [...runtimes.values()].map(runtime => ({ definition: structuredClone(runtime.definition), running: Boolean(runtime.process), status: structuredClone(readGatewayStatus(runtime.definition)) })),
         appendRouteLog: (id: string, line: string) => { const runtime = runtimes.get(id); if (runtime) appendLog(runtime, line); },
         readGatewayStatus, normalizeDefinition,
@@ -7488,6 +7508,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         get ready() { return managerListenerReady && routeCatalogStartupLifecycle.snapshot().state === "ready"; },
         speechPorts: Object.freeze({
           rootDir, packageRoot, control: managerSpeechControlPorts,
+          managedEndpoint: () => rabiGlobalConfig.read().rabiLinkRelay.speechServiceMode === "managed",
           peerRuntime: () => activePeerTunnel, computeTarget: () => speechComputeTarget.getStore(),
           currentService: resolvePublishedPluginService,
           modelChanged: snapshot => publishManagerEvent("speech_model_management_changed", { activeJob: snapshot.activeJob, lastJob: snapshot.lastJob }),
@@ -7712,6 +7733,7 @@ get routeCatalogVersion() { return routeCatalogVersion; },
 get routeCatalogPersonas() { return routeCatalogPersonas; },
 get syncRunningGateways() { return syncRunningGateways; },
 get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
+get reconcileSpeechConfiguration() { return reconcileSpeechConfiguration; },
 set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
 get dataDirFor() { return dataDirFor; },
 get agentAdapterCatalogService() { return agentAdapterCatalogService; },
@@ -8031,7 +8053,9 @@ get roleDirForApi() { return roleDirForApi; } }) }),
   managerPluginKernel = new GenerationRuntime({
     host: "manager",
     hostServices: [...managerPluginHostServices, Object.freeze({ capability: "host.message-endpoints@2",
-      value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value })],
+      value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value }),
+      Object.freeze({ capability: "host.message-endpoints@3",
+        value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value })],
     applicationIdentity: {
       applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
       managerInstanceId
@@ -8039,7 +8063,7 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     executor: createFullPluginExecutor(managerPluginProcessLeases, managerPluginOutcomeArchive, capturePluginRuntimeObservation),
     onPublished: generation => {
       capturePluginGeneration(generation);
-      managerPluginRoutes.refreshPublication();
+      listenerPublicationHost.refresh();
       publishManagerEvent("plugin_catalog_changed", {
         reason: "plugin lifecycle publication", generation: generation.id,
         revision: { plugins: generation.sequence, contributions: generation.contributions.revision }

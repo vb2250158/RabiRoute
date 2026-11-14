@@ -73,7 +73,8 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
   });
   assert.equal("speechProxyEnabled" in store.read().rabiLinkRelay, false);
   assert.equal("knowledgeBridge" in store.read().rabiLinkRelay, false);
-  assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "http://127.0.0.1:8781");
+  assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "");
+  assert.equal(store.read().rabiLinkRelay.speechServiceMode, "managed");
 
   const configuredButOff = store.patch({
     rabiLinkRelay: {

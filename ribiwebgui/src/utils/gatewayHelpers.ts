@@ -21,6 +21,7 @@ import { isGatewayMessageAdapterType, isMessageEndpointType } from "@shared/mess
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { SPEECH_ROUTE_AUTO_SUBMIT } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechDeliveryMode";
 import { pluginCatalogStore } from "../pluginCatalogStore";
+import { publishedNapcatWsUrl } from "../napcatRuntimeEndpoint";
 
 /** Device setup belongs to mobile recording; remote execution belongs to Agent targets. Legacy keys remain readable
  * until existing clients migrate to recording events; see docs/mobile-recording-event-boundary.md. */
@@ -285,7 +286,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, endpointAdapters, disabledEndpointAdapters);
   const adapters = gatewayAdapterTypes(gateway);
   if (adapters.includes("napcat")) {
-    gateway.gatewayPort = Number(gateway.gatewayPort || 8790);
+    gateway.gatewayPort = Number(gateway.gatewayPort ?? 0);
     gateway.napcatHttpUrl = gateway.napcatHttpUrl || "http://127.0.0.1:3000";
     gateway.napcatWebuiUrl = gateway.napcatWebuiUrl || "http://127.0.0.1:6099/webui";
     if (!Array.isArray(gateway.napcatInstances) || gateway.napcatInstances.length === 0) {
@@ -302,6 +303,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     } else {
       const primary = gateway.napcatInstances.find(instance => instance.enabled !== false)
         ?? gateway.napcatInstances[0];
+      primary.gatewayPort = Number(primary.gatewayPort ?? gateway.gatewayPort ?? 0);
       primary.enabled = true;
       gateway.napcatInstances = [primary];
     }
@@ -326,14 +328,14 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
       promptOutputMode: gateway.pipeline?.promptOutputMode || "voice_short",
       ttsProvider: gateway.pipeline?.ttsProvider,
       ttsVoice: gateway.agentRoleId || gateway.pipeline?.ttsVoice,
-      ttsWorkerUrl: "http://127.0.0.1:8781/v1/audio/speech",
+      ttsWorkerUrl: gateway.pipeline?.ttsWorkerUrl ?? "",
       ttsPlay: gateway.routeVariables.speechAutoPlay !== "false",
       preventFeedbackLoop: true,
       replyToSource: false
     };
   }
   if (adapters.includes("webhook")) {
-    gateway.webhookPort = Number(gateway.webhookPort || Number(gateway.gatewayPort || 8790) + 1);
+    gateway.webhookPort = Number(gateway.webhookPort ?? 0);
     gateway.webhookPath = gateway.webhookPath || adapterDefaultWebhookPath("webhook");
   }
   if (adapters.includes("xiaoai")) {
@@ -341,7 +343,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.xiaoaiWebhookPath = gateway.xiaoaiWebhookPath || adapterDefaultWebhookPath("xiaoai");
   }
   if (adapters.includes("rabilink") || adapters.includes("wearable")) {
-    gateway.rabiLinkWebhookPort = Number(gateway.rabiLinkWebhookPort || Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+    gateway.rabiLinkWebhookPort = Number(gateway.rabiLinkWebhookPort ?? 0);
     gateway.rabiLinkWebhookPath = gateway.rabiLinkWebhookPath || adapterDefaultWebhookPath("rabilink");
     gateway.rabiLinkWebhookHost = gateway.rabiLinkWebhookHost || "0.0.0.0";
   }
@@ -356,7 +358,7 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
     gateway.feishuVerificationToken = gateway.feishuVerificationToken || "";
     gateway.feishuEncryptKey = gateway.feishuEncryptKey || "";
     gateway.feishuEventSubscriptionEnabled = gateway.feishuEventSubscriptionEnabled === true;
-    gateway.feishuWebhookPort = Number(gateway.feishuWebhookPort || Number(gateway.gatewayPort || 8790) + 1);
+    gateway.feishuWebhookPort = Number(gateway.feishuWebhookPort ?? 0);
     gateway.feishuWebhookPath = gateway.feishuWebhookPath || adapterDefaultWebhookPath("feishu");
   }
 }
@@ -582,10 +584,10 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
     reasons.push(`配置已变更但尚未重启：当前运行 ${runtimeAdapterTypes.map(adapterLabel).join(" + ")}，保存并重启后切换到 ${expectedRuntimeAdapters.map(adapterLabel).join(" + ")}。`);
   }
   if (externalAdapterTypes.includes("napcat")) {
-    const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
+    const wsUrl = publishedNapcatWsUrl(runtime, gateway.napcatInstances?.[0]?.id || "default");
     const httpUrl = gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-";
     if (!napcatState.connected) {
-      reasons.push(napcatState.lastDisconnectedAt
+      reasons.push(!wsUrl ? "NapCat WebSocket 监听尚未就绪；就绪后会显示当前连接地址。" : napcatState.lastDisconnectedAt
         ? `NapCat WebSocket 当前未连接；最后断开时间：${napcatState.lastDisconnectedAt}。请检查 NapCat WebSocket Client 是否启用并连接到 ${wsUrl}。`
         : `NapCat WebSocket 尚未连接。请在 NapCat OneBot 网络配置中启用 WebSocket Client，并连接到 ${wsUrl}。`);
     }
@@ -612,10 +614,10 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
     return reasons;
   }
   if (type === "napcat") {
-    const wsUrl = `ws://127.0.0.1:${gateway.gatewayPort || runtime.gatewayPort || "-"}`;
+    const wsUrl = publishedNapcatWsUrl(runtime, gateway.napcatInstances?.[0]?.id || "default");
     const httpUrl = gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-";
     if (!napcatState.connected) {
-      reasons.push(napcatState.lastDisconnectedAt
+      reasons.push(!wsUrl ? "NapCat WebSocket 监听尚未就绪；就绪后会显示当前连接地址。" : napcatState.lastDisconnectedAt
         ? `WebSocket 当前未连接；最后断开：${napcatState.lastDisconnectedAt}。请检查 NapCat WebSocket Client 是否连接到 ${wsUrl}。`
         : `WebSocket 尚未连接。请在 NapCat 网络配置中启用 WebSocket Client，连接到 ${wsUrl}。`);
     }
@@ -680,7 +682,7 @@ export function createDefaultGateway(next: number): GatewayDefinition {
         }
       }
     },
-    gatewayPort: 8789 + next,
+    gatewayPort: 0,
     napcatHttpUrl: "http://127.0.0.1:3000",
     heartbeatIntervalSeconds: 900,
     heartbeatMessage: defaultHeartbeatMessage(),
@@ -713,7 +715,7 @@ export function isQuickSetupNeeded(gateways: GatewayDefinition[]): boolean {
     const agentAdapters = Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [];
     const missingCopilotBinding = agentAdapters.includes("copilotCli")
       && (!gateway.copilotThreadName || !gateway.copilotCwd);
-    const missingMessageConfig = adapters.includes("napcat") && (!gateway.gatewayPort || !gateway.napcatHttpUrl);
+    const missingMessageConfig = adapters.includes("napcat") && (!Number.isInteger(gateway.gatewayPort) || gateway.gatewayPort < 0 || gateway.gatewayPort > 65535 || !gateway.napcatHttpUrl);
     return agentAdapters.length === 0 || missingCopilotBinding || missingMessageConfig;
   });
 }

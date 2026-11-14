@@ -12,6 +12,8 @@ import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@s
 import { copyTextToClipboard } from "../clipboard";
 import { routeScopedRuntimePath } from "../routeScopedNavigation";
 import { personaOptionDisplayName } from "../personaPresentation";
+import { publishedAutomaticWebhookUrl, publishedHttpCallbackUrl } from "../webhookRuntimeEndpoint";
+import { isNapcatPortSetting, publishedNapcatWsUrl } from "../napcatRuntimeEndpoint";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -52,17 +54,17 @@ const form = reactive({
   antigravityConversationId: "",
   antigravityConversationName: "",
   antigravityCwd: "",
-  gatewayPort: 8790,
+  gatewayPort: 0,
   napcatHttpUrl: "http://127.0.0.1:3000",
   napcatWebuiUrl: "http://127.0.0.1:6099/webui",
   heartbeatIntervalSeconds: 900,
   heartbeatMessage: defaultHeartbeatMessage(),
   heartbeatSkipWhenAgentBusy: false,
-  webhookPort: 8790,
+  webhookPort: 0,
   webhookPath: "/webhook",
   xiaoaiWebhookPort: 8790,
   xiaoaiWebhookPath: "/xiaoai",
-  rabiLinkWebhookPort: 8790,
+  rabiLinkWebhookPort: 0,
   rabiLinkWebhookPath: "/rabilink",
   rabiLinkWebhookHost: "0.0.0.0",
   wecomBotId: "",
@@ -469,7 +471,14 @@ function defaultNapcatWebuiUrl(): string {
 }
 
 function napcatWsUrl(): string {
-  return `ws://127.0.0.1:${form.gatewayPort || 8790}`;
+  const instance = store.selectedGateway?.napcatInstances?.[0];
+  return publishedNapcatWsUrl(store.selectedRuntime, instance?.id || "default", instance?.enabled !== false);
+}
+
+async function copyNapcatWsUrl(): Promise<void> {
+  const url = napcatWsUrl();
+  if (!url) { copyResult.value = "等待监听就绪"; return; }
+  await copyText(url, "已复制 NapCat WS 地址");
 }
 
 function selectedWebhookAdapter(): MessageAdapterType {
@@ -482,8 +491,8 @@ function selectedWebhookAdapters(): MessageAdapterType[] {
 
 function webhookPortFor(type: MessageAdapterType): number {
   if (type === "xiaoai") return Number(form.xiaoaiWebhookPort || form.webhookPort || form.gatewayPort || 8790);
-  if (type === "rabilink") return Number(form.rabiLinkWebhookPort || form.webhookPort || form.gatewayPort || 8790);
-  return Number(form.webhookPort || form.gatewayPort || 8790);
+  if (type === "rabilink") return Number(form.rabiLinkWebhookPort ?? 0);
+  return Number(form.webhookPort ?? 0);
 }
 
 function webhookPathFor(type: MessageAdapterType): string {
@@ -534,11 +543,24 @@ function setWebhookHost(type: MessageAdapterType, value: unknown): void {
   form.rabiLinkWebhookHost = String(value || "").trim() || "0.0.0.0";
 }
 
+function publishedWebhookUrl(): string {
+  return publishedAutomaticWebhookUrl(store.selectedGateway, store.selectedRuntime,
+    normalizedPath(form.webhookPath, adapterDefaultWebhookPath("webhook")));
+}
+
 function webhookUrl(type: MessageAdapterType = selectedWebhookAdapter()): string {
+  if (type === "webhook" && webhookPortFor(type) === 0) return publishedWebhookUrl();
+  if (type === "rabilink") return publishedHttpCallbackUrl(store.selectedRuntime, "rabilink", normalizedPath(webhookPathFor(type), "/rabilink"), webhookHostFor(type));
   return `http://${webhookHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
 }
 
 function callbackUrl(type: MessageAdapterType = selectedWebhookAdapter()): string {
+  if (type === "webhook" && webhookPortFor(type) === 0) return publishedWebhookUrl();
+  if (type === "rabilink") {
+    const published = webhookUrl(type);
+    if (!published) return "";
+    const url = new URL(published); url.hostname = callbackHostFor(type); return url.href;
+  }
   return `http://${callbackHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
 }
 
@@ -549,6 +571,7 @@ function webhookTestEventType(type: MessageAdapterType): string {
 }
 
 function webhookCurl(type: MessageAdapterType = selectedWebhookAdapter()): string {
+  if (!callbackUrl(type)) return "";
   const source = adapterSourceAliases(type)[0] || type;
   const eventType = webhookTestEventType(type);
   return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
@@ -576,6 +599,7 @@ function openExternalUrl(url: string | undefined): void {
 }
 
 async function copyText(text: string, message = "已复制"): Promise<void> {
+  if (!text.trim()) { copyResult.value = "等待监听就绪"; return; }
   let result = message;
   try {
     await copyTextToClipboard(text);
@@ -609,6 +633,8 @@ async function testNapcatHealth(): Promise<void> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        gatewayId: store.selectedGateway?.id,
+        instanceId: store.selectedGateway?.napcatInstances?.[0]?.id || "default",
         httpUrl: form.napcatHttpUrl,
         webuiUrl: defaultNapcatWebuiUrl(),
         gatewayPort: form.gatewayPort
@@ -709,8 +735,8 @@ async function testAstrbotLogin(): Promise<void> {
 }
 
 const messageReady = computed(() => {
-  if (form.adapters.includes("napcat") && (!form.gatewayPort || !form.napcatHttpUrl.trim())) return false;
-  if (form.adapters.some(isWebhookLikeAdapter) && selectedWebhookAdapters().some(type => !webhookPortFor(type) || !webhookPathFor(type).trim())) return false;
+  if (form.adapters.includes("napcat") && (!isNapcatPortSetting(form.gatewayPort) || !form.napcatHttpUrl.trim())) return false;
+  if (form.adapters.some(isWebhookLikeAdapter) && selectedWebhookAdapters().some(type => !Number.isInteger(webhookPortFor(type)) || webhookPortFor(type) < (type === "webhook" ? 0 : 1) || webhookPortFor(type) > 65535 || !webhookPathFor(type).trim())) return false;
   return form.adapters.length > 0;
 });
 
@@ -791,17 +817,17 @@ function syncFromGateway() {
   form.astrbotPassword = gateway?.astrbotPassword || "";
   form.astrbotProjectId = gateway?.astrbotProjectId || "";
   form.astrbotSessionId = gateway?.astrbotSessionId || "";
-  form.gatewayPort = Number(gateway?.gatewayPort || 8790);
+  form.gatewayPort = Number(gateway?.gatewayPort ?? 0);
   form.napcatHttpUrl = gateway?.napcatHttpUrl || "http://127.0.0.1:3000";
   form.napcatWebuiUrl = gateway?.napcatWebuiUrl || "http://127.0.0.1:6099/webui";
   form.heartbeatIntervalSeconds = Number(gateway?.heartbeatIntervalSeconds || 900);
   form.heartbeatMessage = gateway?.heartbeatMessage || defaultHeartbeatMessage();
   form.heartbeatSkipWhenAgentBusy = gateway?.heartbeatSkipWhenAgentBusy === true;
-  form.webhookPort = Number(gateway?.webhookPort || gateway?.gatewayPort || 8790);
+  form.webhookPort = Number(gateway?.webhookPort ?? 0);
   form.webhookPath = gateway?.webhookPath || "/webhook";
   form.xiaoaiWebhookPort = Number(gateway?.xiaoaiWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
   form.xiaoaiWebhookPath = gateway?.xiaoaiWebhookPath || "/xiaoai";
-  form.rabiLinkWebhookPort = Number(gateway?.rabiLinkWebhookPort || gateway?.webhookPort || gateway?.gatewayPort || 8790);
+  form.rabiLinkWebhookPort = Number(gateway?.rabiLinkWebhookPort ?? 0);
   form.rabiLinkWebhookPath = gateway?.rabiLinkWebhookPath || "/rabilink";
   form.rabiLinkWebhookHost = gateway?.rabiLinkWebhookHost || "0.0.0.0";
   form.wecomBotId = gateway?.wecomBotId || "";
@@ -972,7 +998,7 @@ async function apply() {
 
                 <div class="catalog-param-grid">
                   <template v-if="form.adapters.includes('napcat')">
-                    <v-text-field v-model.number="form.gatewayPort" type="number" label="RabiRoute WS 端口" />
+                    <v-text-field v-model.number="form.gatewayPort" type="number" label="RabiRoute WS 端口" hint="0 表示自动分配，监听就绪后显示实际地址。" persistent-hint :min="0" :max="65535" />
                     <v-text-field v-model="form.napcatHttpUrl" label="NapCat HTTP 地址" />
                     <v-text-field v-model="form.napcatWebuiUrl" class="full-span" label="NapCat 管理接口地址" />
                     <div class="quick-agent-status full-span">
@@ -992,7 +1018,7 @@ async function apply() {
                           >
                             检查并补齐
                           </v-btn>
-                          <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" @click="copyText(napcatWsUrl(), '已复制 NapCat WS 地址')">
+                          <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" :disabled="!napcatWsUrl()" @click="copyNapcatWsUrl">
                             复制 WS
                           </v-btn>
                         </div>
@@ -1014,7 +1040,8 @@ async function apply() {
                         <div v-else-if="napcatHealthResult.webui?.message">
                           管理凭据：{{ napcatHealthResult.webui.message }}
                         </div>
-                        <div>WS：请在 NapCat WebSocket Client 里连接 {{ napcatHealthResult.wsUrl || napcatWsUrl() }}</div>
+                        <div v-if="napcatWsUrl()">WS：请在 NapCat WebSocket Client 里连接 {{ napcatWsUrl() }}</div>
+                        <div v-else>等待监听就绪</div>
                         <div v-if="napcatHealthResult.process">
                           进程：{{ napcatHealthResult.process.found ? napcatHealthResult.process.candidates?.map(item => `${item.name}(${item.pid})`).join(", ") : "未发现 NapCat/QQNT 相关进程" }}
                         </div>
@@ -1080,11 +1107,11 @@ async function apply() {
                   </template>
                   <template v-for="webhookAdapter in selectedWebhookAdapters()" :key="webhookAdapter">
                     <v-text-field v-if="webhookAdapter === 'rabilink'" :model-value="webhookHostFor(webhookAdapter)" :label="`${adapterLabel(webhookAdapter)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(webhookAdapter, value)" />
-                    <v-text-field :model-value="webhookPortFor(webhookAdapter)" type="number" :label="`${adapterLabel(webhookAdapter)} 端口`" @update:model-value="value => setWebhookPort(webhookAdapter, value)" />
+                    <v-text-field :model-value="webhookPortFor(webhookAdapter)" type="number" :label="`${adapterLabel(webhookAdapter)} 端口`" :hint="webhookAdapter === 'webhook' ? '0 表示自动分配；启动后从运行状态读取实际地址' : undefined" :persistent-hint="webhookAdapter === 'webhook'" @update:model-value="value => setWebhookPort(webhookAdapter, value)" />
                     <v-text-field :model-value="webhookPathFor(webhookAdapter)" :label="`${adapterLabel(webhookAdapter)} 路径`" :placeholder="adapterDefaultWebhookPath(webhookAdapter)" @update:model-value="value => setWebhookPath(webhookAdapter, value)" />
                     <div class="quick-agent-status full-span">
-                      <div class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 监听</span><b>{{ webhookUrl(webhookAdapter) }}</b></div>
-                      <div v-if="webhookAdapter === 'rabilink'" class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 回调</span><b>{{ callbackUrl(webhookAdapter) }}</b></div>
+                      <div class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 监听</span><b>{{ webhookUrl(webhookAdapter) || '启动后自动分配' }}</b></div>
+                      <div v-if="webhookAdapter === 'rabilink'" class="status-row"><span>{{ adapterLabel(webhookAdapter) }} 回调</span><b>{{ callbackUrl(webhookAdapter) || "等待监听就绪" }}</b></div>
                       <v-alert type="info" variant="tonal" density="compact" class="mt-2">
                         {{ webhookSetupHint(webhookAdapter) }}
                       </v-alert>
@@ -1096,13 +1123,13 @@ async function apply() {
                           <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-book-open-variant" @click="openExternalUrl(webhookSetupDocUrl(webhookAdapter))">
                             配置说明
                           </v-btn>
-                          <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl(webhookAdapter), `已复制 ${adapterLabel(webhookAdapter)} 回调地址`)">
+                          <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" :disabled="!callbackUrl(webhookAdapter)" @click="copyText(callbackUrl(webhookAdapter), `已复制 ${adapterLabel(webhookAdapter)} 回调地址`)">
                             复制回调
                           </v-btn>
-                          <v-btn v-if="webhookAdapter === 'rabilink'" size="small" variant="text" prepend-icon="mdi-access-point" @click="copyText(webhookUrl(webhookAdapter), '已复制监听地址')">
+                          <v-btn v-if="webhookAdapter === 'rabilink'" size="small" variant="text" prepend-icon="mdi-access-point" :disabled="!webhookUrl(webhookAdapter)" @click="copyText(webhookUrl(webhookAdapter), '已复制监听地址')">
                             复制监听
                           </v-btn>
-                          <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl(webhookAdapter), '已复制 curl 示例')">
+                          <v-btn size="small" variant="text" prepend-icon="mdi-console" :disabled="!webhookUrl(webhookAdapter)" @click="copyText(webhookCurl(webhookAdapter), '已复制 curl 示例')">
                             复制 curl
                           </v-btn>
                         </div>

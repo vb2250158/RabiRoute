@@ -28,7 +28,8 @@ export function rabiLinkDraftFromMeta(meta: MetaPayload) {
     deviceId: relay?.deviceId || meta.computerName || "",
     claimWaitMs: relay?.claimWaitMs ?? 60000,
     replyIdleTimeoutMs: relay?.replyIdleTimeoutMs ?? 60000,
-    speechServiceUrl: relay?.speechServiceUrl || ""
+    speechServiceUrl: relay?.speechServiceUrl || "",
+    speechServiceMode: relay?.speechServiceMode ?? (relay?.speechServiceUrl && relay.speechServiceUrl.replace(/\/+$/, "") !== "http://127.0.0.1:8781" ? "configured" : "managed") as "managed" | "configured"
   };
 }
 

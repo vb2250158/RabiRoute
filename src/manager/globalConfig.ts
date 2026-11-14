@@ -37,6 +37,7 @@ export type RabiLinkRelayGlobalConfig = {
   claimWaitMs: number;
   replyIdleTimeoutMs: number;
   speechServiceUrl: string;
+  speechServiceMode?: "managed" | "configured";
 };
 
 export class RabiGlobalConfigStore {
@@ -168,6 +169,9 @@ export class RabiGlobalConfigStore {
     }
     const timeoutOverrides = patch.timeoutOverrides === undefined ? this.current.timeoutOverrides : validateTimeoutOverrides(patch.timeoutOverrides);
     const current = this.current;
+    const relayPatch = patch.rabiLinkRelay;
+    if (relayPatch?.speechServiceMode !== undefined && !["managed", "configured"].includes(relayPatch.speechServiceMode)) throw new Error("Invalid speechServiceMode.");
+    const explicitSpeechUrl = relayPatch && Object.hasOwn(relayPatch, "speechServiceUrl") && relayPatch.speechServiceMode === undefined;
     const next: RabiGlobalConfig = {
       ...current,
       timeoutOverrides,
@@ -175,7 +179,7 @@ export class RabiGlobalConfigStore {
         ? patch.rabiName.trim()
         : current.rabiName,
       rabiLinkRelay: patch.rabiLinkRelay
-        ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay })
+        ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay, ...(explicitSpeechUrl ? { speechServiceMode: "configured" } : {}) })
         : current.rabiLinkRelay,
       webguiLan: patch.webguiLan
         ? normalizeWebguiLanAccessConfig({ ...current.webguiLan, ...patch.webguiLan })
@@ -315,7 +319,8 @@ function defaultRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig {
     deviceId: os.hostname() || "rabilink-pc",
     claimWaitMs: 60000,
     replyIdleTimeoutMs: 60000,
-    speechServiceUrl: "http://127.0.0.1:8781"
+    speechServiceUrl: "",
+    speechServiceMode: "managed"
   };
 }
 
@@ -326,6 +331,9 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
   const defaults = defaultRabiLinkRelayConfig();
   const url = typeof source.url === "string" ? source.url.trim() : "";
   const token = typeof source.token === "string" ? source.token.trim() : "";
+  const speechServiceUrl = typeof source.speechServiceUrl === "string" ? source.speechServiceUrl.trim() : "";
+  // Historical normalization persisted this default without recording user provenance.
+  const legacyManagedDefault = speechServiceUrl.replace(/\/+$/, "") === "http://127.0.0.1:8781";
   return {
     enabled: typeof source.enabled === "boolean" ? source.enabled : Boolean(url && token),
     url,
@@ -333,9 +341,9 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
     deviceId: typeof source.deviceId === "string" && source.deviceId.trim() ? source.deviceId.trim() : defaults.deviceId,
     claimWaitMs: normalizeNumber(source.claimWaitMs, defaults.claimWaitMs, 0, 60000),
     replyIdleTimeoutMs: normalizeNumber(source.replyIdleTimeoutMs, defaults.replyIdleTimeoutMs, 1000, 120000),
-    speechServiceUrl: typeof source.speechServiceUrl === "string" && source.speechServiceUrl.trim()
-      ? source.speechServiceUrl.trim()
-      : defaults.speechServiceUrl
+    speechServiceUrl,
+    speechServiceMode: source.speechServiceMode === "managed" || source.speechServiceMode === "configured"
+      ? source.speechServiceMode : !speechServiceUrl || legacyManagedDefault ? "managed" : "configured"
   };
 }
 

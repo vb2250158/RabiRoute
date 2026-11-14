@@ -1,6 +1,9 @@
 import { pluginTranslation } from "./translationRegistry";
 
 export const englishCatalog: Record<string, string> = {
+  "手机：录像接收器启动": "Phone: recording receiver startup",
+  "0 表示自动分配；启动后从运行状态读取实际地址": "0 allocates an available port; read the actual address from runtime status after startup.",
+  "启动后自动分配": "Assigned automatically after startup",
   "插件目录暂时无法刷新，正在显示上次读取的界面。": "The plugin catalog could not be refreshed. The last loaded interface remains visible.",
   "部分插件目录项暂不可用，其余功能可继续使用。": "Some plugin catalog entries are unavailable. Other functions remain available.",
 

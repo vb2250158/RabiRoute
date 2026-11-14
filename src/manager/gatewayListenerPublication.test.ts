@@ -125,6 +125,60 @@ function bindingOperation(registry: ManagerPluginRouteRegistry) {
   return registry.catalogSnapshot().operations.find(operation => operation.binding)!;
 }
 
+test("listener descriptors wait for the original child's real published socket and revoke on retirement", async t => {
+  const { runtime, publication, revision } = generationFixture();
+  t.after(async () => { await runtime.dispose(); publication.dispose(); });
+  await runtime.switch([revision("descriptor-owner")]);
+  const controller = new AbortController();
+  const pending = publication.waitForListener("fixture-gateway", "listener", { signal: controller.signal, timeoutMs: 10000 });
+  const native = await managedChild(t, publication);
+  const descriptor = await pending;
+  assert.equal(descriptor.pid, native.child.pid);
+  assert.ok(descriptor.address.port > 0);
+  descriptor.assertCurrent();
+  const response = await fetch(`http://127.0.0.1:${descriptor.address.port}/native`, { method: "POST", body: "descriptor-socket" });
+  assert.equal((await response.json()).pid, descriptor.pid);
+  native.command("retire"); await until(() => native.output().includes("fixture-retired"));
+  assert.throws(descriptor.assertCurrent, /no longer current/);
+  assert.equal(publication.readListener("fixture-gateway", "listener"), undefined);
+});
+
+test("an unpublished cache, generation replacement and cancellation cannot supply a listener lease", async t => {
+  const { runtime, publication, revision } = generationFixture();
+  t.after(async () => { await runtime.dispose(); publication.dispose(); });
+  await managedChild(t, publication);
+  assert.equal(publication.readListener("fixture-gateway", "listener"), undefined);
+  const initial = publication.waitForListener("fixture-gateway", "listener", { signal: new AbortController().signal, timeoutMs: 10000 });
+  await runtime.switch([revision("descriptor-owner")]);
+  publication.refresh(); // The real Manager's generation commit invokes this same owner.
+  assert.ok((await initial).address.port > 0);
+  const descriptor = publication.readListener("fixture-gateway", "listener")!;
+  const controller = new AbortController();
+  const pending = assert.rejects(publication.waitForListener("fixture-gateway", "not-published", { signal: controller.signal, timeoutMs: 10000 }), /generation changed/);
+  await managedChild(t, publication, "replacement-generation"); await pending;
+  assert.throws(descriptor.assertCurrent, /no longer current/);
+  const cancelled = new AbortController();
+  const wait = assert.rejects(publication.waitForListener("fixture-gateway", "not-published", { signal: cancelled.signal, timeoutMs: 10000 }), /cancelled/);
+  cancelled.abort(new Error("descriptor wait cancelled")); await wait;
+});
+
+test("a wait started before attachment cannot adopt a replacement of its first unpublished child", async t => {
+  const { runtime, publication, revision } = generationFixture();
+  t.after(async () => { await runtime.dispose(); publication.dispose(); });
+  await runtime.switch([revision("descriptor-owner")]);
+  const pending = assert.rejects(publication.waitForListener("fixture-gateway", "listener", {
+    signal: new AbortController().signal, timeoutMs: 10000
+  }), /generation changed/);
+  for (const generation of ["first-unpublished", "replacement-unpublished"]) {
+    const child = spawn(process.execPath, ["--eval", "process.stdin.resume()"], { stdio: ["pipe", "pipe", "pipe"] });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) { child.kill(); await once(child, "exit"); }
+    });
+    publication.attach(child, { gatewayId: "fixture-gateway", gatewayGenerationId: generation });
+  }
+  await pending;
+});
+
 test("real Gateway child publishes native contracts through its owned stdout generation into Manager discovery and retires atomically", async t => {
   const registry = new ManagerPluginRouteRegistry(undefined, { identity: () => identity });
   const { runtime, publication, revision } = generationFixture(registry);

@@ -405,7 +405,8 @@ test("repository writes normalized configs and removes renamed route files", () 
   const newConfigPath = path.join(rootDir, "data", "route", "new", "adapterConfig.json");
 
   assert.equal(written.gateways[0].configName, "new");
-  assert.equal(written.gateways[0].webhookPort, 8791);
+  assert.equal(written.gateways[0].webhookPort, 0);
+  assert.equal(JSON.parse(fs.readFileSync(newConfigPath, "utf8")).webhookPort, 0);
   assert.equal(fs.existsSync(oldConfigPath), false);
   assert.equal(fs.existsSync(newConfigPath), true);
 });
