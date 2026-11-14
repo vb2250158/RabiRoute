@@ -12,7 +12,7 @@
         "webhookPort",
         "gatewayPort"
       ],
-      "default": 8789,
+      "default": 0,
       "format": "number"
     },
     "rabiLinkWebhookPath": {

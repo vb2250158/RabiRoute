@@ -1,5 +1,6 @@
 export const pluginTranslations = {
   "en": {
+    "等待监听就绪": "Waiting for the listener",
     "已阻塞": "Blocked",
     "日志诊断": "Logs & diagnostics",
     "投递记录": "Delivery records",
@@ -32,6 +33,7 @@ export const pluginTranslations = {
     "HTTP 异常": "HTTP error"
   },
   "ja": {
+    "等待监听就绪": "リスナーの準備を待っています",
     "已阻塞": "ブロックされました",
     "日志诊断": "ログと診断",
     "投递记录": "配信記録",

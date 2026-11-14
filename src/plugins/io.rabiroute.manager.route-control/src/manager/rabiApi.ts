@@ -52,6 +52,8 @@ export type RabiApiContext = {
   routeCatalogPersonas: () => readonly RouteCatalogPersonaPresentation[];
   syncRunningGateways: () => void;
   syncRabiLinkRelay: () => Promise<void>;
+  /** Notify the original Speech owner only after a committed endpoint configuration change. */
+  reconcileSpeechConfiguration?: () => void;
   scanAgentAdapters: () => Promise<Record<string, unknown>>;
   routeDataDir: (definition: GatewayDefinition) => string;
 };
@@ -808,8 +810,14 @@ function managedMessageWorker(worker: Record<string, unknown>, route: GatewayDef
     && title.includes("协助处理消息");
 }
 
+function requiredDshCleanupUrl(route: GatewayDefinition): string {
+  const baseUrl = route.dshBaseUrl?.trim().replace(/\/+$/, "");
+  if (!baseUrl) throw new Error("DSH cleanup requires the original Route dshBaseUrl; no owner address was guessed.");
+  return baseUrl;
+}
+
 async function listDshMessageWorkers(route: GatewayDefinition, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
-  const baseUrl = (route.dshBaseUrl || "http://127.0.0.1:3080").replace(/\/+$/, "");
+  const baseUrl = requiredDshCleanupUrl(route);
   const response = await fetch(`${baseUrl}/api/session.list`, {
     method: "POST",
     signal,
@@ -880,7 +888,7 @@ async function localMessageProcessingCleanup(
     const adapter = String(worker.agentAdapter || (threadId.startsWith("session-") ? "dsh" : "codex"));
     try {
       if (adapter === "dsh" && threadId) {
-        await deleteDshSession(route.dshBaseUrl || "http://127.0.0.1:3080", threadId, signal);
+        await deleteDshSession(requiredDshCleanupUrl(route), threadId, signal);
       }
       deleted.push(threadId);
     } catch (error) {
@@ -951,6 +959,8 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
         if (nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
         const beforeRelay = JSON.stringify(current.rabiLinkRelay);
         const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any, agentUploads: body.agentUploads });
+        if (current.rabiLinkRelay.speechServiceMode !== config.rabiLinkRelay.speechServiceMode
+          || current.rabiLinkRelay.speechServiceUrl !== config.rabiLinkRelay.speechServiceUrl) ctx.reconcileSpeechConfiguration?.();
         await ctx.syncRabiLinkRelay();
         if (beforeRelay !== JSON.stringify(config.rabiLinkRelay)) {
           for (const runtime of ctx.runtimes()) if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) runtime.needsRestart = true;

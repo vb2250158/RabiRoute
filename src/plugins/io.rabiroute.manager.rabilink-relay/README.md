@@ -11,3 +11,5 @@
 隔离验证：`node --import tsx --test --test-concurrency=1 src/peerTunnel/pluginRuntime.test.ts` 覆盖候选失败、提交回滚、成功替换、旧慢请求排空、原生 HEAD 和真实取消清理；不连接真实远端。安装版运行验收由统一发布流程另行完成。
 
 版本 `2.0.0`：设备 Agent 管理接口由独立的设备 Agent 插件拥有；此包继续负责 Relay/Peer 传输与设备配置。
+
+语音地址在每次能力检测和请求时从当前语音 owner 获取，不把启动时端口保存为固定快照。语音未就绪时独立停止提供该能力，Manager 与资源隧道仍可使用；已就绪后读取新地址。连接设置中的 speechServiceMode=managed 使用 Rabi 自动管理；configured 使用显式 speechServiceUrl。旧配置缺少 mode 时，历史默认地址迁为 managed 并保留原地址，自定义地址保持 configured；仅提交地址的修改视为显式 configured。

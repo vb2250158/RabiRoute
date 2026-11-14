@@ -3,6 +3,8 @@ import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, ref } from "vue";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
+import { publishedNapcatWsUrl } from "../../../../../ribiwebgui/src/napcatRuntimeEndpoint";
+import { publishedHttpCallbackUrl } from "../../../../../ribiwebgui/src/webhookRuntimeEndpoint";
 import {
   adapterConnectionReasons,
   adapterDefaultWebhookPath,
@@ -99,24 +101,22 @@ const runtimeText = computed(() => {
 const runtimeNote = computed(() => needsGatewayRuntime.value ? `PID ${runtime.value.pid || "-"}` : "无需独立子进程");
 
 function webhookAddress(type: string): string {
-  const port = type === "fennenote"
-    ? gateway.value?.fenneNoteWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
-    : type === "xiaoai"
-      ? gateway.value?.xiaoaiWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
-      : type === "rabilink"
-        ? gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort
-        : gateway.value?.webhookPort || gateway.value?.gatewayPort;
-  const path = type === "fennenote"
-    ? gateway.value?.fenneNoteWebhookPath || adapterDefaultWebhookPath(type)
-    : type === "xiaoai"
-      ? gateway.value?.xiaoaiWebhookPath || adapterDefaultWebhookPath(type)
-      : type === "rabilink"
-        ? gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type)
-        : gateway.value?.webhookPath || adapterDefaultWebhookPath(type);
-  return `http://127.0.0.1:${port || 8790}${path}`;
+  const paths: Record<string, string | undefined> = {
+    webhook: gateway.value?.webhookPath, rabilink: gateway.value?.rabiLinkWebhookPath,
+    feishu: gateway.value?.feishuWebhookPath, xiaoai: gateway.value?.xiaoaiWebhookPath,
+    fennenote: gateway.value?.fenneNoteWebhookPath
+  };
+  const path = paths[type]?.trim() || adapterDefaultWebhookPath(type);
+  const host = type === "rabilink" ? gateway.value?.rabiLinkWebhookHost || "0.0.0.0" : "127.0.0.1";
+  return publishedHttpCallbackUrl(runtime.value, type, path.startsWith("/") ? path : `/${path}`, host);
 }
 
-const webhookLikeAdapters = computed(() => adapters.value.filter(isWebhookLikeAdapter));
+function napcatAddress(): string {
+  const instance = gateway.value?.napcatInstances?.[0];
+  return publishedNapcatWsUrl(runtime.value, instance?.id || "default", instance?.enabled !== false);
+}
+
+const webhookLikeAdapters = computed(() => adapters.value.filter(type => isWebhookLikeAdapter(type) || type === "rabilink" || type === "feishu" || type === "fennenote"));
 
 async function triggerRule(rule: { id: string; displayName: string; routeKind: "manual_trigger" | "heartbeat" }): Promise<void> {
   if (!gateway.value) return;
@@ -248,7 +248,7 @@ async function deleteCurrentGateway(): Promise<void> {
           </v-alert>
           <template v-if="adapters.includes('napcat')">
             <div class="status-row"><span>HTTP</span><b>{{ gateway.napcatHttpUrl || runtime.napcatHttpUrl || "-" }}</b></div>
-            <div class="status-row"><span>WS</span><b>ws://127.0.0.1:{{ gateway.gatewayPort || runtime.gatewayPort || "-" }}</b></div>
+            <div class="status-row"><span>WS</span><b>{{ napcatAddress() || "等待监听就绪" }}</b></div>
             <div class="status-row"><span>远端</span><b>{{ napcatState.remoteAddress || "-" }}</b></div>
             <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
             <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
@@ -262,7 +262,7 @@ async function deleteCurrentGateway(): Promise<void> {
           <template v-if="webhookLikeAdapters.length">
             <div v-for="type in webhookLikeAdapters" :key="type" class="status-row">
               <span>{{ adapterLabel(type) }}</span>
-              <b>{{ webhookAddress(type) }}</b>
+              <b>{{ webhookAddress(type) || "等待监听就绪" }}</b>
             </div>
           </template>
         </v-card>

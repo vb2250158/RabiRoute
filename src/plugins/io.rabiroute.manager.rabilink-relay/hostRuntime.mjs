@@ -25,7 +25,19 @@ export function createOwnedRuntime(ports) {
                 deviceId: ports.rabiLinkRelayConfigForMeta().deviceId,
                 generation: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId,
                 discover: () => ports.discoverRabiPeers(ports.peerRelayConfig()), relay: () => ports.peerRelayConfig(),
-                services: () => ({ manager: { baseUrl: ports.managerBaseUrl, headers: { "x-rabilink-tunnel-local": ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId } }, speech: { baseUrl: ports.speechServiceUrl(), headers: { "x-rabilink-tunnel-local": ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId } }, resources: { baseUrl: ports.managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": ports.resourceCacheKey, "x-rabilink-tunnel-local": ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId } } }),
+                services: () => {
+                    const generation = ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId;
+                    const services = { manager: { baseUrl: ports.managerBaseUrl, headers: { "x-rabilink-tunnel-local": generation } },
+                        resources: { baseUrl: ports.managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": ports.resourceCacheKey, "x-rabilink-tunnel-local": generation } } };
+                    try {
+                        const endpoint = ports.speechServiceUrl();
+                        if (endpoint) services.speech = { baseUrl: endpoint, headers: { "x-rabilink-tunnel-local": generation } };
+                    } catch (error) {
+                        // An unavailable optional Speech owner cannot disable Manager or resource tunneling.
+                        if (error?.status !== 409) throw error;
+                    }
+                    return services;
+                },
                 onStatus: value => ports.publishManagerEvent("peer_tunnel_status", value)
             },
             metadata: { identity, server: ports.peerLanServer, operations: ports.createManagerApiOperationsService(managerPluginRoutes),

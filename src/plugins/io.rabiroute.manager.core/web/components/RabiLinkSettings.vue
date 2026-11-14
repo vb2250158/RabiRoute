@@ -134,7 +134,8 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
         <v-expansion-panel title="高级连接参数">
           <v-expansion-panel-text>
             <div class="form-grid">
-              <v-text-field v-model="draft.speechServiceUrl" label="语音服务地址（本机或远端）" density="compact" hide-details="auto" />
+              <v-select v-model="draft.speechServiceMode" label="语音服务连接" :items="[{ title: 'Rabi 自动管理', value: 'managed' }, { title: '指定服务地址', value: 'configured' }]" density="compact" hide-details="auto" />
+              <v-text-field v-if="draft.speechServiceMode === 'configured'" v-model="draft.speechServiceUrl" label="语音服务地址（本机或远端）" density="compact" hide-details="auto" />
               <v-text-field v-model.number="claimWaitSeconds" label="领取任务等待（秒）" type="number" min="0" max="60" step="1" density="compact" hide-details="auto" />
               <v-text-field v-model.number="replyIdleSeconds" label="回复空闲超时（秒）" type="number" min="1" max="120" step="1" density="compact" hide-details="auto" />
             </div>

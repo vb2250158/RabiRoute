@@ -36,7 +36,7 @@ The control service still listens on the LAN by default, so treat this password 
 
 The bridge is zero-config for normal use.
 
-- Control service starts from port `8797`.
+- Control service uses an OS-assigned TCP port by default. Startup output and discovery publish the actual bound port; an explicit nonzero `REMOTE_AGENT_CONTROL_PORT` keeps the existing scan-from-that-port behavior.
 - LAN discovery starts from UDP port `8798`.
 - If a port is occupied, the bridge automatically tries the next available port.
 - RabiGUI scans the discovery range and uses the real advertised control port, so users do not need to type a port.
@@ -49,7 +49,7 @@ REMOTE_AGENT_PASSWORD="replace-with-a-long-random-secret"
 REMOTE_AGENT_DEVICE_NAME="Builder Device"
 REMOTE_AGENT_DEFAULT_CWD="/path/to/project"
 REMOTE_AGENT_DEFAULT_THREAD="Remote Agent"
-REMOTE_AGENT_CONTROL_PORT=8797
+REMOTE_AGENT_CONTROL_PORT=0
 REMOTE_AGENT_DISCOVERY_PORT_START=8798
 REMOTE_AGENT_DISCOVERY_PORT_END=8818
 REMOTE_AGENT_PUBLIC_HOST=192.168.0.57

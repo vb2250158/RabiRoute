@@ -18,6 +18,7 @@ export function createOwnedRuntime(ports) {
             routeCatalogPersonas: ports.routeCatalogPersonas,
             syncRunningGateways: ports.syncRunningGateways,
             syncRabiLinkRelay: () => ports.syncActiveRabiLinkRelay(),
+            reconcileSpeechConfiguration: () => ports.reconcileSpeechConfiguration(),
             routeDataDir: definition => ports.dataDirFor(definition),
             scanAgentAdapters: () => {
                 if (!ports.agentAdapterCatalogService)

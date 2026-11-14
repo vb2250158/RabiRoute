@@ -16,9 +16,12 @@ import { CodexThreadCoordinator } from "./thread-coordinator.mjs";
 const PROTOCOL_VERSION = 3;
 const bridgeVersion = JSON.parse(fs.readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 const controlHost = process.env.REMOTE_AGENT_CONTROL_HOST || "0.0.0.0";
-const controlPortStart = Number(process.env.REMOTE_AGENT_CONTROL_PORT || "8797");
+const controlPortStart = Number(process.env.REMOTE_AGENT_CONTROL_PORT ?? "0");
 const discoveryPortStart = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_START || process.env.REMOTE_AGENT_DISCOVERY_PORT || "8798");
 const discoveryPortEnd = Number(process.env.REMOTE_AGENT_DISCOVERY_PORT_END || "8818");
+if (!Number.isInteger(controlPortStart) || controlPortStart < 0 || controlPortStart > 65535) {
+  throw new Error("REMOTE_AGENT_CONTROL_PORT must be an integer from 0 to 65535.");
+}
 const configuredPassword = process.env.REMOTE_AGENT_PASSWORD?.trim() || "";
 if (configuredPassword && Buffer.byteLength(configuredPassword, "utf8") < 16) {
   throw new Error("REMOTE_AGENT_PASSWORD must be at least 16 UTF-8 bytes.");
@@ -331,7 +334,11 @@ function tryListenServer(server, port, host) {
     };
     const onListening = () => {
       server.off("error", onError);
-      resolve(port);
+      const address = server.address();
+      if (!address || typeof address === "string" || address.port < 1) {
+        reject(new Error("Remote Agent control listener has no bound TCP address.")); return;
+      }
+      resolve(address.port);
     };
     server.once("error", onError);
     server.once("listening", onListening);
@@ -340,12 +347,20 @@ function tryListenServer(server, port, host) {
 }
 
 async function listenServerFrom(server, startPort, host) {
-  for (let port = startPort; port <= 65535; port += 1) {
+  const verify = port => {
+    const address = server.address();
+    const boundHost = address && typeof address !== "string" ? address.address : "127.0.0.1";
+    return verifyLoopbackControlPort(port, boundHost === "0.0.0.0" ? "127.0.0.1" : boundHost === "::" ? "::1" : boundHost);
+  };
+  // Automatic listeners keep their original OS-assigned socket throughout verification.
+  const attempts = startPort === 0 ? 128 : 65536 - startPort;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const requestedPort = startPort === 0 ? 0 : startPort + attempt;
     try {
-      await tryListenServer(server, port, host);
-      const loopbackOk = await verifyLoopbackControlPort(port);
+      const port = await tryListenServer(server, requestedPort, host);
+      const loopbackOk = await verify(port);
       if (!loopbackOk) {
-        console.warn(`Remote Agent control port ${port} is not reachable on 127.0.0.1 by this bridge; trying next port.`);
+        console.warn(`Remote Agent control port ${port} is not reachable at its bound address by this bridge; trying another port.`);
         await closeServer(server);
         continue;
       }
@@ -363,12 +378,13 @@ function closeServer(server) {
   });
 }
 
-function verifyLoopbackControlPort(port) {
+function verifyLoopbackControlPort(port, host = "127.0.0.1") {
   return new Promise((resolve) => {
     const request = http.get({
-      hostname: "127.0.0.1",
+      hostname: host,
       port,
       path: "/health",
+      agent: false,
       timeout: getTimeoutMs("legacyAgent.health", 1000)
     }, (response) => {
       const chunks = [];
@@ -398,7 +414,9 @@ function bindUdp(socket, port) {
     };
     const onListening = () => {
       socket.off("error", onError);
-      resolve(port);
+      const address = socket.address();
+      if (!address || address.port < 1) { reject(new Error("Remote Agent discovery has no bound UDP address.")); return; }
+      resolve(address.port);
     };
     socket.once("error", onError);
     socket.once("listening", onListening);
@@ -411,9 +429,9 @@ async function bindDiscoverySocket() {
   for (let port = discoveryPortStart; port <= end; port += 1) {
     const socket = dgram.createSocket("udp4");
     try {
-      await bindUdp(socket, port);
+      const actualPort = await bindUdp(socket, port);
       socket.setBroadcast(true);
-      return { socket, port };
+      return { socket, port: actualPort };
     } catch (error) {
       try { socket.close(); } catch { /* ignore */ }
       if (error?.code !== "EADDRINUSE" && error?.code !== "EACCES") throw error;

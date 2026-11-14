@@ -48,7 +48,7 @@ export function createRolePanelOperations(owner: RolePanelOperationsOwner): read
     operationId: "manager.role-panel.messages.send", contractVersion: "1.0.0", method: "POST", pathTemplate: "/api/role-panel/messages", exposure: "public", transport: "http",
     description: "Use the original local-persona role-panel delivery owner. Omitted gatewayId retains the existing first-configured-gateway selection; every new request creates a new message ID.",
     request: { path: empty, query: { type: "object" }, headers: { type: "object" }, body: { kind: "json", maxBytes: 0, allowAnyContentType: true, emptyValue: {},
-      schema: { type: "object", properties: { gatewayId: true, text: true, attachments: true }, additionalProperties: true } } },
+      schema: { type: "object", properties: { gatewayId: true, expectedRoleId: { type: "string", minLength: 1 }, text: true, attachments: true }, additionalProperties: true } } },
     responses: { "202": { mediaType: "application/json", schema: { type: "object", required: ["code", "status", "roleId", "messageId", "timelineRecorded", "replyContext"], additionalProperties: false, properties: {
       code: { const: 0 }, status: { const: "delivered" }, roleId: { type: "string" }, messageId: { type: "string" }, timelineRecorded: { type: "boolean" }, message: rolePanelMessageSchema, replyContext: { type: "object", additionalProperties: true }
     } } }, "400": { mediaType: "application/json", schema: sendErrorSchema(false) }, "502": { mediaType: "application/json", schema: sendErrorSchema(true) } },
@@ -64,12 +64,14 @@ export function createRolePanelOperations(owner: RolePanelOperationsOwner): read
       const runtime = gatewayId ? runtimes.get(gatewayId) : runtimes.values()[Symbol.iterator]().next().value;
       if (!runtime) throw new Error(gatewayId ? `Gateway not found: ${gatewayId}` : "No gateway is configured.");
       owner.assertLocalOwner(runtime);
+      const roleId = owner.roleId(runtime);
+      if (body.expectedRoleId !== undefined && body.expectedRoleId !== roleId) throw new Error("The selected Route's persona changed; select the intended persona again.");
       const text = String(body.text || "").trim(), attachments = normalizeRolePanelAttachments(body.attachments);
       if (!text && attachments.length === 0) throw new Error("Missing role panel message text or attachment.");
       let appendTimeline: RolePanelDeliveryOptions["appendTimeline"];
       try { appendTimeline = owner.timelineAppender(); }
       catch (error) { appendTimeline = async () => { throw error; }; }
-      const result = await deliverRolePanelMessage({ runtime, roleId: owner.roleId(runtime), sender: "本地用户", text, attachments,
+      const result = await deliverRolePanelMessage({ runtime, roleId, sender: "本地用户", text, attachments,
         messageIdPrefix: "role-panel-user", deliver: owner.deliver, appendTimeline });
       return { status: 202, body: { code: 0, ...result, ...(result.message ? { message: projectMessage(result.message) } : {}) } };
     } catch (error) {

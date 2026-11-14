@@ -4,6 +4,7 @@ import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewaySto
 import type { MessageAdapterType } from "../../../../../ribiwebgui/src/types";
 import { adapterDefaultWebhookPath, applyAdapterDefaults } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import MessageEndpointDependencyPanel from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
+import { publishedHttpCallbackUrl } from "../../../../../ribiwebgui/src/webhookRuntimeEndpoint";
 
 const store = useGatewayStore();
 
@@ -15,9 +16,14 @@ const feishuState = computed(() => runtime.value.gatewayStatus?.messageAdapters?
 
 function touch(): void { if (gateway.value) applyAdapterDefaults(gateway.value); store.touch(); }
 
-function webhookPortFor(_type: MessageAdapterType): number { return Number(gateway.value?.feishuWebhookPort || gateway.value?.gatewayPort || 8790); }
+function webhookPortFor(_type: MessageAdapterType): number { return Number(gateway.value?.feishuWebhookPort ?? 0); }
 
 function webhookPathFor(type: MessageAdapterType): string { return gateway.value?.feishuWebhookPath || adapterDefaultWebhookPath(type); }
+
+function callbackUrl(): string {
+  const path = webhookPathFor("feishu");
+  return publishedHttpCallbackUrl(runtime.value, "feishu", path.startsWith("/") ? path : `/${path}`);
+}
 
 function setWebhookPort(_type: MessageAdapterType, value: unknown): void { if (!gateway.value) return; gateway.value.feishuWebhookPort = Number(value || 0); touch(); }
 
@@ -34,7 +40,7 @@ const context = computed(() => endpointProps.context);
                     <v-text-field v-model="gateway.feishuAppSecret" type="password" label="飞书 App Secret" @update:model-value="touch" />
                     <v-text-field v-model="gateway.feishuVerificationToken" type="password" label="Verification Token" @update:model-value="touch" />
                     <v-text-field v-model="gateway.feishuEncryptKey" type="password" label="Encrypt Key" @update:model-value="touch" />
-                    <v-text-field :model-value="webhookPortFor('feishu')" type="number" label="本机回调端口" @update:model-value="value => setWebhookPort('feishu', value)" />
+                    <v-text-field :model-value="webhookPortFor('feishu')" type="number" label="本机回调端口" hint="0 表示自动分配，监听就绪后显示实际地址。" persistent-hint :min="0" :max="65535" @update:model-value="value => setWebhookPort('feishu', value)" />
                     <v-text-field :model-value="webhookPathFor('feishu')" label="独立回调路径" placeholder="/feishu" @update:model-value="value => setWebhookPath('feishu', value)" />
                     <v-switch
                       v-model="gateway.feishuEventSubscriptionEnabled"
@@ -55,6 +61,7 @@ const context = computed(() => endpointProps.context);
 <template v-if="runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
                     <div class="status-row"><span>回调监听</span><b :class="feishuState.listenerReady ? 'text-success' : 'text-warning'">{{ feishuState.listenerReady ? "已监听" : feishuState.message || "保持关闭" }}</b></div>
+                    <div class="status-row"><span>本机回调地址</span><b>{{ callbackUrl() || "等待监听就绪" }}</b></div>
                     <div class="status-row"><span>订阅验证</span><b :class="feishuState.subscriptionVerified ? 'text-success' : 'text-warning'">{{ feishuState.subscriptionVerified ? "已收到验证/事件" : "尚未验证" }}</b></div>
                     <div class="status-row"><span>最近消息</span><b>{{ feishuState.lastMessageAt || "-" }}</b></div>
                     <div class="status-row"><span>最近事件 ID</span><b>{{ feishuState.lastEventId || "-" }}</b></div>

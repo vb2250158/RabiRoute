@@ -46,6 +46,17 @@ async function fixture(t: test.TestContext) {
   return { root, originalRoot, nextRoot, state, runtime, registry, registration, authority, credential, request, send, hold };
 }
 
+test("desktop selection rejects a changed persona before native admission", async t => {
+  const f = await fixture(t);
+  const denied = await f.send({ gatewayId: "gateway-a", expectedRoleId: "Other", text: "private selected-persona input" });
+  assert.equal(denied.status, 400);
+  assert.equal((await denied.json()).commitState, "not_started");
+  assert.equal(f.state.accepted, 0);
+  const accepted = await f.send({ gatewayId: "gateway-a", expectedRoleId: "Builder", text: "hello" });
+  assert.equal(accepted.status, 202);
+  assert.equal(f.state.accepted, 1);
+});
+
 test("node-authenticated role-panel contracts retain native coercion, timeline persistence and first query values", { timeout: 10000 }, async t => {
   const f = await fixture(t);
   const response = await f.send({ text: 42, attachments: [null, { kind: "future-kind", name: " file ", size: "12" }], extension: true });

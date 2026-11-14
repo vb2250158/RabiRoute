@@ -11,3 +11,5 @@ Retirement releases only the activation's own routes and native sessions, joinin
 Isolated verification: `node --import tsx --test --test-concurrency=1 src/peerTunnel/pluginRuntime.test.ts` covers candidate failure, publication rollback, successful replacement, old slow-request drain, native HEAD, and actual cancellation cleanup without connecting to real remote peers. Installed-runtime acceptance belongs to the coordinated publication workflow.
 
 Version `2.0.0`: Device Agent management belongs to its independent Agent plugin; this package retains Relay/Peer transport and device configuration.
+
+Speech capability checks and requests resolve the current Speech owner endpoint instead of caching its startup port. Unavailable Speech is isolated from Manager and resource tunneling, and subsequent requests use the new ready address. Connection settings use speechServiceMode=managed for Rabi ownership and configured for an explicit speechServiceUrl. Legacy configurations without a mode migrate the historical default to managed while retaining its URL; custom URLs remain configured. A URL-only patch explicitly selects configured mode.

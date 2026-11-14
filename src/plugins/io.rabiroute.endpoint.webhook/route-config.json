@@ -7,10 +7,9 @@
   "runtimeFields": {
     "webhookPort": {
       "paths": [
-        "webhookPort",
-        "gatewayPort"
+        "webhookPort"
       ],
-      "default": 8789,
+      "default": 0,
       "format": "number"
     },
     "webhookPath": {

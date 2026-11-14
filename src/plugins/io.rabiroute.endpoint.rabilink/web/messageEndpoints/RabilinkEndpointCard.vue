@@ -7,6 +7,7 @@ import type { MessageAdapterType } from "../../../../../ribiwebgui/src/types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, configNameFor, isWebhookLikeAdapter } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import { copyTextToClipboard } from "../../../../../ribiwebgui/src/clipboard";
 import { routeScopedRuntimePath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
+import { publishedHttpCallbackUrl } from "../../../../../ribiwebgui/src/webhookRuntimeEndpoint";
 import MessageEndpointDependencyPanel from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
 
 const store = useGatewayStore();
@@ -126,7 +127,7 @@ function normalizedPath(value: string | undefined, fallback: string): string {
   return raw.startsWith("/") ? raw : `/${raw}`;
 }
 
-function webhookPortFor(_type: MessageAdapterType): number { return Number(gateway.value?.rabiLinkWebhookPort || gateway.value?.webhookPort || gateway.value?.gatewayPort || 8790); }
+function webhookPortFor(_type: MessageAdapterType): number { return Number(gateway.value?.rabiLinkWebhookPort ?? 0); }
 
 function webhookPathFor(type: MessageAdapterType): string { return gateway.value?.rabiLinkWebhookPath || adapterDefaultWebhookPath(type); }
 
@@ -147,17 +148,20 @@ function localCallbackHost(): string {
 
 function callbackHostFor(type: MessageAdapterType): string { const host = webhookHostFor(type); return isUnspecifiedHttpHost(host) ? localCallbackHost() : host; }
 
-function webhookUrl(type: MessageAdapterType = "webhook"): string {
-  return `http://${webhookHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+function webhookUrl(type: MessageAdapterType = "rabilink"): string {
+  return publishedHttpCallbackUrl(runtime.value, "rabilink", normalizedPath(webhookPathFor(type), "/rabilink"), webhookHostFor(type));
 }
 
-function callbackUrl(type: MessageAdapterType = "webhook"): string {
-  return `http://${callbackHostFor(type)}:${webhookPortFor(type)}${normalizedPath(webhookPathFor(type), adapterDefaultWebhookPath(type))}`;
+function callbackUrl(type: MessageAdapterType = "rabilink"): string {
+  const published = webhookUrl(type);
+  if (!published) return "";
+  const url = new URL(published); url.hostname = callbackHostFor(type); return url.href;
 }
 
 function webhookTestEventType(_type: MessageAdapterType): string { return "rabilink.message"; }
 
-function webhookCurl(type: MessageAdapterType = "webhook"): string {
+function webhookCurl(type: MessageAdapterType = "rabilink"): string {
+  if (!callbackUrl(type)) return "";
   const source = adapterSourceAliases(type)[0] || type;
   const eventType = webhookTestEventType(type);
   return `curl -X POST "${callbackUrl(type)}" -H "content-type: application/json" -d "{\"source\":\"${source}\",\"type\":\"${eventType}\",\"message\":\"hello from RabiRoute\"}"`;
@@ -176,6 +180,7 @@ function sourceTitle(type: MessageAdapterType): string {
 }
 
 async function copyText(text: string, message = "已复制"): Promise<void> {
+  if (!text.trim()) { copyResult.value = "等待监听就绪"; return; }
   let result = message;
   try {
     await copyTextToClipboard(text);
@@ -229,16 +234,16 @@ watch([() => endpointProps.context?.routeId, () => endpointProps.context?.active
                   </template>
 <template v-if="runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>监听地址</span><b>{{ webhookUrl('rabilink') }}</b></div>
+                    <div class="status-row"><span>监听地址</span><b>{{ webhookUrl('rabilink') || "等待监听就绪" }}</b></div>
                     <div class="agent-action-bar mt-2">
                       <div class="agent-action-status">
                         <span class="section-note">{{ sourceTitle('rabilink') }} 使用 HTTP 回调接收事件。</span>
                       </div>
                       <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl('rabilink'), `已复制 ${sourceTitle('rabilink')} 回调地址`)">
+                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" :disabled="!callbackUrl('rabilink')" @click="copyText(callbackUrl('rabilink'), `已复制 ${sourceTitle('rabilink')} 回调地址`)">
                           复制回调
                         </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl('rabilink'), '已复制 curl 示例')">
+                        <v-btn size="small" variant="text" prepend-icon="mdi-console" :disabled="!callbackUrl('rabilink')" @click="copyText(webhookCurl('rabilink'), '已复制 curl 示例')">
                           复制 curl
                         </v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">

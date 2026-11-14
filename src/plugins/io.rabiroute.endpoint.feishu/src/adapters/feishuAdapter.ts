@@ -24,6 +24,7 @@ export { handleFeishuCallback, decryptFeishuCallback, verifyFeishuCallbackSignat
 type GatewayStatus = {
   messageAdapters?: Record<string, Record<string, unknown>>;
   feishu?: Record<string, unknown>;
+  httpCallbacks?: Record<string, Record<string, unknown>>;
 };
 
 function gatewayStatusPath(dataDir: string): string {
@@ -44,7 +45,7 @@ function patchFeishuStatus(
   } catch {
     // Replace malformed status while preserving fail-closed runtime behavior.
   }
-  const next = {
+  const next: Record<string, unknown> = {
     ...(status.messageAdapters?.feishu ?? {}),
     ...patch,
     type: "feishu",
@@ -54,7 +55,15 @@ function patchFeishuStatus(
   try {
     fs.writeFileSync(statusPath, JSON.stringify({
       ...status,
+      pid: process.pid,
+      updatedAt: now.toISOString(),
+      gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "",
       feishu: { ...status.feishu, ...next },
+      httpCallbacks: { ...status.httpCallbacks, feishu: {
+        ...status.httpCallbacks?.feishu,
+        ...(typeof next.callbackPort === "number" && next.callbackPort > 0 && typeof next.callbackPath === "string"
+          ? { port: next.callbackPort, path: next.callbackPath, url: `http://127.0.0.1:${next.callbackPort}${next.callbackPath}` } : {})
+      } },
       messageAdapters: { ...status.messageAdapters, feishu: next }
     }, null, 2), "utf8");
     recordDataMutationAudit({
@@ -159,6 +168,7 @@ export function createFeishuAdapter(
         }
       };
       const withdrawPublication = () => {
+        patchRuntimeStatus({ listenerReady: false });
         try { dependencies.publishListener?.(undefined); }
         catch (error) { appendRuntimeLog({ level: "error", event: "listener_publication_withdraw_failed", message: error instanceof Error ? error.message : String(error) }); }
       };
@@ -168,6 +178,7 @@ export function createFeishuAdapter(
         !settings.encryptKey ? "encrypt_key" : "",
         !settings.eventSubscriptionEnabled ? "event_subscription" : ""
       ].filter(Boolean);
+      patchRuntimeStatus({ listenerReady: false, listenerLeaseId: "", gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "" });
       if (missing.length > 0) {
         lifecycle.active = false;
         const message = "飞书消息端保持关闭：需要独立应用凭据、Verification Token、Encrypt Key，并明确确认事件订阅已配置；群机器人 webhook 不能替代。";
@@ -265,10 +276,12 @@ export function createFeishuAdapter(
               connected: false,
               authenticated: true,
               listenerReady: true,
+              listenerLeaseId: binding.binding.leaseId,
+              gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "",
               subscriptionVerified: false,
               message,
               callbackPath: settings.webhookPath,
-              callbackPort: settings.webhookPort
+              callbackPort: address.port
             }, lifecycle.dataDir, lifecycle.now());
             appendLog({ event: "listening", message });
             startupSettled = true;
@@ -292,7 +305,7 @@ export function createFeishuAdapter(
                     subscriptionVerified: false,
                     message: "飞书消息端已停止。",
                     callbackPath: settings.webhookPath,
-                    callbackPort: settings.webhookPort
+                    callbackPort: address.port
                   });
                   appendRuntimeLog({ event: "disabled", message: "Feishu adapter disabled" });
                 })();
