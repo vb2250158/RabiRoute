@@ -4,6 +4,9 @@ import type { ApiExternalListenerDefinition, ApiExternalListenerPublication, Api
 import type { ApiOperationRegistration, ApiUpgradeRegistration } from "../manager/apiOperationContract.js";
 
 export const GATEWAY_LISTENER_PUBLICATION_PREFIX = "RABIROUTE_GATEWAY_LISTENERS ";
+export function gatewayListenerOperationId(gatewayId: string, localName: string): string {
+  return `gateway.${createHash("sha256").update(gatewayId).digest("hex").slice(0, 16)}.${localName}`;
+}
 export type GatewayListenerIdentity = Readonly<{ gatewayId: string; gatewayGenerationId: string; pid: number }>;
 export type GatewayListenerPublication = GatewayListenerIdentity & Readonly<{
   schemaVersion: 1; revision: number; listeners: readonly ApiExternalListenerPublication[];
@@ -17,7 +20,6 @@ export function createGatewayListenerRuntime(options: {
   const identity = Object.freeze({ ...options.identity });
   if (!identity.gatewayId || !identity.gatewayGenerationId || !Number.isSafeInteger(identity.pid) || identity.pid < 1) throw new Error("Gateway listener publication requires the original process identity.");
   const registry = new ManagerPluginRouteRegistry(), listeners = new Set<ApiExternalListenerRegistration>();
-  const prefix = "gateway." + createHash("sha256").update(identity.gatewayId).digest("hex").slice(0, 16);
   let revision = 0, closed = false, disposal: Promise<void> | undefined;
   const publish = () => options.publish({ ...identity, schemaVersion: 1, revision: ++revision,
     listeners: [...listeners].map(listener => listener.publication()).filter(listener => listener.active) });
@@ -48,8 +50,17 @@ export function createGatewayListenerRuntime(options: {
     listeners.add(wrapped); publish(); return wrapped;
   }
   return Object.freeze({ registerExternalListener,
+    listenerAddressForProtocol(protocol: string) {
+      const matches = [...listeners].filter(value => value.binding.protocol === protocol && value.publication().active);
+      return matches.length === 1 ? Object.freeze({ ...matches[0]!.binding.address }) : undefined;
+    },
+    listenerAddress(localName: string) {
+      const listenerId = gatewayListenerOperationId(identity.gatewayId, localName);
+      const listener = [...listeners].find(value => value.binding.listenerId === listenerId && value.publication().active);
+      return listener ? Object.freeze({ ...listener.binding.address }) : undefined;
+    },
     /** A stable public namespace, derived without publishing a private Gateway ID in operation names. */
-    operationId(localName: string) { return `${prefix}.${localName}`; },
+    operationId(localName: string) { return gatewayListenerOperationId(identity.gatewayId, localName); },
     dispose(): Promise<void> {
       return disposal ??= (async () => {
         closed = true;

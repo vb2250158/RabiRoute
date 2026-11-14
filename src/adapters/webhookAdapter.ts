@@ -64,6 +64,9 @@ export type WebhookPayload = {
 };
 
 type GatewayStatus = {
+  pid?: number;
+  updatedAt?: string;
+  gatewayGenerationId?: string;
   messageAdapters?: Record<string, {
     type?: MessageAdapterType;
     status?: "running" | "error" | "disabled";
@@ -73,6 +76,9 @@ type GatewayStatus = {
     port?: number;
     lastEventAt?: string;
     eventCount?: number;
+    listenerReady?: boolean;
+    listenerLeaseId?: string;
+    gatewayGenerationId?: string;
     relayUrl?: string;
     relayDeviceId?: string;
     relayWorker?: "connecting" | "running" | "disabled" | "error";
@@ -142,11 +148,16 @@ function writeGatewayStatus(nextStatus: GatewayStatus): void {
   fs.writeFileSync(gatewayStatusPath(), JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
-function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<GatewayStatus["webhook"]> & { status?: "running" | "error" | "disabled"; message?: string }): void {
+function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<GatewayStatus["webhook"]> & {
+  status?: "running" | "error" | "disabled"; message?: string;
+  listenerReady?: boolean; listenerLeaseId?: string;
+}): void {
   const status = readGatewayStatus();
   const current = status.messageAdapters?.[profile.type] ?? {};
   const shouldKeepGenericWebhook = profile.type === "webhook" || config.messageEndpointTypes.includes("webhook");
-  const host = profile.host || "127.0.0.1";
+  const bindHost = profile.host || "127.0.0.1";
+  const host = ["0.0.0.0", "::", "[::]"].includes(bindHost) ? "127.0.0.1"
+    : bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
   const nextCallback = {
     ...status.httpCallbacks?.[profile.type],
     label: profile.label,
@@ -166,6 +177,9 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
       updatedAt: new Date().toISOString(),
       path: patch.path,
       port: patch.port,
+      listenerReady: patch.listenerReady ?? current.listenerReady ?? false,
+      listenerLeaseId: patch.listenerLeaseId ?? current.listenerLeaseId,
+      gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "",
       relayUrl: current.relayUrl,
       relayDeviceId: current.relayDeviceId,
       relayWorker: current.relayWorker,
@@ -185,6 +199,9 @@ function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<G
 
   const nextStatus: GatewayStatus = {
     ...status,
+    pid: process.pid,
+    updatedAt: new Date().toISOString(),
+    gatewayGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID?.trim() ?? "",
     messageAdapters: nextMessageAdapters,
     httpCallbacks: nextHttpCallbacks
   };
@@ -410,7 +427,10 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
   return {
     type: profile.type,
     start(): Promise<MessageAdapterDispose> {
-      const webhookPath = normalizeWebhookPath(profile.path);
+      // Bound metadata belongs to this activation, never to the saved port preference.
+      const activeProfile = { ...profile };
+      const webhookPath = normalizeWebhookPath(activeProfile.path);
+      patchWebhookStatus(activeProfile, { listenerReady: false, listenerLeaseId: "" });
       let listener: ApiExternalListenerRegistration | undefined;
       const writeReply = (response: http.ServerResponse, reply: WebhookHttpReply) => {
         if (!response.destroyed && !response.writableEnded) response.writeHead(reply.statusCode, reply.headers).end(reply.body);
@@ -426,34 +446,36 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
       });
       const producer = createWebhookRequestProducer(server);
       const owner = createWebhookHttpOwner({
-        profile, webhookPath, accepting: producer.accepting,
-        acceptPayload: (payload, bodyBytes) => (options.acceptPayload ?? acceptWebhookPayload)(profile, webhookPath, payload, bodyBytes),
+        profile: activeProfile, webhookPath, accepting: producer.accepting,
+        acceptPayload: (payload, bodyBytes) => (options.acceptPayload ?? acceptWebhookPayload)(activeProfile, webhookPath, payload, bodyBytes),
         acceptedResponse: options.acceptedResponse,
         readReplies: options.readReplies,
         reportRejected(method, url) {
-          appendAdapterLog(profile.type, { level: "warning", event: "rejected_request",
-            message: `Unsupported ${profile.label} request`, data: { method, url, expectedPath: webhookPath } });
+          appendAdapterLog(activeProfile.type, { level: "warning", event: "rejected_request",
+            message: `Unsupported ${activeProfile.label} request`, data: { method, url, expectedPath: webhookPath } });
         },
         reportError(message) {
-          patchWebhookStatus(profile, {
+          patchWebhookStatus(activeProfile, {
             status: "error",
             message,
             path: webhookPath,
-            port: profile.port
+            port: activeProfile.port
           });
-          appendAdapterLog(profile.type, {
+          appendAdapterLog(activeProfile.type, {
             level: "error",
             event: "error",
             message,
             data: {
               path: webhookPath,
-              port: profile.port
+              port: activeProfile.port
             }
           });
         }
       });
       let nativeClosing: Promise<void> | undefined;
       const closeNative = () => nativeClosing ??= (async () => {
+        let statusFailure: unknown;
+        try { patchWebhookStatus(activeProfile, { listenerReady: false }); } catch (error) { statusFailure = error; }
         listener?.stopAccepting();
         let publicationFailure: unknown;
         try { options.publishListener?.(undefined); } catch (error) { publicationFailure = error; }
@@ -462,37 +484,39 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
         const failure = settled.find(result => result.status === "rejected");
         if (failure?.status === "rejected") throw failure.reason;
         if (publicationFailure !== undefined) throw publicationFailure;
+        if (statusFailure !== undefined) throw statusFailure;
       })();
 
-      const host = profile.host || "127.0.0.1";
+      const host = activeProfile.host || "127.0.0.1";
       return new Promise<MessageAdapterDispose>((resolve, reject) => {
         let startupSettled = false;
 
         const reportServerError = (error: Error) => {
           const message = error.message;
           try {
-            patchWebhookStatus(profile, {
+            patchWebhookStatus(activeProfile, {
               status: "error",
               message,
               path: webhookPath,
-              port: profile.port
+              port: activeProfile.port,
+              listenerReady: false
             });
           } catch (statusError) {
-            console.error(`Failed to update ${profile.label} status`, statusError);
+            console.error(`Failed to update ${activeProfile.label} status`, statusError);
           }
           try {
-            appendAdapterLog(profile.type, {
+            appendAdapterLog(activeProfile.type, {
               level: "error",
               event: startupSettled ? "server_error" : "listen_error",
               message,
               data: {
                 path: webhookPath,
-                port: profile.port,
+                port: activeProfile.port,
                 host
               }
             });
           } catch (logError) {
-            console.error(`Failed to append ${profile.label} error log`, logError);
+            console.error(`Failed to append ${activeProfile.label} error log`, logError);
           }
         };
 
@@ -504,7 +528,7 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
         };
 
         server.once("error", onStartupError);
-        server.listen(profile.port, host, async () => {
+        server.listen(activeProfile.port, host, async () => {
           if (startupSettled) return;
           server.off("error", onStartupError);
           server.on("error", reportServerError);
@@ -512,34 +536,37 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
           try {
             const address = server.address();
             if (!address || typeof address === "string") throw new Error("Webhook listener has no bound TCP address.");
+            activeProfile.port = address.port;
             const gateway = options.apiOperations ? undefined : getGatewayListenerRuntime();
-            const operationId = (name: string) => options.operationId?.(`webhook.${profile.type}.${name}`)
-              ?? gateway?.operationId(`webhook.${profile.type}.${name}`) ?? `webhook.${profile.type}.${address.port}.${name}`;
-            const definition = webhookListenerBinding(profile, address.port, operationId("listener"));
+            const operationId = (name: string) => options.operationId?.(`webhook.${activeProfile.type}.${name}`)
+              ?? gateway?.operationId(`webhook.${activeProfile.type}.${name}`) ?? `webhook.${activeProfile.type}.${address.port}.${name}`;
+            const definition = webhookListenerBinding(activeProfile, address.port, operationId("listener"));
             listener = options.apiOperations ? options.apiOperations.registerExternalListener(definition)
               : gateway!.registerExternalListener(operationId("owner"), definition);
-            listener.registerHttpProxies(createWebhookNativeOperations({ profile, webhookPath, replies: Boolean(options.readReplies), owner, producer, operationId }));
+            listener.registerHttpProxies(createWebhookNativeOperations({ profile: activeProfile, webhookPath, replies: Boolean(options.readReplies), owner, producer, operationId }));
             options.publishListener?.(listener.publication());
-            patchWebhookStatus(profile, {
+            patchWebhookStatus(activeProfile, {
               status: "running",
-              message: `${profile.label} 消息端已启动。`,
+              message: `${activeProfile.label} 消息端已启动。`,
               path: webhookPath,
-              port: profile.port
+              port: activeProfile.port,
+              listenerReady: true,
+              listenerLeaseId: listener.binding.leaseId
             });
-            const acquiredDispose = await options.onListening?.({ webhookPath, profile, server });
+            const acquiredDispose = await options.onListening?.({ webhookPath, profile: activeProfile, server });
             if (typeof acquiredDispose === "function") listeningDispose = acquiredDispose;
-            const url = `http://${host}:${profile.port}${webhookPath}`;
-            appendAdapterLog(profile.type, {
+            const url = `http://${host}:${activeProfile.port}${webhookPath}`;
+            appendAdapterLog(activeProfile.type, {
               event: "listening",
-              message: `${profile.label} listening on ${url}`,
+              message: `${activeProfile.label} listening on ${url}`,
               data: {
                 path: webhookPath,
-                port: profile.port,
+                port: activeProfile.port,
                 host,
                 url
               }
             });
-            console.log(`RabiRoute ${profile.label} adapter listening on ${url}`);
+            console.log(`RabiRoute ${activeProfile.label} adapter listening on ${url}`);
             startupSettled = true;
             let disposeFlight: Promise<void> | undefined;
             resolve(() => disposeFlight ??= (async () => {
@@ -557,14 +584,14 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
                   disposeErrors.push(error);
                 }
               }
-              patchWebhookStatus(profile, {
+              patchWebhookStatus(activeProfile, {
                 status: "disabled",
-                message: `${profile.label} 消息端已停止。`,
+                message: `${activeProfile.label} 消息端已停止。`,
                 path: webhookPath,
-                port: profile.port
+                port: activeProfile.port
               });
               if (disposeErrors.length === 1) throw disposeErrors[0];
-              if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${profile.label} cleanup failed.`);
+              if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${activeProfile.label} cleanup failed.`);
             })());
           } catch (error) {
             startupSettled = true;

@@ -242,8 +242,8 @@ function normalizeNapCatInstance(item: unknown, index: number): NapCatInstanceCo
     return null;
   }
   const source = item as Record<string, unknown>;
-  const gatewayPort = Number(source.gatewayPort ?? source.wsPort ?? source.port);
-  if (!Number.isInteger(gatewayPort) || gatewayPort <= 0) {
+  const gatewayPort = Number(source.gatewayPort ?? source.wsPort ?? source.port ?? 0);
+  if (!Number.isInteger(gatewayPort) || gatewayPort < 0 || gatewayPort > 65535) {
     return null;
   }
   const id = sanitizeInstanceId(source.id, `napcat-${index + 1}`);
@@ -507,7 +507,7 @@ const defaultNapCatInstance: NapCatInstanceConfig = {
   name: "默认 NapCat",
   enabled: true,
   autoLoginOnRabiStart: true,
-  gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
+  gatewayPort: Number(process.env.GATEWAY_PORT ?? "0"),
   httpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   webuiUrl: process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
   accessToken: process.env.NAPCAT_ACCESS_TOKEN ?? "",
@@ -539,13 +539,13 @@ export const config = {
   napcatWebuiToken: primaryNapcatInstance.webuiToken ?? "",
   webhookPath: process.env.WEBHOOK_PATH ?? "/webhook",
   gatewayPort: primaryNapcatInstance.gatewayPort,
-  webhookPort: Number(process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  webhookPort: Number(process.env.WEBHOOK_PORT ?? "0"),
   fenneNoteWebhookPath: process.env.FENNENOTE_WEBHOOK_PATH ?? process.env.FENNOTE_WEBHOOK_PATH ?? "/fennenote",
   fenneNoteWebhookPort: Number(process.env.FENNENOTE_WEBHOOK_PORT ?? process.env.FENNOTE_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   xiaoaiWebhookPath: process.env.XIAOAI_WEBHOOK_PATH ?? "/xiaoai",
-  xiaoaiWebhookPort: Number(process.env.XIAOAI_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  xiaoaiWebhookPort: Number(process.env.XIAOAI_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "0"),
   rabiLinkWebhookPath: process.env.RABILINK_WEBHOOK_PATH ?? "/rabilink",
-  rabiLinkWebhookPort: Number(process.env.RABILINK_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  rabiLinkWebhookPort: Number(process.env.RABILINK_WEBHOOK_PORT ?? process.env.WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "0"),
   rabiLinkWebhookHost: process.env.RABILINK_WEBHOOK_HOST ?? "0.0.0.0",
   weixinBaseUrl: process.env.WEIXIN_BASE_URL?.trim() || "https://ilinkai.weixin.qq.com",
   weixinBotType: process.env.WEIXIN_BOT_TYPE?.trim() || "3",
@@ -573,7 +573,7 @@ export const config = {
   feishuEncryptKey: process.env.FEISHU_ENCRYPT_KEY?.trim() || "",
   feishuEventSubscriptionEnabled: parseBoolean(process.env.FEISHU_EVENT_SUBSCRIPTION_ENABLED, false),
   feishuWebhookPath: process.env.FEISHU_WEBHOOK_PATH?.trim() || "/feishu",
-  feishuWebhookPort: Number(process.env.FEISHU_WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
+  feishuWebhookPort: Number(process.env.FEISHU_WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "0"),
   agentAdapters,
   primaryAgentTarget: routeAgentTargets.primaryAgentTarget,
   remoteAgentTargets: routeAgentTargets.remoteAgentTargets,
@@ -588,7 +588,7 @@ export const config = {
   dshSessionId: process.env.DSH_SESSION_ID?.trim() || "",
   dshSessionName: process.env.DSH_SESSION_NAME?.trim() || "",
   dshCwd: normalizeCodexCwd(process.env.DSH_CWD) ?? "",
-  dshBaseUrl: process.env.DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
+  dshBaseUrl: process.env.DSH_BASE_URL?.trim() || "",
   dshModelProvider: process.env.DSH_MODEL_PROVIDER?.trim() || "",
   dshModel: process.env.DSH_MODEL?.trim() || "",
   dshReasoningEffort: process.env.DSH_REASONING_EFFORT?.trim() || "",

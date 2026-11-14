@@ -31,7 +31,7 @@ function request(port: number, method: string, requestPath: string, body: Buffer
   });
 }
 
-async function fixture(t: test.TestContext, type: WebhookAdapterProfile["type"] = "webhook", options: WebhookAdapterOptions = {}, webhookPath = "/native") {
+async function fixture(t: test.TestContext, type: WebhookAdapterProfile["type"] = "webhook", options: WebhookAdapterOptions = {}, webhookPath = "/native", configuredPort = 0) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-webhook-native-"));
   const saved = { dataDir: config.dataDir, memoryDataDir: config.memoryDataDir, routeProfiles: config.routeProfiles };
   Object.assign(config, { dataDir, memoryDataDir: dataDir, routeProfiles: [] });
@@ -43,7 +43,7 @@ async function fixture(t: test.TestContext, type: WebhookAdapterProfile["type"] 
   let port = 0;
   const registry = new ManagerPluginRouteRegistry();
   const accepted: Array<{ payload: unknown; bytes: number }> = [];
-  const profile: WebhookAdapterProfile = { type, label: "Native fixture", source: type, path: webhookPath, port: 0,
+  const profile: WebhookAdapterProfile = { type, label: "Native fixture", source: type, path: webhookPath, port: configuredPort,
     acceptedTypes: ["webhook.text", "voice_transcript"], routeKind: "voice_transcript", missingTextMessage: "Missing fixture text" };
   const adapter = createWebhookAdapter(profile, {
     apiOperations: { registerExternalListener: definition => registry.registerExternalListener("webhook-fixture", definition) },
@@ -69,7 +69,8 @@ for (const type of ["webhook", "fennenote", "rabilink"] as const) {
     const ctx = await fixture(t, type, type === "rabilink" ? rabiLinkWebhookOptions() : {});
     const ready = await request(ctx.port, "GET", "/native?unknown=value", Buffer.from("ignored"));
     assert.equal(ready.status, 200);
-    assert.deepEqual(JSON.parse(ready.body), { ok: true, adapterType: type, label: ctx.profile.label, path: "/native", port: 0, status: "ready" });
+    assert.equal(ctx.profile.port, 0, "binding must not overwrite the saved preference");
+    assert.deepEqual(JSON.parse(ready.body), { ok: true, adapterType: type, label: ctx.profile.label, path: "/native", port: ctx.port, status: "ready" });
     const accepted = await request(ctx.port, "POST", "/native?unknown=value", Buffer.from('{"text":"hello"}'), { "content-type": "image/png" });
     assert.equal(accepted.status, type === "rabilink" ? 200 : 204);
     assert.equal(ctx.accepted.length, 1);
@@ -256,4 +257,24 @@ test("adapter retirement closes an incomplete native body and joins repeated dis
   await Promise.all([first, closed]);
   assert.deepEqual(ctx.accepted, []);
   await assert.rejects(request(ctx.port, "GET", "/native"), /ECONNREFUSED|socket hang up|ECONNRESET/);
+});
+
+test("automatic Webhooks publish distinct actual addresses and leave their saved zero preference intact", async t => {
+  const one = await fixture(t), two = await fixture(t);
+  assert.notEqual(one.port, two.port);
+  for (const ctx of [one, two]) {
+    assert.ok(ctx.port > 0);
+    assert.equal(ctx.profile.port, 0);
+    const status = JSON.parse(fs.readFileSync(path.join(ctx.dataDir, "gateway-status.json"), "utf8"));
+    assert.equal(status.httpCallbacks.webhook.port, ctx.port);
+    assert.equal(status.httpCallbacks.webhook.url, `http://127.0.0.1:${ctx.port}/native`);
+    const ready = JSON.parse((await request(ctx.port, "GET", "/native")).body);
+    assert.equal(ready.port, ctx.port);
+  }
+});
+
+test("explicit Webhook conflicts remain failures while the original listener stays usable", async t => {
+  const original = await fixture(t);
+  await assert.rejects(fixture(t, "webhook", {}, "/native", original.port), /EADDRINUSE|address already in use/);
+  assert.equal((await request(original.port, "GET", "/native")).status, 200);
 });

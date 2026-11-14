@@ -8,6 +8,7 @@ export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Re
     claimWaitMs: config.claimWaitMs,
     replyIdleTimeoutMs: config.replyIdleTimeoutMs,
     speechServiceUrl: config.speechServiceUrl,
+    ...(config.speechServiceMode ? { speechServiceMode: config.speechServiceMode } : {}),
     tokenConfigured: Boolean(config.token)
   };
 }

@@ -894,6 +894,16 @@ test("NapCat invalid ports are rejected", () => {
   );
 });
 
+test("automatic NapCat WS ports remain zero through route normalization, assignment and claims", () => {
+  const route = normalizeGatewayDefinition(gateway({ gatewayPort: 0,
+    napcatInstances: [{ id: "automatic", gatewayPort: 0, httpUrl: localUrl(3000) }] }));
+  autoAssignGatewayPorts([route]);
+  assert.equal(route.gatewayPort, 0);
+  assert.equal(route.napcatInstances?.[0]?.gatewayPort, 0);
+  assert.equal(collectGatewayPortClaims([route]).some(value => value.kind === "napcat-ws" || value.kind === "gateway-ws"), false);
+  assert.doesNotThrow(() => validateGatewayPortConflicts([route, { ...route, id: "another" }]));
+});
+
 test("auto assignment fences the dynamic Manager port published by Host READY", () => {
   const managerPort = 13486;
   const items = [gateway({ gatewayPort: managerPort })];
@@ -1149,4 +1159,13 @@ test("automation projection sends only message-to-Agent rules through RouteDecis
   assert.equal(result.pipeline?.inputAdapter, "speech");
   assert.equal(result.pipeline?.outputAdapter, "tts");
   assert.deepEqual(gatewayAdapterTypes(result), []);
+});
+
+test("automatic generic Webhook ports survive normalization and assignment without claiming port zero", () => {
+  const routes = [gateway({ id: "auto-one", messageAdapters: ["webhook"], webhookPort: 0 }), gateway({ id: "auto-two", messageAdapters: ["webhook"], webhookPort: 0 })].map(value => normalizeGatewayDefinition(value));
+  autoAssignGatewayPorts(routes);
+  assert.deepEqual(routes.map(value => value.webhookPort), [0, 0]);
+  assert.deepEqual(collectGatewayPortClaims(routes), []);
+  assert.doesNotThrow(() => validateGatewayPortConflicts(routes));
+  assert.throws(() => normalizeGatewayDefinition(gateway({ messageAdapters: ["webhook"], webhookPort: -1 })), /Invalid/);
 });

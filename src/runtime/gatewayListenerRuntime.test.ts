@@ -27,3 +27,14 @@ test("all repeated Gateway runtime closes retain the original pending native dra
   const failed = failing.dispose(); assert.equal(failing.dispose(), failed); await assert.rejects(failed, /cleanup failed/);
   assert.equal(failing.dispose(), failed); await assert.rejects(failing.dispose(), /cleanup failed/);
 });
+
+test("Gateway listener address readback follows the original active owner and retirement", async () => {
+  const runtime = createGatewayListenerRuntime({ identity: { gatewayId: "dynamic", gatewayGenerationId: "fixture", pid: process.pid }, publish() {} });
+  const localName = "webhook.webhook.listener";
+  const lease = runtime.registerExternalListener("fixture", { ...definition, listenerId: runtime.operationId(localName) });
+  assert.deepEqual(runtime.listenerAddress(localName), definition.address);
+  assert.equal(runtime.listenerAddress("missing"), undefined);
+  await lease.dispose();
+  assert.equal(runtime.listenerAddress(localName), undefined);
+  await runtime.dispose();
+});

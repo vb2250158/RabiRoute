@@ -5,7 +5,8 @@ import type { ApiExternalListenerDefinition } from "../manager/apiExternalListen
 const object = { type: "object", additionalProperties: true };
 const path = { type: "object", required: ["nativePath"], properties: { nativePath: { type: "string" } }, additionalProperties: false };
 
-const napcatId = (instanceId: string, port: number) => `gateway.napcat.${createHash("sha256").update(instanceId).digest("hex").slice(0, 24)}.${port}.events`;
+export const napcatListenerLocalName = (instanceId: string) => `gateway.napcat.${createHash("sha256").update(instanceId).digest("hex").slice(0, 24)}.events`;
+const napcatId = (instanceId: string, _port: number) => napcatListenerLocalName(instanceId);
 const feishuId = (port: number) => `gateway.feishu.${port}.callback`;
 
 export function feishuListenerBinding(port: number, hostname = "127.0.0.1"): ApiExternalListenerDefinition {

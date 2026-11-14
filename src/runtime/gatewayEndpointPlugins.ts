@@ -64,6 +64,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
   const agentPorts = options.agentHostPorts ?? createAgentAdapterHostPorts();
   const kernel = new GenerationRuntime({ host: "gateway", hostServices: [{ capability: "host.message-endpoints@1", value: scopedPorts },
     { capability: "host.message-endpoints@2", value: scopedPorts },
+    { capability: "host.message-endpoints@3", value: scopedPorts },
     { capability: "host.agent-adapters@1", value: agentPorts }],
     applicationIdentity: { applicationGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID || "embedded-gateway", managerInstanceId: process.env.GATEWAY_ID || "embedded-gateway" } });
   const releaseAgentProjection = options.agentRegistry?.bindGeneration(() => kernel.current());

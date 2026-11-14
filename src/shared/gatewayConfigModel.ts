@@ -1189,10 +1189,10 @@ export function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
   return [...new Set(raw.map(item => String(item || "").trim()).filter(Boolean))];
 }
 
-export function assertValidPort(value: unknown, label: string): void {
+export function assertValidPort(value: unknown, label: string, allowAutomatic = false): void {
   const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid ${label}: ${value}. Port must be an integer from 1 to 65535.`);
+  if (!Number.isInteger(port) || port < (allowAutomatic ? 0 : 1) || port > 65535) {
+    throw new Error(`Invalid ${label}: ${value}. Port must be an integer from ${allowAutomatic ? 0 : 1} to 65535.`);
   }
 }
 
@@ -1307,8 +1307,8 @@ export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatI
   if (!item) return [];
 
   const id = sanitizeInstanceId(item.id, "default");
-  const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790);
-    assertValidPort(gatewayPort, `NapCat instance port for ${definition.id}/${id}`);
+  const gatewayPort = Number(item.gatewayPort ?? definition.gatewayPort ?? 0);
+    assertValidPort(gatewayPort, `NapCat instance port for ${definition.id}/${id}`, true);
   return [{
     ...item,
     id,
@@ -1470,11 +1470,11 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (!definition.id || !sanitizeRoleId(definition.id)) {
     throw new Error(`Invalid gateway id: ${definition.id}`);
   }
-  assertValidPort(definition.gatewayPort, `gateway port for ${definition.id}`);
-  if (definition.webhookPort != null) assertValidPort(definition.webhookPort, `webhook port for ${definition.id}`);
-  if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`);
-  if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`);
-  if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`);
+  assertValidPort(definition.gatewayPort, `gateway port for ${definition.id}`, true);
+  if (definition.webhookPort != null && definition.webhookPort !== 0) assertValidPort(definition.webhookPort, `webhook port for ${definition.id}`);
+  if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`, true);
+  if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`, true);
+  if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`, true);
 
   const identity = resolveRouteIdentity(definition);
   const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
@@ -1606,7 +1606,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     heartbeatSkipWhenAgentBusy: definition.heartbeatSkipWhenAgentBusy === true,
     personaAutomationScriptsEnabled: true,
     gatewayPort: primaryNapcat?.gatewayPort ?? definition.gatewayPort,
+    xiaoaiWebhookPort: definition.xiaoaiWebhookPort ?? 0,
     rabiLinkWebhookHost: definition.rabiLinkWebhookHost?.trim() || "0.0.0.0",
+    rabiLinkWebhookPort: definition.rabiLinkWebhookPort ?? 0,
     rabiLinkRelayEnabled: definition.rabiLinkRelayEnabled ?? Boolean(definition.rabiLinkRelayUrl?.trim()),
     rabiLinkRelayUrl: definition.rabiLinkRelayUrl?.trim() || "",
     rabiLinkRelayToken: definition.rabiLinkRelayToken?.trim() || "",
@@ -1618,7 +1620,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     feishuVerificationToken: definition.feishuVerificationToken?.trim() || "",
     feishuEncryptKey: definition.feishuEncryptKey?.trim() || "",
     feishuEventSubscriptionEnabled: definition.feishuEventSubscriptionEnabled === true,
-    feishuWebhookPort: definition.feishuWebhookPort ?? definition.gatewayPort,
+    feishuWebhookPort: definition.feishuWebhookPort ?? 0,
     feishuWebhookPath: definition.feishuWebhookPath?.trim() || "/feishu",
     napcatHttpUrl: primaryNapcat?.httpUrl ?? definition.napcatHttpUrl,
     napcatWebuiUrl: primaryNapcat?.webuiUrl ?? definition.napcatWebuiUrl,
@@ -1727,7 +1729,7 @@ export function collectGatewayPortClaims(
     gatewayId?: string,
     instanceId?: string
   ): void => {
-    if (port == null) return;
+    if (port == null || (port === 0 && ["gateway-ws", "napcat-ws", "xiaoai-webhook", "rabilink-webhook", "feishu-webhook"].includes(kind))) return;
     assertValidPort(port, label);
     claims.push({ port, label, kind, gatewayId, instanceId });
   };
@@ -1744,10 +1746,10 @@ export function collectGatewayPortClaims(
     if (activeAdapters.has("napcat") && enabledNapcatInstances.length === 0) {
       claim(gateway.gatewayPort, `${gateway.id} gateway WS`, "gateway-ws", gateway.id);
     }
-    if (activeAdapters.has("webhook")) claim(gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} webhook`, "webhook", gateway.id);
-    if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
-    if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? gateway.webhookPort ?? gateway.gatewayPort, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
-    if (activeAdapters.has("feishu")) claim(gateway.feishuWebhookPort ?? gateway.gatewayPort, `${gateway.id} Feishu webhook`, "feishu-webhook", gateway.id);
+    if (activeAdapters.has("webhook") && Number(gateway.webhookPort ?? 0) !== 0) claim(gateway.webhookPort ?? 0, `${gateway.id} webhook`, "webhook", gateway.id);
+    if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? 0, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
+    if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? 0, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
+    if (activeAdapters.has("feishu")) claim(gateway.feishuWebhookPort ?? 0, `${gateway.id} Feishu webhook`, "feishu-webhook", gateway.id);
     for (const instance of enabledNapcatInstances) {
       const prefix = `${gateway.id}/${instance.id}`;
       claim(instance.gatewayPort, `${prefix} RabiRoute WS`, "napcat-ws", gateway.id, instance.id);
@@ -1821,25 +1823,30 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
 
     if (activeAdapters.has("napcat") && enabledNapcatInstances.length > 0) {
       for (const instance of enabledNapcatInstances) {
-        instance.gatewayPort = assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
+        instance.gatewayPort = instance.gatewayPort == null || instance.gatewayPort === 0 ? 0
+          : assignIngress(instance.gatewayPort, Number(gateway.gatewayPort || 8790) + 1);
         instance.httpUrl = normalizeHttpUrl(instance.httpUrl || gateway.napcatHttpUrl, 3000);
       }
       syncPrimaryNapCatInstanceFields(gateway, gateway.napcatInstances ?? enabledNapcatInstances);
     } else if (activeAdapters.has("napcat")) {
-      gateway.gatewayPort = assignIngress(gateway.gatewayPort, 8790);
+      gateway.gatewayPort = gateway.gatewayPort == null || gateway.gatewayPort === 0 ? 0 : assignIngress(gateway.gatewayPort, 8790);
     }
 
     if (activeAdapters.has("webhook")) {
-      gateway.webhookPort = assignIngress(gateway.webhookPort, Number(gateway.gatewayPort || 8790) + 1);
+      gateway.webhookPort = gateway.webhookPort == null || gateway.webhookPort === 0
+        ? 0 : assignIngress(gateway.webhookPort, Number(gateway.gatewayPort || 8790) + 1);
     }
     if (activeAdapters.has("xiaoai")) {
-      gateway.xiaoaiWebhookPort = assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+      gateway.xiaoaiWebhookPort = gateway.xiaoaiWebhookPort == null || gateway.xiaoaiWebhookPort === 0
+        ? 0 : assignIngress(gateway.xiaoaiWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     }
     if (activeAdapters.has("rabilink")) {
-      gateway.rabiLinkWebhookPort = assignIngress(gateway.rabiLinkWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
+      gateway.rabiLinkWebhookPort = gateway.rabiLinkWebhookPort == null || gateway.rabiLinkWebhookPort === 0
+        ? 0 : assignIngress(gateway.rabiLinkWebhookPort, Number(gateway.webhookPort || gateway.gatewayPort || 8790) + 1);
     }
     if (activeAdapters.has("feishu")) {
-      gateway.feishuWebhookPort = assignIngress(gateway.feishuWebhookPort, Number(gateway.gatewayPort || 8790) + 1);
+      gateway.feishuWebhookPort = gateway.feishuWebhookPort == null || gateway.feishuWebhookPort === 0
+        ? 0 : assignIngress(gateway.feishuWebhookPort, Number(gateway.gatewayPort || 8790) + 1);
     }
   }
 }

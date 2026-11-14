@@ -1,6 +1,8 @@
 import { resolveGatewayPluginRuntimeRoot } from "./shared/gatewayPluginRuntimeRoot.js";
 import { resolvePluginPackageRoots } from "./shared/pluginPackageRoots.js";
 import { config, runtimeLayout } from "./config.js";
+import { getGatewayListenerRuntime } from "./runtime/gatewayListenerRuntime.js";
+import { napcatListenerLocalName } from "./adapters/platformNativeOperations.js";
 import { readGatewayRouteBootSnapshot } from "./shared/gatewayRouteSnapshotBoot.js";
 import { mountGatewayRouteSnapshotRuntime } from "./runtime/gatewayRouteSnapshotReceiver.js";
 import { gatewayReadyLine, type GatewayEndpoint } from "./gatewayLifecycle.js";
@@ -213,21 +215,27 @@ export async function runGatewayMain(): Promise<void> {
   const endpoints: GatewayEndpoint[] = [];
   if (config.gatewayMessageAdapterTypes.includes("napcat")) {
     for (const instance of config.napcatInstances.filter(item => item.enabled !== false)) {
-      endpoints.push({
-        id: `napcat:${instance.id}`,
-        transport: "websocket",
-        host: "127.0.0.1",
-        port: instance.gatewayPort
-      });
+      const address = getGatewayListenerRuntime().listenerAddress(napcatListenerLocalName(instance.id));
+      if (address) endpoints.push({ id: `napcat:${instance.id}`, transport: "websocket",
+        host: address.hostname ?? "127.0.0.1", port: address.port });
     }
   }
   const addHttp = (id: string, enabled: boolean, host: string, port: number, path: string): void => {
     if (enabled) endpoints.push({ id, transport: "http", host, port, path });
   };
-  addHttp("webhook", config.gatewayMessageAdapterTypes.includes("webhook"), "127.0.0.1", config.webhookPort, config.webhookPath);
+  if (config.gatewayMessageAdapterTypes.includes("webhook")) {
+    const address = getGatewayListenerRuntime().listenerAddress("webhook.webhook.listener");
+    if (address) addHttp("webhook", true, address.hostname ?? "127.0.0.1", address.port, config.webhookPath);
+  }
   addHttp("fennenote", config.gatewayMessageAdapterTypes.includes("fennenote"), "127.0.0.1", config.fenneNoteWebhookPort, config.fenneNoteWebhookPath);
-  addHttp("rabilink", config.gatewayMessageAdapterTypes.includes("rabilink"), config.rabiLinkWebhookHost, config.rabiLinkWebhookPort, config.rabiLinkWebhookPath);
-  addHttp("feishu", config.gatewayMessageAdapterTypes.includes("feishu"), "127.0.0.1", config.feishuWebhookPort, config.feishuWebhookPath);
+  if (config.gatewayMessageAdapterTypes.includes("rabilink")) {
+    const address = getGatewayListenerRuntime().listenerAddress("webhook.rabilink.listener");
+    if (address) addHttp("rabilink", true, address.hostname ?? "127.0.0.1", address.port, config.rabiLinkWebhookPath);
+  }
+  if (config.gatewayMessageAdapterTypes.includes("feishu")) {
+    const address = getGatewayListenerRuntime().listenerAddressForProtocol("feishu-events-v2");
+    if (address) addHttp("feishu", true, address.hostname ?? "127.0.0.1", address.port, config.feishuWebhookPath);
+  }
   console.log(gatewayReadyLine({
     protocolVersion: 1,
     gatewayId,
