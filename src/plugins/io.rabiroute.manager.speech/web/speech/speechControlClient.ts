@@ -252,6 +252,10 @@ export function createSpeechControlClient(fetchImpl: typeof fetch = (...args) =>
     { method: "POST" }
   ),
   stopMicrophone: (): Promise<SpeechMicrophoneStatus> => managerData("/api/speech/microphone/stop", { method: "POST" }),
+  cancelPlaybackSession: (sessionId: string): Promise<SpeechPlaybackStatus> => managerData(
+    "/api/speech/playback/cancel-session",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId }) }
+  ),
   stopPlayback: (): Promise<SpeechPlaybackStatus> => managerData("/api/speech/playback/stop", { method: "POST" }),
   submitTranscript: (command: SpeechMessageCommand): Promise<SpeechMessageResult> => managerData(
     "/api/speech/messages",
@@ -279,7 +283,8 @@ export function createSpeechControlClient(fetchImpl: typeof fetch = (...args) =>
     model: string,
     language?: string,
     sessionId?: string,
-    routeId?: string
+    routeId?: string,
+    signal?: AbortSignal
   ): Promise<SpeechTranscriptionResult> {
     const form = new FormData();
     form.append("file", blob, name);
@@ -289,7 +294,7 @@ export function createSpeechControlClient(fetchImpl: typeof fetch = (...args) =>
     if (routeId) form.append("route_id", routeId);
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities", "word");
-    const response = await fetchImpl("/api/speech/asr", { method: "POST", body: form });
+    const response = await fetchImpl("/api/speech/asr", { method: "POST", body: form, signal });
     if (!response.ok) throw await responseError(response);
     const value = await response.json() as Record<string, unknown>;
     return {

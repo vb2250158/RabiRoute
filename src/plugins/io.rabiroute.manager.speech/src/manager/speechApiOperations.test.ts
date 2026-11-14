@@ -59,9 +59,9 @@ async function fixture(t: test.TestContext, options: { control?: Partial<Manager
   return { root, context, owner, registry, definitions, registration, proxyRegistration, send, calls, targets, authority, credential };
 }
 
-test("an enrolled empty node reaches all 32 native operations and 7 exact local proxy branches", async t => {
-  const f = await fixture(t); assert.equal(f.definitions.operations.length, 32); assert.equal(f.definitions.proxies.length, 7);
-  const definitions = [...f.definitions.operations, ...f.definitions.proxies]; assert.equal(new Set(definitions.map(value => value.contract.operationId)).size, 39);
+test("an enrolled empty node reaches all 33 native operations and 7 exact local proxy branches", async t => {
+  const f = await fixture(t); assert.equal(f.definitions.operations.length, 33); assert.equal(f.definitions.proxies.length, 7);
+  const definitions = [...f.definitions.operations, ...f.definitions.proxies]; assert.equal(new Set(definitions.map(value => value.contract.operationId)).size, 40);
   for (const definition of definitions) {
     assert.deepEqual(definition.contract.aliases, ["speech:" + definition.contract.method + ":" + definition.contract.pathTemplate]);
     const contract = definition.contract, url = contract.pathTemplate.replace(":speakerId", "speaker-fixture").replace(":recordId", "record-fixture").replace(":modelId", "model-fixture");
@@ -159,6 +159,9 @@ test("selected-peer connection failure never invokes the local runtime owner", a
   const f = await fixture(t, { capture: request => ({ guard: () => { assertTrustedLanAgentPrincipal(request); }, run: action => action(), targetLocal: false, selectedPeer: { deviceId: "offline-fixture", runtime: { session: async () => { throw new Error("Controlled peer unavailable."); } } } }) });
   f.context.speechRuntimeControl.start = () => assert.fail("Peer failure must not start local runtime.");
   const reply = await f.send("/api/speech/runtime/start", "POST", "not-json"); assert.equal(reply.status, 502); assert.equal(reply.json().code, -1);
+  const cancel = await f.send("/api/speech/playback/cancel-session", "POST", { sessionId: "assistant.local" });
+  assert.equal(cancel.status, 409);
+  assert.equal(f.calls.some(call => call.method === "cancelPlaybackSession"), false);
 });
 
 test("real speech control uses only a controlled HTTP service and preserves native TTS/ASR wire payloads", async t => {

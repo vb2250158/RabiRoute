@@ -5,6 +5,7 @@ import { stickySpeechAuthority, awaitSpeechAuthority, type SpeechAuthorityGuard 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -35,6 +36,8 @@ export type SpeechRuntimeControlOptions = {
   rootDir: string;
   packageRoot?: string;
   serviceUrl(): string;
+  /** The configuration owner chooses managed allocation; configured URLs remain explicit. */
+  managedEndpoint?(): boolean;
   ensureDependencies?: (allowFirstInstall: boolean) => Promise<void>;
   platform?: NodeJS.Platform;
   existsSync?: typeof fs.existsSync;
@@ -197,6 +200,21 @@ export class SpeechRuntimeControl {
   private launchChild: RuntimeChild | null = null;
   private launchServiceUrl: string | null = null;
   private launchOutput = "";
+  private managedNonce: string | null = null;
+  private managedCandidate: { pid: number; host: string; port: number } | null = null;
+  private managedPublished = false;
+  private managedEpoch = 0;
+  private configurationEpoch = 0;
+  private managedOutput = "";
+
+  /** Effective transport address. An unavailable managed runtime never falls back to a fixed port. */
+  serviceUrl(): string {
+    if (!this.options.managedEndpoint?.()) return normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    if (!this.managedPublished || !this.launchServiceUrl || !this.launchChild || this.launchChild.exitCode !== null || this.launchChild.signalCode) {
+      throw new SpeechRuntimeControlError("RabiSpeech 托管服务尚未发布就绪地址。", 409);
+    }
+    return this.launchServiceUrl;
+  }
 
   constructor(private readonly options: SpeechRuntimeControlOptions) {
     this.platform = options.platform ?? process.platform;
@@ -216,18 +234,66 @@ export class SpeechRuntimeControl {
   start(guard?: SpeechAuthorityGuard, allowFirstInstall = true): Promise<SpeechRuntimeControlResult> {
     const authority = stickySpeechAuthority(guard);
     authority();
-    return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.startUnlocked(authority, allowFirstInstall)));
+    const epoch = this.managedEpoch;
+    const configurationEpoch = this.configurationEpoch;
+    const managed = this.options.managedEndpoint?.() === true;
+    const configuredUrl = managed ? "" : normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    const launchAuthority = () => {
+      authority();
+      if (configurationEpoch !== this.configurationEpoch ||
+          (managed && epoch !== this.managedEpoch)) throw new SpeechRuntimeControlError("RabiSpeech 启动已取消或配置已变化。", 409);
+    };
+    return this.runExclusive(() => awaitSpeechAuthority(launchAuthority, () => this.startUnlocked(launchAuthority, allowFirstInstall, managed, configuredUrl)));
+  }
+
+  /** Apply a saved connection change through the original resource owner. */
+  reconfigure(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
+    const authority = stickySpeechAuthority(guard);
+    authority();
+    const epoch = ++this.managedEpoch;
+    this.configurationEpoch += 1;
+    this.managedPublished = false;
+    const managed = this.options.managedEndpoint?.() === true;
+    const configuredUrl = managed ? "" : normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    const current = () => {
+      authority();
+      if (epoch !== this.managedEpoch || (this.options.managedEndpoint?.() === true) !== managed ||
+          (!managed && normalizeLocalSpeechServiceUrl(this.options.serviceUrl()) !== configuredUrl)) {
+        throw new SpeechRuntimeControlError("RabiSpeech 配置已再次变化。", 409);
+      }
+    };
+    return this.runExclusive(async () => {
+      // Retire the original child/URL before the new configuration may launch.
+      await this.releaseOwnedRuntimeUnlocked();
+      current();
+      if (!managed) {
+        const target = new URL(configuredUrl);
+        if (target.protocol !== "http:" || !isLocalSpeechHost(target.hostname)) {
+          const status = await awaitSpeechAuthority(current, () => this.inspect(configuredUrl));
+          return { action: status.state === "online" ? "already_online" : "already_offline", status };
+        }
+      }
+      return this.startUnlocked(current, false, managed, configuredUrl);
+    });
   }
 
   stop(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
     const authority = stickySpeechAuthority(guard);
     authority();
+    this.managedEpoch += 1;
+    this.managedPublished = false;
     return this.runExclusive(() => awaitSpeechAuthority(authority, () => this.stopUnlocked(authority)));
   }
 
   /** Release this workspace's native resources without asserting that an external service is offline. */
   releaseOwnedRuntime(): Promise<void> {
-    return this.runExclusive(async () => {
+    this.managedEpoch += 1;
+    this.managedPublished = false;
+    return this.runExclusive(() => this.releaseOwnedRuntimeUnlocked());
+  }
+
+  private async releaseOwnedRuntimeUnlocked(): Promise<void> {
+      if (this.managedNonce) { await this.releaseManagedRuntime(); return; }
       if (this.platform !== "win32") return;
       // A scope that acquired no runtime owns no current external port to inspect or stop.
       if (!this.launchChild && !this.launchServiceUrl) return;
@@ -259,7 +325,6 @@ export class SpeechRuntimeControl {
       }
       this.launchChild = null;
       this.launchServiceUrl = null;
-    });
   }
 
   private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -334,10 +399,13 @@ export class SpeechRuntimeControl {
     }
   }
 
-  private async startUnlocked(guard?: SpeechAuthorityGuard, allowFirstInstall = true): Promise<SpeechRuntimeControlResult> {
+  private async startUnlocked(guard?: SpeechAuthorityGuard, allowFirstInstall = true, managed = false, configuredUrl?: string): Promise<SpeechRuntimeControlResult> {
     guard = stickySpeechAuthority(guard);
     guard();
-    const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    if (managed) return this.startManagedRuntime(guard, allowFirstInstall);
+    if (this.managedNonce) await this.releaseManagedRuntime();
+    const serviceUrl = configuredUrl ?? normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    if (this.launchServiceUrl && this.launchServiceUrl !== serviceUrl) await this.releaseOwnedRuntimeUnlocked();
     servicePort(serviceUrl);
     const current = await awaitSpeechAuthority(guard, () => this.inspect(serviceUrl));
     if (current.state === "online") {
@@ -359,38 +427,9 @@ export class SpeechRuntimeControl {
       if (!this.launchChild || this.launchChild.exitCode !== null) {
         guard();
         this.launchOutput = "";
-        const environment: NodeJS.ProcessEnv = {
-          ...process.env,
-          RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
-          PYTHONUTF8: "1",
-          PYTHONIOENCODING: "utf-8",
-          PYTHONDONTWRITEBYTECODE: "1",
-          RABISPEECH_DEPS_ROOT: paths.dependenciesRoot,
-          RABISPEECH_ROOT: paths.serviceRoot,
-          RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
-          RABISPEECH_CONFIG: process.env.RABISPEECH_CONFIG?.trim() || this.userSpeechConfigPath(paths)
-        };
-        if (python) {
-          const pythonHome = path.dirname(python);
-          const previousPath = process.env.PATH || "";
-          for (const key of Object.keys(environment)) if (key.toUpperCase() === "PATH") delete environment[key];
-          environment.PYTHONHOME = pythonHome;
-          environment.PATH = `${pythonHome}${path.delimiter}${previousPath}`;
-        }
-        this.launchChild = this.spawnRuntime(
-          python ? paths.runtimeExecutable : "powershell.exe",
-          python ? [paths.hostScript] : ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript],
-          {
-            cwd: paths.serviceRoot,
-            detached: false,
-            stdio: ["ignore", "pipe", "pipe"],
-            windowsHide: true,
-            env: environment
-          }
-        );
+        const target = new URL(serviceUrl);
+        this.launchWindowsRuntime(paths, { RABISPEECH_HOST: target.hostname.replace(/^\[|\]$/g, ""), RABISPEECH_PORT: String(servicePort(serviceUrl)) });
         this.launchServiceUrl = serviceUrl;
-        this.captureLaunchOutput(this.launchChild);
-        this.launchChild.unref();
       }
 
       try {
@@ -427,7 +466,12 @@ export class SpeechRuntimeControl {
   private async stopUnlocked(guard?: SpeechAuthorityGuard): Promise<SpeechRuntimeControlResult> {
     guard = stickySpeechAuthority(guard);
     guard();
-    const serviceUrl = normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
+    if (this.managedNonce || this.options.managedEndpoint?.()) {
+      const existed = Boolean(this.managedNonce);
+      await this.releaseManagedRuntime();
+      return { action: existed ? "stopped" : "already_offline", status: this.managedOfflineStatus() };
+    }
+    const serviceUrl = this.launchServiceUrl ?? normalizeLocalSpeechServiceUrl(this.options.serviceUrl());
     const port = servicePort(serviceUrl);
     const paths = this.runtimePaths();
     // Shutdown needs process ownership, not the dependencies required to start it.
@@ -487,7 +531,7 @@ export class SpeechRuntimeControl {
       "RabiSpeech 停止超时。",
       502,
       latest.error || "语音端口仍未释放。",
-      "等待几秒后重新关闭；仍失败时检查 8781 端口占用。"
+      "等待几秒后重新关闭；仍失败时检查当前语音服务的端口占用。"
     );
   }
 
@@ -500,6 +544,121 @@ export class SpeechRuntimeControl {
     };
     child.stdout?.on("data", capture);
     child.stderr?.on("data", capture);
+  }
+
+  private managedOfflineStatus(): SpeechRuntimeStatus {
+    return { state: "offline", checkedAt: new Date().toISOString(), configuredUrl: "", defaults: {}, providers: { tts: [], asr: [] } };
+  }
+
+  private launchWindowsRuntime(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>, overrides: NodeJS.ProcessEnv = {}): RuntimeChild {
+    const python = packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir);
+    const environment: NodeJS.ProcessEnv = { ...process.env,
+      RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
+      PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1",
+      RABISPEECH_DEPS_ROOT: paths.dependenciesRoot, RABISPEECH_ROOT: paths.serviceRoot,
+      RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
+      RABISPEECH_CONFIG: process.env.RABISPEECH_CONFIG?.trim() || this.userSpeechConfigPath(paths), ...overrides };
+    if (!overrides.RABISPEECH_ENDPOINT_NONCE) delete environment.RABISPEECH_ENDPOINT_NONCE;
+    if (python) {
+      const pythonHome = path.dirname(python), previousPath = process.env.PATH || "";
+      for (const key of Object.keys(environment)) if (key.toUpperCase() === "PATH") delete environment[key];
+      environment.PYTHONHOME = pythonHome; environment.PATH = `${pythonHome}${path.delimiter}${previousPath}`;
+    }
+    const child = this.spawnRuntime(python ? paths.runtimeExecutable : "powershell.exe",
+      python ? [paths.hostScript] : ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript],
+      { cwd: paths.serviceRoot, detached: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: environment });
+    this.launchChild = child;
+    this.captureLaunchOutput(child);
+    child.unref();
+    return child;
+  }
+
+  private readManagedReceipt(): { pid: number; host: string; port: number } | null {
+    // Stream callbacks may publish a receipt while the startup loop awaits.
+    return this.managedCandidate;
+  }
+
+  private async startManagedRuntime(guard: SpeechAuthorityGuard, allowFirstInstall: boolean): Promise<SpeechRuntimeControlResult> {
+    if (this.managedPublished && this.managedCandidate && this.launchServiceUrl && this.launchChild?.exitCode === null && !this.launchChild.signalCode) {
+      const candidate = this.managedCandidate, paths = this.runtimePaths();
+      const owner = await awaitSpeechAuthority(guard, () => this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript));
+      if (owner?.owned && owner.pid === candidate.pid) {
+        const status = await awaitSpeechAuthority(guard, () => this.inspect(this.launchServiceUrl!));
+        const checked = await awaitSpeechAuthority(guard, () => this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript));
+        if (status.state === "online" && checked?.owned && checked.pid === candidate.pid) return { action: "already_online", status };
+      }
+      this.managedPublished = false;
+    }
+    if (this.launchChild || this.launchServiceUrl) await this.releaseOwnedRuntimeUnlocked();
+    await awaitSpeechAuthority(guard, async () => { await this.options.ensureDependencies?.(allowFirstInstall); });
+    const paths = this.runtimePaths();
+    this.assertWindowsRuntimeInstalled(paths);
+    const python = packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir);
+    const executableSource = this.existsSync(paths.bundledExecutable) ? paths.bundledExecutable : python!;
+    if (paths.runtimeExecutable !== executableSource) await awaitSpeechAuthority(guard, () => prepareStableSpeechExecutable(executableSource, this.options.rootDir, guard));
+    const nonce = randomUUID();
+    guard();
+    this.managedNonce = nonce; this.managedCandidate = null; this.managedOutput = ""; this.managedPublished = false;
+    try {
+      const child = this.launchWindowsRuntime(paths, { RABISPEECH_HOST: "127.0.0.1", RABISPEECH_PORT: "0", RABISPEECH_ENDPOINT_NONCE: nonce });
+      child.stdout?.on("data", chunk => {
+        if (this.launchChild !== child || this.managedNonce !== nonce) return;
+        this.managedOutput += String(chunk);
+        if (this.managedOutput.length > 65536) { this.managedOutput = this.managedOutput.slice(-65536); }
+        let newline;
+        while ((newline = this.managedOutput.indexOf("\n")) >= 0) {
+          const line = this.managedOutput.slice(0, newline).trim(); this.managedOutput = this.managedOutput.slice(newline + 1);
+          if (!line.startsWith("RABISPEECH_READY:")) continue;
+          try {
+            const ready = JSON.parse(line.slice("RABISPEECH_READY:".length));
+            if (ready.schemaVersion !== 1 || ready.nonce !== nonce || !Number.isInteger(ready.pid) || ready.pid <= 0 || ready.host !== "127.0.0.1" || !Number.isInteger(ready.port) || ready.port < 1 || ready.port > 65535) continue;
+            this.managedCandidate = { pid: ready.pid, host: ready.host, port: ready.port };
+          } catch { /* Other output cannot publish a transport endpoint. */ }
+        }
+      });
+      const deadline = this.now() + getTimeoutMs("speech.start", this.startTimeoutMs);
+      for (;;) {
+        guard();
+        if (child.exitCode !== null || child.signalCode) throw new SpeechRuntimeControlError("RabiSpeech 托管启动进程已退出。", 502);
+        const candidate = this.readManagedReceipt();
+        if (candidate) {
+          const owner = await awaitSpeechAuthority(guard, () => this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript));
+          if (!owner?.owned || owner.pid !== candidate.pid) throw new SpeechRuntimeControlError("RabiSpeech 就绪地址的进程归属不匹配。", 409);
+          const address = `http://${candidate.host}:${candidate.port}`;
+          const status = await awaitSpeechAuthority(guard, () => this.inspect(address));
+          if (status.state === "online") {
+            const verified = await awaitSpeechAuthority(guard, () => this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript));
+            if (!verified?.owned || verified.pid !== candidate.pid) throw new SpeechRuntimeControlError("RabiSpeech 就绪地址已变化。", 409);
+            guard(); this.launchServiceUrl = address; this.managedPublished = true;
+            return { action: "started", status };
+          }
+        }
+        if (this.now() >= deadline) throw new SpeechRuntimeControlError("RabiSpeech 未在期限内发布可验证的就绪地址。", 502);
+        await awaitSpeechAuthority(guard, () => this.wait(100));
+      }
+    } catch (error) {
+      this.managedPublished = false;
+      await this.releaseManagedRuntime();
+      throw error;
+    }
+  }
+
+  private async releaseManagedRuntime(): Promise<void> {
+    this.managedPublished = false;
+    const child = this.launchChild, candidate = this.managedCandidate, paths = this.runtimePaths();
+    const original = candidate ? await this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript) : null;
+    const targetPid = child?.pid && child.exitCode === null && !child.signalCode ? child.pid
+      : original?.owned && original.pid === candidate?.pid ? original.pid : undefined;
+    if (targetPid) await this.killProcessTree(targetPid);
+    const deadline = this.now() + getTimeoutMs("speech.stop", this.stopTimeoutMs);
+    for (;;) {
+      const owner = candidate ? await this.inspectOwner(candidate.port, paths.runtimeExecutable, paths.hostScript) : null;
+      const childAlive = child && child.exitCode === null && !child.signalCode;
+      if (!childAlive && !(owner?.owned && owner.pid === candidate?.pid)) break;
+      if (this.now() >= deadline) throw new SpeechRuntimeControlError("无法确认自有 RabiSpeech 进程与监听已释放。", 502);
+      await this.wait(100);
+    }
+    this.launchChild = null; this.launchServiceUrl = null; this.managedNonce = null; this.managedCandidate = null; this.managedOutput = "";
   }
 
   private launchDetail(latestError = ""): string {
@@ -557,6 +716,6 @@ export class SpeechRuntimeControl {
   private redactLaunchOutput(value: string): string {
     let result = value.replaceAll(this.options.rootDir, "<RabiRoute>");
     result = result.replace(/[A-Z]:\\Users\\[^\\\r\n]+/gi, "<user>");
-    return result.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-8).join("\n");
+    return result.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith("RABISPEECH_READY:")).slice(-8).join("\n");
   }
 }

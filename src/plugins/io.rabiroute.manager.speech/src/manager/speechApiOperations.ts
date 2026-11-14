@@ -51,6 +51,7 @@ const normal: readonly Normal[] = [
   { id: "microphone.devices", method: "GET", path: "/microphone/devices" },
   { id: "microphone.start", method: "POST", path: "/microphone/start", fields: microphoneFields, error: 400 },
   { id: "microphone.stop", method: "POST", path: "/microphone/stop" },
+  { id: "playback.cancel-session", method: "POST", path: "/playback/cancel-session", fields: ["sessionId"], error: 400 },
   { id: "playback.stop", method: "POST", path: "/playback/stop" },
   { id: "tts", method: "POST", path: "/tts", query: ["computeDeviceId"], fields: ["model", "input", "voice", "responseFormat", "speed", "language", "instructions", "sampleRate", "play", "sessionId", "routeId"], bytes: true },
   { id: "asr", method: "POST", path: "/asr", raw: true, bytes: true },
@@ -109,6 +110,9 @@ export class SpeechApiOwner {
           case "microphone.devices": data = { devices: await control.microphoneDevices(guard) }; break;
           case "microphone.start": data = await control.startMicrophone(input.body as Command<"startMicrophone">, guard); break;
           case "microphone.stop": data = await control.stopMicrophone(guard); break;
+          case "playback.cancel-session":
+            if (admission.selectedPeer && !admission.targetLocal) return { status: 409, body: { code: -1, message: "Scoped desktop playback cancellation requires the original local speech owner." } };
+            data = await control.cancelPlaybackSession(input.body as Command<"cancelPlaybackSession">, guard); break;
           case "playback.stop": data = await control.stopPlayback(guard); break;
           case "tts": { const result = await control.synthesize(input.body as Command<"synthesize">, guard); guard(); return bytes(result); }
           case "asr": {

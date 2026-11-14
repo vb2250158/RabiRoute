@@ -14,6 +14,7 @@ import type { PeerTunnelRuntime } from "@rabiroute/host-api/peerTunnel/runtime";
 export type SpeechPluginPorts = Readonly<{
   rootDir: string;
   packageRoot: string;
+  managedEndpoint?: () => boolean;
   control: Omit<ManagerSpeechControlDependencies, "speechIngressStore" | "localSpeech">;
   api: Omit<SpeechApiContext, "speechControl" | "speechRuntimeControl" | "speechModelManager" | "selectionSpeechSettings" | "speechIngressStore">;
   currentService(capability: string): unknown;
@@ -29,14 +30,16 @@ function createSpeechResources(ports: SpeechPluginPorts) {
   const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(ports.rootDir));
   const speechModelManager = new SpeechModelManager({ rootDir: ports.rootDir, packageRoot: ports.packageRoot, onChange: ports.modelChanged });
   const speechRuntimeControl = new SpeechRuntimeControl({ rootDir: ports.rootDir, packageRoot: ports.packageRoot,
-    serviceUrl: ports.control.serviceUrl, ensureDependencies: allowFirstInstall => speechModelManager.ensureRuntime(allowFirstInstall) });
+    serviceUrl: ports.control.serviceUrl, managedEndpoint: ports.managedEndpoint, ensureDependencies: allowFirstInstall => speechModelManager.ensureRuntime(allowFirstInstall) });
   const subscribed = (route: ReturnType<ManagerSpeechControlDependencies["route"]>) => route && ({
     ...route, speechEnabled: route.speechEnabled && Boolean(ports.currentService("endpoint.speech@1")),
     rabiLinkEnabled: route.rabiLinkEnabled === true && Boolean(ports.currentService("endpoint.rabilink@1"))
   });
-  const speechControl = new ManagerSpeechControl({ ...ports.control, speechIngressStore, localSpeech: createPeerSpeechAdapter(ports.peerRuntime, ports.computeTarget),
+  const speechControl = new ManagerSpeechControl({ ...ports.control, speechIngressStore, localServiceUrl: () => speechRuntimeControl.serviceUrl(),
+    localSpeech: createPeerSpeechAdapter(ports.peerRuntime, ports.computeTarget, () => speechRuntimeControl.serviceUrl()),
     route: id => subscribed(ports.control.route(id)), routes: () => ports.control.routes().map(route => subscribed(route)!) });
   return { speechControl, speechRuntimeControl, speechModelManager, speechIngressStore, selectionSpeechSettings,
+    reconfiguration: undefined as Promise<void> | undefined,
     drains: new Set<Promise<void>>(), operations: new Set<Promise<unknown>>(), shutdown: undefined as Promise<void> | undefined };
 }
 
@@ -63,10 +66,38 @@ export function createSpeechPluginRuntime(ports: SpeechPluginPorts, previous?: {
     markReady: () => { ready = true; },
     runAcceptedWork<T>(operation: () => Promise<T>): Promise<T> {
       service.assertCurrent();
-      const pending = Promise.resolve().then(operation);
+      const configuration = resources.reconfiguration;
+      const pending = Promise.resolve(configuration).then(() => { service.assertCurrent(); return operation(); });
       resources.operations.add(pending);
       void pending.then(() => resources.operations.delete(pending), () => resources.operations.delete(pending));
       return pending;
+    },
+    reconcileConfiguration() {
+      if (!service.isCurrent() || !ready) return;
+      const previous = resources.reconfiguration;
+      const accepted = [...resources.operations];
+      const pending = Promise.resolve(previous).catch(() => undefined).then(async () => {
+        await Promise.allSettled(accepted);
+        if (!service.isCurrent() || !ready) return;
+        await resources.speechRuntimeControl.reconfigure(service.assertCurrent);
+        const localHost = new URL(resources.speechRuntimeControl.serviceUrl()).hostname.toLowerCase();
+        if (service.isCurrent() && ready && ["127.0.0.1", "localhost", "[::1]"].includes(localHost))
+          await resources.speechControl.reconcileMicrophone(service.assertCurrent);
+      }).catch(error => {
+        // Retirement joins this handoff; original resource owners still confirm their own shutdown below.
+        if (!service.isCurrent() || !ready) return;
+        throw error;
+      });
+      resources.reconfiguration = pending;
+      resources.drains.add(pending);
+      const finish = () => {
+        resources.drains.delete(pending);
+        if (resources.reconfiguration === pending) resources.reconfiguration = undefined;
+      };
+      void pending.then(finish, error => {
+        finish();
+        if (service.isCurrent() && ready) ports.reportError("speech configuration", error);
+      });
     },
     reconcile(reason = "manager startup") {
       if (!service.isCurrent() || !ready) return;

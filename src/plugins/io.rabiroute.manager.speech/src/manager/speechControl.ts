@@ -104,6 +104,8 @@ export type ManagerSpeechIngressStore = {
 
 export type ManagerSpeechControlDependencies = {
   serviceUrl(): string;
+  /** Local device I/O requires the current owned endpoint even when compute uses a peer. */
+  localServiceUrl?(): string;
   contextKey?(): string;
   personas(): readonly RouteCatalogPersonaPresentation[];
   route(routeId: string): ManagerSpeechRoute | undefined;
@@ -717,7 +719,7 @@ export class ManagerSpeechControl {
   eventStream(signal: AbortSignal, guard?: SpeechAuthorityGuard): Promise<Response> {
     guard = stickySpeechAuthority(guard);
     guard();
-    return awaitSpeechAuthority(guard, () => fetch(localSpeechEndpoint(this.dependencies.serviceUrl(), "/v1/events"), {
+    return awaitSpeechAuthority(guard, () => fetch(localSpeechEndpoint(this.dependencies.localServiceUrl?.() ?? this.dependencies.serviceUrl(), "/v1/events"), {
       method: "GET",
       headers: { accept: "text/event-stream" },
       signal
@@ -1084,6 +1086,24 @@ export class ManagerSpeechControl {
       10_000
     )));
     return normalizeSpeakerBinding(raw);
+  }
+
+  /** Cancel one immutable output scope, including late synthesis. Never use global stop for barge-in. */
+  async cancelPlaybackSession(command: { sessionId: string }, guard?: SpeechAuthorityGuard): Promise<SpeechPlaybackStatus> {
+    guard = stickySpeechAuthority(guard);
+    guard();
+    const sessionId = command?.sessionId;
+    if (typeof sessionId !== "string" || !sessionId.trim() || sessionId.length > 200
+        || sessionId !== sessionId.trim() || /[\u0000-\u001f\u007f]/.test(sessionId)) {
+      throw new SpeechControlError("A non-empty playback session id of at most 200 characters is required.", 400);
+    }
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(
+      this.dependencies.serviceUrl(),
+      "/v1/playback/cancel-session",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId }) },
+      10_000
+    )));
+    return normalizePlaybackStatus(raw);
   }
 
   async stopPlayback(guard?: SpeechAuthorityGuard): Promise<SpeechPlaybackStatus> {
