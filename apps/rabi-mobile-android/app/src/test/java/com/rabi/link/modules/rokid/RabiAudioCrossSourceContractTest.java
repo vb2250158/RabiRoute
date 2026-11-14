@@ -11,7 +11,7 @@ public class RabiAudioCrossSourceContractTest {
     private static Path repository() {
         Path current = Paths.get("").toAbsolutePath();
         while (current != null) {
-            if (Files.isRegularFile(current.resolve("plugin-adapters/rabi-speech/rabispeech/app.py"))) return current;
+            if (Files.isRegularFile(current.resolve("src/plugins/rabi-speech/rabispeech/app.py"))) return current;
             current = current.getParent();
         }
         throw new AssertionError("RabiRoute checkout containing PC speech source is required");
@@ -20,7 +20,7 @@ public class RabiAudioCrossSourceContractTest {
     @Test public void androidCapabilitiesPathIsAnActualPcGetRoute() throws Exception {
         Path root = repository();
         String android = text(root.resolve("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java"));
-        String pc = text(root.resolve("plugin-adapters/rabi-speech/rabispeech/app.py"));
+        String pc = text(root.resolve("src/plugins/rabi-speech/rabispeech/app.py"));
         Matcher request = Pattern.compile("jsonRequest\\(\"GET\", \"/api/rabilink/speech([^\"]*capabilities)\"").matcher(android);
         assertTrue("Android capability GET call not found", request.find());
         assertTrue("Android capability suffix must exist in actual FastAPI app", pc.contains("@api.get(\"" + request.group(1) + "\")"));
@@ -28,8 +28,8 @@ public class RabiAudioCrossSourceContractTest {
     @Test public void pcConsumesCanonicalDeviceKindRatherThanOptionalSourceAlias() throws Exception {
         Path root = repository();
         String android = text(root.resolve("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java"));
-        String pc = text(root.resolve("plugin-adapters/rabi-speech/rabispeech/app.py"));
-        String remote = text(root.resolve("plugin-adapters/rabi-speech/rabispeech/remote_audio.py"));
+        String pc = text(root.resolve("src/plugins/rabi-speech/rabispeech/app.py"));
+        String remote = text(root.resolve("src/plugins/rabi-speech/rabispeech/remote_audio.py"));
         assertEquals("phone", RabiGlassPcBackend.normalizeCaptureSource("mobile"));
         assertTrue(android.contains(".put(\"device_kind\", glasses ? \"glasses\" : \"mobile\")"));
         assertTrue(pc.contains("kind=body.device_kind"));

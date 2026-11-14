@@ -39,11 +39,11 @@ android {
         if (project.hasProperty("videoAcceptance")) applicationIdSuffix ".videoacceptance"
         minSdk 31
         targetSdk 34
-        testInstrumentationRunner "com.rabi.link.test.DirectVideoInstrumentation"
+        testInstrumentationRunner project.findProperty("mobileTestRunner") ?: "com.rabi.link.test.DirectVideoInstrumentation"
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 73 : 6
-        versionName mobileSlim ? "0.3.70-dev" : "0.3.3"
+        versionCode mobileSlim ? 75 : 6
+        versionName mobileSlim ? "0.3.72-dev" : "0.3.3"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "boolean", "ROKID_VIDEO", (!mobileSlim || rokidVideo) ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""

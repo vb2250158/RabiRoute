@@ -1112,6 +1112,20 @@ public final class RabiGlassPcBackend {
         listener.onStatus("已重新启用失败项重试"); requestDrain(0);
     }
 
+    public void retryMessage(String clientMessageId, String routeProfileId) {
+        String messageId = clean(clientMessageId);
+        String routeId = clean(routeProfileId);
+        if (messageId.isEmpty() || routeId.isEmpty()) return;
+        uploadExecutor.execute(() -> {
+            if (!networkWakeGate.isAvailable() || !configured()) {
+                listener.onDeliveryState(messageId, routeId, "failed", "连接尚未恢复，消息保留在手机，联网后会自动重试");
+                return;
+            }
+            drainControlQueue(messageId, routeId);
+            drainMediaQueue(messageId, routeId);
+        });
+    }
+
     private void drainQueues() {
         drainControlQueue();
         drainMediaQueue();
@@ -1308,12 +1322,17 @@ public final class RabiGlassPcBackend {
     }
 
     private void drainControlQueue() {
+        drainControlQueue("", "");
+    }
+
+    private void drainControlQueue(String onlyMessageId, String onlyRouteId) {
         if (!configured()) return;
         File[] pending = RabiReliableQueueFiles.list(controlQueueDirectory, ".json");
         if (pending.length == 0) return;
         for (File item : pending) {
             JSONObject queued = readQueueJson(controlQueueDirectory, "文字与控制", item);
             if (queued == null) continue;
+            if (!matchesRetryTarget(queued, onlyMessageId, onlyRouteId)) continue;
             String liveId = queued.optString("clientMessageId");
             if (liveId.startsWith("rabi-call-v1.") && !listener.acceptsLiveInput(liveId)) {
                 if (!item.delete()) { listener.onError("过期通话输入清理失败，未投递"); return; }
@@ -1390,6 +1409,14 @@ public final class RabiGlassPcBackend {
     }
 
     private void drainMediaQueue() {
+        drainMediaQueue("", "");
+    }
+
+    static boolean matchesRetryTarget(JSONObject item, String messageId, String routeId) {
+        return messageId.isEmpty() || (messageId.equals(item.optString("clientMessageId")) && routeId.equals(item.optString("routeProfileId")));
+    }
+
+    private void drainMediaQueue(String onlyMessageId, String onlyRouteId) {
         if (!configured()) return;
         File[] pending = RabiReliableQueueFiles.list(mediaQueueDirectory, ".json");
         if (pending.length == 0) return;
@@ -1401,6 +1428,7 @@ public final class RabiGlassPcBackend {
             }
             JSONObject value = readQueueJson(mediaQueueDirectory, "媒体", metadata, binary);
             if (value == null) continue;
+            if (!matchesRetryTarget(value, onlyMessageId, onlyRouteId)) continue;
             try {
                 listener.onDeliveryState(value.optString("clientMessageId", ""), value.optString("routeProfileId", ""), "sending", "");
                 byte[] data = RabiReliableQueueFiles.read(binary);

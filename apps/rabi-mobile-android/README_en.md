@@ -28,9 +28,9 @@ com.rabi.link
 
 Open the third bottom tab, **Settings → Skins and appearance**, to choose System, Light (Clear Teal), or Dark (Night Teal). Changes apply immediately, survive restarts, and affect only this phone. Recording, the timeline, messages, settings, platform dialogs, and system bars share the selected skin; video areas keep a dark background. The current application labels are in Chinese.
 
-Common actions use consistent vector outline icons: search, back, calls, attachments, send, record navigation/live/refresh and conversation actions. Icon-only controls retain accessibility labels and touch targets of at least 48dp. All three bottom tabs show icons and names. Settings groups appearance, recording devices, connection/account, speech/messages, diagnostics and advanced tools. Connection forms and diagnostics are initially collapsed, with connection expanded for first-time setup. Device tools use two rows on narrow screens.
+Common actions use consistent vector outline icons: search, back, calls, attachments, send, record navigation/live/refresh and conversation actions. Icon-only controls retain accessibility labels and touch targets of at least 48dp. All three bottom tabs show icons and names. Settings groups appearance, recording devices, connections/computers, speech/messages, diagnostics and advanced tools. Connection forms and diagnostics are initially collapsed, with connection expanded for first-time setup. Device tools use two rows on narrow screens.
 
-Bottom navigation contains Records, Messages and Settings. The Messages header contains only its title and search, without chat instructions or a settings button. Long-press a conversation for a bottom action sheet offering pin/unpin, mark read/unread and copy conversation ID. Pinned conversations appear only in the three-column avatar grid above the list; unpinning returns them to the ordinary list sorted by latest activity. Unread badges and local pin state survive reopening. Routes with identical persona names retain computer/route hints to distinguish their targets. This change ships in Android `0.3.61-dev` (64); device appearance and interaction acceptance must be checked separately.
+Bottom navigation contains Records, Messages and Settings. The Messages header contains only its title and search, without chat instructions or a settings button. Long-press a conversation for a bottom action sheet offering pin/unpin, mark read/unread and copy conversation ID. Pinned conversations appear as full rows at the top, retaining their latest-message preview, timestamp and unread badge; unpinning returns them to the ordinary list sorted by latest activity. Unread badges and local pin state survive reopening. Routes with identical persona names retain computer/route hints to distinguish their targets. Android `0.3.71-dev` (74) replaces the earlier three-column grid with full conversation rows.
 
 During Android builds, `scripts/generate-mobile-theme.mjs` generates colors from WebGUI's `ribiwebgui/src/themes/{light,dark}/tokens.css` into `app/build/generated/mobileTheme/`. Do not edit generated files. Importing WebGUI custom skins is not currently supported on mobile.
 
@@ -193,7 +193,7 @@ Open All-day recording → Devices → Glasses → Glasses settings to select th
 
 Opening the phone glasses settings refreshes a five-minute pairing code while reusing the same connection service and preserving paired glasses. The private local connection credential lasts fifteen minutes. An active client checks it every minute and calls local `/session/renew` when five minutes remain. The phone re-authenticates the original stored device credential against Relay, verifies the actual device ID and checks the original connection scope and session before and after that request. Success extends only the same private access credential. The PC forty-five-second delegation continues to renew independently through its original device-token chain. Failed authentication, revocation, scope changes or an already expired credential stop the connection, including streams; they never revive an old session or resend a business operation.
 
-Messages place timestamps and unread counts on the right, separate pinned shortcuts from regular rows, and highlight only the selected bottom-tab icon. Settings use one rounded group and a compact connection card based on the actual selected computer state.
+Messages place timestamps and unread counts on the right, keep pinned rows above regular rows, and highlight only the selected bottom-tab icon. Settings use one rounded group and a compact connection card based on the actual selected computer state.
 
 
 Android 0.3.61-dev (64) brings the Records page into the shared teal theme. The Records title and devices action remain visible above a capture-status card. Compact live waveforms use measured audio levels and honor the transcription-reference-line setting. Date, adjacent-event and refresh actions share a row; scope, type and source use three dropdowns. Event rows preserve real timestamps, duration, source, transcripts and archival status, with review opening the existing player. The ruler and bottom navigation remain separate. Scrubbing, zooming, paging, capture consent and persistence keep their existing owners. Missing input displays the actual starting, recovery, paused or error state, without demo waveforms or records. Landscape uses a preview/list split and both themes use existing tokens.
@@ -207,3 +207,37 @@ Android 0.3.64-dev (67) further matches the Records visual reference: compact ca
 Generic Manager connections consume `android.manager.identity` (12 seconds by default) and `android.manager.request` (45 seconds) from authenticated `/meta.timeoutOverrides`. Snapshots are cached locally per account and target PC. First connection or mutation preflight refreshes settings for subsequent requests. Compilation and configuration unit tests pass; physical-device acceptance remains pending.
 
 The WebGUI timeout page also configures SDK HTTP, LAN/P2P/Relay tunnels, recording drain/shutdown, location, glasses text/video startup, and native voice handshakes through `android.*`. Direct SDK discovery adopts the verified endpoint snapshot; the phone uses its verified account/PC selection cache for Relay HTTP and sends the per-request budget. Missing overrides retain each operation’s defaults, including duration-based playback waits. Source compilation and unit tests are not physical-device acceptance.
+
+## Mobile interaction update (0.3.71-dev / 74)
+
+- Recording status uses capture evidence. A saved enabled switch alone does not establish capture success. Waiting, failures and low storage show a local explanation and recovery/check action.
+- Messages and Settings → Connections and computers share the computer picker with recording devices. Connection settings also offer Open messages.
+- Pinned conversations use full rows with previews, timestamps and unread badges, replacing the earlier three-column avatar grid. Chat refresh preserves the reading position; a new-message button returns to the latest messages.
+- Failed outgoing messages offer retry and failure details beside the message. Retry reuses the original queued payload, message ID and conversation. Text supports selection, copying and web links.
+- Calls emphasize listening, waiting, playback, mute and offline states. Granting microphone permission resumes the pending call for the same conversation. Speech remains turn based.
+- Everyday voice settings retain automatic playback and contact preference. Model identifiers, voice and storage parameters are collapsed under advanced settings.
+
+Build, installation and device interaction evidence are recorded separately. Real multi-turn voice and network recovery still require their dedicated acceptance checks.
+
+Select the UI runner explicitly for interaction acceptance without sending messages or creating recording fixtures:
+
+```powershell
+.\gradlew.bat :app:assembleDebugAndroidTest -PmobileSlim '-PmobileTestRunner=com.rabi.link.test.MobileUxInstrumentation'
+adb shell am instrument -w com.rabi.link.test/com.rabi.link.test.MobileUxInstrumentation
+```
+
+The scroll check uses existing, already-read local history and reports missing coverage when history is insufficient. Instrumentation restarts the target application: pause and save ongoing recording first, then restore the original recording switch afterward.
+
+## Record browsing layout (0.3.72-dev / 75)
+
+The fixed toolbar keeps capture status, the start/pause switch and overflow actions visible. Overflow retains recording devices, capture settings, transcription settings and storage management. The live pane shows actual input for the selected mode and has no playback seek bar. The timer represents the current enabled window, not recorded-media coverage.
+
+Dragging the records list folds the live pane continuously and gives history its space. Return to live restores it. Tapping a row opens details; the separate audio/video play action starts replay. Location details show the available address, timestamp, coordinates, accuracy and provider, without invented activities or a demonstration map.
+
+Replay dialogs provide play/pause, a draggable seek bar and measured media duration. Overflow retains seek-by-time, playback speed and sharing. Audio displays raw transcription or its actual processing state; unrequested, failed and completed-without-text states remain distinct. Complete source audio can play independently of transcription. Long text scrolls inside the dialog; closing stops replay and preserves the history anchor. Media failures can retry the same record, without asserting that missing files still exist.
+
+Filters separately select scope (local/computer archive), type and phone/glasses source, then apply or reset. Dates use local calendar-day boundaries, and pages retain the same date and filters. Empty days do not fall through to another date, and refresh/date changes never automatically open replay. Local pages append up to 100 rows with a 1,000-row window. Archive history retains its current ascending-per-page protocol and explicit next-page action; pending uploads are only a bounded preview. Unconfigured, unavailable, cached and stale directories have separate notices. Cached metadata does not guarantee playable media.
+
+Saved capture intent, recent input and save completion are independent. Stopping/saving does not prematurely become paused, and the current save failure remains visible. Loading, empty results, permissions, recovery and low storage have distinct presentations. Health mode exposes current collection status; complete health history is not part of the local mixed-media list.
+
+This is candidate source. Build/unit-test results are tracked separately; this layout has not yet completed phone installation or physical-device acceptance. Earlier device evidence does not validate this version.

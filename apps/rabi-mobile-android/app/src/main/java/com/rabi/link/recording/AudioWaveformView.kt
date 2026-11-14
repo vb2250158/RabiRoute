@@ -33,9 +33,14 @@ class AudioWaveformView(context: Context, private val live: Boolean = false, pri
     private fun drawCompact(canvas: Canvas) {
         val density = resources.displayMetrics.density
         val inset = 18*density; val center = height/2f
-        val samples = levels.takeLast(48); val peak = samples.maxOrNull() ?: 0f
+        val samples = if(live) levels.takeLast(48) else if(levels.isEmpty()) emptyList() else (0 until 48).map { index ->
+            val start = index*levels.size/48
+            val end = maxOf(start+1,(index+1)*levels.size/48).coerceAtMost(levels.size)
+            (start until end).maxOfOrNull { levels[it] } ?: 0f
+        }
+        val peak = samples.maxOrNull() ?: 0f
         val stride = (width-inset*2)/48
-        canvas.drawColor(RabiMobileUi.surface)
+        canvas.drawColor(RabiMobileUi.accentSurface)
         val threshold = EventSplitSettings.load(context).signalThreshold.toFloat()
         val scale = maxOf(0.04f,peak,threshold)*1.15f
         for(index in 0 until 48) {
@@ -45,7 +50,7 @@ class AudioWaveformView(context: Context, private val live: Boolean = false, pri
             displayed[index] += (target-displayed[index]) * if(target > displayed[index]) 0.55f else 0.22f
             val edge = kotlin.math.sin(Math.PI*(index+0.5)/48).toFloat()
             val half = maxOf(1.5f*density,displayed[index]*edge*(height-12*density).coerceAtLeast(1f)/2)
-            paint.color = if(displayed[index] > 0.001f) RabiMobileUi.secondary else RabiMobileUi.accentSurface
+            paint.color = if(!live && index/48f > progress) RabiMobileUi.muted else if(displayed[index] > 0.001f) RabiMobileUi.secondary else RabiMobileUi.accentSurface
             paint.alpha = (55+200*edge*edge).toInt()
             canvas.drawRoundRect(x,center-half,x+stride*0.48f,center+half,2*density,2*density,paint)
         }

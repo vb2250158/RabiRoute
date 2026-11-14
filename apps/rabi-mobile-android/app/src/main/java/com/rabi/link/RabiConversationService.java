@@ -46,7 +46,7 @@ import com.rabi.link.modules.wearable.WearableHealthController;
 
 /** Foreground phone client. Glasses are optional; this service works with the phone alone. */
 public final class RabiConversationService extends Service {
-    private static RabiConversationService currentInstance;
+    private static volatile RabiConversationService currentInstance;
     private com.rabi.link.modules.rokid.RabiDeviceAgentWakeConsumer deviceAgentWake;
     private com.rabi.link.transport.RabiManagerHttpTransport managerHttpTransport;
     private com.rabi.link.transport.RabiPhoneEyeBridge phoneEyeBridge;
@@ -240,9 +240,15 @@ public final class RabiConversationService extends Service {
                     .putString("allDayStatus", "记录已开启，恢复失败；请在记录页重试").apply();
         }
     }
-    public static void startRecording(Context context) {
+    /** Explicit user intent can be retained while Android is still asking for permissions. */
+    public static void rememberRecordingRequest(Context context) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(context);
         s.withEnabled(true, System.currentTimeMillis()).save(context);
+        if (!s.running) context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE).edit()
+                .putLong("captureLastReceivedAt",0).putString("allDayStatus","等待启动采集").apply();
+    }
+    public static void startRecording(Context context) {
+        rememberRecordingRequest(context);
         recordingStartPendingUntil = android.os.SystemClock.elapsedRealtime() + 15000;
         try { context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RECORD)); }
         catch (RuntimeException error) {
@@ -250,6 +256,16 @@ public final class RabiConversationService extends Service {
             AllDayRecordingSettings.load(context).withRunning(false, System.currentTimeMillis()).save(context);
             throw error;
         }
+    }
+    /** Capture owner facts; the UI must not infer save completion from a disabled switch. */
+    public static boolean recordingSaveInProgress() {
+        RabiConversationService service = currentInstance;
+        return service != null && service.captureTransition;
+    }
+    public static String recordingSaveError() {
+        RabiConversationService service = currentInstance;
+        if (service == null || service.captureTransition || !service.captureSaveFailed) return "";
+        return service.terminalCaptureError.isEmpty() ? "本次记录未能完整保存，请检查存储与设备" : service.terminalCaptureError;
     }
     public static void pauseRecording(Context context) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(context);
@@ -290,6 +306,9 @@ public final class RabiConversationService extends Service {
     private volatile RabiGlassPcBackend backend;
     private volatile com.rabi.link.recording.RecordingArchiveSession archiveSession;
     private static volatile java.util.concurrent.CompletableFuture<Void> archiveShutdownBarrier = java.util.concurrent.CompletableFuture.completedFuture(null);
+    private static int offlineReadCount;
+    private static java.util.concurrent.CompletableFuture<Void> offlineReadPrerequisite;
+    private static java.util.concurrent.CompletableFuture<Void> offlineReadDrained;
     /** null means ownership unavailable; legacy workers must defer rather than guess. */
     public static Boolean archiveOwnership(String captureId) {
         RabiConversationService service = currentInstance;
@@ -302,9 +321,34 @@ public final class RabiConversationService extends Service {
         catch (Exception unavailable) { return null; }
     }
     public static AutoCloseable pinLocalEvents(java.util.Collection<String> ids) throws Exception {
-        RabiConversationService service = currentInstance;
-        if (service == null || service.backend == null) throw new IllegalStateException("recording writer unavailable");
-        return service.backend.pinLocalEvents(ids);
+        for(String id : ids) if(id == null || !id.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("record id");
+        java.util.concurrent.CompletableFuture<Void> prerequisite;
+        java.util.concurrent.CompletableFuture<Void> releaseGroup;
+        synchronized(RabiConversationService.class) {
+            RabiConversationService service = currentInstance;
+            if(service != null) {
+                if(service.backend == null || service.shutdownComplete) throw new IllegalStateException("正在恢复本机记录，请稍后重试");
+                return service.backend.pinLocalEvents(ids);
+            }
+            // No writer exists. Reuse its lifecycle barrier rather than starting capture or a second spool.
+            // A service created during this export waits until the read lease has been released.
+            if(offlineReadCount == 0) {
+                offlineReadPrerequisite = archiveShutdownBarrier;
+                offlineReadDrained = new java.util.concurrent.CompletableFuture<>();
+                archiveShutdownBarrier = offlineReadPrerequisite.thenCombine(offlineReadDrained,(a,b) -> null);
+            }
+            prerequisite = offlineReadPrerequisite;
+            releaseGroup = offlineReadDrained;
+            offlineReadCount++;
+        }
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
+        AutoCloseable lease = () -> {
+            if(!closed.compareAndSet(false,true)) return;
+            synchronized(RabiConversationService.class) { if(--offlineReadCount == 0) releaseGroup.complete(null); }
+        };
+        try { prerequisite.join(); }
+        catch(RuntimeException failure) { lease.close(); throw failure; }
+        return lease;
     }
     public static void kickArchive() {
         RabiConversationService service = currentInstance;
@@ -414,6 +458,15 @@ public final class RabiConversationService extends Service {
         context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RETRY));
     }
 
+    /** Retry the existing durable item without creating another message or changing its destination. */
+    public static void retryMessage(Context context, String clientMessageId, String routeProfileId) {
+        if (clientMessageId == null || clientMessageId.trim().isEmpty() || routeProfileId == null || routeProfileId.trim().isEmpty())
+            throw new IllegalArgumentException("缺少原消息或会话标识");
+        RabiConversationServiceState.setRestoreEnabled(context, true);
+        context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RETRY)
+                .putExtra(EXTRA_CLIENT_MESSAGE_ID, clientMessageId).putExtra(EXTRA_ROUTE_PROFILE_ID, routeProfileId));
+    }
+
     /** Replays only the locally retained WAV belonging to an Agent TTS chat message. */
     public static void replayTts(Context context, String messageId, String localPath) {
         Intent intent = new Intent(context, RabiConversationService.class).setAction(ACTION_REPLAY_TTS)
@@ -433,7 +486,7 @@ public final class RabiConversationService extends Service {
 
     @Override
     public void onCreate() {
-        currentInstance = this;
+        synchronized(RabiConversationService.class) { currentInstance = this; }
         getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callState", "ended")
                 .putBoolean("callActive", false)
                 .putString("callStatus", "没有进行中的通话").apply();
@@ -913,7 +966,10 @@ public final class RabiConversationService extends Service {
             return START_STICKY;
         }
         if (ACTION_RETRY.equals(action)) {
-            promote("正在重试失败消息", false); showReviewShortcut(); if (configureBackend()) backend.start(); backend.retryFailedItems();
+            promote("正在重试失败消息", false); showReviewShortcut(); if (configureBackend()) backend.start();
+            String messageId = intent.getStringExtra(EXTRA_CLIENT_MESSAGE_ID);
+            if (messageId == null || messageId.trim().isEmpty()) backend.retryFailedItems();
+            else backend.retryMessage(messageId, intent.getStringExtra(EXTRA_ROUTE_PROFILE_ID));
             return START_STICKY;
         }
         if (ACTION_CLEAR_AUDIO_QUARANTINE.equals(action)) {
@@ -1799,9 +1855,9 @@ public final class RabiConversationService extends Service {
         if (managerHttpTransport != null) managerHttpTransport.close();
         if (phoneEyeBridge != null) phoneEyeBridge.close();
         if (activeGlassTextOutput != null) activeGlassTextOutput.close();
-        if (currentInstance == this) currentInstance = null;
         initializationExecutor.shutdown();
         shutdown(false);
+        synchronized(RabiConversationService.class) { if (currentInstance == this) currentInstance = null; }
         super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent) { return null; }

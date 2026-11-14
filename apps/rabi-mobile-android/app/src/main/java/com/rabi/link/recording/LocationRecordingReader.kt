@@ -9,7 +9,7 @@ class LocationRecordingReader(private val context: Context, private val database
     data class Record(val entry: RecordingStore.Entry, val sample: SavedLocation)
     fun read(from: Long, until: Long, time: Long, cursorId: String, older: Boolean?): List<Record> =
         LocationRepository(context, databaseName).use { repository ->
-            val points = if (older == null) repository.recent(from, until, 1000) else repository.page(time,cursorId,older)
+            val points = if (older == null) repository.page(until,"\uffff",true,101,from,until) else repository.page(time,cursorId,older,101,from,until)
             points.map { sample -> Record(RecordingStore.Entry(LocationRepository.recordId(sample.id), "location", "phone",
                 sample.point.time,sample.point.time,"saved",context.cacheDir,emptyList(),"位置记录"),sample) }
         }

@@ -32,16 +32,6 @@ internal class RabiConversationListUi(private val activity: Activity) {
         layoutParams = FrameLayout.LayoutParams(dp(size), dp(size), Gravity.CENTER)
     }
 
-    private fun avatarWithUnread(image: ImageView, size: Int, unread: Int): View = FrameLayout(activity).apply {
-        addView(image, FrameLayout.LayoutParams(dp(size), dp(size), Gravity.CENTER))
-        if (unread > 0) addView(text(if (unread > 99) "99+" else unread.toString(), 11f, RabiMobileUi.onAccent).apply {
-            gravity = Gravity.CENTER; minWidth = dp(20)
-            setPadding(dp(5), 0, dp(5), 0)
-            background = RabiMobileUi.panel(activity, RabiMobileUi.secondary, RabiMobileUi.surface, 12)
-            contentDescription = "$unread 条未读消息"
-        }, FrameLayout.LayoutParams(-2, dp(20), Gravity.TOP or Gravity.END))
-    }
-
     private fun computerBadge(name: String) = text(name,10f,RabiMobileUi.muted).apply {
         maxLines = 1; ellipsize = TextUtils.TruncateAt.END; maxWidth = dp(96)
         setPadding(dp(6),dp(2),dp(6),dp(2))
@@ -67,18 +57,6 @@ internal class RabiConversationListUi(private val activity: Activity) {
             addView(name,LinearLayout.LayoutParams(-2,-2))
             addView(badge,LinearLayout.LayoutParams(-2,-2).apply { marginStart = dp(8) })
         }
-    }
-
-    fun pinned(title: String, description: String, image: ImageView, unread: Int, open: () -> Unit, actions: () -> Unit, sourceComputer: String = ""): View = LinearLayout(activity).apply {
-        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(dp(6), dp(12), dp(6), dp(12))
-        contentDescription = "$title，已置顶，$description"
-        addView(avatarWithUnread(image, 72, unread), LinearLayout.LayoutParams(dp(84), dp(84)))
-        addView(text(title, 15f).apply {
-            gravity = Gravity.CENTER; maxLines = 2; ellipsize = TextUtils.TruncateAt.END
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
-        if(sourceComputer.isNotBlank()) addView(computerBadge(sourceComputer),LinearLayout.LayoutParams(-2,-2).apply { topMargin = dp(4) })
-        touch(this, open, actions)
     }
 
     fun row(title: String, preview: String, time: String, description: String, image: ImageView, unread: Int, open: () -> Unit, actions: () -> Unit, destinationHint: String = "", sourceComputer: String = ""): View = LinearLayout(activity).apply {

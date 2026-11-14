@@ -1,5 +1,22 @@
 # Rabi mobile: all-day recording, messages and devices
 
+## Separate live recording and history (0.3.72-dev / 75)
+
+The fixed toolbar keeps capture status, the start/pause switch and overflow actions visible. Overflow retains recording devices, capture settings, transcription settings and storage management. The live pane shows actual input for the selected mode and has no playback seek bar. The timer represents the current enabled window, not recorded-media coverage.
+
+Dragging the records list folds the live pane continuously and gives history its space. Return to live restores it. Tapping a row opens details; the separate audio/video play action starts replay. Location details show the available address, timestamp, coordinates, accuracy and provider, without invented activities or a demonstration map.
+
+Replay dialogs provide play/pause, a draggable seek bar and measured media duration. Overflow retains seek-by-time, playback speed and sharing. Audio displays raw transcription or its actual processing state; unrequested, failed and completed-without-text states remain distinct. Complete source audio can play independently of transcription. Long text scrolls inside the dialog; closing stops replay and preserves the history anchor. Media failures can retry the same record, without asserting that missing files still exist.
+
+Filters separately select scope (local/computer archive), type and phone/glasses source, then apply or reset. Dates use local calendar-day boundaries, and pages retain the same date and filters. Empty days do not fall through to another date, and refresh/date changes never automatically open replay. Local pages append up to 100 rows with a 1,000-row window. Archive history retains its current ascending-per-page protocol and explicit next-page action; pending uploads are only a bounded preview. Unconfigured, unavailable, cached and stale directories have separate notices. Cached metadata does not guarantee playable media.
+
+Saved capture intent, recent input and save completion are independent. Stopping/saving does not prematurely become paused, and the current save failure remains visible. Loading, empty results, permissions, recovery and low storage have distinct presentations. Health mode exposes current collection status; complete health history is not part of the local mixed-media list.
+
+This is candidate source. Build/unit-test results are tracked separately; this layout has not yet completed phone installation or physical-device acceptance. Earlier device evidence does not validate this version.
+
+### Historical layouts and version evidence
+
+The retired ruler, capture card and landscape split below describe earlier versions, not the current layout.
 
 Android 0.3.61-dev (64) brings the Records page into the shared teal theme. The Records title and devices action remain visible above a capture-status card. Compact live waveforms use measured audio levels and honor the transcription-reference-line setting. Date, adjacent-event and refresh actions share a row; scope, type and source use three dropdowns. Event rows preserve real timestamps, duration, source, transcripts and archival status, with review opening the existing player. The ruler and bottom navigation remain separate. Scrubbing, zooming, paging, capture consent and persistence keep their existing owners. Missing input displays the actual starting, recovery, paused or error state, without demo waveforms or records. Landscape uses a preview/list split and both themes use existing tokens.
 
@@ -14,9 +31,9 @@ ADB verified the phone's installed version as 0.3.49-dev on 2026-10-07: its 8 Gi
 
 The continuous ruler displays the selected clock time at a fixed cursor. Drag with inertia across days, pinch to zoom, or double-tap to zoom in. Reaching the latest time enters live mode; Return to live is also available. Green marks saved audio and teal marks video. Under the current valid-segment persistence contract, blanks can also mean acoustically invalid intervals that were not saved; blanks alone do not establish capture gaps. Actual interruptions require status and gap evidence. Events refresh for the visible time window. Selecting an event positions the ruler and player at that record; playback updates the ruler. Historical audio loads by time window without the previous latest-500 limit.
 
-The preview keeps a fixed height across live, loading, empty, audio and video states, preserving the position of the date row, ruler and events. Playback controls sit inside the bottom of the preview and elapsed time at the top. Sharing is available in the overflow record menu rather than an extra full-width row.
+The main preview displays live content only. Historical playback uses a separate dialog and does not reduce the history viewport. Playback controls sit inside the bottom of the preview and elapsed time at the top. Sharing is available in the overflow record menu rather than an extra full-width row.
 
-Audio and video share one player overlay and a single mixed timeline. Controls start hidden when opening or switching records. Tap once to show them and again to hide them; they hide after 3.5 seconds during playback, except when using touch exploration. Playback synchronizes the ruler below without a separate clip seek bar. Controls overlay the content without changing preview height.
+Audio and video share one player overlay and a single mixed timeline. Tap the preview to show or hide controls; they hide after 3.5 seconds during playback, except when using touch exploration. Playback synchronizes the ruler below without a separate clip seek bar. Controls overlay the content without changing preview height.
 
 ## Automatic source and unified review (0.3.26-dev)
 

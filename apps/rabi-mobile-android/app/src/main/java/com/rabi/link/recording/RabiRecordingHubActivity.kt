@@ -32,6 +32,8 @@ class RabiRecordingHubActivity : Activity() {
     private var recordingToggle: CompoundButton? = null
     private var recordingTitle: TextView? = null
     private var recordingSource: TextView? = null
+    private var recordingDuration: TextView? = null
+    private var recoveryAction: View? = null
     private var updatingToggle = false
     private var reviewPanel: RecordingReviewPanel? = null
     private var live: RabiLiveRecordingController? = null
@@ -80,29 +82,26 @@ class RabiRecordingHubActivity : Activity() {
         addView(label(title, 20f).apply { typeface = Typeface.DEFAULT_BOLD })
     }.also { body.addView(it) }
     private fun render() {
-        reviewPanel?.close(); reviewPanel = null; status = null; recordingToggle = null; recordingTitle = null; recordingSource = null
+        reviewPanel?.close(); reviewPanel = null; status = null; recoveryAction = null; recordingToggle = null; recordingTitle = null; recordingSource = null; recordingDuration = null
         val frame = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(20),dp(2),dp(12),dp(2)) }
         if(page == "devices") header.addView(label("记录设备",20f),LinearLayout.LayoutParams(0,-2,1f))
         else header.addView(RabiMobileUi.title(this,"记录",22f).apply { setTextColor(RabiMobileUi.text) },LinearLayout.LayoutParams(0,-2,1f))
         header.setBackgroundColor(RabiMobileUi.background)
         header.minimumHeight = dp(56)
-        val captureHeader = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(18),dp(8),dp(18),dp(4)); minimumHeight = dp(72) }
+        val captureHeader = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         if(page == "records") {
-            captureHeader.addView(FrameLayout(this).apply {
-                background = RabiMobileUi.panel(this@RabiRecordingHubActivity,RabiMobileUi.accentSurface,android.graphics.Color.TRANSPARENT,24)
-                addView(RabiMobileUi.icon(this@RabiRecordingHubActivity,R.drawable.ic_ui_pulse,RabiMobileUi.secondary),FrameLayout.LayoutParams(dp(28),dp(28),android.view.Gravity.CENTER))
-            },LinearLayout.LayoutParams(dp(48),dp(48)).apply { marginEnd = dp(14) })
-            captureHeader.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                recordingTitle = TextView(this@RabiRecordingHubActivity).apply {
-                    textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text)
-                    text = if(settings().running) "记录中" else "开始记录"
-                }.also { addView(it) }
-                recordingSource = TextView(this@RabiRecordingHubActivity).apply {
-                    textSize = 15f; setTextColor(RabiMobileUi.muted)
-                }.also { addView(it,LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(3) }) }
-            },LinearLayout.LayoutParams(0,-2,1f))
+            recordingTitle = TextView(this).apply {
+                textSize = 12f; setTextColor(RabiMobileUi.secondary)
+                maxWidth = dp(116)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                contentDescription = "实际录制状态"
+            }.also { captureHeader.addView(it,LinearLayout.LayoutParams(-2,-2).apply { marginEnd = dp(6) }) }
+            recordingSource = TextView(this)
+            recordingDuration = TextView(this).apply {
+                textSize = 12f; setTextColor(RabiMobileUi.text)
+                contentDescription = "本次开启时长，并非实际录音覆盖"
+            }.also { captureHeader.addView(it,LinearLayout.LayoutParams(-2,-2).apply { marginEnd = dp(4) }) }
             recordingToggle = RecordingToggleView(this).apply {
                 isChecked = settings().autoResume || settings().running; contentDescription = "开始或暂停记录"
                 setOnCheckedChangeListener { _, checked ->
@@ -111,8 +110,23 @@ class RabiRecordingHubActivity : Activity() {
                         refreshRuntime()
                     }
                 }
-            }.also { captureHeader.addView(it,LinearLayout.LayoutParams(dp(52),dp(48))) }
-            header.addView(RabiMobileUi.iconAction(this,R.drawable.ic_ui_devices,"记录设备") { page = "devices"; render() },LinearLayout.LayoutParams(dp(48),dp(48)))
+            }.also { captureHeader.addView(it,LinearLayout.LayoutParams(dp(48),dp(48))) }
+            header.addView(captureHeader)
+            val more = RabiMobileUi.iconAction(this,R.drawable.ic_ui_more,"记录更多操作") {}
+            more.setOnClickListener {
+                PopupMenu(this,more).apply {
+                    menu.add("记录设备"); menu.add("采集设置"); menu.add("转写设置"); menu.add("存储管理")
+                    setOnMenuItemClickListener { item ->
+                        when(item.title.toString()) {
+                            "记录设备" -> { page = "devices"; render() }
+                            "采集设置" -> showEventSplitSettings()
+                            "转写设置" -> AsrSettingsDialog.show(this@RabiRecordingHubActivity)
+                            "存储管理" -> RecordingStorageDialog.show(this@RabiRecordingHubActivity)
+                        }; true
+                    }; show()
+                }
+            }
+            header.addView(more,LinearLayout.LayoutParams(dp(40),dp(48)))
         }
         val deviceToolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -132,10 +146,10 @@ class RabiRecordingHubActivity : Activity() {
                     }
                 }.show()
             },LinearLayout.LayoutParams(0,-2,1f))
-            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_connection,"RabiLink") {
+            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_connection,"连接与电脑") {
                 startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("relay_settings",true))
             }.apply { contentDescription = "配置 RabiLink" },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd = dp(8) })
-            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_volume,"ASR 设置") { AsrSettingsDialog.show(this) },LinearLayout.LayoutParams(0,-2,1f))
+            secondRow.addView(RabiMobileUi.labeledAction(this,R.drawable.ic_ui_volume,"转写设置") { AsrSettingsDialog.show(this) },LinearLayout.LayoutParams(0,-2,1f))
             deviceToolbar.addView(firstRow)
             deviceToolbar.addView(secondRow,LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(8) })
         }
@@ -148,7 +162,17 @@ class RabiRecordingHubActivity : Activity() {
         }
         body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(12)) }
         if(page == "records") {
-            reviewPanel = RecordingReviewPanel(this, ::share).also { it.attachHeader(captureHeader); frame.addView(it.view, LinearLayout.LayoutParams(-1,0,1f)) }
+            reviewPanel = RecordingReviewPanel(this, ::share)
+            val feedback = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(18),0,dp(18),dp(8))
+                status = label("",12f).apply { setTextColor(RabiMobileUi.warning); visibility = View.GONE }.also { addView(it) }
+                recoveryAction = RabiMobileUi.compactAction(this@RabiRecordingHubActivity,"检查并恢复记录") {
+                    if(RabiConversationService.recordingSaveError().isNotBlank() || runtime().getString("allDayStatus", "").orEmpty().let { it.contains("storage_low") || it.contains("空间不足") }) RecordingStorageDialog.show(this@RabiRecordingHubActivity)
+                    else startRecording()
+                }.apply { visibility = View.GONE }.also { addView(it) }
+            }
+            frame.addView(feedback)
+            frame.addView(reviewPanel!!.view,LinearLayout.LayoutParams(-1,0,1f))
         } else {
             frame.addView(ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
             renderDevices()
@@ -164,55 +188,15 @@ class RabiRecordingHubActivity : Activity() {
         runCatching(action).onFailure { toast("操作未完成：${it.message ?: "系统未允许启动服务"}") }
         refreshRuntime()
     }
-    private var computerRequestPending = false
     private fun chooseRelayComputer() {
-        val relay = RabiLinkRelaySettings.load(this)
-        if(!relay.configured) {
-            toast("请先通过工具栏配置 RabiLink")
-            return
-        }
-        computerRequest("正在读取电脑列表…") {
-            val state = com.rabiroute.sdk.RabiRouteSdk().getMobileState(relay.baseUrl,relay.token)
-            main.post {
-                if(!active || isFinishing || isDestroyed) return@post
-                if(state.workers.isEmpty()) { toast("RabiLink 上暂无电脑"); return@post }
-                AlertDialog.Builder(this).setTitle("切换电脑")
-                    .setItems(state.workers.map { "${it.name} · ${if(it.online) "在线" else "离线"}${if(it.id == state.selectedWorker?.id) " · 当前" else ""}" }.toTypedArray()) { _, index ->
-                        val pc = state.workers[index]
-                        computerRequest("正在切换电脑…") {
-                            val current = RabiLinkRelaySettings.load(this)
-                            check(current.baseUrl == relay.baseUrl && current.token == relay.token)
-                            val confirmed = com.rabiroute.sdk.RabiRouteSdk().selectMobileRabiPc(relay.baseUrl,relay.token,pc.id)
-                            check(confirmed.selectedWorker?.id == pc.id)
-                            TargetWorkerIdentity.save(this,relay.baseUrl,relay.token,pc.id)
-                            RabiLinkRelaySettings.rememberComputer(this,pc.name,pc.id,relay.baseUrl,relay.token)
-                            main.post {
-                                if(!isFinishing && !isDestroyed) {
-                                    RabiConversationService.start(this)
-                                    if(page == "devices") render()
-                                    toast("已切换到 ${pc.name}")
-                                }
-                            }
-                        }
-                    }.setNegativeButton("取消",null).show()
-            }
-        }
-    }
-    private fun computerRequest(message: String, operation: () -> Unit) {
-        if(computerRequestPending) return
-        computerRequestPending = true
-        toast(message)
-        Thread {
-            val result = runCatching(operation)
-            main.post {
-                computerRequestPending = false
-                if(!isFinishing && !isDestroyed && result.isFailure) toast("RabiLink 请求失败，请检查连接后重试")
-            }
-        }.start()
+        if(!RabiLinkRelaySettings.load(this).configured) {
+            startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("relay_settings",true))
+        } else RabiComputerPicker.show(this) { if(page == "devices") render() }
     }
     private fun transitionPending(): Boolean = runtime().getString("allDayStatus", "").orEmpty().let { it.contains("正在停止") || it.contains("正在保存") }
     private fun startRecording() {
         if(transitionPending()) { toast("正在保存上一段，请完成后再开始"); return }
+        RabiConversationService.rememberRecordingRequest(this)
         val value = settings()
         val required = mutableListOf<String>()
         if(com.rabi.link.location.LocationController.requested(this) && !com.rabi.link.location.LocationController.permitted(this)) {
@@ -225,7 +209,21 @@ class RabiRecordingHubActivity : Activity() {
             required.add(Manifest.permission.BLUETOOTH_SCAN)
         }
         val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if(missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(), 9044); return }
+        if(missing.isNotEmpty()) {
+            val requested = getPreferences(MODE_PRIVATE)
+            val critical = when(value.mode) {
+                "audio" -> missing.filter { it == Manifest.permission.RECORD_AUDIO }
+                "video" -> missing.filter { it == Manifest.permission.BLUETOOTH_CONNECT || it == Manifest.permission.BLUETOOTH_SCAN }
+                "location" -> if(com.rabi.link.location.LocationController.permitted(this)) emptyList() else missing
+                else -> emptyList()
+            }
+            if(critical.any { requested.getBoolean(it,false) && !shouldShowRequestPermissionRationale(it) }) {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))
+                return
+            }
+            requested.edit().apply { missing.forEach { putBoolean(it,true) } }.apply()
+            requestPermissions(missing.toTypedArray(),9044); return
+        }
         if(Build.VERSION.SDK_INT >= 33 && !notificationPermissionChecked && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermissionChecked = true
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9045); return
@@ -264,15 +262,25 @@ class RabiRecordingHubActivity : Activity() {
         val value = settings(); val data = runtime()
         updatingToggle = true
         recordingToggle?.isChecked = value.autoResume || value.running
-        val recentAudio = System.currentTimeMillis()-data.getLong("captureLastReceivedAt",0) < 5000
+        val now = System.currentTimeMillis()
+        val lastReceived = when(value.mode) {
+            "health" -> data.getLong("healthLastReceivedAt",0)
+            "location" -> data.getLong("locationLastReceivedAt",0)
+            else -> data.getLong("captureLastReceivedAt",0)
+        }
+        val receiving = when(value.mode) {
+            "video" -> RabiConversationService.currentVideo()?.receiving == true
+            "health", "location" -> lastReceived >= value.windowStartedAt && lastReceived > 0 && now-lastReceived < 300000
+            else -> lastReceived >= value.windowStartedAt && lastReceived > 0 && now-lastReceived < 5000
+        }
         val actualStatus = data.getString("allDayStatus", "").orEmpty()
-        recordingTitle?.text = when {
-            actualStatus.contains("storage_low") -> "空间不足"
-            actualStatus.contains("失败") || actualStatus.contains("未启动") -> "采集异常"
-            value.running && value.mode == "audio" && !recentAudio -> "正在启动"
-            value.running -> "记录中"
-            value.autoResume -> "正在恢复"
-            else -> "开始记录"
+        val presentation = RecordingStatusPresentation.from(value.running,value.autoResume,receiving,actualStatus,RabiConversationService.recoveringRecording(),RabiConversationService.recordingSaveInProgress(),RabiConversationService.recordingSaveError())
+        recordingTitle?.text = presentation.title
+        recordingTitle?.setTextColor(if(presentation.recoverable) RabiMobileUi.warning else RabiMobileUi.secondary)
+        recordingDuration?.apply {
+            visibility = if(value.running && receiving && value.mode in listOf("audio","video") && value.windowStartedAt > 0) View.VISIBLE else View.GONE
+            val seconds = ((now-value.windowStartedAt)/1000).coerceAtLeast(0)
+            text = String.format(Locale.ROOT,"%02d:%02d:%02d",seconds/3600,seconds/60%60,seconds%60)
         }
         val source = data.getString("actualAudioSource","").orEmpty().ifBlank { value.source }
         recordingSource?.text = when {
@@ -286,7 +294,13 @@ class RabiRecordingHubActivity : Activity() {
         recordingToggle?.stateDescription = recordingTitle?.text
         recordingToggle?.isEnabled = !transitionPending()
         updatingToggle = false
-        status?.text = if((actualStatus.contains("失败") || actualStatus.contains("中断"))) actualStatus else if(value.running) actualStatus.ifBlank { "正在开始记录…" } else "记录已暂停"
+        status?.apply { text = presentation.detail; visibility = if(text.isBlank()) View.GONE else View.VISIBLE }
+        recoveryAction?.visibility = if(presentation.recoverable) View.VISIBLE else View.GONE
+        (recoveryAction as? TextView)?.text = when {
+            RabiConversationService.recordingSaveError().isNotBlank() || actualStatus.contains("storage_low") || actualStatus.contains("空间不足") -> "管理存储"
+            actualStatus.contains("权限") -> "授予权限"
+            else -> "检查并恢复记录"
+        }
     }
     private fun showStreamGuide() {
         val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(12), dp(18), dp(12)) }

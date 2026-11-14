@@ -32,12 +32,12 @@ class LocationRepository(context: Context, databaseName: String = "rabi-location
         put("accuracy", point.accuracy); put("provider", point.provider)
     }).also { changes.incrementAndGet() }
     /** Same ordering key as the unified media timeline, including mixed-kind equal timestamps. */
-    fun page(time: Long, cursorId: String, older: Boolean, limit: Int = 101): List<SavedLocation> {
+    fun page(time: Long, cursorId: String, older: Boolean, limit: Int = 101, from: Long = 0, until: Long = Long.MAX_VALUE): List<SavedLocation> {
         val comparison = if (older) "<" else ">"
         val direction = if (older) "DESC" else "ASC"
         return readableDatabase.rawQuery(
-            "SELECT id,time,latitude,longitude,accuracy,provider,address FROM points WHERE time $comparison ? OR (time=? AND ('location-' || printf('%020d',id)) $comparison ?) ORDER BY time $direction,id $direction LIMIT ?",
-            arrayOf(time.toString(),time.toString(),cursorId,limit.coerceIn(1,1000).toString())).use { cursor ->
+            "SELECT id,time,latitude,longitude,accuracy,provider,address FROM points WHERE time>=? AND time<? AND (time $comparison ? OR (time=? AND ('location-' || printf('%020d',id)) $comparison ?)) ORDER BY time $direction,id $direction LIMIT ?",
+            arrayOf(from.toString(),until.toString(),time.toString(),time.toString(),cursorId,limit.coerceIn(1,1000).toString())).use { cursor ->
             buildList { while (cursor.moveToNext()) add(SavedLocation(cursor.getLong(0), LocationPoint(cursor.getLong(1), 0,
                 cursor.getDouble(2),cursor.getDouble(3),cursor.getFloat(4),cursor.getString(5)),cursor.getString(6))) }
         }

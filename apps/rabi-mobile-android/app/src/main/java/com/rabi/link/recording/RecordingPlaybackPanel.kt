@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.media3.common.MediaItem
@@ -11,115 +12,166 @@ import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.rabi.link.R
 import com.rabi.link.RabiMobileUi
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
 
-/** One player owns picture, sound and scrubbing. Audio-only records display their measured waveform. */
+/** One player owns the media, playback intent and seek position. Capture is owned elsewhere. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class RecordingPlaybackPanel(private val context: Context, files: List<File>, video: Boolean, initialPosition: Long = 0, private val initialState: State = State(), private val onShare: () -> Unit = {}, private val remoteSource: androidx.media3.exoplayer.source.MediaSource? = null, private val remoteDurationMs: Long = 0, private val onPosition: (Long) -> Unit = {}) {
+class RecordingPlaybackPanel(private val context: Context, files: List<File>, private val video: Boolean,
+    initialPosition: Long = 0, private val initialState: State = State(), private val onShare: () -> Unit = {},
+    private val remoteSource: androidx.media3.exoplayer.source.MediaSource? = null, private val remoteDurationMs: Long = 0,
+    private val onPosition: (Long) -> Unit = {}) {
     data class State(val playing: Boolean = false, val controlsVisible: Boolean = false, val speed: Float = 1f)
-    fun state() = State(player.playWhenReady,overlay.visibility == View.VISIBLE,player.playbackParameters.speed)
-    val view = FrameLayout(context)
-    private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val player = ExoPlayer.Builder(context).build()
-    private val picture = if(video) PlayerView(context).apply {
-        useController = false; this.player = this@RecordingPlaybackPanel.player
-        visibility = View.GONE
-    } else null
-    private val waveform = if(!video) AudioWaveformView(context) else null
-    private val time = TextView(context).apply { text = "正在读取媒体…"; setTextColor(android.graphics.Color.WHITE); textSize = 11f; gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(10),0,dp(10),0); setBackgroundColor(0x99000000.toInt()); maxLines = 1 }
-    private val play = control("播放").apply { isEnabled = false }
-    private fun control(title: String) = Button(context).apply { text = title; textSize = 12f; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(0,0,0,0); setTextColor(android.graphics.Color.WHITE); setBackgroundColor(android.graphics.Color.TRANSPARENT) }
-    private val overlay = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xCC192122.toInt()) }
-    private val hideControls = Runnable { if(player.isPlaying) setControls(false) }
-    var onControlsVisibilityChanged: (Boolean) -> Unit = {}
-    fun holdControls() { main.removeCallbacks(hideControls) }
-    fun setControls(shown: Boolean) {
-        overlay.visibility = if(shown) View.VISIBLE else View.GONE
-        onControlsVisibilityChanged(shown)
-        time.visibility = if(shown) View.VISIBLE else View.GONE
-        main.removeCallbacks(hideControls)
-        if(shown && player.isPlaying && !(context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager).isTouchExplorationEnabled) main.postDelayed(hideControls,3500)
+    val view = FrameLayout(context)
+    private fun dp(value: Int) = RabiMobileUi.dp(context,value)
+    private val picture = if(video) PlayerView(context).apply { useController = false; player = this@RecordingPlaybackPanel.player } else null
+    private val waveform = if(!video) AudioWaveformView(context,compact = true) else null
+    private val overlay = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL; setPadding(dp(8),0,dp(8),0)
+        setBackgroundColor(RabiMobileUi.surface)
     }
+    private val status = TextView(context).apply {
+        text = "正在读取媒体…"; textSize = 12f; setTextColor(RabiMobileUi.muted)
+        gravity = Gravity.CENTER; maxLines = 2
+    }
+    private val elapsed = TextView(context).apply { text = "00:00"; textSize = 12f; setTextColor(RabiMobileUi.text) }
+    private val total = TextView(context).apply { text = "--:--"; textSize = 12f; setTextColor(RabiMobileUi.text) }
+    private val seek = SeekBar(context).apply {
+        max = 10000; isEnabled = false; contentDescription = "历史回放进度"
+        progressTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.secondary)
+        thumbTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.secondary)
+    }
+    private val play = RabiMobileUi.iconAction(context,R.drawable.ic_ui_play,"播放历史记录") {}.apply { isEnabled = false }
+    private val errorPanel = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(12),dp(8),dp(12),dp(8))
+        setBackgroundColor(RabiMobileUi.surface); visibility = View.GONE
+    }
+    private val errorText = TextView(context).apply { textSize = 14f; setTextColor(RabiMobileUi.error); gravity = Gravity.CENTER; maxLines = 3 }
     private var durations = emptyList<Long>()
     private var pendingPosition = initialPosition
     private var closed = false
+    private var seeking = false
+    private var failed = false
+    var onControlsVisibilityChanged: (Boolean) -> Unit = {}
+    var onPlaybackChanged: () -> Unit = {}
+    var onRetry: () -> Unit = { failed = false; errorPanel.visibility = View.GONE; player.prepare() }
+    private fun replayRequested() = player.playWhenReady && player.playbackState != Player.STATE_ENDED
+    fun state() = State(replayRequested(),overlay.visibility == View.VISIBLE,player.playbackParameters.speed)
+    fun setPlaying(playing: Boolean) {
+        if(playing) { if(player.playbackState == Player.STATE_ENDED) seekTo(0); player.play() } else player.pause()
+        setControls(true)
+    }
+    private val hideControls = Runnable { if(video && player.isPlaying && !seeking && !failed) setControls(false) }
+    fun holdControls() { main.removeCallbacks(hideControls) }
+    fun setControls(shown: Boolean) {
+        val visible = shown || !video || failed
+        overlay.visibility = if(visible) View.VISIBLE else View.GONE
+        onControlsVisibilityChanged(visible)
+        holdControls()
+        if(visible && video && player.isPlaying && !seeking && !(context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager).isTouchExplorationEnabled)
+            main.postDelayed(hideControls,3500)
+    }
+    private fun fail(message: String) {
+        if(closed) return
+        failed = true; holdControls(); play.isEnabled = false; seek.isEnabled = false
+        errorText.text = "无法播放这条记录\n" + message
+        errorPanel.visibility = View.VISIBLE; setControls(true)
+    }
     private val tick = object : Runnable {
         override fun run() {
             if(closed) return
-            if(durations.isNotEmpty()) {
-                val position = durations.take(player.currentMediaItemIndex.coerceAtLeast(0)).sum() + player.currentPosition
-                time.text = "${clock(position)} / ${clock(durations.sum())}"
-                waveform?.progress = position.toFloat() / durations.sum().coerceAtLeast(1)
-                waveform?.state = if(player.isPlaying) "正在播放录音" else "录音回看"
+            if(!failed && durations.isNotEmpty()) {
+                val position = durations.take(player.currentMediaItemIndex.coerceAtLeast(0)).sum()+player.currentPosition
+                val length = durations.sum().coerceAtLeast(1)
+                if(!seeking) { elapsed.text = clock(position); seek.progress = ((position.coerceIn(0,length)*10000)/length).toInt() }
+                total.text = clock(length); waveform?.progress = position.toFloat()/length
                 onPosition(position)
+                status.text = when(player.playbackState) {
+                    Player.STATE_BUFFERING -> "正在缓冲…"
+                    Player.STATE_ENDED -> "播放结束"
+                    Player.STATE_IDLE -> "正在准备…"
+                    else -> if(player.isPlaying) "" else "已暂停"
+                }
+                play.setImageResource(if(replayRequested()) R.drawable.ic_ui_pause else R.drawable.ic_ui_play)
+                play.contentDescription = if(replayRequested()) "暂停历史记录" else "播放历史记录"
             }
-            play.text = if(player.isPlaying) "暂停" else "播放"
-            main.postDelayed(this, 250)
+            main.postDelayed(this,250)
         }
     }
     init {
-        val pictureFrame = FrameLayout(context).apply { setBackgroundColor(android.graphics.Color.rgb(25,29,34)) }
-        val noPicture = TextView(context).apply { text = "无画面"; gravity = android.view.Gravity.CENTER; setTextColor(android.graphics.Color.LTGRAY) }
-        pictureFrame.addView(noPicture, FrameLayout.LayoutParams(-1,-1))
-        waveform?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = 0 }) }
-        picture?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1)) }
-        view.addView(pictureFrame, FrameLayout.LayoutParams(-1,-1))
-        // A transparent tap target sits above both video and waveform, below interactive controls.
-        view.addView(View(context).apply { contentDescription = "显示或隐藏播放控制"; setOnClickListener { setControls(this@RecordingPlaybackPanel.overlay.visibility != View.VISIBLE) } },FrameLayout.LayoutParams(-1,-1))
-        view.addView(time,FrameLayout.LayoutParams(-1,dp(24),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(48) })
-        val controls = LinearLayout(context).apply { setBackgroundColor(0xCC192122.toInt()) }
-        fun action(title: String, run: () -> Unit) = control(title).apply { setOnClickListener { run(); setControls(true) } }
-        controls.addView(action("−3秒") { seekBy(-3000) }, LinearLayout.LayoutParams(0,-1,1f))
-        controls.addView(play, LinearLayout.LayoutParams(0,-1,1f))
-        controls.addView(action("+3秒") { seekBy(3000) }, LinearLayout.LayoutParams(0,-1,1f))
-        controls.addView(action("1×") {
-            val rate = if(player.playbackParameters.speed < 1.5f) 1.5f else if(player.playbackParameters.speed < 2f) 2f else 1f
-            player.setPlaybackSpeed(rate)
-            (controls.getChildAt(3) as Button).text = "${rate}×"
-        }, LinearLayout.LayoutParams(0,-1,1f))
-        controls.addView(action("⋯") {
-            PopupMenu(context,controls.getChildAt(4)).apply {
-                menu.add("分享原始记录")
-                main.removeCallbacks(hideControls)
-                setOnDismissListener { setControls(true) }
-                setOnMenuItemClickListener { onShare(); true }
-                show()
+        view.setBackgroundColor(RabiMobileUi.accentSurface)
+        waveform?.let { view.addView(it,FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(82) }) }
+        picture?.let { view.addView(it,FrameLayout.LayoutParams(-1,-1)) }
+        view.addView(View(context).apply {
+            contentDescription = "显示或隐藏播放控制"
+            setOnClickListener { setControls(this@RecordingPlaybackPanel.overlay.visibility != View.VISIBLE) }
+        },FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(72) })
+        overlay.addView(status,LinearLayout.LayoutParams(-1,dp(24)))
+        val controls = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        controls.addView(play,LinearLayout.LayoutParams(dp(44),dp(48)))
+        controls.addView(elapsed)
+        controls.addView(seek,LinearLayout.LayoutParams(0,dp(48),1f))
+        controls.addView(total)
+        val more = RabiMobileUi.iconAction(context,R.drawable.ic_ui_more,"回放更多操作") {}
+        more.setOnClickListener {
+            holdControls()
+            PopupMenu(context,more).apply {
+                menu.add("后退3秒"); menu.add("前进3秒"); menu.add("播放速度 ${player.playbackParameters.speed}×"); menu.add("分享原始记录")
+                setOnMenuItemClickListener {
+                    when {
+                        it.title == "后退3秒" -> seekBy(-3000)
+                        it.title == "前进3秒" -> seekBy(3000)
+                        it.title.toString().startsWith("播放速度") -> player.setPlaybackSpeed(if(player.playbackParameters.speed < 1.5f) 1.5f else if(player.playbackParameters.speed < 2f) 2f else 1f)
+                        else -> onShare()
+                    }; true
+                }
+                setOnDismissListener { setControls(true) }; show()
             }
-        }.apply { contentDescription = "记录操作" },LinearLayout.LayoutParams(0,-1,1f))
-        overlay.addView(controls,LinearLayout.LayoutParams(-1,dp(48)))
-        view.addView(overlay,FrameLayout.LayoutParams(-1,dp(48),android.view.Gravity.BOTTOM).apply { bottomMargin = 0 })
-        play.setOnClickListener {
-            if(player.isPlaying) player.pause() else {
-                if(player.playbackState == Player.STATE_ENDED) seekTo(0)
-                player.play()
-            }
-            setControls(true)
         }
-        setControls(initialState.controlsVisible) // Seeking across records preserves the existing UI and playback intent.
-        player.setPlaybackSpeed(initialState.speed)
-        player.playWhenReady = initialState.playing
-        (controls.getChildAt(3) as Button).text = "${initialState.speed}×"
-        player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) { setControls(overlay.visibility == View.VISIBLE) }
-            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
-                picture?.visibility = if(tracks.isTypeSupported(androidx.media3.common.C.TRACK_TYPE_VIDEO)) View.VISIBLE else View.GONE
-            }
-            override fun onPlayerError(error: PlaybackException) { time.text = "播放失败，原文件保留"; picture?.visibility = View.GONE }
+        controls.addView(more,LinearLayout.LayoutParams(dp(36),dp(48)))
+        overlay.addView(controls)
+        view.addView(overlay,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+        errorPanel.addView(errorText)
+        errorPanel.addView(RabiMobileUi.compactAction(context,"重试") { onRetry() },LinearLayout.LayoutParams(-2,dp(48)))
+        view.addView(errorPanel,FrameLayout.LayoutParams(-1,-1))
+        play.setOnClickListener { setPlaying(!replayRequested()) }
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onStartTrackingTouch(bar: SeekBar) { seeking = true; holdControls() }
+            override fun onProgressChanged(bar: SeekBar,value: Int,user: Boolean) { if(user) elapsed.text = clock(durations.sum()*value/10000) }
+            override fun onStopTrackingTouch(bar: SeekBar) { seekTo(durations.sum()*bar.progress/10000); seeking = false; setControls(true) }
         })
+        player.setPlaybackSpeed(initialState.speed); player.playWhenReady = initialState.playing
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) { setControls(overlay.visibility == View.VISIBLE); onPlaybackChanged() }
+            override fun onPlaybackStateChanged(state: Int) {
+                if(!failed) { play.isEnabled = durations.isNotEmpty(); seek.isEnabled = durations.isNotEmpty() }
+                if(state == Player.STATE_ENDED) setControls(true)
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                fail(when(error.errorCode) {
+                    PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "媒体文件不可用"
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "无法读取远端媒体，请检查连接"
+                    PlaybackException.ERROR_CODE_DECODING_FAILED,PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "这条媒体暂时无法解码"
+                    else -> "媒体播放失败，请重试"
+                })
+            }
+        })
+        setControls(true)
         if(remoteSource != null) {
-            durations = listOf(remoteDurationMs.coerceAtLeast(1))
-            waveform?.state = "远端录音 · 按需加载"
-            player.setMediaSource(remoteSource); player.prepare(); seekTo(pendingPosition)
-            play.isEnabled = true; main.post(tick)
+            durations = listOf(remoteDurationMs.coerceAtLeast(1)); status.text = "电脑录音 · 按需读取"
+            waveform?.visibility = View.GONE
+            player.setMediaSource(remoteSource); player.prepare(); seekTo(pendingPosition); main.post(tick)
         } else worker.execute {
             val result = runCatching {
                 require(files.isNotEmpty()) { "没有可播放文件" }
                 val lengths = files.map { RecordedMedia.duration(it) }
+                require(lengths.all { it > 0 }) { "媒体时长不可用" }
                 val playable = files.map { RecordedMedia.playbackFile(context,it) }
                 val levels = if(!video) runCatching { AudioLevels.wave(playable.first()) }.getOrNull() else null
                 Triple(lengths,playable,levels)
@@ -128,24 +180,25 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
                 if(closed) return@post
                 result.onSuccess {
                     durations = it.first
-                    it.third?.let { levels -> waveform?.setLevels(levels) }
-                    player.setMediaItems(it.second.map { file -> MediaItem.fromUri(Uri.fromFile(file)) }); player.prepare(); seekTo(pendingPosition)
-                    play.isEnabled = true; main.post(tick)
-                }.onFailure { time.text = it.message ?: "媒体读取失败" }
+                    if(it.third != null) waveform?.setLevels(it.third!!) else waveform?.visibility = View.GONE
+                    player.setMediaItems(it.second.map { file -> MediaItem.fromUri(Uri.fromFile(file)) })
+                    player.prepare(); seekTo(pendingPosition); main.post(tick)
+                }.onFailure { fail(it.message ?: "媒体读取失败") }
             }
         }
     }
-    private fun seekBy(delta: Long) {
-        if(durations.isEmpty()) return
-        seekTo(durations.take(player.currentMediaItemIndex.coerceAtLeast(0)).sum() + player.currentPosition + delta)
-    }
-    fun pause() { player.pause() }
+    private fun seekBy(delta: Long) = seekTo(durations.take(player.currentMediaItemIndex.coerceAtLeast(0)).sum()+player.currentPosition+delta)
+    fun pause() { setPlaying(false) }
     fun seekTo(position: Long) {
         pendingPosition = position
         if(durations.isEmpty()) return
-        val target = PlaybackPosition.locate(durations, position)
-        player.seekTo(target.index, target.offsetMs)
+        val target = PlaybackPosition.locate(durations,position)
+        player.seekTo(target.index,target.offsetMs)
     }
     fun close() { if(closed) return; closed = true; main.removeCallbacksAndMessages(null); picture?.player = null; player.release(); worker.shutdown() }
-    private fun clock(value: Long): String = String.format(Locale.ROOT, "%02d:%02d:%02d", value / 3600000, value / 60000 % 60, value / 1000 % 60)
+    private fun clock(value: Long): String {
+        val seconds = value.coerceAtLeast(0)/1000
+        return if(seconds >= 3600) String.format(Locale.ROOT,"%d:%02d:%02d",seconds/3600,seconds/60%60,seconds%60)
+            else String.format(Locale.ROOT,"%02d:%02d",seconds/60,seconds%60)
+    }
 }

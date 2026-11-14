@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation android:name="com.rabi.link.test.MobileUxInstrumentation" android:targetPackage="com.rabi.link" />
     <instrumentation
         android:name="com.rabi.link.test.DirectVideoInstrumentation"
         android:targetPackage="com.rabi.link" />

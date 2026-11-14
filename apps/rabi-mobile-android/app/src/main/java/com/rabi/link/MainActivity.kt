@@ -106,6 +106,14 @@ class MainActivity : Activity() {
     private var conversationQuery = ""
     private var chatMessages: LinearLayout? = null
     private var chatScroll: ScrollView? = null
+    private var newMessagesAction: Button? = null
+    private var chatSignature = ""
+    private var followNextMessage = true
+    private var restoringChatViewport = false
+    private var chatRenderGeneration = 0
+    private var renderedLastMessageId = ""
+    private var lastReadChatSignature = ""
+    private var pendingCallRouteId = ""
     private var composer: EditText? = null
     private var conversationListHost: LinearLayout? = null
     private var callPanel: LinearLayout? = null
@@ -141,6 +149,7 @@ class MainActivity : Activity() {
         val saved = RabiLinkRelaySettings.load(this)
         if (saved.configured) availableRoutes = RabiRouteMetadataCache.load(this, saved)
         activeRouteId = intentRoute(intent).ifBlank { state?.getString("active_route_id").orEmpty() }
+        pendingCallRouteId = state?.getString("pending_call_route_id").orEmpty()
         listScrollY = state?.getInt("conversation_list_scroll_y", 0) ?: 0
         conversationQuery = state?.getString("conversation_query").orEmpty()
         val restored = runCatching { Screen.valueOf(state?.getString("screen").orEmpty()) }.getOrNull()
@@ -201,6 +210,7 @@ class MainActivity : Activity() {
         outState.putString("active_route_id", activeRouteId)
         outState.putInt("conversation_list_scroll_y", conversationListScroll?.scrollY ?: listScrollY)
         outState.putString("conversation_query", conversationQuery)
+        outState.putString("pending_call_route_id", pendingCallRouteId)
         super.onSaveInstanceState(outState)
     }
 
@@ -219,6 +229,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSettings(savedConnection: RabiLinkRelayConfig = RabiLinkRelaySettings.load(this), firstRun: Boolean = !savedConnection.configured) {
+        pendingCallRouteId = ""
         val saved = when {
             else -> RabiLinkRelaySettings.computers(this).firstOrNull { it.id == intent.getStringExtra("computer_id") }?.connection ?: savedConnection
         }
@@ -244,6 +255,7 @@ class MainActivity : Activity() {
     }
 
     private fun showConversationList() {
+        pendingCallRouteId = ""
         screen = Screen.CONVERSATIONS
         showingSettings = false
         activeRouteId = ""
@@ -279,6 +291,7 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
         })
         root.addView(search, full(16, 6, 16, 8))
+        root.addView(RabiMobileUi.actionRow(this, R.drawable.ic_ui_connection, currentComputerLabel()) { chooseComputer() })
         conversationListHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.surface) }
         conversationListScroll = ScrollView(this).apply {
             isFillViewport = true
@@ -297,6 +310,10 @@ class MainActivity : Activity() {
         screen = Screen.CHAT
         showingSettings = false
         activeRouteId = routeId
+        chatSignature = ""
+        renderedLastMessageId = ""
+        lastReadChatSignature = ""
+        followNextMessage = true
         avatarTargets.clear()
         RabiConversationTarget.save(this, routeId)
         conversationListHost = null; conversationListScroll = null
@@ -309,8 +326,20 @@ class MainActivity : Activity() {
         root.addView(callPanel)
         renderCallPanel()
         chatMessages = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(18)) }
-        chatScroll = ScrollView(this).apply { addView(chatMessages) }
+        chatScroll = ScrollView(this).apply {
+            addView(chatMessages)
+            setOnScrollChangeListener { _, _, _, _, _ ->
+                if (!restoringChatViewport && isChatAtBottom()) {
+                    newMessagesAction?.visibility = View.GONE
+                    markConversationRead()
+                }
+            }
+        }
         root.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        newMessagesAction = RabiMobileUi.compactAction(this,"有新消息 · 查看") {
+            chatScroll?.fullScroll(View.FOCUS_DOWN)
+            markConversationRead()
+        }.apply { visibility = View.GONE }.also { root.addView(it) }
         val canSend = route?.let(::isRouteChatCapable) ?: !routesLoaded
         if (canSend) {
             val bottom = row().apply { setPadding(dp(8), dp(8), dp(8), dp(10)); setBackgroundColor(RabiMobileUi.surface); gravity = Gravity.BOTTOM }
@@ -393,19 +422,39 @@ class MainActivity : Activity() {
 
     private fun beginCall(routeId: String) {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            pendingCallRouteId = routeId
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 7451)
-            toast("授予麦克风权限后，再点电话开始通话")
             return
         }
         val route = availableRoutes.firstOrNull { it.id == routeId }
-        if (route == null || !isRouteChatCapable(route) || !routesLoaded || routeLoadFailed) {
-            toast("请先刷新并确认当前路线可用"); loadRouteTargets(); return
+        if (!routesLoaded || routeLoadFailed) {
+            pendingCallRouteId = routeId
+            toast("正在确认通话连接…"); loadRouteTargets(); return
+        }
+        if (route == null || !isRouteChatCapable(route)) {
+            pendingCallRouteId = ""
+            toast("当前会话暂不支持通话，请检查电脑连接与消息设置"); return
         }
         val worker = route.rawJson.optString("ownerWorkerId")
         if (worker.isBlank() || route.rawJson.optInt("voiceCallProtocol") != 1) {
             toast("这台电脑尚未提供语音通话能力，请更新并检查会话详情"); return
         }
         RabiConversationService.startVoiceCall(this, worker, routeId)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 7451) return
+        val routeId = pendingCallRouteId
+        pendingCallRouteId = ""
+        if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            screen == Screen.CHAT && routeId.isNotBlank() && routeId == activeRouteId) beginCall(routeId)
+        else if (grantResults.firstOrNull() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            android.app.AlertDialog.Builder(this).setTitle("通话需要麦克风权限")
+                .setMessage("允许麦克风后才能说话；文字聊天仍可使用。")
+                .setPositiveButton("应用权限") { _, _ -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) }
+                .setNegativeButton("取消",null).show()
+        }
     }
 
     private fun renderCallPanel() {
@@ -418,16 +467,27 @@ class MainActivity : Activity() {
         panel.visibility = if (route == activeRouteId && (active || state == "error")) View.VISIBLE else View.GONE
         if (panel.visibility != View.VISIBLE) return
         panel.addView(TextView(this).apply {
-            text = runtime.getString("callStatus", "正在连接"); textSize = 15f; setTextColor(RabiMobileUi.text)
+            text = when(state) {
+                "listening" -> "可以说话了"
+                "waiting" -> "正在等待回复"
+                "speaking" -> "正在播报 · 请等播报结束再说话"
+                "muted" -> "麦克风已静音"
+                "offline" -> "连接已断开 · 录音仍保留"
+                "error" -> "通话遇到问题"
+                else -> "正在连接"
+            }
+            textSize = 18f; typeface = Typeface.DEFAULT_BOLD; setTextColor(RabiMobileUi.text)
         })
         panel.addView(TextView(this).apply {
-            text = "声音照常保留为记录 · 播报时暂停收音 · 挂断不会取消已送达的 Agent 任务"
+            text = if(state == "error") runtime.getString("callStatus", "请检查电脑连接后重试")
+                else "轮流说话，播报时暂不收音。通话录音会保存；挂断后已送出的任务仍可能继续。"
             textSize = 12f; setTextColor(RabiMobileUi.muted); setPadding(0, dp(6), 0, dp(8))
         })
         if (active) panel.addView(row().apply {
             addView(secondary(if (runtime.getBoolean("callMuted", false)) "取消静音" else "静音") { RabiConversationService.muteVoiceCall(this@MainActivity) }, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(secondary("挂断") { RabiConversationService.endVoiceCall(this@MainActivity) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(8), 0, 0, 0) })
         })
+        else if(state == "error") panel.addView(secondary("重新连接通话") { beginCall(activeRouteId) })
     }
 
     private fun appBar(title: String, subtitle: String, leading: String? = null, trailing: String? = null, avatarRoute: RabiRouteInfo? = null, action: () -> Unit): View =
@@ -463,6 +523,11 @@ class MainActivity : Activity() {
             syncAiuiChatHistory()
             if (screen == Screen.CONVERSATIONS) renderConversationList()
             if (screen == Screen.CHAT) renderChat()
+            if(screen == Screen.CHAT && pendingCallRouteId.isNotBlank() && pendingCallRouteId == activeRouteId) {
+                val pending = pendingCallRouteId
+                pendingCallRouteId = ""
+                beginCall(pending)
+            }
         }, error = { error ->
             routesLoaded = true; routeLoadFailed = true
             val unauthorized = error.message.orEmpty().contains("unauthorized", ignoreCase = true) || error.message.orEmpty().contains("401")
@@ -517,19 +582,7 @@ class MainActivity : Activity() {
         }
         if (matching.isEmpty()) host.addView(note("没有匹配的会话").apply { setPadding(dp(24), dp(32), dp(24), dp(32)) })
         val pinned = matching.filter { it.pinned }
-        val ui = RabiConversationListUi(this)
-        pinned.chunked(3).forEach { group ->
-            host.addView(row().apply {
-                gravity = Gravity.TOP; setPadding(dp(12), dp(4), dp(12), dp(8))
-                group.forEach { item ->
-                    val avatar = ui.avatar(item.title, 72)
-                    item.route?.let { bindPersonaAvatar(it, avatar, null) }
-                    addView(ui.pinned(listOf(item.title, item.destinationHint).filter { it.isNotBlank() }.joinToString("\n"), conversationDestination(item), avatar, item.unread,
-                        { showConversationDetail(item.id) }, { showConversationActions(item) }, sourceComputer = RabiConversationRules.personaComputerName(item.route)), LinearLayout.LayoutParams(0, -2, 1f))
-                }
-                repeat(3 - group.size) { addView(space(), LinearLayout.LayoutParams(0, 1, 1f)) }
-            })
-        }
+        pinned.forEach { host.addView(conversationRow(it)) }
         if (pinned.isNotEmpty()) host.addView(RabiMobileUi.insetDivider(this, 20, 20), LinearLayout.LayoutParams(-1, 1).apply {
             topMargin = dp(4); bottomMargin = dp(8)
         })
@@ -550,8 +603,9 @@ class MainActivity : Activity() {
         val ui = RabiConversationListUi(this)
         val avatar = ui.avatar(item.title, 48)
         item.route?.let { bindPersonaAvatar(it, avatar, null) }
+        val hint = listOf(if(item.pinned) "置顶" else "",item.destinationHint).filter { it.isNotBlank() }.joinToString(" · ")
         return ui.row(item.title, preview(item.latest), formatListTime(item.latest?.createdAt ?: 0), conversationDestination(item), avatar, item.unread,
-            { showConversationDetail(item.id) }, { showConversationActions(item) }, item.destinationHint, sourceComputer = RabiConversationRules.personaComputerName(item.route))
+            { showConversationDetail(item.id) }, { showConversationActions(item) }, hint, sourceComputer = RabiConversationRules.personaComputerName(item.route))
     }
 
     private fun showConversationActions(item: ConversationRow) {
@@ -598,7 +652,9 @@ class MainActivity : Activity() {
             toast("这个会话当前不能发送，请先在设置中启用 RabiLink 消息端")
             return
         }
-        RabiConversationService.sendText(this, text, activeRouteId)
+        try { RabiConversationService.sendText(this, text, activeRouteId) }
+        catch (error: Exception) { toast("消息未能入队，草稿已保留"); return }
+        followNextMessage = true
         RabiChatStore(this).saveDraft(activeRouteId, "")
         composer?.text?.clear()
         runtimeHandler.postDelayed({ renderChat() }, 150)
@@ -606,9 +662,20 @@ class MainActivity : Activity() {
 
     private fun renderChat() {
         val host = chatMessages ?: return
-        host.removeAllViews()
         val store = RabiChatStore(this)
         val messages = store.listForConversation(activeRouteId)
+        val signature = messages.joinToString("|") { "${it.id}:${it.deliveryState}:${it.failure}:${it.playbackState}:${it.playbackFailure}:${it.text.hashCode()}:${it.localPath}" }
+        if(signature == chatSignature && !followNextMessage) return
+        val oldScrollY = chatScroll?.scrollY ?: 0
+        val following = followNextMessage || isChatAtBottom()
+        val newLastMessageId = messages.lastOrNull()?.id.orEmpty()
+        val hasNewMessage = renderedLastMessageId.isNotBlank() && renderedLastMessageId != newLastMessageId
+        renderedLastMessageId = newLastMessageId
+        followNextMessage = false
+        chatSignature = signature
+        restoringChatViewport = true
+        val renderGeneration = ++chatRenderGeneration
+        host.removeAllViews()
         if (messages.isEmpty()) host.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             setPadding(dp(24), dp(64), dp(24), dp(24))
@@ -643,7 +710,16 @@ class MainActivity : Activity() {
             })
             if (message.text.isNotBlank()) bubble.addView(TextView(this).apply {
                 text = message.text; textSize = 15f; setTextColor(if (mine) RabiMobileUi.onAccent else RabiMobileUi.text); setLineSpacing(0f, 1.08f)
+                setTextIsSelectable(true)
+                android.text.util.Linkify.addLinks(this, android.text.util.Linkify.WEB_URLS)
+                setLinkTextColor(if(mine) RabiMobileUi.onAccent else RabiMobileUi.secondary)
             })
+            bubble.setOnLongClickListener {
+                val copyText = message.text.ifBlank { message.fileName }
+                (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("消息",copyText))
+                toast("已复制消息"); true
+            }
             if (message.fileName.isNotBlank()) bubble.addView(TextView(this).apply {
                 text = message.fileName; textSize = 13f; typeface = Typeface.DEFAULT_BOLD
                 setTextColor(if (mine) RabiMobileUi.onAccent else RabiMobileUi.primary); setPadding(0, if (message.text.isBlank()) dp(2) else dp(8), 0, 0)
@@ -666,11 +742,52 @@ class MainActivity : Activity() {
                 setTextColor(if (message.deliveryState == "failed") RabiMobileUi.error else RabiMobileUi.muted)
                 gravity = Gravity.END; setPadding(dp(4), dp(3), dp(4), 0)
             })
+            if(mine && message.deliveryState == "failed") group.addView(row().apply {
+                addView(RabiMobileUi.compactAction(this@MainActivity,"重试") {
+                    runCatching { RabiConversationService.retryMessage(this@MainActivity,message.clientMessageId,message.routeProfileId) }
+                        .onSuccess { toast("正在重试这条消息") }.onFailure { toast("重试未启动，请稍后再试") }
+                })
+                addView(RabiMobileUi.compactAction(this@MainActivity,"查看原因") {
+                    android.app.AlertDialog.Builder(this@MainActivity).setTitle("消息未能发送")
+                        .setMessage(message.failure.ifBlank { "请检查手机网络、电脑连接和该会话是否可用。" })
+                        .setPositiveButton("连接设置") { _, _ -> showSettings() }.setNegativeButton("关闭",null).show()
+                })
+            })
             host.addView(group, LinearLayout.LayoutParams(-1, -2).apply { setMargins(if (mine) dp(42) else 0, dp(5), if (mine) 0 else dp(42), dp(5)) })
         }
-        store.markRead(activeRouteId)
-        RabiConversationService.clearConversationNotification(this, activeRouteId)
-        chatScroll?.post { chatScroll?.fullScroll(View.FOCUS_DOWN) }
+        if(following) { newMessagesAction?.visibility = View.GONE; markConversationRead() }
+        else if(hasNewMessage) newMessagesAction?.visibility = View.VISIBLE
+        val scroll = chatScroll
+        scroll?.post {
+            if(chatMessages !== host || chatScroll !== scroll || chatRenderGeneration != renderGeneration) return@post
+            if(following) scroll.fullScroll(View.FOCUS_DOWN) else scroll.scrollTo(0,oldScrollY)
+            restoringChatViewport = false
+        }
+    }
+
+    private fun isChatAtBottom(): Boolean {
+        val scroll = chatScroll ?: return true
+        val content = chatMessages ?: return true
+        return content.height-scroll.height-scroll.scrollY <= dp(48)
+    }
+
+    private fun markConversationRead() {
+        if(activeRouteId.isBlank() || lastReadChatSignature == chatSignature) return
+        RabiChatStore(this).markRead(activeRouteId)
+        RabiConversationService.clearConversationNotification(this,activeRouteId)
+        lastReadChatSignature = chatSignature
+    }
+
+    private fun currentComputerLabel(): String = RabiLinkRelaySettings.computers(this)
+        .firstOrNull { RabiLinkRelaySettings.isActive(this,it) }?.let { "电脑 · ${it.name}" } ?: "选择连接的电脑"
+
+    private fun chooseComputer() {
+        if(!RabiLinkRelaySettings.load(this).configured) { showSettings(); return }
+        RabiComputerPicker.show(this) {
+            availableRoutes = RabiRouteMetadataCache.load(this,RabiLinkRelaySettings.load(this))
+            routesLoaded = false
+            if(screen == Screen.SETTINGS || screen == Screen.SETUP) showSettings() else showConversationList()
+        }
     }
 
     private fun personaTitle(route: RabiRouteInfo): String =
@@ -884,7 +1001,7 @@ class MainActivity : Activity() {
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_palette, "皮肤与外观", grouped = true) { RabiAppearanceActivity.open(this) },
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "记录与设备", grouped = true) { openAllDayRecording() },
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "位置记录", grouped = true) { startActivity(Intent(this, com.rabi.link.location.LocationSettingsActivity::class.java)) },
-            RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_account, "连接与账号", serverCard(), screen == Screen.SETUP, grouped = true),
+            RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_account, "连接与电脑", serverCard(), screen == Screen.SETUP, grouped = true),
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_volume, "语音与消息", conversationCard(), grouped = true),
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_tune, "连接诊断", conversationRuntimeCard(), grouped = true),
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_tools, "高级工具", toolsCard(), grouped = true),
@@ -979,7 +1096,7 @@ class MainActivity : Activity() {
     }
 
     private fun serverCard(): View = card().apply {
-        addView(note("电脑可在“记录 → 设备 → 电脑”中切换。"))
+        addView(secondary(currentComputerLabel()) { chooseComputer() },full(0,0,0,8))
         relayUrl = input("例如：http://192.168.1.10:8794/rabilink")
         relayToken = input("从 Rabi PC 复制的移动端登录码").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         relayUrlHelp = RabiMobileUi.fieldHelp(this@MainActivity, "这里填手机能访问的 RabiLink 地址。通常不用手填，App 找到电脑后会自动写入。")
@@ -993,6 +1110,7 @@ class MainActivity : Activity() {
         val actions = row()
         actions.addView(secondary("自动检测") { scanLocalRabi() }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
+        addView(secondary("打开消息") { showConversationList() },full(0,8,0,0))
     }
 
     private fun toolsCard(): View = card().apply {
@@ -1005,36 +1123,37 @@ class MainActivity : Activity() {
     }
 
     private fun conversationCard(): View = card().apply {
-        addView(title("语音回复、存储与主动性"))
-        addView(note("这里不启动麦克风。记录模式、来源、上传和处理目标统一在全天记录设置。"))
+        addView(title("语音与消息"))
         proactivityPreference = RabiMobileUi.spinner(this@MainActivity, Spinner(this@MainActivity).apply {
             adapter = ArrayAdapter(
                 this@MainActivity,
                 android.R.layout.simple_spinner_item,
-                listOf("由 Agent 角色综合决定", "偏安静", "均衡", "偏主动"),
+                listOf("由角色决定", "偏安静", "均衡", "偏主动"),
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         })
-        autoPlayAgentVoice = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "收到 Agent TTS 后立即播放" })
-        addView(label("明确主动性偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
-        addView(note("这是交给 PC / Route / Agent 的明确偏好，不是 App 本地决策规则。Agent 仍可根据情景、权限和动作安全门选择不打扰、准备、提示、建议、请求确认或行动。"))
+        autoPlayAgentVoice = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "自动播放语音回复" })
+        addView(label("主动联系偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
+        addView(note("角色会结合当前情景决定何时联系你。"))
         addView(autoPlayAgentVoice)
         ttsModel = input("local-tts/gpt-sovits")
         ttsVoice = input("Rabi")
-        addView(label("Rabi PC TTS 模型")); addView(ttsModel, full(0, 0, 0, 6))
-        addView(label("角色 / 声线")); addView(ttsVoice, full(0, 0, 0, 6))
         audioRetentionHours = input("6").apply { inputType = InputType.TYPE_CLASS_NUMBER }
         audioReserveFreeMb = input("1024").apply { inputType = InputType.TYPE_CLASS_NUMBER }
-        addView(label("已确认录音保留（小时，0–168）")); addView(audioRetentionHours, full(0, 0, 0, 6))
-        addView(label("设备剩余空间水位（MiB，至少 256）")); addView(audioReserveFreeMb, full(0, 0, 0, 6))
-        addView(note("录音不设应用容量上限。只有电脑确认长期归档、手机核验历史可见且原音频可回读后，才自动清理手机原件；转写完成不作为删除依据。手机实际可用空间不足时暂停采集，并保留现有录音。"))
-        addView(primary("保存设置（不启动采集）") { saveConversationSettings() }, full(0, 0, 0, 8))
-        addView(note("常驻运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。手机先把连续 PCM 写入私有动态分片，断网或 PC 离线时继续落盘，恢复联网后按序补传。小米等厂商仍可能额外限制后台应用，请在真机上核对电池优化与自启动权限。"))
+        addView(RabiMobileUi.settingsGroup(this@MainActivity,R.drawable.ic_ui_tune,"声音与存储高级设置",card().apply {
+            addView(note("使用电脑上已配置的模型与声线标识。"))
+            addView(label("语音模型")); addView(ttsModel,full(0,0,0,6))
+            addView(label("声线")); addView(ttsVoice,full(0,0,0,6))
+            addView(label("已确认录音保留（小时，0–168）")); addView(audioRetentionHours,full(0,0,0,6))
+            addView(label("设备剩余空间水位（MiB，至少 256）")); addView(audioReserveFreeMb,full(0,0,0,6))
+            addView(note("电脑归档并核验可回放后，才允许清理手机原件。手机空间不足时暂停采集，已有记录保留。"))
+        }))
+        addView(primary("保存设置") { saveConversationSettings() }, full(0, 0, 0, 8))
         val actions = row()
-        actions.addView(secondary("立即提示 Agent") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(secondary("请角色查看近况") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
         actions.addView(secondary("全天记录设置") { openAllDayRecording() }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
-        addView(secondary("重试失败的离线消息 / TTS") { RabiConversationService.retryFailed(this@MainActivity) }, full(0, 8, 0, 0))
+        addView(secondary("重试全部失败消息与语音") { RabiConversationService.retryFailed(this@MainActivity) }, full(0, 8, 0, 0))
         addView(secondary("检查系统后台保活设置") { openBatteryOptimizationSettings() }, full(0, 8, 0, 0))
     }
 
@@ -1271,7 +1390,7 @@ class MainActivity : Activity() {
                 showGuidance(RabiSetupGuidance(
                     "连接完成",
                     "已登录 RabiLink，${pc?.name ?: "Rabi PC"} ${if (pc?.online == true) "在线" else "当前离线"}。",
-                    "如需选择或切换电脑，请返回记录设备页点击“电脑”卡片。",
+                    "点“选择电脑”切换目标，或点“打开消息”开始聊天。",
                     RabiGuidanceTone.SUCCESS,
                 ))
             }

@@ -99,6 +99,9 @@ public final class RabiAudioRecordRepository {
         return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
     }
     public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter) {
+        return page(context,time,cursorId,older,sourceFilter,0,Long.MAX_VALUE);
+    }
+    public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter, long from, long until) {
         // Saved audio remains visible independently of transcription progress or text.
         Map<String, Long> starts = new HashMap<>();
         for (JSONObject row : metadata(context)) {
@@ -109,7 +112,7 @@ public final class RabiAudioRecordRepository {
             starts.merge(id, row.optLong("startedAt"), Math::min);
         }
         List<String> ids = new ArrayList<>(starts.keySet());
-        ids.removeIf(id -> { int order = Long.compare(starts.get(id), time); if (order == 0) order = id.compareTo(cursorId); return older ? order >= 0 : order <= 0; });
+        ids.removeIf(id -> { long start = starts.get(id); if(start < from || start >= until) return true; int order = Long.compare(start, time); if (order == 0) order = id.compareTo(cursorId); return older ? order >= 0 : order <= 0; });
         ids.sort((a,b) -> { int order = Long.compare(starts.get(a),starts.get(b)); if(order == 0) order = a.compareTo(b); return older ? -order : order; });
         Set<String> selected = new HashSet<>(ids.subList(0, Math.min(101,ids.size())));
         return listCaptureRecords(context, Integer.MAX_VALUE, 0, Long.MAX_VALUE, selected);
