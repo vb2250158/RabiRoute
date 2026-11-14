@@ -2,7 +2,7 @@
 
 # YeYu Gamer Manager 插件
 
-该插件提供默认关闭的本机 YeYu Gamer 门面。目标固定为 `http://127.0.0.1:8877/api/v1`；只读 health、meta、snapshot、capabilities，并且只能创建 `mode: "plan"` 的 Agent work item。
+该插件提供默认关闭的本机 YeYu Gamer 门面。目标由 Profile 显式配置为实际本机 `/api/v1` 地址；只读 health、meta、snapshot、capabilities，并且只能创建 `mode: "plan"` 的 Agent work item。
 
 插件配置归 Profile，不写入 `data/manager.json`。Bearer Token 只在读取受保护的 snapshot/capabilities 或创建 work item 时从本机 YeYu Gamer 运行目录读取，不进入 Profile、响应或日志。
 
@@ -23,3 +23,5 @@
 新建计划前读取最新快照并使用其 `stateVersion`。保留原幂等键、完整正文、预期版本与原生回执的 `commandId` / `statusUrl`；本门面没有另一个回执查询接口。撤权时剥离业务数据，只返回执行阶段：`not_started` 表示尚未进入原生提交，`unknown` 表示已进入原生传输且结果需核对。`202` 不证明游戏已执行或通过验收；不确定时先向原生拥有者核对，不自动创建替代计划。
 
 源码测试只使用隔离目录、生成的测试凭据和受控本机 HTTP 服务。真实游戏端口、用户游戏数据、安装版更新及双机执行没有在这些测试中验证。
+
+`baseUrl` 必须显式配置为目标本机 Manager 的实际 `/api/v1` 地址；不再默认或强制使用 8877。留空时能力报告 `yeyu_gamer_not_configured`，读取令牌或发起网络请求之前即停止。原有显式地址、私有 runtimeDir、鉴权和仅建计划的约束保持。

@@ -14,7 +14,7 @@
       "paths": [
         "astrbotUrl"
       ],
-      "default": "http://127.0.0.1:6185",
+      "default": "",
       "trim": true
     },
     "astrbotUsername": {

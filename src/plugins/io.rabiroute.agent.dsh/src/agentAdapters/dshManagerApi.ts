@@ -2,7 +2,7 @@ import fs from 'node:fs';import os from 'node:os';import path from 'node:path';i
 import type {AgentManagerApiContext,AgentScanOptions,AgentScanResult,AgentScanSession,AgentSessionPage,AgentSessionPageQuery,AgentScanProject,AgentScanPerformanceOperation,CopilotSessionEntry,AstrbotSessionScan,AstrbotLoginTestRequest,MarvisOpenRequest} from '@rabiroute/host-api/agentAdapters/managerTypes';
 import {resolvePersistedProjectPath} from '@rabiroute/host-api/shared/projectPaths';
 import {agentScanManifestFields,getRuntimeList,projectOptionsFromPaths,normalizeComparablePath,checkHttpEndpoint,collectAgentCwdOptions} from '@rabiroute/host-api/agentAdapters/managerScanShared';
-import {listDshModels,listDshAgentPresets,listDshSessions,type DshModelCatalogEntry} from '../dshSessionBridge.js';import {DEFAULT_DSH_BASE_URL,discoverLocalDsh,resolveDshBaseUrl,type DshLocalDiscovery} from '../dshDiscovery.js';
+import {listDshModels,listDshAgentPresets,listDshSessions,type DshModelCatalogEntry} from '../dshSessionBridge.js';import {discoverLocalDsh,type DshLocalDiscovery} from '../dshDiscovery.js';
 export async function scanDshAgentAdapter(
   ctx: AgentManagerApiContext,
   options: Pick<AgentScanOptions, "dshLimit" | "dshOffset" | "dshQuery" | "dshBaseUrl"> = {}
@@ -19,8 +19,7 @@ export async function scanDshAgentAdapter(
   ].filter(Boolean) as string[];
   const dshUrls = [...new Set([
     ...configuredDshUrls,
-    ...discovery.discoveredBaseUrls,
-    ...(configuredDshUrls.length || discovery.discoveredBaseUrls.length ? [] : [DEFAULT_DSH_BASE_URL])
+    ...discovery.discoveredBaseUrls
   ])];
   const dshEndpoints = await Promise.all(dshUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 DSH apiproxy" : "DSH apiproxy",
@@ -32,7 +31,7 @@ export async function scanDshAgentAdapter(
   const configuredBaseUrl = configuredDshUrls[0];
   const healthyConfigured = dshEndpoints.find((endpoint) => endpoint.url === configuredBaseUrl && endpoint.healthy);
   const firstHealthy = dshEndpoints.find((endpoint) => endpoint.healthy);
-  const dshBaseUrl = healthyConfigured?.url || firstHealthy?.url || resolveDshBaseUrl(configuredBaseUrl, discovery);
+  const dshBaseUrl = configuredBaseUrl || firstHealthy?.url || discovery.discoveredBaseUrls[0] || "";
   const dshEndpointHealthy = dshEndpoints.some((endpoint) => endpoint.url === dshBaseUrl && endpoint.healthy);
   const dshAnyHealthy = Boolean(firstHealthy);
   const shouldReadDshModels = dshEndpointHealthy && (
@@ -52,7 +51,7 @@ export async function scanDshAgentAdapter(
   const directoryWarnings: string[] = [];
   let dshSessionWarning = "";
   let rawDshSessions: AgentScanSession[] = ctx.dshSessions ?? [];
-  if (!ctx.dshSessions && (ctx.listDshSessions || dshEndpointHealthy)) {
+  if (dshBaseUrl && !ctx.dshSessions && (ctx.listDshSessions || dshEndpointHealthy)) {
     try {
       const listSessions = ctx.listDshSessions ?? (async (query: AgentSessionPageQuery & { baseUrl: string }) => (
         await listDshSessions({
@@ -134,7 +133,8 @@ export async function scanDshAgentAdapter(
         ...(configuredBaseUrl && !healthyConfigured && firstHealthy
           ? [`已保存的 DSH 地址 ${configuredBaseUrl} 未响应；本机扫描到 ${firstHealthy.url}。`]
           : []),
-        ...(dshAnyHealthy ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
+        ...(!dshBaseUrl ? ["未配置或发现 DSH owner 地址；请填写 dshBaseUrl，不猜测端口。"]
+          : dshAnyHealthy ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
         ...(dshSessions.length === 0 && !dshSessionWarning ? ["未发现 DSH 会话；保存配置时可按名称和工作目录创建。"] : []),
         "RabiRoute 可以发现、创建、重命名、绑定 DSH 会话，并通过 session.prompt（mode=queue）投递。",
         "DSH 支持主角色、计划秘书、消息处理和独立记忆整理会话；请在当前实例核对任务可用性和实际投递结果。"

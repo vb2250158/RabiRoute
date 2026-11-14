@@ -29,6 +29,7 @@ export type {
   YeYuGamerWorkItemKind
 } from "./contracts.js";
 
+/** Legacy explicit configuration example; never an implicit request destination. */
 export const YEYU_GAMER_MANAGER_BASE_URL = "http://127.0.0.1:8877/api/v1" as const;
 export const YEYU_GAMER_RABIROUTE_ACTOR = "rabiroute" as const;
 
@@ -39,7 +40,7 @@ export type YeYuGamerManagerConfigInput = {
 };
 
 export type YeYuGamerManagerConfig = Readonly<{
-  baseUrl: typeof YEYU_GAMER_MANAGER_BASE_URL;
+  baseUrl: string;
   runtimeDir: string;
   requestTimeoutMs: number;
 }>;
@@ -52,9 +53,9 @@ export const yeyuGamerManagerConfigSchema = Object.freeze({
   additionalProperties: false,
   properties: {
     baseUrl: {
-      const: YEYU_GAMER_MANAGER_BASE_URL,
-      default: YEYU_GAMER_MANAGER_BASE_URL,
-      description: "Fixed loopback YeYu Gamer Manager API v1 origin."
+      type: "string",
+      default: "",
+      description: "Explicit loopback YeYu Gamer Manager API v1 URL; empty means not configured."
     },
     runtimeDir: {
       type: "string",
@@ -120,13 +121,15 @@ export function normalizeYeYuGamerManagerConfig(
   environment: YeYuGamerManagerConfigEnvironment = {}
 ): YeYuGamerManagerConfig {
   const platform = environment.platform ?? process.platform;
-  const baseUrl = String(input?.baseUrl || YEYU_GAMER_MANAGER_BASE_URL).trim().replace(/\/+$/, "");
-  if (baseUrl !== YEYU_GAMER_MANAGER_BASE_URL) {
-    throw new YeYuGamerManagerApiError(
-      400,
-      "yeyu_gamer_base_url_rejected",
-      `YeYu Gamer Manager must use ${YEYU_GAMER_MANAGER_BASE_URL}.`
-    );
+  const baseUrl = String(input?.baseUrl ?? "").trim().replace(/\/+$/, "");
+  if (baseUrl) {
+    let target: URL;
+    try { target = new URL(baseUrl); }
+    catch { throw new YeYuGamerManagerApiError(400, "yeyu_gamer_base_url_rejected", "YeYu Gamer requires an explicit loopback API v1 URL."); }
+    if (!["http:", "https:"].includes(target.protocol) || !["127.0.0.1", "localhost", "[::1]"].includes(target.hostname)
+      || target.username || target.password || target.port === "0" || target.pathname !== "/api/v1" || target.search || target.hash) {
+      throw new YeYuGamerManagerApiError(400, "yeyu_gamer_base_url_rejected", "YeYu Gamer requires an explicit loopback API v1 URL without credentials.");
+    }
   }
   const rawRuntimeDir = String(input?.runtimeDir || localRuntimeDir(environment)).trim();
   const pathApi = platform === "win32" ? path.win32 : path.posix;
@@ -146,7 +149,7 @@ export function normalizeYeYuGamerManagerConfig(
     );
   }
   return Object.freeze({
-    baseUrl: YEYU_GAMER_MANAGER_BASE_URL,
+    baseUrl,
     runtimeDir: pathApi.resolve(rawRuntimeDir),
     requestTimeoutMs
   });
@@ -294,6 +297,7 @@ export class YeYuGamerManagerApiClient {
       throw new YeYuGamerManagerApiError(400, "yeyu_gamer_request_id_rejected", "requestId must contain visible ASCII and be at most 128 characters.");
     }
     access?.authorize();
+    this.#assertConfigured();
     const token = await this.#readCredential(access);
     access?.authorize();
     return this.#request("/agent/work-items", {
@@ -312,6 +316,7 @@ export class YeYuGamerManagerApiClient {
 
   async #get<T>(resource: "/health" | "/meta" | "/snapshot" | "/capabilities", parse: (value: unknown) => T, access?: YeYuGamerRequestAccess): Promise<T> {
     access?.authorize();
+    this.#assertConfigured();
     const protectedView = resource === "/snapshot" || resource === "/capabilities";
     const headers: Record<string, string> = {};
     if (protectedView) {
@@ -321,6 +326,10 @@ export class YeYuGamerManagerApiClient {
       headers["X-YeYu-Gamer-Actor"] = YEYU_GAMER_RABIROUTE_ACTOR;
     }
     return this.#request(resource, { method: "GET", headers }, parse, access);
+  }
+
+  #assertConfigured(): void {
+    if (!this.config.baseUrl) throw new YeYuGamerManagerApiError(503, "yeyu_gamer_not_configured", "Configure the actual local YeYu Gamer Manager baseUrl before requesting this capability.");
   }
 
   async #readCredential(access?: YeYuGamerRequestAccess): Promise<string> {
@@ -366,7 +375,7 @@ export class YeYuGamerManagerApiClient {
       } catch {
         access?.authorize();
         if (signal.aborted) {
-          throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable on the fixed loopback endpoint.");
+          throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable at the configured loopback endpoint.");
         }
         throw new YeYuGamerManagerApiError(502, "yeyu_gamer_invalid_json", "YeYu Gamer Manager returned invalid JSON.");
       }
@@ -379,7 +388,7 @@ export class YeYuGamerManagerApiClient {
     } catch (error) {
       access?.authorize();
       if (error instanceof YeYuGamerManagerApiError) throw error;
-      throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable on the fixed loopback endpoint.");
+      throw new YeYuGamerManagerApiError(503, "yeyu_gamer_unreachable", "YeYu Gamer Manager is unavailable at the configured loopback endpoint.");
     } finally {
       clearTimeout(timer);
     }

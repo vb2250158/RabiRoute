@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** Documented `dsh web` default. The live owner may listen on another loopback port. */
+/** Legacy documented example retained for API compatibility; never used for discovery or requests. */
 export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
 
 const LAUNCH_BANNER = /dsh web: (https?:\/\/[^\s<>"']+)/g;
@@ -129,5 +129,7 @@ export function resolveDshBaseUrl(
 ): string {
   const explicit = value?.trim().replace(/\/+$/, "");
   if (explicit) return explicit;
-  return discovery.discoveredBaseUrls[0] || DEFAULT_DSH_BASE_URL;
+  const discovered = discovery.discoveredBaseUrls[0];
+  if (discovered) return discovered;
+  throw new Error("DSH owner URL is not configured or discovered; configure dshBaseUrl or start the existing DSH owner.");
 }

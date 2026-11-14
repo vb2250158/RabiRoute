@@ -141,8 +141,8 @@ async function testAstrbotLogin(): Promise<void> {
                       v-model="gateway.astrbotUrl"
                       :items="agentScanFor('astrbot')?.endpoints?.map(endpoint => endpoint.url) ?? []"
                       label="AstrBot 地址"
-                      placeholder="http://127.0.0.1:6185"
-                      hint="AstrBot ChatUI 地址；消息只通过 /api/chat/send 投递"
+                      placeholder="填写目标 AstrBot 的实际 URL"
+                      hint="必填；使用该 AstrBot 实例的实际 ChatUI 地址"
                       persistent-hint
                       @update:model-value="touch"
                     >

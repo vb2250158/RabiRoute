@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.yeyu-gamer",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "YeYu Gamer 连接",
   "description": "查看本机游戏助手状态并提交游戏计划",
   "icon": "mdi-gamepad-variant",
@@ -28,9 +28,9 @@
     "additionalProperties": false,
     "properties": {
       "baseUrl": {
-        "const": "http://127.0.0.1:8877/api/v1",
-        "default": "http://127.0.0.1:8877/api/v1",
-        "description": "Fixed loopback YeYu Gamer Manager API v1 origin."
+        "type": "string",
+        "default": "",
+        "description": "Explicit loopback YeYu Gamer Manager API v1 URL; empty means not configured."
       },
       "runtimeDir": {
         "type": "string",

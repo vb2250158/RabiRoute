@@ -2,7 +2,7 @@ English | <a href="./README.md">简体中文</a>
 
 # YeYu Gamer Manager Plugin
 
-This plugin provides a disabled-by-default local facade for YeYu Gamer. The target is fixed to `http://127.0.0.1:8877/api/v1`; the plugin only reads health, meta, snapshot, and capabilities and can create only `mode: "plan"` Agent work items.
+This plugin provides a disabled-by-default local facade for YeYu Gamer. The target is explicitly configured in the Profile with its actual local `/api/v1` URL; the plugin only reads health, meta, snapshot, and capabilities and can create only `mode: "plan"` Agent work items.
 
 Configuration belongs to the Profile instead of `data/manager.json`. The Bearer token is read from the local YeYu Gamer runtime directory only for protected snapshot/capability reads or work-item creation and is never stored in the Profile, responses, or logs.
 
@@ -23,3 +23,5 @@ Authenticated enabled remote connections use these public operations without ano
 Read a fresh snapshot and use its `stateVersion` before creating a new plan. Retain the original idempotency key, complete payload, expected version and native receipt's `commandId` / `statusUrl`; this facade has no separate receipt lookup endpoint. Revocation strips business data and returns only execution progress: `not_started` means native dispatch was not entered; `unknown` means native transport was entered and its outcome needs reconciliation. `202` does not prove game execution or acceptance. Reconcile uncertain results with the original owner before retrying, without automatically creating a replacement plan.
 
 Source tests use isolated directories, generated fixture credentials and controlled local HTTP services. They do not exercise the real game port, user game data, installed updates or two-computer execution.
+
+Configure `baseUrl` explicitly with the actual local Manager `/api/v1` URL. Port 8877 is no longer a default or a requirement. Empty configuration returns `yeyu_gamer_not_configured` before reading credentials or issuing requests. Existing explicit URLs, private runtimeDir, authorization and plan-only limits remain supported.

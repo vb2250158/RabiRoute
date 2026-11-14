@@ -50,7 +50,7 @@ async function fixture(t: test.TestContext) {
   t.after(() => { held?.release.resolve(); upstream.closeAllConnections(); return new Promise<void>(resolve => upstream.close(() => resolve())); });
   upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
   const upstreamBase = "http://127.0.0.1:" + (upstream.address() as import("node:net").AddressInfo).port;
-  let config: YeYuGamerManagerConfigInput = { runtimeDir: root }, credentialReads = 0, configReads = 0;
+  let config: YeYuGamerManagerConfigInput = { baseUrl: YEYU_GAMER_MANAGER_BASE_URL, runtimeDir: root }, credentialReads = 0, configReads = 0;
   let configRead: (() => void) | undefined;
   const owner = createYeYuGamerManagerOperations({ getConfig: () => { configReads++; configRead?.(); return config; }, createClient: original => new YeYuGamerManagerApiClient(original, {
     readFile: async (file, encoding) => { credentialReads++; assert.equal(file, path.join(actorDir, "rabiroute.token")); return fs.readFile(file, encoding); },

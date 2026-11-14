@@ -81,17 +81,17 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
-test("YeYu Gamer config fixes the loopback API/runtime contract", () => {
+test("YeYu Gamer configuration requires an explicit loopback API/runtime contract", () => {
   const config = normalizeYeYuGamerManagerConfig(undefined, {
     platform: "win32",
     env: { ProgramData: "C:\\ProgramData" }
   });
-  assert.equal(config.baseUrl, YEYU_GAMER_MANAGER_BASE_URL);
+  assert.equal(config.baseUrl, "");
   assert.equal(config.runtimeDir, "C:\\ProgramData\\YeYuGamer\\runtime");
   assert.equal(config.requestTimeoutMs, 3000);
 
   assert.throws(
-    () => normalizeYeYuGamerManagerConfig({ baseUrl: "http://localhost:8877/api/v1" }),
+    () => normalizeYeYuGamerManagerConfig({ baseUrl: "http://remote.example.invalid:8877/api/v1" }),
     (error: unknown) => error instanceof YeYuGamerManagerApiError
       && error.code === "yeyu_gamer_base_url_rejected"
   );
@@ -124,14 +124,14 @@ test("published JSON schema matches the runtime config schema", async () => {
     platform: "win32",
     env: { ProgramData: "C:\\ProgramData" }
   });
-  assert.equal(normalized.baseUrl, YEYU_GAMER_MANAGER_BASE_URL);
+  assert.equal(normalized.baseUrl, "");
   assert.equal(normalized.requestTimeoutMs, 3000);
 });
 
 test("typed GET client authenticates protected Manager views with the rabiroute credential", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const byUrl: Record<string, unknown> = { health, meta, snapshot, capabilities };
-  const client = new YeYuGamerManagerApiClient({}, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: YEYU_GAMER_MANAGER_BASE_URL }, {
     readFile: async () => "T".repeat(48),
     fetch: async (input, init) => {
       const url = String(input);
@@ -167,7 +167,7 @@ test("work item dispatch reads rabiroute.token and can create only a plan record
   await fs.writeFile(path.join(credentialDir, "rabiroute.token"), `${"T".repeat(48)}\n`, "ascii");
   let capturedUrl = "";
   let capturedInit: RequestInit | undefined;
-  const client = new YeYuGamerManagerApiClient({ runtimeDir }, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: YEYU_GAMER_MANAGER_BASE_URL, runtimeDir }, {
     fetch: async (input, init) => {
       capturedUrl = String(input);
       capturedInit = init;
@@ -216,7 +216,7 @@ test("client exposes no claim, decision, capability invocation, path or shell fa
 test("failed credential state fails closed without making a Manager request", async () => {
   let requests = 0;
   const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-yeyu-gamer-missing-"));
-  const client = new YeYuGamerManagerApiClient({ runtimeDir }, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: YEYU_GAMER_MANAGER_BASE_URL, runtimeDir }, {
     fetch: async () => {
       requests += 1;
       return jsonResponse(receipt, 202);
@@ -233,7 +233,7 @@ test("failed credential state fails closed without making a Manager request", as
 
 test("remote error bodies cannot leak credential or filesystem details", async () => {
   const secret = "S".repeat(48);
-  const client = new YeYuGamerManagerApiClient({ runtimeDir: "C:\\ProgramData\\YeYuGamer\\runtime" }, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: YEYU_GAMER_MANAGER_BASE_URL, runtimeDir: "C:\\ProgramData\\YeYuGamer\\runtime" }, {
     readFile: async () => secret,
     fetch: async () => jsonResponse({
       error: {
@@ -255,7 +255,7 @@ test("remote error bodies cannot leak credential or filesystem details", async (
 });
 
 test("work item input refuses execution-shaped or path-shaped identifiers", async () => {
-  const client = new YeYuGamerManagerApiClient({ runtimeDir: "C:\\ProgramData\\YeYuGamer\\runtime" }, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: YEYU_GAMER_MANAGER_BASE_URL, runtimeDir: "C:\\ProgramData\\YeYuGamer\\runtime" }, {
     readFile: async () => "T".repeat(48),
     fetch: async () => jsonResponse(receipt, 202)
   }, { platform: "win32" });

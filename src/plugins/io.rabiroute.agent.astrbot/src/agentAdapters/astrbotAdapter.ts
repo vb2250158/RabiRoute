@@ -8,7 +8,7 @@
  * the new `/api/chat/send` contract is not configured.
  */
 
-import { config } from "@rabiroute/host-api/config";
+import { requireAstrbotUrl } from "./astrbotEndpoint.js";
 import { reportAgentState } from "@rabiroute/host-api/agentAdapters/stateReporter";
 
 // --------------- types ---------------
@@ -48,7 +48,7 @@ function baseState(): AstrBotAgentState {
 // --------------- config helpers ---------------
 
 function getAstrBotUrl(): string {
-  return process.env.ASTRBOT_URL ?? "http://127.0.0.1:6185";
+  return requireAstrbotUrl();
 }
 
 function getAstrBotUsername(): string {
@@ -65,18 +65,16 @@ function getAstrBotSessionId(): string {
 
 let cachedToken: string | null = null;
 let tokenExpiresAt = 0;
+let cachedCredentials: { baseUrl: string; username: string; password: string } | undefined;
 
 // --------------- auth ---------------
 
-async function login(): Promise<string> {
+async function login(baseUrl: string, username: string, password: string): Promise<string> {
   const now = Date.now();
-  if (cachedToken && now < tokenExpiresAt - 60000) {
+  if (cachedToken && now < tokenExpiresAt - 60000 && cachedCredentials?.baseUrl === baseUrl
+    && cachedCredentials.username === username && cachedCredentials.password === password) {
     return cachedToken;
   }
-
-  const baseUrl = getAstrBotUrl().replace(/\/$/, "");
-  const username = getAstrBotUsername();
-  const password = getAstrBotPassword();
 
   if (!password) {
     throw new Error(
@@ -87,6 +85,7 @@ async function login(): Promise<string> {
 
   const response = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
+    redirect: "error",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
@@ -107,6 +106,7 @@ async function login(): Promise<string> {
 
   // JWT tokens have a 3-part structure; we don't decode, just cache for 55 min
   cachedToken = token;
+  cachedCredentials = { baseUrl, username, password };
   tokenExpiresAt = now + 55 * 60 * 1000;
 
   return token;
@@ -135,9 +135,9 @@ async function deliverOnce(message: string): Promise<void> {
   const state = readState();
 
   try {
-    const token = await login();
-    const baseUrl = getAstrBotUrl().replace(/\/$/, "");
+    const baseUrl = getAstrBotUrl();
     const sessionId = getAstrBotSessionId().trim();
+    const token = await login(baseUrl, getAstrBotUsername(), getAstrBotPassword());
     if (!sessionId) {
       throw new Error(
         "ASTRBOT_SESSION_ID is required. Bind an AstrBot ChatUI session before sending messages."
@@ -179,6 +179,7 @@ async function deliverOnce(message: string): Promise<void> {
 async function deliverToChatUiSession(baseUrl: string, token: string, sessionId: string, message: string): Promise<string> {
   const response = await fetch(`${baseUrl}/api/chat/send`, {
     method: "POST",
+    redirect: "error",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${token}`,

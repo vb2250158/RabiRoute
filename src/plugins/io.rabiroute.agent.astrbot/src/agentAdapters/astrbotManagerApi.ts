@@ -1,12 +1,17 @@
-import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawn} from 'node:child_process';import {getTimeoutMs} from '@rabiroute/host-api/shared/timeoutSettings';
+import { requireAstrbotUrl, astrbotEnvironmentMatches } from "./astrbotEndpoint.js";
+import fs from 'node:fs';import {getTimeoutMs} from '@rabiroute/host-api/shared/timeoutSettings';
 import type {AgentManagerApiContext,AgentScanOptions,AgentScanResult,AgentScanSession,AgentSessionPage,AgentScanProject,AgentScanPerformanceOperation,CopilotSessionEntry,AstrbotSessionScan,AstrbotLoginTestRequest,MarvisOpenRequest} from '@rabiroute/host-api/agentAdapters/managerTypes';
 import {agentScanManifestFields,getRuntimeList,projectOptionsFromPaths,normalizeComparablePath,checkHttpEndpoint,collectAgentCwdOptions} from '@rabiroute/host-api/agentAdapters/managerScanShared';
 export async function testAstrbotLogin(
   request: AstrbotLoginTestRequest
 ): Promise<Record<string, unknown> & { ok: boolean }> {
-  const baseUrl = (request.url?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
-  const username = request.username?.trim() || process.env.ASTRBOT_USERNAME || "";
-  const password = request.password?.trim() || process.env.ASTRBOT_PASSWORD || "";
+  let baseUrl: string;
+  try { baseUrl = requireAstrbotUrl(request.url?.trim() || process.env.ASTRBOT_URL); }
+  catch { return { ok: false, status: 400, message: "请先配置目标 AstrBot 的实际 URL。" }; }
+  const useEnvironment = astrbotEnvironmentMatches(baseUrl);
+  const environmentUsername = useEnvironment ? process.env.ASTRBOT_USERNAME?.trim() || "" : "";
+  const username = request.username?.trim() || environmentUsername;
+  const password = request.password?.trim() || (useEnvironment && username === environmentUsername ? process.env.ASTRBOT_PASSWORD : "") || "";
   if (!password) {
     return { ok: false, status: 400, message: "缺少 AstrBot 密码。" };
   }
@@ -16,6 +21,7 @@ export async function testAstrbotLogin(
   try {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
+      redirect: "error",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username, password }),
       signal: controller.signal
@@ -56,6 +62,8 @@ export async function testAstrbotLogin(
   }
 }
 export async function loginAstrbotDashboard(baseUrl: string, username: string, password: string): Promise<{ token?: string; message?: string }> {
+  try { baseUrl = requireAstrbotUrl(baseUrl); }
+  catch { return { message: "请先配置目标 AstrBot 的实际 URL。" }; }
   if (!password) {
     return { message: "缺少 AstrBot 密码。" };
   }
@@ -64,6 +72,7 @@ export async function loginAstrbotDashboard(baseUrl: string, username: string, p
   try {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
+      redirect: "error",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username, password }),
       signal: controller.signal
@@ -87,7 +96,7 @@ export async function loginAstrbotDashboard(baseUrl: string, username: string, p
   }
 }
 export async function fetchAstrbotJson<T>(url: string, token: string): Promise<T | null> {
-  const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  const response = await fetch(url, { redirect: "error", headers: { authorization: `Bearer ${token}` } });
   if (!response.ok) {
     if (response.status === 404) return null; // Older owners may omit an optional catalog API.
     throw Object.assign(new Error(`AstrBot Dashboard catalog request failed (HTTP ${response.status}).`), { statusCode: response.status });
@@ -168,115 +177,51 @@ export async function scanAstrbotViaDashboardApi(baseUrl: string, _username: str
   return { authVerified: true, projects, sessions, source: "api", warnings,
     authMessage: `已通过 Dashboard API 读取 ${projects.length} 个项目、${sessions.length} 个会话。` };
 }
-export async function scanAstrbotLocalDb(): Promise<Pick<AstrbotSessionScan, "projects" | "sessions" | "source">> {
-  const dbPath = path.join(os.homedir(), ".astrbot", "data", "data_v4.db");
-  if (!fs.existsSync(dbPath)) {
-    return { projects: [], sessions: [], source: "none" };
-  }
-  const pyCandidates = [
-    "py",
-    "python",
-    path.join(process.env.LOCALAPPDATA ?? "", "AstrBot", "backend", "python", "python.exe")
-  ].filter(Boolean);
-  const script = `
-import json, sqlite3, sys
-db_path = sys.argv[1]
-con = sqlite3.connect(db_path)
-con.row_factory = sqlite3.Row
-projects = [dict(r) for r in con.execute("select project_id, title, emoji, updated_at from chatui_projects order by updated_at desc limit 100")]
-sessions = [dict(r) for r in con.execute("""select s.session_id, s.display_name, s.updated_at, p.project_id, p.title as project_title
-from platform_sessions s
-left join session_project_relations rel on rel.session_id=s.session_id
-left join chatui_projects p on p.project_id=rel.project_id
-where s.platform_id='webchat'
-order by s.updated_at desc limit 200""")]
-print(json.dumps({"projects": projects, "sessions": sessions}, ensure_ascii=False))
-con.close()
-`.trim();
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
-  for (const py of pyCandidates) {
-    try {
-      const args = path.basename(py).toLowerCase() === "py"
-        ? ["-3", "-c", script, dbPath]
-        : ["-c", script, dbPath];
-      const { stdout } = await execFileAsync(py, args, {
-        timeout: getTimeoutMs("backend.agentAdapters.managerApi.scanAstrbotLocalDb.execFileAsync.timeout", 3000),
-        windowsHide: true,
-        encoding: "utf8",
-        env: { ...process.env, PYTHONIOENCODING: "utf-8" }
-      });
-      const parsed = JSON.parse(stdout) as {
-        projects?: Array<{ project_id?: string; title?: string; emoji?: string; updated_at?: string }>;
-        sessions?: Array<{ session_id?: string; display_name?: string; updated_at?: string; project_id?: string; project_title?: string }>;
-      };
-      const projects: AgentScanProject[] = (parsed.projects ?? []).map((project) => {
-        const label = [project.emoji, project.title].filter(Boolean).join(" ") || project.project_id || "未命名项目";
-        const pathValue = project.title || label;
-        return {
-          id: project.project_id,
-          label,
-          path: pathValue,
-          exists: pathValue ? fs.existsSync(pathValue) : false
-        };
-      });
-      const sessions: AgentScanSession[] = (parsed.sessions ?? []).map((session) => ({
-        id: session.session_id,
-        name: session.display_name || session.session_id || "未命名会话",
-        projectId: session.project_id,
-        projectPath: session.project_title,
-        updatedAt: session.updated_at
-      }));
-      return { projects, sessions, source: "local-db" };
-    } catch {
-      // try next interpreter
-    }
-  }
-  return { projects: [], sessions: [], source: "none" };
-}
 export async function scanAstrbotAgentAdapter(ctx:AgentManagerApiContext,options:AgentScanOptions={}) {const checkEndpoint=ctx.checkHttpEndpoint??checkHttpEndpoint;
 const runtimes = getRuntimeList(ctx);
-const configuredAstrbotUrls = runtimes.map((runtime) => runtime.definition.astrbotUrl?.trim()).filter(Boolean) as string[];
-const configuredAstrbotPasswords = runtimes.map((runtime) => runtime.definition.astrbotPassword?.trim()).filter(Boolean) as string[];
-const configuredAstrbotUsernames = runtimes.map((runtime) => runtime.definition.astrbotUsername?.trim()).filter(Boolean) as string[];
-const astrbotUrls = [...new Set([
-    ...configuredAstrbotUrls,
-    process.env.ASTRBOT_URL,
-    "http://127.0.0.1:6185"
-  ].filter(Boolean) as string[])];
-const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
-    label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
-    url,
-    healthy: await checkEndpoint(url)
-  })));
-const astrbotPasswordPresent = Boolean(process.env.ASTRBOT_PASSWORD?.trim() || configuredAstrbotPasswords.length > 0);
-const astrbotBaseUrl = (configuredAstrbotUrls[0] || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
-const astrbotUsername = configuredAstrbotUsernames[0] || process.env.ASTRBOT_USERNAME || "";
-const astrbotPassword = configuredAstrbotPasswords[0] || process.env.ASTRBOT_PASSWORD || "";
+const bindings = runtimes.flatMap(runtime => {
+  const raw = runtime.definition.astrbotUrl?.trim();
+  if (!raw) return [];
+  try {
+    const url = requireAstrbotUrl(raw);
+    const environmentMatches = astrbotEnvironmentMatches(url);
+    const environmentUsername = environmentMatches ? process.env.ASTRBOT_USERNAME?.trim() || "" : "";
+    const username = runtime.definition.astrbotUsername?.trim() || environmentUsername;
+    return [{ url, username,
+      password: runtime.definition.astrbotPassword?.trim() || (environmentMatches && username === environmentUsername ? process.env.ASTRBOT_PASSWORD : "") || "" }];
+  } catch { return []; }
+});
+if (process.env.ASTRBOT_URL?.trim()) {
+  try { bindings.push({ url: requireAstrbotUrl(), username: process.env.ASTRBOT_USERNAME || "", password: process.env.ASTRBOT_PASSWORD || "" }); }
+  catch { /* Invalid explicit endpoint is not a credential target. */ }
+}
+const astrbotUrls = [...new Set(bindings.map(binding => binding.url))];
+const astrbotEndpoints = await Promise.all(astrbotUrls.map(async url => ({
+  label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot", url, healthy: await checkEndpoint(url)
+})));
+const credentialBindings = bindings.filter(binding => binding.password);
+const selectedBinding = credentialBindings[0];
+const unambiguous = astrbotUrls.length === 1 && selectedBinding
+  && bindings.every(binding => binding.url === selectedBinding.url && binding.username === selectedBinding.username)
+  && credentialBindings.every(binding => binding.url === selectedBinding.url && binding.username === selectedBinding.username && binding.password === selectedBinding.password);
+const astrbotPasswordPresent = credentialBindings.length > 0;
 let astrbotSessionScan: AstrbotSessionScan = {
     authVerified: false,
-    authMessage: astrbotPasswordPresent ? "已填写 AstrBot 凭据，尚未验证 Dashboard 登录。" : "缺少 AstrBot 密码；请填写本地配置或设置 ASTRBOT_PASSWORD。",
+    authMessage: !astrbotUrls.length ? "未配置 AstrBot URL；请填写目标实例的实际地址。"
+      : !unambiguous && astrbotPasswordPresent ? "存在多个 AstrBot 目标或账号；请在目标 Route 验证登录。"
+      : astrbotPasswordPresent ? "已填写 AstrBot 凭据，尚未验证 Dashboard 登录。" : "缺少 AstrBot 密码；请填写本地配置或设置 ASTRBOT_PASSWORD。",
     projects: [],
     sessions: [],
     source: "none"
   };
-if (astrbotPasswordPresent && astrbotEndpoints.some((endpoint) => endpoint.healthy)) {
+if (unambiguous && astrbotEndpoints.some(endpoint => endpoint.url === selectedBinding.url && endpoint.healthy)) {
+    const { url: astrbotBaseUrl, username: astrbotUsername, password: astrbotPassword } = selectedBinding;
     const login = await loginAstrbotDashboard(astrbotBaseUrl, astrbotUsername, astrbotPassword);
     if (login.token) {
       astrbotSessionScan = await scanAstrbotViaDashboardApi(astrbotBaseUrl, astrbotUsername, login.token);
     } else {
       astrbotSessionScan.authMessage = `已填写 AstrBot 凭据，但 Dashboard 登录未通过：${login.message || "未知错误"}`;
     }
-  }
-if (astrbotSessionScan.sessions.length === 0 || astrbotSessionScan.projects.length === 0) {
-    const localScan = await scanAstrbotLocalDb();
-    astrbotSessionScan = {
-      ...astrbotSessionScan,
-      projects: astrbotSessionScan.projects.length ? astrbotSessionScan.projects : localScan.projects,
-      sessions: astrbotSessionScan.sessions.length ? astrbotSessionScan.sessions : localScan.sessions,
-      source: astrbotSessionScan.source === "api" ? "api" : localScan.source
-    };
   }
 return {agents:{astrbot:{
       ...agentScanManifestFields("astrbot",ctx.manifest),
@@ -291,7 +236,6 @@ return {agents:{astrbot:{
       sessions: astrbotSessionScan.sessions,
       warnings: [
         ...(astrbotSessionScan.warnings ?? []),
-        ...(astrbotSessionScan.source === "local-db" ? ["已从本机 AstrBot 数据库读取项目/会话；发送前仍需 Dashboard 登录或 API Key 验证。"] : []),
         ...(astrbotSessionScan.sessions.length === 0 ? ["未读取到 AstrBot WebChat 会话；可以在 AstrBot ChatUI 创建对话后重新扫描。"] : []),
         "尚未自动执行真实消息注入烟测；同会话连续两次发送需用户确认后再测。",
       ]

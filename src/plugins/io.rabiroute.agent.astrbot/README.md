@@ -7,3 +7,5 @@
 Web 入口在 manifest 中直接声明 `entries.web.module: "./web/client.mjs"`。完整 Web 构建生成该文件，将 `activate` 直接导出到本包独立的 `/assets/…` 模块；发布器据此将卡片资源固定到同一 Web 版本。无需额外的 `web.mjs` 转发文件。
 
 配置切换、共享任务依赖和接入要求见 [Agent 接入规范](../../../../docs/agent-adapter-standard-requirements.md)，插件生命周期见 [SDK](../../../contracts/plugin-sdk/README.md)。
+
+AstrBot 地址必须来自 Route 的 `astrbotUrl` 或显式 `ASTRBOT_URL`，不再猜测默认端口。目录只使用选定 Dashboard API 返回的项目与会话；空目录不从未绑定身份的本机数据库补齐。环境密码仅用于地址和账号均与环境配置一致的目标；多目标扫描不自动选择账号登录。发送 token 缓存按目标 URL 和账号凭据隔离，改地址后重新登录。

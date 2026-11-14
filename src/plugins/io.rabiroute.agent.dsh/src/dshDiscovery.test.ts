@@ -47,7 +47,7 @@ test("DSH discovery treats a present Home as installed even when no owner is lis
   const discovery = discoverLocalDsh({ homeDir, env: {} });
   assert.equal(discovery.installed, true);
   assert.deepEqual(discovery.discoveredBaseUrls, []);
-  assert.equal(resolveDshBaseUrl(undefined, discovery), DEFAULT_DSH_BASE_URL);
+  assert.throws(() => resolveDshBaseUrl(undefined, discovery), /not configured or discovered/);
 });
 
 test("DSH discovery ignores non-loopback launch banners", () => {
