@@ -1,0 +1,20 @@
+{
+  "name": "@rabilink/desktop-assistant",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node src/main.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@rabilink/assistant-runtime": "file:../../packages/assistant-runtime",
+    "@rabilink/desktop-voice-service": "file:../../packages/desktop-voice-service",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.0"
+  }
+}

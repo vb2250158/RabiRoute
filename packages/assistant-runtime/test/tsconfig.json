@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "strict": true, "noEmit": true, "types": [], "lib": ["ES2022", "DOM"]
+  },
+  "files": ["typing.ts"]
+}

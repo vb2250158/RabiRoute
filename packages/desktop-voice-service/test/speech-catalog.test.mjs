@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { initialAssistantSettings,patchAssistantSettings } from '../src/assistant-settings.mjs';
+import { encodeVolcanoAsrRequest,encodeVolcanoTtsParams,volcanoCatalog,parameterEnabled } from '../src/speech-catalog.mjs';
+const initial=()=>patchAssistantSettings(initialAssistantSettings(),{asrMode:'volcengine',ttsProvider:'volcengine'});
+test('restoring an ASR model restores its mode and matching endpoint together',()=>{
+  let config=patchAssistantSettings(initial(),{asrRecognitionMode:'utterance'});
+  assert.ok(config.asrEndpoint.endsWith('bigmodel_nostream'));
+  config=patchAssistantSettings(config,{asrModel:'bigmodel-1.0'});
+  assert.equal(config.asrRecognitionMode,'realtime');
+  assert.ok(config.asrEndpoint.endsWith('bigmodel_async'));
+  config=patchAssistantSettings(config,{asrModel:'bigmodel'});
+  assert.equal(config.asrRecognitionMode,'utterance');
+  assert.ok(config.asrEndpoint.endsWith('bigmodel_nostream'));
+  config=patchAssistantSettings(config,{asrModel:'bigmodel-1.0',asrEndpoint:'wss://example.test/custom'});
+  assert.equal(config.asrEndpoint,'wss://example.test/custom');
+});
+test('ASR GUI options encode mode, detection, acceleration, VAD and context without contradictory parameters',()=>{
+  const config=patchAssistantSettings(initial(),{asrRecognitionMode:'twopass',asrModel:'bigmodel-1.0',asrBilling:'concurrent',asrEnableAgeDetection:true,asrEnableGenderDetection:true,asrEnableEmotionDetection:true,asrResultType:'single',asrEnableAccelerateText:true,asrAccelerateScore:8,asrEndWindowEnabled:true,asrEndWindowSize:900,asrHotwords:'Rabi\nWorkBuddy',asrContext:'软件助手',asrEnablePoiFc:true});
+  assert.equal(config.asrResourceId,'volc.bigasr.sauc.concurrent');
+  const request=encodeVolcanoAsrRequest(config);
+  assert.equal(request.model_name,'bigmodel');assert.equal(request.enable_nonstream,true);
+  assert.equal(request.enable_age_detection,true);assert.equal(request.enable_gender_detection,true);assert.equal(request.enable_emotion_detection,true);
+  assert.equal(request.result_type,'single');assert.equal(request.accelerate_score,8);assert.equal(request.end_window_size,900);
+  assert.equal(request.enable_poi_fc,true);assert.equal('vad_segment_duration' in request,false);
+  assert.deepEqual(JSON.parse(request.corpus.context).hotwords,[{word:'Rabi'},{word:'WorkBuddy'}]);
+  const off=encodeVolcanoAsrRequest(patchAssistantSettings(config,{asrRecognitionMode:'utterance',asrEnableAccelerateText:false}));
+  assert.equal('accelerate_score' in off,false);assert.equal('enable_poi_fc' in off,false);
+  assert.equal(patchAssistantSettings(config,{asrRecognitionMode:'utterance'}).asrEndpoint.endsWith('bigmodel_nostream'),true);
+});
+test('models retain independent typed parameter selections and reject invalid GUI values',()=>{
+  let config=patchAssistantSettings(initial(),{ttsContextText:'轻声说话',ttsSpeechRate:25,ttsVoice:'zh_female_vv_uranus_bigtts',asrEnableAgeDetection:true});
+  config=patchAssistantSettings(config,{ttsModel:'seed-tts-1.0'});
+  assert.equal(config.ttsContextText,'');assert.equal(config.ttsVoice,'');
+  config=patchAssistantSettings(config,{ttsSpeechRate:-10,ttsEmotion:'happy'});
+  config=patchAssistantSettings(config,{ttsModel:'seed-tts-2.0'});
+  assert.equal(config.ttsContextText,'轻声说话');assert.equal(config.ttsSpeechRate,25);assert.equal(config.ttsVoice,'zh_female_vv_uranus_bigtts');assert.equal(config.ttsEmotion,'');
+  for(const patch of [{asrEndWindowSize:299},{asrEndWindowSize:5001},{asrAccelerateScore:1.5},{asrEnableAgeDetection:'true'},{ttsSpeechRate:101},{ttsEmotionScale:6},{ttsEncoding:'mp3'}])assert.throws(()=>patchAssistantSettings(config,patch),/SETTINGS_INVALID/);
+  config=patchAssistantSettings(config,{asrMode:'compatible'});config=patchAssistantSettings(config,{asrEnableAgeDetection:false});
+  config=patchAssistantSettings(config,{asrMode:'volcengine'});assert.equal(config.asrEnableAgeDetection,true);
+});
+test('TTS settings produce the selected sample rate, style prompt, expressive variant and mix weights',()=>{
+  let config=patchAssistantSettings(initial(),{ttsModel:'seed-icl-2.0',ttsVoice:'private-fixture',ttsVariant:'seed-tts-2.0-expressive',ttsContextText:'平静自然',ttsSpeechRate:20,ttsPitch:-2,ttsSampleRate:48000,ttsUseTagParser:true});
+  let request=encodeVolcanoTtsParams(config);
+  assert.equal(request.model,'seed-tts-2.0-expressive');assert.equal(request.audio_params.sample_rate,48000);assert.equal(request.audio_params.speech_rate,20);
+  assert.deepEqual(JSON.parse(request.additions).context_texts,['平静自然']);assert.equal(JSON.parse(request.additions).post_process.pitch,-2);
+  assert.equal(JSON.parse(request.additions).use_tag_parser,true);
+  config=patchAssistantSettings(config,{ttsVariant:'seed-tts-2.0-standard'});request=encodeVolcanoTtsParams(config);
+  assert.equal('context_texts' in JSON.parse(request.additions),false);assert.equal('use_tag_parser' in JSON.parse(request.additions),false);
+  config=patchAssistantSettings(config,{ttsModel:'seed-tts-1.0',ttsMixEnabled:true,ttsMixSpeaker1:'fixture-a',ttsMixSpeaker2:'fixture-b',ttsMixFactor1:.4,ttsMixFactor2:.6});
+  request=encodeVolcanoTtsParams(config);assert.equal(request.speaker,'custom_mix_bigtts');assert.equal(request.mix_speaker.speakers.length,2);
+  assert.throws(()=>encodeVolcanoTtsParams({...config,ttsMixFactor2:.7}),/MIX_WEIGHTS_INVALID/);
+});
+test('voice catalog excludes incompatible protocols and exposes per-voice emotions',()=>{
+  assert.equal(volcanoCatalog.tts.voices.length,577);
+  assert.ok(volcanoCatalog.tts.voices.some(v=>!v.bidirectional));
+  assert.ok(volcanoCatalog.tts.voices.some(v=>v.emotions.some(e=>e.id==='happy')));
+  const unsupported=volcanoCatalog.tts.voices.find(v=>!v.bidirectional);
+  assert.throws(()=>encodeVolcanoTtsParams({...initial(),ttsVoice:unsupported.id}),/VOICE_UNSUPPORTED/);
+  const vectorControl={enabledWhen:{key:'mode',oneOf:['vector']}};
+  assert.equal(parameterEnabled(vectorControl,{mode:'prompt'}),false);
+  assert.equal(parameterEnabled(vectorControl,{mode:'vector'}),true);
+});

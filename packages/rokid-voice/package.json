@@ -1,0 +1,15 @@
+{
+  "name": "@rabilink/rokid-voice",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Injected Rokid AIUI voice adapters and transcript policies shared by glasses clients.",
+  "exports": {
+    "./runtime": "./src/voice-runtime.js",
+    "./transcript-policy": "./src/transcript-policy.js",
+    "./task-input": { "types": "./src/task-input.d.ts", "import": "./src/task-input.js" },
+    "./task-input-handoff": { "types": "./src/task-input-handoff.d.ts", "import": "./src/task-input-handoff.js" }
+  },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "files": ["src", "test", "README.md", "README_en.md"]
+}

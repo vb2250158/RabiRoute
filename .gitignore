@@ -1,4 +1,5 @@
 /node_modules/
+node_modules/
 /.cache/
 /.npm-cache/
 /dist/
@@ -80,6 +81,10 @@ examples/rabi-link-vela-probe/node_modules/
 examples/rabi-link-vela-probe/build/
 examples/rabi-link-vela-probe/dist/
 examples/rabi-link-vela-probe/*.log
+
+# 本地插件适配器运行目录：含依赖缓存、模型运行产物与日志，不入库。
+/plugin-adapters/
+/packages/phone-eye-transport-android/build/
 apps/rabilink-aiui/node_modules/
 apps/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.voice-assistant",
+  "version": "1.0.1",
+  "displayName": "语音助手",
+  "description": "使用当前角色和 Agent 的桌面语音对话",
+  "icon": "mdi-microphone-message",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
+  },
+  "provides": [
+    "manager.voice-assistant@1"
+  ],
+  "requires": [
+    "manager.core@1",
+    "manager.speech@1",
+    "manager.persona@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

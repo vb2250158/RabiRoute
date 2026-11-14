@@ -1,0 +1,68 @@
+{
+  "name": "@rabilink/assistant-runtime",
+  "version": "0.13.1",
+  "private": true,
+  "type": "module",
+  "description": "Host-injected assistant decision protocol and serial tool loop.",
+  "exports": {
+    "./protocol": {
+      "types": "./src/decision-protocol.d.ts",
+      "import": "./src/decision-protocol.js"
+    },
+    "./turn": {
+      "types": "./src/turn-runtime.d.ts",
+      "import": "./src/turn-runtime.js"
+    },
+    "./session": {
+      "types": "./src/assistant-session.d.ts",
+      "import": "./src/assistant-session.js"
+    },
+    "./aiui": {
+      "types": "./src/aiui-runtime.d.ts",
+      "import": "./src/aiui-runtime.js"
+    },
+    "./conversation": {
+      "types": "./src/conversation-runtime.d.ts",
+      "import": "./src/conversation-runtime.js"
+    },
+    "./listening": {
+      "types": "./src/listening-lifecycle.d.ts",
+      "import": "./src/listening-lifecycle.js"
+    },
+    "./playback": {
+      "types": "./src/speech-playback.d.ts",
+      "import": "./src/speech-playback.js"
+    },
+    "./voice": {
+      "types": "./src/voice-interaction.d.ts",
+      "import": "./src/voice-interaction.js"
+    },
+    "./resident": {
+      "types": "./src/resident-interaction.d.ts",
+      "import": "./src/resident-interaction.js"
+    },
+    "./ui": {
+      "import": "./ui/assistant-panel.js",
+      "types": "./ui/assistant-panel.d.ts"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs test/*.test.js"
+  },
+  "files": [
+    "src",
+    "test",
+    "README.md",
+    "README_en.md",
+    "VOICE_HOST_CONTRACT.md",
+    "ui"
+  ],
+  "peerDependencies": {
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

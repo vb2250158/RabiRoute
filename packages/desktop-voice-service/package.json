@@ -1,0 +1,51 @@
+{
+  "name": "@rabilink/desktop-voice-service",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./speech-catalog": "./src/speech-catalog.mjs",
+    "./model-providers": "./src/model-providers.mjs",
+    "./windows-secrets": "./src/windows-secrets.mjs",
+    "./host": "./src/assistant-host.mjs",
+    "./settings": "./src/assistant-settings.mjs",
+    "./provider-profiles": "./src/provider-profiles.mjs",
+    "./chat-model": "./src/chat-model.mjs",
+    "./speech-providers": "./src/speech-providers.mjs",
+    "./node": {
+      "import": "./src/node-device.mjs",
+      "types": "./src/node-device.d.ts"
+    },
+    "./services": "./src/services.mjs",
+    "./providers": {
+      "import": "./src/providers.mjs",
+      "types": "./src/providers.d.ts"
+    }
+  },
+  "files": [
+    "src",
+    "runtime",
+    "README.md",
+    "README_en.md",
+    "SPEECH_CAPABILITIES.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses",
+    "scripts/build.mjs"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build.mjs"
+  },
+  "peerDependencies": {
+    "@rabilink/assistant-runtime": "file:../assistant-runtime"
+  },
+  "dependencies": {
+    "ws": "8.18.3",
+    "koffi": "3.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.0"
+  },
+  "license": "MIT"
+}

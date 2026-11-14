@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "strict": true, "noEmit": true, "module": "NodeNext", "moduleResolution": "NodeNext", "target": "ES2022", "types": [], "skipLibCheck": false },
+  "files": ["typing.ts"]
+}
