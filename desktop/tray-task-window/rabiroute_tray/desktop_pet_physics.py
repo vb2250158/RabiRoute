@@ -61,8 +61,10 @@ class PetFlight:
     vx: float
     vy: float
     at_rest: bool = False
+    landing_speed: float = 0.0
 
     def advance(self, elapsed: float, size: tuple[float, float], displays: list[DisplayArea]) -> tuple[int, int]:
+        self.landing_speed = 0.0
         if not displays:
             self.at_rest = True
             return round(self.x), round(self.y)
@@ -103,6 +105,8 @@ class PetFlight:
                 else:
                     self.y = value
                     if value == high:
+                        if self.vy >= 40 * scale:
+                            self.landing_speed = max(self.landing_speed, self.vy / scale)
                         self.vx *= math.exp(-2.5 * dt)
                         self.vy = 0 if abs(velocity) < 40 * .78 * scale else velocity
                         if self.vy == 0 and abs(self.vx) < 15 * scale:

@@ -4,6 +4,9 @@ from .timeout_settings import get_timeout_seconds, configure_timeouts
 
 import json
 import re
+import uuid
+import io
+import wave
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -51,6 +54,7 @@ class ManualTriggerResult:
 class RolePanelSendResult:
     ok: bool
     message: str = ""
+    uncertain: bool = False
 
 
 @dataclass(frozen=True)
@@ -264,6 +268,112 @@ class ManagerClient:
             return RolePanelSendResult(ok=False, message=self._error_message(error))
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return RolePanelSendResult(ok=False, message=str(error))
+
+    def screenshot_preferences(self) -> dict[str, Any]:
+        data = self._get_json("/api/desktop/settings").get("data", {})
+        return data.get("screenshotComposer", {})
+
+    def save_screenshot_preferences(self, patch: dict[str, Any]) -> dict[str, Any]:
+        request = Request(f"{self.manager_url}/api/desktop/settings", method="PATCH",
+                          data=json.dumps({"screenshotComposer": patch}).encode("utf-8"),
+                          headers={"content-type": "application/json", **self._generation_headers()})
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, URLError, TimeoutError, ValueError):
+            # A response can be lost after the owner commits. Inspect the same fields without replaying the PATCH.
+            current = self.screenshot_preferences()
+            if all(current.get(key) == value for key, value in patch.items()):
+                return current
+            raise
+        if payload.get("code") != 0:
+            raise ValueError(payload.get("message") or "截图偏好保存失败")
+        return payload["data"]["screenshotComposer"]
+
+    def _generation_headers(self) -> dict[str, str]:
+        return {"x-rabiroute-expected-application-generation-id": self.application_generation_id,
+                "x-rabiroute-expected-manager-instance-id": self.manager_instance_id}
+
+    def screenshot_agents(self) -> list[dict[str, str]]:
+        payload = self._get_json("/api/agent-adapters/catalog")
+        adapters = payload.get("data", {}).get("adapters", [])
+        return [{"provider": row["type"], "label": row.get("label") or row["type"]}
+                for row in adapters if row.get("capabilities", {}).get("managedTasks", {}).get("agentThreads") is True
+                and row.get("capabilities", {}).get("managedTasks", {}).get("imageAttachments") is True]
+
+    def screenshot_threads(self, provider: str, query: str = "", offset: int = 0) -> dict[str, Any]:
+        return self._post_json("/api/agent/threads", {"action": "list", "agentAdapter": provider,
+            "agentTargetId": f"local:{provider}", "query": query, "offset": offset, "limit": 100},
+            timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120), headers=self._generation_headers())
+
+    def send_screenshot_to_thread(self, target: dict[str, str], text: str, image_path: str, delivery_id: str) -> RolePanelSendResult:
+        try:
+            payload = self._post_json("/api/agent/threads", {"action": "send", "agentAdapter": target["provider"],
+                "agentTargetId": f"local:{target['provider']}", "threadId": target["threadId"], "cwd": target.get("cwd", ""),
+                "prompt": text or "请查看这张截图。", "imagePaths": [image_path], "deliveryId": delivery_id, "createIfMissing": False},
+                timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120), headers=self._generation_headers())
+            return RolePanelSendResult(ok=payload.get("code") == 0 and payload.get("ok") is True,
+                message=str(payload.get("message") or payload.get("status") or "请核对原投递回执后再发送"),
+                uncertain=payload.get("uncertain") is True or payload.get("status") in ("delivery_unconfirmed", "delivered_tracking_failed"))
+        except HTTPError as error:
+            try:
+                failure = json.loads(error.read().decode("utf-8"))
+            except (OSError, ValueError):
+                failure = {}
+            return RolePanelSendResult(ok=False, message=str(failure.get("message") or error),
+                uncertain=error.code >= 500 or failure.get("uncertain") is True
+                or failure.get("status") in ("delivery_unconfirmed", "delivered_tracking_failed"))
+        except (OSError, URLError, TimeoutError, ValueError) as error:
+            return RolePanelSendResult(ok=False, message=f"投递结果待核对（{delivery_id}）：{error}", uncertain=True)
+
+    def reconcile_screenshot_delivery(self, target: dict[str, str], delivery_id: str) -> RolePanelSendResult:
+        try:
+            payload = self._post_json("/api/agent/threads", {"action": "reconcile_delivery", "agentAdapter": target["provider"],
+                "agentTargetId": f"local:{target['provider']}", "threadId": target["threadId"], "deliveryId": delivery_id},
+                timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120), headers=self._generation_headers())
+            return RolePanelSendResult(ok=payload.get("ok") is True and payload.get("code") == 0,
+                message=str(payload.get("message") or payload.get("status") or "原投递仍待核对"), uncertain=True)
+        except Exception as error:
+            return RolePanelSendResult(ok=False, message=str(error), uncertain=True)
+
+    def screenshot_asr_model(self) -> str:
+        return self.screenshot_voice_settings()["model"]
+
+    def screenshot_voice_settings(self) -> dict[str, Any]:
+        timeout = get_timeout_seconds("desktop.manager.operation", 120)
+        status = self._get_json("/api/speech/status", timeout_seconds=timeout).get("data", {})
+        if status.get("state") != "online":
+            raise ValueError("语音服务未就绪，请安装或启动 RabiSpeech，并配置本地模型或 API。")
+        catalog = self._get_json("/api/speech/models", timeout_seconds=timeout).get("data", {}).get("models", [])
+        models = [row for row in catalog if row.get("capability") == "asr"
+                  and all(row.get(key) is True for key in ("installed", "enabled", "available"))]
+        config = self._get_json("/api/speech/microphone/status", timeout_seconds=timeout).get("data", {}).get("config", {})
+        requested = config.get("asrModel")
+        selected = next((row for row in models if row.get("id") == requested), None)
+        if selected is None and requested in (None, "", "default", "asr-local", "asr-api", "whisper-1"):
+            provider = status.get("defaults", {}).get("asr")
+            current = next((row.get("model") for row in status.get("providers", {}).get("asr", []) if row.get("id") == provider), None)
+            selected = next((row for row in models if row.get("provider") == provider and row.get("model") == current), None)
+        if selected is None:
+            raise ValueError("没有已配置且可用的转录模型，请在语音服务中安装本地模型或配置 API。")
+        return {"model": str(selected["id"]), "config": config}
+
+    def transcribe_screenshot_audio(self, pcm: bytes, model: str, sample_rate: int) -> str:
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(sample_rate)
+            audio.writeframes(pcm)
+        boundary = uuid.uuid4().hex
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n"
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.wav\"\r\n"
+                "Content-Type: audio/wav\r\n\r\n").encode() + buffer.getvalue() + f"\r\n--{boundary}--\r\n".encode()
+        request = Request(f"{self.manager_url}/api/speech/asr", data=body, method="POST",
+            headers={"content-type": f"multipart/form-data; boundary={boundary}", **self._generation_headers()})
+        with urlopen(request, timeout=get_timeout_seconds("desktop.manager.operation", 120)) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return str(payload.get("text") or "").strip()
 
     def selection_speech_settings(self) -> SelectionSpeechSettings:
         payload = self._get_json("/api/speech/selection-reader/settings")
@@ -496,8 +606,8 @@ class ManagerClient:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return PlanFeedbackSubmitResult(ok=False, message=str(error), uncertain=mutation_started)
 
-    def _get_json(self, path: str) -> dict[str, Any]:
-        with urlopen(f"{self.manager_url}{path}", timeout=get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
+    def _get_json(self, path: str, timeout_seconds: float | None = None) -> dict[str, Any]:
+        with urlopen(f"{self.manager_url}{path}", timeout=timeout_seconds if timeout_seconds is not None else get_timeout_seconds("desktop.manager.request", self.timeout_seconds)) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _get_json_resource(self, path: str) -> tuple[dict[str, Any], str]:

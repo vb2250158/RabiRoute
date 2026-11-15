@@ -6,7 +6,11 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Desktop
 
-Persona entries open `/#/routes/<routeId>/persona` on the currently connected Manager, using the selected Route ID. Tasks and memory preserves Manager/Gateway status, Current, Plans, Recent Memory, Archived and Diagnostics. The panel no longer fetches or sends role chat. Shared rolePanel APIs remain for screenshots and selected text; existing history is not deleted.
+When sending a screenshot, select a role or a local Agent that supports images, then its conversation. Search and pagination are available. The last target is saved; an unavailable target requires a new selection. Codex and DSH receive native images. WorkBuddy uses official local attachment references for the same task’s Read tool. Images are not transferred to another computer. An uncertain delivery offers “Check original delivery” without automatically resending.
+
+Voice input is off by default and remembers its state. Enabling checks RabiSpeech and the configured transcription model. If unavailable, it stays off and opens the Speech service page to install a local service/model or configure an API. Enable the switch again after setup. Dictation uses the configured microphone and segmentation settings and inserts editable text after a pause. Sending, closing the window or switching voice input off stops capture. Dictation never sends messages automatically.
+
+Persona entries open `/#/routes/<routeId>/persona` on the currently connected Manager, using the selected Route ID. Tasks and memory preserves Manager/Gateway status, Current, Plans, Recent Memory, Archived and Diagnostics. The panel no longer fetches or sends role chat. Role screenshots and selected text retain the rolePanel APIs; direct Agent screenshots use the thread interface. Existing history is not deleted.
 
 > Status: current Windows presentation child. RabiRoute Host is the only application-lifecycle owner; tray/task-window and Manager must carry the same `applicationGenerationId`.
 

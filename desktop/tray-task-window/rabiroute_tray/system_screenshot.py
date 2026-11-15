@@ -42,6 +42,7 @@ from .plugin_catalog import (
 )
 from .qt_async import QtAsyncTask, start_qt_task
 from .system_selection import SelectionDeliveryTarget
+from .screenshot_composer import ScreenshotComposer
 from .windows_app_identity import sync_startup_shortcut
 
 
@@ -2687,65 +2688,6 @@ class PinnedImageWindow(QWidget):
         event.accept()
 
 
-class ScreenshotComposer(QDialog):
-    send_requested = Signal(str, str)
-
-    def __init__(self, image_path: Path, targets: list[SelectionDeliveryTarget], parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("发送截图")
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setModal(False)
-        self._image_path = image_path
-        self._preview = QLabel()
-        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview.setMinimumSize(420, 260)
-        pixmap = QPixmap(str(image_path))
-        if not pixmap.isNull():
-            self._preview.setPixmap(pixmap.scaled(720, 480, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        self._target = QComboBox()
-        for target in targets:
-            self._target.addItem(target.label, target.gateway_id)
-        self._text = QPlainTextEdit()
-        self._text.setPlaceholderText("输入要和截图一起发送给角色的文字……")
-        self._text.setMinimumHeight(80)
-        self._error = QLabel()
-        self._error.setStyleSheet("color: #b42318;")
-        self._error.hide()
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("发送")
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self._send)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self._preview)
-        layout.addWidget(QLabel("投递至角色"))
-        layout.addWidget(self._target)
-        layout.addWidget(self._text)
-        layout.addWidget(self._error)
-        layout.addWidget(buttons)
-        self.resize(760, 700)
-
-    @property
-    def image_path(self) -> Path:
-        return self._image_path
-
-    def set_error(self, message: str) -> None:
-        self._error.setText(message)
-        self._error.setVisible(bool(message))
-
-    def set_sending(self, sending: bool) -> None:
-        self._target.setEnabled(not sending)
-        self._text.setEnabled(not sending)
-
-    @Slot()
-    def _send(self) -> None:
-        gateway_id = str(self._target.currentData() or "").strip()
-        if not gateway_id:
-            self.set_error("没有可投递的激活角色。")
-            return
-        self.send_requested.emit(gateway_id, self._text.toPlainText().strip())
-
-
-
 class SystemScreenshotController(QObject):
     def __init__(
         self,
@@ -3149,10 +3091,7 @@ class SystemScreenshotController(QObject):
         if self._send_task is not None or self._composer is not None:
             return
         targets = self._delivery_targets_provider()
-        if not targets:
-            self._notify("系统截图", "当前没有已激活角色，图片已复制或保存。", True)
-            return
-        composer = ScreenshotComposer(image_path, targets)
+        composer = ScreenshotComposer(image_path, targets, manager=self._manager)
         self._composer = composer
         composer.send_requested.connect(self._send_screenshot)
         composer.finished.connect(lambda _result: self._clear_composer(composer))
@@ -3174,6 +3113,12 @@ class SystemScreenshotController(QObject):
         except OSError:
             composer.set_error("截图文件已不可用，请重新截图。")
             return
+        selection = composer.delivery_selection
+        if selection is None:
+            composer.set_error("请选择投递目标。")
+            return
+        frozen_selection = dict(selection)
+        delivery_id = str(uuid.uuid4())
         composer.set_sending(True)
         attachment = {
             "kind": "image",
@@ -3188,16 +3133,29 @@ class SystemScreenshotController(QObject):
             if not isinstance(result, RolePanelSendResult):
                 result = RolePanelSendResult(ok=False, message="未知发送结果")
             if result.ok:
-                label = next((target.label for target in self._delivery_targets_provider() if target.gateway_id == gateway_id), gateway_id)
+                label = (f"{frozen_selection['provider']} · {frozen_selection['threadId']}" if frozen_selection["kind"] == "agent" else
+                    next((target.label for target in self._delivery_targets_provider() if target.gateway_id == gateway_id), gateway_id))
                 self._notify("系统截图", f"已投递至 {label}。", False)
                 if self._composer is not None:
                     self._composer.accept()
             elif self._composer is not None:
                 self._composer.set_sending(False)
                 self._composer.set_error(f"投递失败：{result.message or '未知错误'}")
+                if result.uncertain and frozen_selection["kind"] == "agent":
+                    self._composer.set_error(f"投递结果待核对：{result.message}（{delivery_id}）")
+                    self._composer.set_delivery_uncertain(reconcile)
+
+        def reconcile() -> None:
+            if self._send_task is not None:
+                return
+            self._send_task = start_qt_task(
+                lambda: self._manager.reconcile_screenshot_delivery(frozen_selection, delivery_id), completed,
+                on_error=lambda error: RolePanelSendResult(ok=False, message=str(error), uncertain=True),
+            )
 
         self._send_task = start_qt_task(
-            lambda: self._manager.send_role_panel_message(gateway_id, text, [attachment]),
+            lambda: (self._manager.send_screenshot_to_thread(frozen_selection, text, str(composer.image_path), delivery_id)
+                     if frozen_selection["kind"] == "agent" else self._manager.send_role_panel_message(gateway_id, text, [attachment])),
             completed,
-            on_error=lambda error: RolePanelSendResult(ok=False, message=str(error)),
+            on_error=lambda error: RolePanelSendResult(ok=False, message=str(error), uncertain=frozen_selection["kind"] == "agent"),
         )

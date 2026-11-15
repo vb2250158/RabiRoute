@@ -15,6 +15,7 @@ from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_companion import DesktopPetCompanion
 from .desktop_pet_companion_notice import CompanionFailureNotice
 from .desktop_pet_speech import DesktopPetSpeech
+from .desktop_pet_assistant import AssistantPresentation
 from .desktop_pet_dialogue import DesktopPetDialogue
 from .desktop_pet_bubble_settings import DesktopPetBubbleSettings
 from .desktop_pet_fullscreen import is_foreground_fullscreen
@@ -98,6 +99,8 @@ class DesktopPetController(QObject):
         self._dialogue_task: QtAsyncTask | None = None
         self._dialogue_reload_pending = False
         self._events = event_stream or DesktopPetEventStream(manager_url)
+        self._assistant_presentation = AssistantPresentation(persona_id)
+        self._events.voice_assistant_presentation.connect(self._assistant_changed)
         self._speech_events = speech_event_stream or DesktopPetEventStream(manager_url, path="/api/speech/events")
         self._owns_speech_events = speech_event_stream is None
         self._speech_job: dict = {}
@@ -229,6 +232,7 @@ class DesktopPetController(QObject):
 
     def close(self) -> None:
         self._closed = True
+        self._events.voice_assistant_presentation.disconnect(self._assistant_changed)
         self._events.role_panel_message.disconnect(self._role_panel_message)
         self._panel_message_timer.stop()
         self._pending_panel_messages.clear()
@@ -470,6 +474,13 @@ class DesktopPetController(QObject):
                 self.set_state("drag")
             return
         self._resume_context(next_state or "idle")
+
+    def _assistant_changed(self, payload: object) -> None:
+        if self._closed:
+            return
+        job = self._assistant_presentation.accept(payload, self._speech_job)
+        if job is not None:
+            self._speech_changed(job)
 
     def _speech_changed(self, payload: object) -> None:
         job = payload if isinstance(payload, dict) else {}
