@@ -23,8 +23,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     service_root = Path(__file__).resolve().parents[1]
-    deps = service_root / ".deps"
-    for path in (service_root, deps):
+    # Packaged program code is immutable; dependencies retain their existing
+    # Host-managed location. Do not apply this to model-specific isolated venvs.
+    deps = Path(os.environ.get("RABISPEECH_DEPS_ROOT") or service_root / ".deps").expanduser().resolve()
+    for path in (deps, service_root):
         if path.is_dir() and str(path) not in sys.path:
             sys.path.insert(0, str(path))
 

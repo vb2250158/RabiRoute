@@ -188,6 +188,24 @@ raise SystemExit(worker.main())
         with patch.object(sys, "argv", [*base, "--port", "23456"]):
             self.assertEqual(module.parse_args().port, 23456)
 
+    def test_packaged_entry_uses_host_dependencies_and_current_code_without_changing_model_arguments(self):
+        spec = importlib.util.spec_from_file_location("onnx_worker_packaged", WORKER)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        dependencies = self.root / "host-dependencies"
+        dependencies.mkdir()
+        service = str(WORKER.resolve().parents[1])
+        arguments = [str(WORKER), "--model-dir", str(self.root), "--config", str(self.root / "existing.json"),
+                     "--output-dir", str(self.root / "output"), "--default-speaker-id", "7"]
+        with patch.dict(os.environ, {"RABISPEECH_DEPS_ROOT": str(dependencies)}), \
+                patch.object(sys, "argv", arguments), patch.object(sys, "path", []), \
+                patch("rabispeech.worker_http.run_http_worker", return_value=0) as run:
+            self.assertEqual(module.main(), 0)
+            self.assertEqual(sys.path[:2], [service, str(dependencies)])
+            self.assertEqual(os.environ["RABISPEECH_ONNX_VITS_DEFAULT_SPEAKER_ID"], "7")
+            self.assertEqual(os.environ["RABISPEECH_ONNX_VITS_OUTPUT"], str((self.root / "output").resolve()))
+            run.assert_called_once_with("rabispeech.onnx_vits.server:app", "127.0.0.1", 0,
+                                        port_environment="RABISPEECH_ONNX_VITS_PORT")
+
 
 if __name__ == "__main__":
     unittest.main()
