@@ -1195,7 +1195,7 @@ export class ManagerSpeechControl {
     return normalizeMicrophoneStatus(raw);
   }
 
-  synthesize(command: SpeechSynthesisCommand, guard?: SpeechAuthorityGuard): Promise<LocalSpeechResponse> {
+  synthesize(command: SpeechSynthesisCommand, guard?: SpeechAuthorityGuard, signal?: AbortSignal): Promise<LocalSpeechResponse> {
     guard = stickySpeechAuthority(guard);
     guard();
     const input = stringValue(command?.input).trim();
@@ -1207,6 +1207,7 @@ export class ManagerSpeechControl {
       {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8" },
+        signal,
         body: JSON.stringify(synthesisPayload({
           ...command,
           input,
@@ -1218,7 +1219,7 @@ export class ManagerSpeechControl {
     ));
   }
 
-  transcribe(contentType: string, body: Buffer, guard?: SpeechAuthorityGuard): Promise<LocalSpeechResponse> {
+  transcribe(contentType: string, body: Buffer, guard?: SpeechAuthorityGuard, signal?: AbortSignal): Promise<LocalSpeechResponse> {
     guard = stickySpeechAuthority(guard);
     guard();
     if (!contentType.toLowerCase().startsWith("multipart/form-data;")) {
@@ -1227,6 +1228,7 @@ export class ManagerSpeechControl {
     return awaitSpeechAuthority(guard, () => this.localSpeech.requestBinary(this.dependencies.serviceUrl(), "/v1/audio/transcriptions", {
       method: "POST",
       headers: { "content-type": contentType },
+      signal,
       body: new Uint8Array(body)
     }));
   }

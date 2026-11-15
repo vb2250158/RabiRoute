@@ -114,11 +114,11 @@ export class SpeechApiOwner {
             if (admission.selectedPeer && !admission.targetLocal) return { status: 409, body: { code: -1, message: "Scoped desktop playback cancellation requires the original local speech owner." } };
             data = await control.cancelPlaybackSession(input.body as Command<"cancelPlaybackSession">, guard); break;
           case "playback.stop": data = await control.stopPlayback(guard); break;
-          case "tts": { const result = await control.synthesize(input.body as Command<"synthesize">, guard); guard(); return bytes(result); }
+          case "tts": { const result = await control.synthesize(input.body as Command<"synthesize">, guard, input.signal); guard(); return bytes(result); }
           case "asr": {
             const chunks: Buffer[] = []; let size = 0;
             for await (const chunk of input.request.iterator({ destroyOnReturn: false })) { const payload = Buffer.from(chunk); size += payload.length; if (size > 27 * 1024 * 1024) throw new Error("Request body too large."); chunks.push(payload); }
-            guard(); const result = await control.transcribe(String(input.request.headers["content-type"] || ""), Buffer.concat(chunks), guard); guard(); return bytes(result);
+            guard(); const result = await control.transcribe(String(input.request.headers["content-type"] || ""), Buffer.concat(chunks), guard, input.signal); guard(); return bytes(result);
           }
           case "messages.list": {
             const store = this.context.speechIngressStore, recordId = value(input, "recordId").trim();
