@@ -295,10 +295,21 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         }
         (view as RecordingHistoryLayout).apply {
             canStartHistoryGesture = { x,y ->
-                val bounds = android.graphics.Rect(); scroll.getGlobalVisibleRect(bounds)
-                bounds.contains(x.toInt(),y.toInt())
+                val origin = IntArray(2); scroll.getLocationOnScreen(origin)
+                scroll.isShown && x >= origin[0] && x < origin[0]+scroll.width && y >= origin[1] && y < origin[1]+scroll.height
             }
             shouldCollapseLive = { reviewColumn.visibility == View.VISIBLE }
+            historyAtTop = { !scroll.canScrollVertically(-1) }
+            canExpandLive = { !live && !archiveView && day == midnight(System.currentTimeMillis()) && reachedNewer && !loading && !queryFailed }
+            expandBy = { amount ->
+                collapseAnimation?.removeAllListeners(); collapseAnimation?.cancel(); collapseAnimation = null
+                val height = if(reviewColumn.visibility == View.VISIBLE) previewStage.layoutParams.height else 0
+                reviewColumn.visibility = View.VISIBLE
+                previewStage.layoutParams = previewStage.layoutParams.apply { this.height = (height+amount).toInt().coerceIn(0,dp(124)) }
+            }
+            finishExpansion = {
+                if(previewStage.layoutParams.height >= dp(32)) enterLive() else enterHistory()
+            }
             collapseBy = { amount ->
                 live = false; listDriving = true
                 val height = previewStage.layoutParams.height.coerceAtLeast(0)
@@ -580,6 +591,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                         items = if(listDriving && items.isNotEmpty()) (items+fresh).associateBy { it.entry.id }.values
                             .sortedWith(compareByDescending<Item> { it.entry.started }.thenByDescending { it.entry.id }).take(1000) else fresh
                         reachedOlder = items.size <= 100 && matchingRecords.size <= 100
+                        reachedNewer = true
                     }
                     else {
                         val ordered = matchingRecords.sortedWith(compareBy<Item> { it.entry.started }.thenBy { it.entry.id }).let { if(older) it.asReversed() else it }

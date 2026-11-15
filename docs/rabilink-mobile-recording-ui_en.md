@@ -4,7 +4,7 @@
 
 The fixed toolbar keeps capture status, the start/pause switch and overflow actions visible. Overflow retains recording devices, capture settings, transcription settings and storage management. The live pane shows actual input for the selected mode and has no playback seek bar. The timer represents the current enabled window, not recorded-media coverage.
 
-Dragging the records list folds the live pane continuously and gives history its space. Return to live restores it. Tapping a row opens details; the separate audio/video play action starts replay. Location details show the available address, timestamp, coordinates, accuracy and provider, without invented activities or a demonstration map.
+Dragging the records list folds the live pane continuously and gives history its space. At today's newest local record, pulling farther down expands the live pane and releasing returns to live. Pulling within older records, another date or PC archives does not trigger this transition. The Return to live button remains available. Tapping a row opens details; the separate audio/video play action starts replay. Location details show the available address, timestamp, coordinates, accuracy and provider, without invented activities or a demonstration map.
 
 Replay dialogs provide play/pause, a draggable seek bar and measured media duration. Overflow retains seek-by-time, playback speed and sharing. Audio displays raw transcription or its actual processing state; unrequested, failed and completed-without-text states remain distinct. Complete source audio can play independently of transcription. Long text scrolls inside the dialog; closing stops replay and preserves the history anchor. Media failures can retry the same record, without asserting that missing files still exist.
 
@@ -12,7 +12,11 @@ Filters separately select scope (local/computer archive), type and phone/glasses
 
 Saved capture intent, recent input and save completion are independent. Stopping/saving does not prematurely become paused, and the current save failure remains visible. Loading, empty results, permissions, recovery and low storage have distinct presentations. Health mode exposes current collection status; complete health history is not part of the local mixed-media list.
 
-This is candidate source. Build/unit-test results are tracked separately; this layout has not yet completed phone installation or physical-device acceptance. Earlier device evidence does not validate this version.
+2026-11-16: 0.3.72-dev (75) was installed in place on the phone. All 327 Android unit tests and the APK/device-test builds passed. Physical-device checks passed for complete gesture-driven live-pane collapse, continued history scrolling in the same gesture, retained top switch/menu, 205 isolated records paged in batches of 100, modal list-position preservation, return to live, local playback while capture is paused, scrubbing without resuming playback, and one-tap replay after completion. The real history viewport measured 2216/3032 px. The 205 fixture records and silent PCM used an isolated cache directory that was removed afterward. Glasses video, PC archives, every failure branch, and long-running stability are outside this device acceptance scope.
+
+The subsequent pull-to-live update was also installed. Physical-device checks passed for staying in history when pulling within older records, expanding live when the same gesture reaches and pulls beyond the newest row, collapsing again on history browsing, and the return-to-live button. All 327 unit tests passed again.
+
+After acceptance, the original capture intent was restored: audio, transcription-only, uploads allowed. Two observations showed active phone audio reception with increasing `captureLastReceivedAt`. This establishes fresh PCM input at those observations, not PC transcription, upload, or all-day retention acceptance.
 
 ### Historical layouts and version evidence
 
