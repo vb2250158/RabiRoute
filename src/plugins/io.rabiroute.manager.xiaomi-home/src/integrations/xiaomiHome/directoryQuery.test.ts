@@ -38,6 +38,13 @@ test("resource search matches metadata and nested values while type, availabilit
   assert.equal(filterHomeResources(resources, query("q=不存在"), directory).length, 0);
 });
 
+test("partial registry exposes coverage and does not claim a missing device is absent", () => {
+  const partial = deviceDirectory(resources, [{deviceId: "ac", entityId: "climate.study"}, {deviceId: "invalid/fixture", entityId: "light.offline"}]);
+  assert.deepEqual(queryHomeDevices(partial, query("", "devices")).coverage, { state: "partial", invalidRows: 1 });
+  assert.equal(filterHomeResources(resources, query("deviceId=ac"), partial).length, 1);
+  assert.throws(() => filterHomeResources(resources, query("deviceId=missing"), partial), { status: 503, code: "xiaomi_home_directory_partial" });
+});
+
 test("pages traverse 372 resources without omissions and enforce the summary byte budget", () => {
   const items = Array.from({ length: 372 }, (_, id) => ({ id, description: "长名称".repeat(42) }));
   let offset = 0;
@@ -79,4 +86,19 @@ test("resource pages discover action schemas only for the selected page and deta
   assert.equal(detailed.items.length, 1); assert.equal(serviceReads, 1);
   assert.ok("attributes" in detailed.items[0]!);
   assert.equal((await client.getResource("home:ha:climate.study")).attributes.current_temperature, 25);
+});
+
+test("malformed HA states do not hide valid resources and the page reports partial coverage", async () => {
+  const client = new XiaomiHomeManagerApiClient({ baseUrl: "http://127.0.0.1:8123" }, (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/states") return Response.json([{entity_id:"light.good",state:"on"}, null, {entity_id:"bad",state:"on"}]);
+    if (path === "/api/template") return Response.json([{deviceId:"light",entityId:"light.good"}]);
+    throw Error("Unexpected provider read");
+  }) as typeof fetch, "fixture-token");
+  const page = await client.queryResources(query());
+  assert.deepEqual(page.items.map(item => item.entityId), ["light.good"]);
+  assert.deepEqual(page.coverage, {state:"partial",invalidRows:0,invalidStates:2});
+  const devices = await client.queryDevices(query("", "devices"));
+  assert.deepEqual(devices.coverage, {state:"partial",invalidRows:0,invalidStates:2});
+  await assert.rejects(client.getDevice("unknown"), {status:503,code:"xiaomi_home_directory_partial"});
 });

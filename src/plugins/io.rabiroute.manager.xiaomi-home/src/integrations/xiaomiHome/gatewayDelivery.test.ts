@@ -133,6 +133,35 @@ test("plugin normalization rejection preserves the original per-Route failure wi
   ]);
 });
 
+test("one Route setup failure does not hide another Route's delivery result", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiaomi-route-isolation-"));
+  let calls = 0;
+  const owner = createXiaomiHomeGatewayDelivery({ rootDir: root,
+    routeSnapshots: () => ["bad", "good"].map(id => ({ definition: { id, gatewayPort: 0, agentRoleId: "TestRole", messageAdapters: ["xiaomiHome"] } })),
+    childCommand: () => { if (++calls === 1) throw new Error("fixture setup failure"); return { command: process.execPath, shell: false, args: ["-e", `process.stdin.resume();process.stdin.on('end',()=>process.stdout.write(${JSON.stringify(SYSTEM_EVENT_RESULT_PREFIX + JSON.stringify({status:"delivered",matchedRuleCount:1,sentPacketCount:1}))}))`] }; },
+    environmentForGateway: () => process.env, appendLog() {}
+  }, () => root);
+  t.after(async () => { await owner.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  const results = await owner.deliverEvent(event, { agentRoleId: "TestRole" });
+  assert.deepEqual(results.map(result => [result.gatewayId, result.status]), [["bad", "failed"], ["good", "delivered"]]);
+});
+
+test("delivery admission bounds worker concurrency and reports overflow without dropping the event ledger", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "xiaomi-route-budget-"));
+  let spawned = 0;
+  const owner = createXiaomiHomeGatewayDelivery({ rootDir: root,
+    routeSnapshots: () => [{definition:{id:"route",gatewayPort:0,agentRoleId:"TestRole",messageAdapters:["xiaomiHome"]}}],
+    childCommand: () => { spawned++; return {command:process.execPath,shell:false,args:["-e",`process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>process.stdout.write(${JSON.stringify(SYSTEM_EVENT_RESULT_PREFIX + JSON.stringify({status:"delivered",matchedRuleCount:1,sentPacketCount:1}))}),300))`]}; },
+    environmentForGateway: () => process.env, appendLog() {}
+  }, () => root, {maxConcurrent:1,maxQueued:1});
+  t.after(async () => { await owner.stop(); await fs.rm(root, {recursive:true,force:true}); });
+  const results = await Promise.all([0,1,2].map(i => owner.deliverEvent({...event,id:`budget-${i}`}, {agentRoleId:"TestRole"})));
+  assert.equal(spawned,2);
+  assert.deepEqual(results.map(items => items[0]?.reason ?? items[0]?.status), ["delivered","delivered","delivery_queue_full"]);
+  const lines = (await fs.readFile(path.join(root,"xiaomi-home-events.jsonl"),"utf8")).trim().split("\n");
+  assert.equal(lines.length,3);
+});
+
 test("real generic event CLI accepts another normalized event kind and rejects malformed input with the original exit semantics", { timeout: 120_000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "generic-event-cli-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

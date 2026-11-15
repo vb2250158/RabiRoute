@@ -11,3 +11,11 @@ test("WebGUI collects detail pages and refuses incomplete or non-advancing respo
   await assert.rejects(readHomeDirectory("/devices", async () => ({ ...page(), nextOffset: 0 })), /did not advance/);
   await assert.rejects(readHomeDirectory("/devices", async () => ({ ...page(), items: [1], nextOffset: null })), /incomplete/);
 });
+
+test("directory pages expose partial provider coverage without discarding valid items", async () => {
+  const coverage = { state: "partial" as const, invalidRows: 1 };
+  let observed: HomeDirectoryPage<number>["coverage"];
+  const items = await readHomeDirectory("/devices", async () => ({schemaVersion:1,view:"detail",observedAt:"fixture",
+    items:[42],total:1,offset:0,limit:50,nextOffset:null,coverage}), page => { observed = page.coverage; });
+  assert.deepEqual(items,[42]); assert.deepEqual(observed,coverage);
+});

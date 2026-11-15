@@ -107,6 +107,8 @@ POST 正常返回 HTTP 202、`code=0` 与动作回执。`planned` 是未执行�
 
 GET `/api/agent/xiaomi-home/devices` 和 `/resources` 返回 `{schemaVersion:1,view,observedAt,items,total,offset,limit,nextOffset}`。默认 view=summary、limit=20，范围1–50；摘要条目另有6000字节预算，可能少于limit，以nextOffset续读，null表示结束。offset默认0，最大1000000。按稳定ID排序，但各页读取当前状态，不是冻结快照；成员变化时调用者按ID去重或重新查询。旧整表数组和嵌套正文默认输出已替换，调用者须读取items并续页，WebGUI已同步适配。
 
+提供方的单条状态或登记项无效时，保留其余有效设备和实体，并在分页 `coverage` 中返回 `state=partial`、`invalidRows` 及按需出现的 `invalidStates`。此时“未分配”也可能包含归属无法确认的实体；未知设备不能据此断言不存在，精确查询返回 `xiaomi_home_directory_partial`。完整结果的 `coverage.state=complete`。
+
 两条目录支持q（最多256字符，URL编码、空格分隔多词全部匹配）、kind（如climate）、available=0|1、view=summary|detail、offset和limit。搜索覆盖名称、ID、型号、厂商、房间、实体状态和完整属性的键和值，包括description和嵌套信息；搜索信息不必全部返回。使用Unicode NFKC和大小写归一，不提供正则或模板执行。无结果total=0，未知或重复参数及非法范围返回400，未知deviceId返回404。
 
 设备摘要只有deviceId、displayName、model、manufacturer、areaName、resourceCount、availableResourceCount、kinds、resourcesPath，不带实体属性。GET `/devices/<编码deviceId>` 读取完整登记字段和实体查询路径；同名设备按ID分开。目录另有unassignedResourceCount和unassignedResourcesPath，无归属实体不伪装为物理设备。实体摘要只有resourceId、entityId、displayName、kind、available；摘要显示文字最多128字符，完整文字和属性按单项读取。实体查询还支持deviceId=<登记ID>或deviceId=unassigned。先查 `/resources?kind=climate&limit=5` 或 `/devices?q=书房&limit=5`，再按resourcesPath筛所属实体，最后读单项实时状态和动作。

@@ -13,7 +13,9 @@ test("camera capture status reports the probe lifecycle without exposing allowed
     ready: false,
     ffmpegStatus: "idle",
     allowedHostCount: 1,
-    inFlight: 0
+    inFlight: 0,
+    active: 0,
+    queued: 0
   });
   assert.equal(JSON.stringify(worker.status()).includes("media.private.local"), false);
   worker.start();
@@ -55,6 +57,38 @@ test("camera clips have no implicit host restriction when the list is empty", ()
   assert.equal(worker.isEnabled(), true);
   const playlist = '#EXTM3U\n#EXTINF:5.0,\nhttp://new-cdn.example/segment.ts';
   assert.equal(parseHlsMediaPlaylist(playlist, new URL("https://media.example/index.m3u8"), []).length, 1);
+});
+
+test("camera capture bounds active and queued work while preserving same-event deduplication", async () => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const worker = new XiaomiHomeClipCaptureWorker({cameraClipCaptureEnabled:true},
+    {getBySourceEventId:()=>undefined} as unknown as XiaomiHomeArtifactStore,
+    async () => { calls++; await gate; return new Response("invalid playlist"); }, undefined, undefined,
+    {maxConcurrent:1,maxQueued:1});
+  const candidate = {sourceEventId:"first",resourceId:"home:ha:camera.example",resourceName:"Fixture",occurredAt:"2026-01-01T00:00:00Z",eventType:"PeopleMotion",playlistUrl:"http://media.example/clip.m3u8"};
+  const first = worker.capture(candidate), duplicate = worker.capture(candidate);
+  const second = worker.capture({...candidate,sourceEventId:"second"});
+  assert.equal(first,duplicate); assert.equal(calls,1);
+  await assert.rejects(worker.capture({...candidate,sourceEventId:"third"}), {code:"camera_capture_queue_full"});
+  assert.equal(worker.status().inFlight,2); release();
+  await Promise.allSettled([first,second]); assert.equal(calls,2);
+  await worker.close();
+});
+
+test("camera shutdown rejects queued work but joins the active capture", async () => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const worker = new XiaomiHomeClipCaptureWorker({cameraClipCaptureEnabled:true},
+    {getBySourceEventId:()=>undefined} as unknown as XiaomiHomeArtifactStore,
+    async () => { calls++; await gate; return new Response("invalid playlist"); }, undefined, undefined,
+    {maxConcurrent:1,maxQueued:1});
+  const candidate = {sourceEventId:"active",resourceId:"home:ha:camera.example",resourceName:"Fixture",occurredAt:"2026-01-01T00:00:00Z",eventType:"PeopleMotion",playlistUrl:"http://media.example/clip.m3u8"};
+  const active = worker.capture(candidate), queued = worker.capture({...candidate,sourceEventId:"queued"});
+  const queuedFailure = assert.rejects(queued,/stopped before capture/);
+  let stopped = false; const stopping = worker.close().then(() => { stopped = true; });
+  await queuedFailure; assert.equal(stopped,false); assert.equal(calls,1);
+  release(); await Promise.allSettled([active,stopping]); assert.equal(stopped,true); assert.equal(calls,1);
 });
 
 

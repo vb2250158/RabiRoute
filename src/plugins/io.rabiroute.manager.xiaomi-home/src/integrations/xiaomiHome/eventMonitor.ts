@@ -34,6 +34,7 @@ type SocketLike = {
   on(event: "close" | "error" | "open", listener: () => void): SocketLike;
   send(data: string): void;
   close(): void;
+  terminate?(): void;
 };
 
 export type XiaomiHomeEventMonitorConfig = XiaomiHomeManagerConfigInput & {
@@ -196,6 +197,7 @@ export function xiaomiHomeEventFromHomeAssistantStateChange(
   const normalizedEntityId = state.entity_id.toLowerCase();
   const oldState = change.data?.old_state;
   const isStateChanged = !oldState || oldState.state !== state.state;
+  if (!isStateChanged) return undefined;
 
   let kind: XiaomiHomeEvent["kind"];
   let summary: string;
@@ -250,6 +252,7 @@ export class XiaomiHomeEventMonitor {
   private lastEventAt?: string;
   private lastTransportError?: string;
   private lastDeliveryState?: "accepted" | "missed" | "failed";
+  private lastDeliveryReason?: string;
   private stopped = true;
   private subscriptionId = 1;
   private connectionState: "disabled" | "authorization_required" | "stopped" | "connecting" | "authorizing" | "subscribing" | "subscribed" | "authorization_failed" | "reconnecting" = "stopped";
@@ -294,7 +297,7 @@ export class XiaomiHomeEventMonitor {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.clearHeartbeat();
-    this.socket?.close();
+    if (this.socket) this.closeSocket(this.socket);
     this.socket = undefined;
     this.connectionState = !this.enabled ? "disabled" : !this.token ? "authorization_required" : "stopped";
     await Promise.all([...this.pending, ...this.socketClosures]);
@@ -303,6 +306,14 @@ export class XiaomiHomeEventMonitor {
   private observe(operation: Promise<unknown>): void {
     const work = operation.catch(() => undefined).finally(() => this.pending.delete(work));
     this.pending.add(work);
+  }
+
+  private closeSocket(socket: SocketLike): void {
+    try { socket.close(); }
+    catch {
+      this.lastTransportError = "socket_close_failed";
+      try { socket.terminate?.(); } catch { /* Retain the closure until the socket actually closes. */ }
+    }
   }
 
   status(): Record<string, unknown> {
@@ -317,7 +328,8 @@ export class XiaomiHomeEventMonitor {
       agentRoleConfigured: Boolean(this.agentRoleId),
       ...(this.lastEventAt ? { lastEventAt: this.lastEventAt } : {}),
       ...(this.lastTransportError ? { lastTransportError: this.lastTransportError } : {}),
-      ...(this.lastDeliveryState ? { lastDeliveryState: this.lastDeliveryState } : {})
+      ...(this.lastDeliveryState ? { lastDeliveryState: this.lastDeliveryState } : {}),
+      ...(this.lastDeliveryReason ? { lastDeliveryReason: this.lastDeliveryReason } : {})
     };
   }
 
@@ -342,15 +354,23 @@ export class XiaomiHomeEventMonitor {
       if (this.stopped || this.socket !== socket || this.connectionState === "subscribed") return;
       this.lastTransportError = "subscription_timeout";
       this.connectionState = "reconnecting";
-      socket.close();
+      this.closeSocket(socket);
     }, this.resolved.requestTimeoutMs);
     this.heartbeatDeadline.unref?.();
-    socket.on("message", data => { if (!this.stopped && this.socket === socket) this.handleMessage(data); });
+    socket.on("message", data => {
+      if (this.stopped || this.socket !== socket) return;
+      try { this.handleMessage(data); }
+      catch {
+        this.lastTransportError = "message_handler_failed";
+        this.connectionState = "reconnecting";
+        this.closeSocket(socket);
+      }
+    });
     socket.on("error", () => {
       if (this.stopped || this.socket !== socket) return;
       this.lastTransportError = "socket_error";
       this.connectionState = "reconnecting";
-      socket.close();
+      this.closeSocket(socket);
     });
     socket.on("close", () => {
       this.socketClosures.delete(closure); closed();
@@ -379,13 +399,15 @@ export class XiaomiHomeEventMonitor {
   private async deliver(event: XiaomiHomeEvent): Promise<void> {
     try {
       const result = await this.dependencies.deliverEvent(event, { agentRoleId: this.agentRoleId });
-      const missed = Array.isArray(result) && result.some(item => item?.status === "missed" || item?.status === "failed");
-      this.lastDeliveryState = missed ? "missed" : "accepted";
-      if (!missed) return;
-    } catch { this.lastDeliveryState = "failed"; }
+      const missed = Array.isArray(result) && result.find(item => item?.status === "missed" || item?.status === "failed" || item?.status === "skipped");
+      this.lastDeliveryState = !Array.isArray(result) || !result.length ? "failed" : missed ? "missed" : "accepted";
+      const reason = String(missed?.reason || (!Array.isArray(result) || !result.length ? "delivery_result_unavailable" : ""));
+      this.lastDeliveryReason = /^[a-z0-9_]{1,80}$/.test(reason) ? reason : undefined;
+      if (this.lastDeliveryState === "accepted") return;
+    } catch { this.lastDeliveryState = "failed"; this.lastDeliveryReason = "delivery_exception"; }
     recordDataMutationAudit({ group: "xiaomi-home", event: "xiaomi_home_event_delivery_failed", owner: "xiaomi-home-event-monitor",
       action: "deliver", target: { type: "event", id: event.id }, dataSource: { kind: "runtime", id: "xiaomi-home-event-delivery" },
-      outcome: "failed", result: this.lastDeliveryState });
+      outcome: "failed", result: this.lastDeliveryReason ?? this.lastDeliveryState });
   }
 
   private scheduleHeartbeat(): void {
@@ -399,11 +421,11 @@ export class XiaomiHomeEventMonitor {
         if (this.stopped || this.socket !== socket) return;
         this.lastTransportError = "heartbeat_timeout";
         this.connectionState = "reconnecting";
-        socket.close();
+        this.closeSocket(socket);
       }, this.resolved.requestTimeoutMs);
       this.heartbeatDeadline.unref?.();
       try { socket.send(JSON.stringify({ id: this.pendingPingId, type: "ping" })); }
-      catch { this.lastTransportError = "heartbeat_send_failed"; socket.close(); }
+      catch { this.lastTransportError = "heartbeat_send_failed"; this.closeSocket(socket); }
     }, Math.max(1000, this.dependencies.heartbeatIntervalMs ?? 30000));
     this.heartbeatTimer.unref?.();
   }
@@ -428,7 +450,7 @@ export class XiaomiHomeEventMonitor {
     }
     if (message.type === "auth_invalid") {
       this.connectionState = "authorization_failed";
-      this.socket?.close();
+      if (this.socket) this.closeSocket(this.socket);
       return;
     }
     if (message.type === "auth_ok") {
@@ -439,7 +461,7 @@ export class XiaomiHomeEventMonitor {
     if (message.type === "result" && Number(message.id) === this.subscriptionId) {
       this.connectionState = message.success === true ? "subscribed" : "reconnecting";
       if (message.success === true) this.scheduleHeartbeat();
-      if (message.success !== true) this.socket?.close();
+      if (message.success !== true && this.socket) this.closeSocket(this.socket);
       return;
     }
     if (message.type !== "event" || Number(message.id) !== this.subscriptionId) return;
@@ -472,7 +494,13 @@ export class XiaomiHomeEventMonitor {
         artifactId: artifact.artifactId,
         sourceEventId: motionClip.sourceEventId,
         cameraId: motionClip.cameraId
-      }); }, () => { if (this.stopped) return; return this.deliver({
+      }); }, (error) => { if (this.stopped) return;
+        const code = (error as { code?: unknown } | undefined)?.code;
+        recordDataMutationAudit({ group: "xiaomi-home", event: "xiaomi_home_clip_capture_failed", owner: "xiaomi-home-event-monitor",
+          action: "capture-clip", target: { type: "event", id: motionClip.sourceEventId },
+          dataSource: { kind: "runtime", id: "xiaomi-home-clip-capture" }, outcome: "failed",
+          result: code === "camera_capture_queue_full" ? code : "capture_failed" });
+        return this.deliver({
         id: `${motionClip.sourceEventId}:capture-failed`,
         kind: "action_failed",
         resourceId: motionClip.resourceId,

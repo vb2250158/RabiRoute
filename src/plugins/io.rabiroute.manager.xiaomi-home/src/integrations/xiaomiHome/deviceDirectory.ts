@@ -14,10 +14,11 @@ export function deviceDirectory(resources: XiaomiHomeResource[], rows: unknown):
   const resourceById = new Map(resources.map(resource => [resource.entityId, resource]));
   const devices = new Map<string, HomeDeviceDirectory<XiaomiHomeResource>["devices"][number]>();
   const assigned = new Set<string>();
+  let invalidRows = 0;
   const text = (value: unknown) => typeof value === "string" ? value.slice(0, 512) : "";
   for (const row of rows) {
     if (!row || typeof row !== "object" || !/^[a-z0-9_.:-]{1,128}$/i.test(String(row.deviceId || ""))
-      || typeof row.entityId !== "string") throw new Error("Invalid device registry entry.");
+      || typeof row.entityId !== "string") { invalidRows++; continue; }
     const resource = resourceById.get(row.entityId);
     if (!resource || assigned.has(resource.entityId)) continue;
     let device = devices.get(row.deviceId);
@@ -28,7 +29,7 @@ export function deviceDirectory(resources: XiaomiHomeResource[], rows: unknown):
     }
     device.resources.push(resource); assigned.add(resource.entityId);
   }
-  return { schemaVersion: 1, observedAt: new Date().toISOString(),
+  return { schemaVersion: 1, observedAt: new Date().toISOString(), coverage: { state: invalidRows ? "partial" : "complete", invalidRows },
     devices: [...devices.values()].sort((a, b) => a.displayName.localeCompare(b.displayName)),
     unassignedResources: resources.filter(resource => !assigned.has(resource.entityId)) };
 }

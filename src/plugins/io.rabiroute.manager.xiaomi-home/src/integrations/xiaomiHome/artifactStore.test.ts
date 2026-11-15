@@ -109,6 +109,22 @@ test("latest video never invents absence or silently falls back from damaged evi
   assert.throws(() => repaired.latestVideoForRole("RoleA"), XiaomiHomeArtifactEvidenceError);
 });
 
+test("latest video isolates a damaged row to its known role and quarantines cross-role identity conflicts", t => {
+  const f = ledgerFixture(t);
+  const original = f.store.register({ ...f.input, ownerRoleId: "RoleA", sourceEventId: "role-a" });
+  const damaged = { ...f.rows[0], ownerRoleId: "RoleB", artifactId: "bad-role-b", sourceEventId: "bad-b", byteLength: -1 };
+  fs.appendFileSync(f.ledger, JSON.stringify(damaged) + "\n");
+  const isolated = new XiaomiHomeArtifactStore(f.root);
+  assert.equal(isolated.coverage().state, "partial");
+  assert.equal(isolated.latestVideoForRole("RoleA")?.artifactId, original.artifactId);
+  assert.throws(() => isolated.latestVideoForRole("RoleB"), XiaomiHomeArtifactEvidenceError);
+  assert.equal(isolated.latestVideoForRole("RoleC"), undefined);
+  fs.appendFileSync(f.ledger, JSON.stringify({ ...damaged, artifactId: original.artifactId }) + "\n");
+  const conflicting = new XiaomiHomeArtifactStore(f.root);
+  assert.throws(() => conflicting.latestVideoForRole("RoleA"), XiaomiHomeArtifactEvidenceError);
+  assert.throws(() => conflicting.latestVideoForRole("RoleB"), XiaomiHomeArtifactEvidenceError);
+});
+
 test("known damaged artifact rows reserve only their original identities and preserve valid neighbors", t => {
   const f = ledgerFixture(t);
   const damaged = { ...f.rows[0], artifactId: "damaged-artifact", sourceEventId: "damaged-event", occurredAt: null };

@@ -27,6 +27,10 @@ Core still depends on a working HAOS Supervisor startup chain. Automatic startup
 
 Authorization/subscription has a transport deadline. A subscribed event WebSocket sends HA protocol ping every 30 seconds; a missing matching pong causes reconnection. Status exposes last event time, transport error category and delivery state. Failed delivery or missing matching Routes is audited, and failed clip delivery is not mislabeled as failed capture. Agent delivery requires a correctly bound Xiaomi message Route; appending the ledger alone is not delivery success.
 
+Ordinary state events require a state change: attribute updates while an entity remains offline or motion remains active do not repeat the alert. Camera recordings use their separate recording identity, so a new clip is still recognized when the entity state is unchanged.
+
+Event routing defaults to at most 4 concurrent workers and 128 queued entries; clip capture defaults to 2 active captures and 32 queued entries. Exhaustion reports `delivery_queue_full` or `camera_capture_queue_full` rather than claiming delivery or recording success. Event-ledger appends remain independent and failures are audited. Stopping the owner prevents queued work from starting and joins admitted work. A Route startup failure is reported separately from other Routes.
+
 `scripts/Test-XiaomiHomePrerequisites.ps1` reads Xiaomi health and deployment endpoints through the current Manager identity fence by default. Manager verifies its existing protected authorization; the script neither reads nor forwards HA or recording environment tokens. An explicit `-HomeAssistantBaseUrl` receives only a credential-free network check. Authorization is reused only when that origin matches the current owner; otherwise it is reported as not checked. Legacy token environment parameters remain for caller compatibility. `ffmpeg` is required for capture; `ffprobe` provides optional metadata. A healthy connection does not prove real camera events or recordings.
 
 ## Cameras and persona storage

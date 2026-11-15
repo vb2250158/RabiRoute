@@ -472,11 +472,22 @@ export class XiaomiHomeManagerApiClient {
     });
   }
 
-  async listResources(includeActions = false, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource[]> {
+  private async readResources(includeActions = false, authority?: XiaomiHomeRequestAuthority): Promise<{items: XiaomiHomeResource[]; invalidStates: number}> {
     const states = await this.request<HomeAssistantState[]>("/api/states", {}, authority);
     if (!Array.isArray(states)) throw new XiaomiHomeManagerApiError(502, "xiaomi_home_provider_invalid", "Home Assistant returned an invalid state list.");
     const services = includeActions ? await this.entityServices() : undefined;
-    return states.map(state => this.resource(state, services)).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
+    const items: XiaomiHomeResource[] = [];
+    let invalidStates = 0;
+    for (const state of states) {
+      if (!state || typeof state.entity_id !== "string" || !/^[a-z0-9_]+\.[a-z0-9_]+$/.test(state.entity_id) || typeof state.state !== "string") { invalidStates++; continue; }
+      try { items.push(this.resource(state, services)); } catch { invalidStates++; }
+    }
+    items.sort((left, right) => left.resourceId.localeCompare(right.resourceId));
+    return { items, invalidStates };
+  }
+
+  async listResources(includeActions = false, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource[]> {
+    return (await this.readResources(includeActions, authority)).items;
   }
 
   async getResource(resourceId: string, authority?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeResource> {
@@ -488,10 +499,14 @@ export class XiaomiHomeManagerApiClient {
 
   async listDevices(authority?: XiaomiHomeRequestAuthority) {
     const [resources, registry] = await Promise.all([
-      this.listResources(false, authority),
+      this.readResources(false, authority),
       this.request<unknown>("/api/template", { method: "POST", body: JSON.stringify({ template: HOME_DEVICE_DIRECTORY_TEMPLATE }) }, authority)
     ]);
-    try { return deviceDirectory(resources, registry); }
+    try {
+      const directory = deviceDirectory(resources.items, registry);
+      if (resources.invalidStates) directory.coverage = { state: "partial", invalidRows: directory.coverage?.invalidRows ?? 0, invalidStates: resources.invalidStates };
+      return directory;
+    }
     catch { throw new XiaomiHomeManagerApiError(502, "xiaomi_home_device_registry_invalid", "Home Assistant returned an invalid device directory."); }
   }
 
@@ -503,15 +518,18 @@ export class XiaomiHomeManagerApiClient {
     if (!/^[a-z0-9_.:-]{1,128}$/i.test(deviceId)) throw new XiaomiHomeManagerApiError(400, "xiaomi_home_device_invalid", "Supply a device registry ID.");
     const directory = await this.listDevices(authority);
     const device = directory.devices.find(item => item.deviceId === deviceId);
+    if (!device && directory.coverage?.state === "partial") throw new XiaomiHomeManagerApiError(503, "xiaomi_home_directory_partial", "Device registry is incomplete; the requested device cannot be confirmed absent.");
     if (!device) throw new XiaomiHomeManagerApiError(404, "xiaomi_home_device_not_found", "Device was not found in the current registry.");
     return { ...homeDeviceSummary(device), displayName: device.displayName, model: device.model, manufacturer: device.manufacturer, areaName: device.areaName };
   }
 
   async queryResources(query: HomeDirectoryQuery, authority?: XiaomiHomeRequestAuthority) {
     const directory = query.deviceId || query.q ? await this.listDevices(authority) : undefined;
-    const resources = directory ? [...directory.devices.flatMap(device => device.resources), ...directory.unassignedResources] : await this.listResources(false, authority);
+    const snapshot = directory ? undefined : await this.readResources(false, authority);
+    const resources = directory ? [...directory.devices.flatMap(device => device.resources), ...directory.unassignedResources] : snapshot!.items;
     const matches = filterHomeResources(resources, query, directory);
-    const page = homeDirectoryPage(matches.map(resource => query.view === "summary" ? homeResourceSummary(resource) : resource), query);
+    const coverage = directory?.coverage ?? (snapshot?.invalidStates ? { state: "partial" as const, invalidRows: 0, invalidStates: snapshot.invalidStates } : { state: "complete" as const, invalidRows: 0 });
+    const page = { ...homeDirectoryPage(matches.map(resource => query.view === "summary" ? homeResourceSummary(resource) : resource), query), coverage };
     if (query.includeActions) {
       const services = await this.entityServices(authority);
       return { ...page, items: matches.slice(query.offset, query.offset + query.limit).map(resource => this.attachActions(resource, services)) };

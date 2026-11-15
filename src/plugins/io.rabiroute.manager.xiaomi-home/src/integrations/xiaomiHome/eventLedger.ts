@@ -22,15 +22,15 @@ export class XiaomiHomeEventLedger {
       summary: event.summary, artifactId: event.artifactId, areaName: event.areaName, homeId: event.homeId,
       sourceEventId: event.sourceEventId, cameraId: event.cameraId
     }) + "\n";
-    if (Buffer.byteLength(line) > 256 * 1024) throw new Error("Xiaomi event is too large");
-    if (this.pending >= this.capacity) throw new Error("Xiaomi event ledger queue full");
+    const id = createHash("sha256").update(roleId + ":" + event.id).digest("hex");
+    const audit = (outcome: "started" | "committed" | "failed", result?: string) => recordDataMutationAudit({
+      group: "xiaomi-home", event: "xiaomi_event_append", owner: "xiaomi-event-ledger", action: "append",
+      target: { type: "event", id }, dataSource: { kind: "ledger", id }, outcome, ...(result ? { result } : {})
+    });
+    if (Buffer.byteLength(line) > 256 * 1024) { audit("failed", "event_too_large"); throw new Error("Xiaomi event is too large"); }
+    if (this.pending >= this.capacity) { audit("failed", "ledger_queue_full"); throw new Error("Xiaomi event ledger queue full"); }
     this.pending++;
     const flight = this.tail.catch(() => {}).then(async () => {
-      const id = createHash("sha256").update(roleId + ":" + event.id).digest("hex");
-      const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
-        group: "xiaomi-home", event: "xiaomi_event_append", owner: "xiaomi-event-ledger", action: "append",
-        target: { type: "event", id }, dataSource: { kind: "ledger", id }, outcome
-      });
       audit("started");
       try {
         const root = this.roleDirectory(roleId);
