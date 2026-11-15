@@ -103,7 +103,8 @@ import {
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
 import { installAgentAdapterManifestReader, normalizePlanBindingAgentType, type AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRemoteSource, type AgentThreadRequestOptions } from "../agentThreads.js";
-import { createAgentEndpointDelivery } from "./agentEndpointDelivery.js";
+import { createAgentEndpointDelivery, type AgentServiceSourcePrincipal } from "./agentEndpointDelivery.js";
+import { createOwnedServiceAgentSender } from "./ownedServiceAgentSender.js";
 import { createCorePublicOperations } from "./corePublicOperations.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
@@ -926,7 +927,7 @@ function messageWorkerDataDir(definition: GatewayDefinition): string {
   return binding ? instanceWorkerStateDirectory(dataDirFor(definition), binding, primaryAgentSessionId(definition) || "unavailable") : dataDirFor(definition);
 }
 async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions,
-  trustedDeviceSource?: NonNullable<ReturnType<typeof rabiLinkAgentDevicePrincipal>>) {
+  trustedDeviceSource?: NonNullable<ReturnType<typeof rabiLinkAgentDevicePrincipal>>, trustedServiceSource?: AgentServiceSourcePrincipal) {
   const deviceProvider = resolvePublishedAgentManagerProviders(publishedPluginGeneration()).find(provider => provider.type === "deviceAgent");
   const deviceEndpoint = deviceProvider?.deviceEndpoint as { handlesThreadRequest?(request: AgentThreadRequest): boolean } | undefined;
   const handlesDeviceMetadata = deviceEndpoint?.handlesThreadRequest
@@ -939,7 +940,7 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
   }
   if (request.action === "create" && request.prompt != null && request.prompt !== "" && request.agentAdapter === "codex" && request.instanceBinding && !("ownerDeviceId" in request.instanceBinding && request.instanceBinding.ownerDeviceId) && instanceThreadTransport && !instanceThreadTransport.instances().some(item => item.local && item.instanceId === request.instanceBinding!.instanceId)) {
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
-    const endpoint = agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions);
+    const endpoint = agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, trustedServiceSource, options.callerExecutionOptions);
     const transport = instanceThreadTransport;
     const manageCreation = async (binding: NonNullable<AgentThreadRequest["instanceBinding"]>, params: Record<string, unknown>): Promise<CallerCreationMetadataStatus> => {
       options.requestAuthority?.();
@@ -959,7 +960,7 @@ async function handleAgentThreadRequest(request: AgentThreadRequest, options: Ag
   if (request.action === "send" || request.action === "reconcile_delivery") {
     if (!agentEndpointDelivery) throw new Error("Manager endpoint delivery authority is unavailable.");
     return handleLocalAgentThreadRequest(request, { ...options,
-      endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, undefined, options.callerExecutionOptions),
+      endpointDelivery: agentEndpointDelivery.options(options.remoteSource, options.requestAuthority, trustedDeviceSource, trustedServiceSource, options.callerExecutionOptions),
       // Return coordinates reuse ingress attribution without another source-owner lookup.
       ...(options.remoteSource ? { remoteEndpoint: agentEndpointDelivery.remoteEndpoint } : {}) });
   }
@@ -7607,6 +7608,24 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   });
   const nativePluginHostPorts = await createMessageEndpointHostPorts();
   const managerFeatureHostPorts = createAgentAdapterHostPorts();
+  const voiceAssistantHostPort = Object.freeze({
+    deliveryAuthorityId() {
+      if (managerReadOnly || shuttingDown || managerRuntimeOwner.isTearingDown()) throw new Error("Agent sender admission is unavailable.");
+      return lanAgentRegistry.localInstanceId;
+    },
+    bindAgentSender: createOwnedServiceAgentSender({
+      providers: () => resolvePublishedAgentManagerProviders(publishedPluginGeneration()),
+      deliveryAuthorityId: () => lanAgentRegistry.localInstanceId,
+      assertCurrent() { if (managerReadOnly || shuttingDown || managerRuntimeOwner.isTearingDown()) throw new Error("Agent sender admission is unavailable."); },
+      dispatch: (request, source, guard) => handleAgentThreadRequest(request, agentThreadRequestOptions(request, { requestAuthority: guard }), undefined, source)
+    }).bind,
+    endpoint() {
+      if (shuttingDown || !activeServer.listening || managerRuntimeOwner.isTearingDown()) throw new Error("Manager voice assistant endpoint is unavailable.");
+      const address = activeServer.address();
+      if (!address || typeof address === "string" || address.port !== managerPort) throw new Error("Manager listener identity changed.");
+      return Object.freeze({ managerUrl: managerBaseUrl, applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId });
+    }
+  });
   const managerPluginHostServices: readonly HostService[] = Object.freeze([
     Object.freeze({ capability: "host.peer-transports@1", value: Object.freeze({
       priority: PEER_TRANSPORT_PRIORITY,
@@ -7711,6 +7730,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }))
     }) }),
     Object.freeze({ capability: "host.manager.operations@1", value: createManagerApiOperationsService(managerPluginRoutes) }),
+    Object.freeze({ capability: "host.manager.voice-assistant@1", value: voiceAssistantHostPort }),
+    Object.freeze({ capability: "host.manager.voice-assistant@2", value: voiceAssistantHostPort }),
     Object.freeze({ capability: "host.manager.video@2", value: Object.freeze({ ...managerFeatureHostPorts, get rootDir() { return rootDir; },
 get managerPluginProcessLeases() { return managerPluginProcessLeases; },
 get managerReadOnly() { return managerReadOnly; },

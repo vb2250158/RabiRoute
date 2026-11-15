@@ -91,7 +91,9 @@ export function writeDesktopSettingsPayload(
   const current = store.read();
   const row = body as Partial<DesktopSettings> | null | undefined;
   const screenshot = row && typeof row.screenshot === "object" && !Array.isArray(row.screenshot) ? row.screenshot : {};
-  const data = store.write({ ...current, ...row, screenshot: { ...current.screenshot, ...screenshot } });
+  const composer = row && typeof row.screenshotComposer === "object" && !Array.isArray(row.screenshotComposer) ? row.screenshotComposer : {};
+  const data = store.write({ ...current, ...row, screenshot: { ...current.screenshot, ...screenshot },
+    screenshotComposer: { ...current.screenshotComposer, ...composer } });
   changed(data);
   return { code: 0, data: { ...data, autostartConfigured: true } };
 }

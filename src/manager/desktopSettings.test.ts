@@ -9,7 +9,24 @@ import {
   DEFAULT_SCREENSHOT_SHORTCUT,
   normalizeDesktopSettings
 } from "../shared/desktopSettingsContract.js";
-import { DesktopSettingsStore, DesktopSettingsStorageError } from "./desktopSettings.js";
+import { DesktopSettingsStore, DesktopSettingsStorageError, writeDesktopSettingsPayload } from "./desktopSettings.js";
+
+test("screenshot target and voice preference survive separate partial writes and a new store", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "screenshot-preferences-"));
+  try {
+    const file = path.join(root, "settings.json"), store = new DesktopSettingsStore(file);
+    assert.equal(store.read().screenshotComposer.voiceInputEnabled, false);
+    const target = { kind: "agent", provider: "workbuddy", threadId: "full-stable-session-id", cwd: "C:/workspace" };
+    writeDesktopSettingsPayload(store, { screenshotComposer: { lastTarget: target } }, () => {});
+    writeDesktopSettingsPayload(store, { screenshotComposer: { voiceInputEnabled: true } }, () => {});
+    writeDesktopSettingsPayload(store, { theme: "dark", screenshot: { autoCopy: false } }, () => {});
+    const restored = new DesktopSettingsStore(file).read();
+    assert.deepEqual(restored.screenshotComposer, { voiceInputEnabled: true, lastTarget: target });
+    assert.equal(restored.screenshot.autoCopy, false);
+    assert.equal(restored.theme, "dark");
+    assert.equal(normalizeDesktopSettings({ screenshotComposer: { lastTarget: { ...target, threadId: "bad\u0000id" } } }).screenshotComposer.lastTarget, null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("bubble appearance is safe, persona-scoped and survives Manager storage", () => {
   const normalized = normalizeDesktopPetBubbleStyle({ skin: "unknown", fontSize: Infinity, maxWidth: 9999,
@@ -41,6 +58,7 @@ test("desktop settings keep the safe default while preserving an explicit F3 bin
     clipboardShortcut: " F3 ",
     autoCopy: false
   }, autostart: true }), {
+    screenshotComposer: { voiceInputEnabled: false, lastTarget: null },
     lastRoleSelection: null,
     screenshot: { enabled: true, shortcut: "Ctrl+Alt+S", clipboardShortcut: "F3", autoCopy: false },
     autostart: true,
@@ -95,6 +113,7 @@ test("desktop settings store writes and reads the single host settings file", ()
     assert.equal(store.read().screenshot.enabled, false);
     store.write({ screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false }, autostart: true });
     assert.deepEqual(store.read(), {
+      screenshotComposer: { voiceInputEnabled: false, lastTarget: null },
       lastRoleSelection: null,
       screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false },
       autostart: true,
