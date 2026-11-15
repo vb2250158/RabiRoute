@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.voice-assistant",
-  "version": "1.0.2",
+  "version": "1.1.6",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -8,7 +8,10 @@
     "*.mjs",
     "web",
     "README.md",
-    "README_en.md"
+    "README_en.md",
+    "native-deps",
+    "native-device",
+    "assets"
   ],
   "peerDependencies": {
     "@rabiroute/plugin-sdk": "^1.1.0"
@@ -24,5 +27,12 @@
   },
   "scripts": {
     "build": "rabi-plugin-build"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "koffi": "3.1.1",
+    "ws": "8.18.3",
+    "@rabilink/assistant-runtime": "file:../../../packages/assistant-runtime"
   }
 }

@@ -1,0 +1,106 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createVoiceAssistantOwner} from './src/runtime.mjs';
+import {createVoiceAssistantAgent} from './src/agent-endpoint.mjs';
+import {createRabiOperationTools} from './src/operation-tools.mjs';
+import {createChatModel} from '@rabilink/desktop-voice-service/chat-model';
+const identity={applicationGenerationId:'app',managerInstanceId:'manager',activationId:'activation'};
+async function fixture(){
+  const stateRoot=await mkdtemp(join(tmpdir(),'rabi-voice-owner-')),abort=new AbortController(),requests=[],modelPrompts=[];
+  const speech={speechControl:{personas:()=>[{id:'A',voiceReady:true,defaultModel:'tts',speed:1}],models:async()=>[{id:'asr',capability:'asr',enabled:true,available:true},{id:'tts',capability:'tts',enabled:true,available:true}]}};
+  const sdk={async call(id,input){requests.push({id,input});return {ok:true,data:{code:0,data:id==='manager.roles.list'?{roles:[{roleId:'A',title:'人格 A'},{roleId:'B',title:'无本机声线人格'}],nextCursor:null}:id==='manager.personas.resources.reference.read'?{document:'你是人格 '+input.pathParams.roleId,personaConfig:{}}:{value:'native'}}}}};
+  sdk.describe=async id=>({operation:{id,contract:{transport:'http',method:'GET',effects:{mode:'read'},request:{body:{kind:'none'}}}}});sdk.invokeOperation=async()=>({ok:true,statusCode:200,body:'{}'});sdk.openOperation=async()=>({});
+  const args={identity,stateRoot,speech,publish(){},signal:abort.signal,clientFactory:async()=>({operations:sdk,close:async()=>{}}),modelCatalog:async()=>[{id:'fixture',label:'fixture',isDefault:true}],createModel:options=>(modelPrompts.push(options.initialPrompts),createChatModel({...options,provider:'compatible',endpoint:'https://example.test/chat/completions',resolveCredential:async()=>undefined,fetcher:async()=>new Response('data: '+JSON.stringify({choices:[{delta:{content:'真实公共循环的回答'}}]})+'\n\ndata: [DONE]\n\n')}))};
+  let owner=await createVoiceAssistantOwner(args);
+  return {requests,modelPrompts,args,get owner(){return owner},async restart(){await owner.dispose();owner=await createVoiceAssistantOwner(args)},async close(){await owner.dispose();await rm(stateRoot,{recursive:true,force:true})}};
+}
+test('plugin-owned session works without an external role route; refresh/restart preserves history and exact delivery identity',async()=>{
+  const f=await fixture();try{const first=await f.owner.session();await f.owner.submit('你好','request-1');for(let n=0;n<80&&!(await f.owner.messages()).some(item=>item.status==='completed');n++)await new Promise(resolve=>setTimeout(resolve,5));
+    assert.ok((await f.owner.messages()).some(item=>item.text==='真实公共循环的回答'),JSON.stringify(await f.owner.messages()));
+    await f.restart();assert.equal((await f.owner.session()).id,first.id);assert.equal(await f.owner.recover('request-1','你好'),true);await assert.rejects(f.owner.recover('request-1','changed'),/REQUEST_CONFLICT/);
+    assert.equal((await f.owner.messages()).length,2);
+  }finally{await f.close()}
+});
+test('all four independent speech source combinations and a persona without local voice keep text/model settings available',async()=>{
+  const f=await fixture();try{
+    for(const asrSource of ['host','custom'])for(const ttsSource of ['host','custom']){await f.owner.command({action:'host-settings',patch:{personaId:'B',asrSource,ttsSource}});const state=await f.owner.state();assert.equal(state.hostSettings.asrSource,asrSource);assert.equal(state.hostSettings.ttsSource,ttsSource);assert.equal(state.hostSettings.voiceReady,false);assert.equal(state.capabilities.modelConfiguration,true);assert.equal(state.settings.persona,'你是人格 B')}
+    const b=(await f.owner.session()).id;await f.owner.command({action:'host-settings',patch:{personaId:'A'}});assert.notEqual((await f.owner.session()).id,b);await f.owner.command({action:'host-settings',patch:{personaId:'B'}});assert.equal((await f.owner.session()).id,b);
+  }finally{await f.close()}
+});
+test('persona switches share connection settings while each real system prompt and history remains isolated',async()=>{
+ const f=await fixture();try{
+  await f.owner.command({action:'settings',patch:{llmModel:'shared-model',ttsVoice:'shared-custom',onboardingComplete:true}});
+  for(const personaId of ['A','B']){
+   await f.owner.command({action:'host-settings',patch:{personaId,asrSource:'custom',ttsSource:'custom'}});
+   const state=await f.owner.state();assert.equal(state.settings.llmModel,'shared-model');assert.equal(state.settings.ttsVoice,'shared-custom');assert.equal(state.settings.onboardingComplete,true);
+   await f.owner.submit('以当前身份回应','request-'+personaId);for(let n=0;n<80&&(await f.owner.state()).context.busy;n++)await new Promise(resolve=>setTimeout(resolve,5));
+   const prompt=f.modelPrompts.at(-1).find(item=>item.role==='system').content;assert.ok(prompt.includes('你是人格 '+personaId));assert.ok(!prompt.includes('你是人格 '+(personaId==='A'?'B':'A')));
+  }
+  await f.restart();assert.equal((await f.owner.state()).settings.llmModel,'shared-model');assert.equal((await f.owner.messages()).filter(item=>item.role==='user').length,1);
+ }finally{await f.close()}
+});
+test('unavailable inherited voice models use a ready default while explicit unavailable choices remain visible and block capture',async()=>{
+ const f=await fixture();try{
+  f.args.speech.speechControl.personas=()=>[{id:'A',voiceReady:true,defaultModel:'not-installed',speed:1}];
+  await f.owner.command({action:'host-settings',patch:{personaId:'A'}});assert.equal((await f.owner.state()).hostSettings.ttsModel,'tts');
+  await f.owner.command({action:'host-settings',patch:{asrModel:'explicit-unavailable'}});const state=await f.owner.state();assert.equal(state.settings.asrModel,'explicit-unavailable');assert.match(state.hostSettings.asrIssue,/不可用/);
+  await assert.rejects(f.owner.command({action:'start'}),/HOST_ASR_CONFIGURATION_REQUIRED/);
+ }finally{await f.close()}
+});
+test('Agent endpoint routes to the same owner, recovers original receipts, rejects foreign sessions and retires',async()=>{
+  const f=await fixture();let retired=false;try{const agent=createVoiceAssistantAgent(f.owner,identity,()=>{if(retired)throw Error('retired')},'delivery-authority-distinct-from-http'),session=await f.owner.session();
+    const target=(await agent.serviceEndpoint.resolveTarget({agentAdapter:'voice-assistant',threadId:session.id})).endpoint;
+    assert.notEqual(target.managerInstanceId,identity.managerInstanceId);assert.equal(target.managerInstanceId,'delivery-authority-distinct-from-http');assert.throws(()=>agent.serviceEndpoint.authorize({...target,managerInstanceId:identity.managerInstanceId}),/RETIRED/);
+    const listed=await agent.operations['threads.request']({request:{action:'list',agentAdapter:'voice-assistant'}});
+    assert.equal(listed.data.code,0);assert.ok(Object.hasOwn(listed.data.threads[0],'updatedAt'));
+    assert.equal(await agent.serviceEndpoint.resolveSource({messageSource:{agentAdapter:'voice-assistant',sessionId:session.id}}),undefined);
+    const principal={provider:target.provider,agentId:target.agentId,sessionId:target.sessionId,authorizationIncarnation:target.authorizationIncarnation};
+    assert.equal((await agent.serviceEndpoint.resolveSource({sourceThreadId:session.id},principal)).threadId,session.id);
+    await assert.rejects(agent.serviceEndpoint.resolveSource({sourceThreadId:session.id},{...principal,authorizationIncarnation:'forged'}),/RETIRED/);
+    const delivery={deliveryId:'delivery-1',generation:'generation',target,prompt:'ping',promptHash:'hash',executionOptionsHash:'options'};
+    assert.equal(await agent.serviceEndpoint.transport(delivery,()=>{},true),undefined);
+    const receipt=await agent.serviceEndpoint.transport(delivery,()=>{},false);assert.equal(receipt.accepted,true);assert.deepEqual(await agent.serviceEndpoint.transport(delivery,()=>{},true),receipt);
+    await assert.rejects(agent.serviceEndpoint.resolveTarget({threadId:'foreign'}),/CONTEXT_CHANGED/);
+    await assert.rejects(agent.operations['threads.request']({request:{action:'delete',agentAdapter:'voice-assistant',threadId:session.id}}),/UNSUPPORTED/);
+    retired=true;assert.throws(()=>agent.serviceEndpoint.authorize(target),/retired/);
+  }finally{await f.close()}
+});
+test('unknown writes keep their owned request identity; readback remains allowed while new writes are fenced',async()=>{
+ const calls=[],sdk={describe:async id=>({operation:{id,contract:{transport:'http',method:id==='readback'?'GET':'PATCH',effects:{mode:id==='readback'?'read':'write'},request:{body:{kind:id==='readback'?'none':'json',schema:{type:'object'}}}}}}),invokeOperation:async(id,options)=>{calls.push({id,options});if(id==='write')throw Error('native disconnected');return {ok:true,statusCode:200,body:'{}'}}};
+ const backend=createRabiOperationTools({sdk});try{
+  const unknown=await backend.executeTool({functionName:'rabi_call',arguments:{operation:'write',input:{body:{value:1}}},callId:'owned-call'});
+  assert.equal(unknown.uncertain,true);assert.equal(unknown.mutation,true);assert.equal(unknown.requestId,'owned-call');assert.equal(calls[0].options.headers['idempotency-key'],'owned-call');
+  const read=await backend.executeTool({functionName:'rabi_call',arguments:{operation:'readback'},writeReconciliationRequired:true});assert.equal(read.ok,true);
+  const blocked=await backend.executeTool({functionName:'rabi_call',arguments:{operation:'write',input:{body:{value:2}}},callId:'new-call',writeReconciliationRequired:true});
+  assert.equal(blocked.error,'WRITE_RECONCILIATION_REQUIRED');assert.equal(blocked.mutation,true);assert.equal(blocked.dispatched,false);assert.deepEqual(calls.map(item=>item.id),['write','readback']);
+ }finally{await backend.dispose()}
+});
+test('dynamic SDK tools forward arbitrary operation IDs, schemas, original parameters and uncertainty without retry',async()=>{
+  const calls=[],sdk={categories:async()=>({categories:[{id:'new-plugin'}]}),list:async filters=>({operations:[],nextCursor:filters.cursor?null:'page2'}),search:async(query,filters)=>({query,filters}),describe:async id=>({operation:{id,contract:{transport:'http',method:'PATCH',effects:{mode:'write'},request:{body:{kind:'json',schema:{type:'object'}}}}}}),invokeOperation:async(id,options)=>{calls.push({id,options});return {ok:false,statusCode:503,uncertain:true,body:JSON.stringify({code:-1,uncertain:true})}}};
+  const backend=createRabiOperationTools({sdk});try{
+    assert.equal((await backend.executeTool({functionName:'rabi_list',arguments:{}})).data.nextCursor,'page2');
+    const result=await backend.executeTool({functionName:'rabi_call',arguments:{operation:'unlisted.future.operation',input:{pathParams:{nodeId:'remote'},query:{target:'original'},body:{a:1}},requestId:'original-id'}});
+    assert.equal(calls.length,1);assert.equal(calls[0].id,'unlisted.future.operation');assert.equal(calls[0].options.headers['idempotency-key'],'original-id');assert.deepEqual(calls[0].options.pathParams,{nodeId:'remote'});assert.equal(backend.toolPolicy.inspectOutcome(result).uncertain,true);
+  }finally{await backend.dispose()}
+});
+test('owned Agent delivery forwards its original receipt and keeps reconciliation available after an unknown send',async()=>{
+ const calls=[],backend=createRabiOperationTools({sdk:{describe:async()=>{throw Error('unexpected operation')},invokeOperation:async()=>{throw Error('unexpected operation')}},sendAgent:async request=>{calls.push(request);return {statusCode:request.action==='send'?202:200,data:{status:'accepted',deliveryId:request.deliveryId}}}});
+ try{const sent=await backend.executeTool({functionName:'rabi_agent_deliver',callId:'owned-call',arguments:{action:'send',agentAdapter:'voice-assistant',threadId:'target',prompt:'hello'}});assert.equal(sent.data.deliveryId,'owned-call');assert.equal(sent.statusCode,202);
+  const blocked=await backend.executeTool({functionName:'rabi_agent_deliver',callId:'new-call',writeReconciliationRequired:true,arguments:{action:'send',agentAdapter:'voice-assistant',threadId:'target',prompt:'again'}});assert.equal(blocked.dispatched,false);
+  const read=await backend.executeTool({functionName:'rabi_agent_deliver',writeReconciliationRequired:true,arguments:{action:'reconcile_delivery',agentAdapter:'voice-assistant',threadId:'target',deliveryId:'owned-call'}});assert.equal(read.ok,true);assert.deepEqual(calls.map(x=>x.deliveryId),['owned-call','owned-call']);
+  await assert.rejects(backend.executeTool({functionName:'rabi_agent_deliver',callId:'not-original-id',arguments:{action:'reconcile_delivery',agentAdapter:'voice-assistant',threadId:'target'}}),/DELIVERY_ID_REQUIRED/);
+  for(const patch of [{unknown:true},{messageSource:{}},{threadId:2},{agentAdapter:[]},{prompt:12},{deliveryId:'x'.repeat(101)},{responsePolicy:'anything'},{instanceBinding:{instanceId:'node',agentId:'agent',extra:true}},{instanceBinding:{instanceId:1,agentId:'agent'}}])await assert.rejects(backend.executeTool({functionName:'rabi_agent_deliver',callId:'owned-call',arguments:{action:'send',agentAdapter:'voice-assistant',threadId:'target',prompt:'hello',...patch}}),/AGENT_DELIVERY_/);
+  assert.equal(calls.length,2);
+ }finally{await backend.dispose()}
+});
+test('native delivery failures preserve only a machine code and function stage without private messages or stack paths',async()=>{
+ const backend=createRabiOperationTools({sdk:{describe:async()=>{},invokeOperation:async()=>{}},sendAgent:async()=>{const error=Object.assign(Error('Bearer private-key /private/config'),{code:'ORIGINAL_OWNER_FAILED',stack:'Error: private\n    at originalOwner (/private/config:12:3)'});throw error}});
+ try{const result=await backend.executeTool({functionName:'rabi_agent_deliver',arguments:{action:'reconcile_delivery',agentAdapter:'voice-assistant',threadId:'target',deliveryId:'original'}});assert.equal(result.uncertain,true);assert.equal(result.deliveryId,'original');assert.equal(result.causeCode,'ORIGINAL_OWNER_FAILED');assert.equal(result.failureStage,'originalOwner');assert.ok(!JSON.stringify(result).includes('private'));}finally{await backend.dispose()}
+});
+test('native send keeps caller identity separate from the actual scoped receipt ID used for reconciliation',async()=>{
+ const backend=createRabiOperationTools({sdk:{describe:async()=>{},invokeOperation:async()=>{}},sendAgent:async()=>({statusCode:200,data:{communication:{deliveryId:'agent-scoped-original'}}})});
+ try{const result=await backend.executeTool({functionName:'rabi_agent_deliver',arguments:{action:'send',agentAdapter:'voice-assistant',threadId:'target',prompt:'fixed',deliveryId:'caller-original'}});assert.equal(result.deliveryId,'agent-scoped-original');assert.equal(result.callerDeliveryId,'caller-original');}finally{await backend.dispose()}
+});
