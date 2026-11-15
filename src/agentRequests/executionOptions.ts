@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import type { AgentThreadRequest, AgentThreadRequestOptions } from "../agentThreads.js";
 import type { CodexDesktopReasoningEffort } from "../agentAdapters/codexContracts.js";
 import type { CodexTurnSandbox } from "../agentAdapters/codexContracts.js";
+import { normalizeLocalDeliveryImages, snapshotLocalDeliveryImages, type LocalDeliveryImage } from "./localDeliveryImages.js";
 
 /** Immutable per-delivery snapshot; owner identity and live permissions are separate. */
 export type EndpointExecutionOptions = {
+  localImages?: LocalDeliveryImage[];
   cwd?: string;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
@@ -25,7 +27,7 @@ function boundedText(value: unknown, name: string, max: number): string {
 export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecutionOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Endpoint execution options are required.");
   const input = value as Record<string, unknown>;
-  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "grokBotDelivery"];
+  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "grokBotDelivery", "localImages"];
   if (Object.keys(input).some(key => !fields.includes(key))) throw new Error("Unsupported endpoint execution option.");
   const result: EndpointExecutionOptions = input.cwd === undefined ? {} : { cwd: boundedText(input.cwd, "cwd", 32_768) };
   if (input.model !== undefined) result.model = boundedText(input.model, "model", 500);
@@ -54,6 +56,7 @@ export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecu
     result.grokBotDelivery = { deliveryType: delivery.deliveryType as "private" | "group", sendMode: delivery.sendMode as "direct" | "identity",
       ...(delivery.sendMode === "identity" ? { senderAgentId: boundedText(delivery.senderAgentId, "senderAgentId", 4096) } : {}) };
   }
+  if (input.localImages !== undefined) result.localImages = normalizeLocalDeliveryImages(input.localImages);
   return result;
 }
 
@@ -73,6 +76,7 @@ export function resolveEndpointExecutionOptions(request: AgentThreadRequest, own
   const model = explicitModel ? request.model : request.agentAdapter === "codex" ? defaults?.model : undefined;
   const reasoningEffort = request.reasoningEffort ?? (!explicitModel && request.agentAdapter === "codex" ? defaults?.reasoningEffort : undefined);
   const options = normalizeEndpointExecutionOptions({ cwd: request.cwd ?? ownerWorkspace,
+    ...(request.imagePaths?.length ? { localImages: snapshotLocalDeliveryImages(request.imagePaths) } : {}),
     ...(model !== undefined ? { model } : {}), ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(request.sandbox !== undefined ? { sandbox: request.sandbox } : {}),
     ...(request.dshDeliveryMode !== undefined ? { dshDeliveryMode: request.dshDeliveryMode } : {}) });

@@ -90,6 +90,7 @@ export async function sendWorkbuddyThreadMessage(params: {
   threadId: string;
   prompt: string;
   cwd: string;
+  imagePaths?: string[];
 }): Promise<{
   threadId: string;
   action: "started";
@@ -116,6 +117,7 @@ export async function sendWorkbuddyThreadMessage(params: {
     assertAuthorized: params.assertAuthorized,
     sessionId: resolved.id,
     text: params.prompt,
+    imagePaths: params.imagePaths,
     endpoint
   });
   return { threadId: resolved.id, action: "started", openedThread: false, transport: "http" };

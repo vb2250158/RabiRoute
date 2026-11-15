@@ -147,6 +147,7 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
     ...(legacySourceMetadata ? { sourceAgentType: source.agentType } : {}), targetAgentType: target.agentType,
     messageSource: messageSource.type === "plan" ? { type: messageSource.type, planId: messageSource.planId, planName: messageSource.planName } : { type: messageSource.type },
     prompt: request.prompt, contextBlocks: request.contextBlocks ?? [], controlBlocks: request.controlBlocks ?? [],
+    ...(request.imagePaths?.length ? { imagePaths: request.imagePaths } : {}),
     responsePolicy: request.responsePolicy, responseInstruction: request.responseInstruction,
     inReplyToRequestId: request.inReplyToRequestId, result: request.result, nextAction: request.nextAction,
     messageProcessing: request.messageProcessing ? { requirementId: request.messageProcessing.requirementId, outcome: request.messageProcessing.outcome,
@@ -329,7 +330,7 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
   request = { ...request, threadId: completeAgentSessionId(request.threadId, "threadId"),
     sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType), responsePolicy: request.responsePolicy === undefined ? "none" : request.responsePolicy };
   const callerDeliveryId = callerAgentDeliveryId(request.deliveryId);
-  if (request.imagePaths?.length) throw new Error("Endpoint delivery does not transfer local attachment paths.");
+  if (request.imagePaths !== undefined && !Array.isArray(request.imagePaths)) throw new Error("imagePaths must be an array.");
   const source = await options.resolveSource(request);
   const resolvedTarget = await options.resolveTarget(request);
   const originalRequest = request.inReplyToRequestId ? options.store.get(request.inReplyToRequestId) : undefined;
@@ -344,6 +345,10 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
     throw new Error("The current delivery record requires a source address and an exact target endpoint.");
   }
   const sourceEndpoint = normalizeAgentDeliverySource(sourceAddress), targetEndpoint = target.endpoint;
+  if (request.imagePaths?.length && (sourceEndpoint.kind !== "connection" || sourceEndpoint.transport !== "local"
+    || targetEndpoint.kind !== "local" || request.agentTargetId !== `local:${targetEndpoint.provider}`)) {
+    throw new Error("Local image attachments require an explicit local target and the local desktop caller; remote requests cannot read PC files.");
+  }
   // Source metadata is attached from the resolver snapshot, never compared as a second admission gate.
   request = { ...request, sourceThreadId: source.threadId, sourceAgentType: source.agentType,
     messageSource: resolvedMessageSource(request, source) };

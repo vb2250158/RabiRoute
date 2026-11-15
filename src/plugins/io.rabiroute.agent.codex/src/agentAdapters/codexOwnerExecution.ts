@@ -46,13 +46,15 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, _opt
   const endpoint = delivery.target;
   const { cwd, model, reasoningEffort, sandbox } = delivery.executionOptions;
   await assertAuthorized();
-  assertEndpointOwnerDirectory(cwd);
+  try { assertEndpointOwnerDirectory(cwd); }
+  catch (error) { throw new EndpointDeliveryNotSentError(error); }
 
     const thread = readCodexDesktopThread(endpoint.sessionId);
     if (!thread || thread.archived || !thread.cwd) throw new Error("Exact Codex owner is unavailable.");
     if (!sameCodexWorkspace(thread.cwd, cwd)) throw agentWorkspaceMismatch(endpoint);
     try {
       return await transport.sendCodex({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
+        imagePaths: delivery.executionOptions.localImages?.map(image => image.path),
         sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
     } catch (error) {
       if (error instanceof CodexDesktopPromptNotSentError) throw new EndpointDeliveryNotSentError(error);

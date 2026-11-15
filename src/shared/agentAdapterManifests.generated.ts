@@ -53,6 +53,7 @@ export const installedAgentAdapterManifests = [
         "memoryConsolidationAgent": true,
         "hooks": true,
         "agentThreads": true,
+        "imageAttachments": true,
         "deliveryReceiptRecovery": true
       }
     }
@@ -103,7 +104,8 @@ export const installedAgentAdapterManifests = [
         "planAssistantSessions": true,
         "memoryConsolidationAgent": true,
         "hooks": true,
-        "agentThreads": true
+        "agentThreads": true,
+        "imageAttachments": true
       }
     }
   },
@@ -151,7 +153,8 @@ export const installedAgentAdapterManifests = [
       "managedTasks": {
         "messageProcessingAgent": true,
         "hooks": true,
-        "agentThreads": true
+        "agentThreads": true,
+        "imageAttachments": true
       }
     }
   }

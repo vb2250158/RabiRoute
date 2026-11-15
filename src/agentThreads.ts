@@ -34,6 +34,7 @@ import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 
 import {
   isAgentThreadCapableAdapter,
+  agentAdapterCapabilities,
   type PlanAssistantAgentType
 } from "./shared/agentAdapterCapabilities.js";
 
@@ -521,6 +522,12 @@ async function readAgentThreadForAdapter(
   driver: AgentThreadDriver
 ): Promise<{ value: unknown; summary: AgentThreadSummary | null }> {
   if (driver !== defaultDriver) return readAgentThread(threadId, driver);
+  if (agentAdapterCapabilities(adapter).nativeThreadOperations) {
+    const result = await invokeScopedAgentManagerOperation<AgentThreadRequestResult>(adapter, "threads.request", { request: { action: "read", agentAdapter: adapter, threadId } }, { assertCurrent: options.requestAuthority });
+    if (result.statusCode !== 200) throw new Error("Original Agent thread owner could not read this session.");
+    const value = result.data.thread;
+    return { value, summary: threadSummary(value) };
+  }
   const value = adapter === "dsh"
     ? await readDshSession(threadId, await dshBaseUrlFor(options))
     : adapter === "antigravity"
@@ -937,6 +944,9 @@ async function executeAgentThreadRequest(
   }
   if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
     return executeEndpointAgentDelivery(request, options.endpointDelivery);
+  }
+  if (request.agentAdapter && agentAdapterCapabilities(request.agentAdapter).nativeThreadOperations) {
+    return invokeScopedAgentManagerOperation<AgentThreadRequestResult>(request.agentAdapter, "threads.request", { request }, { assertCurrent: options.requestAuthority });
   }
   if (request.agentAdapter === "grokBot") {
     if (!options.invokeAgentOperation) throw new Error("The Grok Bot plugin is unavailable.");
@@ -1663,10 +1673,7 @@ async function executeAgentThreadRequest(
       if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
       if (imagePaths.length) delivery.imagePaths = imagePaths;
       if (targetAgentAdapter === "workbuddy" && driver === defaultDriver) {
-        if (imagePaths.length) {
-          throw new Error("WorkBuddy deliveries do not carry image attachments.");
-        }
-        return await sendWorkbuddyThreadMessage({ threadId, prompt, cwd });
+          return await sendWorkbuddyThreadMessage({ threadId, prompt, cwd, imagePaths });
       }
       return targetAgentAdapter === "dsh" && driver === defaultDriver
         ? await sendDshSessionMessage({

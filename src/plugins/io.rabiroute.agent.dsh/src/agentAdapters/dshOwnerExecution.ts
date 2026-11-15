@@ -16,7 +16,8 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, opti
     await assertAuthorized();
     if (!thread || !thread.cwd || !sameCodexWorkspace(thread.cwd, cwd)) throw new Error("Exact DSH owner is unavailable.");
     return sendDshSessionMessage({ sessionId: endpoint.sessionId, prompt: delivery.prompt, cwd, baseUrl: options.dshBaseUrl,
-      requestId: delivery.deliveryId, mode: dshDeliveryMode, assertAuthorized });
+      requestId: delivery.deliveryId, mode: dshDeliveryMode, assertAuthorized,
+      imagePaths: delivery.executionOptions.localImages?.map(image => image.path) });
 
 }
 

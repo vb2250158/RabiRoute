@@ -19,7 +19,8 @@
         "planAssistantSessions": true,
         "memoryConsolidationAgent": true,
         "hooks": true,
-        "agentThreads": true
+        "agentThreads": true,
+        "imageAttachments": true
       }
     }
   },
