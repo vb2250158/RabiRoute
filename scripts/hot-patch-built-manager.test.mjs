@@ -25,8 +25,13 @@ test("built Manager keeps its identity while discovering modules and updating so
   await fs.mkdir(stateRoot);
   await fs.mkdir(sourceRoot);
   for (const name of ["roles", "routes", "appdata", "localappdata", "home", "userprofile"]) await fs.mkdir(path.join(root, name));
-  await fs.writeFile(profile, JSON.stringify({ schemaVersion: 2, readyRequires: ["manager.core@1", "manager.diagnostics@1"],
-    instances: ["core", "diagnostics"].map(name => ({ id: `manager:${name}`, package: `io.rabiroute.manager.${name}`, version: "1.0.0", enabled: true, config: {}, grants: [] })) }));
+  const desktopProfile = JSON.parse(await fs.readFile(path.join(packageRoot, "dist/plugins/profiles/desktop.json"), "utf8"));
+  const requiredInstances = ["core", "diagnostics"].map(name => {
+    const instance = desktopProfile.instances.find(item => item.id === `manager:${name}`);
+    assert.ok(instance, `Built desktop profile is missing manager:${name}.`);
+    return instance;
+  });
+  await fs.writeFile(profile, JSON.stringify({ schemaVersion: 2, readyRequires: ["manager.core@1", "manager.diagnostics@1"], instances: requiredInstances }));
   const sourcePath = path.join(fixtureSourceRoot, "src/manager/pluginCatalogPresentation.ts");
   const sourceBytes = await fs.readFile(sourcePath);
   const catalog = JSON.parse(await fs.readFile(path.join(packageRoot, "dist/automatic-code/catalog.json"), "utf8"));
@@ -211,6 +216,7 @@ test("built Manager keeps its identity while discovering modules and updating so
       await new Promise(resolve => setTimeout(resolve, 100));
     } while (Date.now() < webDeadline);
     assert.equal(webBefore.state, "ready", JSON.stringify(webBefore));
+    const originalModules = (await request(`/api/plugins/modules?webRelease=${webBefore.active}`)).value.data.modules;
     checkpoint("initial Web release ready");
     const webOutput = path.join(sourceRoot, "dist/web-patches");
     // Build outside the watched source tree, then publish one complete candidate atomically.
@@ -262,10 +268,15 @@ test("built Manager keeps its identity while discovering modules and updating so
     assert.equal(createHash("sha256").update(Buffer.from(await oldAsset.arrayBuffer())).digest("hex"), createHash("sha256").update(bundleBytes).digest("hex"));
     const modules = (await request(`/api/plugins/modules?webRelease=${webBefore.active}`)).value.data.modules;
     for (const module of modules) {
-      assert.equal(module.rev, webBefore.active);
+      if (module.resourceMode === "package") {
+        assert.equal(module.rev, originalModules.find(item => item.id === module.id)?.rev);
+      } else {
+        assert.equal(module.rev, webBefore.active);
+      }
       const wrapper = await fetch(`${ready.baseUrl}/api/plugins/modules/${module.id}/${module.rev}/${module.entryPath}`);
       assert.equal(wrapper.status, 200);
-      assert.match(await wrapper.text(), new RegExp(webBefore.active));
+      const content = await wrapper.text();
+      if (module.resourceMode !== "package") assert.match(content, new RegExp(webBefore.active));
     }
     const rollback = (await request("/_rabiroute/host/web-patches", {
       ...webAfter.identity, operationId: randomUUID(), candidate: webBefore.active, expectedRevision: webAfter.revision

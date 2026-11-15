@@ -1,11 +1,11 @@
 // Synthetic integration fixture: the real PC owner services consume the existing Relay HTTP queue.
 import http from 'node:http';
-import { createRabiLinkMobileOwner } from '../src/manager/rabiLinkMobileOwner.js';
-import { createRabiLinkMobileOperations } from '../src/manager/rabiLinkMobileOperations.js';
+import { createRabiLinkMobileOwner } from '../src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.js';
+import { createRabiLinkMobileOperations } from '../src/plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.js';
 import { createRabiLinkAgentDevices } from '../src/manager/rabiLinkAgentDevices.js';
-import { createRabiLinkAgentDeviceOperations } from '../src/manager/rabiLinkAgentDeviceOperations.js';
+import { createRabiLinkAgentDeviceOperations } from '../src/plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.js';
 import { ManagerPluginRouteRegistry } from '../src/manager/managerPluginRouteRegistry.js';
-import { normalizeRabiLinkTaskInput } from '../src/adapters/rabilinkTaskInput.js';
+import { normalizeRabiLinkTaskInput } from '../src/plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkTaskInput.js';
 const base = String(process.env.OWNER_FIXTURE_RELAY), token = String(process.env.OWNER_FIXTURE_TOKEN), appId = String(process.env.OWNER_FIXTURE_APP);
 const deviceId = String(process.env.OWNER_FIXTURE_PC || 'pc-test');
 const headers = { 'x-rabilink-token': token, 'content-type': 'application/json' };

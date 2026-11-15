@@ -9,6 +9,19 @@ import { buildPluginPackages, finalizePluginBuildWebArtifacts, finalizeSelectedP
 import { execFileSync, spawn } from "node:child_process";
 import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
 
+test('package-owned native sidecars resolve after relocation without a node_modules directory',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'endpoint-native-sidecar-'));
+  try{
+    await fs.mkdir(path.join(root,'src'));await fs.mkdir(path.join(root,'out/native-deps'),{recursive:true});
+    await fs.writeFile(path.join(root,'src/entry.mjs'),'import native from "fixture-native"; export function read(){return native.value;}');
+    await fs.writeFile(path.join(root,'out/native-deps/fixture.cjs'),'module.exports={value:42};');
+    const specification={exports:[{source:'src/entry.mjs',name:'read'}],ownedPrefixes:['src/'],externalPackagePaths:{'fixture-native':'./native-deps/fixture.cjs'}};
+    const output=path.join(root,'out/runtime.mjs');await bundleMessageEndpointRuntime(root,specification,output);
+    const loaded=await import(pathToFileURL(output));assert.equal(loaded.createImplementation({}).read(),42);
+    await assert.rejects(bundleMessageEndpointRuntime(root,{...specification,externalPackagePaths:{'fixture-native':'../foreign.cjs'}},output),/Invalid package-owned/);
+  }finally{await fs.rm(root,{recursive:true,force:true})}
+});
+
 test("endpoint dependencies follow emitted owner reads and preserve explicit bare initialization imports", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-emitted-owners-"));
   try {

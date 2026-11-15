@@ -98,6 +98,7 @@ from PySide6 import QtCore, QtGui, QtNetwork, QtWidgets
 import PIL, uiautomation, pip
 from rabiroute_tray import desktop_diagnostics
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+from rabiroute_tray import tray_app
 icon = QtWidgets.QSystemTrayIcon(QtGui.QIcon())
 server = QtNetwork.QLocalServer()
 assert icon is not None and server is not None
