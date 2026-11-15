@@ -5,6 +5,7 @@ import { transformWindowsSecret } from '@rabilink/desktop-voice-service/windows-
 import { initialAssistantSettings, patchAssistantSettings, validateAssistantSettings, previewAssistantSettings } from '@rabilink/desktop-voice-service/settings';
 import { speechCredentialRef } from '@rabilink/desktop-voice-service/provider-profiles';
 import { modelCredentialRef } from '@rabilink/desktop-voice-service/model-providers';
+import {webSearchCredentialRef} from '@rabilink/desktop-voice-service/web-search-catalog';
 
 export async function openSettingsStore(directory, { protect = value => transformWindowsSecret(value, false), unprotect = value => transformWindowsSecret(value, true) } = {}) {
   await mkdir(directory, { recursive: true });
@@ -23,6 +24,7 @@ export async function openSettingsStore(directory, { protect = value => transfor
     settings = nextSettings; encrypted = nextEncrypted;
   };
   const reference = (kind, endpoint, provider) => {
+    if(kind==='search')return webSearchCredentialRef(provider);
     if (kind === 'llm') {
       return modelCredentialRef(provider || settings.llmProvider || 'compatible',endpoint);
     }
@@ -34,9 +36,13 @@ export async function openSettingsStore(directory, { protect = value => transfor
     saveBatch: patches => enqueue(async () => { const next=previewAssistantSettings(settings,patches);if(patches.length)await commit(next,encrypted);return structuredClone(next); }),
     save: patch => enqueue(async () => { const next = patchAssistantSettings(settings, patch); await commit(next, encrypted); return structuredClone(next); }),
     credentials: {
-      async describe(kind, endpoint, provider) { return { configured: Boolean(encrypted[reference(kind, endpoint, provider)]), writable: true }; },
+      async describe(kind, endpoint, provider) {
+        if(kind==='llm'&&provider==='workbuddy-cli')return {configured:true,writable:false,mode:'official-login'};
+        return { configured: Boolean(encrypted[reference(kind, endpoint, provider)]), writable: true };
+      },
       async resolve(kind, endpoint, provider) { const value = encrypted[reference(kind, endpoint, provider)]; return value ? unprotect(value) : undefined; },
       set: (kind, endpoint, key, provider) => {
+        if(kind==='llm'&&provider==='workbuddy-cli')throw Error('WORKBUDDY_USES_OFFICIAL_LOGIN');
         const id = reference(kind, endpoint, provider);
         return enqueue(async () => {
         if (typeof key !== 'string' || key.length > 8192 || /[\r\n]/.test(key)) throw Error('SPEECH_CREDENTIAL_INVALID');
