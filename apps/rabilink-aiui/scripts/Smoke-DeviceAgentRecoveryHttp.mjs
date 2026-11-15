@@ -5,8 +5,8 @@ import http from 'node:http';
 import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDeviceAgentOwner } from '../../../src/agentAdapters/deviceAgentOwner.ts';
-import { createDeviceAgentOperations } from '../../../src/agentAdapters/deviceAgentOperations.ts';
+import { createDeviceAgentOwner } from '../../../src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOwner.ts';
+import { createDeviceAgentOperations } from '../../../src/plugins/io.rabiroute.agent.device-agent/src/agentAdapters/deviceAgentOperations.ts';
 import { ManagerPluginRouteRegistry } from '../../../src/manager/managerPluginRouteRegistry.ts';
 
 // Real PC journal/HTTP handlers plus the production page adapter. Device auth,

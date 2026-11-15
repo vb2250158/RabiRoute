@@ -1,3 +1,4 @@
+import { canonicalAgentIntent } from '../../../packages/assistant-runtime/src/decision-protocol.js';
 const failure = code => Object.assign(new Error(code), { code });
 const copy = value => JSON.parse(JSON.stringify(value));
 const settled = row => ['answered', 'completed'].includes(row.status);
@@ -23,7 +24,7 @@ export function createAiuiInputLedger({ read, write }) {
   function save(value) {
     try {
       write(copy(value));
-      if (JSON.stringify(read()) !== JSON.stringify(value)) throw Error('readback mismatch');
+      if (canonicalAgentIntent(read()) !== canonicalAgentIntent(value)) throw Error('readback mismatch');
     } catch (cause) { throw Object.assign(failure('AIUI_INPUT_STORAGE_FAILED'), { cause }); }
   }
   function update(input, allowed, patch) {

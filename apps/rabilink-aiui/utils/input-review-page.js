@@ -26,7 +26,7 @@ export const inputReviewPageMethods = {
   refreshAiuiInputReview(recordDelta = 0, pageDelta = 0) {
     if (this.destroyed) return;
     try {
-      const rows = this.inputLedger().snapshot();
+      const rows = [...(this.localConversationRows?.() || []), ...this.inputLedger().snapshot()];
       const selected = rows.findIndex(row => row.id === this.data.inputReviewId);
       const index = Math.max(0, Math.min(rows.length - 1, (selected < 0 ? rows.length - 1 : selected) + recordDelta));
       const row = rows[index];

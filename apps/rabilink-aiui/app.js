@@ -20,7 +20,7 @@ export default {
     console.error("[RabiLink AIUI] app:error", safeErrorSummary(error));
   },
   globalData: {
-    appName: "RabiLink AIUI",
+    appName: "拉比小助手",
     releaseVersion: "__RABILINK_RELEASE_VERSION__"
   }
 };

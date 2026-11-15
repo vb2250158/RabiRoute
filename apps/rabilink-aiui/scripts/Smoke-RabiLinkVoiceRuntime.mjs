@@ -58,6 +58,7 @@ try {
   await negotiating;
   assert.equal(negotiatedRound.started, true);
   assert.equal(negotiatedRound.interimResults, false, "Final-only hosts must not be asked for interim results.");
+  assert.equal(negotiatedAsr.getCapability().supportsPartial, false);
   const cancelledRound = negotiatedAsr.createRound({ interimResults: true });
   const cancelledStart = negotiatedAsr.start(cancelledRound);
   negotiatedAsr.stop(cancelledRound);
@@ -69,7 +70,7 @@ try {
   assert.equal(asrCapability.requiresApiKey, false);
   assert.equal(asrCapability.networkFallback, false);
   assert.equal(asrCapability.supportsContinuous, true);
-  assert.equal(asrCapability.supportsPartial, true);
+  assert.equal(asrCapability.supportsPartial, null, "Availability alone cannot prove partial results.");
 
   let finalResult = null;
   let nativeError = null;

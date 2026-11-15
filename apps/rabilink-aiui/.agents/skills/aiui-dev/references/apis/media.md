@@ -1,6 +1,6 @@
 # AIUI Media API Reference
 
-This file documents the verified media playback, capture, and recording APIs available to AIUI agent code.
+This file documents the verified media playback, capture, recording, and library APIs available to AIUI agent code.
 
 - Common scope, entry points, and authoring rules live in [apis.md](./index.md).
 - Keep examples aligned with the current local-file-focused implementation.
@@ -272,3 +272,61 @@ The default encoded dimensions are `2016 × 2688` for `wide`, `2016 × 1512`
 for `telephoto`, and `3024 × 4032` for `default`. Read the selected video
 track's `getSettings()` for actual stream dimensions; photo dimensions may
 differ from the video stream.
+
+
+## Media Library
+
+`navigator.mediaLibrary` accesses system images and audio. Declare only the needed
+permissions in `app.json`: `READ_MEDIA_IMAGES` or `READ_MEDIA_AUDIO` for `list()`
+and `get()`; `CREATE_MEDIA_IMAGES` or `CREATE_MEDIA_AUDIO` for `save()`. Image
+and audio permissions are independent. Manifest declarations do not grant system
+authorization. Request authorization from an interactive view and handle denial,
+limited access, and operation errors.
+
+- `getAuthorizationStatus(access, mediaType?)` queries without showing a prompt;
+  `requestAuthorization(access, mediaType?)` requests access. Both return a
+  Promise of `prompt`, `restricted`, `denied`, `limited`, or `granted`.
+  `access` is `read` or `add`, and `mediaType` is `image` (default) or `audio`.
+  Limited read access exposes only the user's selected assets.
+- `list(options?)` returns `{ items, nextCursor, access }`, with `access` equal
+  to `full` or `limited`. Options: `mediaType`, `createdAfter`, `createdBefore`
+  (integer Unix milliseconds), `order` (`ascending` or `descending`, default
+  `descending`), `limit` (1–100, default 20), and `cursor`. Use the returned
+  cursor only with the same media type, filters, and ordering; `null` ends paging.
+- `get(id, options?)` returns `{ asset, file }`, where `file` is a `File`.
+  Options include `mediaType` (default `image`) and `representation` (default
+  `original`, or `thumbnail` for images). Positive integer `width` and `height`
+  are thumbnail bounds only. Audio supports only `original` and requires
+  `mediaType: 'audio'`.
+- `save(blob, options?)` creates a new asset and returns its metadata. The Blob
+  or File must be non-empty with an `image/*` or `audio/*` MIME type. Options
+  are `filename` (a hint, never an overwrite), `creationTime` (integer Unix
+  milliseconds), and `idempotencyKey` (reuse for retries of the same operation;
+  a new operation needs a new key).
+- Assets expose opaque `id` and `mediaType`; `mimeType`, `width`, `height`,
+  `durationMs`, `creationTime`, `modificationTime`, `filename`, and `size` may
+  be null. Times and duration are in milliseconds; size is in bytes.
+- Invalid arguments produce `TypeError`. Handle `NotAllowedError`,
+  `NotFoundError`, `InvalidStateError`, `NotSupportedError`, and
+  `OperationError`. iOS does not support audio library operations. Video library
+  operations and `allowNetwork` are unsupported; cloud-only images unavailable
+  locally can fail with `OperationError`.
+
+```javascript
+// Declare READ_MEDIA_IMAGES in app.json; call from a user interaction.
+const library = navigator.mediaLibrary;
+try {
+  const status = await library.requestAuthorization('read', 'image');
+  if (status === 'granted' || status === 'limited') {
+    const page = await library.list({ mediaType: 'image', limit: 20 });
+    if (page.items.length) {
+      const { file } = await library.get(page.items[0].id, {
+        representation: 'thumbnail', width: 320, height: 240,
+      });
+      console.log(file.type, file.size);
+    }
+  }
+} catch (error) {
+  console.error('Media library unavailable:', error);
+}
+```

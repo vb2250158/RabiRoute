@@ -97,3 +97,42 @@ Call `context.clear()` when the generated interface should be removed.
 | `context.clear()` | Clears the generated interface. |
 
 `a2ui` does not provide `agent-id`, `session-id`, or `bindmessage`. Manage the agent session and incoming messages in the page or an Agent Worker, then pass the resulting A2UI instructions to this component.
+
+## Play a Video in a Generated Interface
+
+Add a `Video` to A2UI `updateComponents` and set its size, source, and playback options:
+
+```json
+{
+  "id": "clip",
+  "component": "Video",
+  "props": {
+    "src": "/assets/intro.mp4",
+    "width": 160,
+    "height": 90,
+    "objectFit": "contain",
+    "autoplay": true,
+    "loop": true,
+    "muted": true
+  }
+}
+```
+
+Use an H.264 MP4, optionally with AAC audio. Playback depends on the device's video capability. `src` also accepts a data binding; see [Video](/AIUI/components/video) for more playback guidance.
+
+## Adjust a Dialog's Appearance
+
+For an A2UI `Modal`, use `headerChild` to identify a title component and `panelAppearance` or `closeAppearance` to style the panel and close button. For more layout control, use `props.contentStyle` and `props.closeButtonStyle`; `borderless: true` removes the panel border. Leave enough room for the close button.
+
+For example, this `Modal` refers to an existing open button, title, and body. Include it alongside those components in `updateComponents.components`:
+
+```json
+{
+  "id": "dialog",
+  "component": "Modal",
+  "trigger": "open_button",
+  "content": "dialog_body",
+  "headerChild": "dialog_title",
+  "panelAppearance": { "borderRadius": 16, "padding": 20 }
+}
+```

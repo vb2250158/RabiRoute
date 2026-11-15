@@ -89,6 +89,8 @@ async function bundlePageSetup(setupSource, relayBaseUrl, releaseVersion) {
     ['rokid-voice/src/transcript-policy.js', '../../packages/rokid-voice/src/transcript-policy.js'],
       ['rokid-voice/src/task-input.js', '../../packages/rokid-voice/src/task-input.js'],
       ['rokid-voice/src/task-input-handoff.js', '../../packages/rokid-voice/src/task-input-handoff.js'],
+    ['assistant-runtime/src/speech-expression.js', '../../packages/assistant-runtime/src/speech-expression.js'],
+    ['assistant-runtime/src/speech-observation.js', '../../packages/assistant-runtime/src/speech-observation.js'],
     ['assistant-runtime/src/decision-protocol.js', '../../packages/assistant-runtime/src/decision-protocol.js'],
       ['assistant-runtime/src/assert-current.js', '../../packages/assistant-runtime/src/assert-current.js'],
       ['assistant-runtime/src/interjection.js', '../../packages/assistant-runtime/src/interjection.js'],

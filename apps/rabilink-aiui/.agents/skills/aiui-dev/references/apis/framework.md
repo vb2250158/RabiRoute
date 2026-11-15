@@ -41,3 +41,7 @@ const list = page.querySelector('#results');
 ```
 
 Do not assume a complete browser DOM. Component nodes expose only their documented AIUI methods and properties.
+
+## App Script Errors
+
+`app.js` may define `onError(message)` for uncaught synchronous script errors, including timer and lifecycle callbacks. The string includes the message and available stack. Caught exceptions, failure callbacks, and Promise rejections do not trigger it; handle asynchronous errors locally.

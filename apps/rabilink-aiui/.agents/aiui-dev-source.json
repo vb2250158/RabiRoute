@@ -1,13 +1,9 @@
 {
   "repository": "https://github.com/yodaos-project/AIUI",
-  "commit": "00c6ec71ee313817705683248b3ebe2acf0937f0",
+  "commit": "7b6d0e73a123d919bbc00916eaeabf01a139397f",
   "path": "skills/aiui-dev",
-  "verifiedAt": "2026-11-07",
+  "verifiedAt": "2026-11-16",
   "files": [
-    {
-      "path": "SKILL.md",
-      "gitBlobSha1": "937e05bf6bcf47382fd2f6f6899ae3c17a1d9989"
-    },
     {
       "path": "assets/minimal-agent-worker.js",
       "gitBlobSha1": "204e7d6958ca69e20855cfb60a711f02b72997f9"
@@ -34,7 +30,7 @@
     },
     {
       "path": "references/apis/canvas.md",
-      "gitBlobSha1": "31307dc951e055b245439c121c61d10c0d3518f4"
+      "gitBlobSha1": "0f9770a00d1a49c49c4ff10af0b5c7972b1c9245"
     },
     {
       "path": "references/apis/device.md",
@@ -42,11 +38,11 @@
     },
     {
       "path": "references/apis/framework.md",
-      "gitBlobSha1": "cf31bb1fac595d8bd792c4b7fd9490ea7b203f80"
+      "gitBlobSha1": "8b108f0badf319d53e1ad7045d96c4a6026ff869"
     },
     {
       "path": "references/apis/geo/geolocation.md",
-      "gitBlobSha1": "62b4ef68c256ecc2d7d994c3c385de9fa7b984b4"
+      "gitBlobSha1": "7fb839627d06b00aa31410b9d89886eb1a032362"
     },
     {
       "path": "references/apis/geo/gpx-document.md",
@@ -54,23 +50,27 @@
     },
     {
       "path": "references/apis/geo/index.md",
-      "gitBlobSha1": "716339a3958f77f6043e56fa42776bcedcfd8988"
+      "gitBlobSha1": "a22f1938f066b8af8134ac892db2fdc2fddaf438"
+    },
+    {
+      "path": "references/apis/geo/maps.md",
+      "gitBlobSha1": "0e231dad39bfd9b495a7f0f8a3aa796777a8bcf3"
     },
     {
       "path": "references/apis/index.md",
-      "gitBlobSha1": "f7384da48ad5fd2c2b4ae34547755d0a79d032a6"
+      "gitBlobSha1": "a1879b9ebecb58e6372a5c1ad70b9d57848804a8"
     },
     {
       "path": "references/apis/media.md",
-      "gitBlobSha1": "114d81ee89e9921a486293a143816cb410854ac4"
+      "gitBlobSha1": "7c412906f8d188232ea8939dbc8ca22373535977"
     },
     {
       "path": "references/apis/navigator.md",
-      "gitBlobSha1": "a9375ba8adbc4a6c050e7a9912ca92bef6a7759a"
+      "gitBlobSha1": "161c095a6ea01aeb113bb8339026e7febd40a6f8"
     },
     {
       "path": "references/apis/web.md",
-      "gitBlobSha1": "9808cee50e06afad8d077dc6593226ea0149a426"
+      "gitBlobSha1": "30dff3236058ad51149842a942a7f6a2fb61bbae"
     },
     {
       "path": "references/apis/widget.md",
@@ -82,19 +82,15 @@
     },
     {
       "path": "references/apis/wx.md",
-      "gitBlobSha1": "0a8fea365c0c67d5ddacc24560f020395ffe9085"
+      "gitBlobSha1": "1a40b9d2a16eafa7eb8dc447d3794da47dba02e4"
     },
     {
       "path": "references/checklist.md",
       "gitBlobSha1": "9cdf9bf5ec7187bc2c1330294c7b4c79601e48a4"
     },
     {
-      "path": "references/components.md",
-      "gitBlobSha1": "d82f80906fc0173cd607cb7a7c3a7d356e3c2cb7"
-    },
-    {
       "path": "references/components/a2ui.md",
-      "gitBlobSha1": "ea7de5fbe7343310d049a535da2866a334b5fd8f"
+      "gitBlobSha1": "25cda8212ac7dbbe42caa697b860103c8f423c90"
     },
     {
       "path": "references/components/b.md",
@@ -217,6 +213,10 @@
       "gitBlobSha1": "2be7946a354504edf0ad873257277026aa70b881"
     },
     {
+      "path": "references/components.md",
+      "gitBlobSha1": "d82f80906fc0173cd607cb7a7c3a7d356e3c2cb7"
+    },
+    {
       "path": "references/design/full-color.md",
       "gitBlobSha1": "185a80d156df5898772c5f6f22eda13d09a6019a"
     },
@@ -230,11 +230,15 @@
     },
     {
       "path": "references/framework.md",
-      "gitBlobSha1": "75344e156b73047251eac9bcb355075d3a45d41f"
+      "gitBlobSha1": "fd698ee3218df456faf4f90eeed3d522beb39733"
     },
     {
       "path": "references/wxss.md",
       "gitBlobSha1": "30caebbcd93370246f7bde9ccfd25357425e0b37"
+    },
+    {
+      "path": "SKILL.md",
+      "gitBlobSha1": "937e05bf6bcf47382fd2f6f6899ae3c17a1d9989"
     }
   ]
 }

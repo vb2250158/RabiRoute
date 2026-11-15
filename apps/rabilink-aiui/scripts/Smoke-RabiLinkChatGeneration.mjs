@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { createModelHistory } from '../utils/model-history.js';
+import { sha256Text } from '../../../packages/rabi-api-contract/fingerprint.mjs';
 import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,16 +16,17 @@ const profileSource = fs.readFileSync(new URL('../utils/agent-profile-page.js', 
 const readiness = profileSource.slice(profileSource.indexOf('  isAiuiVoiceContextReady() {'), profileSource.indexOf('  invalidateAiuiVoiceContext() {')).trim().replace(/,$/, '');
 function extract(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))).trim().replace(/,$/, ''); }
 function fixture(storageFails = false, timeout = requestTimeout, online = true) {
-  const pending = [], saved = [], spoken = [], modelOptions = [];
-  const context = vm.createContext({ rabiAgentProtocol, getAgentProtocolFailureReason, rabiAgentToolPolicy, requestTimeout: timeout, console, Promise, Number, String, navigator: { onLine: online },
+  const pending = [], saved = [], spoken = [], modelOptions = [], storage = new Map();
+  const context = vm.createContext({ createModelHistory, sha256Text, rabiAgentProtocol, getAgentProtocolFailureReason, rabiAgentToolPolicy, requestTimeout: timeout, console, Promise, Number, String, navigator: { onLine: online },
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; }, clearTimeout,
-    wx: { setStorageSync: (key, value) => { if (storageFails) throw Error('disk'); saved.push({ key, value }); } },
+    wx: { getStorageSync: key => storage.get(key), setStorageSync: (key, value) => { if (storageFails) throw Error('disk'); storage.set(key, structuredClone(value)); saved.push({ key, value }); } },
     lingzhuLanguageModelOptions,
     LanguageModel: { availability: async () => 'available', create: options => { modelOptions.push(options); return new Promise(resolve => pending.push(resolve)); } }
   });
   const methods = vm.runInContext(`({${readiness},${extract('  handleTranscriptionResult(text) {', '  async executeLingzhuAgentPrompt(')},${extract('  async executeLingzhuAgentPrompt(', '  recognitionStartupTimeoutMs() {')},${extract('  async ensureChatModel() {', '  async ensureConfigurationModel() {')},${extract('  cleanupChatModel() {', '  async ensureChatModel() {')}})`, context);
+  const historyMethods = vm.runInContext(fs.readFileSync(new URL('../utils/model-history-page.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace('export const ', 'const ') + '\nmodelHistoryPageMethods', context);
   // These local-name fixtures have no configured Rabi credential scope.
-  const page = { ...methods, ...taskFollowPageMethods, currentAgentProfileScope: () => '', browseKnowledgeResultFromSpeech: () => false, prepareRabiApiTools: async () => ({tools: [], runtime: null}), deviceAgentSystemInstructions: fallback => fallback, acknowledgeDeviceAgentProfile: async () => {}, data: { lingzhuAgentName: 'Old', lingzhuAgentId: 'id', lingzhuSystemPrompt: 'prompt' }, setData(patch) { Object.assign(this.data, patch); }, speakText(text) { spoken.push(text); } };
+  const page = { ...methods, ...historyMethods, ...taskFollowPageMethods, currentAgentProfileScope: () => '', browseKnowledgeResultFromSpeech: () => false, prepareRabiApiTools: async () => ({tools: [], runtime: null}), deviceAgentSystemInstructions: fallback => fallback, acknowledgeDeviceAgentProfile: async () => {}, data: { lingzhuAgentName: 'Old', lingzhuAgentId: 'id', lingzhuSystemPrompt: 'prompt' }, setData(patch) { Object.assign(this.data, patch); }, speakText(text) { spoken.push(text); } };
   page.config = () => ({});
   attachPageVoiceFixture(page);
   return { page, pending, saved, spoken, modelOptions };

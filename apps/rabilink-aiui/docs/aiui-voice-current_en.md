@@ -2,6 +2,29 @@ English | [简体中文](aiui-voice-current.md)
 
 # AIUI Conversation, Voice, and Device Troubleshooting
 
+## Current candidate 1.0.40 — November 16, 2026
+
+The submission application name is exactly **拉比小助手**. Application/page titles, `app.globalData.appName`, runtime reporting and default upload metadata match it. The configurable persona `agentName` remains independent. The original cloud project is still located by its historical name; it is not yet signed in or renamed, and no new draft is created.
+
+AIUI still runs the host `LanguageModel`, with the identical session, voice interaction and resource owner from `packages/assistant-runtime`. No Electron, Windows speech dependency or PC model forwarding enters the glasses bundle. Existing controlled tool adapters remain; basic host conversation does not require a PC connection.
+
+- The first nonempty ASR text accepted by echo, punctuation and rapid-duplicate filtering stops current and queued audio. Raw VAD, empty text and rejected transcripts retain sound. Capture, model streaming and tool work continue. Finals submit automatically; interim revisions display immediately.
+- VAD is capture feedback only. Final-only hosts show transcription after capture ends. The host recognition API exposes no volume waveform, so the candidate does not draw a fabricated one. Thinking, responding, synthesis, playback, pause and errors have separate states.
+- `timed-text` follows the player's actual active cue. Long captions window around its actual character range; older cues without offsets highlight only the returned cue text. No model-token timing or estimated playback is used. Cancellation and completion clear highlighting.
+- Partial recognition is negotiated through `SpeechRecognitionSession.getCapabilities()`; `supportsPartial=null` before negotiation. These APIs do not expose emotion, age, gender, detected language, speaker or rate estimates, so this candidate does not fabricate `speechObservation`. Its shared SDK contract remains available for hosts returning real data. The application adds no sensitive-word filter; upstream host policies are not an exposed preference.
+
+### Native model transcript journal
+
+`utils/model-history.js` uses host `wx.getStorageSync/setStorageSync` for actual model inputs and completed outputs, isolated by a SHA-256 of persona ID, prompt and persona source. Any real hidden observation in model input is preserved verbatim; visible records project user text and replies only. New model creation restores the current system prompt followed by recent completed exchanges. Failed or incomplete requests remain unconfirmed and never replay automatically.
+
+This is a raw conversation ledger. Sixteen consecutive model exchanges form one physical shard; `activityAt` is the start/settlement time. Events write records; startup/model creation reads the index. Sequence/revision fencing rejects stale owners. Shard write/readback precedes index publication; an unpublished slot can be reused before any model dispatch. Context restores at most 128 recent exchanges and a 32768-character suffix; the view reads at most 64 exchanges. Original shards remain intact: no deletion, expiry or semantic consolidation. These are physical shards, not archival; 24/72-hour archival windows do not apply. Storage failures stop a new request and report an error.
+
+### Acceptance boundaries
+
+Official Skill commit `7b6d0e73a123d919bbc00916eaeabf01a139397f` is verified across 59 project and 59 installed files. AIX/AIX CLI `0.12.0` and Ink `0.20.0` are pinned separately. npm updates do not update Studio or glasses runtimes. Studio currently shows signed out; ADB lists a phone only. Real Ink WASM rendering/player/accepted-text interruption regressions run locally, but the WASM host loses `wx` storage when the entire view is destroyed: the cross-view history restoration diagnostic fails. Persistent-storage fixtures do not replace that failed diagnostic or device acceptance. Official Studio import, real host model/audio and glasses history reopening remain unverified.
+
+The following entries are historical; old speech-onset interruption descriptions are superseded.
+
 November 7 online toolchain recheck: npm's current stable AIX/AIX CLI releases are `0.12.0`; the manifest, lockfile and isolated local build dependencies are upgraded. Ink remains `0.19.1`. Official Skill `main` still points to `00c6ec71ee313817705683248b3ebe2acf0937f0`; both 58-file project/installed copies pass their audit. The new tools pass 48 source and 48 supplied-AIX contracts, the complete Agent check and archive audit. The package also includes the task-follow maintenance instructions. Official CLI `check` reports no errors and the existing `AIX033` warning below. This does not update Studio or the glasses runtime; see the [official CLI documentation](https://yodaos-project.github.io/aix/cli).
 
 Same-day Studio editing fallback check: the original main project remains synced; the file tree and `pages/home/index.js` are readable, and context menus/command palette work. The editor uses `native-edit-context`: clicking visible code focuses it, but browser `locator.press` repeatedly times out, so a full original-source copy could not be obtained. Raw CDP input is explicitly unsupported. No usable Select All command was exposed, no file was overwritten and no project was created. The current computer-use skill forbids the desktop fallback through ChatGPT's UI. ADB still lists no device. Updated-package simulator acceptance requires supported editing/upload access to recover, or the user to import the identified AIX into the existing project.

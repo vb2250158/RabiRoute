@@ -14,10 +14,11 @@ Never infer full browser or WeChat compatibility from a familiar API name. If a 
 | `navigator` identity, language, network status, device capabilities | [Navigator](./navigator.md) |
 | `window` viewport, Widget routing, closing, Base64 | [Window](./window.md) |
 | `fetch`, `Headers`, `Response`, Streams, `WebSocket`, `File`, `FormData`, URL, encoding, Crypto, Performance | [Web APIs](./web.md) |
-| `AudioPlayer`, text tracks, `Sound`, Web Audio, microphone/camera streams, recording sources (`captureSource`, `microphoneMode`), video | [media APIs](./media.md) |
+| `AudioPlayer`, text tracks, `Sound`, Web Audio, microphone/camera streams, `navigator.mediaLibrary`, recording sources (`captureSource`, `microphoneMode`), video | [media APIs](./media.md) |
 | Language model, image input, speech synthesis, `SpeechRecognition`, `SpeechRecognitionSession` | [AI and speech APIs](./ai.md) |
 | BLE client, accelerometer, orientation, gyroscope | [device APIs](./device.md) |
-| `navigator.geolocation`, current position, location watching | [Geolocation API](./geo/geolocation.md) |
+| `navigator.maps`, system navigation and rerouting | [System navigation](./geo/maps.md) |
+| `navigator.geolocation`, `Geocoder`, coordinates, addresses | [Geolocation API](./geo/geolocation.md) |
 | GPX route parsing, creation, and export | [GPXDocument API](./geo/gpx-document.md) |
 | `Canvas`, 2D drawing, `Path2D`, text metrics, image export, `BarcodeDetector` | [Canvas and barcode APIs](./canvas.md) |
 | `wx.request`, sockets, Event Source, storage, navigation, camera, recorder, speech | [wx APIs](./wx.md) |
@@ -41,6 +42,7 @@ Never infer full browser or WeChat compatibility from a familiar API name. If a 
 ## Capability and Cleanup Rules
 
 - Microphone: declare `RECORD_AUDIO`, start capture from a valid user interaction, stop every media track, and release recorder/audio resources.
+- Media library: declare the matching image/audio read or create permissions and handle system authorization; see [media APIs](./media.md#media-library).
 - Location: declare `GEOLOCATION`; clear every active `watchPosition()` ID.
 - BLE client scan: stop the scan and disconnect GATT connections when finished.
 - Audio: disconnect nodes and close `AudioContext`; call `destroy()` where the API exposes it.

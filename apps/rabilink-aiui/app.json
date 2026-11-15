@@ -1,10 +1,12 @@
 {
-  "permissions": ["RECORD_AUDIO"],
+  "permissions": [
+    "RECORD_AUDIO"
+  ],
   "pages": [
     "pages/home/index"
   ],
   "window": {
-    "navigationBarTitleText": "RabiLink AIUI",
+    "navigationBarTitleText": "拉比小助手",
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#000000",
     "navigationBarTextStyle": "white"

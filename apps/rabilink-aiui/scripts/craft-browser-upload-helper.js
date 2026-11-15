@@ -8,7 +8,7 @@
       layout: { width: 448, height: 150 },
       function: {
         name: "index",
-        description: "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：乐奇原生模型在眼镜执行消息与通用接口工具；ASR 在推理与 TTS 期间保持输入，最终文字引导同一推理循环。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
+        description: "打开拉比小助手完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：乐奇原生模型在眼镜执行消息与通用接口工具；ASR 在推理与 TTS 期间保持输入，最终文字引导同一推理循环。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
         parameters: {
           type: "object",
           properties: {
@@ -63,8 +63,8 @@
   ];
 
   const DEFAULTS = {
-    agentName: "RabiLink",
-    version: "1.0.39",
+    agentName: "拉比小助手",
+    version: "1.0.40",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: "RECORD_AUDIO",

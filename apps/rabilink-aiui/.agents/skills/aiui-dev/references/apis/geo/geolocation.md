@@ -14,8 +14,7 @@ The runtime supplies this object; agents do not construct it.
 
 ### `getCurrentPosition(success, error?, options?)`
 
-Requests one position and reports it through callbacks. Returns `undefined`.
-`success` is required; `error` and `options` are optional.
+Requests one position and reports it through callbacks. Returns `undefined`; `success` is required, and `error` and `options` are optional. The `reverseGeocode` option is temporarily unavailable for this method. Use the standalone `Geocoder` to look up the returned coordinates.
 
 ### `watchPosition(success, error?, options?)`
 
@@ -58,3 +57,9 @@ const watchId = navigator.geolocation.watchPosition(
 // During cleanup:
 navigator.geolocation.clearWatch(watchId);
 ```
+
+## Addresses
+
+For addresses from supplied coordinates, use the standalone `Geocoder` below. For a position watch, `reverseGeocode: { enabled: true, level, acceptLanguages }` requests an address with updates. `position.address` can be null even when coordinates succeed; inspect `reverseGeocodeStatus` (`not-requested`, `success`, `not-found`, `unavailable`, `timeout`, `error`, `rate-limited`). Address lookup can add up to 3 seconds; watches rate-limit lookups. `level` is `country`, `region`, `city`, `district`, or `street` (default `city`).
+
+For supplied WGS-84 coordinates use `new Geocoder({ level, acceptLanguages, timeout }).getFromLocation(latitude, longitude)`. It returns `Promise<GeocodeAddress | null>`, does not require device location permission, and rejects with `UNAVAILABLE`, `TIMEOUT`, or `PROVIDER_ERROR` in `error.code`. Address fields can be null. Address service availability varies.

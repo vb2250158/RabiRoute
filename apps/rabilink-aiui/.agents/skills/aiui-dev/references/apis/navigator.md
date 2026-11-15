@@ -20,6 +20,7 @@ may depend on host support and declared agent permissions.
 | `bluetooth` | `Bluetooth` | BLE client entry point; see [device APIs](./device.md). |
 | `geolocation` | `Geolocation` | Location entry point; see [Geolocation API](./geo/geolocation.md). |
 | `mediaDevices` | `MediaDevices` | Camera and microphone capture entry point; see [media APIs](./media.md). |
+| `mediaLibrary` | `MediaLibrary` | List, read, and create image or audio assets; see [media APIs](./media.md#media-library). |
 | `storage` | `StorageManager` | Persistent file storage entry point. |
 
 ## Network Information
