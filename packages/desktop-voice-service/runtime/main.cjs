@@ -47,12 +47,14 @@ async function configureCaption(settings){
   }
   if(caption){
     caption.setMovable(!captionSettings.locked);caption.setResizable(!captionSettings.locked)
+    caption.setIgnoreMouseEvents(Boolean(captionSettings.locked),{forward:true})
     if(settings.bounds)caption.setBounds(clampBounds(settings.bounds))
     else if(settings.bounds===null)caption.setBounds(defaultBounds(captionSettings.position))
     else if(settings.position&&settings.position!==previousPosition)caption.setBounds(defaultBounds(settings.position))
     caption.webContents.send('device-command',{method:'caption',params:{settings:captionSettings,presentation:lastPresentation}})
     if(captionSettings.enabled)caption.showInactive();else caption.hide()
   }
+  return {visible:Boolean(caption&&!caption.isDestroyed()&&caption.isVisible()),movable:caption?.isMovable()??false,resizable:caption?.isResizable()??false,bounds:caption?.getBounds()||null}
 }
 function trayMenu(){
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -96,7 +98,7 @@ app.whenReady().then(async()=>{
           if(!['http:','https:'].includes(url.protocol)||!['localhost','127.0.0.1','[::1]'].includes(url.hostname)||url.username||url.password||url.pathname!=='/'||url.search!=='?voice-assistant=1'||url.hash)throw Error('settings-url')
           void shell.openExternal(url.href).then(()=>send({id:message.id,ok:true,value:true}),()=>send({id:message.id,ok:false,error:'SETTINGS_OPEN_FAILED'}))
         }else if(message.method==='presenter.configure'){
-          captionQueue=captionQueue.then(()=>configureCaption(message.params)).then(()=>{trayMenu();send({id:message.id,ok:true,value:true})},()=>send({id:message.id,ok:false,error:'CAPTION_CONFIG_FAILED'}))
+          captionQueue=captionQueue.then(()=>configureCaption(message.params)).then(value=>{trayMenu();send({id:message.id,ok:true,value})},()=>send({id:message.id,ok:false,error:'CAPTION_CONFIG_FAILED'}))
         }
         else if(message.method==='presenter.update'){
           lastPresentation=message.params;caption?.webContents.send('device-command',{method:'caption',params:{settings:captionSettings,presentation:lastPresentation}});trayMenu();send({id:message.id,ok:true,value:true})

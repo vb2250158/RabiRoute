@@ -1,5 +1,6 @@
 import { createListeningLifecycle } from './listening-lifecycle.js';
 import { createSpeechPlayback } from './speech-playback.js';
+export {createSpeechExpressionDecoder,speechExpressionInstruction,normalizeSpeechExpression} from './speech-expression.js';
 
 const owners = new WeakMap();
 const fail = code => Object.assign(new Error(code), { code });
@@ -39,6 +40,7 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
   if (owners.has(runtime)) throw fail('VOICE_INTERACTION_ALREADY_ATTACHED');
   const owner = {}, subscribers = new Set(), responses = new Set();
   let closed = false, enabled = true, epoch = 0, responseSequence = 0, transcript = '', foreground = null;
+  let recognizedInputPending = false;
   const report = error => { try { onError(error); } catch (_) { /* Diagnostics cannot own voice resources. */ } };
   const notify = (callback, value) => {
     try { const result = callback(value); if (result?.then) Promise.resolve(result).catch(report); }
@@ -77,7 +79,10 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
   });
   listening = createListeningLifecycle({ ...listeningOptions, asr: runtime.asr,
     isActive: active, onCleanupError: report,
-    onEvent: event => { emit({ type: 'listening', event }); notify(listeningOptions.onEvent || (() => {}), event); }
+    onEvent: event => {
+      if (event.type === 'ended' || event.type === 'paused') recognizedInputPending = false;
+      emit({ type: 'listening', event }); notify(listeningOptions.onEvent || (() => {}), event);
+    }
   });
   owners.set(runtime, owner);
   function retireResponses() {
@@ -94,34 +99,45 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
     // A new reply may supersede presentation without cancelling any old work.
     interruptSpeech('response-replaced');
     if (!active()) throw fail('VOICE_INTERACTION_INACTIVE');
-    const response = { id, epoch, text: '', buffer: '', finished: false, retired: false,
+    const response = { id, epoch, text: '', buffer: '', segmentOffset:0, finished: false, retired: false,
       suppressed: !outputEnabled,
-      speech: { ...speech, ...(speech.audio ? { audio: { ...speech.audio } } : {}) } };
+      speech: { ...speech, responseId:id,...(speech.audio ? { audio: { ...speech.audio } } : {}) } };
     responses.add(response); foreground = response;
     const current = () => active() && !response.retired && response.epoch === epoch && !response.finished;
     const announce = () => emit({ type: 'response', id, text: response.text, suppressed: response.suppressed,
       foreground: foreground === response, finished: response.finished });
     const speak = flush => {
-      if (runtime.getState().inputPending) { response.suppressed = true; response.buffer = ''; }
+      // Capture/VAD may claim input priority before any words exist. Only
+      // accepted ASR text can suppress audio, including newly created replies.
+      if (recognizedInputPending) { response.suppressed = true; response.buffer = ''; }
       if (!outputEnabled || response.suppressed || foreground !== response) return;
       if (typeof runtime.tts.openStream === 'function') {
         const delta = response.buffer; response.buffer = '';
         if (delta) {
-          response.stream ||= playback.beginStream(response.speech);
+          response.stream ||= playback.beginStream({...response.speech,textOffset:response.segmentOffset});
           response.stream.append(delta);
         }
         if (flush) response.stream?.finish();
         return;
       }
-      const chunks = splitSpeechText(response.buffer, flush); response.buffer = chunks.rest;
+      const buffered = response.buffer, bufferOffset = response.text.length - buffered.length;
+      const chunks = splitSpeechText(buffered, flush); response.buffer = chunks.rest;
+      let searchFrom = 0;
       for (const part of chunks.parts) {
         // Output events may synchronously trigger input, hide or disposal.
         if (!current() || response.suppressed || foreground !== response) break;
-        playback.speak(part, { ...response.speech, mode: 'enqueue' });
+        const start = buffered.indexOf(part, searchFrom);
+        if (start < 0) throw fail('VOICE_RESPONSE_SEGMENT_INVALID');
+        searchFrom = start + part.length;
+        playback.speak(part, { ...response.speech, mode: 'enqueue', textOffset: bufferOffset + start });
       }
     };
     announce();
     return Object.freeze({ id,
+      setSpeech(options={}) {
+        if(!current()||response.text.length!==response.segmentOffset||response.stream)return false;
+        response.speech={...response.speech,...options};return true;
+      },
       append(delta) {
         if (!current()) return false;
         if (typeof delta !== 'string') throw fail('VOICE_RESPONSE_TEXT_INVALID');
@@ -134,6 +150,11 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
         if (!response.suppressed) response.buffer += delta;
         announce();
         if (current()) speak(false);
+        return true;
+      },
+      finishSpeechSegment() {
+        if(!current()||response.text.length===response.segmentOffset)return false;
+        speak(true);response.stream=undefined;response.segmentOffset=response.text.length;
         return true;
       },
       finish({ speak: flush = true } = {}) {
@@ -154,14 +175,18 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
       enabled = true;
       const callbacks = options.handlers || {};
       return listening.activate({ ...options, handlers: { ...callbacks,
-        onSpeechStart(...args) { interruptSpeech('speech-onset'); callbacks.onSpeechStart?.(...args); },
+        onSpeechStart(...args) { emit({type:'speech-started'}); callbacks.onSpeechStart?.(...args); },
         onInterim(result, ...args) {
           const text = String(textOf(result) || '').trim();
           if (!text || acceptTranscript(text, 'interim') !== true) return;
-          interruptSpeech('interim'); transcript = text;
+          const firstText = !recognizedInputPending;
+          recognizedInputPending = true;
+          if (firstText) interruptSpeech('interim');
+          transcript = text;
           emit({ type: 'transcript', text, final: false }); callbacks.onInterim?.(result, ...args);
         },
         onFinal(result, ...args) {
+          recognizedInputPending = false;
           if (deliver(textOf(result), 'speech', result)) callbacks.onFinal?.(result, ...args);
         }
       } });

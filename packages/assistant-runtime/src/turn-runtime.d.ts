@@ -38,6 +38,8 @@ export interface TurnOptions extends TurnLimits {
   assertCurrent?(): void;
   /** Original task binding. Independent inputs require an exact match; never infer this from assistant scope. */
   inputScope?: string;
+  speechCapabilities?: import('./speech-expression.js').SpeechExpressionPolicy;
+    speechObservation?: import('./speech-observation.js').SpeechObservation;
   model: HostModel; protocol: AgentProtocol; toolPolicy: ToolPolicy;
   executeTool(event: ToolEvent): MaybePromise<unknown>;
   tools?: (ToolDeclaration | string)[]; turnId?: string;

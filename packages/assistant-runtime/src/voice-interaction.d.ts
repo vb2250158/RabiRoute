@@ -6,8 +6,12 @@ export interface VoiceInput<Result = unknown> { readonly text: string; readonly 
 export interface VoiceResponseState { id: string; text: string; suppressed: boolean; finished: boolean; retired: boolean }
 export interface VoiceResponse {
   readonly id: string;
+  /** Options must arrive before this segment's first text. Never revives interrupted output. */
+  setSpeech(options?: SpeechPlaybackInput): boolean;
   /** Retired tokens return false. Text continues after a speech interruption. */
   append(delta: string): boolean;
+  /** Seal audio before a tool wait; keep the same response, text, input and work owners. */
+  finishSpeechSegment?(): boolean;
   /** On cancellation/error use speak:false to release the response without flushing its tail. */
   finish(options?: { speak?: boolean }): boolean;
   getState(): VoiceResponseState;
@@ -16,6 +20,8 @@ export type VoiceEvent<Round extends object = object, Result = unknown> =
   | { type: 'listening'; event: ListeningEvent<Round> }
   | { type: 'playback'; event: SpeechPlaybackEvent }
   | { type: 'speech-interrupted'; reason: string }
+  /** Capture feedback only; audio continues until accepted nonempty ASR text. */
+  | { type: 'speech-started' }
   | { type: 'input'; input: VoiceInput<Result> }
   | { type: 'transcript'; text: string; final: false }
   | { type: 'response'; id: string; text: string; suppressed: boolean; foreground: boolean; finished: boolean };
@@ -56,6 +62,7 @@ export interface VoiceInteraction<Round extends object, Result, Event, Job exten
   dispose(): void;
 }
 export function splitSpeechText(text: string, flush?: boolean): { parts: string[]; rest: string };
+export {createSpeechExpressionDecoder,speechExpressionInstruction,normalizeSpeechExpression} from './speech-expression.js';
 export function createVoiceInteraction<Round extends object, Result, Event, Job extends PlaybackJob, Timer = unknown>(
   options: VoiceInteractionOptions<Round, Result, Event, Job, Timer>
 ): VoiceInteraction<Round, Result, Event, Job>;

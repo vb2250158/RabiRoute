@@ -54,9 +54,11 @@ export async function requestLocalSpeech(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? getTimeoutMs("speech.request", 190000));
   try {
+    const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+    signal.throwIfAborted();
     const response = await (options.fetchImpl ?? fetch)(localSpeechEndpoint(configuredUrl, pathname), {
       ...init,
-      signal: controller.signal,
+      signal,
       headers: {
         accept: "application/json, audio/*;q=0.9, */*;q=0.1",
         ...(init.headers ?? {})

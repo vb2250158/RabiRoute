@@ -13,7 +13,8 @@ test('resident stop drains capture before closing device, and can start again', 
     conversation:()=>({open:async()=>{},getSessionId:()=>null,close:()=>{}}),
     observeOutput:()=>()=>{}, speech:()=>({catalog:async()=>({maxAudioBytes:1000})}),
     createProviders:()=>({synthesize:async()=>Buffer.alloc(2)}),
-    deviceFactory:async({signal})=>{
+    deviceFactory:async({signal,onEvent})=>{
+      onEvent({event:'capture.level',level:.25});
       let closed=false;
       const close=async()=>{closed=true;events.push('close')};
       signal.addEventListener('abort',()=>{void close()},{once:true});
@@ -27,6 +28,7 @@ test('resident stop drains capture before closing device, and can start again', 
   try {
     for(let i=0;i<2;i++) {
       await host.command({action:'start'});
+      assert.equal((await host.state()).waveform.samples.at(-1),.25);
       await host.command({action:'stop'});
       await delay(65);
       assert.equal((await host.state()).error,null);
@@ -34,4 +36,28 @@ test('resident stop drains capture before closing device, and can start again', 
     }
     assert.deepEqual(events,['capture-disposed','close','capture-disposed','close']);
   } finally {await host.dispose()}
+});
+
+test('accepted speech automatically enters conversation once and clears the temporary transcript',async()=>{
+ let handlers;const received=[];const config={...initialAssistantSettings(),electronExecutable:process.execPath,asrMode:'volcengine',asrModel:'bigmodel',ttsModel:'fixture',ttsVoice:'fixture'};
+ const host=createResidentHost({settings:()=>config,saveSettings:async()=>{},credentials:{describe:async()=>({configured:true})},
+ conversation:()=>({open:async()=>{},getSessionId:()=>null,close(){},submit:async(text,id)=>{received.push({text,id});return{accepted:true}}}),observeOutput:()=>()=>{},
+ createProviders:()=>({asrFeedback:'streaming',createAsr:()=>({createRound(value){handlers=value;return{}},start(){handlers.onStart?.()},stop(){}}),synthesize:async()=>Buffer.alloc(2)}),
+ deviceFactory:async()=>({close:async()=>{},configurePresenter:async()=>{},present:async()=>{}})});
+ try{await host.command({action:'start'});handlers.onInterim({text:'临时转写'});assert.equal((await host.state()).inputPreview.text,'临时转写');handlers.onFinal({text:'确定的语音。'});await delay(0);assert.equal(received.length,1);assert.equal(received[0].text,'确定的语音。');assert.equal((await host.state()).inputPreview,null)}finally{await host.dispose()}
+});
+
+test('historical invalid endpoint stays readable and repairable while actual start still rejects it',async()=>{
+ let config={...initialAssistantSettings(),electronExecutable:process.execPath,asrMode:'compatible',asrEndpoint:'https://example.test/asr',asrModel:'fixture',ttsEndpoint:'broken',ttsModel:'fixture',ttsVoice:'fixture'};
+ let devices=0;
+ const host=createResidentHost({settings:()=>config,saveSettings:async patch=>{config={...config,...patch}},
+   credentials:{describe:async(_kind,url)=>{new URL(url);return {configured:true}}},
+   conversation:()=>({open:async()=>{},getSessionId:()=>null,close(){}}),observeOutput:()=>()=>{},
+   deviceFactory:async()=>{devices++;return {close:async()=>{},configurePresenter:async()=>{},present:async()=>{},createRecording:()=>({start:async()=>{},amplitude:()=>0,dispose:async()=>{}})}}});
+ try{
+   const historical=await host.state();assert.equal(historical.settings.ttsEndpoint,'broken');assert.equal(historical.asrFeedback,'utterance');assert.equal(devices,0);
+   await assert.rejects(host.command({action:'start'}),{code:'ERR_INVALID_URL'});assert.equal(devices,0);assert.equal((await host.state()).voice.phase,'failed');
+   const repaired=await host.command({action:'settings',patch:{ttsEndpoint:'https://example.test/tts'}});assert.equal(repaired.settings.ttsEndpoint,'https://example.test/tts');
+   await host.command({action:'start'});assert.equal((await host.state()).voice.capture,'listening');assert.equal(devices,1);await host.command({action:'stop'});
+ }finally{await host.dispose()}
 });

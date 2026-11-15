@@ -37,6 +37,7 @@ export interface ResidentInteraction<Round extends object, Result> {
   setOutputEnabled(enabled: boolean): void;
   beginResponse(options?: Parameters<import('./voice-interaction.js').VoiceInteraction<Round, Result, unknown, PlaybackJob>['beginResponse']>[0]): VoiceResponse | null;
   interruptSpeech(reason?: string): boolean;
+  getPresentationState(): { inputPending: boolean; outputActive: boolean; outputQueued: number; responseSuppressed: boolean } | null;
   getState(): ResidentState;
   subscribe(callback: (event: ResidentEvent<Round, Result>) => unknown): () => void;
   dispose(): Promise<void>;

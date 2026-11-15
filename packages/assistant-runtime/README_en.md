@@ -41,7 +41,7 @@ const playback = createSpeechPlayback({
 });
 playback.speak('First sentence', { voice: selectedVoice, volume: 1 });
 playback.speak('Second sentence', { voice: selectedVoice, volume: 1 });
-// In an accepted speech-onset/interim/gesture handler:
+// Explicit manual/gesture cancellation; ASR cancellation is owned by createVoiceInteraction:
 playback.cancel();
 // Dispose on unload; cancel on hide.
 ```
@@ -212,7 +212,7 @@ try {
 ```
 
 - Construction does not start recording, model work or networking. `ready()` prepares model/tools; `asr.start(round)` requires a valid interaction, actual host capabilities and microphone permission. The injected `createModel` still checks service availability. Importing the package does not give an ordinary webpage Rokid services.
-- The adapter interfaces retain their capture/synthesis usage, owning one recognition round and one pending/playing output. Replacing a round fences old events. Speech onset interrupts owned output without stopping capture, cancelling the model or undoing backend work. Distinguishing user speech from echo still depends on host VAD/AEC and application filtering.
+- The adapter interfaces retain their capture/synthesis usage, owning one recognition round and one pending/playing output. Replacing a round fences old events. Raw speech onset updates capture priority without cancelling audio. The shared interaction layer cancels output on the first accepted nonempty recognition text, leaving capture, model and backend work active. Distinguishing user speech from echo still depends on host VAD/AEC and application filtering.
 - `runtime.tts.synthesize()` returns the real `{task, player}` without playing it. The caller owns canplay/ended/error handling, captions and deadlines. Use `releaseSpeech({task,player})` after completion, or `{abort:true}`/`interruptSpeech()` to interrupt. During synthesis, pass the original Promise as `task`. Repeated release is idempotent; an old output cannot release a newer one.
 - Interrupted synthesis rejects promptly and late task/player resources are retired without publishing stale captions. Cleanup is best effort, with `onCleanupError` reporting native failures; a cleanup call alone does not certify hardware state.
 - `suspendVoice()` releases only voice and retains the model. The application decides whether hiding a Page also ends its model. `dispose()` permanently closes the owner and releases voice/model clients without cancelling durable backend tasks. The original run caller still handles cancellation/error `pendingGuidance`.
@@ -343,3 +343,7 @@ Hosts expose `previewSettings(patches)` and `saveSettingsBatch(patches)` with ma
 The DSH plugin reads providers and models from its current DSH host without duplicate chat credentials. Select a model and confirm a real text reply before configuring recognition, a voice and audio devices. An empty catalog or a default model name does not prove the model is callable. Isolated environments need the actual provider plugins and credentials.
 
 UI previews explicitly state that conversation is unavailable, including inside settings and sample model results. Credentials, sending, voice start and audio tests are disabled in previews. First-use guidance proceeds through conversation, recognition, output and devices; model parameters may initially keep their defaults.
+
+### Text-confirmed voice interruption
+
+Raw onset/VAD only reports capture activity. Empty or rejected transcripts keep current playback and future text chunks active. The first accepted nonempty interim result stops playback and queued audio; the final result is automatically submitted. Final-only recognizers wait for their nonempty final result. `inputPending` still holds scheduling priority, independently of audio suppression. The model/tool task and original response text continue; cancelled audio never replays. Recognition end/error/pause releases the pending-text gate.

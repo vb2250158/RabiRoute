@@ -25,20 +25,26 @@ export function createHttpSpeechProviders({asr,tts,resolveCredential,fetcher=fet
       if(!asrUrl||!asr.model)throw Error('SPEECH_ASR_MODEL_REQUIRED')
       if(!(audio instanceof Uint8Array)||audio.byteLength>MAX_AUDIO)throw Error('SPEECH_AUDIO_INVALID')
       const form=new FormData();form.set('model',asr.model);form.set('file',new Blob([audio],{type:'audio/wav'}),'speech.wav')
+      const parameters={model:asr.model,...asr.encode?.()}
+      for(const [name,value] of Object.entries(parameters))if(name!=='model')for(const item of Array.isArray(value)?value:[value])form.append(name,String(item))
       const response=await fetcher(asrUrl,{method:'POST',headers:await headers(asr.credentialRef),body:form,signal:scoped(signal),redirect:'error'})
       const result=JSON.parse(new TextDecoder().decode(await bounded(response,128*1024)))
       if(typeof result.text!=='string')throw Error('SPEECH_TRANSCRIPT_INVALID')
-      return {text:result.text}
+      return {...result,providerDetails:{request:safeSpeechDetails(parameters),result:safeSpeechDetails(result)}}
     },
-    async synthesize(text,signal){
+    async synthesize(text,signal,expression,trace={}){
       signal.throwIfAborted()
       if(!ttsUrl||!tts.model||!tts.voice)throw Error('SPEECH_TTS_MODEL_REQUIRED')
       if(typeof text!=='string'||text.length>16000)throw Error('SPEECH_TEXT_INVALID')
-      const response=await fetcher(ttsUrl,{method:'POST',headers:{...await headers(tts.credentialRef),'content-type':'application/json'},
-        body:JSON.stringify({model:tts.model,voice:tts.voice,input:text,response_format:'wav'}),signal:scoped(signal),redirect:'error'})
+      const parameters={model:tts.model,voice:tts.voice,input:text,response_format:'wav',...tts.encode?.(expression)}
+      const pending=fetcher(ttsUrl,{method:'POST',headers:{...await headers(tts.credentialRef),'content-type':'application/json'},body:JSON.stringify(parameters),signal:scoped(signal),redirect:'error'})
+      notifySpeechObserver(trace.onRequest,{requestId:1,protocol:'compatible-wav',stage:'sent',parameters})
+      const response=await pending
+      notifySpeechObserver(trace.onRequest,{requestId:1,protocol:'compatible-wav',stage:response.ok?'accepted':'failed',parameters,...(!response.ok?{error:'SPEECH_PROVIDER_HTTP_'+response.status}:{})})
       const bytes=await bounded(response,MAX_AUDIO)
       if(bytes.length<44||new TextDecoder().decode(bytes.subarray(0,4))!=='RIFF'||new TextDecoder().decode(bytes.subarray(8,12))!=='WAVE')throw Error('SPEECH_WAV_REQUIRED')
       return bytes
     },
   }
 }
+import {safeSpeechDetails,notifySpeechObserver} from './speech-details.mjs';

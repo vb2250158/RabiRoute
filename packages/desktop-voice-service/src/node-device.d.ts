@@ -18,7 +18,7 @@ export interface DesktopDevice {
   close(): Promise<void>;
   enumerateDevices(): Promise<AudioDevice[]>;
   configurePresenter(settings: CaptionSettings): Promise<unknown>;
-  present(value: { text?: string; statusText?: string; outputEnabled?: boolean; capturePaused?: boolean }): Promise<unknown>;
+  present(value: { text?: string; statusText?: string; outputEnabled?: boolean; capturePaused?: boolean; responseId?:string;spokenEnd?:number;timingMode?:'word'|'sentence'|null;speechStatus?:string }): Promise<unknown>;
   createRecording(): DesktopRecording;
   createPlayer(bytes: Uint8Array): Promise<{ events: EventTarget; play(): Promise<unknown>; stop(): Promise<unknown>; destroy(): Promise<unknown> }>;
   createStreamPlayer(options?: { sampleRate?: number }): Promise<{

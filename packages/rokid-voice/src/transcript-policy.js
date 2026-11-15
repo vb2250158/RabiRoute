@@ -126,7 +126,7 @@ export function createTranscriptPolicy(options = {}) {
 
     rememberPlayback,
 
-    evaluate(value, now = Date.now()) {
+    evaluate(value, now = Date.now(), { commit = true } = {}) {
       const at = Number(now || Date.now());
       const text = normalizeTranscriptText(value);
       const fingerprint = transcriptFingerprint(text);
@@ -155,7 +155,7 @@ export function createTranscriptPolicy(options = {}) {
         }
       }
 
-      rememberAccepted(text, at);
+      if (commit) rememberAccepted(text, at);
       return { accepted: true, text, reason: "accepted" };
     }
   };

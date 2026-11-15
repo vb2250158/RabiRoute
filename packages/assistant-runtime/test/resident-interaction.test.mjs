@@ -22,7 +22,8 @@ test('one resident survives all presenter detachments and preserves mute across 
   first.rounds[0].handlers.onFinal({text:'background'});
   assert.equal(inputs.length,1);assert.equal(first.rounds[0].stopped,0);
   const response=resident.beginResponse({id:'work'});response.append('Still working。');await flush();
-  first.rounds[0].handlers.onSpeechStart();assert.equal(first.jobs[0].aborted,1);
+  first.rounds[0].handlers.onSpeechStart();assert.equal(first.jobs[0].aborted,0);
+  first.rounds[0].handlers.onInterim({text:'你'});assert.equal(first.jobs[0].aborted,1);
   response.append(' task continues');assert.equal(response.getState().text,'Still working。 task continues');
   resident.setOutputEnabled(false);await resident.stop();
   assert.equal(first.disposed,1);assert.equal(first.rounds[0].stopped,1);

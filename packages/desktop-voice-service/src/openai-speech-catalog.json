@@ -1,0 +1,657 @@
+{
+  "tts": {
+    "origins": [
+      "https://api.openai.com"
+    ],
+    "docs": "https://developers.openai.com/api/docs/guides/text-to-speech",
+    "verifiedAt": "2026-11-15",
+    "models": [
+      {
+        "id": "gpt-4o-mini-tts",
+        "label": "gpt-4o-mini-tts",
+        "supported": true,
+        "note": "支持自然语言风格指令。"
+      },
+      {
+        "id": "gpt-4o-mini-tts-2025-12-15",
+        "label": "gpt-4o-mini-tts-2025-12-15",
+        "supported": true,
+        "note": "支持自然语言风格指令。"
+      },
+      {
+        "id": "tts-1",
+        "label": "tts-1",
+        "supported": true,
+        "note": "不支持风格指令；支持语速。"
+      },
+      {
+        "id": "tts-1-hd",
+        "label": "tts-1-hd",
+        "supported": true,
+        "note": "不支持风格指令；支持语速。"
+      }
+    ],
+    "modes": [
+      {
+        "id": "http-pcm",
+        "label": "文本按句提交 · 音频流式播放",
+        "supported": true
+      }
+    ],
+    "capabilities": [
+      "文本按句输入",
+      "24 kHz PCM 流式输出",
+      "随时停止播报"
+    ],
+    "parameters": [
+      {
+        "key": "ttsSpeed",
+        "label": "默认语速",
+        "group": "播放偏好",
+        "type": "number",
+        "default": 1,
+        "min": 0.25,
+        "max": 4,
+        "parameter": "speed",
+        "note": "1 为正常语速；动态表达在此基础上临时调整。",
+        "owner": "user",
+        "expressionField": "rate"
+      },
+      {
+        "key": "ttsContextText",
+        "label": "语气与风格指令",
+        "group": "Agent 表达",
+        "type": "textarea",
+        "default": "",
+        "maxLength": 2048,
+        "models": [
+          "gpt-4o-mini-tts",
+          "gpt-4o-mini-tts-2025-12-15"
+        ],
+        "parameter": "instructions",
+        "owner": "agent",
+        "expressionField": "style",
+        "note": "由助手按人设和本轮对话生成。"
+      },
+      {
+        "key": "ttsEncoding",
+        "label": "音频格式",
+        "group": "音频输出",
+        "type": "select",
+        "default": "pcm",
+        "options": [
+          {
+            "id": "pcm",
+            "label": "PCM",
+            "supported": true
+          },
+          {
+            "id": "mp3",
+            "label": "MP3",
+            "supported": false
+          },
+          {
+            "id": "opus",
+            "label": "OPUS",
+            "supported": false
+          },
+          {
+            "id": "aac",
+            "label": "AAC",
+            "supported": false
+          },
+          {
+            "id": "flac",
+            "label": "FLAC",
+            "supported": false
+          },
+          {
+            "id": "wav",
+            "label": "WAV",
+            "supported": false
+          }
+        ],
+        "parameter": "response_format",
+        "owner": "user",
+        "note": "当前播放器使用 24 kHz PCM 流。压缩格式暂未接入播放。"
+      }
+    ],
+    "voices": [
+      {
+        "id": "alloy",
+        "label": "alloy",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "ash",
+        "label": "ash",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "ballad",
+        "label": "ballad",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "coral",
+        "label": "coral",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "echo",
+        "label": "echo",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "fable",
+        "label": "fable",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "nova",
+        "label": "nova",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "onyx",
+        "label": "onyx",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "sage",
+        "label": "sage",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "shimmer",
+        "label": "shimmer",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "verse",
+        "label": "verse",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "marin",
+        "label": "marin",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "cedar",
+        "label": "cedar",
+        "model": "gpt-4o-mini-tts",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "alloy",
+        "label": "alloy",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "ash",
+        "label": "ash",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "ballad",
+        "label": "ballad",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "coral",
+        "label": "coral",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "echo",
+        "label": "echo",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "fable",
+        "label": "fable",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "nova",
+        "label": "nova",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "onyx",
+        "label": "onyx",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "sage",
+        "label": "sage",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "shimmer",
+        "label": "shimmer",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "verse",
+        "label": "verse",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "marin",
+        "label": "marin",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "cedar",
+        "label": "cedar",
+        "model": "gpt-4o-mini-tts-2025-12-15",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": true,
+        "emotions": []
+      },
+      {
+        "id": "alloy",
+        "label": "alloy",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "echo",
+        "label": "echo",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "fable",
+        "label": "fable",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "nova",
+        "label": "nova",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "onyx",
+        "label": "onyx",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "shimmer",
+        "label": "shimmer",
+        "model": "tts-1",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "alloy",
+        "label": "alloy",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "echo",
+        "label": "echo",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "fable",
+        "label": "fable",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "nova",
+        "label": "nova",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "onyx",
+        "label": "onyx",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      },
+      {
+        "id": "shimmer",
+        "label": "shimmer",
+        "model": "tts-1-hd",
+        "languages": "多语言 · 音色主要优化英语",
+        "bidirectional": true,
+        "instruction": false,
+        "emotions": []
+      }
+    ],
+    "voiceNote": "内置音色；也可填写账户已有的专属 voice ID。",
+    "voiceDocs": "https://developers.openai.com/api/docs/guides/text-to-speech",
+    "inputCapabilities": [
+      "文本按句提交",
+      "已选音色",
+      {
+        "label": "风格指令",
+        "models": [
+          "gpt-4o-mini-tts",
+          "gpt-4o-mini-tts-2025-12-15"
+        ]
+      }
+    ],
+    "outputCapabilities": [
+      {
+        "label": "PCM 流式音频",
+        "status": "available"
+      },
+      {
+        "label": "SSE 音频事件",
+        "status": "unavailable"
+      },
+      {
+        "label": "压缩音频",
+        "status": "unavailable"
+      },
+      {
+        "label": "按句跟随高亮（无逐字时间戳）",
+        "status": "available"
+      }
+    ]
+  },
+  "asr": {
+    "origins": [
+      "https://api.openai.com"
+    ],
+    "docs": "https://developers.openai.com/api/docs/guides/speech-to-text",
+    "verifiedAt": "2026-11-15",
+    "models": [
+      {
+        "id": "gpt-4o-transcribe",
+        "label": "gpt-4o-transcribe",
+        "supported": true
+      },
+      {
+        "id": "gpt-4o-mini-transcribe",
+        "label": "gpt-4o-mini-transcribe",
+        "supported": true
+      },
+      {
+        "id": "whisper-1",
+        "label": "whisper-1",
+        "supported": true
+      },
+      {
+        "id": "gpt-4o-transcribe-diarize",
+        "label": "gpt-4o-transcribe-diarize",
+        "supported": true
+      }
+    ],
+    "modes": [
+      {
+        "id": "utterance",
+        "label": "整句录音后识别",
+        "supported": true
+      }
+    ],
+    "capabilities": [
+      "整句转写",
+      "多语言识别",
+      "自动对话上下文"
+    ],
+    "parameters": [
+      {
+        "key": "asrLanguage",
+        "label": "识别语言",
+        "type": "text",
+        "group": "文字与上下文",
+        "default": "",
+        "maxLength": 32,
+        "parameter": "language",
+        "note": "留空自动识别；可填写 zh、en、ja 等语言代码。",
+        "owner": "user",
+        "kind": "asr"
+      },
+      {
+        "key": "asrPrompt",
+        "label": "对话辅助识别提示",
+        "type": "textarea",
+        "group": "文字与上下文",
+        "default": "",
+        "maxLength": 4096,
+        "parameter": "prompt",
+        "models": [
+          "gpt-4o-transcribe",
+          "gpt-4o-mini-transcribe",
+          "whisper-1"
+        ],
+        "note": "程序自动附带最近助手回复和专有词；说话人分离模型不支持此输入。",
+        "owner": "system",
+        "kind": "asr",
+        "integration": "dialog-context"
+      },
+      {
+        "key": "asrTemperature",
+        "label": "采样温度",
+        "type": "number",
+        "group": "高级识别设置",
+        "default": 0,
+        "min": 0,
+        "max": 1,
+        "parameter": "temperature",
+        "owner": "user",
+        "kind": "asr"
+      },
+      {
+        "key": "asrWordTimestamps",
+        "label": "返回词级时间戳",
+        "type": "boolean",
+        "group": "返回信息",
+        "default": true,
+        "parameter": "timestamp_granularities[]",
+        "models": [
+          "whisper-1"
+        ],
+        "note": "请求 verbose_json；当前对话仍只使用识别文字。",
+        "owner": "user",
+        "kind": "asr",
+        "feature": true
+      },
+      {
+        "key": "asrSegmentTimestamps",
+        "label": "返回分段时间戳",
+        "type": "boolean",
+        "group": "返回信息",
+        "default": true,
+        "parameter": "timestamp_granularities[]",
+        "models": [
+          "whisper-1"
+        ],
+        "owner": "user",
+        "kind": "asr",
+        "feature": true
+      },
+      {
+        "key": "asrLogprobs",
+        "label": "返回文字置信度",
+        "type": "boolean",
+        "group": "返回信息",
+        "default": true,
+        "parameter": "include[]",
+        "models": [
+          "gpt-4o-transcribe",
+          "gpt-4o-mini-transcribe"
+        ],
+        "note": "返回识别置信度元数据；当前对话仍只使用识别文字。",
+        "owner": "user",
+        "kind": "asr",
+        "feature": true
+      },
+      {
+        "key": "asrUseContext",
+        "label": "对话辅助识别",
+        "type": "boolean",
+        "group": "识别能力",
+        "default": true,
+        "feature": true,
+        "owner": "user",
+        "kind": "asr",
+        "models": [
+          "gpt-4o-transcribe",
+          "gpt-4o-mini-transcribe",
+          "whisper-1"
+        ],
+        "note": "转写时自动附带最近助手回复和专有词，帮助识别当前对话。"
+      },
+      {
+        "key": "asrHotwords",
+        "label": "专有词与拼写（每行一个）",
+        "type": "textarea",
+        "group": "识别偏好",
+        "default": "",
+        "maxLength": 2048,
+        "owner": "user",
+        "kind": "asr",
+        "models": [
+          "gpt-4o-transcribe",
+          "gpt-4o-mini-transcribe",
+          "whisper-1"
+        ],
+        "note": "你希望优先识别的人名、产品名或专业词语。"
+      }
+    ]
+  }
+}

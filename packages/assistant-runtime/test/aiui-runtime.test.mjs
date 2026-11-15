@@ -64,7 +64,7 @@ test('a conversation created mid-utterance and a reentrant next round keep the c
   assert.equal(runtime.getState().inputPending,false);assert.equal(conversation.getState().listening,false);runtime.dispose();
 });
 
-test('speech onset stops only owned output while model and recognition remain active', async () => {
+test('raw speech onset keeps output alive; explicit interaction cancellation stops only owned output', async () => {
   const f = fixtures(), pending = deferred(); let modelDestroyed = 0, onsets = 0, playbackStops = 0;
   const runtime = createAiuiAssistantRuntime({ ...f, session: sessionOptions(() => ({
     prompt: () => pending.promise, destroy() { modelDestroyed++; }
@@ -76,6 +76,8 @@ test('speech onset stops only owned output while model and recognition remain ac
   job.player.stop = () => { playbackStops++; };
   job.task.abort = () => { assert.equal(onsets, 1, 'UI invalidation precedes synchronous player callbacks'); job.stats.aborts++; };
   round.handlers.onSpeechStart();
+  assert.deepEqual(job.stats,{aborts:0,destroys:0});assert.equal(playbackStops,0);
+  runtime.interruptSpeech();
   assert.deepEqual(job.stats, { aborts: 1, destroys: 1 });
   assert.equal(playbackStops, 1);
   assert.equal(runtime.session.getState().busy, true); assert.equal(modelDestroyed, 0); assert.equal(f.stops, 0);

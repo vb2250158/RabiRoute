@@ -17,6 +17,9 @@ export interface PlaybackJob extends SpeechJob {
   };
 }
 export interface SpeechPlaybackInput {
+  responseId?: string;
+  /** UTF-16 start of this audio segment in the response's displayed text. */
+  textOffset?: number;
   mode?: 'enqueue' | 'immediate';
   voice?: string; volume?: number;
   audio?: { [key: string]: unknown };
@@ -24,7 +27,7 @@ export interface SpeechPlaybackInput {
   signal?: never; onCue?: never;
   [key: string]: unknown;
 }
-export type SpeechPlaybackEvent = { id?: number; text: string } & (
+export type SpeechPlaybackEvent = { id?: number; responseId?:string; text: string } & (
   | { type: 'synthesizing' | 'play-requested' | 'ended' | 'idle' | 'cancelled' | 'unavailable' }
   | { type: 'cue'; cue: unknown }
   | { type: 'error'; error: unknown }

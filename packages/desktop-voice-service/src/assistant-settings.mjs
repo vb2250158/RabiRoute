@@ -1,11 +1,14 @@
 import { updateProviderProfiles } from './provider-profiles.mjs';
 import { updateModelProfiles, validateModelEndpoint } from './model-providers.mjs';
 import { speechParameterDefinitions, speechSelectionDefinitions } from './speech-catalog.mjs';
+import {webSearchDefinitions} from './web-search-catalog.mjs';
 
 /** Shared settings data. Host-only model configuration stays out of DSH accounts. */
 export const assistantSettingDefinitions = {
   ...speechParameterDefinitions,...speechSelectionDefinitions,
   persona: { default: '你是大肥鱼，也叫 DeepSeek 娘。自然、简洁地与用户交流，认真办事，不编造工具结果。', max: 16000 },
+  onboardingComplete: { default: false }, assistantName: { default: '语音助手', max: 64 },
+  voiceFavorites: { default: '[]', max: 16000 },
   agentPreset: { default: '' }, cwd: { default: '' }, manageAllWorkspaces: { default: true },
   electronExecutable: { default: '' }, asrMode: { default: 'compatible' }, asrProviderId: { default: '' },
   asrEndpoint: { default: 'https://api.openai.com/v1/audio/transcriptions' }, asrModel: { default: '' }, asrResourceId: { default: '' },
@@ -23,6 +26,7 @@ export const assistantSettingDefinitions = {
 };
 
 export const standaloneModelDefinitions = {
+  ...webSearchDefinitions,
   llmProvider: { default: 'compatible' },
   llmEndpoint: { default: 'https://api.openai.com/v1/chat/completions' },
   llmModel: { default: '' },
@@ -45,6 +49,7 @@ export function validateAssistantSettings(value, host = 'standalone') {
     if (typeof item === 'number' && (!Number.isFinite(item) || item < (spec.min ?? -1e7) || item > (spec.max ?? 1e7))) throw Error('ASSISTANT_SETTINGS_INVALID');
     if (spec.integer && !Number.isInteger(item) || spec.enum && !spec.enum.includes(item)) throw Error('ASSISTANT_SETTINGS_INVALID');
   }
+  if(value.voiceFavorites!==undefined){let favorites;try{favorites=JSON.parse(value.voiceFavorites)}catch{throw Error('ASSISTANT_SETTINGS_INVALID')}if(!Array.isArray(favorites)||favorites.length>100||favorites.some(item=>typeof item!=='string'||item.length>2048))throw Error('ASSISTANT_SETTINGS_INVALID')}
   if (!['light', 'dark'].includes(value.captionSkin) || !['top', 'bottom'].includes(value.captionPosition)) throw Error('ASSISTANT_SETTINGS_INVALID');
   if (host === 'standalone') {
     validateModelEndpoint(value.llmEndpoint,value.llmProvider||'compatible');

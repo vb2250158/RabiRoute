@@ -91,11 +91,9 @@ export function createAiuiAssistantRuntime({ asr, tts, session: initialSession, 
         owner.speaking = true;
         owner.pendingTranscript = true;
         syncInputState();
-        const output = speech;
-        // Let the UI invalidate its playback generation/queue before native
-        // cancellation can synchronously invoke player callbacks.
-        try { handlers.onSpeechStart?.(...args); }
-        finally { releaseOutput(output); }
+        // VAD is capture feedback, not evidence of recognized user words.
+        // The interaction owner filters ASR text before cancelling output.
+        handlers.onSpeechStart?.(...args);
       };
       for (const name of ['onSpeechEnd', 'onError']) {
         callbacks[name] = (...args) => {

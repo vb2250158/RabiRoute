@@ -1,0 +1,21 @@
+{
+  "volcengine": {
+    "source": {"title":"火山引擎 · 双向流式语音合成 API", "url":"https://docs.volcengine.com/docs/doubao-voice/websocket-bidirectional-streaming-v3?lang=zh", "checkedAt":"2026-11-15"},
+    "fields": {
+      "style": {"label":"风格提示", "description":"用文字描述这句话的情绪、语气或节奏，作为合成时的辅助指令。", "limitation":"适用 2.0 音色；声音复刻 2.0 需要表现力增强版。接口只使用 context_texts 的第一项，指令文字不参与计费。", "parameter":"req_params.additions.context_texts", "integration":"开启自动表达后，助手根据人设和当前对话生成这次的风格提示；未生成时沿用默认表达。"},
+      "emotion": {"label":"情绪", "description":"用音色提供的情绪标签指定本次播报的情绪。", "limitation":"只有部分音色支持，标签范围随音色变化；支持风格提示不代表支持情绪标签。", "parameter":"req_params.audio_params.emotion", "integration":"助手只能从当前音色已声明的情绪中选择，不会把未核验的标签投递给接口。"},
+      "intensity": {"label":"情绪强度", "description":"在指定情绪标签后，进一步调整表达强度。", "limitation":"范围 1–5，接口默认 4；强度变化不是线性的，必须与 emotion 一起使用。", "parameter":"req_params.audio_params.emotion_scale", "integration":"助手同时指定情绪时才会使用本次强度；当前音色没有情绪标签时不会开放此项。"},
+      "rate": {"label":"临时语速", "description":"调整本次播报的快慢。", "limitation":"接口 speech_rate 范围为 −50–100，0 为原速，−50 为 0.5 倍，100 为 2 倍。", "parameter":"req_params.audio_params.speech_rate", "integration":"助手的临时比例限制为 0.75–1.4，乘在你保存的默认语速上，再换算并限制到接口范围；不会改写默认设置。"},
+      "pitch": {"label":"音调", "description":"调整声音的高低。", "limitation":"接口 pitch 范围为 −12–12，默认 0；正值提高音调，负值降低音调。", "parameter":"req_params.additions.post_process.pitch", "integration":"助手可在单次播报中指定 −6–6 的临时音调；不会改写保存的播放偏好。"},
+      "vector": {"label":"情绪向量", "description":"用一组数值表示多个情绪维度。", "limitation":"当前已核验的双向流式接口字段没有声明情绪向量；情绪标签、情绪强度和文字风格指令是不同输入。", "parameter":"未声明", "integration":"当前没有向 Agent 开放情绪向量，也不会构造或投递此类参数。"}
+    }
+  },
+  "openai": {
+    "source": {"title":"OpenAI · Speech API 参数", "url":"https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create", "checkedAt":"2026-11-15"},
+    "fields": {
+      "style": {"label":"风格提示", "description":"通过文字指令引导合成声音的语气与风格。", "limitation":"instructions 不适用于 tts-1 和 tts-1-hd；本工具只向已核验支持该字段的模型开放。", "parameter":"instructions", "integration":"助手根据人设与本轮对话生成指令，并与本次播报文字一起发送；不需要你为每句话手工填写。"},
+      "rate": {"label":"临时语速", "description":"调整生成语音的速度。", "limitation":"接口 speed 范围为 0.25–4，默认 1。", "parameter":"speed", "integration":"助手临时比例限制为 0.75–1.4，与保存的默认速度相乘，最终限制在 0.25–4；不会改写默认设置。"},
+      "vector": {"label":"情绪向量", "description":"用一组数值表示多个情绪维度。", "limitation":"当前 Speech API 未声明情绪向量字段；自然语言风格指令不等于向量输入。", "parameter":"未声明", "integration":"当前没有向 Agent 开放情绪向量。"}
+    }
+  }
+}

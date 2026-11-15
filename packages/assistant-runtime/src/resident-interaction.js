@@ -165,6 +165,11 @@ export function createResidentInteraction({ openServices, onInput, onEvent, onEr
         throw error;
       }
     },
+    getPresentationState() {
+      const value=current?.voice?.getState();
+      return value ? { inputPending:value.inputPending, outputActive:value.playback.active,
+        outputQueued:value.playback.queued, responseSuppressed:value.response?.suppressed||false } : null;
+    },
     getState: () => state,
     subscribe(callback) { if (closed) return () => {}; observers.add(callback); return () => observers.delete(callback); },
     setOutputEnabled(enabled) {

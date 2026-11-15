@@ -1,11 +1,17 @@
 import { createHash } from 'node:crypto';
 import { validateProviderEndpoint } from './provider-profiles.mjs';
+import { runWorkBuddyCli } from './workbuddy-cli.mjs';
 export const modelProviders = [
   { id:'compatible',label:'OpenAI / 兼容服务',endpoint:'https://api.openai.com/v1/chat/completions' },
+  { id:'workbuddy-cli',label:'WorkBuddy 国内版 · 官方登录',endpoint:'codebuddy://cn',credentialMode:'official-login',hint:'复用本机官方 CodeBuddy 的国内账号登录与额度。刷新模型后选择并保存。' },
   { id:'workbuddy-cn',label:'WorkBuddy 国内版',endpoint:'http://127.0.0.1:18088/v1/chat/completions',hint:'连接已登录国内账号的 WorkBuddy 网关。此处使用网关密钥，不是 CodeBuddy CLI 访问密钥。' },
 ];
 export function validateModelEndpoint(endpoint,provider='compatible') {
   if(!modelProviders.some(item=>item.id===provider))throw Error('ASSISTANT_MODEL_PROVIDER_INVALID');
+  if(provider==='workbuddy-cli') {
+    if(endpoint!=='codebuddy://cn')throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID');
+    return endpoint;
+  }
   let url;try{url=new URL(endpoint)}catch{throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID')}
   const local=['127.0.0.1','localhost','[::1]'].includes(url.hostname);
   if(url.username||url.password||url.search||url.hash||!(url.protocol==='https:'||url.protocol==='http:'&&local))throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID');
@@ -22,8 +28,12 @@ export function updateModelProfiles(previous,patch) {
   return {...previous,...patch,llmProvider:next,llmEndpoint:current.endpoint,llmModel:current.model,llmProfiles:profiles};
 }
 /** OpenAI-compatible catalog, also used by the existing DSH WorkBuddy gateway. */
-export async function listProviderModels({kind,provider,endpoint,resolveCredential,fetcher=fetch}) {
+export async function listProviderModels({kind,provider,endpoint,resolveCredential,fetcher=fetch,workbuddyCli}) {
   if(!['llm','asr','tts'].includes(kind))throw Error('MODEL_CATALOG_KIND_INVALID');
+  if(kind==='llm'&&provider==='workbuddy-cli') {
+    validateModelEndpoint(endpoint,provider);
+    return runWorkBuddyCli({timeoutMs:20000,cli:workbuddyCli});
+  }
   if(provider==='volcengine'||provider==='native')throw Error('MODEL_CATALOG_UNAVAILABLE');
   if (kind !== 'llm' && provider !== 'compatible') throw Error('MODEL_CATALOG_UNAVAILABLE');
   const url=new URL(kind==='llm'?validateModelEndpoint(endpoint,provider):validateProviderEndpoint(endpoint,provider));

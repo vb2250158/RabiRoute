@@ -6,6 +6,7 @@ import { createVolcanoAsr } from '../src/volcano-asr.mjs';
 import { openDesktopVoiceServices } from '../src/services.mjs';
 import { createVoiceInteraction } from '@rabilink/assistant-runtime/voice';
 const flush = async () => { for (let i=0;i<40;i++) await Promise.resolve(); };
+const until=async predicate=>{const deadline=Date.now()+2000;while(!predicate()&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,2));assert.ok(predicate(),'expected asynchronous speech receipt')};
 const integer = n => { const b=Buffer.alloc(4);b.writeInt32BE(n);return b; };
 const response = (event,id,payload=Buffer.from('{}'),type=9) => Buffer.concat([Buffer.from([0x11,type*16+4,type===11?0:16,0]),integer(event),integer(Buffer.byteLength(id)),Buffer.from(id),integer(payload.length),payload]);
 const asrResponse = result => { const b=Buffer.from(JSON.stringify({result}));return Buffer.concat([Buffer.from([0x11,0x90,0x10,0]),integer(b.length),b]); };
@@ -64,7 +65,8 @@ test('streaming ASR sends microphone PCM before silence and deduplicates final u
   receive(asrResponse({utterances:[{text:'你好',definite:false,end_time:100}]}));
   const result=asrResponse({utterances:[{text:'你好。',definite:true,start_time:0,end_time:200}]});receive(result);receive(result);
   assert.deepEqual(finals,['你好。']);assert.deepEqual(interims,['你好']);
-  await asr.stop(round);capture(Buffer.alloc(4096));await flush();assert.equal(frames.length,2);assert.equal(disposed,1);assert.equal(closed,1);
+  capture(Buffer.alloc(100));await asr.finish(round);await asr.finish(round);assert.equal(frames.at(-1).last,true);assert.equal(frames.at(-1).payload.length,100);
+  await asr.stop(round);capture(Buffer.alloc(4096));await flush();assert.equal(frames.length,3);assert.equal(disposed,1);assert.equal(closed,1);
 });
 
 test('shared voice streams immediately and barge-in preserves text while releasing all audio',async()=>{
@@ -76,10 +78,12 @@ test('shared voice streams immediately and barge-in preserves text while releasi
     openSpeechStream:async({signal,onAudio})=>{audioCallback=onAudio;signals.push(signal);return {append:async()=>onAudio(Buffer.alloc(2)),finish:async()=>resolveFinished({duration:.01}),finished:new Promise(resolve=>resolveFinished=resolve),close:async()=>{providerClosed++}}},
   });
   const voice=createVoiceInteraction({runtime:services.runtime,onInput:()=>{}});
-  voice.activate();const reply=voice.beginResponse();reply.append('第一段');await flush();
+  voice.activate();const reply=voice.beginResponse();reply.append('第一段');await until(()=>played===1&&appends===1);
   assert.equal(played,1);assert.equal(appends,1);assert.equal(providerClosed,0);
-  handlers.onSpeechStart();reply.append('后台继续完成的文字');reply.finish();await flush();
-  await audioCallback(Buffer.alloc(2));assert.equal(appends,1);assert.ok(signals[0].aborted);
-  assert.equal(reply.getState().text,'第一段后台继续完成的文字');
+  handlers.onSpeechStart();assert.equal(signals[0].aborted,false);
+  reply.append('首字前继续播报');await until(()=>appends===2);assert.equal(appends,2);
+  handlers.onInterim({text:'停'});reply.append('后台继续完成的文字');reply.finish();await flush();
+  await audioCallback(Buffer.alloc(2));assert.equal(appends,2);assert.ok(signals[0].aborted);
+  assert.equal(reply.getState().text,'第一段首字前继续播报后台继续完成的文字');
   voice.dispose();await services.dispose();assert.equal(stopped,1);assert.equal(destroyed,1);assert.equal(providerClosed,1);assert.equal(deviceClosed,1);
 });

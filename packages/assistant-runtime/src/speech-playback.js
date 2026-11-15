@@ -24,7 +24,7 @@ export function createSpeechPlayback({ tts, releaseSpeech, clock = defaultClock,
   const attempt = action => { try { const result = action(); if (result?.then) Promise.resolve(result).catch(report); } catch (error) { report(error); } };
   const emit = event => { try { onEvent(event); } catch (error) { report(error); } };
   const current = item => !closed && owner === item && !item.finished;
-  const event = (type, item, extra = {}) => emit({ type, id: item?.id, text: item?.text || '', ...extra });
+  const event = (type, item, extra = {}) => emit({ type, id: item?.id, text: item?.text || '', ...(item?.options?.responseId?{responseId:item.options.responseId}:{}),...extra });
   function clearTimer(item, key) {
     if (item[key] !== null) clock.clearTimeout(item[key]);
     item[key] = null;
@@ -127,7 +127,7 @@ export function createSpeechPlayback({ tts, releaseSpeech, clock = defaultClock,
       deadline(item, synthesisTimeoutMs(), 'SPEECH_SYNTHESIS_TIMEOUT');
       const synthesize = item.streaming ? options => tts.openStream(options) : options => tts.synthesize(item.text, options);
       item.pending = synthesize({ ...item.options, signal: item.controller.signal,
-        onCue: cue => { if (active(item)) event('cue', item, { cue }); }
+        onCue: cue => { if (active(item)) event('cue', item, { cue: item.options.textOffset ? {...cue,charIndex:cue.charIndex+item.options.textOffset} : cue }); }
       });
       Promise.resolve(item.pending).then(job => attach(item, job), error => finish(item, error));
     } catch (error) { finish(item, error); }
@@ -149,6 +149,7 @@ export function createSpeechPlayback({ tts, releaseSpeech, clock = defaultClock,
       if (closed) throw failure('SPEECH_PLAYBACK_CLOSED');
       if (typeof tts.openStream !== 'function') throw failure('SPEECH_STREAM_UNAVAILABLE');
       if (options.signal !== undefined || options.onCue !== undefined) throw failure('SPEECH_CALLBACK_OWNERSHIP_INVALID');
+      if(options.textOffset!==undefined&&(!Number.isSafeInteger(options.textOffset)||options.textOffset<0||options.textOffset>16000))throw failure('SPEECH_TEXT_OFFSET_INVALID');
       const item = { id: ++sequence, text: '', options: { ...options }, streaming: true,
         inputBuffer: [], inputFinished: false, finishDispatched: false, inputChain: Promise.resolve(),
         controller: new AbortController(), job: null, pending: null, timer: null, readyTimer: null,

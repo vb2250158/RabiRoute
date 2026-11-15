@@ -36,7 +36,7 @@ voice.setOutputEnabled(true); // Does not start ASR or replay old responses.
 
 `assistant.accept` is a product-owned admission function, not an SDK method. Retain input before asynchronous execution and handle busy sessions through session guidance/interjection. `submitText` returning true means callback delivery only, never persistence, backend acceptance, execution or completion.
 
-ASR onset or accepted interim/final input stops existing audio and its queued tail. Old model/tool work is never cancelled; its response token continues emitting text with `suppressed:true`. A new response token can speak again. Events carry response IDs and `foreground`; old reply events must not replace new foreground text. `suspend` retires voice output tokens; activation does not replay them. One runtime rejects a second voice owner.
+The first accepted nonempty interim/final ASR text stops existing audio and its queued tail. Raw onset/VAD and empty or rejected transcripts never stop or suppress output. `speech-started` reports capture feedback only; `inputPending` retains scheduling priority without being an audio gate. An interim result is displayed immediately, but only final text is automatically submitted. Final-only providers necessarily wait until their first nonempty final result. Old model/tool work is never cancelled; its response token continues emitting text with `suppressed:true`. A new response token can speak again. Events carry response IDs and `foreground`; old reply events must not replace new foreground text. `suspend` retires voice output tokens; activation does not replay them. One runtime rejects a second voice owner.
 
 ## Foreground lifecycle and output permission
 
@@ -65,3 +65,11 @@ DSH supplies an independent GUI and desktop adapters. Its pet is an optional sub
 Run package tests unchanged in consumers. Cover streaming, barge-in, late text, final after speechend, recognition restart, bounded errors, hidden/disposed callbacks, pet attach/detach and pending work. Then verify actual permissions, microphone, echo and playback; fixtures do not establish hardware full duplex.
 
 On failed, cancelled or superseded assistant turns, call response.finish({ speak: false }) in the owner's finally block. This releases the reply token without speaking its tail or cancelling newer output. An already finished reply keeps its queued audio.
+
+## Capability parity across hosts
+
+Glasses/AIUI, web, DSH and Rabi reuse this voice loop and the same assistant data contracts. Each adapter determines availability from its actual host APIs, selected model/voice and transport, including version-specific parameters. Implement all compatible supported capabilities; enable capability switches by default while keeping sensitive-word filtering off and preserving later user choices. Protocol incompatibilities come from the provider contract, not a host-name-based feature gate.
+
+Separate user preferences, per-reply Agent inputs, tool-owned inputs and returned observations. Tools supply conversational ASR context and playback timing automatically where supported. Actual ASR semantic returns travel with their utterance as hidden speechObservation, remain available in durable model context, and do not alter the visible transcript. Native hosts own their persistence and model-message projection. Return values are model estimates, not inferred identity facts. Never advertise a capability solely because another host implements it; expose unsupported or not-yet-connected status accurately.
+
+Validate the actual request, response consumption, hidden-context persistence and corresponding visible behavior on every host. Keep fixtures, official simulator, installed runtime and physical-device evidence distinct. UI views, subtitles and pets subscribe to one resident owner rather than creating another voice/model loop.

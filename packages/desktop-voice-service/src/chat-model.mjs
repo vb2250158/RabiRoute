@@ -1,13 +1,20 @@
-/** OpenAI-compatible model port for the shared assistant loop; no browser-owned keys. */
+import { createWorkBuddyModel } from './workbuddy-cli.mjs';
+import {snapshotModelContext} from './model-context.mjs';
+
+/** Host model port for the shared assistant loop; no browser-owned keys. */
 export function createChatModel({ endpoint, model, initialPrompts = [], resolveCredential,
-  fetcher = fetch, signal, timeoutMs = 60000 }) {
+  fetcher = fetch, signal, timeoutMs = 60000, provider = 'compatible',workbuddyCli,initialHistory=[],onHistoryChange=()=>{},projectAssistantHistory }) {
+  if(provider==='workbuddy-cli') {
+    if(endpoint!=='codebuddy://cn')throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID');
+    return createWorkBuddyModel({model,initialPrompts,signal,cli:workbuddyCli,initialHistory,onHistoryChange,projectAssistantHistory});
+  }
   const address = new URL(endpoint);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(address.hostname);
   if (address.username || address.password || address.search || address.hash ||
       (address.protocol !== 'https:' && !(local && address.protocol === 'http:'))) throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID');
   if (typeof model !== 'string' || !model.trim()) throw Error('ASSISTANT_MODEL_REQUIRED');
   const lifetime = new AbortController();
-  let history = [], busy = false;
+  let history = snapshotModelContext(initialHistory), busy = false;
   return {
     async promptStreaming(input) {
       if (busy) throw Error('ASSISTANT_MODEL_BUSY');
@@ -36,8 +43,8 @@ export function createChatModel({ endpoint, model, initialPrompts = [], resolveC
         ended = true;
         try { await reader.cancel(); } finally { reader.releaseLock(); busy = false; }
         if (confirmed) {
-          history.push(...input, { role: 'assistant', content: text });
-          while (history.length > 24 || history.reduce((n, item) => n + item.content.length, 0) > 64000) history.shift();
+          history=snapshotModelContext([...history,...input,{role:'assistant',content:text}]);
+          onHistoryChange(snapshotModelContext(history));
         }
       };
       return {
