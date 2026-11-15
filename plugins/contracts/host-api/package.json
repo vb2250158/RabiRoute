@@ -1,6 +1,7 @@
 {
   "name": "@rabiroute/host-api",
-  "version": "1.14.0",  "type": "module",
+  "version": "1.15.0",
+  "type": "module",
   "license": "MIT",
   "description": "Public declarations and export signatures for RabiRoute shared host owners.",
   "exports": {

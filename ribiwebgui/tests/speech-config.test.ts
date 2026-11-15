@@ -102,7 +102,13 @@ test("speech workbench exposes exact VAD inputs and one host playback volume con
 
 test("speech plugin retirement joins accepted work before releasing its original owned runtime", () => {
   const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/src/manager/speechPluginRuntime.ts", import.meta.url), "utf8");
-  assert.match(source, /runAcceptedWork<T>[\s\S]*service\.assertCurrent\(\);\s*const pending = Promise\.resolve\(\)\.then\(operation\);\s*resources\.operations\.add\(pending\);/);
+  const acceptedStart = source.indexOf("    runAcceptedWork<T>(");
+  const acceptedEnd = source.indexOf("    reconcileConfiguration()", acceptedStart);
+  assert.ok(acceptedStart >= 0 && acceptedEnd > acceptedStart);
+  const acceptedWork = source.slice(acceptedStart, acceptedEnd);
+  assert.match(acceptedWork, /service\.assertCurrent\(\);[\s\S]*const configuration = resources\.reconfiguration;/);
+  assert.match(acceptedWork, /Promise\.resolve\(configuration\)\.then\(\(\) => \{ service\.assertCurrent\(\); return operation\(\); \}\)/);
+  assert.match(acceptedWork, /resources\.operations\.add\(pending\);[\s\S]*pending\.then\(\(\) => resources\.operations\.delete\(pending\), \(\) => resources\.operations\.delete\(pending\)\)/);
   const start = source.indexOf("    stopResources() {");
   assert.ok(start >= 0);
   const retirement = source.slice(start);

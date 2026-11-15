@@ -1,6 +1,11 @@
-import { japaneseCatalog } from "./japaneseCatalog";
+import { japaneseCatalog as baseJapaneseCatalog } from "./japaneseCatalog";
 import { pluginTranslation } from "./translationRegistry";
-export { japaneseCatalog };
+export const japaneseCatalog: Record<string, string> = {
+  ...baseJapaneseCatalog,
+  "手机：录像接收器启动": "スマートフォン：録画受信サービスの起動",
+  "0 表示自动分配；启动后从运行状态读取实际地址": "0 は自動割り当てです。起動後、稼働状況から実際のアドレスを確認します。",
+  "启动后自动分配": "起動時に自動割り当て"
+};
 
 const inlineCatalog: Record<string, string> = {
   "已禁用": "無効", "定时触发": "定期実行", "角色面板": "ペルソナパネル",

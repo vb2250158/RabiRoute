@@ -12,10 +12,12 @@ import { createManagerClient } from "../lib/manager-client.mjs";
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { const deadline = Date.now() + 8000; while (Date.now() < deadline) { if (await check()) return; await delay(20); } throw new Error("Delivery fixture timed out"); }
 
-test("short CLI submits through the existing authenticated launcher; the same owner resumes disk intents after restart", async t => {
+test("short CLI submits through the existing authenticated launcher; original receipt reconciles after restart", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-delivery-control-"));
   const configPath = path.join(root, "config.json"), entry = path.join(root, "worker.mjs"), marker = path.join(root, "ready"), online = path.join(root, "online");
   const catalogOnline = path.join(root, "catalog-online");
+  const postLog = path.join(root, "stable-posts");
+  const reconcile = path.join(root, "reconcile");
   fs.writeFileSync(catalogOnline, "fixture catalogue available");
   fs.writeFileSync(configPath, JSON.stringify({ nodeId: "fixture-node", managerUrl: "http://manager.invalid", managerGuid: "fixture-guid", nodeCredential: "fixture-only" }));
   const ownerModule = new URL("../lib/delivery-owner.mjs", import.meta.url).href;
@@ -40,7 +42,8 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
  const result=process.argv.includes('--delivery-submit')?await runDeliveryCommand(process.argv.slice(2),configPath,readInput):await runManagerCommand(process.argv.slice(2),configPath,{readInput,fetchImpl,discover:async()=>null});
  console.log(JSON.stringify(result));
 } else {
- const owner=new DeliveryOwner({configPath,config:{nodeId:'fixture-node',deliveryPolicy:{baseDelayMs:10,maxDelayMs:50,pollMs:10}},sendEvent:()=>false,client:()=>({request:async(method)=>{
+ const owner=new DeliveryOwner({configPath,config:{nodeId:'fixture-node',deliveryPolicy:{baseDelayMs:10,maxDelayMs:50,pollMs:10}},sendEvent:()=>false,client:()=>({request:async(method,_path,options)=>{
+  if(method==='POST' && options.body.deliveryId==='stable-fixture')fs.appendFileSync(${JSON.stringify(postLog)},'P');
   if(!fs.existsSync(${JSON.stringify(online)}))throw new Error('fixture offline');
   return {ok:true,statusCode:200,body:JSON.stringify(method==='GET'?{code:0,data:{state:'committed',deliveryId:'internal',receipt:{accepted:true}}}:{status:'delivered',delivery:{status:'accepted',deliveryId:'internal'}})};
  }})});
@@ -52,6 +55,10 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
  process.on('SIGTERM',async()=>{await owner.close();process.exit(0)});
  process.on('disconnect',async()=>{await owner.close();process.exit(0)});
  owner.start();
+ // Simulate the authenticated Manager's delivery_records control operation.
+ const reconcilePath=${JSON.stringify(reconcile)};
+ let reconciled=false;
+ setInterval(()=>{if(!reconciled && fs.existsSync(reconcilePath)){reconciled=true;void owner.control({action:'reconcile',intentId:'stable-fixture'}).catch(error=>{process.stderr.write(error.message);process.exitCode=1});}},20).unref();
  // Publish complete PID bytes before making the readiness path visible.
  const readyMarker=${JSON.stringify(marker)},readyTemporary=readyMarker+'.'+process.pid+'.tmp';
  fs.writeFileSync(readyTemporary,String(process.pid));fs.renameSync(readyTemporary,readyMarker);
@@ -118,12 +125,20 @@ if(process.argv.includes('--delivery-submit')||process.argv.includes('--api')||p
   assert.equal(coldFileResult.code, 0, coldFileResult.errors); assert.equal(JSON.parse(coldFileResult.output).statusCode, 202);
   const unknown = await run(["--operation", "unverified.unknown", "--body-stdin", "--agent-type", "codex", "--id", "source"], JSON.stringify({ action: "send", threadId: "never-target", prompt: "must not be accepted" })).closed;
   assert.notEqual(unknown.code, 0); assert.equal(unknown.output.includes("local-durable"), false);
+  let original;
+  await until(async () => { original = await requestDeliveryControl(configPath, "query", { action: "get", intentId: "stable-fixture" }); return original.item.state === "awaiting_confirmation"; });
+  assert.equal(original.item.attemptCount, 1);
+  assert.equal(fs.readFileSync(postLog, "utf8"), "P");
   const stop = run(["--stop"]); assert.equal((await stop.closed).code, 0); await first.closed;
   fs.unlinkSync(marker); fs.writeFileSync(online, "fixture recovered");
   run(); await until(() => fs.existsSync(marker));
+  const restarted = await requestDeliveryControl(configPath, "query", { action: "get", intentId: "stable-fixture" });
+  assert.equal(restarted.item.state, "awaiting_confirmation");
+  fs.writeFileSync(reconcile, "original receipt only");
   let recovered;
   try { await until(async () => { recovered = await requestDeliveryControl(configPath, "query", { action: "get", intentId: "stable-fixture" }); return recovered.item?.state === "received"; }); }
   catch (error) { throw new Error(error.message + ': ' + JSON.stringify(recovered)); }
+  assert.equal(fs.readFileSync(postLog, "utf8"), "P", "only the original first attempt may be sent");
   const secondStop = run(["--stop"]); assert.equal((await secondStop.closed).code, 0);
 });
 

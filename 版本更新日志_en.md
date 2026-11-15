@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.3 - 2026-11-15
+
+- Advance io.rabiroute.manager.voice-assistant to 1.0.2 with owned English and Japanese translation registration and disposal. Complete translations for computer-control settings and new phone recording status messages.
+- Integrate upstream dynamic listener ports, the desktop voice assistant and recording-page changes. Explicit configured ports retain their values. New listeners without a configured port use system allocation and publish the actual address through their existing owner.
+- Windows Host advances a generation after the original Manager, Tray and Job have actually exited. Unconfirmed exits retain the original cleanup owner and request record. The Host version advances to 0.15.3.
+- Give changed existing packages distinct versions and synchronize the desktop profile. The affected versions are io.rabiroute.agent.astrbot 0.1.4, io.rabiroute.agent.dsh 0.1.6, io.rabiroute.endpoint.feishu 0.1.5, io.rabiroute.endpoint.napcat 0.1.9, io.rabiroute.endpoint.rabilink 0.1.5, io.rabiroute.manager.core 0.1.9, io.rabiroute.manager.diagnostics 0.1.7, io.rabiroute.manager.persona 0.1.15, io.rabiroute.manager.route-control 0.1.5 and io.rabiroute.manager.speech 0.1.5.
+- Advance Host API to 1.15.0 and Plugin SDK to 1.4.0 for the added listener-access contracts and synchronize dependency metadata. Rabi Agent advances to 0.4.6 for the owner-lease and endpoint-session changes. Adoption by remote nodes is verified in their own normal maintenance windows.
+
 ## Unreleased - 2026-11-05
 
 - Desktop voice plugin `1.0.1` and AIUI use shared loop `0.10.3`: hiding or pausing stops capture/output while retaining admitted work and text. Showing does not reopen the microphone or replay old replies, and manual mute persists. The glasses session renews its existing lease and validates the original ownerEpoch before resuming receipt reconciliation or claims. AIUI 51, device-owner 31 and desktop lifecycle 3 regressions pass; physical audio and installation acceptance are recorded separately.

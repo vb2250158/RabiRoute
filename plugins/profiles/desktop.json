@@ -22,14 +22,14 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.8",      "enabled": true,
+      "version": "0.1.9",      "enabled": true,
       "config": {},
       "grants": []
     },
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "enabled": true,
       "config": {},
       "grants": []
@@ -37,7 +37,7 @@
     {
       "id": "manager:speech",
       "package": "io.rabiroute.manager.speech",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "enabled": true,
       "config": {},
       "grants": []
@@ -61,7 +61,7 @@
     {
       "id": "manager:route-control",
       "package": "io.rabiroute.manager.route-control",
-      "version": "0.1.4",      "enabled": true,
+      "version": "0.1.5",      "enabled": true,
       "config": {},
       "grants": []
     },
@@ -182,7 +182,7 @@
     {
       "id": "manager:diagnostics",
       "package": "io.rabiroute.manager.diagnostics",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": []
@@ -236,7 +236,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []
@@ -266,7 +266,7 @@
     {
       "id": "endpoint:feishu",
       "package": "io.rabiroute.endpoint.feishu",
-      "version": "0.1.4",      "enabled": true,
+      "version": "0.1.5",      "enabled": true,
       "config": {},
       "grants": []
     },
@@ -289,7 +289,7 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
-      "version": "0.1.4",      "enabled": true,
+      "version": "0.1.5",      "enabled": true,
       "config": {},
       "grants": []
     },
@@ -319,7 +319,7 @@
     {
       "id": "agent:astrbot",
       "package": "io.rabiroute.agent.astrbot",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "enabled": true,
       "config": {},
       "grants": []
@@ -327,7 +327,7 @@
     {
       "id": "agent:dsh",
       "package": "io.rabiroute.agent.dsh",
-      "version": "0.1.5",      "enabled": true,
+      "version": "0.1.6",      "enabled": true,
       "config": {},
       "grants": []
     },
@@ -366,7 +366,7 @@
     {
       "id": "manager:voice-assistant",
       "package": "io.rabiroute.manager.voice-assistant",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "enabled": true,
       "config": {},
       "grants": []

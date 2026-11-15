@@ -1,5 +1,12 @@
 export const pluginTranslations = {
   "en": {
+    "每批操作后归还原前台": "Restore the foreground window after each batch",
+    "提示条位置": "Status bar position",
+    "结果提示时长": "Result notification duration",
+    "减少动态效果": "Reduce motion",
+    "文字大小": "Text size",
+    "控制提示": "Control notifications",
+    "每批操作后归还光标": "Return the cursor after each batch",
     "前台归还确认时长": "Foreground return confirmation timeout",
     "每批操作后确认原窗口成为前台的最长等待时长。0 表示立即确认。等待期间仍可处理用户输入。": "Maximum time to confirm the original foreground window after a batch. Set 0 for immediate confirmation. User input remains responsive during the wait.",
     "桌面（兼容模式）": "Desktop (compatibility mode)",
@@ -362,6 +369,13 @@ export const pluginTranslations = {
     "修改已提交，回读待确认": "Changes submitted; readback unconfirmed"
   },
   "ja": {
+    "每批操作后归还原前台": "操作バッチごとに元のウィンドウを前面に戻す",
+    "提示条位置": "ステータスバーの位置",
+    "结果提示时长": "結果通知の表示時間",
+    "减少动态效果": "動きを減らす",
+    "文字大小": "文字サイズ",
+    "控制提示": "操作通知",
+    "每批操作后归还光标": "操作バッチごとにカーソルを戻す",
     "前台归还确认时长": "フォーカス復元の確認時間",
     "每批操作后确认原窗口成为前台的最长等待时长。0 表示立即确认。等待期间仍可处理用户输入。": "操作バッチ後に元のウィンドウのフォーカス復元を確認する最大時間です。0 で即時確認します。待機中もユーザーの入力を処理できます。",
     "桌面（兼容模式）": "デスクトップ（互換モード）",
