@@ -14,7 +14,7 @@ import {createRabiOperationTools} from './operation-tools.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.message||'RABI_OPERATION_FAILED'),{receipt:result});return result.data?.data??result.data};
 const validSource=value=>['host','custom'].includes(value);
-export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent}){
+export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,recognitionSampleUrl,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent}){
   const directory=join(stateRoot,'data','voice-assistant');await mkdir(directory,{recursive:true});
   let profile={personaId:'',asrSource:'host',ttsSource:'host'},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
   const profilePath=join(directory,'host-profile.json');
@@ -114,7 +114,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
           const key=presentation.responseId+':'+presentation.playbackId;
           if(presentation.responseId&&presentation.speechStatus==='ended'&&!seen.has(key)){seen.add(key);record({voice:bound.personaId,kind:'tts',id:key,text:presentation.text,time:Date.now()})}},
         async dispose(){if(bound.personaId)publish('voice_assistant_presentation',{personaId:bound.personaId,ownerId:identity.activationId,ownerStartedAt,revision:++presentationRevision,clear:true});await Promise.allSettled([...petPending]);seen.clear()}};
-      const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,
+      const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(models.find(item=>item.id===ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
         onSubmitted:(message,config)=>{if(config.petEnabled&&bound.personaId&&message.source==='speech')record({kind:'asr',source:'voice-assistant',id:message.id,text:message.text,time:Date.now()})},

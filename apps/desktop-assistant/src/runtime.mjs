@@ -15,7 +15,7 @@ import {openConversationStore} from './conversation-store.mjs';
 import {createWebSearchService} from '@rabilink/desktop-voice-service/web-search';
 
 /** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy }) {
+export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy }) {
   const store = await openSettingsStore(settingsDirectory);
   let options={};
   try {options=JSON.parse(await readFile(join(directory,'host-options.json'),'utf8'));}
@@ -52,7 +52,7 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
     createProviders: providers,
     openSettings: onOpenSettings,
   });
-  diagnostics=await createAssistantDiagnostics({directory,settings:store.read,host,conversation,
+  diagnostics=await createAssistantDiagnostics({directory,settings:store.read,host,conversation,sampleUrl:recognitionSampleUrl,
     recognize:(audio,signal)=>{
       const config=store.read();
       if(config.asrMode==='local-whisper')return localAsr.recognize(audio,signal);

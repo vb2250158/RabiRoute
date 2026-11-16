@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.7 - 2026-11-16
+
+- Advance the voice assistant plugin to 1.1.9: bundle a licensed public Mandarin recognition sample without system speech; keep model and TTS checks independent when recognition fails and mark the voice chain untested.
+
 ## 0.15.6 - 2026-11-16
 
 - Synchronize the generated Agent capability catalog with the desktop voice assistant so clean builds match tracked source.

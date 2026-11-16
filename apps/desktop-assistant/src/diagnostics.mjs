@@ -2,13 +2,13 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createSystemRecognitionSample } from './recognition-sample.mjs';
+import { createRecognitionSample, recognitionSampleSource } from './recognition-sample.mjs';
 
 const ids=['model','asr','tts','microphone','voice'];
 const safeError=error=>/^[A-Z][A-Z0-9_]+$/.test(error?.message)?error.message:'ASSISTANT_TEST_FAILED';
 
 /** Host owns evidence. Configuration changes make prior results visibly stale. */
-export async function createAssistantDiagnostics({directory,settings,host,conversation,recognize,createSample=createSystemRecognitionSample}) {
+export async function createAssistantDiagnostics({directory,settings,host,conversation,recognize,sampleUrl,createSample=()=>createRecognitionSample({url:sampleUrl})}) {
   const path=join(directory,'checks.json');
   let records={},running,admitting=false,job={status:'idle',current:null,completed:0,total:0},serial=Promise.resolve();
   try { records=JSON.parse(await readFile(path,'utf8')); }
@@ -19,7 +19,7 @@ export async function createAssistantDiagnostics({directory,settings,host,conver
   const signature=(id,config=settings())=>{
     const prefixes=id==='model'?['llm','persona']:id==='asr'?['asr']:id==='tts'?['tts','outputDeviceId']:id==='microphone'?['inputDeviceId','electronExecutable']:['llm','persona','asr','tts','inputDeviceId','outputDeviceId','silence','electronExecutable'];
     const values=Object.fromEntries(Object.entries(config).filter(([key])=>!key.endsWith('Profiles')&&prefixes.some(prefix=>key.startsWith(prefix))));
-    return createHash('sha256').update(JSON.stringify(['asr','voice'].includes(id)?{...values,sampleSource:'system-speech-v1'}:values)).digest('hex');
+    return createHash('sha256').update(JSON.stringify(['asr','voice'].includes(id)?{...values,sampleSource:recognitionSampleSource}:values)).digest('hex');
   };
   const persist=()=>{
     const snapshot=JSON.stringify(records);
@@ -134,7 +134,15 @@ export async function createAssistantDiagnostics({directory,settings,host,conver
               for(const id of ['model','tts','voice'])if(id!==current&&records[id]?.status!=='passed')await record(id,'failed','前一步未通过，尚未完成测试');
             }
           } else {
-            for(const id of ['model','tts','voice'])await record(id,'failed','请先修复语音识别，再运行完整测试');
+            for(const id of ['model','tts']) {
+              begin(id);
+              try {await testOne(id);}
+              catch(error) {await record(id,'failed',safeError(error));}
+              complete();
+            }
+            begin('voice');
+            await record('voice','untested','语音链路未测试：识别示例未通过；对话模型和播报已分别测试。');
+            complete();
           }
         }
         job={...job,status:'completed',current:null,completed:job.total,finishedAt:new Date().toISOString()};

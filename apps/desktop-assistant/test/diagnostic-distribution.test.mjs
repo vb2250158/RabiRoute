@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import {isPublicPluginSource,isPluginRuntimeSource} from '../../../plugins/contracts/plugin-sdk/public-source.mjs';
 
 const repository=fileURLToPath(new URL('../../../',import.meta.url));
@@ -35,4 +36,18 @@ test('public test media can stay in Git without becoming runtime assets or priva
   assert.equal(isPluginRuntimeSource('assets/public-ui-sound.wav'),true);
   assert.equal(isPublicPluginSource('data/voice-assistant/test-private/input.wav'),false);
   assert.throws(()=>assertRuntimeInput('data/voice-assistant/test-private/input.wav'),/Test fixtures and private data/);
+});
+
+test('shipped Mandarin diagnostic includes its unchanged public sample, provenance and license',async()=>{
+  const specification=JSON.parse(await fs.readFile(path.join(repository,plugin,'manager-runtime.build.json'),'utf8'));
+  const assets='apps/desktop-assistant/assets/diagnostics/';
+  for(const name of ['recognition-zh-CN.wav','LICENSE.Microsoft.txt','source.json']) {
+    const mapping=specification.resources.find(item=>item.source===assets+name);
+    assert.equal(mapping?.target,'diagnostic-assets/'+name,'Package must include the complete diagnostic resource: '+name);
+  }
+  const source=JSON.parse(await fs.readFile(path.join(repository,assets,'source.json'),'utf8'));
+  const audio=await fs.readFile(path.join(repository,assets,'recognition-zh-CN.wav'));
+  assert.equal(createHash('sha256').update(audio).digest('hex'),source.sha256);
+  const manifest=JSON.parse(await fs.readFile(path.join(repository,plugin,'package.json'),'utf8'));
+  assert.ok(manifest.files.includes('diagnostic-assets'));
 });

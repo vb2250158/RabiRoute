@@ -62,6 +62,18 @@
     {
       "source": "node_modules/@koromix/koffi-win32-x64",
       "target": "native-deps/@koromix/koffi-win32-x64"
+    },
+    {
+      "source": "apps/desktop-assistant/assets/diagnostics/recognition-zh-CN.wav",
+      "target": "diagnostic-assets/recognition-zh-CN.wav"
+    },
+    {
+      "source": "apps/desktop-assistant/assets/diagnostics/LICENSE.Microsoft.txt",
+      "target": "diagnostic-assets/LICENSE.Microsoft.txt"
+    },
+    {
+      "source": "apps/desktop-assistant/assets/diagnostics/source.json",
+      "target": "diagnostic-assets/source.json"
     }
   ],
   "externalPackagePaths": {

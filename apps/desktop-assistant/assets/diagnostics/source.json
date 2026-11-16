@@ -1,0 +1,23 @@
+{
+  "id": "microsoft-mandarin-weather-v1",
+  "language": "zh-CN",
+  "transcript": "今天天气怎么样？",
+  "purpose": "Public fixed input for the shipped recognition diagnostic; not an accuracy benchmark.",
+  "sourceRepository": "https://github.com/Azure-Samples/cognitive-services-speech-sdk",
+  "sourceCommit": "b48b2bd8da4c94153e43a48eaf2a33138ff603cd",
+  "sourcePath": "scenarios/python/console/language-learning/resources/zhcn_short_dummy_sample.wav",
+  "sourceBlob": "52a993e1dcb8ad1d78208bd5a4721db35c316244",
+  "sha256": "71bc7f39ad53a23b1343e04c8dc35ab68bc4f3aac7b288cd59d09817c4cd2d66",
+  "bytes": 81644,
+  "format": {
+    "codec": "PCM",
+    "sampleRate": 16000,
+    "channels": 1,
+    "bitsPerSample": 16
+  },
+  "license": "MIT",
+  "licenseFile": "LICENSE.Microsoft.txt",
+  "licenseSource": "https://github.com/Azure-Samples/cognitive-services-speech-sdk/blob/b48b2bd8da4c94153e43a48eaf2a33138ff603cd/LICENSE.md",
+  "modifications": "None; original upstream bytes.",
+  "content": "Public Mandarin weather question; no application user recording, persona voice, credentials or private paths."
+}
