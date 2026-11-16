@@ -166,7 +166,7 @@ test('registered mobile operations admit an enabled remote node and revoke it du
   const reported = await call('/api/rabilink/mobile/device-status', 'POST', { level: '64.7', charging: false });
   assert.equal(reported.status, 200); assert.equal(reported.body.deviceStatus.batteryLevel, 65);
   const pending = call('/api/rabilink/mobile/proof', 'POST', { event: 'lease-check' });
-  await Promise.race([ready, pending.then(result => { throw new Error('proof rejected before owner: ' + JSON.stringify(result)); })]); authority.setNodeEnabled(credential.nodeId, false, true); unblock();
+  await Promise.race([ready, pending.then(result => { throw new Error('proof rejected before owner: ' + JSON.stringify(result)); })]); authority.revokeNode(credential.nodeId); unblock();
   const result = await pending; assert.equal(result.status, 403); assert.equal(result.body.errorCode, 'API_REQUEST_AUTHORITY_REVOKED');
   // The admitted status write remains; the subsequently revoked proof never commits.
   const storedFiles = fs.readdirSync(path.join(dataDir, 'rabilink-mobile-owner'));

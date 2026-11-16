@@ -26,7 +26,7 @@ test("an enrolled computer with no Agent catalog can use public APIs with an exp
   assert.throws(() => assertTrustedLanAgentPrincipal(request), /revoked/);
 });
 
-test("node-only service calls need no Agent registration; partial or forged invocation metadata is rejected", t => {
+test("node-only calls need no Agent registration; partial metadata is unattributed and forged identity is rejected", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unbound-service-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
@@ -36,7 +36,9 @@ test("node-only service calls need no Agent registration; partial or forged invo
   const system = request({});
   assert.equal(evaluateLanAgentRequest(system, authority, true).kind, "agent");
   assert.equal(assertTrustedLanAgentPrincipal(system)?.source, undefined);
-  assert.equal(evaluateLanAgentRequest(request({ "x-rabiroute-agent-type": "codex" }), authority, true).kind, "denied");
+  const partial = request({ "x-rabiroute-agent-type": "codex" });
+  assert.equal(evaluateLanAgentRequest(partial, authority, true).kind, "agent");
+  assert.equal(assertTrustedLanAgentPrincipal(partial)?.source, undefined);
   assert.equal(evaluateLanAgentRequest(request({ "x-rabiroute-agent-type": "codex", "x-rabiroute-session-id": "session" }, "lan1:invalid"), authority, true).kind, "denied");
   const selected = request({ "x-rabiroute-agent-type": "dsh", "x-rabiroute-session-id": "one" });
   assert.equal(evaluateLanAgentRequest(selected, authority, true).kind, "agent");

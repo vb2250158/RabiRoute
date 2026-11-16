@@ -97,7 +97,7 @@ test("resource settings share real ingress authority, not headers or resource tr
   const forged = make("GET", undefined, "", false);
   Object.assign(forged.socket, { remoteAddress: "127.0.0.1" });
   forged.headers.host = "127.0.0.1";
-  assert.equal((await resourceResponse(handler, forged)).status, 403);
+  assert.equal((await resourceResponse(handler, forged)).status, 200, "A legacy metadata header does not remove local authority.");
   const bytes = Buffer.from("private resource");
   const id = createHash("sha256").update(bytes).digest("hex");
   await store.put("owner", id, bytes);

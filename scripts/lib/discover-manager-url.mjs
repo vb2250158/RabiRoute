@@ -32,8 +32,9 @@ export async function discoverManagerIdentity(options = {}) {
     if (!meta.applicationGenerationId || !meta.managerInstanceId
       || (requireIdentity && (meta.applicationGenerationId !== candidate.applicationGenerationId || meta.managerInstanceId !== candidate.managerInstanceId))
       || loopbackManagerUrl(meta.managerBaseUrl) !== managerBaseUrl) throw new Error("Manager identity mismatch; rediscovery required.");
-    if (meta.health?.live !== true || !["healthy", "degraded"].includes(meta.health?.state)) throw new Error("Manager is not ready for business requests.");
-    return { managerBaseUrl, applicationGenerationId: meta.applicationGenerationId, managerInstanceId: meta.managerInstanceId };
+    if (!options.diagnostic && (meta.health?.live !== true || !["healthy", "degraded"].includes(meta.health?.state))) throw new Error("Manager is not ready for business requests.");
+    return { managerBaseUrl, applicationGenerationId: meta.applicationGenerationId, managerInstanceId: meta.managerInstanceId,
+      ...(options.includeMeta ? { meta } : {}) };
   }
   const explicit = options.explicit || env.RABIROUTE_MANAGER_URL || env.GATEWAY_MANAGER_URL;
   if (explicit) return verify({ managerBaseUrl: explicit }, false);

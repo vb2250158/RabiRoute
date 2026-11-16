@@ -42,7 +42,7 @@ test("Windows path validation uses fixed local drive and protects install/source
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("public settings accept only ingress-authenticated enabled Agents and cannot fall back after disable-enable", () => {
+test("public settings accept ingress-authenticated nodes and cannot fall back after credential replacement", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "settings-agent-authority-"));
   try {
     const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
@@ -52,10 +52,10 @@ test("public settings accept only ingress-authenticated enabled Agents and canno
       headers: { host: "manager.example", authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "fixture-agent" } } as unknown as IncomingMessage;
     assert.equal(localModelSettingsRequestAllowed(request), false);
     assert.equal(evaluateLanAgentRequest(request, authority, true).kind, "agent");
-    authority.setNodeEnabled("fixture-node", false);
-    authority.setNodeEnabled("fixture-node", true);
+    authority.revokeNode("fixture-node");
+    const renewed = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
     assert.equal(localModelSettingsRequestAllowed(request), false);
-    const fresh = { ...request, headers: { ...request.headers }, socket: { ...socket } } as unknown as IncomingMessage;
+    const fresh = { ...request, headers: { ...request.headers, authorization: `Bearer ${renewed.token}` }, socket: { ...socket } } as unknown as IncomingMessage;
     assert.equal(evaluateLanAgentRequest(fresh, authority, true).kind, "agent");
     assert.equal(localModelSettingsRequestAllowed(fresh), true);
     socket.remoteAddress = "127.0.0.1";

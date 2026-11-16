@@ -72,7 +72,7 @@ test("local fallback rejects cross-origin, Relay, P2P and unadmitted Agent reque
   const headerCases: Record<string, string>[] = [
     { origin: "https://other.example.test" }, { "sec-fetch-site": "cross-site" },
     { "x-rabilink-tunnel-local": "generation" }, { "x-rabiroute-relay-proxy": "1" },
-    { "x-rabiroute-peer-proxy": "1" }, { "x-rabiroute-agent-id": "agent" },
+    { "x-rabiroute-peer-proxy": "1" },
     { authorization: "Bearer lan1:invalid" }, { "x-rabiroute-webgui-token": "lan1:invalid" },
     { "x-forwarded-for": "192.0.2.10" },
     { host: "rebound.example.test", origin: "http://rebound.example.test", "sec-fetch-site": "same-origin" },

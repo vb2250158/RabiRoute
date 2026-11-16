@@ -331,9 +331,9 @@ export class LanAgentNodeNameConflictError extends Error {
 
 export class LanAgentRegistry {
   readonly terminals = new LanAgentTerminals((instanceId, body, assertAuthorized) => {
-    if (!terminalActionDefinition(String(body.action))?.recovery) this.assertComputerFeature(instanceId, "terminal");
-    if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.execute("terminal", body, assertAuthorized);
     try {
+      if (!terminalActionDefinition(String(body.action))?.recovery) this.assertComputerFeature(instanceId, "terminal");
+      if (instanceId === this.localInstanceId && this.localComputer) return this.localComputer.execute("terminal", body, assertAuthorized);
       if (!this.requireNode(instanceId).terminalShells?.length) throw new Error("This connector does not support remote terminals. Update it first.");
       return this.manageAgent(instanceId, "terminal", body, 45_000, assertAuthorized);
     } catch (cause) {

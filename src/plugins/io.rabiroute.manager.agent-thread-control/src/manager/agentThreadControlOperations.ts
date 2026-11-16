@@ -14,6 +14,7 @@ const threadRequest = { type: 'object', properties: {
   agentAdapter: { enum: [...agentAdapterTypes, '', null] }, agentTargetId: text, ledgerOwnerDeviceId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text, ownerDeviceId: text } }, { type: 'null' }] },
   dsBot: { type: 'object', required: ['botScopeId', 'botId'], additionalProperties: false, properties: { botScopeId: text, botId: text, scheduledAt: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$" } } },
   query: text, limit: true, offset: true, threadId: text, deliveryId: text, title: text, prompt: text, cwd: text,
+  history: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 200 } } },
   createIfMissing: true, lookupMode: true, sandbox: true, model: text, reasoningEffort: true, imagePaths: strings,
   dshBaseUrl: text, dshAgentPreset: text, dshDeliveryMode: true, grokBotDelivery: { anyOf: [{ type: 'object', properties: { deliveryType: text, sendMode: text, senderAgentId: text } }, { type: 'null' }] },
   messageSource: { anyOf: [source, { type: 'null' }] }, contextBlocks: strings, controlBlocks: strings, sourceThreadId: text, sourceAgentType: text, responsePolicy: text, responseInstruction: text,
@@ -22,7 +23,7 @@ const threadRequest = { type: 'object', properties: {
 const response = { mediaType: 'application/json', schema: { type: 'object', required: ['code'], properties: { code: { type: 'integer' }, action: { anyOf: [text, { type: 'null' }] },
   agentAdapter: text, threadId: text, query: text, errorCode: { type: 'string' }, field: { type: 'string' }, repair: { type: 'string' }, offset: { type: 'number' }, nextOffset: { anyOf: [{ type: 'number' }, { type: 'null' }] },
   threads: { type: 'array', items: { type: 'object', required: ['id', 'title', 'updatedAt'], properties: { id: text, title: text, updatedAt: text, cwd: text, archived: { type: 'boolean' } } } },
-  dsBot: true, thread: true, resolution: text, ok: { type: 'boolean' }, status: text, message: text, warning: text, communication: { type: 'object' }, delivery: { type: 'object' },
+  dsBot: true, thread: true, history: true, resolution: text, ok: { type: 'boolean' }, status: text, message: text, warning: text, communication: { type: 'object' }, delivery: { type: 'object' },
   source: { type: 'object' }, messageSource: source, error: true, handoffReturn: { type: 'object' }, uncertain: { type: 'boolean' } } } };
 const headers = { 'cache-control': 'no-store' };
 const toResult = (result: { status: number; body: Record<string, unknown> }): ApiOperationResult => ({ ...result, headers });
@@ -65,7 +66,7 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
     };
     return { contract: { operationId: method === 'GET' ? 'manager.agent.threads.list' : 'manager.agent.threads.action',
       aliases: ['agent:' + method + ':/api/agent/threads'], contractVersion: '1.0.0', method, pathTemplate: '/api/agent/threads', exposure: 'public', transport: 'http',
-      description: method === 'GET' ? 'List native owner sessions with full names and opaque IDs, using existing adapter discovery.' : 'Execute the original list/read/reconcile_delivery/open/resolve/create/rename/send action against the actual owner. Unsupported adapter actions remain unsupported; no delete/cancel API is invented.',
+      description: method === 'GET' ? 'List native owner sessions with full names and opaque IDs, using existing adapter discovery.' : 'Execute the original list/read/reconcile_delivery/open/resolve/create/rename/send action against the actual owner. read accepts optional history={cursor,limit} to read native history from the same provider and endpoint. Unsupported adapter actions remain unsupported; no delete/cancel API is invented.',
       request: { path: empty, query: ignored, headers: ignored, body: method === 'GET' ? { kind: 'none', allowIgnoredBody: true } : { kind: 'json', schema: threadRequest, maxBytes: 0, allowAnyContentType: true, emptyValue: {} } },
       responses: Object.fromEntries([200, 201, 202, 400, 401, 403, 404, 409, 500, 503].map(status => [String(status), response])),
       effects: { mode: method === 'GET' ? 'read' : 'native-owner-action', description: 'Original adapter/driver and Manager ledger own session discovery, exact identity, metadata creation/rename/open, real delivery, prepared reservation and formal reply. Handoff callbacks update the original board and publish events. Only the actual device/Desktop/service owner executes prompts; no fallback Runtime is created by these contracts.' },

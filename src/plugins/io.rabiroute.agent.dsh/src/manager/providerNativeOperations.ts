@@ -4,6 +4,39 @@ import { dshRpc, listDshSessions, readDshSession, requestDshBotAutomation } from
 import { resolveDshBaseUrl } from "../dshDiscovery.js";
 
 type NativeRpc = (method: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
+export async function readDshNativeHistory(sessionId: string, options: {
+  baseUrl?: string; beforeSeq?: number; throughSeq?: number; maxMessages?: number;
+  parentSessionId?: string; mode?: string; rpc?: NativeRpc;
+  signal?: AbortSignal; assertAuthorized?: () => void;
+}) {
+  if (options.beforeSeq !== undefined && (!Number.isSafeInteger(options.beforeSeq) || options.beforeSeq < 0)
+    || options.throughSeq !== undefined && (!Number.isSafeInteger(options.throughSeq) || options.throughSeq < 0)
+    || options.maxMessages !== undefined && (!Number.isSafeInteger(options.maxMessages) || options.maxMessages < 1)) {
+    throw new Error("History cursor and page limit must be valid native integers.");
+  }
+  const rpc: NativeRpc = options.rpc ?? (async (method, args, signal) => {
+    const result = await dshRpc<unknown>(resolveDshBaseUrl(options.baseUrl), method, args, options.assertAuthorized, signal);
+    if (!result.ok) throw new Error(result.error.message || "DSH history is unavailable.");
+    return result.value;
+  });
+  options.assertAuthorized?.();
+  const page = await rpc("session/events", {
+    request: { address: options.parentSessionId
+      ? { kind: "subagent", parentSessionId: options.parentSessionId, childSessionId: sessionId, mode: options.mode ?? "unknown" }
+      : { kind: "session", sessionId },
+      ...(options.beforeSeq === undefined ? {} : { beforeSeq: options.beforeSeq }),
+      ...(options.throughSeq === undefined ? {} : { throughSeq: options.throughSeq }),
+      ...(options.maxMessages === undefined ? {} : { maxMessages: options.maxMessages }) }
+  }, options.signal) as { records: unknown[]; cursor: number; hasMore: boolean };
+  options.assertAuthorized?.();
+  if (!Array.isArray(page?.records) || typeof page.hasMore !== "boolean" || !Number.isSafeInteger(page.cursor)) {
+    throw new DshNativeError(503, "DSH_HISTORY_RESPONSE_INVALID", "The DSH native history page is incomplete.");
+  }
+  return { ...page, provider: "dsh", sessionId, source: "dsh-session-events", coverage: {
+    throughSeq: page.cursor, ...(options.beforeSeq === undefined ? {} : { beforeSeq: options.beforeSeq }),
+    direction: "backward", nativeCursorPreserved: true
+  } };
+}
 export type DshNativeOperationDependencies = { baseUrl?: string; rpc?: NativeRpc; botRequest?: typeof requestDshBotAutomation; configuredTargets?: () => { localBaseUrls: string[]; remoteTargetIds: string[] } };
 class DshNativeError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -107,34 +140,11 @@ export function createDshNativeOperations(dependencies: DshNativeOperationDepend
         mode: { type: "string", enum: ["one-shot", "continuable", "unknown"] }
       },
       run: async (input: ApiOperationInput) => {
-        const sessionId = input.path.sessionId!, parent = input.url.searchParams.get("parentSessionId");
-        const address = parent ? {
-          kind: "subagent",
-          parentSessionId: parent,
-          childSessionId: sessionId,
-          mode: input.url.searchParams.get("mode") ?? "unknown"
-        } : { kind: "session", sessionId };
-        const beforeSeq = nativeInteger(input, "beforeSeq"), throughSeq = nativeInteger(input, "throughSeq"), maxMessages = nativeInteger(input, "maxMessages");
-        const request = {
-          address,
-          ...(beforeSeq === undefined ? {} : { beforeSeq }),
-          ...(throughSeq === undefined ? {} : { throughSeq }),
-          ...(maxMessages === undefined ? {} : { maxMessages })
-        };
-        const page = await rpc("session/events", { request }, input.signal);
-        if (!page || typeof page !== "object" || !Array.isArray((page as { records?: unknown }).records) || typeof (page as { hasMore?: unknown }).hasMore !== "boolean" || !Number.isSafeInteger((page as { cursor?: unknown }).cursor)) throw new DshNativeError(503, "DSH_HISTORY_RESPONSE_INVALID", "The DSH native history page is incomplete.");
-        return {
-          ...page,
-          provider: "dsh",
-          sessionId,
-          source: "dsh-session-events",
-          coverage: {
-            throughSeq: (page as { cursor: number }).cursor,
-            ...(beforeSeq === undefined ? {} : { beforeSeq }),
-            direction: "backward",
-            nativeCursorPreserved: true
-          }
-        };
+        return readDshNativeHistory(input.path.sessionId!, {
+          rpc, beforeSeq: nativeInteger(input, "beforeSeq"), throughSeq: nativeInteger(input, "throughSeq"),
+          maxMessages: nativeInteger(input, "maxMessages"), parentSessionId: input.url.searchParams.get("parentSessionId") ?? undefined,
+          mode: input.url.searchParams.get("mode") ?? undefined, signal: input.signal
+        });
       }
     },
     {

@@ -6,11 +6,13 @@ English | <a href="./performance-monitoring.md">简体中文</a>
 
 # Resident performance recording and inspection
 
+Open **Logs & diagnostics → Performance monitor**. The sidebar uses the shared diagnostics entry. Existing `/performance` bookmarks continue to use the same performance page. The tab retains unsaved settings when switching to runtime logs or call history.
+
 > Audience: local operators and project maintainers. Use this feature to retain recent evidence for sustained slowdowns, memory growth, and slow requests in Manager, Gateway, or the browser UI.
 
 ## Enable and inspect
 
-1. Open RibiWebGUI and go to **Performance**.
+1. Open RibiWebGUI, go to **Logs & diagnostics**, then select **Performance monitor**.
 2. Enable performance recording, then set the sample interval, retention period, disk limit, and slow-operation threshold.
 3. Save the settings. Manager and the current browser apply them immediately. Running Gateways read the new settings within 30 seconds.
 4. The page shows CPU, memory, garbage collection, API P95, event-loop delay, internal hotspots, HTTP hotspots, collector status, and recent JSON records.

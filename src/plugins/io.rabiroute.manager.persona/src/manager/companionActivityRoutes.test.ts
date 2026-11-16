@@ -83,7 +83,7 @@ test("authenticated remote Agents share companionship start, read and stop", asy
   const working = ((await mode.json()) as any).data.session;
   assert.equal(working.id, session.id); assert.equal(working.activityKind, "work");
   const stop = await fetch(`${base}/command`, { method: "POST", headers, body: JSON.stringify({ sessionId: working.id, revision: working.revision, action: "stop" }) });
-  authority.setNodeEnabled("remote-fixture", false);
+  authority.revokeNode("remote-fixture");
   assert.equal(stop.status, 200);
   assert.equal((await fetch(base, { headers })).status, 403);
 });

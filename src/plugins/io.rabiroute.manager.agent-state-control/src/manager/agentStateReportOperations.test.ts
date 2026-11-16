@@ -47,7 +47,7 @@ async function fixture(t: test.TestContext) {
   const body = (sequence: number | string, state: unknown = {}) => ({ gatewayId: " example ", adapterType: "codex", generation: " process-one ", sequence, state });
   const binding = { bindingUpdateRequestedAt: "2026-10-21T00:00:00Z", bindingPreviousThreadId: previousId, bindingThreadId: nextId, bindingWorkspace: "C:/work/example" };
   return { root, runtime, states, events, registration, send, body, binding, started,
-    failWrite: () => { failWrite = true; }, disable: () => { authority.setNodeEnabled(credential.nodeId, false, true); }, hold: () => { gate = new Promise<void>(resolve => { release = resolve; }); }, release: () => release!() };
+    failWrite: () => { failWrite = true; }, disable: () => { authority.revokeNode(credential.nodeId); }, hold: () => { gate = new Promise<void>(resolve => { release = resolve; }); }, release: () => release!() };
 }
 
 test("public report updates native state, preserves open fields and overrides report metadata", async t => {

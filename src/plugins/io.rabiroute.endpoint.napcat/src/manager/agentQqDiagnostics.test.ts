@@ -112,8 +112,8 @@ test("executable diagnostics validates its published query and response while pr
   }
 });
 
-test("missing ingress principal, forged Agent header and source-only marker cannot access diagnostics", async t => {
-  for (const variant of ["nonlocal", "forged", "source"]) {
+test("missing ingress principal and source-only marker cannot access diagnostics", async t => {
+  for (const variant of ["nonlocal", "source"]) {
     const value = fixture(t, { remote: false, address: variant === "nonlocal" ? "192.0.2.1" : "127.0.0.1" });
     if (variant === "forged") value.request.headers["x-rabiroute-agent-id"] = "fixture-agent";
     if (variant === "source") setTrustedLanAgentSource(value.request, { nodeId: "fixture-node", agentId: "fixture-agent", provider: "dsh", sessionId: "fixture-session", sessionName: "Fixture" });
@@ -125,7 +125,7 @@ test("missing ingress principal, forged Agent header and source-only marker cann
 
 test("revoked original principal never falls back even on loopback", async t => {
   const value = fixture(t, { address: "127.0.0.1" });
-  value.authority.setNodeEnabled("fixture-node", false);
+  value.authority.revokeNode("fixture-node");
   delete value.request.headers["x-rabiroute-agent-id"];
   await value.run();
   assert.equal(value.results[0].status, 403);
@@ -174,7 +174,7 @@ test("stale or unversioned WS status cannot indicate live connection", async t =
 
 test("revocation between status read and network probe stops upstream access", async t => {
   const value = fixture(t);
-  value.context.readStatus = () => { value.authority.setNodeEnabled("fixture-node", false); return {}; };
+  value.context.readStatus = () => { value.authority.revokeNode("fixture-node"); return {}; };
   await value.run();
   assert.equal(value.results[0].status, 403);
   assert.equal(value.counts().probes, 0);
@@ -196,10 +196,10 @@ test("revocation and node/global ABA during a pending probe suppress projected r
       value.authority.revokeNode("fixture-node");
       const replacement = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "fixture-node");
     } else {
-      value.authority.setNodeEnabled("fixture-node", false);
+      value.authority.revokeNode("fixture-node");
       if (change === "node-aba") {
-        value.authority.setNodeEnabled("fixture-node", true);
-        assert.ok(value.authority.authenticate(value.request.headers.authorization!.toString().replace(/^Bearer /, "")), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+        const renewed = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "fixture-node");
+        assert.ok(value.authority.authenticate(renewed.token), "Restored node accepts fresh authentication while the original request lease remains revoked.");
       }
     }
     delete value.request.headers["x-rabiroute-agent-id"];

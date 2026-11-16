@@ -12,7 +12,10 @@ export async function queryRabiSearch({query={},budgetMs=3000,agentType,id,signa
     for(let attempt=0;attempt<2;attempt++) {
       const params=new URLSearchParams();
       for(const [name,value] of Object.entries(query))if(value!==undefined && value!==null)params.set(name,Array.isArray(value)?value.join(','):String(value));
-      params.set('budgetMs',String(remaining()));
+      const requestBudgetMs = remaining();
+      // Leave time for the server's partial response to be encoded, delivered and read.
+      const responseReserveMs = Math.min(500, Math.ceil(requestBudgetMs / 5));
+      params.set('budgetMs', String(Math.max(1, requestBudgetMs - responseReserveMs)));
       const headers={accept:'application/json'};
       if(typeof agentType==='string' && agentType.trim() && typeof id==='string' && id.trim()){
         headers['x-rabiroute-agent-type']=agentType.trim();headers['x-rabiroute-session-id']=id.trim();

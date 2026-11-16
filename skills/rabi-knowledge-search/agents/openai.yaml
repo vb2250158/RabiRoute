@@ -1,4 +1,4 @@
 interface:
-  display_name: "Rabi 记忆与计划搜索"
-  short_description: "Rabi 在线时先查计划和记忆，再定位项目文件；离线直接普通搜索"
-  default_prompt: "使用 $rabi-knowledge-search 查找相关资料；仅在 Rabi 在线且角色范围明确时优先查询计划和记忆，按命中线索定位文件。"
+  display_name: "Rabi 统一搜索"
+  short_description: "Rabi 可用时先搜索，调用失败时记录一次并继续原任务"
+  default_prompt: "使用 $rabi-knowledge-search，Rabi 可用时先完成至少一次 /api/search，默认查询全部角色和来源。读取 label、excerpt、coverage 与 handle，再决定查详情、调整关键词或定位文件。已知文件和旧规范同样先搜索；Rabi 发现、连接、查询或承载检索的工具失败时，记录一次实际错误，本轮跳过同一故障并继续本地检索与原任务。"

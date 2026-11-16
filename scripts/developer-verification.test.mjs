@@ -5,7 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { verifyPluginCandidate, inspectPluginBuild, analyzeVerificationImpact, fingerprintFiles } from './lib/developer-verification.mjs';
+import { verifyPluginCandidate, inspectPluginBuild, analyzeVerificationImpact, fingerprintFiles, collectArtifactOwnerFiles } from './lib/developer-verification.mjs';
+
+test('artifact owner closure follows static, re-export and literal dynamic relative imports', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'artifact-closure-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'entry.js'), "import './static.js'; export * from './export.js'; import('./dynamic.js'); import 'node:fs';");
+  for (const name of ['static.js', 'export.js', 'dynamic.js']) await fs.writeFile(path.join(root, name), 'export {};');
+  await fs.writeFile(path.join(root, 'unrelated.js'), 'export {};');
+  assert.deepEqual(await collectArtifactOwnerFiles(root, ['entry.js']), ['dynamic.js', 'entry.js', 'export.js', 'static.js']);
+});
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rabi-proof-test-'));
@@ -307,6 +316,8 @@ test('web-patch reuses original manifest/file/HTML validation and exposes only d
     assert.ok(owner, `Missing frozen Web verifier dependency: ${ownerPath}`);
     assert.equal(owner.sha256, createHash('sha256').update(await fs.readFile(new URL('../' + ownerPath, import.meta.url))).digest('hex'));
   }
+  assert.ok(receipt.artifactOwner.some(file => file.path === 'dist/manager/webPluginModules.js'));
+  assert.ok(receipt.artifactOwner.some(file => file.path === 'dist/plugin-kernel/packageLoader.js'));
   await fs.writeFile(path.join(options.candidateRoot, 'web/assets/main.js'), 'tampered');
   await assert.rejects(verifyPluginCandidate({ ...options, artifactKind: 'web-patch', artifactSha256 }), /file verification failed/);
 });

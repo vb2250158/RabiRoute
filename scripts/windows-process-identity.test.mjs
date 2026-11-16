@@ -84,6 +84,8 @@ test("Speech launcher preserves its interpreter version and copyright with the o
       PYTHONPATH: path.join(process.env.LOCALAPPDATA, "RabiRoute/build-cache/executable-identity-pyinstaller-6.16.0") };
     delete environment.PYTHONHOME;
     for (const value of [environment.HOME, environment.APPDATA, environment.LOCALAPPDATA, environment.TEMP]) fs.mkdirSync(value, { recursive: true });
+    fs.mkdirSync(environment.RABISPEECH_DATA_ROOT, { recursive: true });
+    fs.writeFileSync(environment.RABISPEECH_CONFIG, "{}\n");
     const interpreter = JSON.parse(run("py.exe", ["-3.10", "-c", "import sys,json; print(json.dumps(dict(executable=sys.executable,home=sys.base_prefix,version=sys.version)))"], { env: environment }));
     const originalBytes = fs.readFileSync(interpreter.executable);
     run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
@@ -101,10 +103,10 @@ test("Speech launcher preserves its interpreter version and copyright with the o
     const runtimeEnvironment = { ...environment, PYTHONHOME: interpreter.home,
       PATH: interpreter.home + path.delimiter + environment.PATH };
     const probe = JSON.parse(run(executable, [path.join(source, "scripts/windows_host.py"), "--probe"], { env: runtimeEnvironment }));
-    assert.equal(probe.service_root, source);
-    assert.equal(probe.dependencies, dependencies);
-    assert.equal(probe.config, environment.RABISPEECH_CONFIG);
-    assert.equal(probe.executable, executable);
+    assert.equal(fs.realpathSync.native(probe.service_root), fs.realpathSync.native(source));
+    assert.equal(fs.realpathSync.native(probe.dependencies), fs.realpathSync.native(dependencies));
+    assert.equal(fs.realpathSync.native(probe.config), fs.realpathSync.native(environment.RABISPEECH_CONFIG));
+    assert.equal(fs.realpathSync.native(probe.executable), fs.realpathSync.native(executable));
     assert.equal(run(executable, ["-c", "import sys; print(sys.version)"], { env: runtimeEnvironment }), interpreter.version);
     run("py.exe", ["-3.10", "-c", iconCheck, executable, path.join(repository, "assets/rabiroute-icon.ico")], { env: environment });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

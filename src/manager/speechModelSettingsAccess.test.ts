@@ -54,11 +54,11 @@ test("verified connection access is preserved without trusting copied objects or
   assert.equal(localModelSettingsRequestAllowed({ ...remote }), false);
 });
 
-test("unissued Agent header denies even an authenticated connection on a safe local origin", () => {
+test("legacy Agent header does not change authenticated local connection authority", () => {
   for (const agentId of ["fixture-agent", "", ["fixture-agent"]]) {
     const local = request("127.0.0.1", { host: "127.0.0.1:1234", "x-rabiroute-agent-id": agentId });
     markAuthenticatedConnectionRequest(local);
-    assert.equal(localModelSettingsRequestAllowed(local), false);
+    assert.equal(localModelSettingsRequestAllowed(local), true);
   }
 });
 

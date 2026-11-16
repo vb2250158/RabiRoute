@@ -32,7 +32,7 @@ RabiRoute 是消息网关和 Policy Router，负责消息接入、事件记录�
 
 所有新增或修改的 Skill、工作流和脚本，访问 Manager 时使用下列动态发现与身份核对流程。
 
-- 知识查询先读 `skills/rabi-knowledge-search/SKILL.md`，在线查计划与记忆，接口故障时按实际来源继续文件查询。
+- 任务检索先读 `skills/rabi-knowledge-search/SKILL.md`；Rabi 可用时先完成至少一次 `/api/search`，读取 `label`、`excerpt`、覆盖与真实入口，再决定详情查询、关键词调整或本地搜索。已知文件、旧规范和本地协作同样执行；Rabi 发现、连接、查询或承载检索的工具失败时，记录一次实际错误，本轮跳过同一故障并继续本地检索与原任务。
 - 运行 `node scripts/resolve-manager.mjs`；其他工作区使用已配置源码根的绝对路径。取得 managerBaseUrl、applicationGenerationId、managerInstanceId，通过 `GET /meta`（`<managerBaseUrl>/meta`）核对当前身份。源码模式使用结构化 READY 地址，测试可显式注入 URL。
 - 普通业务请求核对 health.live=true，接受 `healthy`、`degraded`；health.requiredReady 表示声明能力是否齐备，缺项由目标接口判断，不阻断无依赖功能。`/meta` 诊断只核对身份；写后按身份与原回执判断状态，待确认结果标记 uncertain 并查询原请求。
 - 安装版使用 `RabiRouteHost.exe --command status --json`；Manager 地址始终由当前发现结果提供。Host status 空输出时使用解析器复核。身份变化后重新发现，应用生命周期由 Host 管理。

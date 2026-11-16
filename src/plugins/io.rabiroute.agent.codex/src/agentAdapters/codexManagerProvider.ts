@@ -1,4 +1,4 @@
-import { createCodexNativeOperations } from "../manager/providerNativeOperations.js";
+import { CodexNativeHistoryReader, createCodexNativeOperations } from "../manager/providerNativeOperations.js";
 import { CodexRemoteTaskOwner } from "./codexRemoteTask.js";
 import * as endpointOwner from "./codexOwnerExecution.js";
 import { createCodexRuntime } from '../codexRuntime.js';
@@ -14,10 +14,21 @@ import type { AgentManagerImplementationOptions } from '@rabiroute/host-api/mana
 import type { AgentManagerDescriptor } from '@rabiroute/host-api/manager/agentManagerProviders';
 export function createManager(options: AgentManagerImplementationOptions, descriptor: AgentManagerDescriptor, signal: AbortSignal): AgentOwnedManager {
   const runtime = createCodexRuntime();
+  const historyReader = new CodexNativeHistoryReader();
   const remoteTasks = new CodexRemoteTaskOwner(options.host);
   let unsubscribe: (() => void) | undefined;
   return {
     operations: {
+      "threads.history": (payload, invocation) => historyReader.read(payload.sessionId, {
+        cursor: payload.cursor, limit: payload.limit, signal: invocation?.signal, maxBytes: 2 * 1024 * 1024,
+        includeRecord: record => {
+          const value = record as { type?: string; payload?: { type?: string; role?: string; phase?: string } } | null;
+          const item = value?.payload;
+          return value?.type === "event_msg" && (item?.type === "user_message" || item?.type === "task_complete")
+            || value?.type === "response_item" && item?.type === "message"
+              && (item.role === "user" || item.role === "assistant" && item.phase === "final_answer");
+        }
+      }),
       "threads.metadata": payload => readCodexDesktopThreadsByIds(payload.sessionIds).map(task => ({ id: task.id, title: task.title, url: codexDesktopDeepLinkForTest(task.id) })),
       "remote.task": (payload, invocation) => remoteTasks.execute(payload, invocation),
       "endpoint.execute": (_payload, invocation) => {

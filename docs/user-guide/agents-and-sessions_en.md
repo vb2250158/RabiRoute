@@ -6,6 +6,12 @@ English | <a href="./agents-and-sessions.md">简体中文</a> | <a href="./agent
 
 # Agents, projects, and tasks
 
+## Read sessions and message history
+
+Open a persona's **Message History** and select **Agent sessions**. Switch between configured Agents using the second-level tabs, then choose a session or task. Search, refresh and load more sessions from the list. The conversation shows user inputs and final replies.
+
+The directory combines the persona's configured Routes and keeps each remote computer and Agent identity. Separate DSH service origins remain separate choices. Codex and DSH read paged history from their native owners. Other adapters supply their own history capability, and missing interfaces or connection failures show an error for that target. Switching Agents selects that Agent's tasks. Failed refreshes retain loaded content.
+
 The message adapter decides where an event enters. The Agent adapter decides which handler receives it. The handler owns answers, code, tools, and private task state.
 
 ## Current handlers

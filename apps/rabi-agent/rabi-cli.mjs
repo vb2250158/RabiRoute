@@ -26,11 +26,13 @@ export async function runCli(args, dependencies = {}) {
   if (!client && configPath) {
     const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
     protectedCredential = config.nodeCredential;
-    client = createManagerClient({ config, configPath, agentType: option('--agent-type'), sessionId: option('--id') });
+    client = createManagerClient({ config, configPath, agentType: option('--agent-type'), sessionId: option('--id'),
+      callHistory: { source: 'cli' } });
   } else if (!client) {
     const endpointSession = createHostEndpointSession({ hostExecutable: process.env.RABIROUTE_HOST_EXE });
     const endpoint = await endpointSession.ensure({ diagnostic: true });
-    client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true });
+    client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true,
+      callHistory: { source: 'cli' } });
   }
   const redact = value => {
     if (!protectedCredential) return value;
@@ -39,7 +41,13 @@ export async function runCli(args, dependencies = {}) {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redact(item)]));
     return value;
   };
-  try { return redact(await runOperationCommand(args, client.operations, { ...dependencies, protectedCredential, redact })); }
+  try {
+    const execute = () => runOperationCommand(args, client.operations, { ...dependencies, protectedCredential, redact });
+    const result = client.observeCall
+      ? await client.observeCall('cli', { command: args[0], operationId: args[0] === 'call' ? args[1] : undefined }, execute)
+      : await execute();
+    return redact(result);
+  }
   finally { if (!dependencies.client) await client.close?.(); }
 }
 

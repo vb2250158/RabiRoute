@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { DeveloperCandidateAdmission } from "./developerCandidateAdmission.js";
 import { DeveloperCandidateProvenance } from "./developerCandidateProvenance.js";
+import { collectArtifactOwnerFiles } from "../../scripts/lib/developer-verification.mjs";
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 async function fixture(t: any) {
@@ -14,7 +15,8 @@ async function fixture(t: any) {
   const sourceRoot = path.join(root, "source"), candidateRoot = path.join(root, "candidate"), tests = path.join(root, "tests");
   await fs.mkdir(sourceRoot); await fs.mkdir(candidateRoot); await fs.mkdir(tests);
   await fs.writeFile(path.join(sourceRoot, "package.json"), '{"type":"module"}');
-  for (const file of ["scripts/verify-plugin-candidate.mjs", "scripts/lib/developer-verification.mjs", "dist/plugin-kernel/hotPatchCandidateStore.js", "dist/plugin-kernel/hotPatchResourceStore.js", "dist/manager/webPatchCatalog.js", "dist/manager/webPluginModules.js", "dist/plugin-kernel/packageLoader.js", "dist/plugin-kernel/manifest.js", "dist/plugin-kernel/types.js", "dist/plugin-kernel/capabilityReference.js", "dist/plugin-kernel/automaticCodeRuntime.js", "dist/plugin-kernel/hotPatchIterator.js"]) {
+  const ownerFiles = await collectArtifactOwnerFiles(repository, ["dist/plugin-kernel/hotPatchCandidateStore.js", "dist/manager/webPatchCatalog.js"]);
+  for (const file of ["scripts/verify-plugin-candidate.mjs", "scripts/lib/developer-verification.mjs", ...ownerFiles]) {
     await fs.mkdir(path.dirname(path.join(sourceRoot, file)), { recursive: true }); await fs.copyFile(path.join(repository, file), path.join(sourceRoot, file));
   }
   await fs.symlink(path.join(repository, "node_modules"), path.join(sourceRoot, "node_modules"), "junction");
@@ -56,6 +58,6 @@ test("managed Web uses the real manifest owner and preserves original contract w
   const input = { kind: "web-patch" as const, sha256, candidateRoot: f.candidateRoot };
   assert.equal((await f.admission.prepareManagedCandidate(input)).mode, "existing-contract");
   await f.origins.record("web-patch", sha256, f.sourceRoot);
-  const proof = await f.admission.prepareManagedCandidate({ ...input, originSourceRoot: await f.origins.source("web-patch", sha256) });
+  const proof = await f.admission.prepareManagedCandidate({ ...input, originSourceRoot: await f.origins.source("web-patch", sha256) }).catch(error => { throw new Error("Managed Web verification failed", { cause: error.cause ?? error }); });
   assert.equal(proof.mode, "verified-development"); proof.assertCurrent();
 });

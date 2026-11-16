@@ -114,6 +114,32 @@ async function fixture(t:test.TestContext, ctx:AgentThreadControlRoutesContext, 
   return {owner,registry,registration,base,call};
 }
 
+test('disconnecting a history read cancels the original native provider operation', { timeout: 5000 }, async t => {
+  const started = deferred<void>(), cancelled = deferred<void>();
+  const f = await fixture(t, context({
+    agentThreadRequestOptions: (_body, extra) => ({ allowedWorkspaces: [], ...extra,
+      invokeAgentOperation: async (_provider, operation, _payload, invocation) => {
+        assert.equal(operation, 'threads.history');
+        assert.ok(invocation?.signal);
+        const signal = invocation.signal;
+        started.resolve();
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+          cancelled.resolve(); reject(signal.reason);
+        }, { once: true }));
+      }
+    }),
+    handleAgentThreadRequest: (body, options) => handleAgentThreadRequest(body, options)
+  }));
+  const controller = new AbortController();
+  const pending = fetch(f.base + '/api/agent/threads', { method: 'POST',
+    headers: { 'content-type': 'application/json' }, signal: controller.signal,
+    body: JSON.stringify({ action: 'read', agentAdapter: 'codex', threadId: '019f0000-0000-7000-8000-000000000001', history: { limit: 10 } }) });
+  await started.promise;
+  controller.abort();
+  await assert.rejects(pending);
+  await cancelled.promise;
+});
+
 test('workspace repair examples are valid read-only requests on the registered thread contract', async t => {
   const target = { provider: 'codex', sessionId: 'complete-original-task', instanceId: 'original-instance', agentId: 'original-agent', ownerDeviceId: 'original-peer' };
   const repair = agentWorkspaceMismatch(target).repair;

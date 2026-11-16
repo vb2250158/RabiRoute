@@ -13,13 +13,15 @@ async function main() {
   if (!['true', 'false'].includes(writeSetting)) throw new Error('Invalid write setting.');
   const endpointSession = createHostEndpointSession({ hostExecutable: process.env.RABIROUTE_HOST_EXE });
   const endpoint = await endpointSession.ensure({ diagnostic: true });
-  const client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true, timeoutMs: 12000 });
+  const client = createManagerClient({ managerUrl: endpoint.managerUrl, endpointSession, localHost: true, timeoutMs: 12000,
+    callHistory: { source: 'mcp', targetKey: endpoint.meta.rabiGuid || `instance:${endpoint.meta.managerInstanceId}` } });
   const policy = { client, allowedRoles, allowWrites: writeSetting === 'true' };
   const operations = createOperationTools({ ...policy, ...readOperationSessionSettings() });
   const legacyKnowledge = createKnowledgeTools(policy);
   // Existing knowledge tool names remain callable during client migration.
   // The visible catalog presents the same six shared actions as CLI.
-  const tools = { list: operations.list, close: operations.close, call(name, args, context) {
+  const tools = { list: operations.list, close: operations.close,
+    observeCall: (name, args, action) => client.observeCall(name, args, action), call(name, args, context) {
     return name.startsWith('rabi_') ? operations.call(name, args, context) : legacyKnowledge.call(name, args, context);
   } };
   const closeTools = async () => { try { await tools.close(); } finally { await client.close(); } };

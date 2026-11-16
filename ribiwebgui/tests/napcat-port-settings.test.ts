@@ -193,17 +193,12 @@ test("named HTTP cards retain automatic preferences and expose only the original
   }
 });
 
-test("runtime diagnostics follow NapCat, Feishu and RabiLink publications without saved-port fallbacks", () => {
-  const fixture = component(false, {}, "../../src/plugins/io.rabiroute.manager.diagnostics/web/pages/RuntimeLogPage.vue");
-  try {
-    assert.equal(fixture.model.napcatAddress(), "ws://127.0.0.1:31415");
-    for (const type of ["rabilink", "feishu"]) {
-      publishHttp(fixture, type);
-      assert.equal(fixture.model.webhookAddress(type), `http://127.0.0.1:31416/${type}`);
-      (fixture.store.selectedRuntime.gatewayStatus.messageAdapters as Record<string, any>)[type].listenerReady = false;
-      assert.equal(fixture.model.webhookAddress(type), "");
-    }
-    fixture.store.selectedRuntime.running = false;
-    assert.equal(fixture.model.napcatAddress(), "");
-  } finally { fixture.dispose(); }
+test("runtime log tab contains log output and refresh without connection or execution controls", () => {
+  const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.diagnostics/web/pages/RuntimeLogPage.vue", import.meta.url), "utf8");
+  assert.match(source, /运行日志/);
+  assert.match(source, /selectedRuntime\.log/);
+  assert.match(source, /store\.ensureDiagnostics\(true\)/);
+  assert.match(source, /data-no-i18n>\{\{ logs \}\}/);
+  assert.doesNotMatch(source, /诊断摘要|消息端连接|Codex Desktop 任务|手动触发|stat-card|status-row/);
+  assert.doesNotMatch(source, /manualTriggerGateway|actionGateway|deleteGateway|napcatAddress|webhookAddress/);
 });

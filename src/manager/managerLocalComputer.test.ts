@@ -23,7 +23,7 @@ test("host with no connector or Agent exposes real platform capabilities and chu
   assert.equal(instance.local, true); assert.deepEqual(instance.agents, []); assert.deepEqual(f.registry.listNodes(), []);
   assert.ok(instance.terminalShells?.length);
   const tracking = await fs.access(new URL("../../apps/rabi-agent/dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url)).then(() => true, () => false);
-  assert.deepEqual(instance.computerCapabilities, ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", ...(tracking ? ["tracking"] : [])] : [])]);
+  assert.deepEqual(instance.computerCapabilities, ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", "imageView-v1", ...(tracking ? ["tracking"] : [])] : [])]);
   const bytes = Buffer.alloc(65_537, 211), uploadId = randomUUID(), target = path.join(f.directory, "roundtrip.bin");
   const sha256 = (data: Buffer) => createHash("sha256").update(data).digest("hex");
   await f.computer({ action: "upload.begin", uploadId, path: target, size: bytes.length, sha256: sha256(bytes) });

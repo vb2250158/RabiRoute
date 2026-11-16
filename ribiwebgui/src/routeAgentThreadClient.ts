@@ -4,22 +4,22 @@ import type { RouteAgentTarget } from "@shared/routeAgentTargets";
 export async function postRouteAgentThreadAction(
   payload: Record<string, unknown>,
   target: RouteAgentTarget | undefined,
-  options: { fetch?: typeof fetch; accessToken: () => string }
+  options: { fetch?: typeof fetch; accessToken: () => string; signal?: AbortSignal }
 ): Promise<Record<string, any>> {
   const request = options.fetch || globalThis.fetch;
   if (target?.binding?.ownerDeviceId) {
-    const response = await request("/api/agent/threads", { method: "POST", headers: { "content-type": "application/json" },
+    const response = await request("/api/agent/threads", { method: "POST", signal: options.signal, headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...payload, agentAdapter: target.provider, instanceBinding: target.binding }) });
     const body = await response.json();
     if (!response.ok || body.code === -1) throw new Error(body.message || "远端主机任务操作失败，请核对原投递回执。");
     return body;
   }
   if (target?.binding) {
-    const accessResponse = await request("/api/webgui-access");
+    const accessResponse = await request("/api/webgui-access", { signal: options.signal });
     const access = await accessResponse.json();
     if (!accessResponse.ok) throw new Error(access.message || "无法读取远端访问凭据");
     const response = await request(`/api/lan-agent/instances/${encodeURIComponent(target.binding.instanceId)}/agents/${encodeURIComponent(target.binding.agentId)}/threads`, {
-      method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": access.data?.token || options.accessToken() },
+      method: "POST", signal: options.signal, headers: { "content-type": "application/json", "x-rabiroute-webgui-token": access.data?.token || options.accessToken() },
       body: JSON.stringify({ ...payload, agentAdapter: target.provider })
     });
     const body = await response.json();
@@ -30,7 +30,7 @@ export async function postRouteAgentThreadAction(
   const provider = target?.provider || payload.agentAdapter;
   if (typeof provider !== "string" || !provider) throw new Error("本机会话操作需要明确 Agent 类型。");
   const response = await request("/api/agent/threads", {
-    method: "POST", headers: { "content-type": "application/json" },
+    method: "POST", signal: options.signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...payload, agentAdapter: provider, agentTargetId: `local:${provider}` })
   });
   const body = await response.json().catch(() => ({}));

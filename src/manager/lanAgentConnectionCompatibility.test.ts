@@ -45,17 +45,19 @@ test("v2 enrollment and revocation retain credential format, existing incarnatio
   assert.deepEqual(Object.keys(written.nodes[1]).sort(), ["connectionIncarnation", "nodeId", "secretHash"]);
   assert(f.authority.authenticate(credential.token));
   assert.deepEqual(f.authority.authenticate(f.token), { nodeId: "computer-fixture" });
-  assert.equal(f.authority.acquireConnectionLease(f.token), null);
+  assert(f.authority.acquireConnectionLease(f.token));
+  assert.equal((f.authority.getComputerSettings("computer-fixture").settings as { enabled: boolean }).enabled, false);
   f.authority.revokeNode("second-fixture");
   assert.equal(f.authority.authenticate(credential.token), null);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.statePath, "utf8")), f.state);
 });
 
-test("v2 leases fail after disable, credential replacement or revocation, without an Agent profile", t => {
+test("v2 computer disable preserves the connection; credential replacement and revocation invalidate leases", t => {
   const f = fixture(t); const lease = f.authority.acquireConnectionLease(f.token)!;
   assert(lease); f.authority.assertConnectionLease(f.token, lease);
   fs.writeFileSync(f.statePath, JSON.stringify({ ...f.state, nodes: [{ ...f.state.nodes[0], enabled: false }] }));
-  assert.throws(() => f.authority.assertConnectionLease(f.token, lease), /disabled, revoked or replaced/);
+  assert.doesNotThrow(() => f.authority.assertConnectionLease(f.token, lease));
+  assert.equal((f.authority.getComputerSettings("computer-fixture", true).settings as { enabled: boolean }).enabled, false);
   fs.writeFileSync(f.statePath, JSON.stringify({ ...f.state, nodes: [{ ...f.state.nodes[0], connectionIncarnation: "b".repeat(64) }] }));
   assert.throws(() => f.authority.assertConnectionLease(f.token, lease), /disabled, revoked or replaced/);
   f.authority.revokeNode("computer-fixture");
@@ -115,11 +117,13 @@ test("v2 invocation freezes connection identity while payload attribution needs 
   assert.deepEqual(fs.readFileSync(f.statePath), before);
 });
 
-test("v2 incomplete source metadata, malformed targets and disabled ingress remain rejected", t => {
+test("v2 incomplete source metadata remains unattributed; malformed targets and disabled ingress are rejected", t => {
   const f = fixture(t);
   const request = (url: string, extra: Record<string, string> = {}) => ({ method: "GET", url,
     headers: { authorization: `Bearer ${f.token}`, ...extra } }) as unknown as IncomingMessage;
-  assert.equal(evaluateLanAgentRequest(request("/api/plugins/catalog", { "x-rabiroute-agent-type": "codex" }), f.authority, true).kind, "denied");
+  const partial = request("/api/plugins/catalog", { "x-rabiroute-agent-type": "codex" });
+  assert.equal(evaluateLanAgentRequest(partial, f.authority, true).kind, "agent");
+  assert.equal(assertTrustedLanAgentPrincipal(partial)?.source, undefined);
   assert.equal(evaluateLanAgentRequest(request("//manager.invalid/api/plugins/catalog"), f.authority, true).kind, "denied");
   assert.equal(evaluateLanAgentRequest(request("/api/plugins/catalog"), f.authority, false).kind, "denied");
 });

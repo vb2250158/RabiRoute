@@ -1,5 +1,5 @@
 import { DshConnectionStore } from "../dshConnectionStore.js";
-import { createDshNativeOperations } from "../manager/providerNativeOperations.js";
+import { createDshNativeOperations, readDshNativeHistory } from "../manager/providerNativeOperations.js";
 import { sendDshTask } from "../../apps/rabi-agent/lib/dsh.mjs";
 import * as endpointOwner from "./dshOwnerExecution.js";
 import * as runtime from '../dshSessionBridge.js';
@@ -15,6 +15,10 @@ export function createManager(options: AgentManagerImplementationOptions, descri
   const recovery = new DshOwnerRecovery();
   return {
     operations: {
+      "threads.history": (payload, invocation) => readDshNativeHistory(payload.sessionId, {
+        baseUrl: payload.baseUrl, beforeSeq: payload.cursor === undefined ? undefined : Number(payload.cursor),
+        maxMessages: payload.limit, signal: invocation?.signal, assertAuthorized: invocation?.assertCurrent
+      }),
       "ds-bot.request": (payload, invocation) => {
         const guard = Array.isArray(invocation?.nativeArgs) ? invocation.nativeArgs[0] : undefined;
         if (guard !== undefined && typeof guard !== "function") throw new Error("Original new-task admission callback is invalid.");

@@ -146,6 +146,7 @@ import { appendMessageContextToDir } from "../messageContextStore.js";
 
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, installOperationalMutationAuditSink, managerOperationalError } from "./operationalLog.js";
+import { AgentCallHistory } from "./agentCallHistory.js";
 import { createLineLog } from "./lineLog.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { PerformanceApi } from "../plugins/io.rabiroute.manager.performance/src/manager/performanceRoutes.js";
@@ -321,6 +322,7 @@ import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
 import { WebPluginModuleRegistry, retainedWebPackageCatalog } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
+  operationForObservedRequest,
   createManagerApiOperationsService,
   type ManagerPluginRouteHandler
 } from "./managerPluginRouteRegistry.js";
@@ -7426,6 +7428,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     })
   }, { applicationOwnerKey: managerApplicationRouteKey });
   const managerApplicationRoutes = managerPluginRoutes.createApplicationOwner(managerApplicationRouteKey, "host:manager-bootstrap");
+  const agentCallHistory = new AgentCallHistory(rootDir);
+  managerRuntimeOwner.register("agent_call_history", () => agentCallHistory.close());
   const listenerPublicationHost = createGatewayListenerPublicationHost(managerPluginRoutes);
   gatewayListenerPublicationHost = listenerPublicationHost;
   managerRuntimeOwner.register("gateway_listener_publication", () => {
@@ -8165,6 +8169,15 @@ get rootDir() { return rootDir; },
 get runtimes() { return runtimes; },
 get remoteAgentHub() { return remoteAgentHub; },
 set remoteAgentHub(value) { remoteAgentHub = value; } }) }),
+    Object.freeze({ capability: "host.manager.call-history@1", value: Object.freeze({
+      list: (query: Parameters<AgentCallHistory["list"]>[0]) => agentCallHistory.list(query),
+      detail: (callId: string, spanId?: string, boundary?: string) => agentCallHistory.detail(callId, spanId, boundary),
+      listStages: (callId: string) => agentCallHistory.listStages(callId),
+      ingest: (value: unknown) => agentCallHistory.ingest(value),
+      configure: (value: unknown) => agentCallHistory.configure(value),
+      configuration: () => agentCallHistory.configuration(),
+      events: () => agentCallHistory.events()
+    }) }),
     Object.freeze({ capability: "host.manager.gateway-status@1", value: Object.freeze({
       readStatuses: () => measureSyncPerformanceOperation(PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics, () => {
         return readGatewayDiagnosticsStatuses(rootDir, runtimes.keys().map(id => [id, runtimes.get(id)!] as const), activeGatewayDiagnosticsSnapshotService(), failure => {
@@ -8717,6 +8730,7 @@ createManagerEventOperationDefinition
       peerPort: request.socket.remotePort
     });
     response.setHeader("x-rabiroute-request-id", requestId);
+    agentCallHistory.observeHttp(request, response, requestId, () => operationForObservedRequest(request));
     const transportContext = managerClientTransportIdentity.capture(response);
     observeManagerHttpAbort(response, () => managerOperationalLog.record("warn", "http_request_aborted", {
       requestId, method, pathname, durationMs: Math.max(0, Date.now() - requestStartedAt), result: "aborted"

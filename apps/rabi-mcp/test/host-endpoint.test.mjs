@@ -7,6 +7,24 @@ const descriptor = { ok: true, managerBaseUrl: "http://127.0.0.1:12345", applica
 const meta = { applicationGenerationId: descriptor.applicationGenerationId, managerInstanceId: descriptor.managerInstanceId, health: { live: true, requiredReady: true, state: "healthy" } };
 const options = { hostExecutable: "fixture-host.exe", env: {}, spawnSync: () => ({ status: 0, stdout: JSON.stringify(descriptor) }), fetchImpl: async () => Response.json(meta) };
 
+test('default Host endpoint verifies the asynchronous discovery cache and reuses its metadata', async () => {
+  const value = { ...descriptor, ...meta };
+  const session = createHostEndpointSession({ hostExecutable: 'fixture-host.exe', env: { LOCALAPPDATA: 'fixture-local' },
+    discoveryOptions: { platform: 'win32', readFile: async () => JSON.stringify({ schemaVersion: 1, ...descriptor }),
+      execFile: async () => assert.fail('A verified current cache should satisfy discovery') },
+    fetchImpl: async url => { assert.equal(url, descriptor.managerBaseUrl + '/meta'); return Response.json(value); } });
+  assert.deepEqual((await session.ensure()).meta, value);
+});
+
+test('default diagnostic discovery preserves identity checks while allowing startup metadata', async () => {
+  const value = { ...descriptor, ...meta, health: { live: false, requiredReady: false, state: 'starting' } };
+  const session = createHostEndpointSession({ hostExecutable: 'fixture-host.exe', env: { LOCALAPPDATA: 'fixture-local' },
+    discoveryOptions: { platform: 'win32', readFile: async () => JSON.stringify({ schemaVersion: 1, ...descriptor }) },
+    fetchImpl: async () => Response.json(value) });
+  assert.equal((await session.ensure({ diagnostic: true })).meta.health.live, false);
+  await assert.rejects(session.ensure(), /not ready/);
+});
+
 test("each ensure resolves Host again and only reads current metadata", async () => {
   let generation = 0;
   const calls = [];

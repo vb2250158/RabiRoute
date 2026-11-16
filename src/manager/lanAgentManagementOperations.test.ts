@@ -147,7 +147,7 @@ test('remote lookup transport failure is distinct from invalid adapter parameter
 
 test("management discovery contains all registered routes, optional ignored bodies and no issued secrets", { timeout: 15000 }, async t => {
   const f = await fixture(t);
-  assert.deepEqual(f.api.catalogSnapshot().operations.filter(row => row.contract.operationId.startsWith("manager.lan-agent.")).map(row => row.contract.operationId).sort(), LAN_AGENT_MANAGEMENT_ROUTES.map(route => `manager.lan-agent.${route.key}`).sort());
+  assert.deepEqual(f.api.catalogSnapshot().operations.filter(row => row.contract.operationId.startsWith("manager.lan-agent.")).map(row => row.contract.operationId).sort(), [...LAN_AGENT_MANAGEMENT_ROUTES.map(route => `manager.lan-agent.${route.key}`), "manager.lan-agent.computer-settings.reset"].sort());
   const response = await fetch(f.base + "/api/agent/openapi", { headers: f.auth });
   const spec = await response.json() as any;
   assert.equal(spec.paths["/api/lan-agent/enrollments"].post.requestBody.required, false);

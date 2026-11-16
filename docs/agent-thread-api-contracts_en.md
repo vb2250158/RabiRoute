@@ -17,7 +17,8 @@ The original directory IDs `agent:GET:/api/agent/threads` and `agent:POST:/api/a
 
 | POST action | Actual owner | Meaning |
 | --- | --- | --- |
-| `list` / `read` | Original adapter discovery/exact read | Full IDs, visible names and native session content; no creation |
+| `list` / `read` | Original adapter discovery/exact read | Full IDs, visible names and session metadata |
+| `read` + `history` | The same provider's `threads.history` | Returns native cursor pages in `history`, retaining the original Agent and remote instance identity |
 | `open` | Original host's session-opening function | Retains actual host support; does not prove prompt execution |
 | `resolve` / `create` | Original resolver and durable creation reservation | Existing name/ID/workspace, archive and idempotency rules |
 | `rename` | Original owner's metadata API | Changes the display name without replacing full task identity |

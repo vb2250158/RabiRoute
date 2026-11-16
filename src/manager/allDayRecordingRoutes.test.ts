@@ -70,9 +70,9 @@ test("safe local and authenticated custom-provider Agents share recording querie
   }
 });
 
-test("Agent header and unsafe local origins never fall back to local authority", async t => {
+test("unsafe local origins and revoked credentials never fall back to local authority", async t => {
   const f = await fixture(t);
-  for (const header of [{ "x-rabiroute-agent-id": "worker" }, { origin: "https://outside.invalid" }, { "x-forwarded-for": "192.0.2.1" }, { "sec-fetch-site": "cross-site" }, { "x-rabilink-tunnel-local": "private" }]) {
+  for (const header of [{ origin: "https://outside.invalid" }, { "x-forwarded-for": "192.0.2.1" }, { "sec-fetch-site": "cross-site" }, { "x-rabilink-tunnel-local": "private" }]) {
     const req = f.request(false);
     Object.assign(req.headers, header);
     assert.equal((await f.invoke(req)).status, 403);

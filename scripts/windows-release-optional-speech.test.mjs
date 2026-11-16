@@ -16,6 +16,18 @@ const releaseWorkflow = fs.readFileSync(
   "utf8"
 );
 
+test('Windows release includes the MCP server version metadata and snapshot resolver accepts it', () => {
+  assert.ok(releaseScript.includes('"apps/rabi-mcp/package.json"'));
+  if (process.platform !== 'win32') return;
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const resolver = fileURLToPath(new URL('./lib/release-tracked-manifest.ps1', import.meta.url));
+  const quote = value => "'" + value.replaceAll("'", "''") + "'";
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+    `. ${quote(resolver)}; Resolve-ReleaseTrackedSourcePath 'apps/rabi-mcp/package.json' ${quote(root)}`], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), path.join(root, 'apps/rabi-mcp/package.json'));
+});
+
 test("Windows workflow shares the explicit local artifact root and builds before isolated test gates", () => {
   assert.doesNotMatch(
     releaseWorkflow,
@@ -67,6 +79,22 @@ test("Windows release explicitly includes required discovery and Agent transport
       "scripts/lib/windows-host-discovery.mjs",
       "apps/rabi-agent/lib/manager-client.mjs",
       "apps/rabi-agent/lib/manager-cli.mjs",
+      "apps/rabi-agent/rabi-cli.mjs",
+      "apps/rabi-agent/lib/operation-sdk.mjs",
+      "apps/rabi-agent/lib/operation-cli.mjs",
+      "apps/rabi-agent/lib/operation-result.mjs",
+      "apps/rabi-agent/lib/operation-tool-definitions.mjs",
+      "apps/rabi-agent/lib/host-endpoint.mjs",
+      "apps/rabi-mcp/knowledge-mcp.mjs",
+      "apps/rabi-mcp/package.json",
+      "apps/rabi-mcp/lib/operation-tools.mjs",
+      "apps/rabi-mcp/lib/api-tools.mjs",
+      "apps/rabi-mcp/lib/manager-client.mjs",
+      "apps/rabi-mcp/lib/host-endpoint.mjs",
+      "apps/rabi-mcp/lib/manager-discovery.mjs",
+      "apps/rabi-mcp/lib/endpoint-session.mjs",
+      "apps/rabi-mcp/lib/knowledge-mcp-server.mjs",
+      "apps/rabi-mcp/lib/knowledge-http-server.mjs",
       "src/plugins/xiaoai-rabiroute/bridge-endpoint.mjs",
       "packages/rabi-knowledge-contract/schema.mjs",
       "packages/rabi-knowledge-contract/tools.mjs",
@@ -126,6 +154,8 @@ test("tracked release manifests accept only the stable shared runtime contracts"
     "packages/rabilink-agent-contract/profile.mjs",
     "packages/rabilink-agent-contract/state.mjs",
     "packages/rabilink-agent-contract/persona.mjs",
+    "apps/rabi-mcp/package.json",
+    "apps/rabi-mcp/lib/knowledge-http-client.mjs",
     "apps/rabi-mcp/lib/knowledge-tools.mjs",
     "apps/rabi-mcp/lib/knowledge-receipt.mjs"
   ];
@@ -147,7 +177,7 @@ test("tracked release manifests accept only the stable shared runtime contracts"
     const accepted = known.map(entry);
     const result = run(accepted);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    for (const denied of ["packages/unknown-owner/schema.mjs", "packages/rabi-knowledge-contract/private.mjs", "packages/rabi-api-contract/private.mjs", "packages/rabilink-agent-contract/private.mjs", "apps/rabi-mcp/lib/knowledge-http-client.mjs"]) {
+    for (const denied of ["packages/unknown-owner/schema.mjs", "packages/rabi-knowledge-contract/private.mjs", "packages/rabi-api-contract/private.mjs", "packages/rabilink-agent-contract/private.mjs", "apps/rabi-mcp/private.json"]) {
       const rejected = run([entry(denied)]);
       assert.notEqual(rejected.status, 0, denied);
       assert.match(rejected.stderr + rejected.stdout, /Unsafe or duplicate tracked path/);

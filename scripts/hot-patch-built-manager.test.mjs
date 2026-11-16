@@ -29,7 +29,7 @@ test("built Manager keeps its identity while discovering modules and updating so
   const requiredInstances = ["core", "diagnostics"].map(name => {
     const instance = desktopProfile.instances.find(item => item.id === `manager:${name}`);
     assert.ok(instance, `Built desktop profile is missing manager:${name}.`);
-    return instance;
+    return { ...instance, enabled: true };
   });
   await fs.writeFile(profile, JSON.stringify({ schemaVersion: 2, readyRequires: ["manager.core@1", "manager.diagnostics@1"], instances: requiredInstances }));
   const sourcePath = path.join(fixtureSourceRoot, "src/manager/pluginCatalogPresentation.ts");

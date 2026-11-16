@@ -123,7 +123,6 @@ const HARD_OWNER_MODULES = new Set(
 // changes multiplicity; each entry also remains visible as a TODO in test output.
 const EXPECTED_PENDING_PARENT_VIOLATION_COUNTS = Object.freeze([
   ["src/manager/controlPlaneRoutes.ts|domain-storage-owner-import|messageContextStore.appendMessageContextToDir", 1],
-  ["src/manager/controlPlaneRoutes.ts|role-storage-fs-access|fs.readdirSync", 1],
   ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.removePersonaAvatar", 1],
   ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-call|personaAvatar.savePersonaAvatar", 1],
   ["src/plugins/io.rabiroute.manager.persona/src/manager/personaAvatarRoutes.ts|domain-storage-owner-import|personaAvatar.removePersonaAvatar", 1],

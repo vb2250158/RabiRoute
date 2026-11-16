@@ -39,7 +39,7 @@ test("durable delivery identity survives restart and unrelated writes, HTTP admi
 });
 
 for (const failure of ["policy", "config", "unchanged-policy-config"] as const) {
-  test(`failed ${failure} publication closes both gates and invalidates old delivery after restart`, t => {
+  test(`failed ${failure} publication preserves or invalidates delivery according to connection scope`, t => {
     const { root, store, policyPath, pendingPath } = fixture(t);
     const original = store.getLanAgentDeliveryPolicy();
     const admission = store.getLanAgentAdmissionPolicy();
@@ -54,6 +54,13 @@ for (const failure of ["policy", "config", "unchanged-policy-config"] as const) 
       ? { rabiName: "Rejected PC" } : { webguiLan: { enabled: false } }), /fixture rename failure/);
     mock.mock.restore();
     assert.equal(fs.readFileSync(store.configPath, "utf8"), saved);
+    if (failure === "unchanged-policy-config") {
+      assert.deepEqual(store.getLanAgentAdmissionPolicy(), admission);
+      assert.deepEqual(store.getLanAgentDeliveryPolicy(), original);
+      assert.equal(fs.existsSync(pendingPath), false);
+      assert.deepEqual(new RabiGlobalConfigStore(root).getLanAgentDeliveryPolicy(), original);
+      return;
+    }
     assert.equal(store.getLanAgentAdmissionPolicy().enabled, false);
     assert.notEqual(store.getLanAgentAdmissionPolicy().incarnation, admission.incarnation);
     assert.equal(store.getLanAgentDeliveryPolicy().enabled, false);

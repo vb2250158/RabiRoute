@@ -456,7 +456,7 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.equal(source.includes("readConfigAsync"), false);
   assert.equal(source.includes("loadRuntimesAsync"), false);
   assert.equal(source.includes("configRepository.readRoleMessageConfigAsync"), false);
-  assert.match(source, /input:\s*\(\) => \(\{[\s\S]*?routeRoot,[\s\S]*?rolesRoot,[\s\S]*?readOnly: managerReadOnly/);
+  assert.match(source, /input:\s*\(\) => \(\{[\s\S]*?routeRoot:\s*managerRouteRoot\(\),[\s\S]*?rolesRoot:\s*managerRolesRoot\(\),[\s\S]*?readOnly: managerReadOnly/);
   assert.match(source, /apply: applyRouteCatalogSnapshot/);
   assert.match(source, /await routeCatalogLifecycle\.recapture\(\)/);
   assert.match(source, /withRoleBindings\(normalized\.gateways, \(\) => requireRouteCatalogLifecycle\(\)\.replace\(normalized, expectedContentHash, operationId\)\)/);

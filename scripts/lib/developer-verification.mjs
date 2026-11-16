@@ -180,15 +180,38 @@ export async function inspectPluginBuild(candidateRoot) {
 /** Reuse the original built artifact owners from the formal backend build.
  * Their exact bytes are frozen per verification; no validation schema is copied.
  */
+export async function collectArtifactOwnerFiles(root, entries) {
+  const pending = [...entries], seen = new Set();
+  while (pending.length) {
+    const file = relativeFile(pending.pop());
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = ts.createSourceFile(file, await fs.readFile(path.join(root, file), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const visit = node => {
+      let specifier;
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) specifier = node.moduleSpecifier.text;
+      } else if (ts.isCallExpression(node)) {
+        const isImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+        const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require';
+        if ((isImport || isRequire) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
+          specifier = node.arguments[0].text;
+        }
+      }
+      if (specifier?.startsWith('.')) pending.push(relativeFile(path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier))));
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return [...seen].sort();
+}
+
 async function inspectPublicationArtifact(candidateRoot, artifactKind, expected, tempRoot, signal) {
   if (artifactKind === 'plugin-build') return { ...await inspectPluginBuild(candidateRoot), artifactKind };
   if (!['source-patch', 'web-patch'].includes(artifactKind) || !/^[a-f0-9]{64}$/.test(expected ?? '')) throw new Error('Declare source-patch/web-patch and its original artifact SHA-256.');
-  const ownerFiles = artifactKind === 'source-patch'
-    ? ['dist/plugin-kernel/hotPatchCandidateStore.js', 'dist/plugin-kernel/hotPatchResourceStore.js']
-    : ['dist/manager/webPatchCatalog.js', 'dist/manager/webPluginModules.js', 'dist/plugin-kernel/packageLoader.js',
-      'dist/plugin-kernel/manifest.js', 'dist/plugin-kernel/types.js', 'dist/plugin-kernel/capabilityReference.js',
-      'dist/plugin-kernel/automaticCodeRuntime.js', 'dist/plugin-kernel/hotPatchIterator.js'];
   const repository = fileURLToPath(new URL('../../', import.meta.url));
+  const entry = artifactKind === 'source-patch' ? 'dist/plugin-kernel/hotPatchCandidateStore.js' : 'dist/manager/webPatchCatalog.js';
+  const ownerFiles = await collectArtifactOwnerFiles(repository, [entry]);
   const ownerBefore = await fingerprintFiles(repository, ownerFiles);
   const compiled = path.join(tempRoot, 'artifact-owner');
   const ownerInputs = [];
@@ -203,7 +226,7 @@ async function inspectPublicationArtifact(candidateRoot, artifactKind, expected,
   }
   if (ownerBefore.sha256 !== (await fingerprintFiles(repository, ownerFiles)).sha256
       || ownerInputs.some(file => new Map(ownerBefore.entries).get(file.path) !== file.sha256)) throw new Error('Built artifact owner changed while freezing verification.');
-  const module = await import(pathToFileURL(path.join(compiled, ownerFiles[0])).href);
+  const module = await import(pathToFileURL(path.join(compiled, entry)).href);
   if (artifactKind === 'source-patch') {
     await new module.HotPatchCandidateStore(candidateRoot).read(expected);
     return { artifactKind, candidateSha256: expected, roots: [`${expected}.json`], ownerInputs };

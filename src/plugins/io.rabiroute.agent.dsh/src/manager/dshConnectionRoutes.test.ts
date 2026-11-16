@@ -195,7 +195,7 @@ test("DSH body wait cannot write after Agent or connection authority is revoked 
   }
 });
 
-test("DSH authorization ignores copied connection identities and rejects forged Agent or Relay headers", () => {
+test("DSH authorization ignores copied connection identities and rejects forged Relay headers", () => {
   const remote = request("192.0.2.1", { host: "manager.example", "x-rabilink-tunnel-local": "forged" });
   assert.equal(dshConnectionRequestAllowed(remote), false);
   markAuthenticatedConnectionRequest(remote);
@@ -203,5 +203,5 @@ test("DSH authorization ignores copied connection identities and rejects forged 
   assert.equal(dshConnectionRequestAllowed({ ...remote } as http.IncomingMessage), false);
   const local = request("127.0.0.1", { host: "127.0.0.1:12345", "x-rabiroute-agent-id": "forged" });
   markAuthenticatedConnectionRequest(local);
-  assert.equal(dshConnectionRequestAllowed(local), false);
+  assert.equal(dshConnectionRequestAllowed(local), true);
 });

@@ -2,12 +2,12 @@ English | [简体中文](README.md)
 
 # Install Rabi knowledge search
 
-For project maintainers. This skill uses unified search to discover plans, memories, messages, operations, and devices, then checks source evidence. If an entry or source is unavailable, follow the actual coverage and use other available sources. It requires no Manager changes or Hook installation.
+For project maintainers. Begin task retrieval with at least one unified search, read its contents and coverage, then choose detail queries, keyword changes or local file search. Known files, previous standards, examples and direct collaboration follow this sequence. When Rabi discovery, connection, search or its calling tool fails, record the actual error once, skip that same failure for the current turn and continue local retrieval and the original task. The skill uses the existing API.
 
 The source files are `SKILL.md` and `agents/openai.yaml` in this directory. Copy the entire directory to `.agents/skills/rabi-knowledge-search/` in the target project and add this instruction to its `AGENTS.md`:
 
 ```markdown
-- When finding information, past decisions, scheduled arrangements, or task leads, read `.agents/skills/rabi-knowledge-search/SKILL.md` first. Use unified search when available, check its sources, and search files as needed; use ordinary search when offline.
+- Read `.agents/skills/rabi-knowledge-search/SKILL.md` before task retrieval. When Rabi is available, complete at least one `/api/search`, read `label`, `excerpt`, coverage and `handle`, then choose detail queries, keyword changes or local search. Known files, previous standards and direct collaboration follow this sequence. When Rabi discovery, connection, search or its calling tool fails, record the actual error once, skip that same failure for the current turn and continue local retrieval and the original task.
 ```
 
 Check the destination first. Create the directory for an initial installation; for upgrades, compare differences and preserve project changes before syncing the source files, then verify the `AGENTS.md` link. A project copy is a localized derivative: files such as `README.md` or `README_en.md` may already be rewritten there, so never replace the whole directory.

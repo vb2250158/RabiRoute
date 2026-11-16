@@ -18,6 +18,9 @@ type PerformanceChartSeries = {
   values: Array<{ time: string; value: number }>;
 };
 
+const props = defineProps<{ context?: { embedded?: boolean } }>();
+let disposed = false;
+
 const summary = ref<PerformanceSummary>();
 const performanceStatusRenderers = computed(() => webRenderersAt(pluginCatalogStore.statusRenderers.value, "global.performance.summary"));
 const recentLogs = ref<PerformanceSample[]>([]);
@@ -173,13 +176,16 @@ onMounted(async () => {
   } finally {
     configHydrating.value = false;
   }
+  if (disposed) return;
   await refresh();
+  if (disposed) return;
   events = managerEventSource("/api/performance/events");
   events.addEventListener("sample", scheduleRefresh);
   events.addEventListener("status", scheduleRefresh);
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   events?.close();
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
   unregisterPageSaveAction?.();
@@ -188,7 +194,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-shell performance-page">
-    <header class="performance-hero">
+    <header v-if="!props.context?.embedded" class="performance-hero">
       <div>
         <span class="performance-kicker">FLIGHT RECORDER · 本机性能记录</span>
         <h1>性能监控</h1>
@@ -339,7 +345,7 @@ onBeforeUnmount(() => {
 .performance-config { display: grid; grid-template-columns: minmax(220px, .72fr) minmax(0, 1.7fr); gap: 22px; border: 1px solid var(--rr-border); border-radius: 24px; padding: 22px; background: linear-gradient(120deg, var(--rr-accent-surface), var(--rr-surface) 58%); }
 .performance-config-copy h2, .performance-panel h2 { margin: 4px 0 5px; font-family: Georgia, "Times New Roman", serif; font-size: 24px; }
 .performance-config-copy p { margin: 0; color: var(--rr-muted); font-size: 12px; }
-.performance-config-fields { display: grid; grid-template-columns: minmax(180px, .9fr) repeat(4, minmax(130px, 1fr)) auto; align-items: center; gap: 10px; }
+.performance-config-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; gap: 10px; }
 .performance-toolbar { display: flex; align-items: center; gap: 10px; }
 .performance-toolbar .v-select { max-width: 220px; }
 .performance-toolbar > span { color: var(--rr-muted-soft); font-size: 11px; }

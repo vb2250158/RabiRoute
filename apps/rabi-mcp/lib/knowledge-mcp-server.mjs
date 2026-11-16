@@ -34,6 +34,7 @@ export function createKnowledgeMcpServer({ tools } = {}) {
     }
   });
   server.setRequestHandler(CallToolRequestSchema, async (request, context) => {
+    const execute = async () => {
     try {
       // The contract owns operation validation and the user's configured policy.
       const receipt = await tools.call(request.params.name, request.params.arguments ?? {}, { signal: context.signal });
@@ -54,6 +55,8 @@ export function createKnowledgeMcpServer({ tools } = {}) {
       // Never forward exception messages/stacks, arguments, credentials or request bodies.
       return safeFailure();
     }
+    };
+    return tools.observeCall ? tools.observeCall(request.params.name, request.params.arguments ?? {}, execute) : execute();
   });
   return server;
 }

@@ -674,7 +674,7 @@ test("read-only mode and native Route preconditions reject before malformed writ
 test("revocation after an accepted native write hides its result and preserves the original committed key", async t => {
   const f = await enrolledFixture(t), hold = f.hold("writeConfig");
   const pending = f.request("/gateways", "POST", { gateways: [] }, { "idempotency-key": "original-commit-key", "if-match": "a".repeat(64) });
-  await hold.started; f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  await hold.started; f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId); hold.release();
   const response = await pending; assert.equal(response.status, 403); const result = await response.json(); assert.equal(result.uncertain, true); assert.equal(result.receipt, undefined); assert.equal(result.data, undefined);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, "committed.json"), "utf8")), { operationId: "original-commit-key", config: { gateways: [] } });
   assert.equal(f.calls.filter(call => call.name === "writeConfig").length, 1);

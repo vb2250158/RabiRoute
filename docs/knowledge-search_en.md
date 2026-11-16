@@ -2,7 +2,11 @@
 
 English | [简体中文](knowledge-search.md)
 
-Manager owns one derived in-memory index per persona. Files remain authoritative. Search neither writes records nor updates viewedAt. The bundled `rabi-knowledge-search` skill searches summaries before requesting existing detail endpoints.
+Begin Agent task retrieval with at least one `GET /api/search` through `rabi-knowledge-search`. Read contents, coverage and real entries before choosing detail queries, keyword changes or local search. Known files, previous standards, examples and direct collaboration follow this sequence. Users can state their task directly. Reuse a valid search result for the same objective within the current turn. Record discovery, connection, target-query or calling-tool failures once, skip the same failure for the current turn and continue the original task through available tools and local retrieval. Retain successful sources when another source fails.
+
+Unified items use `label`, `excerpt`, `source`, `kind`, `origin`, coverage and `handle`. Verify details through `handle.detailUrl` or the returned operation contract. Empty results and partial coverage guide further retrieval. When generating a file under an earlier standard, search for that standard first, then verify matching examples and the current format.
+
+The following sections describe the original knowledge-source query. Manager owns one derived in-memory index per persona. Files remain authoritative. Search neither writes records nor updates viewedAt.
 
 ## API
 

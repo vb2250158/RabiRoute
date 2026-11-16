@@ -45,7 +45,7 @@ async function fixture(t: test.TestContext) {
     return { request, result };
   };
   const send = async (body: unknown) => { const pending = begin(); pending.request.end(JSON.stringify(body)); return pending.result; };
-  return { calls, registration, started, begin, send, fail: () => { fail = true; }, disable: () => { authority.setNodeEnabled(credential.nodeId, false, true); } };
+  return { calls, registration, started, begin, send, fail: () => { fail = true; }, disable: () => { authority.revokeNode(credential.nodeId); } };
 }
 
 test("an enrolled unbound node invokes the native opener once and receives launch-attempt DTO", async t => {

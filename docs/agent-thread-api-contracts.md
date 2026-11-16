@@ -17,7 +17,8 @@
 
 | POST action | 真正负责的入口 | 结果含义 |
 | --- | --- | --- |
-| `list` / `read` | 原 adapter 的会话发现/精确读取 | 返回完整 ID、可见名称和原生会话内容；不创建 |
+| `list` / `read` | 原 adapter 的会话发现/精确读取 | 返回完整 ID、可见名称和会话元信息 |
+| `read` + `history` | 同一 provider 的 `threads.history` | 按原生游标返回 `history`，保留原 Agent 和远端实例身份 |
 | `open` | 原宿主打开会话功能 | 沿用宿主是否支持的事实，不证明执行消息 |
 | `resolve` / `create` | 原会话 resolver 和持久创建 reservation | 沿用已有名称/ID/workspace、归档与幂等规则 |
 | `rename` | 原 owner 的元数据命名功能 | 改显示名称，不用名称代替完整任务身份 |

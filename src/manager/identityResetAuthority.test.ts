@@ -141,10 +141,9 @@ test("reset custom-provider principal has equivalent local POST/GET, confirmatio
   assert.equal(f.hostCalls(), 2);
 });
 
-test("reset credential-first ingress denies invalid/disabled agents and never substitutes local authority", async t => {
+test("reset credential-first ingress denies invalid/revoked credentials and never substitutes local authority", async t => {
   const f = await fixture(t);
-  const invalidHeaders: Record<string, string>[] = [{ authorization: "Bearer lan1:invalid", "x-rabiroute-agent-id": "agent" },
-    { "x-rabiroute-agent-id": "agent" }];
+  const invalidHeaders: Record<string, string>[] = [{ authorization: "Bearer lan1:invalid", "x-rabiroute-agent-id": "agent" }];
   for (const headers of invalidHeaders) {
     const response = await fetch(f.url, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ operationId, expectedGuid, confirmed: true }) });
     assert.ok([401, 403].includes(response.status));

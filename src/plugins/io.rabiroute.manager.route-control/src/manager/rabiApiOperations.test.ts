@@ -138,7 +138,7 @@ test("native cleanup keeps explicit sessions and unrelated workers, and independ
 test("node revocation suppresses an accepted identity write response while joining the original native synchronization", async t => {
   const f = await fixture(t), hold = f.holdSync();
   const pending = f.request("/api/rabi/identity", "PATCH", { rabiName: "Committed before revocation" }); await hold.started;
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId);
   hold.release(); const response = await pending; assert.equal(response.status, 403); const result = await response.json(); assert.equal(result.uncertain, true); assert.equal(result.data, undefined);
   assert.equal(f.globalConfig.read().rabiName, "Committed before revocation");
 });

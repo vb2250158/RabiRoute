@@ -11,12 +11,15 @@ import { waitForChatHistoryFrame } from '../../../../../ribiwebgui/src/personaCh
 import EndpointConversationHistory from './EndpointConversationHistory.vue';
 import PersonaTaskHistory from './PersonaTaskHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
+import PersonaAgentSessions from './PersonaAgentSessions.vue';
+import PersonaSearchTestDialog from './PersonaSearchTestDialog.vue';
 
 const props = defineProps<{ roleId: string; version: number; messageVersion?:number }>();
 const { fetch } = usePersonaService(), { t } = useI18n();
 const catalog = ref<MessageHistoryChannelCatalog>({ adapters: [], chatCategories: [] });
 const channels = computed(() => historyChannels(catalog.value,messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value)));
 const selected = ref(''), visited = ref(new Set<string>());
+const searchTestOpen = ref(false);
 const error = ref(''), warnings = ref<string[]>([]), catalogLoading=ref(true);
 const positions = new Map<string, number>();
 let request: AbortController | undefined, layout: AbortController | undefined;
@@ -59,7 +62,8 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
 
 <template>
   <div>
-    <div class="d-flex justify-end"><v-btn variant="text" prepend-icon="mdi-refresh" @click="refreshCatalog">{{ t('刷新渠道') }}</v-btn></div>
+    <div class="d-flex justify-end flex-wrap ga-2"><v-btn variant="text" prepend-icon="mdi-magnify" @click="searchTestOpen = true">{{ t('搜索接口测试') }}</v-btn><v-btn variant="text" prepend-icon="mdi-refresh" @click="refreshCatalog">{{ t('刷新渠道') }}</v-btn></div>
+    <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
     <v-tabs v-model="selected" color="secondary" show-arrows class="history-channel-tabs mb-4" :aria-label="t('消息渠道')">
       <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
     </v-tabs>
@@ -68,7 +72,8 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
     <v-alert v-for="warning in warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
     <template v-for="channel in channels" :key="channel.id">
       <div v-if="visited.has(channel.id)" v-show="selected === channel.id" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
-        <PersonaTaskHistory v-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
+        <PersonaAgentSessions v-if="channel.agentSessions" :role-id="roleId" :active="selected===channel.id" />
+        <PersonaTaskHistory v-else-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
         <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
         <EndpointConversationHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="version" :message-version="messageVersion" :active="selected === channel.id" />
       </div>

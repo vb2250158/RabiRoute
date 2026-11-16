@@ -8,7 +8,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
-    "paths": { "@rabiroute/host-api/*": ["src/*.ts"] },
+    "paths": {
+      "@rabiroute/host-api/*": ["src/*.ts"],
+      "@shared/*": ["src/shared/*"]
+    },
     "rootDir": "src",
     "outDir": "dist"
   },

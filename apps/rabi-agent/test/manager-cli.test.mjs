@@ -4,7 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { runManagerCommand } from "../lib/manager-cli.mjs";
+import { runManagerCommand as executeManagerCommand } from "../lib/manager-cli.mjs";
+
+function runManagerCommand(args, configPath, options = {}) {
+  const original = options.fetchImpl ?? fetch;
+  return executeManagerCommand(args, configPath, { ...options, fetchImpl: async (url, init) => {
+    if (new URL(url).pathname === "/api/diagnostics/calls/client") return Response.json({ code: 0, data: { stored: true } });
+    return original(url, init);
+  } });
+}
 
 test("CLI wildcard discovery uses an explicit real HTTP method without a client endpoint mapping", async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-cli-wildcard-"));
@@ -126,7 +134,7 @@ test("CLI finite SSE streams save exact bytes and timeout removes partial withou
   assert.equal(stalled.ok, false);
   assert.equal(stalled.noReplay, true);
   assert.equal(counts.get("/plugin/new/stall"), 1);
-  assert.deepEqual(fs.readdirSync(directory).sort(), ["config.json", "finite.txt"]);
+  assert.deepEqual(fs.readdirSync(directory).sort(), ["call-history-outbox", "config.json", "finite.txt"]);
 });
 
 test("CLI uses explicit source IDs, preserves stdin JSON and never exports credentials", async () => {
@@ -149,7 +157,7 @@ test("CLI uses explicit source IDs, preserves stdin JSON and never exports crede
     assert.ok(!JSON.stringify(receipt).includes(config.nodeCredential));
     const largeBody = JSON.stringify({ text: "x".repeat(1024 * 1024 + 1) });
     assert.equal((await runManagerCommand(["--api", "POST", "/api/fixture", ...sourceArgs, "--body-stdin"], configPath, { fetchImpl, readInput: async () => largeBody })).ok, true);
-    assert.equal(calls.at(-2).body, largeBody);
+    assert.equal(calls.filter(call => call.body !== undefined).at(-1).body, largeBody);
     const beforeAnonymousMetadata = calls.length;
     assert.equal((await runManagerCommand(["--api", "GET", "/meta"], configPath, { fetchImpl })).ok, true);
     assert.ok(calls.length > beforeAnonymousMetadata);

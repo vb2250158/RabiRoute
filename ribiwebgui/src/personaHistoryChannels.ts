@@ -1,10 +1,11 @@
 import type { MessageHistoryChannelCatalog } from '@shared/personaHistoryChannels';
 import type { MessageEndpointCatalogEntry } from './messageEndpoints/messageEndpointCatalog';
 
-export type HistoryChannel = { id: string; label: string; icon:string; adapter?: string; category?:'agent'|'panel'|'replies' };
+export type HistoryChannel = { id: string; label: string; icon:string; adapter?: string; category?:'agent'|'panel'|'replies'; agentSessions?: boolean };
 export function historyChannels(catalog: MessageHistoryChannelCatalog, endpoints:readonly MessageEndpointCatalogEntry[]=[]): HistoryChannel[] {
   const channels:HistoryChannel[] = [
     {id:'chat:agent',label:'Agent 间投递',icon:'mdi-send-outline',category:'agent'},
+    {id:'agent:sessions',label:'Agent 会话',icon:'mdi-forum-outline',agentSessions:true},
     {id:'chat:panel',label:'角色面板',icon:'mdi-account-box-outline',category:'panel'},
     {id:'chat:replies',label:'任务回复',icon:'mdi-reply',category:'replies'},
     {id:'endpoint:system',label:'系统消息',icon:'mdi-cog-outline',adapter:'system'}

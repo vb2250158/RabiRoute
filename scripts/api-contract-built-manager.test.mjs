@@ -14,6 +14,31 @@ import http from "node:http";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
+test("compiled call history correlates a CLI search and exposes lazy stage payloads", { timeout: 90_000 }, async t => {
+  const instance = await startBuiltManager(t, false);
+  const { ready, get, root } = instance;
+  const client = createManagerClient({ managerUrl: ready.baseUrl, localHost: true,
+    endpointSession: { async ensure() { return { managerUrl: ready.baseUrl, meta: await (await get("/meta")).json() }; } },
+    callHistory: { source: "cli", directory: path.join(root, "outbox") } });
+  t.after(() => client.close());
+  const receipt = await client.observeCall("cli", { operationId: "manager.search", query: { q: "call-history-fixture" } },
+    () => client.request("GET", "/api/search?q=call-history-fixture"));
+  assert.equal(receipt.ok, true, receipt.body);
+  await client.close();
+  const page = await (await get("/api/diagnostics/calls?source=cli&limit=50")).json();
+  assert.equal(page.code, 0, JSON.stringify(page));
+  const call = page.data.items.find(item => item.pathname === "/api/search");
+  assert.ok(call, JSON.stringify(page));
+  const directory = await (await get("/api/diagnostics/calls/" + call.callId)).json();
+  assert.deepEqual(directory.data.stages.map(stage => stage.boundary).sort(), ["client", "server", "tool"]);
+  assert.ok(directory.data.stages.every(stage => stage.response === undefined));
+  const server = directory.data.stages.find(stage => stage.boundary === "server");
+  const params = new URLSearchParams({ spanId: server.spanId, boundary: "server" });
+  const detail = await (await get("/api/diagnostics/calls/" + call.callId + "?" + params)).json();
+  assert.deepEqual(detail.data.stages[0].response.body, receipt.bodyJson);
+  assert.equal(detail.data.stages[0].request.query.q, "call-history-fixture");
+});
+
 async function pollFixture(read, predicate, description, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   let value;
