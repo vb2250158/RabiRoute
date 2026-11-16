@@ -5,13 +5,14 @@ import { VideoService, VideoError } from "./service.mjs";
 import { VideoModels } from "./models.mjs";
 import { VideoAssets } from "./assets.mjs";
 import { VideoProjects } from "./projects.mjs";
+import { WorkbenchRuns } from "./workbenchRuns.mjs";
 import { RemoteVideoCompute } from "./remoteCompute.mjs";
 import { createVideoApiEvents, createVideoOperationsOwner } from "./apiOwner.mjs";
 
 /** Candidate state is read-only; shared recovery and component preparation belong to the published activation. */
 export function createVideoPluginLifecycle({ identity, signal, http, host, api, runtime, catalog }) {
   const events = createVideoApiEvents(catalog), registrations = [];
-  let service, models, assets, computeAssets, prepared = false, published = false, ready = false;
+  let service, models, assets, computeAssets, runs, prepared = false, published = false, ready = false;
   let retiring = false, closeFlight, startup;
   const preparations = new Set();
   const assertPreparing = () => {
@@ -28,6 +29,7 @@ export function createVideoPluginLifecycle({ identity, signal, http, host, api, 
   const publish = (name, data) => {
     if (!published || retiring) return;
     http.publishManagerEvent("plugin_event", { instanceId: identity.instanceId, name, data });
+    if(data?.jobId)runs?.onMediaChanged(data.jobId);
     events.publish(name, data);
   };
   const remote = () => new RemoteVideoCompute(runtime, catalog,
@@ -44,7 +46,8 @@ export function createVideoPluginLifecycle({ identity, signal, http, host, api, 
       ...registrations.map(registration => Promise.resolve().then(() => registration.dispose())),
       Promise.resolve().then(() => events.close()), Promise.resolve().then(() => runtime.stopMediaProbe()),
       ...(models ? [Promise.resolve().then(() => models.close())] : []),
-      Promise.resolve().then(() => service ? service.close() : runtime.stop())
+      ...(runs ? [Promise.resolve().then(() => runs.close())] : []),
+      Promise.resolve().then(async() => {if(service){await service.close();for(const job of service.jobs.values())runs?.onMediaChanged(job.id);}else await runtime.stop();})
     ]);
     const failure = settled.find(result => result.status === "rejected");
     if (failure) throw failure.reason;
@@ -59,12 +62,13 @@ export function createVideoPluginLifecycle({ identity, signal, http, host, api, 
         assets = new VideoAssets(runtime); service.assets = assets;
         computeAssets = new VideoAssets({ ...runtime, stateRoot: path.join(runtime.stateRoot, "compute"), inspectAsset: (id, kind, access) => runtime.inspectAsset(id, kind, access, true) });
         service.computeAssets = computeAssets; service.remote = remote();
-        const projects = new VideoProjects(runtime);
+        const projects = new VideoProjects({...runtime,workbenchProjectsRoot:await runtime.workbenchProjectRoot?.()});
+        runs = new WorkbenchRuns(runtime, projects, service, publish);
         stage = "model snapshot";
         models = new VideoModels(runtime, catalog, () => publish("video.models", {})); await prepare(() => models.initialize());
         stage = "executable contracts";
         const assertReady = () => { if (!ready || retiring) throw new VideoError("视频服务正在准备或停止。", 503); };
-        const nativeContext = { contracts: createVideoContracts(catalog), runtime, catalog, service, models, assets, computeAssets, projects, events, readJsonBody: http.readJsonBody, assertReady };
+        const nativeContext = { contracts: createVideoContracts(catalog), runtime, catalog, service, models, assets, computeAssets, projects, runs, events, readJsonBody: http.readJsonBody, assertReady };
         const definitions = host.createOperations({ ...nativeContext, owner: createVideoOperationsOwner(nativeContext) });
         await prepare(async () => { registrations.push(await api.registerOperationsAsync(definitions.operations, signal)); });
         registrations.push(api.registerHttpProxies(definitions.proxies));
@@ -91,6 +95,7 @@ export function createVideoPluginLifecycle({ identity, signal, http, host, api, 
           await service.initialize(); assertCurrent();
           await models.initialize(); assertCurrent();
           service.remote = remote();
+          await runs.initialize(); assertCurrent();
           if (!runtime.readOnly) {
             await fs.mkdir(runtime.componentRoot, { recursive: true }); assertCurrent();
             await fs.copyFile(new URL("./inspect-media.py", import.meta.url), path.join(runtime.componentRoot, "inspect-media.py")); assertCurrent();

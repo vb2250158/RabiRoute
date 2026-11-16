@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.20 - 2026-11-17
+
+- Add independent workbench canvases, execution and artifacts with migration recovery and existing Agent session bridging.
+
 ## 0.15.19 - 2026-11-17
 
 - Merge Agent call history and search updates while retaining candidate verification dependencies and the NapCat test fixture.

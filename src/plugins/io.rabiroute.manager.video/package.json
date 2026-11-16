@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.video",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -10,6 +10,7 @@
     "route-message-endpoint.json",
     "config.schema.json",
     "*.mjs",
+    "workbench-definition.json",
     "src",
     "web",
     "assets",

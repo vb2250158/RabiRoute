@@ -7737,6 +7737,19 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.voice-assistant@1", value: voiceAssistantHostPort }),
     Object.freeze({ capability: "host.manager.voice-assistant@2", value: voiceAssistantHostPort }),
     Object.freeze({ capability: "host.manager.video@2", value: Object.freeze({ ...managerFeatureHostPorts, get rootDir() { return rootDir; },
+agentTasks: Object.freeze({
+  send: (request: AgentThreadRequest) => {
+    if(request.action !== "send" || !request.threadId || request.createIfMissing) throw new Error("An exact existing Agent task is required.");
+    return handleAgentThreadRequest(request, agentThreadRequestOptions(request));
+  },
+  async inspect(callerDeliveryId: string, threadId: string, provider: string) {
+    await agentRequests.ready();
+    const delivery=agentRequests.listEndpointDeliveryMetadata().find(row=>row.callerDeliveryId===callerDeliveryId && row.target.sessionId===threadId && row.target.provider===provider);
+    if(!delivery) return {state:"unknown"};
+    const request=agentRequests.list().find(row=>row.deliveryId===delivery.deliveryId);
+    return {state:delivery.state,deliveryId:delivery.deliveryId,request};
+  }
+}),
 get managerPluginProcessLeases() { return managerPluginProcessLeases; },
 get managerReadOnly() { return managerReadOnly; },
 get activePeerTunnel() { return activePeerTunnel; },

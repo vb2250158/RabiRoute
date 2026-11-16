@@ -12,6 +12,7 @@
 - [电脑视觉操作](computer-control-visual-workflow.md)：单屏与区域截图、图像送达、整批输入归还和操作提示。
 
 - [宿主与插件边界](host-plugin-boundaries.md)
+- [工作台画布](workbench-canvas.md)：独立画布目录、复制、节点运行与迁移边界。
 
 - [Agent 调用记录](agent-call-history.md) — 日志诊断标签卡、请求与返回正文、MCP / CLI 关联和捕获范围。
 

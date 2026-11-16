@@ -55,8 +55,18 @@ export type VideoOperationsContext = {
     download(modelId: string, access: VideoRequestAccess): unknown | Promise<unknown>;
   };
   assets: VideoNativeAssets; computeAssets: VideoNativeAssets;
-  projects: { recordIssues?: readonly unknown[]; list(access: VideoRequestAccess): Promise<unknown[]>; create(body: unknown, access: VideoRequestAccess): Promise<unknown>; read(id: string, access: VideoRequestAccess): Promise<unknown>; save(id: string, body: unknown, access: VideoRequestAccess): Promise<{ revision: number }> };
+  projects: { recordIssues?: readonly unknown[]; definition?: unknown; list(access: VideoRequestAccess): Promise<unknown[]>; create(body: unknown, access: VideoRequestAccess): Promise<unknown>; read(id: string, access: VideoRequestAccess): Promise<unknown>; save(id: string, body: unknown, access: VideoRequestAccess): Promise<{ revision: number }>;
+    readProject(id: string, access: VideoRequestAccess): Promise<unknown>; createProjectV2(body: unknown, access: VideoRequestAccess): Promise<unknown>; saveProject(id: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+    readCanvas(project: string, canvas: string, access: VideoRequestAccess): Promise<unknown>; saveCanvas(project: string, canvas: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+    listCanvases(project: string, query: unknown, access: VideoRequestAccess): Promise<unknown>; createCanvas(project: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+    copyCanvas(project: string, body: unknown, access: VideoRequestAccess): Promise<unknown>; migrateProject(project: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+    importCanvas(project: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+    exportCanvas(project:string,canvas:string,format:string|null,access:VideoRequestAccess):Promise<unknown>;
+    rebuildCanvasIndex(project: string, access: VideoRequestAccess): Promise<unknown>;
+    readMediaEditor(project: string, canvas: string, access: VideoRequestAccess): Promise<unknown>; saveMediaEditor(project: string, canvas: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
+  };
   events: { compute(access: VideoRequestAccess): ApiOperationStream; job(service: VideoNativeService, job: VideoNativeJob, access: VideoRequestAccess): ApiOperationStream };
+  runs: {start(project:string,canvas:string,body:unknown,access:VideoRequestAccess):Promise<unknown>; list(project:string,canvas:string,query:unknown):Promise<unknown>; read(id:string):Promise<unknown>; refresh(id:string,access:VideoRequestAccess):Promise<unknown>; logs(id:string,after:number,limit:number):Promise<unknown>; cancel(id:string,access:VideoRequestAccess):Promise<unknown>; completeHuman(id:string,body:unknown,access:VideoRequestAccess):Promise<unknown>;artifactContent(id:string,artifactId:string,request:IncomingMessage,access:VideoRequestAccess,signal?:AbortSignal):Promise<VideoMediaContent>};
 };
 type Options = { body?: ApiOperationContract["request"]["body"]; status?: number; model?: boolean; compute?: boolean; noStore?: boolean; media?: boolean; assetMetadata?: boolean; rawRemainder?: string };
 const root = "/api/video", empty = { type: "object", additionalProperties: false }, ignored = { type: "object", additionalProperties: true };
@@ -76,12 +86,12 @@ function assetMetadata(value: unknown): unknown {
 
 /** Fixed Video APIs, derived once for execution and discovery. No boolean HTTP dispatcher. */
 export function createVideoOperations(context: VideoOperationsContext) {
-  const { owner, service, models, assets, computeAssets, projects, events, contracts } = context, presentVideoError = owner.error;
+  const { owner, service, models, assets, computeAssets, projects, runs, events, contracts } = context, presentVideoError = owner.error;
   const operations: ApiOperationDefinition[] = [], proxies: ApiHttpProxyDefinition[] = [];
   const contract = (name: string, method: ApiMethod, suffix: string, options: Options = {}): ApiOperationContract => ({
     operationId: "manager.video." + name, ...(method === "*" ? {} : { aliases: [`video:${method}:${root}${suffix}`] }), contractVersion: "1.0.0", method, pathTemplate: root + suffix,
     exposure: "public", transport: "http", description: "Use the original video " + name + " owner.",
-    request: { path: options.rawRemainder ? { type: "object", required: [options.rawRemainder], properties: { [options.rawRemainder]: { type: "string" } }, additionalProperties: false } : suffix.includes(":modelId") ? idSchema("modelId", "^[a-z0-9-]+$") : suffix.includes(":mediaId") ? idSchema("mediaId") : empty,
+    request: { path: options.rawRemainder ? { type: "object", required: [options.rawRemainder], properties: { [options.rawRemainder]: { type: "string" } }, additionalProperties: false } : suffix.includes(":projectId") ? { type:"object", required: suffix.includes(":canvasId") ? ["projectId","canvasId"] : ["projectId"], properties: {projectId:{type:"string",pattern:"^[a-f0-9-]{36}$"}, ...(suffix.includes(":canvasId") ? {canvasId:{type:"string",pattern:"^[a-f0-9-]{36}$"}} : {})}, additionalProperties:false } : suffix.includes(":modelId") ? idSchema("modelId", "^[a-z0-9-]+$") : suffix.includes(":mediaId") ? idSchema("mediaId") : empty,
       ...(options.rawRemainder ? { pathRemainder: options.rawRemainder } : {}),
       query: { ...ignored, properties: { computeDeviceId: { type: "string", description: "Original selected peer; first query value is used, maximum 200 characters. Projects and saved outputs remain local." }, ...(name.endsWith("upload") ? { kind: { description: "Native image/video/audio selection; omitted value defaults to image. Original MIME, limits and inspection remain native." } } : {}), ...(options.assetMetadata ? { metadata: { description: "Only the first query value exactly equal to 1 selects JSON metadata; every other value keeps original media." } } : {}) } }, headers: { ...ignored, ...(name === "jobs.submit" || name === "compute.job-submit" ? { properties: { "idempotency-key": { description: "Required original 8–128 ASCII [A-Za-z0-9._:-] key. Native 400 for invalid key, 409 for same key with different normalized intent; workspace and compute scopes stay separate." } } } : {}) },
       body: options.body ?? { kind: "none", allowIgnoredBody: true } },
@@ -101,6 +111,29 @@ export function createVideoOperations(context: VideoOperationsContext) {
   add("projects.create", "POST", "/projects", (input, saved) => projects.create(input.body, saved.access), { body: json(4096, contracts.requests.projectCreate), noStore: true });
   add("project.read", "GET", "/projects/:mediaId", (input, saved) => projects.read(input.path.mediaId, saved.access), { noStore: true });
   add("project.save", "PUT", "/projects/:mediaId", async (input, saved) => ({ revision: (await projects.save(input.path.mediaId, input.body, saved.access)).revision }), { body: json(64 * 1024 ** 2, contracts.requests.projectSave), noStore: true });
+  const workbenchBody = { body: json(64 * 1024 ** 2, ignored), noStore:true };
+  add("workbench.definition", "GET", "/v2/definition", () => projects.definition, { noStore:true });
+  add("workbench.projects-create", "POST", "/v2/projects", (input,saved) => projects.createProjectV2(input.body,saved.access), workbenchBody);
+  add("workbench.project-read", "GET", "/v2/projects/:projectId", (input,saved) => projects.readProject(input.path.projectId,saved.access), {noStore:true});
+  add("workbench.project-save", "PUT", "/v2/projects/:projectId", (input,saved) => projects.saveProject(input.path.projectId,input.body,saved.access), workbenchBody);
+  add("workbench.project-migrate", "POST", "/v2/projects/:projectId/migrate", (input,saved) => projects.migrateProject(input.path.projectId,input.body,saved.access), workbenchBody);
+  add("workbench.canvases-list", "GET", "/v2/projects/:projectId/canvases", (input,saved) => projects.listCanvases(input.path.projectId,Object.fromEntries(input.url.searchParams),saved.access), {noStore:true});
+  add("workbench.canvas-create", "POST", "/v2/projects/:projectId/canvases", (input,saved) => projects.createCanvas(input.path.projectId,input.body,saved.access), workbenchBody);
+  add("workbench.canvas-copy", "POST", "/v2/projects/:projectId/canvases/copy", (input,saved) => projects.copyCanvas(input.path.projectId,input.body,saved.access), workbenchBody);
+  add("workbench.canvas-import", "POST", "/v2/projects/:projectId/canvases/import", (input,saved) => projects.importCanvas(input.path.projectId,input.body,saved.access), workbenchBody);
+  add("workbench.canvas-read", "GET", "/v2/projects/:projectId/canvases/:canvasId", (input,saved) => projects.readCanvas(input.path.projectId,input.path.canvasId,saved.access), {noStore:true});
+  add("workbench.canvas-export", "GET", "/v2/projects/:projectId/canvases/:canvasId/export", (input,saved) => projects.exportCanvas(input.path.projectId,input.path.canvasId,input.url.searchParams.get("format"),saved.access), {noStore:true});
+  add("workbench.canvas-save", "PUT", "/v2/projects/:projectId/canvases/:canvasId", (input,saved) => projects.saveCanvas(input.path.projectId,input.path.canvasId,input.body,saved.access), workbenchBody);
+  add("workbench.media-read", "GET", "/v2/projects/:projectId/canvases/:canvasId/editor", (input,saved) => projects.readMediaEditor(input.path.projectId,input.path.canvasId,saved.access), {noStore:true});
+  add("workbench.media-save", "PUT", "/v2/projects/:projectId/canvases/:canvasId/editor", (input,saved) => projects.saveMediaEditor(input.path.projectId,input.path.canvasId,input.body,saved.access), workbenchBody);
+  add("workbench.index-rebuild", "POST", "/v2/projects/:projectId/index/rebuild", (input,saved) => projects.rebuildCanvasIndex(input.path.projectId,saved.access), {noStore:true});
+  add("workbench.run-create", "POST", "/v2/projects/:projectId/canvases/:canvasId/runs", (input,saved) => runs.start(input.path.projectId,input.path.canvasId,input.body,saved.access), {...workbenchBody,status:202});
+  add("workbench.runs-list", "GET", "/v2/projects/:projectId/canvases/:canvasId/runs", input => runs.list(input.path.projectId,input.path.canvasId,Object.fromEntries(input.url.searchParams)), {noStore:true});
+  add("workbench.run-read", "GET", "/v2/runs/:mediaId", input => runs.read(input.path.mediaId), {noStore:true});
+  add("workbench.run-refresh", "POST", "/v2/runs/:mediaId/refresh", (input,saved) => runs.refresh(input.path.mediaId,saved.access), {noStore:true});
+  add("workbench.run-logs", "GET", "/v2/runs/:mediaId/logs", input => runs.logs(input.path.mediaId,Number(input.url.searchParams.get("after")||0),Number(input.url.searchParams.get("limit")||100)), {noStore:true});
+  add("workbench.run-cancel", "POST", "/v2/runs/:mediaId/cancel", (input,saved) => runs.cancel(input.path.mediaId,saved.access), {noStore:true});
+  add("workbench.run-human", "POST", "/v2/runs/:mediaId/complete", (input,saved) => runs.completeHuman(input.path.mediaId,input.body,saved.access), workbenchBody);
   add("compute.status", "GET", "/compute/status", () => owner.computeStatus(), { compute: true });
   add("compute.runtime-start", "POST", "/compute/runtime/start", async (_, saved) => { await owner.startLocal(saved.access); return owner.computeStatus(); }, { compute: true });
   add("compute.runtime-stop", "POST", "/compute/runtime/stop", async (_, saved) => { await service.stop(saved.access); return owner.computeStatus(); }, { compute: true });
@@ -178,6 +211,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
     return owner.remoteModel(saved, input.url.pathname.slice(root.length), "POST", await owner.readModelBody(input.request, saved.access), input.signal);
   }, { model: true });
   modelProxy("models.runtime-install", "/models/runtime", saved => owner.installRuntime(saved.access));
+  proxy("workbench.artifact-content","GET","/v2/runs/:mediaId/artifacts",(input,saved)=>runs.artifactContent(input.path.mediaId,input.url.searchParams.get("artifact")||"",input.request,saved.access,input.signal),{media:true});
   modelProxy("model.download", "/models/:modelId/download", (saved, input) => service.exclusive(() => models.download(input.path.modelId, saved.access), saved.access));
   proxy("models.remote-exchange", "*", "/models:suffix", async (input, saved) => {
     if (!saved.deviceId) { input.request.resume(); return owner.unmatchedModel(); }

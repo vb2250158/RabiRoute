@@ -168,7 +168,9 @@ test("successful Video publication recovers unfinished local and remote jobs onl
   assert.equal(f.owners[0].service.remote.blocked.has("fixture-peer"), true);
   assert.deepEqual(await fs.readFile(f.component), await fs.readFile(new URL("./inspect-media.py", import.meta.url)));
   assert.equal((await f.send()).status, 200);
-  assert.equal(f.routes.catalogSnapshot().operations.length, 35);
+  const contracts=f.routes.catalogSnapshot().operations;
+  assert.equal(contracts.filter(row=>!row.contract.operationId.startsWith("manager.video.workbench.")).length,35);
+  assert.ok(contracts.some(row=>row.contract.operationId==="manager.video.workbench.canvas-save"));
 });
 
 test("replacement waits for the old native job and reloads its final receipt and model revision before accepting requests", { timeout: 15000 }, async t => {
@@ -185,7 +187,7 @@ test("replacement waits for the old native job and reloads its final receipt and
   await published; await tick();
   assert.equal((await f.send()).status, 503);
   const contracts = f.routes.catalogSnapshot().operations;
-  assert.equal(contracts.length, 35);
+  assert.equal(contracts.filter(row=>!row.contract.operationId.startsWith("manager.video.workbench.")).length,35);
   for (const { contract } of contracts) {
     const pathname = contract.method === "*" ? "/api/video/models-native-extension" : contract.pathTemplate.replace(/:[A-Za-z][A-Za-z0-9]*/g, local.job.id);
     const response = await f.sendPath(pathname, contract.method === "*" ? "PROPFIND" : contract.method);
@@ -230,7 +232,7 @@ test("packaged Video manifest admits its real activation through kernel declarat
   const restored = await f.kernel.switch([f.candidate("packaged-manifest")]);
   assert.equal(restored.generation.records[0].status, "active");
   assert.equal(restored.generation.services.services.has("manager.video@1"), true);
-  assert.equal(f.routes.catalogSnapshot().operations.length, 35);
+  assert.equal(f.routes.catalogSnapshot().operations.filter(row=>!row.contract.operationId.startsWith("manager.video.workbench.")).length,35);
   assert.equal((await f.send()).status, 200);
 });
 

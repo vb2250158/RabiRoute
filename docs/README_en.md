@@ -12,6 +12,7 @@ Start with the user guide for everyday operation, use the API reference for inte
 - [Visual computer operation](computer-control-visual-workflow_en.md) covers display and region capture, image delivery, batch return and operation feedback.
 
 - [Host and plugin boundaries](host-plugin-boundaries_en.md)
+- [Workbench canvases](workbench-canvas_en.md): independent folders, copying, graph execution and migration boundaries.
 
 - [Agent call history](agent-call-history_en.md) — diagnostics tabs, request and response payloads, MCP / CLI correlation and capture coverage.
 

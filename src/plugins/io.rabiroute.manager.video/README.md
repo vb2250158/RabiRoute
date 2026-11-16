@@ -1,10 +1,10 @@
 [English](README_en.md) | 简体中文
 
-# 视频生成插件
+# 工作台插件
 
-提供独立视频页面、任务 API、H3 工作流与任务持久化。默认启用页面，GPU 服务由用户从页面启动。通过 `host.manager.video@1` 获取限定的本机进程租约与合同工厂，通过 `host.manager.operations@1` 注册受 Manager 鉴权的 API；Manager 事件与原条件正文读取器仍来自 `host.manager.http@1`。
+提供独立画布目录、流程节点、媒体编辑、H3 生成与持久化运行。默认启用页面，GPU 服务由用户从页面启动。通过 `host.manager.video@2` 复用本机进程租约、原 Agent 投递与合同工厂，通过 `host.manager.operations@1` 注册受 Manager 鉴权的 API；Manager 事件与原条件正文读取器仍来自 `host.manager.http@1`。
 
-同一定义安装 34 个固定入口和 1 个原生动态模型 exchange，并进入活动目录；包括 PNG/MP4/WAV、Range、SSE、项目与算力回执。插件当前模块创建的原生 owner 直接注入工厂，不包装旧 HTTP 分发。方法、正文、恢复和退役边界见[可执行接口合同](../../../../docs/video-api-contract.md)。
+既有媒体入口与新增 `/api/video/v2/*` 工作台入口从同一操作定义进入活动目录；包括 PNG/MP4/WAV、Range、SSE、独立画布 CAS 与运行回执。插件当前模块创建的原生 owner 直接注入工厂，不包装旧 HTTP 分发。媒体方法与正文见[可执行接口合同](../../../../docs/video-api-contract.md)，目录、绑定、节点和验收范围见[工作台画布](../../../../docs/workbench-canvas.md)。
 
 请求授权由 Host 提供 `requestAccess(request)`；插件在异步等待和 fs/process/network/stream 派发前复核。已接受后台任务归插件生命周期，不持有原请求权限。撤销返回脱敏 403；写入结果区分 `not_started` 与 `unknown`，不承诺回滚。
 
