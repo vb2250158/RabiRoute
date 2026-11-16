@@ -59,10 +59,16 @@ test("home directory search, pagination and details are discoverable through the
   cleanup.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const request = (suffix: string) => fetch("http://127.0.0.1:" + address.port + "/api/agent/xiaomi-home" + suffix, { headers: { authorization: "Bearer " + credential.token } });
-  const catalog = registry.catalogSnapshot(); assert.equal(catalog.operations.length, 53); assert.ok(catalog.operations.every(row => row.contract.exposure === "public"));
+  const catalog = registry.catalogSnapshot(); assert.equal(catalog.operations.length, 54); assert.ok(catalog.operations.every(row => row.contract.exposure === "public"));
+  assert.equal(new Set(catalog.operations.map(row => row.contract.operationId)).size, catalog.operations.length);
+  const recording = catalog.operations.find(row => row.contract.operationId === "manager.xiaomi-home.recordings.latest"); assert.ok(recording);
+  assert.equal(recording.contract.method, "GET"); assert.equal(recording.contract.pathTemplate, "/api/agent/xiaomi-home/recordings/latest");
+  const searchSources = catalog.searchSources.filter(source => source.operationId === "manager.xiaomi-home.resources.list");
+  assert.equal(searchSources.length, 1); assert.equal(searchSources[0]!.scope, "entities"); assert.deepEqual(searchSources[0]!.kinds, ["*"]);
   assert.equal(catalog.coverage.scope, "registered-routes"); assert.equal(catalog.coverage.globalCoverage, "not-proven");
-  const openapi = (await apiCatalogOpenApi(catalog)).paths as Record<string, unknown>;
-  for (const suffix of ["/devices", "/resources", "/devices/{deviceId}", "/resources/{resourceId}", "/capabilities"]) assert.ok(openapi["/api/agent/xiaomi-home" + suffix]);
+  const openapi = (await apiCatalogOpenApi(catalog)).paths as Record<string, { get?: { operationId?: string } }>;
+  for (const suffix of ["/devices", "/resources", "/devices/{deviceId}", "/resources/{resourceId}", "/capabilities", "/recordings/latest"]) assert.ok(openapi["/api/agent/xiaomi-home" + suffix]);
+  assert.equal(openapi["/api/agent/xiaomi-home/recordings/latest"]!.get?.operationId, recording.contract.operationId);
   const deviceContract = catalog.operations.find(row => row.contract.operationId === "manager.xiaomi-home.devices.list"); assert.ok(deviceContract); assert.equal(deviceContract.contract.request.query && typeof deviceContract.contract.request.query, "object"); assert.ok(deviceContract.contract.responses["200"].schema);
   // The live capability DTO owns query names/defaults; per-operation wire schemas
   // still defer these native query rules rather than claiming exact field coverage.

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.16 - 2026-11-17
+
+- Cover Xiaomi latest-recording discovery and distinguish work switches from credential revocation in native read tests.
+
 ## 0.15.15 - 2026-11-16
 
 - Update lifecycle test fixtures for current persona and core services while preserving cleanup error and drain checks.

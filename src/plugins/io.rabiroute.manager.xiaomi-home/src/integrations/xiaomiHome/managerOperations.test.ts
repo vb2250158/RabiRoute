@@ -181,10 +181,32 @@ test("nonce HTML retains CSP and the native deployment SSE source is cancelled o
   await f.operations.dispose(); assert.equal(sourceClosed, true); request.destroy(); response.destroy();
 });
 
-test("revoking the original Node while a native read is pending suppresses its old business result", async t => {
+for (const { mode, revoked } of [
+  { mode: "work-disabled", revoked: false }, { mode: "work-toggle", revoked: false },
+  { mode: "credential-revoked", revoked: true }, { mode: "credential-replaced", revoked: true }
+] as const) test(`pending native read ${revoked ? "suppresses" : "preserves"} its original result after ${mode}`, async t => {
   const f = await fixture(t), hold = f.holdHealth();
-  const pending = f.request("/health"); await hold.started; f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
-  const response = await pending; assert.equal(response.status, 403); assert.equal((await response.json()).data, undefined);
+  const pending = f.request("/health"); await hold.started;
+  if (revoked) {
+    f.authority.revokeNode(f.credential.nodeId);
+    if (mode === "credential-replaced") f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId);
+  } else {
+    f.authority.setNodeEnabled(f.credential.nodeId, false, true);
+    if (mode === "work-toggle") f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  }
+  hold.release();
+  const response = await pending, body = await response.json();
+  assert.equal(response.status, revoked ? 403 : 200);
+  if (revoked) {
+    // The registry revalidates the original connection before disclosing the native result.
+    assert.equal(body.code, -1); assert.equal(body.errorCode, "API_REQUEST_AUTHORITY_REVOKED");
+    assert.equal(body.field, "authorization"); assert.equal(body.operationId, "manager.xiaomi-home.health.read");
+    assert.equal(body.retryable, false); assert.equal(body.data, undefined); assert.ok(!JSON.stringify(body).includes(f.directory));
+  } else {
+    assert.equal(body.code, 0); assert.equal(body.data.storage.runtimeDir, f.directory);
+    assert.equal(body.data.settings.revision, f.runtime.settings().revision);
+    assert.equal(f.authority.isNodeEnabled(f.credential.nodeId), mode === "work-toggle");
+  }
 });
 
 for (const reason of ["client disconnect", "plugin retirement"] as const) test("blocked native MP4 upstream closes and joins after " + reason, { timeout: 15000 }, async t => {
