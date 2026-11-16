@@ -51,6 +51,8 @@ test("persona operation retirement failure still joins and reports storage clean
   const storageError = new Error("controlled storage stop failure");
   let settled = false;
   const host = {
+    subscribeRoleAutomationCatalog: () => () => {},
+    dsBotAutomationRuleOwner: { async dispose() {} },
     PersonaStorageOwner: class { async stop() { entered.resolve(); await release.promise; throw storageError; } },
     createPersonaStorageOperations: () => storageOperations,
     managerPluginRoutes: { registerOperationsAsync: async (_instance: unknown, definitions: unknown) => ({ async dispose() {
@@ -58,6 +60,10 @@ test("persona operation retirement failure still joins and reports storage clean
     } }) }
   };
   const { module, ports } = await canonicalManagerPluginFixture("persona", host);
+  Object.assign(ports, { module: (name: string) => {
+    assert.equal(name, "roleKnowledge");
+    return { planUpdatePrimitives: {} };
+  } });
   const harness = createPluginTestHarness({ services: [["host.manager.persona@2", ports]] });
   await harness.activate(module);
   const disposal = harness.dispose().then(() => { settled = true; throw new Error("cleanup must reject"); }, error => {

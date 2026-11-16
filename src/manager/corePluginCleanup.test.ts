@@ -18,6 +18,7 @@ test("core operation cleanup failure still starts and joins its upgrade owner", 
       registerOperationsAsync: async () => ({ async dispose() { operationEntered(); await operationGate; throw failure; } }),
       registerHttpProxies: () => ({ dispose() {} })
     },
+    computerSettingsDefinition: () => ({}),
     createLanAgentConnectionOperation: () => ({}),
     createManagerEventOperationDefinition: () => ({}),
     createWebguiStaticOperations: () => ({ resources: [], fallback: {} })

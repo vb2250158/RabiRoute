@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.15 - 2026-11-16
+
+- Update lifecycle test fixtures for current persona and core services while preserving cleanup error and drain checks.
+
 ## 0.15.14 - 2026-11-16
 
 - Update the MCP Hono transitive dependencies to resolve production audit findings; align Xiaomi authority and delivery receipt tests with connection revocation and no-replay contracts.
