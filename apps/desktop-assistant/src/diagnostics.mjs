@@ -2,12 +2,13 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createSystemRecognitionSample } from './recognition-sample.mjs';
 
 const ids=['model','asr','tts','microphone','voice'];
 const safeError=error=>/^[A-Z][A-Z0-9_]+$/.test(error?.message)?error.message:'ASSISTANT_TEST_FAILED';
 
 /** Host owns evidence. Configuration changes make prior results visibly stale. */
-export async function createAssistantDiagnostics({directory,settings,host,conversation,recognize,fixture}) {
+export async function createAssistantDiagnostics({directory,settings,host,conversation,recognize,createSample=createSystemRecognitionSample}) {
   const path=join(directory,'checks.json');
   let records={},running,admitting=false,job={status:'idle',current:null,completed:0,total:0},serial=Promise.resolve();
   try { records=JSON.parse(await readFile(path,'utf8')); }
@@ -18,7 +19,7 @@ export async function createAssistantDiagnostics({directory,settings,host,conver
   const signature=(id,config=settings())=>{
     const prefixes=id==='model'?['llm','persona']:id==='asr'?['asr']:id==='tts'?['tts','outputDeviceId']:id==='microphone'?['inputDeviceId','electronExecutable']:['llm','persona','asr','tts','inputDeviceId','outputDeviceId','silence','electronExecutable'];
     const values=Object.fromEntries(Object.entries(config).filter(([key])=>!key.endsWith('Profiles')&&prefixes.some(prefix=>key.startsWith(prefix))));
-    return createHash('sha256').update(JSON.stringify(values)).digest('hex');
+    return createHash('sha256').update(JSON.stringify(['asr','voice'].includes(id)?{...values,sampleSource:'system-speech-v1'}:values)).digest('hex');
   };
   const persist=()=>{
     const snapshot=JSON.stringify(records);
@@ -44,7 +45,7 @@ export async function createAssistantDiagnostics({directory,settings,host,conver
     const config=settings(),started=Date.now();
     if(id==='asr') {
       if(!recognize)throw Error('ASR_SAMPLE_TEST_UNAVAILABLE');
-      const audio=await readFile(fixture);
+      const audio=await createSample();
       const result=await recognize(audio,new AbortController().signal);
       if(!result.text.trim())throw Error('ASR_TEST_EMPTY');
       await record(id,'passed','识别结果「'+result.text.slice(0,80)+'」 · '+((Date.now()-started)/1000).toFixed(1)+' 秒',config);

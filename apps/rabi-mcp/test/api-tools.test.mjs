@@ -55,6 +55,34 @@ test('explicit read policy follows fixed operation effects for POST queries and 
   assert.equal(calls.length, 2);
 });
 
+test('unconfirmed writes permit contract-declared readback but fence new mutations before dispatch',async()=>{
+  const selected={...operation('selected','POST'),contract:{...operation('selected','POST').contract,effects:{mode:'write',request:{bodyPath:['action'],modes:{inspect:'read',save:'write'}}}}};
+  const f=fixture([operation('query','POST','http','/query','read'),operation('touch','GET','http','/touch','write'),selected]);
+  const effects=[],context={writeReconciliationRequired:true,onOperationEffect:value=>effects.push(value)};
+  try{
+    assert.equal((await f.tools.call('rabi_api_call',{operationId:'query'},context)).ok,true);
+    assert.equal((await f.tools.call('rabi_api_call',{operationId:'selected',options:{bodyText:'{"action":"inspect"}'}},context)).ok,true);
+    for(const args of [{operationId:'touch'},{operationId:'selected',options:{bodyText:'{"action":"save"}'}}]){
+      const result=await f.tools.call('rabi_api_call',args,context);assert.equal(result.error,'WRITE_RECONCILIATION_REQUIRED');assert.equal(result.mutation,true);assert.equal(result.uncertain,true);assert.equal(result.state,'not_started');
+    }
+    assert.equal(f.calls.length,2);assert.deepEqual(effects,[false,false]);
+  }finally{await f.tools.close()}
+});
+
+test('unconfirmed writes keep original WebSocket receipts readable and closable without allowing new frames',async()=>{
+  const f=fixture([operation('socket','GET','websocket')]);let resolveClosed,sent=0,closed=0;
+  f.client.openOperation=async()=>({closed:new Promise(resolve=>resolveClosed=resolve),sendJsonAsync:async()=>sent++,close(){closed++;resolveClosed({code:1000})}});
+  const context={writeReconciliationRequired:true};
+  try{
+    const session=await f.tools.call('rabi_api_call',{operationId:'socket'},context);
+    assert.equal(session.ok,true);
+    const rejected=await f.tools.call('rabi_api_session',{sessionId:session.sessionId,action:'send',json:{write:true}},context);
+    assert.equal(rejected.error,'WRITE_RECONCILIATION_REQUIRED');assert.equal(sent,0);
+    assert.equal((await f.tools.call('rabi_api_session',{sessionId:session.sessionId,action:'read'},context)).ok,true);
+    assert.equal((await f.tools.call('rabi_api_session',{sessionId:session.sessionId,action:'close'},context)).state,'closed');assert.equal(closed,1);
+  }finally{await f.tools.close()}
+});
+
 test('role policy checks equivalent JSON payload encodings and rejects ignored query role scope', async () => {
   const create = { ...operation('roles.create', 'POST', 'http', '/api/roles'), contract: { ...operation('roles.create', 'POST', 'http', '/api/roles').contract, request: { body: { kind: 'json', schema: { type: 'object', properties: { roleId: { type: 'string' }, title: { type: 'string' } } } } } } };
   const list = { ...operation('roles.list', 'GET', 'http', '/api/roles'), contract: { ...operation('roles.list', 'GET', 'http', '/api/roles').contract, request: { query: { type: 'object', properties: { query: { type: 'string' } } } } } };

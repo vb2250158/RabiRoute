@@ -19,4 +19,3 @@ test('queued utterances keep their own observation and later text turns receive 
  const conversation=createAssistantConversation({session,scope:'fixture',receipts:{has:async()=>false,acknowledge:async()=>true}});
  try{const first=conversation.run('first',{speechObservation:{source:'speech-recognition',estimates:{emotion:'happy'}}});for(let i=0;i<10&&!release;i++)await new Promise(resolve=>setTimeout(resolve,0));const metadata={source:'speech-recognition',estimates:{emotion:'sad',age:'23'}};const second=conversation.run('second',{speechObservation:metadata});metadata.estimates.emotion='angry';const third=conversation.run('text');release();await Promise.all([first,second,third]);assert.equal(calls[0].speechObservation.estimates.emotion,'happy');assert.equal(calls[1].speechObservation.estimates.emotion,'sad');assert.equal(calls[2].speechObservation,undefined)}finally{conversation.dispose()}
 });
-

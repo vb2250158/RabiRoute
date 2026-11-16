@@ -15,7 +15,7 @@ import {openConversationStore} from './conversation-store.mjs';
 import {createWebSearchService} from '@rabilink/desktop-voice-service/web-search';
 
 /** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, diagnosticFixture, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy }) {
+export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy }) {
   const store = await openSettingsStore(settingsDirectory);
   let options={};
   try {options=JSON.parse(await readFile(join(directory,'host-options.json'),'utf8'));}
@@ -59,7 +59,7 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
       const current=providers(config);
       if(current.createAsr)return recognizeStreamSample({createAsr:current.createAsr,audio,signal,endInput:false});
       return current.recognize(audio,signal);
-    },fixture:diagnosticFixture||new URL('../assets/recognition-check.wav',import.meta.url)});
+    }});
   const bound = {
     async state() {
       const state = await host.state();

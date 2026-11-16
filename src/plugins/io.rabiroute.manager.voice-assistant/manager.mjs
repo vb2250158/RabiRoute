@@ -1,4 +1,4 @@
-import {definePlugin,ownAgentAdapter} from '@rabiroute/plugin-sdk';
+import {definePlugin,ownAgentAdapter} from "@rabiroute/plugin-sdk";
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {createImplementation,hostModules} from './manager-runtime.mjs';
@@ -10,7 +10,7 @@ export const activate=definePlugin({async activate(context){
   const managerEndpoint=managerPort.endpoint;let agentSender;
   const implementation=createImplementation(host);
   const owner=await implementation.createVoiceAssistantOwner({identity:context.identity,stateRoot:host.environment.RABIROUTE_STATE_ROOT,speech,managerEndpoint,signal:context.lifecycle.signal,
-    publish:host.manager.publishManagerEvent,sendAgent:(request,sessionId)=>{if(!agentSender)throw Error('AGENT_SOURCE_OWNER_NOT_READY');return agentSender(request,sessionId)},diagnosticFixture:new URL('./assets/recognition-check.wav',import.meta.url),runtimeEntry:fileURLToPath(new URL('./native-device/main.cjs',import.meta.url))});
+    publish:host.manager.publishManagerEvent,sendAgent:(request,sessionId)=>{if(!agentSender)throw Error('AGENT_SOURCE_OWNER_NOT_READY');return agentSender(request,sessionId)},runtimeEntry:fileURLToPath(new URL('./native-device/main.cjs',import.meta.url))});
   context.effects.adopt(()=>owner.dispose(),'dispose owned voice assistant audio/model client');
   const assertCurrent=()=>context.lifecycle.signal.throwIfAborted();
   const descriptor=JSON.parse(await readFile(new URL('./agent-adapter.json',import.meta.url),'utf8'));

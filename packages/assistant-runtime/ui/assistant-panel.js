@@ -117,6 +117,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     LOCAL_ASR_FAILED:'本机语音识别失败，请检查模型和运行环境后重试。',
     SPEECH_PROVIDER_ERROR_45000081:'识别服务等待音频包超时，请检查音频采集后重试。',
     ASR_SAMPLE_TIMEOUT:'识别示例超时，请检查识别服务和连接后重试。',
+    ASR_SAMPLE_SOURCE_UNAVAILABLE:'无法生成识别示例：需要 Windows 自带的中文或英语语音。也可返回对话，开启语音测试识别。',
     ASR_SAMPLE_CANCELLED:'识别示例已停止。',
     SPEECH_SAMPLE_FORMAT:'示例音频格式不支持。',
     ASR_SAMPLE_TEST_UNAVAILABLE:'当前识别模式尚不支持示例测试，请使用已配置的本机识别服务。',

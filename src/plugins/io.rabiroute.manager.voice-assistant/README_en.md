@@ -1,5 +1,9 @@
 # Voice assistant
 
+For a full repository build, run `npm ci` at the root, then `npm run build`. This repository is not an npm workspace: root dev dependencies and the root lockfile supply React and React DOM for Web compilation, alongside Vue/Vite, at the versions declared by this plugin. Its own dependencies still describe the standalone package. Existing local `node_modules` do not replace clean root-lockfile validation.
+
+Recognition diagnostics synthesize fixed public test text in memory with a Windows system voice. No recordings or persona reference audio are bundled. An installed Chinese or English system voice is required; unavailable synthesis fails explicitly, and recognition can instead be checked by starting microphone input in the conversation. Generated samples still use the selected ASR service.
+
 The unique Rabi PC plugin adds **语音助手** at `/voice-assistant`. It owns its model session and does not require a Codex, DSH or persona Route. Its model/voice loops and settings UI reuse the same shared runtime as the standalone Web assistant. WorkBuddy uses the existing official domestic login; no account tokens are copied.
 
 Connection settings, encrypted credentials and onboarding are shared between personas. Encrypted conversation history and model context are isolated by persona and survive refresh/restart. Switching back restores the original history. The selected public persona document is applied in full; native voice settings remain with their original speech owner. Automation and Hook configuration are not silently converted into system instructions.

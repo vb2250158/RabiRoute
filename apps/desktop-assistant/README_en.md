@@ -22,6 +22,10 @@ Data defaults to `%LOCALAPPDATA%/RabiAssistant`. Override the private directory 
 
 Under Settings → Conversation, choose a provider, save the connection and refresh the model list. Manual model entry is available when a service has no catalog. Endpoint fields are under Advanced Connection Settings. Speech configures ASR and TTS separately; Devices selects microphone and speaker.
 
+Connection and testing → Recognition sample synthesizes fixed public test text in memory with the Windows system voice, preferring Chinese and falling back to English. No recording is bundled and no persona reference audio is read. It requires Windows PowerShell and an installed Chinese or English system voice; unavailable synthesis fails explicitly. You can instead return to the conversation and start voice input to verify recognition. The generated sample is sent to the selected ASR service and only actual transcription can pass the check.
+
+Public test data and generation recipes live in `test/fixtures`, with source notes there. The app tests and repository `npm test` keep test directories and private data out of runtime inputs; audio format alone is not a privacy classification. Personal input stays in ignored directories or outside the repository. Dynamic diagnostics do not need a stored audio file.
+
 ## WorkBuddy China
 
 Choose “WorkBuddy 国内版 · 官方登录” under Settings → Conversation, refresh models, select one and save. The app reuses the domestic login owned by the official CodeBuddy CLI and reads its actual model catalog.

@@ -52,10 +52,6 @@
       "target": "native-device"
     },
     {
-      "source": "apps/desktop-assistant/assets/recognition-check.wav",
-      "target": "assets/recognition-check.wav"
-    },
-    {
       "source": "node_modules/koffi",
       "target": "native-deps/koffi"
     },
