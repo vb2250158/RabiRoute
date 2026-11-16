@@ -7,6 +7,7 @@ import test from "node:test";
 import { createSpeechApiOperations, SpeechApiOwner } from "./speechApiOperations.js";
 import type { SpeechApiContext } from "../../../../manager/speechApiContext.js";
 import { SpeechControlError, ManagerSpeechControl } from "./speechControl.js";
+import { SpeechIngressStore } from "../../../../speechIngressStore.js";
 import { SelectionSpeechSettingsStore } from "./selectionSpeechSettings.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
@@ -32,7 +33,7 @@ async function fixture(t: test.TestContext, options: { control?: Partial<Manager
     speechRuntimeControl: { start: async () => ({ owner: "runtime.start" }), stop: async () => ({ owner: "runtime.stop" }) } as any,
     speechModelManager: models as any,
     selectionSpeechSettings: new SelectionSpeechSettingsStore(path.join(root, "selection.json")),
-    speechIngressStore: { read: () => undefined, query: () => [], listDeliveryReceipts: () => [] },
+    speechIngressStore: { read: () => undefined, query: () => [], listDeliveryReceipts: () => [], listDeliveryReceiptsBatch: async () => new Map() },
     readOnly: () => options.readOnly ?? false,
     identity: () => ({ applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-manager" }),
     hostSpeechCommand: body => ({ ...body, sourceDeviceId: "fixture-host", sourceDeviceName: "Fixture Host" }),
@@ -133,7 +134,7 @@ test("native errors and original-node revocation suppress disclosure after accep
   const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
   t.after(release);
   const f = await fixture(t, { control: { synthesize: async () => { entered(); await gate; return { status: 200, contentType: "audio/wav", headers: {}, body: Buffer.from("private-fixture-audio") }; } } });
-  const pending = f.send("/api/speech/tts", "POST", {}); await started; f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); release();
+  const pending = f.send("/api/speech/tts", "POST", {}); await started; f.authority.revokeNode(f.credential.nodeId); release();
   const reply = await pending; assert.equal(reply.status, 403); assert.equal(reply.bytes.includes(Buffer.from("private-fixture-audio")), false);
   const errors = await fixture(t, { control: { startMicrophone: async () => { throw new SpeechControlError("Controlled native command rejection.", 409); } } });
   const error = await errors.send("/api/speech/microphone/start", "POST", {}); assert.equal(error.status, 409); assert.deepEqual(error.json(), { code: -1, message: "Controlled native command rejection." });
@@ -236,7 +237,7 @@ test("native bodyless audio statuses remain bodyless rather than becoming schema
 
 test("speech event opening revalidates revoked success and failure without disclosing upstream content", async t => {
   for (const upstreamFails of [false, true]) {
-    const f = await fixture(t, { control: { eventStream: async () => { f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); if (upstreamFails) throw new Error("private upstream failure"); return new Response("private upstream stream", { headers: { "content-type": "text/event-stream" } }); } } });
+    const f = await fixture(t, { control: { eventStream: async () => { f.authority.revokeNode(f.credential.nodeId); if (upstreamFails) throw new Error("private upstream failure"); return new Response("private upstream stream", { headers: { "content-type": "text/event-stream" } }); } } });
     const response = await f.send("/api/speech/events"); assert.equal(response.status, 403); assert.equal(response.bytes.includes(Buffer.from("private upstream")), false);
   }
 });
@@ -251,4 +252,47 @@ test("real HTTP speech SSE disconnection aborts its native upstream and permits 
   await started;
   abort.abort(); await pending; await aborted;
   assert.equal((await f.send("/api/speech/status")).status, 200); await f.owner.events.stop(); assert.equal(f.owner.events.activeCount(), 0);
+});
+
+test("message listing uses one asynchronous receipt scan for all returned records", async t => {
+  const f = await fixture(t);
+  const store = new SpeechIngressStore(path.join(f.root, "messages"), path.join(f.root, "receipts"));
+  const first = store.append({ recordId: "batch-one", text: "fixture one" }).record;
+  const second = store.append({ recordId: "batch-two", text: "fixture two" }).record;
+  store.appendDeliveryReceipt({ schemaVersion: 1, recordId: first.id, routeId: "fixture-route", messageAdapterType: "speech", status: "delivered", completedAt: "2026-01-02T00:00:00Z" });
+  store.appendDeliveryReceipt({ schemaVersion: 1, recordId: second.id, routeId: "fixture-route", messageAdapterType: "speech", status: "recorded", completedAt: "2026-01-02T00:00:00Z" });
+  let scans = 0;
+  (f.context as any).speechIngressStore = {
+    read: store.read.bind(store), query: store.query.bind(store),
+    listDeliveryReceipts: () => { throw new Error("synchronous per-record scan must not run"); },
+    listDeliveryReceiptsBatch: async (ids: string[], signal?: AbortSignal) => { scans++; return store.listDeliveryReceiptsBatch(ids, signal); }
+  };
+  const result = await f.send("/api/speech/messages");
+  assert.equal(result.status, 200, result.bytes.toString());
+  const data = result.json().data;
+  assert.equal(scans, 1);
+  assert.equal(data.records.length, 2);
+  assert.equal(data.deliveriesByRecordId[first.id][0].status, "delivered");
+  assert.equal(data.deliveriesByRecordId[second.id][0].status, "recorded");
+});
+
+test("receipt scan rechecks the original connection before disclosing results", async t => {
+  const f = await fixture(t);
+  let enter!: () => void, resume!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  t.after(resume);
+  (f.context as any).speechIngressStore = {
+    query: () => [{ id: "fixture-sensitive-record" }],
+    read: () => undefined,
+    listDeliveryReceipts: () => { throw new Error("synchronous scan is not permitted"); },
+    listDeliveryReceiptsBatch: async () => { enter(); await gate; return new Map([["fixture-sensitive-record", []]]); }
+  };
+  const pending = f.send("/api/speech/messages");
+  await entered;
+  f.authority.revokeNode("speech-node");
+  resume();
+  const result = await pending;
+  assert.equal(result.status, 403);
+  assert.doesNotMatch(result.bytes.toString(), /fixture-sensitive-record/);
 });

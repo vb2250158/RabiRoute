@@ -19,9 +19,13 @@ export function HostSettings({state,settingsTab,speechKind,command,dirty}){
 }
 export function SettingsPage({children,title,onClose,open}){if(!open)return null;return h('section',{className:'rabi-assistant-settings'},h('div',{className:'rabi-settings-heading'},h('h2',null,title),h('button',{onClick:onClose},'返回对话')),children)}
 export const Panel=createAssistantPanel(React,{Modal:SettingsPage,HostSettings,settingsPresentation:'page'});
-export function mountAssistantPanel(element,{fetcher=fetch}={}){
+export function mountAssistantPanel(element,{fetcher=fetch,resolveAvatarUrl}={}){
   const request=async(action,body)=>{const response=await fetcher('/api/voice-assistant/'+action,{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:{},...(body?{body:JSON.stringify(body)}:{})});let value;try{value=await response.json()}catch{throw Error('ASSISTANT_PLUGIN_UNAVAILABLE')}if(!response.ok||value.code!==0)throw Error(value.message||'ASSISTANT_PLUGIN_UNAVAILABLE');return value.data};
-  const adapter={read:()=>request('state'),command:body=>request('command',body),subscribeConversation(_id,listener,onError){let closed=false,timer;const poll=async()=>{try{const data=await request('messages');if(!closed)listener(data)}catch(error){if(!closed)onError(error)}finally{if(!closed)timer=setTimeout(poll,350)}};void poll();return()=>{closed=true;clearTimeout(timer)}}};
+  const adapter={read:async()=>{
+    const state=await request('state'),id=state.hostSettings?.personaId;
+    // The selected persona's existing public resource endpoint also serves the message-history page.
+    return id?{...state,participants:{...state.participants,assistant:{name:state.hostSettings.personaLabel||state.settings.assistantName,avatarUrl:'/api/roles/'+encodeURIComponent(id)+'/avatar'}}}:state;
+  },command:body=>request('command',body),resolveAvatarUrl,subscribeConversation(_id,listener,onError){let closed=false,timer;const poll=async()=>{try{const data=await request('messages');if(!closed)listener(data)}catch(error){if(!closed)onError(error)}finally{if(!closed)timer=setTimeout(poll,350)}};void poll();return()=>{closed=true;clearTimeout(timer)}}};
   const root=createRoot(element);root.render(h(React.Fragment,null,h('style',null,'.rabi-host-setting{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}.rabi-host-setting select{min-height:42px;border:1px solid #527080;border-radius:8px;padding:8px}.rabi-assistant-settings{width:100%}.rabi-settings-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}'),h(Panel,{adapter})));
   return()=>root.unmount();
 }

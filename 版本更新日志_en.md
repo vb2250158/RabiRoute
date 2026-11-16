@@ -6,6 +6,32 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.12 - 2026-11-16
+
+- Advance `@rabilink/desktop-assistant` to `0.2.2` to version the merged diagnostic-sample and runtime changes as an independent application.
+
+- Read speech message delivery receipts asynchronously in one batch per request, preserving latest historical receipts and existing authorization without repeated scans blocking the Manager, and migrate previously published voice assistant package selections.
+
+## 0.15.11 - 2026-11-16
+
+- Align YeYu and QQ test fixtures with explicit synthetic endpoints, independent authenticated connections across the computer-work switch, the current NapCat host capability and attachment metadata path, and bounded readiness of asynchronously loaded required plugins.
+
+## 0.15.10 - 2026-11-16
+
+- Upgrade the voice assistant plugin to 1.1.10: unify conversation avatars, names, bubbles and timestamps while preserving message and speech state, and scope resource credentials to Manager URLs.
+
+## 0.15.9 - 2026-11-16
+
+- Add an isolated temporary Host acceptance entry with separate control pipes, a read-only Manager lock and sanitized child environments while retaining the formal singleton and data; normalize a machine-specific user path in the workbench design document.
+
+## 0.15.8 - 2026-11-16
+
+- Correct native-listener test fixture identities and ports, cover matching local identities across Gateway owners, and align listener-name documentation.
+
+## 0.15.7 - 2026-11-16
+
+- Advance the voice assistant plugin to 1.1.9: bundle a licensed public Mandarin recognition sample without system speech; keep model and TTS checks independent when recognition fails and mark the voice chain untested.
+
 ## 0.15.6 - 2026-11-16
 
 - `io.rabiroute.endpoint.napcat` advances to `0.1.11`. When an expired short-ID history anchor returns retcode 200, one bounded recent page in the same conversation can recover the exact message. Original ID/target checks and deadlines remain, with no added recovery read after transport failure or cancellation.

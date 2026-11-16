@@ -7,11 +7,27 @@ public static class HostEntry
     [STAThread]
     public static async Task<int> RunAsync(string[] args, string packageRoot, string stateRoot)
     {
-        HostTimeouts.Load(stateRoot);
-        var command = ParseCommand(args);
-        var generationId = ParseOption(args, "--application-generation-id");
-        var jsonOutput = args.Contains("--json", StringComparer.OrdinalIgnoreCase);
+        var acceptanceCount = args.Count(arg => arg.Equals("--acceptance", StringComparison.OrdinalIgnoreCase));
+        var effectiveArgs = args.Where(arg => !arg.Equals("--acceptance", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var command = ParseCommand(effectiveArgs);
+        var generationId = ParseOption(effectiveArgs, "--application-generation-id");
+        var jsonOutput = effectiveArgs.Contains("--json", StringComparer.OrdinalIgnoreCase);
         if (jsonOutput) ConsoleBridge.AttachToParent();
+        (string Mutex, string Pipe)? acceptance = null;
+        if (acceptanceCount > 0)
+        {
+            try
+            {
+                if (acceptanceCount != 1 || command == "invalid") throw new InvalidDataException("Invalid acceptance command.");
+                acceptance = HostAcceptanceScope.Validate(stateRoot, command is null or "activate");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException)
+            {
+                if (jsonOutput) WriteJson(new HostResponse(false, "invalid_acceptance", "The isolated acceptance fixture could not be validated."));
+                return 64;
+            }
+        }
+        HostTimeouts.Load(stateRoot);
         if (command == "self-test") return RunSelfTest();
         JsonElement? sourcePatch = null;
         JsonElement? identityReset = null;
@@ -35,13 +51,14 @@ public static class HostEntry
             }
         }
 
-        using var mutexLease = new NamedMutexLease(HostIdentity.MutexName);
+        using var mutexLease = new NamedMutexLease(acceptance?.Mutex ?? HostIdentity.MutexName);
         if (!mutexLease.OwnsMutex)
         {
             var response = await HostProtocol.SendAsync(
                 command ?? "activate",
                 generationId,
                 CommandTimeout(command ?? "activate"),
+                pipeName: acceptance?.Pipe,
                 sourcePatch: isWebPatch ? null : sourcePatch,
                 webPatch: isWebPatch ? sourcePatch : null,
                 identityReset: identityReset);
@@ -91,7 +108,7 @@ public static class HostEntry
                 packageRoot,
                 stateRoot,
                 log,
-                new HostLifecycleAudit(hostDiagnosticsRoot)).RunAsync(cancellation.Token);
+                new HostLifecycleAudit(hostDiagnosticsRoot), controlPipeName: acceptance?.Pipe, acceptanceMode: acceptance.HasValue).RunAsync(cancellation.Token);
         }
         finally
         {

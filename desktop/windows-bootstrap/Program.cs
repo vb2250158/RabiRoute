@@ -2,9 +2,19 @@ namespace RabiRoute.WindowsBootstrap;
 
 internal static class Program
 {
+    internal static string[] EffectiveArguments(string[] args, string? inheritedAcceptance) =>
+        inheritedAcceptance == "1" && !args.Contains("--acceptance", StringComparer.OrdinalIgnoreCase)
+            ? args.Concat(new[] { "--acceptance" }).ToArray() : args;
+
+    internal static bool ShouldConsiderElevation(string[] args) =>
+        !args.Contains("--self-test", StringComparer.OrdinalIgnoreCase)
+        && !args.Contains("--command", StringComparer.OrdinalIgnoreCase)
+        && !args.Contains("--acceptance", StringComparer.OrdinalIgnoreCase);
+
     [STAThread]
     private static async Task<int> Main(string[] args)
     {
+        args = EffectiveArguments(args, Environment.GetEnvironmentVariable("RABIROUTE_HOST_ACCEPTANCE"));
         await using var startup = await StartupPresentation.TryStartAsync(args);
         try
         {
@@ -29,7 +39,7 @@ internal static class Program
                 elevation.SetAutostart(args[3] == "true");
                 return 0;
             }
-            if (!selfTest && !args.Contains("--command", StringComparer.OrdinalIgnoreCase))
+            if (ShouldConsiderElevation(args))
             {
                 if (args.Length == 0 && (await ReadOnlyHostStatusProbe.QueryAsync()).IsRunning)
                 {

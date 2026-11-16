@@ -158,9 +158,10 @@ test("two Feishu addresses and repeated NapCat instance names publish distinct e
   t.after(async () => { for (const dispose of disposers.reverse()) await dispose(); });
   for (let index = 0; index < 2; index++) {
     const root = path.join(dataDir, String(index)); fs.mkdirSync(root);
+    const gatewayPort = await unusedPort();
     disposers.push(await createFeishuAdapter({ settings, dataDir: () => root, memoryDataDir: () => root, apiOperations: registry }).start() as MessageAdapterDispose);
     disposers.push(await createNapCatAdapter({ dataDir: () => root, apiOperations: registry, refreshProfile: () => {}, createServer: options => new WebSocketServer(options),
-      instances: () => [{ id: "default", name: "Native duplicate name", enabled: true, autoLoginOnRabiStart: false, gatewayPort: 0,
+      instances: () => [{ id: `instance-${index}`, name: "Native duplicate name", enabled: true, autoLoginOnRabiStart: false, gatewayPort,
         httpUrl: "http://127.0.0.1:1", webuiUrl: "http://127.0.0.1:1", accessToken: "" }] }).start() as MessageAdapterDispose);
   }
   const operations = registry.catalogSnapshot().operations;

@@ -8,6 +8,7 @@ import {
 import { installManagerRuntimeDiagnostics } from "./managerRuntimeDiagnostics.js";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
 import { bindLinuxHostParentLifetime } from "./linuxHostParent.js";
+import { permitsAcceptanceOwnership } from "./managerAcceptance.js";
 
 bindLinuxHostParentLifetime();
 
@@ -27,10 +28,7 @@ const localAppDataInstanceRoot = process.platform === "win32" && process.env.LOC
 // override remains for isolated development and tests.
 const defaultInstanceLockRoot = programDataInstanceRoot || localAppDataInstanceRoot || projectRoot;
 const requestedTestOwnershipNamespace = process.env.RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE?.trim();
-const acceptanceOwnershipAllowed = process.env.RABIROUTE_MANAGER_ACCEPTANCE_MODE === "1"
-  && process.env.RABIROUTE_MANAGER_READ_ONLY === "1"
-  && process.env.RABIROUTE_MANAGER_AUTOSTART === "0"
-  && process.env.RABIROUTE_HOSTED !== "1";
+const acceptanceOwnershipAllowed = permitsAcceptanceOwnership(process.env);
 if (requestedTestOwnershipNamespace && !acceptanceOwnershipAllowed) {
   throw new Error("RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE is restricted to isolated read-only acceptance runs.");
 }

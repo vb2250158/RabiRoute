@@ -69,7 +69,7 @@ test('QQ API keeps actionable configured-limit details and masks arbitrary upstr
     const endpoint='/api/agent/qq/messages/123/attachments/0?routeId=review-route&kind=group&target=456';
     await withQqRoute(async url=>String(url).endsWith('/get_msg')?envelope({
       message_id:123,message_type:'group',group_id:'456',user_id:'789',
-      message:[{type:'image',data:{file:'resource-key',url:'https://private.invalid/private-token'}}],
+      message:[{type:'image',data:{file:'resource-key'}}],
     }):envelope({file_size:9}),async base=>{
       const response=await fetch(base+endpoint),body=await response.json();
       assert.equal(response.status,413);

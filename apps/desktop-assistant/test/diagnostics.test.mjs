@@ -43,20 +43,22 @@ test('full test uses actual recognition output and requires playback completion 
 test('failed recognition is visible, never passes the voice chain, and overlapping tests are rejected',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'assistant-checks-'));
   const createSample=createDiagnosticSample;
-  const checks=await createAssistantDiagnostics({directory,createSample,settings:()=>({}),
-    host:{state:async()=>({voice:{phase:'stopped'}}),command:async()=>({bytes:100,audible:false})},
-    conversation:{submit:async()=>assert.fail('model should not run')},recognize:async()=>{throw Error('LOCAL_ASR_FAILED')}});
+  const checks=await createAssistantDiagnostics({directory,createSample,settings:()=>({llmModel:'fixture-model'}),
+    host:{state:async()=>({voice:{phase:'stopped'}}),command:async()=>({bytes:100,audible:false,played:true})},
+    conversation:{submit:async()=>{},drain:async()=>{},activity:()=>({status:'completed'})},recognize:async()=>{throw Error('LOCAL_ASR_FAILED')}});
   try{
     const admissions=await Promise.allSettled([checks.run('all'),checks.run('all')]);
     assert.equal(admissions.filter(item=>item.status==='fulfilled').length,1);
     await checks.drain();
     assert.equal(checks.snapshot().checks.asr.status,'failed');
-    assert.equal(checks.snapshot().checks.voice.status,'failed');
+    assert.equal(checks.snapshot().checks.voice.status,'untested');
+    assert.equal(checks.snapshot().checks.model.status,'passed');
+    assert.equal(checks.snapshot().checks.tts.status,'passed');
     assert.equal(checks.snapshot().checks.microphone.status,'warning');
   }finally{await rm(directory,{recursive:true,force:true})}
 });
 
-test('missing system sample cannot pass ASR or invoke recognition',async()=>{
+test('missing packaged sample cannot pass ASR or invoke recognition',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'assistant-no-sample-'));
   try {
     const checks=await createAssistantDiagnostics({directory,settings:()=>({}),
@@ -67,6 +69,27 @@ test('missing system sample cannot pass ASR or invoke recognition',async()=>{
     assert.equal(checks.snapshot().checks.asr.status,'failed');
     assert.equal(checks.snapshot().checks.asr.detail,'ASR_SAMPLE_SOURCE_UNAVAILABLE');
   } finally {await rm(directory,{recursive:true,force:true})}
+});
+
+test('missing sample leaves the voice chain untested while independently checking model and playback',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'assistant-sample-independent-'));
+  let models=0,playbacks=0;
+  try {
+    const checks=await createAssistantDiagnostics({directory,settings:()=>({llmModel:'fixture-model'}),
+      host:{state:async()=>({voice:{phase:'stopped'}}),command:async request=>{
+        if(request.action==='test-playback'){playbacks++;return {played:true};}
+        return {bytes:100,audible:true};
+      }},
+      conversation:{submit:async()=>{models++;},drain:async()=>{},activity:()=>({status:'completed'})},
+      createSample:async()=>{throw Error('ASR_SAMPLE_SOURCE_UNAVAILABLE')},
+      recognize:async()=>assert.fail('no sample was supplied')});
+    await checks.run('all');await checks.drain();
+    const {checks:results,job}=checks.snapshot();
+    assert.equal(results.asr.detail,'ASR_SAMPLE_SOURCE_UNAVAILABLE');
+    assert.equal(results.model.status,'passed');assert.equal(results.tts.status,'passed');
+    assert.equal(results.microphone.status,'passed');assert.equal(results.voice.status,'untested');
+    assert.equal(models,1);assert.equal(playbacks,1);assert.equal(job.completed,5);
+  }finally{await rm(directory,{recursive:true,force:true})}
 });
 
 test('prior bundled-sample results become stale without invalidating unchanged model checks',async()=>{

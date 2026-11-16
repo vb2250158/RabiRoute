@@ -347,6 +347,42 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
             ["RABIROUTE_STATE_ROOT"] = stateRoot
         };
 
+    internal static IReadOnlyDictionary<string, string?> BuildAcceptanceTrayEnvironment(
+        string packageRoot, string stateRoot, string generationId)
+    {
+        var environment = new Dictionary<string, string?>(BuildTrayEnvironment(packageRoot, stateRoot, generationId));
+        environment["RABIROUTE_HOST_ACCEPTANCE"] = "1";
+        environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.GetFullPath(stateRoot));
+        return environment;
+    }
+
+    internal static IReadOnlyDictionary<string, string?> BuildManagerEnvironment(
+        string packageRoot, string stateRoot, string generationId, string controlToken, string managerPortPolicy,
+        bool acceptanceMode)
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            ["GATEWAY_MANAGER_PORT"] = managerPortPolicy,
+            ["RABIROUTE_HOSTED"] = "1",
+            ["RABIROUTE_APPLICATION_GENERATION_ID"] = generationId,
+            ["RABIROUTE_HOST_CONTROL_TOKEN"] = controlToken,
+            ["RABIROUTE_MANAGER_INSTANCE_LOCK_DIR"] = acceptanceMode ? Path.Combine(stateRoot, "acceptance-lock") : null,
+            ["RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE"] = acceptanceMode ? HostIdentity.AcceptanceNames(stateRoot).Pipe : null,
+            ["RABIROUTE_MANAGER_ACCEPTANCE_MODE"] = acceptanceMode ? "1" : null,
+            ["RABIROUTE_HOST_ACCEPTANCE"] = acceptanceMode ? "1" : null,
+            ["RABIROUTE_PACKAGE_ROOT"] = packageRoot,
+            ["RABIROUTE_STATE_ROOT"] = stateRoot,
+            ["RABIROUTE_HOST_EXECUTABLE"] = Environment.ProcessPath ?? Path.Combine(stateRoot, "RabiRouteHost.exe")
+        };
+        if (acceptanceMode)
+        {
+            environment["RABIROUTE_MANAGER_READ_ONLY"] = "1";
+            environment["RABIROUTE_MANAGER_AUTOSTART"] = "0";
+            environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.GetFullPath(stateRoot));
+        }
+        return environment;
+    }
+
     internal static async Task<ApplicationGeneration> StartAsync(
         string packageRoot,
         string stateRoot,
@@ -354,7 +390,8 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         HostLog log,
         Action<string> healthChanged,
         Action<string> failureObserved,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool acceptanceMode = false)
     {
         if (string.IsNullOrWhiteSpace(generationId)) throw new ArgumentException("Application generation id is required.", nameof(generationId));
         var controlToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
@@ -374,19 +411,8 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
                 node,
                 new[] { managerEntry },
                 stateRoot,
-                new Dictionary<string, string?>
-                {
-                    ["GATEWAY_MANAGER_PORT"] = managerPortPolicy,
-                     ["RABIROUTE_HOSTED"] = "1",
-                     ["RABIROUTE_APPLICATION_GENERATION_ID"] = generationId,
-                     ["RABIROUTE_HOST_CONTROL_TOKEN"] = controlToken,
-                     ["RABIROUTE_MANAGER_INSTANCE_LOCK_DIR"] = null,
-                     ["RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE"] = null,
-                     ["RABIROUTE_MANAGER_ACCEPTANCE_MODE"] = null,
-                     ["RABIROUTE_PACKAGE_ROOT"] = packageRoot,
-                     ["RABIROUTE_STATE_ROOT"] = stateRoot,
-                     ["RABIROUTE_HOST_EXECUTABLE"] = Environment.ProcessPath ?? Path.Combine(stateRoot, "RabiRouteHost.exe")
-                 });
+                BuildManagerEnvironment(packageRoot, stateRoot, generationId, controlToken, managerPortPolicy, acceptanceMode),
+                isolatedEnvironment: acceptanceMode);
             log.Write($"generation={generationId} manager pid={manager.ProcessId} started suspended, assigned to Job, then resumed");
 
             var readiness = new TaskCompletionSource<ManagerReady>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -447,7 +473,10 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
                     Environment.ProcessPath ?? Path.Combine(stateRoot, "RabiRouteHost.exe"),
                     trayLifecycle.PipeName),
                 stateRoot,
-                BuildTrayEnvironment(packageRoot, stateRoot, generationId));
+                acceptanceMode
+                    ? BuildAcceptanceTrayEnvironment(packageRoot, stateRoot, generationId)
+                    : BuildTrayEnvironment(packageRoot, stateRoot, generationId),
+                isolatedEnvironment: acceptanceMode);
             _ = PumpLinesAsync(tray.StandardOutput, "tray stdout", generationId, log);
             _ = PumpLinesAsync(tray.StandardError, "tray stderr", generationId, log);
             var trayExit = tray.WaitForExitAsync(cancellationToken);
@@ -751,6 +780,7 @@ internal sealed class HostRuntime
     private readonly string _stateRoot;
     private readonly HostLog _log;
     private readonly IHostLifecycleAudit _audit;
+    private readonly string? _controlPipeName;
     private readonly Channel<QueuedCommand> _commands;
     private readonly Func<string, Action<string>, Action<string>, CancellationToken, Task<IApplicationGeneration>> _startGeneration;
     private readonly ConcurrentDictionary<string, QueuedCommand> _acceptedMutations = new(StringComparer.Ordinal);
@@ -774,13 +804,15 @@ internal sealed class HostRuntime
 
     internal HostRuntime(string packageRoot, string stateRoot, HostLog log, IHostLifecycleAudit? audit = null,
         Channel<QueuedCommand>? commands = null,
-        Func<string, Action<string>, Action<string>, CancellationToken, Task<IApplicationGeneration>>? startGeneration = null)
+        Func<string, Action<string>, Action<string>, CancellationToken, Task<IApplicationGeneration>>? startGeneration = null,
+        string? controlPipeName = null, bool acceptanceMode = false)
     {
         _commands = commands ?? Channel.CreateUnbounded<QueuedCommand>();
         _startGeneration = startGeneration ?? (async (id, health, failed, token) =>
-            await ApplicationGeneration.StartAsync(packageRoot, stateRoot, id, log, health, failed, token));
+            await ApplicationGeneration.StartAsync(packageRoot, stateRoot, id, log, health, failed, token, acceptanceMode));
         _packageRoot = packageRoot;
         _stateRoot = stateRoot;
+        _controlPipeName = controlPipeName;
         _endpointCache = new ManagerEndpointCache(Path.Combine(stateRoot, "manager-endpoint.json"));
         _log = log;
         _audit = audit ?? new HostLifecycleAudit();
@@ -1703,7 +1735,7 @@ internal sealed class HostRuntime
         _pendingIdentityReset = null;
     }
 
-    private async Task RunControlServerAsync(
+    internal async Task RunControlServerAsync(
         CancellationToken acceptCancellationToken,
         CancellationToken handlerCancellationToken)
     {
@@ -1718,7 +1750,7 @@ internal sealed class HostRuntime
                 System.IO.Pipes.NamedPipeServerStream? server = null;
                 try
                 {
-                    server = HostProtocol.CreateServer();
+                    server = HostProtocol.CreateServer(_controlPipeName);
                     await server.WaitForConnectionAsync(acceptCancellationToken);
                 }
                 catch (OperationCanceledException) when (acceptCancellationToken.IsCancellationRequested)

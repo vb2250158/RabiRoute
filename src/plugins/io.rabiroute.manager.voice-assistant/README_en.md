@@ -2,7 +2,7 @@
 
 For a full repository build, run `npm ci` at the root, then `npm run build`. This repository is not an npm workspace: root dev dependencies and the root lockfile supply React and React DOM for Web compilation, alongside Vue/Vite, at the versions declared by this plugin. Its own dependencies still describe the standalone package. Existing local `node_modules` do not replace clean root-lockfile validation.
 
-Recognition diagnostics synthesize fixed public test text in memory with a Windows system voice. No recordings or persona reference audio are bundled. An installed Chinese or English system voice is required; unavailable synthesis fails explicitly, and recognition can instead be checked by starting microphone input in the conversation. Generated samples still use the selected ASR service.
+Recognition diagnostics use the packaged Microsoft MIT-licensed Mandarin question “今天天气怎么样？” (What is the weather like today?). No system voice, PowerShell, Azure SDK or runtime download is required. The [diagnostic resources](../../../apps/desktop-assistant/assets/diagnostics/README_en.md) record the source, fixed hash and complete license, also shipped in the plugin’s `diagnostic-assets`. The selected ASR must support Mandarin. A sample failure still permits independent model and playback checks and leaves the voice chain untested. Normal microphone recognition does not depend on this sample.
 
 The unique Rabi PC plugin adds **语音助手** at `/voice-assistant`. It owns its model session and does not require a Codex, DSH or persona Route. Its model/voice loops and settings UI reuse the same shared runtime as the standalone Web assistant. WorkBuddy uses the existing official domestic login; no account tokens are copied.
 

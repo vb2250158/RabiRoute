@@ -183,3 +183,27 @@ test("speech ingress serializes host-record deduplication across processes", asy
   assert.ok(elapsedMs >= 200, `Expected append to wait for the host-record lock, waited ${elapsedMs}ms.`);
   assert.equal(store.list().filter(item => item.id === "one-record").length, 1);
 });
+
+test("batched receipt reads preserve latest route results and yield while scanning", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-speech-batch-fixture-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new SpeechIngressStore(root);
+  fs.mkdirSync(store.deliveryRoot, { recursive: true });
+  const row = (recordId: string, routeId: string, status: "recorded" | "delivered", completedAt: string) =>
+    JSON.stringify({ schemaVersion: 1, recordId, routeId, status, messageAdapterType: "speech", completedAt });
+  const old = [row("a", "route-b", "recorded", "2026-01-01T00:00:00Z"), row("b", "route-a", "recorded", "2026-01-01T00:00:00Z")];
+  const newer = [row("a", "route-b", "recorded", "2026-01-02T00:00:00Z"), "not-json",
+    ...Array.from({ length: 1200 }, (_, i) => row(`irrelevant-${i}`, "route-a", "recorded", "2026-01-02T00:00:00Z")),
+    row("a", "route-b", "delivered", "2026-01-02T00:00:01Z"), row("a", "route-a", "recorded", "2026-01-02T00:00:02Z")];
+  fs.writeFileSync(path.join(store.deliveryRoot, "2026-01-01.jsonl"), old.join("\n") + "\n");
+  fs.writeFileSync(path.join(store.deliveryRoot, "2026-01-02.jsonl"), newer.join("\n") + "\n");
+  let yielded = false; setImmediate(() => { yielded = true; });
+  const results = await store.listDeliveryReceiptsBatch(["a", "b", "missing"]);
+  assert.equal(yielded, true);
+  assert.deepEqual(results.get("a"), store.listDeliveryReceipts("a"));
+  assert.deepEqual(results.get("b"), store.listDeliveryReceipts("b"));
+  assert.deepEqual(results.get("missing"), []);
+  assert.deepEqual(results.get("a")?.map(receipt => [receipt.routeId, receipt.status]), [["route-a", "recorded"], ["route-b", "delivered"]]);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(store.listDeliveryReceiptsBatch(["a"], controller.signal), { name: "AbortError" });
+});

@@ -4,9 +4,14 @@ export function createAssistantPanel(React: typeof import('react'), components: 
 }): import('react').ComponentType<{ adapter: {
   read(): Promise<any>;
   command(request: Record<string, unknown>): Promise<any>;
-  subscribeConversation(sessionId: string, onMessages: (messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; notice?: boolean;source?:string;hasDetails?:boolean }>) => void,
+  /** Resolve host-owned images with the host's existing prefix and authentication. */
+  resolveAvatarUrl?(url:string):string;
+  subscribeConversation(sessionId: string, onMessages: (messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; notice?: boolean;source?:string;hasDetails?:boolean;createdAt?:string }>) => void,
     onError: (error: Error) => void): () => void;
 } }>;
+
+export function assistantParticipants(state:any):Record<'assistant'|'user'|'system',{name:string;avatarUrl:string}>;
+export function messageTimeLabel(message:{createdAt?:string},previous?:{createdAt?:string}):string;
 
 export function recognitionRows(details:any):Array<{key:string;label:string;value:string;returned:boolean}>;
 export function speechParameterRows(parameters?:Record<string,unknown>,catalog?:any):Array<{key:string;label:string;value:string}>;

@@ -9,6 +9,15 @@ using System.Text.Json;
 using System.Threading.Channels;
 
 if (args.Length > 0 && args[0].StartsWith("--tree-")) return await ProcessTreeTests.FixtureAsync(args);
+if (args.Length == 2 && args[0] == "--acceptance-env-probe")
+{
+    Console.Write(JsonSerializer.Serialize(new {
+        secretAbsent = Environment.GetEnvironmentVariable("RABI_FIXTURE_SECRET") is null,
+        routeAbsent = Environment.GetEnvironmentVariable("ROUTE_DIR") is null,
+        profileIsFixture = Environment.GetEnvironmentVariable("LOCALAPPDATA") == args[1]
+    }));
+    return 0;
+}
 
 var failures = new List<string>();
 var assertionCount = 0;
@@ -131,6 +140,132 @@ Check(
 Check(
     HostIdentity.UserKey("S-1-5-21-test") != HostIdentity.UserKey("S-1-5-21-other"),
     "Host identity namespace does not collapse different SID sources");
+
+var acceptanceRootA = Path.Combine(Path.GetTempPath(), "rabi-acceptance-fixture-a");
+var acceptanceRootB = Path.Combine(Path.GetTempPath(), "rabi-acceptance-fixture-b");
+var acceptanceA = HostIdentity.AcceptanceNames(acceptanceRootA);
+var acceptanceB = HostIdentity.AcceptanceNames(acceptanceRootB);
+Check(acceptanceA.Pipe != HostIdentity.PipeName && acceptanceA.Mutex != HostIdentity.MutexName,
+    "acceptance Host does not address the formal Host control or mutex");
+Check(acceptanceA.Pipe != acceptanceB.Pipe && acceptanceA.Mutex != acceptanceB.Mutex,
+    "different acceptance roots have independent Host identities");
+Check(HostIdentity.AcceptanceNames(acceptanceRootA.ToUpperInvariant()) == acceptanceA,
+    "Windows path case does not create duplicate acceptance owners");
+Check(HostIdentity.AcceptanceNames(acceptanceRootA + Path.DirectorySeparatorChar) == acceptanceA,
+    "trailing path separators do not create duplicate acceptance owners");
+try { HostIdentity.AcceptanceNames("relative-fixture"); Check(false, "relative acceptance root must be rejected"); }
+catch (ArgumentException) { Check(true, "relative acceptance root rejected"); }
+
+var scopeFixture = Path.Combine(Path.GetTempPath(), $"rabi-acceptance-scope-{Guid.NewGuid():N}");
+Directory.CreateDirectory(scopeFixture);
+try
+{
+    try { HostAcceptanceScope.Validate(scopeFixture, true); Check(false, "missing acceptance marker must fail"); }
+    catch (InvalidDataException) { Check(true, "missing acceptance marker rejected"); }
+    Check(await HostEntry.RunAsync(new[] { "--acceptance", "--command", "status" }, scopeFixture, scopeFixture) == 64,
+        "invalid acceptance status never falls back to the formal Host pipe");
+    File.WriteAllText(Path.Combine(scopeFixture, HostAcceptanceScope.MarkerName), HostAcceptanceScope.MarkerContent);
+    Check(await HostEntry.RunAsync(new[] { "--acceptance", "--command", "status" }, scopeFixture, scopeFixture) == 0,
+        "valid acceptance status reaches only its stopped fixture Host");
+    var scopeNames = HostAcceptanceScope.Validate(scopeFixture, true);
+    Check(scopeNames == HostIdentity.AcceptanceNames(scopeFixture), "fresh fixture maps to its acceptance-only identity");
+    File.WriteAllText(Path.Combine(scopeFixture, ".env"), "fixture");
+    try { HostAcceptanceScope.Validate(scopeFixture, true); Check(false, "credential-bearing acceptance startup must fail"); }
+    catch (InvalidDataException) { Check(true, "acceptance startup refuses an existing env file"); }
+    Check(HostAcceptanceScope.Validate(scopeFixture, false) == scopeNames, "status remains available after fixture state appears");
+    var priorTemp = Environment.GetEnvironmentVariable("TEMP");
+    var priorParent = Environment.GetEnvironmentVariable("RABIROUTE_ACCEPTANCE_TEMP_PARENT");
+    try
+    {
+        Environment.SetEnvironmentVariable("TEMP", scopeFixture);
+        Environment.SetEnvironmentVariable("RABIROUTE_ACCEPTANCE_TEMP_PARENT", Path.GetDirectoryName(scopeFixture));
+        Check(HostAcceptanceScope.Validate(scopeFixture, false) == scopeNames,
+            "acceptance children with a fixture-local TEMP still address their own Host");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("TEMP", priorTemp);
+        Environment.SetEnvironmentVariable("RABIROUTE_ACCEPTANCE_TEMP_PARENT", priorParent);
+    }
+}
+finally { Directory.Delete(scopeFixture, recursive: true); }
+
+var isolatedControlRoot = Path.Combine(Path.GetTempPath(), $"rabi-acceptance-control-{Guid.NewGuid():N}");
+var isolatedControlA = Path.Combine(isolatedControlRoot, "a");
+var isolatedControlB = Path.Combine(isolatedControlRoot, "b");
+Directory.CreateDirectory(isolatedControlA);
+Directory.CreateDirectory(isolatedControlB);
+try
+{
+    await using var firstLog = new HostLog(Path.Combine(isolatedControlA, "logs"));
+    await using var secondLog = new HostLog(Path.Combine(isolatedControlB, "logs"));
+    using var stopControl = new CancellationTokenSource();
+    var firstNames = HostIdentity.AcceptanceNames(isolatedControlA);
+    var secondNames = HostIdentity.AcceptanceNames(isolatedControlB);
+    var firstHost = new HostRuntime(isolatedControlA, isolatedControlA, firstLog, controlPipeName: firstNames.Pipe);
+    var secondHost = new HostRuntime(isolatedControlB, isolatedControlB, secondLog, controlPipeName: secondNames.Pipe);
+    var firstServer = firstHost.RunControlServerAsync(stopControl.Token, stopControl.Token);
+    var secondServer = secondHost.RunControlServerAsync(stopControl.Token, stopControl.Token);
+    try
+    {
+        var firstStatus = await HostProtocol.SendAsync("status", null, TimeSpan.FromSeconds(5), firstNames.Pipe);
+        var secondStatus = await HostProtocol.SendAsync("status", null, TimeSpan.FromSeconds(5), secondNames.Pipe);
+        Check(firstStatus?.Ok == true && secondStatus?.Ok == true,
+            "two independent acceptance Host control servers answer through their own pipes");
+    }
+    finally
+    {
+        stopControl.Cancel();
+        try { await Task.WhenAll(firstServer, secondServer); } catch (OperationCanceledException) { }
+    }
+}
+finally
+{
+    Directory.Delete(isolatedControlRoot, recursive: true);
+}
+
+var normalManagerEnvironment = ApplicationGeneration.BuildManagerEnvironment("package", acceptanceRootA, "fixture-generation", "fixture-token", "auto", false);
+var isolatedManagerEnvironment = ApplicationGeneration.BuildManagerEnvironment("package", acceptanceRootA, "fixture-generation", "fixture-token", "auto", true);
+Check(!normalManagerEnvironment.ContainsKey("RABIROUTE_MANAGER_READ_ONLY") && !normalManagerEnvironment.ContainsKey("RABIROUTE_MANAGER_AUTOSTART"),
+    "normal Manager retains its inherited read-only and autostart configuration");
+Check(isolatedManagerEnvironment["RABIROUTE_MANAGER_READ_ONLY"] == "1" && isolatedManagerEnvironment["RABIROUTE_MANAGER_AUTOSTART"] == "0",
+    "acceptance Manager remains read-only with route autostart disabled");
+Check(isolatedManagerEnvironment["RABIROUTE_HOST_ACCEPTANCE"] == "1"
+    && isolatedManagerEnvironment["RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE"] == acceptanceA.Pipe
+    && isolatedManagerEnvironment["RABIROUTE_MANAGER_INSTANCE_LOCK_DIR"] == Path.Combine(acceptanceRootA, "acceptance-lock"),
+    "acceptance Manager gets a fixture-local lock and the same isolated identity");
+var isolatedTrayEnvironment = ApplicationGeneration.BuildAcceptanceTrayEnvironment("package", acceptanceRootA, "fixture-generation");
+Check(isolatedTrayEnvironment["RABIROUTE_HOST_ACCEPTANCE"] == "1" && isolatedTrayEnvironment["RABIROUTE_HOST_CONTROL_TOKEN"] is null
+    && isolatedTrayEnvironment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] == Path.GetDirectoryName(acceptanceRootA),
+    "acceptance Tray routes Host commands to its fixture without inheriting the control token");
+
+var envFixtureRoot = Path.Combine(Path.GetTempPath(), $"rabi-acceptance-env-{Guid.NewGuid():N}");
+Directory.CreateDirectory(envFixtureRoot);
+var previousFixtureSecret = Environment.GetEnvironmentVariable("RABI_FIXTURE_SECRET");
+var previousRouteDir = Environment.GetEnvironmentVariable("ROUTE_DIR");
+try
+{
+    Environment.SetEnvironmentVariable("RABI_FIXTURE_SECRET", "synthetic-secret");
+    Environment.SetEnvironmentVariable("ROUTE_DIR", "synthetic-route");
+    using var envJob = new WindowsJob($"acceptance-env-{Guid.NewGuid():N}");
+    using var child = NativeChildProcess.StartSuspendedInJob(envJob, Environment.ProcessPath!,
+        new[] { "--acceptance-env-probe", envFixtureRoot }, envFixtureRoot,
+        new Dictionary<string, string?>(), isolatedEnvironment: true);
+    var childOutput = child.StandardOutput.ReadToEndAsync();
+    Check(await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)) == 0,
+        "isolated acceptance child exits normally");
+    using var result = JsonDocument.Parse(await childOutput);
+    Check(result.RootElement.GetProperty("secretAbsent").GetBoolean()
+        && result.RootElement.GetProperty("routeAbsent").GetBoolean()
+        && result.RootElement.GetProperty("profileIsFixture").GetBoolean(),
+        "real acceptance child receives neither inherited fixture secret nor route and uses its isolated profile");
+}
+finally
+{
+    Environment.SetEnvironmentVariable("RABI_FIXTURE_SECRET", previousFixtureSecret);
+    Environment.SetEnvironmentVariable("ROUTE_DIR", previousRouteDir);
+    Directory.Delete(envFixtureRoot, recursive: true);
+}
 
 var stableNodeRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-stable-node-{Guid.NewGuid():N}");
 var stableNodeState = Path.Combine(stableNodeRoot, "install");

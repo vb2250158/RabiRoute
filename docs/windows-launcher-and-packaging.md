@@ -307,3 +307,9 @@ Desktop 的每次启动仍保存自己的崩溃证据包；Manager、插件与 R
 6. `--command status --json` 与 Manager `/meta` 的 generation、instance 和 URL 一致；
 7. 退役生命周期入口、固定端口默认值和 Manager HTTP 应用启停路由不在正式调用链与发布包中。
 8. Manager 与其 Node.js 子进程的可执行文件路径固定为 `<install-root>/runtime/RabiRoute.Runtime.exe`，升级后不会回到 `versions/<releaseId>/node.exe`。
+
+## 隔离 Host 验收
+
+开发验收可在本机临时目录内准备独立发行目录：根目录只包含验证过的 `RabiRouteHost.exe`、`current.json` 和 `versions/`，不复制 `.env`、`data/`、路由、角色或凭据。在根目录创建 `.rabiroute-acceptance`，内容必须为 `RabiRoute isolated acceptance fixture v1`（无换行）。启动器进程的 `TEMP` / `TMP` 必须指向该目录的本机父级，并使用不包含业务凭据的环境。
+
+用该目录的 Host 执行 `--acceptance` 启动；查询和受代号约束的退出命令同样附加 `--acceptance`。验收入口使用独立单例与控制管道、只读 Manager、独立锁和不继承业务环境的子进程，关闭路由自启动；它不注册或修改正式的提权任务。普通启动与状态查询保持原有行为。验收应核对独立 generation、Manager 与托盘身份、页面资源及正常退出，并另行确认正式 Host 的身份和健康未变。验收目录不是正式安装，验收成功不代表已完成版本切换。
