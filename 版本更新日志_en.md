@@ -8,6 +8,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.4 - 2026-11-16
 
+- Updated io.rabiroute.manager.persona to 0.1.16. Initial history, pagination and automatic updates use saved names and summaries, with live task metadata on manual refresh. The first event connection reuses the initial read to reduce duplicate requests.
+
+
 - Clean temporary Markdown browser profiles in one pass. Locked files retain their original error, avoiding recursive retry amplification that can starve Manager page and asset reads. Existing temporary-directory ownership checks remain enforced.
 
 ## 0.15.3 - 2026-11-15

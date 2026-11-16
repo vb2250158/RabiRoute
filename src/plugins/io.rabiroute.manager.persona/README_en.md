@@ -25,3 +25,9 @@ Choose a default or plugin template while adding automation, then edit its sched
 Defaults cover memory consolidation and Skill maintenance, work review and memory capture, plan progress, message summaries, runtime status and blank delivery. The memory task reads related memories and existing Skills, updates an existing method or creates a reusable Skill, then saves, reads back and summarizes actual results.
 
 `GET /api/automation/templates?limit=20&query=...&cursor=...` returns paged summaries. `GET /api/automation/templates/:templateId` reads one complete editable action. Plugins declare templates in the existing operation's `discovery.automationTemplates`. The catalog caches the active snapshot and reports malformed entries locally. Delivery targets use the existing Agent target format. A failed template application preserves the previous rule draft.
+
+## Message history performance
+
+Opening history, switching tasks and automatic updates read saved message summaries, task names and original peer relationships directly. Pagination retains the native index and cursors. Manual refresh also queries task owners for current names and links. The first event connection reuses the initial page read, while reconnects still catch up.
+
+`chat-history` and `chat-history/tasks` accept `metadata=recorded`, retaining the original connection and persona-directory checks while using only ledger and saved delivery metadata. Omitting this parameter retains live task-name lookup.

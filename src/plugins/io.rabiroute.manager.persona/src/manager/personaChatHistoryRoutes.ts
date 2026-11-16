@@ -33,20 +33,20 @@ export function createPersonaChatHistoryOwner(context: PersonaChatHistoryContext
           const qqRoutes = context.historyQqRoutes?.(roleId) ?? [];
           assertCurrent(); return { adapters, qqRoutes, chatCategories: [], warnings: [] as string[] };
         },
-        async read(cursor: number | undefined, limit: number, options: Parameters<typeof readPersonaChatHistory>[3] = {}) {
+        async read(cursor: number | undefined, limit: number, options: Parameters<typeof readPersonaChatHistory>[3] & { recordedMetadata?: boolean } = {}) {
           assertCurrent();
           const data = await (context.read ?? readPersonaChatHistory)(roleDir, cursor, limit, options);
           assertCurrent();
           data.entries = await enrichPersonaChatTasks(data.entries.map(row=>({...row,
             sourceTaskKey:personaHistoryTaskKey(row.sessionId,row.sourceTaskOwner),
-            ...(row.targetSessionId?{targetTaskKey:personaHistoryTaskKey(row.targetSessionId,row.targetTaskOwner)}:{})})), context);
+            ...(row.targetSessionId?{targetTaskKey:personaHistoryTaskKey(row.targetSessionId,row.targetTaskOwner)}:{})})), context, options.recordedMetadata);
           assertCurrent(); return data;
         },
-        async tasks(options: Parameters<typeof readPersonaHistoryTasks>[1]) {
+        async tasks(options: Parameters<typeof readPersonaHistoryTasks>[1] & { recordedMetadata?: boolean }) {
           assertCurrent();
           const data=await readPersonaHistoryTasks(roleDir,options);
           assertCurrent();
-          const rows=await enrichPersonaChatTasks(data.items.map(task=>({id:task.key,sessionId:task.sessionId,sessionTitle:task.title,sourceTaskOwner:task.owner,receivedAt:task.receivedAt,text:task.preview})),context);
+          const rows=await enrichPersonaChatTasks(data.items.map(task=>({id:task.key,sessionId:task.sessionId,sessionTitle:task.title,sourceTaskOwner:task.owner,receivedAt:task.receivedAt,text:task.preview,taskUrl:task.taskUrl})),context,options.recordedMetadata);
           data.items=data.items.map((task,i)=>({...task,title:rows[i]!.sessionTitle||task.title,taskUrl:rows[i]!.taskUrl}));
           assertCurrent();return data;
         },

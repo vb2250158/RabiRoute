@@ -101,3 +101,18 @@ test("delivery lookup preserves available endpoint records if legacy metadata fa
   assert.equal(result.get("delivery")?.target.threadId, "target");
   assert.equal(result.has("missing"), false);
 });
+
+
+test("recorded metadata renders saved messages without contacting task owners", async () => {
+  let lookups = 0;
+  const result = await enrichPersonaChatTasks([row({ targetTaskUrl: "codex://threads/target" })], {
+    readDeliveryParties: () => new Map([["delivery", { source: party("source"), target: party("target", true) }]]),
+    readTasks: () => { lookups++; return new Promise(() => {}); },
+    readRemoteTask: () => { lookups++; return new Promise(() => {}); }
+  }, true);
+  assert.equal(lookups, 0);
+  assert.equal(result[0].sessionTitle, "Recorded source");
+  assert.equal(result[0].targetSessionTitle, "Recorded target");
+  assert.equal(result[0].targetTaskUrl, undefined);
+  assert.equal(result[0].text, "Saved message");
+});

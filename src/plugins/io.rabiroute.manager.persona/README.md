@@ -25,3 +25,9 @@
 默认包括记忆整理与 Skill 维护、阶段复盘与记忆记录、计划进展核对、消息摘要、运行状态巡检和空白消息投递。记忆整理正文要求先按主题读取记忆和已有 Skill，更新已有方法或创建新 Skill，再保存、回读并汇总结果。
 
 `GET /api/automation/templates?limit=20&query=...&cursor=...` 返回摘要分页，`GET /api/automation/templates/:templateId` 按需返回完整投递 action。插件在原 operation 的 `discovery.automationTemplates` 声明模板，目录按活动快照缓存和刷新，坏条目单独提示。模板投递目标采用原 Agent 目标格式，应用失败保留原规则草稿。
+
+## 消息记录性能
+
+打开消息记录、切换任务及自动更新时，页面直接读取保存的正文摘要、任务名称与原始往来关系。分页沿原索引和游标读取；点击刷新时再查询任务拥有者的最新名称与链接。首次事件连接复用页面已发出的读取，重连仍补读更新。
+
+`chat-history` 与 `chat-history/tasks` 支持 `metadata=recorded`，沿原连接与角色目录核验，只使用账本及已保存投递元数据。省略参数时保留实时名称查询。

@@ -26,10 +26,10 @@ async function read(query:URLSearchParams,signal:AbortSignal){
   const result=await response.json();if(!response.ok||result.code!==0)throw new Error(result.message||t('消息记录读取失败'));
   return result.data as PersonaHistoryTaskPage & {partial?:boolean};
 }
-async function load(more=false){
+async function load(more=false, refreshMetadata=false){
   request?.abort();const controller=new AbortController();request=controller;loading.value=true;
   try{
-    const query=new URLSearchParams({category:props.category,limit:'50'});if(search.value.trim())query.set('query',search.value.trim());if(more&&cursor.value)query.set('cursor',cursor.value);
+    const query=new URLSearchParams({category:props.category,limit:'50'});if(!refreshMetadata)query.set('metadata','recorded');if(search.value.trim())query.set('query',search.value.trim());if(more&&cursor.value)query.set('cursor',cursor.value);
     const data=await read(query,controller.signal);if(controller.signal.aborted)return;
     const sameQuery=catalogQuery===search.value.trim();
     const pageItems=more?mergeHistoryTaskPage(catalogPages,data.items,true):data.items.slice();
@@ -44,11 +44,11 @@ async function load(more=false){
   }catch(cause){if(!controller.signal.aborted)error.value=userFacingError(cause);}
   finally{if(request===controller){request=undefined;loading.value=false;}}
 }
-async function loadPeers(more=false){
+async function loadPeers(more=false, refreshMetadata=false){
   peerRequest?.abort();if(!selectedKey.value)return;const controller=new AbortController();peerRequest=controller;peerLoading.value=true;
   const key=selectedKey.value;
   try{
-    const query=new URLSearchParams({category:props.category,peerOf:key,limit:'50'});if(more&&peerCursor.value)query.set('cursor',peerCursor.value);
+    const query=new URLSearchParams({category:props.category,peerOf:key,limit:'50'});if(!refreshMetadata)query.set('metadata','recorded');if(more&&peerCursor.value)query.set('cursor',peerCursor.value);
     const data=await read(query,controller.signal);if(controller.signal.aborted||key!==selectedKey.value)return;
     peers.value=[...new Map((more?[...peers.value,...data.items]:data.items).map(task=>[task.key,task])).values()];peerCursor.value=data.nextCursor;peerError.value='';peerPartial.value=data.partial===true;
   }catch(cause){if(!controller.signal.aborted)peerError.value=userFacingError(cause);}
@@ -66,7 +66,7 @@ onBeforeUnmount(()=>{clearTimeout(timer);request?.abort();peerRequest?.abort();}
 </script>
 <template>
   <HistoryConversationLayout :items="items.filter(item=>!search||item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()))" :selected="selectedKey" v-model:search="search" :loading="loading" :has-details="category==='agent'||Boolean(selected)" :details-title="category==='agent'?'往来任务':'任务详情'" @select="choose">
-    <template #list-actions><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load();loadPeers()" /></template>
+    <template #list-actions><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load(false,true);loadPeers(false,true)" /></template>
     <template #list-notice>
       <QqReadNotice v-if="error" summary="会话暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load()" />
       <QqReadNotice v-if="catalogPartial" :summary="cursor&&!items.length?'当前没有可显示的消息，请继续加载更早的回复。':'会话暂时无法更新，已有记录仍可查看。'" />

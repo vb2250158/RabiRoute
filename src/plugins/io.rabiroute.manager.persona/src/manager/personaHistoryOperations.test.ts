@@ -7,7 +7,7 @@ import http from 'node:http';
 import { createPersonaHistoryOperations, type PersonaHistoryContext } from './personaHistoryOperations.js';
 import { createPersonaChatHistoryOwner } from './personaChatHistoryRoutes.js';
 import { ManagerPluginRouteRegistry } from '../../../../manager/managerPluginRouteRegistry.js';
-import { appendPersonaAiuiExchange, readPersonaChatHistory } from '../../../../personaChatHistory.js';
+import { appendPersonaAiuiExchange, readPersonaChatHistory, appendPersonaChatReply } from '../../../../personaChatHistory.js';
 import { queryPersonaVoiceTranscriptViews } from '../personaVoiceTranscriptView.js';
 import { recordConversationSituation } from '../../../../conversationSituationStore.js';
 import { conversationSituationForIdentity } from '../../../../routing/conversationSituation.js';
@@ -84,7 +84,7 @@ test('late history results cannot disclose a revoked connection or a replaced pe
   const messageWait=gate(),messageEntered=gate();
   // A fresh definition captures the same original callback; use the mutable read function for the existing chat owner.
   f.context.read=async()=>{messageEntered.release();await messageWait.promise;return {entries:[],nextCursor:null};};
-  const revoked=f.call('chat-history');t.after(messageWait.release);await Promise.race([messageEntered.promise,revoked.then(result=>{throw new Error('Chat did not enter its read owner: '+JSON.stringify(result));})]);f.authority.setNodeEnabled(f.credential.nodeId,false,true);messageWait.release();
+  const revoked=f.call('chat-history');t.after(messageWait.release);await Promise.race([messageEntered.promise,revoked.then(result=>{throw new Error('Chat did not enter its read owner: '+JSON.stringify(result));})]);f.authority.revokeNode(f.credential.nodeId);messageWait.release();
   assert.equal((await revoked).status,403);
 });
 
@@ -96,4 +96,34 @@ test('queued AIUI append rechecks the original directory inside the native write
   await entered.promise;f.root.current=path.join(f.directory,'replacement');wait.release();
   await assert.rejects(pending,(error:any)=>error.statusCode===409);
   assert.equal(fs.existsSync(path.join(f.roleDir,'chat-history','final-replies.jsonl')),false);
+});
+
+
+test('recorded metadata fast path covers messages, task directory, peers and both aliases', async t => {
+  const f = await fixture(t);
+  await appendPersonaChatReply(f.roleDir, {
+    kind: 'agent_delivery', deliveryId: 'saved-delivery', sessionId: 'source', sessionTitle: 'Saved source',
+    targetSessionId: 'target', targetSessionTitle: 'Saved target', text: 'Saved body'
+  });
+  let metadataReads = 0;
+  f.context.readTasks = ids => { metadataReads++; return ids.map(id => ({ id, title: 'Current ' + id })); };
+  for (const prefix of ['/api/roles', '/roles']) {
+    const directory = await f.call('chat-history/tasks?category=agent&metadata=recorded', 'GET', undefined, prefix);
+    assert.equal(directory.status, 200);
+    assert.equal(directory.body.data.items.length, 2);
+    const key = encodeURIComponent(directory.body.data.items[0].key);
+    const [messages, peers] = await Promise.all([
+      f.call('chat-history?category=agent&summary=true&metadata=recorded&taskKey=' + key, 'GET', undefined, prefix),
+      f.call('chat-history/tasks?category=agent&metadata=recorded&peerOf=' + key, 'GET', undefined, prefix)
+    ]);
+    assert.equal(messages.status, 200);
+    assert.equal(messages.body.data.entries[0].text, 'Saved body');
+    assert.equal(messages.body.data.entries[0].sessionTitle, 'Saved source');
+    assert.equal(peers.status, 200);
+    assert.equal(peers.body.data.items.length, 1);
+  }
+  assert.equal(metadataReads, 0);
+  const refreshed = await f.call('chat-history');
+  assert.equal(refreshed.body.data.entries[0].sessionTitle, 'Current source');
+  assert.equal(metadataReads, 1, 'explicit refresh retains live task metadata');
 });

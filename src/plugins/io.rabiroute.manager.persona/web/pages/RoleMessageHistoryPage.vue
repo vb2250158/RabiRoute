@@ -12,10 +12,14 @@ const service = providePersonaService(String(route.query.source || ""));
 const version = ref(0);
 const messageVersion = ref(0);
 let events: EventSource | undefined;
+let connected = false;
 onMounted(() => {
   if (!roleId) return;
   events = service.events("/api/events");
-  events.addEventListener("ready", () => { version.value += 1; messageVersion.value += 1; });
+  events.addEventListener("ready", () => {
+    if (connected) { version.value += 1; messageVersion.value += 1; }
+    connected = true;
+  });
   events.addEventListener("message_endpoint_history_changed", raw => {
     try {
       const data = JSON.parse((raw as MessageEvent).data);

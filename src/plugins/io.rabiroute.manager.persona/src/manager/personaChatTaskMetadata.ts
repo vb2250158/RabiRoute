@@ -20,8 +20,9 @@ function readPublishedLocalTasks(ids: string[]): Promise<PersonaChatLocalTask[]>
   return invokeAgentProviderOperation<PersonaChatLocalTask[]>(provider, "threads.metadata", { sessionIds: ids });
 }
 
-/** Exact delivery identities enrich old rows without rewriting their append-only ledger. */
-export async function enrichPersonaChatTasks(entries: PersonaChatReply[], context: PersonaChatTaskMetadataContext): Promise<PersonaChatReply[]> {
+/** Exact delivery identities enrich old rows without rewriting their append-only ledger.
+ * Recorded reads keep rendering independent of live task metadata owners. */
+export async function enrichPersonaChatTasks(entries: PersonaChatReply[], context: PersonaChatTaskMetadataContext, recordedOnly = false): Promise<PersonaChatReply[]> {
   let deliveries = new Map<string, ChatDeliveryParties>();
   try { deliveries = context.readDeliveryParties?.([...new Set(entries.flatMap(row => row.deliveryId ? [row.deliveryId] : []))]) ?? deliveries; }
   catch { /* Metadata failure must not hide the recorded message. */ }
@@ -51,7 +52,7 @@ export async function enrichPersonaChatTasks(entries: PersonaChatReply[], contex
   let tasks = new Map<string, PersonaChatLocalTask>();
   try {
     const ids = [...new Set(references.filter(ref => local(ref.owner)).map(ref => ref.id))];
-    if (ids.length) tasks = new Map((await (context.readTasks ?? readPublishedLocalTasks)(ids)).map(task => [task.id, task]));
+    if (!recordedOnly && ids.length) tasks = new Map((await (context.readTasks ?? readPublishedLocalTasks)(ids)).map(task => [task.id, task]));
   } catch { /* Recorded names remain usable while Desktop is unavailable. */ }
   const remote = new Map<string, typeof references>();
   for (const ref of references) {
@@ -63,7 +64,7 @@ export async function enrichPersonaChatTasks(entries: PersonaChatReply[], contex
     } else {
       // A remote ID is never a local Desktop link, even if the IDs happen to match.
       delete ref.row[urlKey];
-      if (ref.owner?.kind === "instance" && context.readRemoteTask) {
+      if (!recordedOnly && ref.owner?.kind === "instance" && context.readRemoteTask) {
         const key = JSON.stringify([ref.owner.nodeId, ref.owner.agentId, ref.owner.provider, ref.id]);
         remote.set(key, [...(remote.get(key) ?? []), ref]);
       }

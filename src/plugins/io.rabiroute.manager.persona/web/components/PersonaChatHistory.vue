@@ -41,7 +41,7 @@ let gapAfterId: string | undefined;
 let request: AbortController | undefined;
 let pendingUpdate = false;
 
-async function load(older = false, resumeGap = false, newer = false): Promise<void> {
+async function load(older = false, resumeGap = false, newer = false, refreshMetadata = false): Promise<void> {
   if (request) { if (!older) pendingUpdate = true; return; }
   const controller = new AbortController();
   request = controller;
@@ -54,6 +54,7 @@ async function load(older = false, resumeGap = false, newer = false): Promise<vo
   const refreshed = new Map<string, PersonaChatReply>();
   const readPage = async (cursor?: number): Promise<PersonaChatHistoryPage> => {
     const query = new URLSearchParams({ limit: "50", summary: "true", ...(newer ? { direction: "newer" } : {}) });
+    if (!refreshMetadata) query.set('metadata', 'recorded');
     if (props.category) query.set('category', props.category);
     if (props.taskKey) query.set('taskKey',props.taskKey);
     if (cursor !== undefined) query.set("cursor", String(cursor));
@@ -212,7 +213,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
         <div class="text-h6" data-no-i18n>{{ props.title || t('消息记录') }}</div>
         <div v-if="!conversation" class="text-body-2 text-medium-emphasis">{{ t('最新消息在前。') }}</div>
       </div>
-      <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load()">{{ t('刷新') }}</v-btn>
+      <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load(false, false, false, true)">{{ t('刷新') }}</v-btn>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-progress-linear v-if="loading && !entries.length" indeterminate color="secondary" :aria-label="t('正在读取消息记录')" />
