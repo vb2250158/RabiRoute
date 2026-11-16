@@ -8,7 +8,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.6 - 2026-11-16
 
-- `io.rabiroute.endpoint.napcat` advances to `0.1.10`. When an expired short-ID history anchor returns retcode 200, one bounded recent page in the same conversation can recover the exact message. Original ID/target checks and deadlines remain, with no added recovery read after transport failure or cancellation.
+- `io.rabiroute.endpoint.napcat` advances to `0.1.11`. When an expired short-ID history anchor returns retcode 200, one bounded recent page in the same conversation can recover the exact message. Original ID/target checks and deadlines remain, with no added recovery read after transport failure or cancellation.
 
 - Synchronize the generated Agent capability catalog with the desktop voice assistant so clean builds match tracked source.
 
