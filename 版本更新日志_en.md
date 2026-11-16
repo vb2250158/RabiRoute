@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.21 - 2026-11-17
+
+- Advance `io.rabiroute.manager.video` to `0.2.2`, merging workbench response discovery and the project serial-queue fix while retaining cancellation, draft and log-pagination fixes.
+- Describe workbench response contracts and verify the real queue and connection revocation behavior.
+
 ## 0.15.20 - 2026-11-17
 
 - Add independent workbench canvases, execution and artifacts with migration recovery and existing Agent session bridging.

@@ -6,6 +6,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { apiCatalogOpenApi } from "../../../../manager/apiOperationCatalog.js";
+import { compileApiContract, validateApiOperationResult } from "../../../../manager/apiOperationContract.js";
 import { createVideoOperations } from "./videoOperations.js";
 import { createVideoRequestAccess } from "./videoRuntime.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
@@ -28,9 +29,17 @@ import { createVideoApiEvents, createVideoOperationsOwner } from "../../apiOwner
 
 // @ts-ignore Native field definitions are supplied by the current plugin activation.
 import { createVideoContracts } from "../../contracts.mjs";
+// @ts-ignore Native Workbench owner, with no external execution in this fixture.
+import { WorkbenchRuns } from "../../workbenchRuns.mjs";
 
 const bind = (server: http.Server) => new Promise<string>(resolve => server.listen(0, "127.0.0.1", () => resolve("http://127.0.0.1:" + (server.address() as import("node:net").AddressInfo).port)));
 const close = async (server: http.Server) => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); };
+const connectionChanges = [
+  { name: "work-disabled", denied: false, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => authority.setNodeEnabled(credential.nodeId, false, true) },
+  { name: "work-toggle", denied: false, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => { authority.setNodeEnabled(credential.nodeId, false, true); authority.setNodeEnabled(credential.nodeId, true, false); } },
+  { name: "credential-revoked", denied: true, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => authority.revokeNode(credential.nodeId) },
+  { name: "credential-replaced-with-same-token", denied: true, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => { authority.revokeNode(credential.nodeId); const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, credential.nodeId, credential.token.split(":")[2]); assert.equal(replacement.token, credential.token); } }
+] as const;
 async function fixture(t: test.TestContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-contract-http-")), calls: unknown[] = [];
   const cleanup: Array<() => Promise<unknown>> = [], releases: Array<() => void> = [];
@@ -49,6 +58,8 @@ async function fixture(t: test.TestContext) {
   });
   cleanup.push(() => close(provider)); const providerBase = await bind(provider); let alive = true;
   const runtime = { stateRoot: root, componentRoot: path.join(root, "component"), defaultModelRoot: path.join(root, "models"), readOnly: false,
+    workbenchRuntimeRoot:path.join(root,"workbench-runtime"),machineId:"fixture-machine",generation:"fixture-generation",
+    workbenchBindings:async()=>({workspaces:{fixture:{roots:{runtime:root,output:root,materials:root}}}}),
     requestAccess: createVideoRequestAccess, localSettingsAllowed: () => true, alive: () => alive, installed: async () => true,
     validateModelRoot: async () => null, inspectAsset: async (_id: string, kind: string) => ({ width: 16, height: 16, ...(kind === "audio" ? { duration: 1, channels: 1 } : {}) }),
     start: async () => { throw new Error("No real inference process is permitted."); }, stop: async () => { alive = false; }, stopInstaller: async () => {}, stopMediaProbe: async () => {},
@@ -60,6 +71,7 @@ async function fixture(t: test.TestContext) {
   const assets = new VideoAssets(runtime), computeAssets = new VideoAssets({ ...runtime, stateRoot: path.join(root, "compute") });
   service.assets = assets; service.computeAssets = computeAssets; service.remote = new RemoteVideoCompute(runtime, catalog, () => {}, service.jobs.values());
   const models = new VideoModels(runtime, catalog, () => events.publish("video.models", {})); cleanup.push(() => models.close()); await models.initialize(); const projects = new VideoProjects(runtime);
+  const runs=new WorkbenchRuns(runtime,projects,service,()=>{});await runs.initialize();cleanup.push(()=>runs.close());
   const readJsonBody = <T>(request: http.IncomingMessage, limit: number): Promise<T> => new Promise((resolve, reject) => {
     const chunks: Buffer[] = []; let size = 0, failed = false;
     request.on("data", chunk => { if (failed) return; size += chunk.length; if (size > limit) { failed = true; reject(new Error("Original model body cap")); return; } chunks.push(Buffer.from(chunk)); });
@@ -67,7 +79,7 @@ async function fixture(t: test.TestContext) {
   });
   let streamCreated: (() => void) | undefined;
   const eventSource = { job: events.job, compute(access: ReturnType<typeof createVideoRequestAccess>) { const stream = events.compute(access); streamCreated?.(); return stream; } };
-  const nativeContext = { contracts: createVideoContracts(catalog), runtime, catalog, service, models, assets, computeAssets, projects, events: eventSource, readJsonBody };
+  const nativeContext = { contracts: createVideoContracts(catalog), runtime, catalog, service, models, assets, computeAssets, projects, runs, events: eventSource, readJsonBody };
   const bundle = createVideoOperations({ ...nativeContext, owner: createVideoOperationsOwner(nativeContext) } as never);
   const registry = new ManagerPluginRouteRegistry(), operations = registry.registerOperations("video-fixture", bundle.operations); cleanup.push(() => operations.dispose());
   const proxies = registry.registerHttpProxies("video-fixture", bundle.proxies); cleanup.push(() => proxies.dispose());
@@ -94,12 +106,14 @@ async function fixture(t: test.TestContext) {
     const hold = { entered, closed, respond: undefined as (() => void) | undefined }; pendingPeer = hold;
     return { started, closed: finished, respond: () => { assert.ok(hold.respond); hold.respond(); } };
   };
-  return { root, runtime, catalog, model, events, service, models, assets, computeAssets, projects, bundle, registry, operations, proxies, authority, credential, base, request, savedJob, calls, releases, holdPeer, setAlive: (value: boolean) => { alive = value; }, onStreamCreated: (callback: () => void) => { streamCreated = callback; } };
+  return { root, runtime, catalog, model, events, service, models, assets, computeAssets, projects, runs, bundle, registry, operations, proxies, authority, credential, base, request, savedJob, calls, releases, holdPeer, setAlive: (value: boolean) => { alive = value; }, onStreamCreated: (callback: () => void) => { streamCreated = callback; } };
 }
 
-test("34 fixed Video contracts and one native model wildcard register with original mediaId aliases and public connection access", async t => {
-  const f = await fixture(t); assert.equal(f.bundle.operations.length, 25); assert.equal(f.bundle.proxies.length, 10);
-  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 35); assert.ok(rows.every(row => row.contract.exposure === "public"));
+test("original Video contracts and separate Workbench contracts register with public connection access", async t => {
+  const f = await fixture(t), original = (row: { contract: { operationId: string } }) => !row.contract.operationId.startsWith("manager.video.workbench.");
+  assert.equal(f.bundle.operations.filter(original).length, 25); assert.equal(f.bundle.proxies.filter(original).length, 10);
+  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 22); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
+  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 58); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,58); assert.ok(rows.every(row => row.contract.exposure === "public"));
   for (const path of ["/jobs/:mediaId", "/projects/:mediaId", "/assets/:mediaId"]) assert.ok(rows.some(row => row.contract.aliases?.includes("video:GET:/api/video" + path)));
   assert.equal((await f.request("/status")).status, 200); assert.equal((await f.request("/models/settings")).status, 200); assert.equal((await f.request("/compute/status")).status, 200);
 });
@@ -156,13 +170,17 @@ test("native compute SSE sends progress, finishes at terminal state and joins su
   assert.match(first, /event: compute/); assert.equal(f.events.active(), 1); await f.operations.dispose(); assert.equal(f.events.active(), 0); incoming.destroy(); outgoing.destroy();
 });
 
-test("queued native project save keeps the original Node incarnation and does not commit after revocation", async t => {
+for (const change of connectionChanges) test("queued native project save preserves the original connection after " + change.name, async t => {
   const f = await fixture(t), id = randomUUID(); await f.request("/projects", "POST", { id });
   let release!: () => void, entered!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; }); f.releases.push(release);
-  const mutate = f.projects.mutate.bind(f.projects); f.projects.serial = gate; f.projects.mutate = (operation: unknown, access: unknown) => { entered(); return mutate(operation, access); };
+  let lockEntered!: () => void; const lockStarted = new Promise<void>(resolve => { lockEntered=resolve; });
+  const held = f.projects.locked(`project:${id}`, undefined, async () => { lockEntered(); await gate; }); await lockStarted;
+  const mutate = f.projects.mutate.bind(f.projects); f.projects.mutate = (...args: Parameters<typeof mutate>) => { entered(); return mutate(...args); };
   const pending = f.request("/projects/" + id, "PUT", { revision: 0, value: { version: 1, active: "video", items: [{ id: "video", kind: "video" }], drafts: [] } });
-  await started; f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); release();
-  const response = await pending; assert.equal(response.status, 403); const denied = await response.json(); assert.equal(denied.mutation ?? denied.mutationOutcome, "not_started"); assert.equal((await new VideoProjects(f.runtime).read(id)).revision, 0);
+  await started; change.apply(f.authority,f.credential); release(); await held;
+  const response = await pending; assert.equal(response.status, change.denied ? 403 : 200); const body=await response.json();
+  if(change.denied) assert.equal(body.mutation ?? body.mutationOutcome, "not_started");
+  assert.equal((await new VideoProjects(f.runtime).read(id)).revision, change.denied ? 0 : 1);
 });
 
 test("retiring an original media proxy joins a backpressured native file read", { timeout: 20000 }, async t => {
@@ -173,9 +191,12 @@ test("retiring an original media proxy joins a backpressured native file read", 
   assert.ok(received>0 && received<bytes);await f.proxies.dispose();assert.equal(f.proxies.activeOperationCount(),0);incoming.destroy();outgoing.destroy();
 });
 
-test("revocation during native SSE creation cancels the undisclosed original subscription", async t => {
-  const f = await fixture(t); f.onStreamCreated(() => { f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); });
-  const response = await f.request("/compute/events"); assert.equal(response.status, 403); assert.equal(f.events.active(), 0);
+for (const change of connectionChanges) test("native SSE creation preserves the original connection after " + change.name, async t => {
+  const f = await fixture(t); f.onStreamCreated(() => change.apply(f.authority,f.credential));
+  if(change.denied) { const response = await f.request("/compute/events"); assert.equal(response.status, 403); assert.equal(f.events.active(), 0); return; }
+  let outgoing!:http.ClientRequest,incoming!:http.IncomingMessage;
+  const first=await new Promise<string>((resolve,reject)=>{outgoing=http.get(f.base+"/api/video/compute/events",{headers:{authorization:"Bearer "+f.credential.token}},response=>{incoming=response;assert.equal(response.statusCode,200);response.on("error",()=>{});response.once("data",chunk=>resolve(chunk.toString()));});outgoing.on("error",reject);});
+  assert.match(first,/event: compute/);assert.equal(f.events.active(),1);await f.operations.dispose();assert.equal(f.events.active(),0);incoming.destroy();outgoing.destroy();
 });
 
 test("native model wildcard preserves raw prefix paths, arbitrary methods, original body rules and local 404", async t => {
@@ -206,10 +227,12 @@ test("native model exchange retirement cancels and joins an upstream pending bef
   await hold.started;await f.proxies.dispose();await hold.closed;await pending;assert.equal(f.proxies.activeOperationCount(),0);assert.equal(f.calls.length,1);
 });
 
-test("a dispatched native model mutation keeps its unknown outcome and suppresses the revoked peer response", async t => {
+for (const change of connectionChanges) test("a dispatched native model mutation preserves its original outcome after " + change.name, async t => {
   const f=await fixture(t),hold=f.holdPeer(),pending=f.request("/models/custom?computeDeviceId=owned-compute","POST",{ownedFixture:true});
-  await hold.started;f.authority.setNodeEnabled(f.credential.nodeId,false,true);f.authority.setNodeEnabled(f.credential.nodeId,true,false);hold.respond();
-  const response=await pending;assert.equal(response.status,403);const body=await response.json();assert.equal(body.mutationOutcome,"unknown");assert.equal(body.nativePeer,undefined);assert.equal(f.calls.length,1);
+  await hold.started;change.apply(f.authority,f.credential);hold.respond();
+  const response=await pending;assert.equal(response.status,change.denied?403:200);const body=await response.json();
+  if(change.denied){assert.equal(body.mutationOutcome,"unknown");assert.equal(body.nativePeer,undefined);}else{assert.equal(body.nativePeer,true);assert.deepEqual(body.body,{ownedFixture:true});}
+  assert.equal(f.calls.length,1);
 });
 
 
@@ -226,11 +249,32 @@ test("Video discovery describes stable native fields, result DTOs and deferred n
     ["job.read", ["computeOutcome", "hasFirstFrame", "outputPurged", "progressStage"]]
   ] as const) for (const field of fields) assert.ok(schema(name).includes(field), name + ": " + field);
   for (const definition of f.bundle.operations.filter(row => row.contract.transport === "http")) {
-    const response = definition.contract.responses[definition.contract.operationId.endsWith("submit") ? "202" : "200"];
+    const response = Object.entries(definition.contract.responses).find(([status])=>/^2\d\d$/.test(status))?.[1];
     assert.ok(response?.schema && Object.keys(response.schema).some(key => key !== "description"), definition.contract.operationId);
   }
   const openapi = JSON.stringify((await apiCatalogOpenApi(f.registry.catalogSnapshot())));
   for (const field of ["expectedRevision", "progressMax", "effectiveModelRoot", "samplingSteps"]) assert.ok(openapi.includes(field));
+});
+
+test("Workbench discovery validates original HTTP project, canvas, media, run and log results",async t=>{
+  const f=await fixture(t),id=randomUUID();
+  const read=async(suffix:string,method="GET",body?:unknown,status=200)=>{const response=await f.request(suffix,method,body);assert.equal(response.status,status,await response.clone().text());return response.json();};
+  const definition=await read("/v2/definition");assert.equal(definition.capabilities.agent.executable,true);
+  const project=await read("/v2/projects","POST",{id,title:"Discovery fixture"}),canvasId=project.defaultCanvasId,prefix=`/v2/projects/${id}/canvases/${canvasId}`;
+  const canvas=await read(prefix);canvas.workspaceBindingKey="fixture";canvas.extension={retained:true};canvas.graph.nodes=[{id:"review",kind:"human",config:{}}];
+  const saved=await read(prefix,"PUT",canvas);assert.deepEqual(saved.extension,{retained:true});
+  assert.equal((await read(`/v2/projects/${id}/canvases`)).canvases[0].id,canvasId);
+  assert.equal((await read(prefix+"/editor")).value,null);assert.equal((await read(prefix+"/export")).id,canvasId);
+  assert.equal((await read(`/v2/projects/${id}/index/rebuild`,"POST")).count,1);
+  const runId=randomUUID(),run=await read(prefix+"/runs","POST",{id:runId,revision:saved.revision},202);assert.equal(run.id,runId);
+  await f.runs.flights.get(runId);
+  const waiting=await read(`/v2/runs/${runId}`);assert.equal(waiting.state,"waiting_human");
+  assert.equal((await read(prefix+"/runs")).runs[0].id,runId);assert.ok(Array.isArray((await read(`/v2/runs/${runId}/logs`)).entries));
+  const finished=await read(`/v2/runs/${runId}/complete`,"POST",{nodeId:"review",attemptId:waiting.attempts.review.id,identity:"fixture reviewer",evidence:{reviewed:true}});assert.equal(finished.attempts.review.state,"succeeded");
+  await f.runs.flights.get(runId);assert.equal((await read(`/v2/runs/${runId}`)).state,"succeeded");
+  const contract=f.bundle.operations.find(row=>row.contract.operationId==="manager.video.workbench.canvas-read")!;
+  assert.doesNotThrow(()=>validateApiOperationResult(compileApiContract(contract),{status:200,body:saved}));
+  assert.throws(()=>validateApiOperationResult(compileApiContract(contract),{status:200,body:{...saved,revision:"wrong"}}));
 });
 
 test("project native coercion, ignored root fields and opaque canvas data survive the same registered JSON parser", async t => {

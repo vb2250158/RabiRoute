@@ -2,7 +2,7 @@ English | [简体中文](workbench-canvas.md)
 
 # Workbench canvases
 
-Workbench plugin 0.2.1 separates project metadata from independently saved canvas folders. Existing media projects remain readable. Explicit migration creates a recoverable original and publishes the new directory; reads do not migrate data.
+Workbench plugin 0.2.2 separates project metadata from independently saved canvas folders. Existing media projects remain readable. Explicit migration creates a recoverable original and publishes the new directory; reads do not migrate data.
 
 Migration backs up the complete original, fences the legacy file against old writers, then commits the new project. Interrupted commits appear as “恢复迁移” in the project list and resume on the original machine. A changed source or backup digest stops recovery and preserves both records.
 
