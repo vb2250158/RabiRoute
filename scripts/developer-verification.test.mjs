@@ -311,7 +311,11 @@ test('web-patch reuses original manifest/file/HTML validation and exposes only d
   await fs.writeFile(path.join(options.sourceRoot, 'check.test.mjs'), `import fs from 'node:fs'; import path from 'node:path'; import assert from 'node:assert/strict'; const root=process.env.RABI_CANDIDATE_ROOT; assert.equal(fs.existsSync(path.join(root,'packages')),false); assert.equal(fs.readFileSync(path.join(root,'web/assets/main.js'),'utf8'),'export const version=1;');`);
   const receipt = await verifyPluginCandidate({ ...options, artifactKind: 'web-patch', artifactSha256 });
   assert.equal(receipt.status, 'passed'); assert.equal(receipt.artifactKind, 'web-patch'); assert.equal(receipt.candidateSha256, artifactSha256);
-  assert.ok(receipt.artifactOwner.some(file => file.path === 'dist/manager/webPatchCatalog.js'));
+  for (const ownerPath of ['dist/manager/webPatchCatalog.js', 'dist/manager/webPluginModules.js', 'dist/plugin-kernel/packageLoader.js', 'dist/plugin-kernel/manifest.js', 'dist/plugin-kernel/types.js', 'dist/plugin-kernel/capabilityReference.js']) {
+    const owner = receipt.artifactOwner.find(file => file.path === ownerPath);
+    assert.ok(owner, `Missing frozen Web verifier dependency: ${ownerPath}`);
+    assert.equal(owner.sha256, createHash('sha256').update(await fs.readFile(new URL('../' + ownerPath, import.meta.url))).digest('hex'));
+  }
   assert.ok(receipt.artifactOwner.some(file => file.path === 'dist/manager/webPluginModules.js'));
   assert.ok(receipt.artifactOwner.some(file => file.path === 'dist/plugin-kernel/packageLoader.js'));
   await fs.writeFile(path.join(options.candidateRoot, 'web/assets/main.js'), 'tampered');

@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.17 - 2026-11-17
 
+- Fix incomplete frozen module dependencies in developer Web candidate verification and verify their hashes.
+
 - Isolated publication verification copies the built owner and its relative dependency closure, fingerprints every included module, and fixes missing-module failures for Web candidates.
 - Persona pages wrap within the available narrow-screen width. Terminal admission failures remove newly created empty sessions. Backend regression runs resolve shared Web aliases and update historical protocol and explicit-setting fixtures while retaining real credential-revocation and in-flight result protection.
 - Agent call history persists CLI, MCP, HTTP and SDK observations with original call identities, deduplication and pending-write state. Diagnostics separates runtime logs, calls and performance, loading bodies on demand. Submitted filters remain stable during event refresh and pagination.
