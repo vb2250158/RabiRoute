@@ -8,6 +8,8 @@ English | <a href="./agents-and-sessions.md">简体中文</a> | <a href="./agent
 
 ## Read sessions and message history
 
+Messages run from oldest to newest, with new messages at the bottom. A thin scrollbar stays inside the message pane. Loading earlier messages preserves the reading position, while the conversation list and details remain independently accessible.
+
 Open a persona's **Message History** and select **Agent sessions**. Switch between configured Agents using the second-level tabs, then choose a session or task. Search, refresh and load more sessions from the list. The conversation shows user inputs and final replies.
 
 The directory combines the persona's configured Routes and keeps each remote computer and Agent identity. Separate DSH service origins remain separate choices. Codex and DSH read paged history from their native owners. Other adapters supply their own history capability, and missing interfaces or connection failures show an error for that target. Switching Agents selects that Agent's tasks. Failed refreshes retain loaded content.

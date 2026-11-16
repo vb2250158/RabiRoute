@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.15.17",
+  "version": "0.15.18",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -88,6 +88,9 @@
   },
   "devDependencies": {
     "@mdi/font": "^7.4.47",
+    "@noble/hashes": "1.8.0",
+    "@rabilink/assistant-runtime": "file:packages/assistant-runtime",
+    "@rabilink/desktop-voice-service": "file:packages/desktop-voice-service",
     "@types/node": "^22.10.7",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
@@ -98,16 +101,15 @@
     "@xterm/xterm": "^6.0.0",
     "marked": "^15.0.12",
     "pinia": "^2.3.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "tsx": "^4.19.2",
     "vite": "^6.4.4",
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",
     "vue-tsc": "^2.2.12",
     "vuetify": "^3.12.8",
-    "yauzl": "3.4.0",
-    "@noble/hashes": "1.8.0",
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "yauzl": "3.4.0"
   },
   "engines": {
     "node": ">=22.13.0"

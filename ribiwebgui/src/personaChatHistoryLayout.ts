@@ -19,3 +19,57 @@ export function waitForChatHistoryFrame(signal: AbortSignal): Promise<boolean> {
     frame = requestAnimationFrame(() => finish(!signal.aborted && !document.hidden));
   });
 }
+
+
+/** Every history component uses its own message pane, with a document fallback for standalone views. */
+export function chatHistoryScroller(element?: Element | null): HTMLElement {
+  return (element?.closest<HTMLElement>('[data-history-scroll]') ?? document.scrollingElement) as HTMLElement;
+}
+
+export function chatHistoryViewport(scroller: HTMLElement): { top: number; bottom: number } {
+  if (scroller === document.scrollingElement) return { top: 0, bottom: window.innerHeight };
+  const bounds = scroller.getBoundingClientRect();
+  return { top: bounds.top, bottom: bounds.bottom };
+}
+
+
+/** Keep measured virtual rows at the bottom until the reader scrolls away. */
+export function bindChatHistoryScroll(scroller: HTMLElement, content: HTMLElement): { dispose(): void; restorePosition(top: number): void } {
+  let followBottom = true;
+  let lastScrollTop = scroller.scrollTop;
+  let frame = 0;
+  const trackPosition = () => {
+    if (!scroller.clientHeight) return;
+    const top = scroller.scrollTop;
+    if (top > lastScrollTop && scroller.scrollHeight - top - scroller.clientHeight <= 1) followBottom = true;
+    lastScrollTop = top;
+  };
+  const interrupt = () => { followBottom = false; lastScrollTop = scroller.scrollTop; };
+  const observer = new ResizeObserver(() => {
+    if (!followBottom || !scroller.clientHeight) return;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      if (followBottom && scroller.clientHeight) scroller.scrollTop = scroller.scrollHeight;
+    });
+  });
+  observer.observe(scroller);
+  observer.observe(content);
+  scroller.addEventListener('scroll', trackPosition, { passive: true });
+  const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+  for (const event of events) scroller.addEventListener(event, interrupt, { passive: true });
+  return {
+    restorePosition(top: number) {
+      followBottom = false;
+      cancelAnimationFrame(frame);
+      scroller.scrollTop = top;
+      lastScrollTop = scroller.scrollTop;
+      followBottom = scroller.scrollHeight - lastScrollTop - scroller.clientHeight <= 1;
+    },
+    dispose() {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      scroller.removeEventListener('scroll', trackPosition);
+      for (const event of events) scroller.removeEventListener(event, interrupt);
+    }
+  };
+}

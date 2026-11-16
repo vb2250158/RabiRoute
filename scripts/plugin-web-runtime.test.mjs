@@ -6,11 +6,54 @@ import test from 'node:test';
 import { build } from 'vite';
 import { WEB_RUNTIME_MODULES, webRuntimeVitePlugin, pluginWebRuntimeProxy, pluginEntryStyles } from './lib/plugin-web-runtime.mjs';
 import { WEB_RUNTIME_KEY, WEB_RUNTIME_ABI, missingWebRuntimeImports } from '../plugins/contracts/plugin-sdk/web-runtime.mjs';
+import { buildPluginWebPackage } from '../plugins/contracts/plugin-sdk/web-builder.mjs';
 import { finalizeSelectedPluginWebArtifacts } from './build-plugin-packages.mjs';
 import { buildPluginWebPackages, allWebPluginPackages } from './build-plugin-web-packages.mjs';
 import { createHash } from 'node:crypto';
 const root = path.resolve(import.meta.dirname, '..');
 const hash = value => createHash('sha256').update(value).digest('hex');
+
+test('Windows Web publication retries sharing failures and restores the previous package after exhaustion', { skip: process.platform !== 'win32' }, async t => {
+  const directory = await fs.mkdtemp(path.join(root, 'node_modules/.rabi-web-rename-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const sourceDirectory = path.join(directory, 'source');
+  const outputDirectory = path.join(directory, 'output');
+  await fs.mkdir(path.join(sourceDirectory, 'web'), { recursive: true });
+  await fs.writeFile(path.join(sourceDirectory, 'package.json'), JSON.stringify({ name: 'example.rename', rabi: { webSource: 'web/entry.mjs' } }));
+  await fs.writeFile(path.join(sourceDirectory, 'rabi.plugin.json'), JSON.stringify({ id: 'example.rename', version: '1.0.0' }));
+  const entry = path.join(sourceDirectory, 'web/entry.mjs');
+  await fs.writeFile(entry, 'export function activate(){return 1}');
+  const options = {
+    sourceDirectory, outputDirectory, referenceRoot: root, logLevel: 'error',
+    runtimeCatalog: { schemaVersion: 1, abi: WEB_RUNTIME_ABI, modules: [{ id: 'vue', specifier: 'vue', exports: ['ref'] }] }
+  };
+  const originalRename = fs.rename;
+  let attempts = 0;
+  let failures = 2;
+  fs.rename = async (source, destination) => {
+    if (destination === outputDirectory && String(source).startsWith(outputDirectory + '.build-')) {
+      attempts++;
+      if (attempts <= failures) throw Object.assign(new Error('fixture sharing violation'), { code: 'EPERM' });
+    }
+    return originalRename(source, destination);
+  };
+  try {
+    await buildPluginWebPackage(options);
+    assert.equal(attempts, 3);
+    const previousClient = await fs.readFile(path.join(outputDirectory, 'client.mjs'));
+    const previousManifest = await fs.readFile(path.join(outputDirectory, 'module.json'));
+    await fs.writeFile(entry, 'export function activate(){return 2}');
+    attempts = 0;
+    failures = Infinity;
+    await assert.rejects(buildPluginWebPackage(options), { code: 'EPERM' });
+    assert.equal(attempts, 7);
+    assert.deepEqual(await fs.readFile(path.join(outputDirectory, 'client.mjs')), previousClient);
+    assert.deepEqual(await fs.readFile(path.join(outputDirectory, 'module.json')), previousManifest);
+    assert.deepEqual((await fs.readdir(directory)).sort(), ['output', 'source']);
+  } finally {
+    fs.rename = originalRename;
+  }
+});
 
 test('selected plugin uses the exact shell Vue/store namespaces and keeps its own lazy/CSS/font/worker resources', async t => {
   const directory = await fs.mkdtemp(path.join(root, 'node_modules/.rabi-web-runtime-'));
@@ -170,11 +213,11 @@ test('independent bundles register saves and translations on the exact shell own
   assert.equal(actual.namespaces['rabi.page-save'].pageSaveAction.value,null);
 });
 
-test('normal shell build exposes no static plugin business entries and official producer covers all 26 sources', async () => {
+test('normal shell build exposes no static plugin business entries and official producer covers all 27 sources', async () => {
   const {resolveConfig}=await import('vite');
   const config=await resolveConfig({configFile:path.join(root,'ribiwebgui/vite.config.ts')},'build');
   assert.deepEqual(Object.keys(config.build.rollupOptions.input),['app']);
-  assert.equal((await allWebPluginPackages(root)).length,26);
+  assert.equal((await allWebPluginPackages(root)).length,27);
   const sync=await fs.readFile(path.join(root,'scripts/sync-plugin-web-bundles.mjs'),'utf8');
   assert.match(sync,/buildPluginWebPackages/);assert.match(sync,/allWeb: true/);assert(!sync.includes('export { activate } from'));
   for(const name of ['rabi.page-save','rabi.plugin-catalog','rabi.role-store','rabi.speech-store','rabi.plugin-pages','rabi.plugin-renderers','rabi.plugin-themes','rabi.translations'])assert(WEB_RUNTIME_MODULES.some(item=>item.id===name));

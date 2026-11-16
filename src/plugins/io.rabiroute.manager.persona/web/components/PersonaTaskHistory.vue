@@ -19,6 +19,7 @@ const selected=computed(()=>tasks.value.find(task=>task.key===selectedKey.value)
 const subtitle=(task:PersonaHistoryTask)=>(task.owner?.nodeName||task.owner?.nodeId||t('本机'))+' · '+task.sessionId.slice(0,8);
 const items=computed(()=>tasks.value.map(task=>({key:task.key,title:task.title,preview:task.preview,time:task.receivedAt,subtitle:subtitle(task),agentProvider:task.owner?.provider??'codex'})));
 const positions=new Map<string,number>();
+const conversationLayout=ref<{scrollElement?:HTMLElement;restoreScroll(top:number):void}>();
 let request:AbortController|undefined,peerRequest:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined,catalogQuery='';
 let catalogPages:PersonaHistoryTask[]=[];
 async function read(query:URLSearchParams,signal:AbortSignal){
@@ -55,8 +56,8 @@ async function loadPeers(more=false, refreshMetadata=false){
   finally{if(peerRequest===controller){peerRequest=undefined;peerLoading.value=false;}}
 }
 async function choose(key:string){
-  if(key===selectedKey.value)return;positions.set(selectedKey.value,window.scrollY);
-  selectedKey.value=key;await nextTick();window.scrollTo(0,positions.get(key)??0);
+  if(key===selectedKey.value)return;positions.set(selectedKey.value,conversationLayout.value?.scrollElement?.scrollTop??0);
+  selectedKey.value=key;await nextTick();conversationLayout.value?.restoreScroll(positions.get(key)??0);
 }
 function choosePeer(task:PersonaHistoryTask){if(!tasks.value.some(item=>item.key===task.key))tasks.value.push(task);void choose(task.key);}
 watch(selectedKey,()=>{peers.value=[];peerCursor.value=null;peerError.value='';peerPartial.value=false;if(props.active)void loadPeers();});
@@ -65,7 +66,7 @@ watch(()=>[props.version,props.active] as const,()=>{if(props.active){void load(
 onBeforeUnmount(()=>{clearTimeout(timer);request?.abort();peerRequest?.abort();});
 </script>
 <template>
-  <HistoryConversationLayout :items="items.filter(item=>!search||item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()))" :selected="selectedKey" v-model:search="search" :loading="loading" :has-details="category==='agent'||Boolean(selected)" :details-title="category==='agent'?'往来任务':'任务详情'" @select="choose">
+  <HistoryConversationLayout ref="conversationLayout" :items="items.filter(item=>!search||item.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()))" :selected="selectedKey" v-model:search="search" :loading="loading" :has-details="category==='agent'||Boolean(selected)" :details-title="category==='agent'?'往来任务':'任务详情'" @select="choose">
     <template #list-actions><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load(false,true);loadPeers(false,true)" /></template>
     <template #list-notice>
       <QqReadNotice v-if="error" summary="会话暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load()" />

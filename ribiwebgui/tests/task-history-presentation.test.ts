@@ -24,10 +24,10 @@ test('saved pages retain write order across skewed clocks, equal times and legac
   const page=[{id:'first',time:90,sequence:7},{id:'legacy',time:10},{id:'last',time:90,sequence:1}];
   const original=structuredClone(page);
   assert.deepEqual(historyPageForDisplay(page,true,false).map(row=>row.id),['first','legacy','last']);
-  assert.deepEqual(historyPageForDisplay(page,false,false).map(row=>row.id),['last','legacy','first']);
+  assert.deepEqual(historyPageForDisplay(page,false,false).map(row=>row.id),['first','legacy','last']);
   // Live QQ still follows its protocol timestamp, with stable ties in either view.
   assert.deepEqual(historyPageForDisplay(page,true,true).map(row=>row.id),['legacy','first','last']);
-  assert.deepEqual(historyPageForDisplay(page,false,true).map(row=>row.id),['first','last','legacy']);
+  assert.deepEqual(historyPageForDisplay(page,false,true).map(row=>row.id),['legacy','first','last']);
   assert.deepEqual(page,original);
 });
 

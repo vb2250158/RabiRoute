@@ -3,9 +3,23 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { WEB_RUNTIME_ABI, WEB_RUNTIME_KEY } from './web-runtime.mjs';
 
 const virtual = '\0rabi-web-runtime';
+
+async function renameBuildDirectory(source, destination) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fs.rename(source, destination);
+    } catch (error) {
+      const sharingFailure = error.code === 'EPERM' || error.code === 'EBUSY';
+      if (process.platform !== 'win32' || !sharingFailure || attempt >= 6) throw error;
+      await delay(50 * (attempt + 1));
+    }
+  }
+}
+
 export function webRuntimeVitePlugin(root, modules, options = {}) {
   const resolved = new Map();
   return {
@@ -185,14 +199,14 @@ export async function buildPluginWebPackage(options = {}) {
         }
         if (!owned) throw new Error('Existing output does not belong to this plugin Web build or its native package.');
       }
-      await fs.rename(output, backup); previous = true;
+      await renameBuildDirectory(output, backup); previous = true;
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    await fs.rename(staged, output); committed = true;
+    await renameBuildDirectory(staged, output); committed = true;
     if (previous) { await fs.rm(backup, { recursive: true, force: true }); previous = false; }
     return { outputDirectory: output, manifest, manifestSha256: hash(await fs.readFile(path.join(output, 'module.json'))),
       runtimeCatalogSha256: hash(runtimeBytes), inputs, toolchain: { node: process.version, builderSha256: hash(await fs.readFile(fileURLToPath(import.meta.url))) } };
   } finally {
-    if (!committed && previous) await fs.rename(backup, output);
+    if (!committed && previous) await renameBuildDirectory(backup, output);
     await fs.rm(staged, { recursive: true, force: true });
   }
 }

@@ -5,7 +5,7 @@ import type { MessageContextRecord } from '../../../../messageContextStore';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
-import { waitForChatHistoryFrame } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
+import { waitForChatHistoryFrame, chatHistoryScroller, chatHistoryViewport } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import QqHistoryMessage from './QqHistoryMessage.vue';
 import QqMessageDetails from './QqMessageDetails.vue';
 import QqImagePreview from './QqImagePreview.vue';
@@ -57,14 +57,15 @@ async function load(older = false,update=false) {
     }
     skippedCount.value=live?result.data.skippedCount??0:0;
     unreadablePage.value=Boolean(skippedCount.value&&!page.length);
-    const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>('.history-record') ?? [])].find(element => element.getBoundingClientRect().bottom > 0);
+    const readingScroller=chatHistoryScroller(listElement.value),viewport=chatHistoryViewport(readingScroller);
+    const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>('.history-record') ?? [])].find(element => element.getBoundingClientRect().bottom > viewport.top && element.getBoundingClientRect().top < viewport.bottom);
     const anchorId = anchor?.dataset.entryId, anchorTop = anchor?.getBoundingClientRect().top ?? 0;
-    const atBottom=Boolean(listElement.value&&listElement.value.getBoundingClientRect().bottom<=window.innerHeight+80);
+    const atBottom=readingScroller.scrollHeight-readingScroller.scrollTop-readingScroller.clientHeight<=80;
     const incremental=update&&props.bubble&&entries.value.length>0;
     if (older) {
       const additions=page.filter(record=>!known.has(key(record)));
-      if(props.bubble&&entries.value.length+additions.length>200)newerAvailable.value=true;
-      entries.value=props.bubble?[...additions,...entries.value].slice(0,200):[...entries.value,...additions].slice(-200);
+      if(entries.value.length+additions.length>200)newerAvailable.value=true;
+      entries.value=[...additions,...entries.value].slice(0,200);
     }
     else if(incremental){
       const first=entries.value[0]!,merged=live?mergeQqHistoryWindow(entries.value,page,atBottom):mergeSavedHistoryWindow(entries.value,page,atBottom,key);
@@ -87,17 +88,17 @@ async function load(older = false,update=false) {
     const ids = new Set(entries.value.map(key));
     for (const id of expanded.value) if (!ids.has(id)) expanded.value.delete(id);
     await nextTick();
-    if(props.bubble&&!older&&!unreadablePage.value&&(!incremental||atBottom)) {
+    if(!older&&!unreadablePage.value&&(!incremental||atBottom)) {
       const interrupt=()=>controller.abort();
       const events=['wheel','touchstart','pointerdown','keydown'] as const;
-      for(const event of events)window.addEventListener(event,interrupt,{passive:true});
+      for(const event of events)readingScroller.addEventListener(event,interrupt,{passive:true});
       try {
         virtualList.value?.scrollToIndex(entries.value.length-1);
         for(let frame=0;frame<12;frame++) {
           if(!await waitForChatHistoryFrame(controller.signal))break;
-          if(listElement.value)window.scrollTo(0,window.scrollY+listElement.value.getBoundingClientRect().bottom-window.innerHeight+24);
+          readingScroller.scrollTop=readingScroller.scrollHeight;
         }
-      }finally{for(const event of events)window.removeEventListener(event,interrupt);}
+      }finally{for(const event of events)readingScroller.removeEventListener(event,interrupt);}
     }
     if ((older||(incremental&&!atBottom)) && anchorId) {
       const interrupt = () => controller.abort();
@@ -108,7 +109,7 @@ async function load(older = false,update=false) {
         for (let frame = 0; frame < 12; frame++) {
           if (!await waitForChatHistoryFrame(controller.signal)) break;
           const current = [...(listElement.value?.querySelectorAll<HTMLElement>('.history-record') ?? [])].find(element => element.dataset.entryId === anchorId);
-          if (current) window.scrollBy(0, current.getBoundingClientRect().top - anchorTop);
+          if (current) readingScroller.scrollTop+=current.getBoundingClientRect().top-anchorTop;
           else if (!requested) { virtualList.value?.scrollToIndex(entries.value.findIndex(record => key(record) === anchorId)); requested = true; }
         }
       } finally { for (const event of events) window.removeEventListener(event, interrupt); }
@@ -150,7 +151,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
   <v-card class="app-card glass-card pa-4" :class="{'qq-chat-surface':bubble}">
     <div class="d-flex align-center justify-space-between ga-3 mb-3" :class="{'qq-chat-header':bubble}">
       <slot v-if="bubble" name="back" />
-      <div class="qq-chat-heading"><div v-if="bubble" class="text-h6" data-no-i18n>{{ title }}<span v-if="memberCount!==undefined" class="qq-member-count"> ({{ memberCount }})</span></div><div v-else class="text-h6">{{ t(title) }}</div><div v-if="!bubble" class="text-body-2 text-medium-emphasis">{{ t('最新消息在前。') }}</div></div>
+      <div class="qq-chat-heading"><div v-if="bubble" class="text-h6" data-no-i18n>{{ title }}<span v-if="memberCount!==undefined" class="qq-member-count"> ({{ memberCount }})</span></div><div v-else class="text-h6">{{ t(title) }}</div></div>
       <div v-if="bubble" class="d-flex align-center"><slot name="actions" /><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新消息')" :loading="loading" @click="load()" /></div>
       <v-btn v-else variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load()">{{ t('刷新') }}</v-btn>
     </div>
@@ -164,7 +165,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
     <v-alert v-if="connectionLost" type="warning" variant="tonal" class="mb-3">{{ t('QQ 连接已断开，保留已加载的消息。') }}</v-alert>
     <div v-if="skippedCount" class="d-flex align-center ga-2 my-2 text-caption text-medium-emphasis" role="status"><v-icon icon="mdi-information-outline" size="16" /><span>{{ t(unreadablePage?'本页消息无法读取，历史记录可能不完整。':'部分消息无法读取，其他消息仍可查看。') }}</span></div>
     <v-progress-linear v-if="loading" indeterminate :aria-label="t('正在读取消息记录')" />
-    <v-btn v-if="bubble&&cursor!==null&&(!nativeWindow||qqLive)" variant="tonal" :disabled="loading" class="mb-3" @click="load(true)">{{ t('加载更早的消息') }}</v-btn>
+    <v-btn v-if="cursor!==null&&(!nativeWindow||qqLive)" variant="tonal" :disabled="loading" class="mb-3" @click="load(true)">{{ t('加载更早的消息') }}</v-btn>
     <v-alert v-if="showEmptyHistory" type="info" variant="tonal">{{ t('此渠道暂无消息记录。') }}</v-alert>
     <div ref="listElement" class="endpoint-history-list" :class="{'qq-history':bubble}" :aria-busy="loading" aria-live="polite">
       <template v-if="bubble">
@@ -189,7 +190,6 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
         </template>
       </v-virtual-scroll>
     </div>
-    <v-btn v-if="!bubble&&cursor !== null" variant="tonal" :disabled="loading" class="mt-3" @click="load(true)">{{ t('加载更早的消息') }}</v-btn>
     <v-btn v-if="newerAvailable" class="qq-new-messages" color="secondary" prepend-icon="mdi-arrow-down" @click="load()">{{ t('回到最新消息') }}</v-btn>
     <QqImagePreview v-if="imagePreview" :image="imagePreview" @close="imagePreview=undefined" />
     <v-dialog v-if="quotedMessage" :model-value="true" max-width="680" @update:model-value="!$event&&(quotedMessage=undefined)"><v-card :title="t('引用消息')"><v-card-text><div class="text-caption text-medium-emphasis mb-2" data-no-i18n>{{ senderNames?.[quotedMessage.sender]||quotedMessage.senderName||quotedMessage.sender }}</div><QqMessageContent :text="quotedMessage.text" :structured-parts="quotedMessage.parts" :message-id="quotedMessage.messageId" :selection="qqSelection" :names="senderNames" :active="active" :readable="qqLive" @image="imagePreview=$event" @quote="quotedMessage=$event" /></v-card-text><v-card-actions><v-spacer /><v-btn @click="quotedMessage=undefined">{{ t('关闭') }}</v-btn></v-card-actions></v-card></v-dialog>
@@ -206,7 +206,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
 details { overflow-wrap: anywhere; }
 summary { cursor: pointer; }
 .qq-chat-surface {overflow:visible!important;border:0!important;border-radius:0!important;background:transparent!important;padding:0 18px 20px!important;box-shadow:none!important;backdrop-filter:none!important;}
-.qq-chat-header {position:sticky;top:112px;z-index:4;min-height:58px;margin:0 -18px 16px!important;padding:8px 18px;background:rgb(var(--v-theme-background));border-bottom:1px solid rgba(var(--v-theme-on-surface),.08);}
+.qq-chat-header {position:sticky;top:0;z-index:4;min-height:58px;margin:0 -18px 16px!important;padding:8px 18px;background:rgb(var(--v-theme-background));border-bottom:1px solid rgba(var(--v-theme-on-surface),.08);}
 .qq-chat-heading {min-width:0;flex:1;}
 .qq-chat-heading .text-h6 {font-size:17px!important;line-height:24px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qq-member-count {font-weight:400;font-size:14px;color:rgba(var(--v-theme-on-surface),.6);}

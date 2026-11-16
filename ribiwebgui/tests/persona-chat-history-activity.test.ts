@@ -31,6 +31,7 @@ function fixture(t: import("node:test").TestContext) {
   const code = transformSync(compileScript(parse(source).descriptor, { id: "chat-history-activity" }).content,
     { loader: "ts", format: "cjs" }).code;
   const module = { exports: {} as any };
+  const pane={scrollTop:0,scrollHeight:800,clientHeight:800,addEventListener(){},removeEventListener(){}};
   vm.runInNewContext(code, { module, exports: module.exports, AbortController, URL, URLSearchParams,
     window: { innerHeight: 800 }, document: { scrollingElement: { scrollTop: 0 } },
     require: (name: string) => name === "vue" ? { ...vue,
@@ -38,6 +39,7 @@ function fixture(t: import("node:test").TestContext) {
       name.endsWith(".vue") ? {} :
       name.endsWith("personaServiceClient") ? { usePersonaService: () => ({ fetch }) } :
       name.endsWith("i18n/index") ? { useI18n: () => ({ t: (value: string) => value, locale: vue.ref("zh-CN") }) } :
+      name.endsWith("personaChatHistoryLayout") ? { chatHistoryScroller:()=>pane,chatHistoryViewport:()=>({top:0,bottom:800}),waitForChatHistoryFrame:async()=>false } :
       name.endsWith("markdownPreview") ? { renderMarkdownPreview: (value: string) => value } :
       require(name)
   });

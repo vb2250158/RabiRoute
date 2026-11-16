@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { createAgentSessionClient, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, type AgentHistoryEvent, type AgentSessionMessage } from '../persona/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
+import { chatHistoryScroller, chatHistoryViewport, waitForChatHistoryFrame } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import { renderMarkdownPreview } from '../../../../../ribiwebgui/src/markdownPreview';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
 import HistoryConversationLayout from './HistoryConversationLayout.vue';
@@ -20,6 +21,7 @@ const tasks = ref<PersonaAgentTask[]>([]), selectedId = ref(''), query = ref('')
 const selected = computed(() => tasks.value.find(task => task.id === selectedId.value));
 const offset = ref<number | null>(null), cursor = ref<string | null>(null);
 const events = ref<AgentHistoryEvent[]>([]), expanded = ref(new Set<string>());
+const listElement = ref<HTMLElement>(), virtualList = ref<{scrollToIndex(index:number):void}>();
 const messages = computed(() => agentHistoryMessages(agent.value?.provider || '', events.value));
 const loadingAgents = ref(false), loadingTasks = ref(false), loadingHistory = ref(false);
 const agentError = ref(''), taskError = ref(''), historyError = ref(''), partialHistory = ref(false);
@@ -67,9 +69,38 @@ async function loadHistory(more = false) {
     const nextCursor = agentHistoryNextCursor(agent.value.provider, page);
     if (nextCursor !== null && nextCursor === previousCursor) throw new Error(t('历史分页位置未前进，请刷新后重试。'));
     const incoming = agentHistoryEvents(agent.value.provider, page);
+    const scroller = chatHistoryScroller(listElement.value), viewport = chatHistoryViewport(scroller);
+    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 80;
+    const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>('.session-message') ?? [])]
+      .find(element => element.getBoundingClientRect().bottom > viewport.top && element.getBoundingClientRect().top < viewport.bottom);
+    const anchorId = anchor?.dataset.entryId, anchorTop = anchor?.getBoundingClientRect().top ?? 0;
+    const followBottom = !more || agent.value.provider !== 'dsh' && atBottom;
     events.value = [...new Map([...(more ? events.value : []), ...incoming].map(event => [event.id, event])).values()];
     cursor.value = nextCursor;
     partialHistory.value = Boolean(more && partialHistory.value || page.warnings?.length || page.coverage?.partial);
+    await nextTick();
+    const interrupt = () => request.abort(), interruptionEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+    for (const event of interruptionEvents) scroller.addEventListener(event, interrupt, {passive:true});
+    try {
+      if (followBottom && messages.value.length) virtualList.value?.scrollToIndex(messages.value.length - 1);
+      let requestedAnchor = false;
+      for (let frame = 0; frame < 12; frame++) {
+        if (!await waitForChatHistoryFrame(request.signal)) break;
+        if (followBottom) scroller.scrollTop = scroller.scrollHeight;
+        else if (anchorId) {
+          const restored = [...(listElement.value?.querySelectorAll<HTMLElement>('.session-message') ?? [])]
+            .find(element => element.dataset.entryId === anchorId);
+          if (restored) scroller.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+          else if (!requestedAnchor) {
+            virtualList.value?.scrollToIndex(messages.value.findIndex(message => message.id === anchorId));
+            requestedAnchor = true;
+          }
+        }
+      }
+    } finally {
+      for (const event of interruptionEvents) scroller.removeEventListener(event, interrupt);
+    }
+
   } catch (error) { if (!request.signal.aborted) historyError.value = userFacingError(error); }
   finally { if (historyRequest === request) loadingHistory.value = false; }
 }
@@ -79,10 +110,14 @@ function toggle(id: string) {
   expanded.value = next;
 }
 watch(() => [props.roleId, props.active], () => {
+  if (!props.active) { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); }
   if (loadedRole !== props.roleId) {
     directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort();
     agents.value = []; agentKey.value = ''; tasks.value = []; selectedId.value = ''; events.value = [];
     if (props.active) void loadAgents();
+  } else if (props.active && agent.value) {
+    if (!tasks.value.length) void loadTasks();
+    if (selectedId.value && !events.value.length) void loadHistory();
   }
 }, { immediate: true });
 watch(agentKey, () => {
@@ -126,9 +161,10 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
         <v-alert v-if="partialHistory" type="warning" variant="tonal" class="mb-3">{{ t('部分历史记录暂时无法读取，已加载的消息仍可查看。') }}</v-alert>
         <v-progress-linear v-if="loadingHistory" indeterminate :aria-label="t('正在加载历史记录')" />
         <div v-if="!messages.length && !loadingHistory && !historyError" class="pa-4 text-medium-emphasis">{{ t('当前页暂无用户输入或最终回复。') }}</div>
-        <div class="session-messages" aria-live="polite" :aria-busy="loadingHistory">
-          <v-virtual-scroll :items="messages" :item-height="160" renderless><template #default="{ item, itemRef }: { item: AgentSessionMessage; itemRef?: VNodeRef }">
-            <article :ref="itemRef" :key="item.id" class="session-message" :class="{ 'session-user': item.role === 'user' }" :data-message-role="item.role">
+        <v-btn v-if="cursor !== null && agent.provider === 'dsh'" class="mb-3" variant="text" :loading="loadingHistory" @click="loadHistory(true)">{{ t('加载更早的消息') }}</v-btn>
+        <div ref="listElement" class="session-messages" aria-live="polite" :aria-busy="loadingHistory">
+          <v-virtual-scroll ref="virtualList" :items="messages" :item-height="160" renderless><template #default="{ item, itemRef }: { item: AgentSessionMessage; itemRef?: VNodeRef }">
+            <article :ref="itemRef" :key="item.id" class="session-message" :class="{ 'session-user': item.role === 'user' }" :data-message-role="item.role" :data-entry-id="item.id">
               <AgentAvatar :provider="agent.provider" :kind="item.role === 'user' ? 'user' : 'agent'" />
               <div class="session-message-content">
                 <div class="session-sender">{{ item.role === 'user' ? t('用户') : t('最终回复') }}<time v-if="item.time" :datetime="item.time">{{ new Date(item.time).toLocaleString(locale) }}</time></div>
@@ -137,7 +173,7 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
             </article>
           </template></v-virtual-scroll>
         </div>
-        <v-btn v-if="cursor !== null" class="mt-3" variant="tonal" :loading="loadingHistory" @click="loadHistory(true)">{{ t(agent.provider === 'dsh' ? '加载更早的消息' : '继续加载消息') }}</v-btn>
+        <v-btn v-if="cursor !== null && agent.provider !== 'dsh'" class="mt-3" variant="tonal" :loading="loadingHistory" @click="loadHistory(true)">{{ t(agent.provider === 'dsh' ? '加载更早的消息' : '继续加载消息') }}</v-btn>
       </template>
       <div v-else class="pa-6 text-medium-emphasis">{{ t('选择会话查看用户输入和最终回复。') }}</div>
     </HistoryConversationLayout>
@@ -145,12 +181,14 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
 </template>
 
 <style scoped>
+.agent-session-history{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;}
+.agent-session-tabs{flex:none;}
 .agent-session-tabs{display:flex;align-items:center;gap:8px;min-width:0;margin:4px 0 20px;border-bottom:1px solid var(--rr-border-faint);}
 .agent-session-tabs :deep(.v-tabs){flex:1;min-width:0;}
 .agent-session-tab{text-transform:none;max-width:340px;letter-spacing:normal;}
 .agent-tab-copy{display:grid;gap:2px;min-width:0;margin-left:10px;text-align:left;}
 .agent-tab-copy small{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;opacity:.65;}
-.session-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px 18px;border-bottom:1px solid var(--rr-border-faint);margin-bottom:20px;}
+.session-heading{position:sticky;top:0;z-index:3;background:rgb(var(--v-theme-background));display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px 18px;border-bottom:1px solid var(--rr-border-faint);margin-bottom:20px;}
 .session-heading h3{font-size:17px;font-weight:600;overflow-wrap:anywhere;}
 .session-messages{padding:0 16px;min-width:0;}
 .session-message{display:flex;gap:12px;margin-bottom:24px;min-width:0;}

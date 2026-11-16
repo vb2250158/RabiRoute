@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.18 - 2026-11-17
+
+- Advance the plugin SDK to `1.4.1`. Windows Web builds retry temporary directory-sharing failures within a fixed budget and restore the previous complete output if publication still fails.
+- Declare the existing local voice packages as development-test dependencies. Advance `io.rabiroute.manager.voice-assistant` to `1.1.11` and the shared voice library to `0.3.2`, pinning ws to `8.23.0` for the disclosed memory-exhaustion fixes.
+- Advance `io.rabiroute.manager.persona` to `0.1.21`. Message history runs from oldest to newest with the latest messages at the bottom. Session lists, messages and details use separate thin internal scrollbars.
+- Shared chat scroll state preserves the reading anchor when loading older messages and follows the bottom for initial reads and new messages. A disposable ResizeObserver handles virtual-row size changes while preserving the view when reading earlier messages.
+- Align QQ, task, Agent, role-panel and system-message entry points while retaining native cursors, cancellation and session bindings.
+
 ## 0.15.17 - 2026-11-17
 
 - Fix incomplete frozen module dependencies in developer Web candidate verification and verify their hashes.

@@ -140,7 +140,8 @@ async function load(older=false) {
   }catch(cause){if(!controller.signal.aborted)error.value=userFacingError(cause);}
   finally{if(request===controller){request=undefined;loading.value=false;if(pendingRefresh&&props.active){pendingRefresh=false;void load();}}}
 }
-function showList(){restorePosition?.abort();detailPosition={key:selected.value?qqConversationIdentity(selected.value):selectedKey.value,y:window.scrollY};detailOpen.value=false;}
+const conversationLayout=ref<{scrollElement?:HTMLElement;restoreScroll(top:number):void}>();
+function showList(){restorePosition?.abort();detailPosition={key:selected.value?qqConversationIdentity(selected.value):selectedKey.value,y:conversationLayout.value?.scrollElement?.scrollTop??0};detailOpen.value=false;}
 async function choose(conversation:QqConversation){
   restorePosition?.abort();
   const identity=qqConversationIdentity(conversation);
@@ -149,9 +150,10 @@ async function choose(conversation:QqConversation){
   if(position===undefined)return;
   const controller=new AbortController();restorePosition=controller;
   const interrupt=()=>controller.abort(),events=['wheel','touchstart','pointerdown','keydown'] as const;
-  for(const event of events)window.addEventListener(event,interrupt,{passive:true});
-  try{await nextTick();for(let frame=0;frame<8;frame++){if(!await waitForChatHistoryFrame(controller.signal))break;window.scrollTo(0,position);}}
-  finally{for(const event of events)window.removeEventListener(event,interrupt);}
+  const scroller=conversationLayout.value?.scrollElement;
+  for(const event of events)scroller?.addEventListener(event,interrupt,{passive:true});
+  try{await nextTick();for(let frame=0;frame<8;frame++){if(!await waitForChatHistoryFrame(controller.signal))break;conversationLayout.value?.restoreScroll(position);}}
+  finally{for(const event of events)scroller?.removeEventListener(event,interrupt);}
 }
 async function loadMembers() {
   const conversation=selected.value;
@@ -185,7 +187,7 @@ onBeforeUnmount(()=>{restorePosition?.abort();request?.abort();memberRequest?.ab
 </script>
 
 <template>
-  <HistoryConversationLayout :items="[]" :selected="selectedKey" v-model:search="search" :loading="loading" :has-details="selected?.kind==='group'" details-title="群成员" v-model:detail-open="detailOpen" v-model:info-open="membersOpen" @back="showList">
+  <HistoryConversationLayout ref="conversationLayout" :items="[]" :selected="selectedKey" v-model:search="search" :loading="loading" :has-details="selected?.kind==='group'" details-title="群成员" v-model:detail-open="detailOpen" v-model:info-open="membersOpen" @back="showList">
     <template #list-actions><v-btn icon="mdi-refresh" size="small" variant="text" :aria-label="t('刷新会话')" @click="load();loadContacts()" /></template>
     <template #list-notice>
       <QqReadNotice v-if="error" summary="会话暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load()" />

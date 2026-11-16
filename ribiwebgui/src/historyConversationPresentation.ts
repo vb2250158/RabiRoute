@@ -17,9 +17,9 @@ export function endpointHistoryTime(seconds:number):string {
 }
 
 /** Saved pages already follow physical write order; only live QQ uses protocol timestamps. */
-export function historyPageForDisplay<T extends {time:number}>(page:readonly T[],bubble:boolean,live:boolean):T[] {
+export function historyPageForDisplay<T extends {time:number}>(page:readonly T[],_bubble:boolean,live:boolean):T[] {
   const entries=page.slice();
-  return live?entries.sort((a,b)=>bubble?a.time-b.time:b.time-a.time):bubble?entries:entries.reverse();
+  return live ? entries.sort((a,b)=>a.time-b.time) : entries;
 }
 
 /** Keep the latest indexed task page authoritative, retaining already loaded older tasks. */

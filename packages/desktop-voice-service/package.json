@@ -1,6 +1,6 @@
 {
   "name": "@rabilink/desktop-voice-service",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -47,7 +47,7 @@
     "@rabilink/assistant-runtime": "file:../assistant-runtime"
   },
   "dependencies": {
-    "ws": "8.18.3",
+    "ws": "8.23.0",
     "koffi": "3.1.1"
   },
   "devDependencies": {

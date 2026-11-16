@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, watch, type VNodeRef } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import type { HistoryConversationItem } from '../../../../../ribiwebgui/src/historyConversationPresentation';
 import { useHistoryConversationLayout } from '../../../../../ribiwebgui/src/historyConversationLayout';
+import { bindChatHistoryScroll } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import { qqConversationTime } from '../../../../../ribiwebgui/src/qqChatLayout';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
 const props = defineProps<{items:HistoryConversationItem[];selected:string;search:string;loading?:boolean;detailsTitle?:string;hasDetails?:boolean;detailOpen?:boolean;infoOpen?:boolean}>();
 const emit = defineEmits<{select:[string];search:[];'update:search':[string];'update:detailOpen':[boolean];'update:infoOpen':[boolean];back:[]}>();
 const {t,locale} = useI18n();
-const localDetail = ref(false), localInfo = ref(false), root = ref<HTMLElement>();
+const localDetail = ref(false), localInfo = ref(false), root = ref<HTMLElement>(), scrollElement = ref<HTMLElement>(), scrollContent = ref<HTMLElement>();
+let scrollBinding: ReturnType<typeof bindChatHistoryScroll> | undefined;
+onMounted(() => { if (scrollElement.value && scrollContent.value) scrollBinding = bindChatHistoryScroll(scrollElement.value, scrollContent.value); });
+onBeforeUnmount(() => { scrollBinding?.dispose(); });
+function restoreScroll(top:number) { scrollBinding?.restorePosition(top); }
+defineExpose({ scrollElement, restoreScroll });
 const detailOpen = computed({ get: () => props.detailOpen ?? localDetail.value, set: value => { localDetail.value = value; emit('update:detailOpen', value); } });
 const infoOpen = computed({ get: () => props.infoOpen ?? localInfo.value, set: value => { localInfo.value = value; emit('update:infoOpen', value); } });
 const {width,maximum,detailsWidth,detailsMaximum,dragging,start,move,stop,key,reset,details} = useHistoryConversationLayout(root, () => Boolean(props.hasDetails));
@@ -44,7 +50,7 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
     <div class="history-splitter" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整会话列表宽度')" :aria-valuenow="width" :aria-valuemin="200" :aria-valuemax="maximum" @pointerdown="start" @pointermove="move" @pointerup="stop" @pointercancel="stop" @lostpointercapture="stop" @keydown="key" @dblclick="reset" />
     <section class="history-detail">
       <div class="history-mobile-actions"><v-btn icon="mdi-arrow-left" variant="text" :aria-label="t('返回会话')" @click="back" /><v-spacer /><v-btn v-if="hasDetails" icon="mdi-information-outline" variant="text" :aria-label="t(detailsTitle||'详细信息')" @click="infoOpen=true" /></div>
-      <slot />
+      <div ref="scrollElement" class="history-message-scroll" data-history-scroll tabindex="0" :aria-label="t('消息记录')"><div ref="scrollContent" class="history-scroll-content"><slot /></div></div>
     </section>
     <div v-if="hasDetails" class="history-splitter history-info-splitter" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整右侧列表宽度')" :aria-valuenow="detailsWidth" :aria-valuemin="180" :aria-valuemax="detailsMaximum" @pointerdown="details.start" @pointermove="details.move" @pointerup="details.stop" @pointercancel="details.stop" @lostpointercapture="details.stop" @keydown="details.key" @dblclick="details.reset" />
     <aside v-if="hasDetails" class="history-info"><slot name="details" /></aside>
@@ -52,9 +58,9 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
   </div>
 </template>
 <style scoped>
-.history-conversations{display:grid;grid-template-columns:var(--history-list-width) 12px minmax(0,1fr);align-items:start;min-width:0;}
+.history-conversations{display:grid;grid-template-columns:var(--history-list-width) 12px minmax(0,1fr);align-items:stretch;min-width:0;min-height:0;height:100%;flex:1;}
 .history-conversations.history-with-details{grid-template-columns:var(--history-list-width) 12px minmax(0,1fr) 12px var(--history-details-width);}
-.history-list{position:sticky;top:120px;display:flex;flex-direction:column;min-width:0;max-height:calc(100dvh - 140px);background:rgba(var(--v-theme-on-surface),.025);}
+.history-list{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;background:rgba(var(--v-theme-on-surface),.025);}
 .history-search{display:flex;align-items:center;gap:4px;padding:10px 8px;}
 .history-search :deep(.v-field){font-size:12px;border-radius:7px;}
 .history-session-scroll{min-height:0;overflow-y:auto;overflow-x:hidden;padding:0;overscroll-behavior:contain;}
@@ -66,14 +72,19 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
 .history-row-title>time{font-size:10px;opacity:.6;flex-shrink:0;max-width:64px;overflow:hidden;text-overflow:ellipsis;}
 .history-avatar{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;margin-right:12px;background:rgba(var(--v-theme-on-surface),.08);font-size:14px;}
 .history-list :deep(.agent-avatar){margin-right:12px;}
-.history-splitter{align-self:stretch;min-height:240px;cursor:col-resize;touch-action:none;position:relative;}
+.history-splitter{align-self:stretch;min-height:0;cursor:col-resize;touch-action:none;position:relative;}
 .history-splitter::after{content:'';position:absolute;top:0;bottom:0;left:5px;width:1px;background:var(--rr-border-faint);}
 .history-splitter:hover::after,.history-splitter:focus-visible::after{background:rgb(var(--v-theme-secondary));}
 .history-dragging{user-select:none;}
-.history-detail{min-width:0;}
-.history-info{position:sticky;top:120px;height:calc(100dvh - 140px);max-height:calc(100dvh - 140px);overflow-y:auto;overflow-x:hidden;min-width:0;padding:0 0 0 8px;}
+.history-detail{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;}
+.history-message-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;}
+.history-message-scroll,.history-session-scroll,.history-info{overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(var(--v-theme-on-surface),.25) transparent;scrollbar-gutter:stable;}
+.history-message-scroll::-webkit-scrollbar,.history-session-scroll::-webkit-scrollbar,.history-info::-webkit-scrollbar{width:6px;}
+.history-message-scroll::-webkit-scrollbar-thumb,.history-session-scroll::-webkit-scrollbar-thumb,.history-info::-webkit-scrollbar-thumb{border-radius:8px;background:rgba(var(--v-theme-on-surface),.25);}
+.history-message-scroll::-webkit-scrollbar-track,.history-session-scroll::-webkit-scrollbar-track,.history-info::-webkit-scrollbar-track{background:transparent;}
+.history-info{height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;min-width:0;padding:0 0 0 8px;}
 .history-mobile-actions{display:none;}
-@media(max-width:1200px){.history-conversations.history-with-details{grid-template-columns:var(--history-list-width) 12px minmax(0,1fr);}.history-info,.history-info-splitter{display:none;}.history-mobile-actions{display:flex;align-items:center;position:sticky;top:112px;z-index:4;background:rgb(var(--v-theme-background));}}
+@media(max-width:1200px){.history-conversations.history-with-details{grid-template-columns:var(--history-list-width) 12px minmax(0,1fr);}.history-info,.history-info-splitter{display:none;}.history-mobile-actions{display:flex;align-items:center;flex:none;z-index:4;background:rgb(var(--v-theme-background));}}
 @media(min-width:761px){.history-mobile-actions>:first-child{display:none;}}
-@media(max-width:760px){.history-conversations,.history-conversations.history-with-details{display:flex;flex-direction:column;}.history-splitter{display:none;}.history-list{width:100%;position:static;max-height:calc(100dvh - 180px);}.history-detail{display:none;width:100%;}.history-detail-open .history-list{display:none;}.history-detail-open .history-detail{display:block;}}
+@media(max-width:760px){.history-conversations,.history-conversations.history-with-details{display:flex;flex-direction:column;}.history-splitter{display:none;}.history-list{width:100%;position:static;}.history-detail{display:none;width:100%;}.history-detail-open .history-list{display:none;}.history-detail-open .history-detail{display:flex;}}
 </style>

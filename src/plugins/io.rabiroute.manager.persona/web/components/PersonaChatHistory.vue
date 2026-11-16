@@ -9,7 +9,7 @@ import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vu
 import type { PersonaChatHistoryPage, PersonaChatReply } from "@shared/personaChatHistory";
 import type { ChatHistoryCategory } from '@shared/personaHistoryChannels';
 import { mergeChatHistoryBatch, readChatHistoryAddition, retainChatHistoryWindow } from "../../../../../ribiwebgui/src/personaChatHistoryUpdates";
-import { waitForChatHistoryFrame } from "../../../../../ribiwebgui/src/personaChatHistoryLayout";
+import { waitForChatHistoryFrame, chatHistoryScroller, chatHistoryViewport } from "../../../../../ribiwebgui/src/personaChatHistoryLayout";
 import { renderMarkdownPreview } from "../../../../../ribiwebgui/src/markdownPreview";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { usePersonaService } from "../persona/personaServiceClient";
@@ -18,7 +18,7 @@ const fetch = usePersonaService().fetch;
 const props = defineProps<{ roleId: string; version: number; category?: ChatHistoryCategory; title?: string; active?: boolean;taskKey?:string;conversation?:boolean }>();
 const { t, locale } = useI18n();
 const entries = ref<PersonaChatReply[]>([]);
-const displayedEntries=computed(()=>props.conversation?entries.value.slice().reverse():entries.value);
+const displayedEntries=computed(()=>entries.value.slice().reverse());
 const detailsEntry = ref<PersonaChatReply>();
 const messageTime = (entry:PersonaChatReply) => new Date(entry.receivedAt).getTime()/1000;
 const timeBreaks = computed(() => new Set(displayedEntries.value.filter((entry,index) => qqTimeBreak(messageTime(entry), index ? messageTime(displayedEntries.value[index-1]!) : undefined)).map(entry=>entry.id)));
@@ -81,16 +81,14 @@ async function load(older = false, resumeGap = false, newer = false, refreshMeta
     }
     const added = page.entries.filter(entry => !known.has(entry.id));
     // Retain existing keyed nodes and the visible reading anchor during a prepend.
-    const viewport = listElement.value?.getBoundingClientRect();
+    const readingScroller = chatHistoryScroller(listElement.value);
+    const viewport = chatHistoryViewport(readingScroller);
     const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>(".chat-reply") ?? [])]
-      .find(element => element.getBoundingClientRect().bottom > Math.max(0, viewport?.top ?? 0) && element.getBoundingClientRect().top < Math.min(window.innerHeight, viewport?.bottom ?? window.innerHeight));
+      .find(element => element.getBoundingClientRect().bottom > viewport.top && element.getBoundingClientRect().top < viewport.bottom);
     const anchorTop = anchor?.getBoundingClientRect().top ?? 0;
     const anchorId = anchor?.dataset.entryId;
-    let scroller = anchor?.parentElement;
-    while (scroller && !(/auto|scroll/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
-    const readingScroller = scroller ?? document.scrollingElement;
     const preservePosition = (readingScroller?.scrollTop ?? 0) > 0;
-    const atBottom=Boolean(listElement.value&&listElement.value.getBoundingClientRect().bottom<=window.innerHeight+80);
+    const atBottom=readingScroller.scrollHeight-readingScroller.scrollTop-readingScroller.clientHeight<=80;
     if (older) entries.value.push(...added);
     else entries.value = mergeChatHistoryBatch(entries.value, page.entries, afterId);
     const retained = retainChatHistoryWindow(entries.value, anchorId, older);
@@ -108,19 +106,19 @@ async function load(older = false, resumeGap = false, newer = false, refreshMeta
       gapAfterId = gapCursor.value === null ? undefined : (page.entries.at(-1)?.id ?? afterId);
     }
     await nextTick();
-    if(props.conversation&&!older&&!resumeGap&&(!hadEntries||atBottom)){
+    if(!older&&!resumeGap&&(!hadEntries||atBottom)){
       let interrupted=false;const interrupt=()=>{interrupted=true;};
       const events=['wheel','touchstart','pointerdown','keydown'] as const;
-      for(const event of events)window.addEventListener(event,interrupt,{passive:true});
+      for(const event of events)readingScroller.addEventListener(event,interrupt,{passive:true});
       try{
         virtualList.value?.scrollToIndex(displayedEntries.value.length-1);
         for(let frame=0;frame<12&&!controller.signal.aborted&&!interrupted;frame++){
           if(!await waitForChatHistoryFrame(controller.signal))break;
-          if(listElement.value)window.scrollTo(0,window.scrollY+listElement.value.getBoundingClientRect().bottom-window.innerHeight+24);
+          readingScroller.scrollTop=readingScroller.scrollHeight;
         }
-      }finally{for(const event of events)window.removeEventListener(event,interrupt);}
+      }finally{for(const event of events)readingScroller.removeEventListener(event,interrupt);}
     }
-    if (!controller.signal.aborted && anchorId && added.length && preservePosition && !(props.conversation&&!older&&atBottom)) {
+    if (!controller.signal.aborted && anchorId && added.length && preservePosition && !(!older&&atBottom)) {
       // Vuetify measures dynamic rows with ResizeObserver and updates spacer offsets
       // after Vue's nextTick. Keep the actual rendered anchor, then settle its offset
       // across those measurements; scrollToIndex is only needed if it left the window.
@@ -211,7 +209,6 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
     <div class="d-flex align-center justify-space-between ga-3 mb-3" :class="{'conversation-header':conversation}">
       <div>
         <div class="text-h6" data-no-i18n>{{ props.title || t('消息记录') }}</div>
-        <div v-if="!conversation" class="text-body-2 text-medium-emphasis">{{ t('最新消息在前。') }}</div>
       </div>
       <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load(false, false, false, true)">{{ t('刷新') }}</v-btn>
     </div>
@@ -225,8 +222,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
       <v-btn variant="text" :disabled="loading" @click="load(false, true)">{{ t('继续加载') }}</v-btn>
     </v-alert>
     <v-alert v-if="invalidRecords" type="warning" variant="tonal" class="mb-3">{{ t('部分消息记录损坏，其他消息仍可浏览。') }}</v-alert>
-    <v-btn v-if="newerCursor !== null" variant="tonal" :disabled="loading" @click="load(false, false, true)">{{ t('加载较新的回复') }}</v-btn>
-    <v-btn v-if="conversation&&nextCursor !== null" class="mb-3" variant="text" :disabled="loading" @click="load(true)">{{t('加载更早的消息')}}</v-btn>
+    <v-btn v-if="nextCursor !== null" class="mb-3" variant="text" :disabled="loading" @click="load(true)">{{t('加载更早的消息')}}</v-btn>
     <div ref="listElement" class="chat-history-list" aria-live="polite" :aria-busy="loading">
       <v-virtual-scroll v-if="entries.length" ref="virtualList" :items="displayedEntries" item-key="id" :renderless="true" :item-height="180">
       <template #default="{ item: entry, itemRef }: { item: PersonaChatReply; itemRef?: VNodeRef }">
@@ -280,7 +276,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
       </template>
       </v-virtual-scroll>
     </div>
-    <v-btn v-if="!conversation&&nextCursor !== null" class="mt-3" variant="tonal" :disabled="loading" @click="load(true)">{{ t('加载更早的回复') }}</v-btn>
+    <v-btn v-if="newerCursor !== null" variant="tonal" :disabled="loading" @click="load(false, false, true)">{{ t('加载较新的回复') }}</v-btn>
     <v-dialog :model-value="Boolean(detailsEntry)" max-width="640" scrollable @update:model-value="value=>{if(!value)detailsEntry=undefined}"><v-card><v-card-title>{{t('消息详情')}}</v-card-title><v-card-text v-if="detailsEntry"><div class="text-caption text-medium-emphasis mb-2">
           <time :datetime="detailsEntry.receivedAt">{{ new Date(detailsEntry.receivedAt).toLocaleString() }}</time>
           <div class="chat-task-row mt-1" :class="{'conversation-task-row':conversation}">
@@ -320,7 +316,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
 <style scoped>
 .chat-history-list { overflow-anchor: none; }
 .conversation-surface{border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;backdrop-filter:none!important;padding:0 18px 20px!important;overflow:visible!important;}
-.conversation-header{position:sticky;top:112px;z-index:4;min-height:58px;background:rgb(var(--v-theme-background));padding:8px 0;border-bottom:1px solid rgba(var(--v-theme-on-surface),.08);}
+.conversation-header{position:sticky;top:0;z-index:4;min-height:58px;background:rgb(var(--v-theme-background));padding:8px 0;border-bottom:1px solid rgba(var(--v-theme-on-surface),.08);}
 .conversation-surface .chat-reply{width:fit-content;max-width:88%;border:0;border-radius:10px;background:rgba(var(--v-theme-on-surface),.075);padding:10px 13px;}
 .conversation-surface .conversation-outgoing{margin-left:auto;background:rgba(var(--v-theme-secondary),.14);}
 .conversation-message-row{display:flex;align-items:flex-start;gap:10px;min-width:0;}

@@ -74,7 +74,8 @@ function actualEndpointHistory(pages:unknown[]) {
   const props={roleId:'fixture',adapter:'napcat',title:'Fixture',version:1,active:true,bubble:true,qqLive:true,qqSelection:selection,ownQqId:'20002',conversationKey:'original-conversation'};
   const watches:{source:()=>unknown;callback:(value:unknown)=>void}[]=[];
   const calls:string[]=[];let started!:()=>void;const firstRead=new Promise<void>(resolve=>{started=resolve;});
-  const bindings={computed,ref,defineProps:()=>props,defineEmits:()=>()=>{},useI18n:()=>({t:(text:string)=>text,locale:ref('en')}),
+  const pane={scrollTop:0,scrollHeight:800,clientHeight:800,addEventListener(){},removeEventListener(){}};
+  const bindings={chatHistoryScroller:()=>pane,chatHistoryViewport:()=>({top:0,bottom:800}),computed,ref,defineProps:()=>props,defineEmits:()=>()=>{},useI18n:()=>({t:(text:string)=>text,locale:ref('en')}),
     usePersonaService:()=>({fetch:async(url:string)=>{calls.push(url);started();assert.ok(pages.length,'Every read must consume an explicit private page');const data=await pages.shift();if(data instanceof Error)throw data;return {ok:true,json:async()=>({code:0,data})};}}),
     watch:(source:()=>unknown,callback:(value:unknown)=>void)=>{watches.push({source,callback});},onBeforeUnmount:()=>{},onDeactivated:()=>{},onActivated:()=>{},nextTick:async()=>{},
     qqNavigationRead,qqHistoryRecord,mergeQqHistoryWindow,historyPageForDisplay,mergeSavedHistoryWindow,userFacingError:String,waitForChatHistoryFrame:async()=>false,

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
+import ts from 'typescript';
+import { parse } from '@vue/compiler-sfc';
+import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
 import { createAgentSessionClient, personaSessionAgents } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
@@ -132,4 +135,47 @@ test('explicit DSH origin and enrolled LAN instance keep their original instance
 test('the role history grid keeps its implicit minimum within the viewport for long Agent tabs and messages', () => {
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/pages/RoleMessageHistoryPage.vue', import.meta.url), 'utf8');
   assert.match(source, /\.page-shell\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
+
+test('returning to an Agent tab resumes the original cancelled first task/history read', async () => {
+  const file = new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url);
+  const parsed = parse(fs.readFileSync(file, 'utf8'));
+  const source = ts.createSourceFile('agent-history.ts', parsed.descriptor.scriptSetup!.content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const body = source.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getFullText(source)).join('\n');
+  const emitted = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const props = reactive({ roleId: 'role', active: true });
+  const agent = { id: 'local:codex', provider: 'codex', key: 'codex', routes: [] };
+  let taskReads = 0, historyReads = 0;
+  const cancelled = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+  const client = {
+    agents: async () => [agent],
+    tasks: async (_agent: unknown, _query: string, _offset: number, signal: AbortSignal) => {
+      if (++taskReads === 1) return cancelled(signal);
+      return { items: [{ id: 'original-task', title: 'Original task' }], nextOffset: null };
+    },
+    history: async (_agent: unknown, task: string, _cursor: unknown, signal: AbortSignal) => {
+      assert.equal(task, 'original-task');
+      if (++historyReads === 1) return cancelled(signal);
+      return { entries: [native(1, 'event_msg', { type: 'user_message', message: 'User input' })], nextCursor: null };
+    }
+  };
+  const pane = Object.assign(new EventTarget(), { scrollHeight: 100, clientHeight: 100, scrollTop: 0 });
+  const cleanups: Array<() => void> = [];
+  const bindings = { computed, nextTick, ref, watch, onBeforeUnmount: (callback: () => void) => cleanups.push(callback),
+    defineProps: () => props, usePersonaService: () => ({ fetch, deviceId: '' }), createAgentSessionClient: () => client,
+    useI18n: () => ({ t: (text: string) => text, locale: ref('en') }), pluginCatalogStore: { agentAdapters: ref([]) },
+    userFacingError: String, agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor,
+    chatHistoryScroller: () => pane, chatHistoryViewport: () => ({ top: 0, bottom: 100 }), waitForChatHistoryFrame: async () => false };
+  const scope = effectScope();
+  const state = scope.run(() => new Function(...Object.keys(bindings), emitted + ';return {tasks,selectedId,messages};')(...Object.values(bindings)))!;
+  const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick(); };
+  try {
+    await flush(); assert.equal(taskReads, 1);
+    props.active = false; await flush(); props.active = true; await flush();
+    assert.equal(taskReads, 2); assert.equal(state.tasks.value[0].id, 'original-task');
+    state.selectedId.value = 'original-task'; await flush(); assert.equal(historyReads, 1);
+    props.active = false; await flush(); props.active = true; await flush();
+    assert.equal(historyReads, 2); assert.equal(state.messages.value[0].text, 'User input');
+  } finally { cleanups.forEach(cleanup => cleanup()); scope.stop(); }
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { MessageHistoryChannelCatalog } from '@shared/personaHistoryChannels';
 import { historyChannels } from '../../../../../ribiwebgui/src/personaHistoryChannels';
 import { messageEndpointCatalog } from '../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCatalog';
@@ -7,7 +7,6 @@ import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogS
 import { usePersonaService } from '../persona/personaServiceClient';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
-import { waitForChatHistoryFrame } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import EndpointConversationHistory from './EndpointConversationHistory.vue';
 import PersonaTaskHistory from './PersonaTaskHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
@@ -21,8 +20,7 @@ const channels = computed(() => historyChannels(catalog.value,messageEndpointCat
 const selected = ref(''), visited = ref(new Set<string>());
 const searchTestOpen = ref(false);
 const error = ref(''), warnings = ref<string[]>([]), catalogLoading=ref(true);
-const positions = new Map<string, number>();
-let request: AbortController | undefined, layout: AbortController | undefined;
+let request: AbortController | undefined;
 async function refreshCatalog() {
   request?.abort(); const controller = new AbortController(); request = controller;catalogLoading.value=true;
   try {
@@ -35,34 +33,19 @@ async function refreshCatalog() {
   finally {if(request===controller)catalogLoading.value=false;}
 }
 watch(() => props.version, refreshCatalog);
-watch(() => props.roleId, () => { catalog.value = { adapters: [], chatCategories: [] }; positions.clear(); visited.value = new Set<string>(); selected.value = ''; void refreshCatalog(); }, { immediate: true });
+watch(() => props.roleId, () => { catalog.value = { adapters: [], chatCategories: [] }; visited.value = new Set<string>(); selected.value = ''; void refreshCatalog(); }, { immediate: true });
 watch(channels,list=>{
   const available=new Set(list.map(channel=>channel.id));
   visited.value=new Set([...visited.value].filter(id=>available.has(id)));
-  for(const id of positions.keys())if(!available.has(id))positions.delete(id);
   if(!available.has(selected.value))selected.value=list[0]?.id??'';
 });
-watch(selected, async (id, previous) => {
-  positions.set(previous, window.scrollY); visited.value.add(id);
-  layout?.abort(); const controller = new AbortController(); layout = controller;
-  const interrupt = () => controller.abort();
-  const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
-  for (const event of events) window.addEventListener(event, interrupt, { passive: true });
-  try {
-    await nextTick();
-    const target = positions.get(id) ?? 0;
-    for (let frame = 0; frame < 8 && !controller.signal.aborted; frame++) {
-      if (!await waitForChatHistoryFrame(controller.signal)) break;
-      window.scrollTo(0, target);
-    }
-  } finally { for (const event of events) window.removeEventListener(event, interrupt); }
-});
-onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
+watch(selected, id => { visited.value.add(id); });
+onBeforeUnmount(() => { request?.abort(); });
 </script>
 
 <template>
-  <div>
-    <div class="d-flex justify-end flex-wrap ga-2"><v-btn variant="text" prepend-icon="mdi-magnify" @click="searchTestOpen = true">{{ t('搜索接口测试') }}</v-btn><v-btn variant="text" prepend-icon="mdi-refresh" @click="refreshCatalog">{{ t('刷新渠道') }}</v-btn></div>
+  <div class="persona-message-history">
+    <div class="history-channel-toolbar d-flex justify-end flex-wrap ga-2"><v-btn variant="text" prepend-icon="mdi-magnify" @click="searchTestOpen = true">{{ t('搜索接口测试') }}</v-btn><v-btn variant="text" prepend-icon="mdi-refresh" @click="refreshCatalog">{{ t('刷新渠道') }}</v-btn></div>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
     <v-tabs v-model="selected" color="secondary" show-arrows class="history-channel-tabs mb-4" :aria-label="t('消息渠道')">
       <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
@@ -71,7 +54,7 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
     <v-alert v-if="!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
     <v-alert v-for="warning in warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
     <template v-for="channel in channels" :key="channel.id">
-      <div v-if="visited.has(channel.id)" v-show="selected === channel.id" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
+      <div v-if="visited.has(channel.id)" v-show="selected === channel.id" class="history-channel-panel" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
         <PersonaAgentSessions v-if="channel.agentSessions" :role-id="roleId" :active="selected===channel.id" />
         <PersonaTaskHistory v-else-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
         <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
@@ -82,6 +65,9 @@ onBeforeUnmount(() => { request?.abort(); layout?.abort(); });
 </template>
 
 <style scoped>
+.persona-message-history{display:flex;flex-direction:column;min-height:0;min-width:0;height:100%;}
+.history-channel-toolbar,.history-channel-tabs{flex:none;}
+.history-channel-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;}
 .history-channel-tabs { position:sticky; top:64px; z-index:5; background:rgb(var(--v-theme-background)); }
 .history-channel-tabs :deep(.v-tab) {text-transform:none;letter-spacing:normal;}
 </style>

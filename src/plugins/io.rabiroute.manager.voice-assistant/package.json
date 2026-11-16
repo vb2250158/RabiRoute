@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.voice-assistant",
-  "version": "1.1.10",
+  "version": "1.1.11",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -32,7 +32,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "koffi": "3.1.1",
-    "ws": "8.18.3",
+    "ws": "8.23.0",
     "@rabilink/assistant-runtime": "file:../../../packages/assistant-runtime"
   }
 }

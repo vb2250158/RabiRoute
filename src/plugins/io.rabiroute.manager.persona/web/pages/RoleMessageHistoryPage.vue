@@ -44,5 +44,5 @@ onBeforeUnmount(() => { events?.close(); });
 </template>
 
 <style scoped>
-.page-shell { grid-template-columns: minmax(0, 1fr); }
+.page-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: calc(100dvh - 64px); min-height: 0; padding-bottom: 16px; }
 </style>

@@ -39,6 +39,7 @@ function actualLayoutHandlers(hasDetails = () => true) {
     unmount:()=>unmounted.forEach(fn=>fn()),disconnected:()=>disconnected};
 }
 function sfcSetup(name:string,bindings:Record<string,unknown>,expose:string) {
+  bindings={defineExpose(){},onMounted(){},onBeforeUnmount(){},bindChatHistoryScroll:()=>({dispose(){},restorePosition(){}}),...bindings};
   const parsed=parse(readFileSync(componentPath(name),'utf8'));assert.deepEqual(parsed.errors,[]);
   const source=ts.createSourceFile('fixture.ts',parsed.descriptor.scriptSetup!.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const body=source.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(source)).join('\n');
@@ -78,7 +79,7 @@ test('actual shared layout keeps controlled mobile list/info state during backgr
   }finally{scope.stop();}
 });
 
-test('actual QQ handlers preserve members and browser position across a canonical key alias, then close on a different source',async()=>{
+test('actual QQ handlers preserve members and pane position across a canonical key alias, then close on a different source',async()=>{
   const props=reactive({roleId:'fixture',version:0,messageVersion:0,active:false,routes:[{routeId:'route',instanceId:'instance',name:'Current'}]});
   const cleanup:(()=>void)[]=[],scroll:number[]=[];
   const window={scrollY:700,addEventListener(){},removeEventListener(){},scrollTo:(_x:number,y:number)=>{scroll.push(y);window.scrollY=y;}};
@@ -86,7 +87,8 @@ test('actual QQ handlers preserve members and browser position across a canonica
   const state=scope.run(()=>sfcSetup('NapcatConversationHistory',{computed,ref,watch,nextTick,onBeforeUnmount:(fn:()=>void)=>cleanup.push(fn),defineProps:()=>props,
     useDisplay:()=>({width:ref(390)}),useI18n:()=>({t:(x:string)=>x,locale:ref('en')}),usePersonaService:()=>({fetch:async()=>{throw new Error('Unexpected read in this layout-only fixture');}}),
     window,qqConfiguredRoute,qqConversationIdentity,userFacingError:String,waitForChatHistoryFrame:async(signal:AbortSignal)=>!signal.aborted},
-    'conversations,selectedKey,membersOpen,detailOpen,showList,choose'))!;
+    'conversations,selectedKey,membersOpen,detailOpen,showList,choose,conversationLayout'))!;
+  const pane={scrollTop:700,addEventListener(){},removeEventListener(){}};state.conversationLayout.value={scrollElement:pane,restoreScroll:(top:number)=>{pane.scrollTop=top;}};
   const stored={conversationKey:'stored-key',gatewayId:'route',instanceId:'instance',kind:'group',target:'10001',time:1,preview:''};
   try {
     state.conversations.value=[stored];state.selectedKey.value=stored.conversationKey;await nextTick();
@@ -94,7 +96,7 @@ test('actual QQ handlers preserve members and browser position across a canonica
     const canonical={...stored,conversationKey:'qq-live:key',storedConversationKey:stored.conversationKey};
     state.conversations.value=[canonical];state.selectedKey.value=canonical.conversationKey;await nextTick();
     assert.equal(state.detailOpen.value,false);assert.equal(state.membersOpen.value,true);
-    window.scrollY=0;await state.choose(canonical);assert.equal(state.detailOpen.value,true);assert.equal(scroll.at(-1),700);
+    window.scrollY=0;pane.scrollTop=0;await state.choose(canonical);assert.equal(state.detailOpen.value,true);assert.equal(pane.scrollTop,700);assert.equal(window.scrollY,0);assert.equal(scroll.length,0);
     state.membersOpen.value=true;
     const different={...canonical,conversationKey:'other-source',gatewayId:'other-route'};
     state.conversations.value=[canonical,different];state.selectedKey.value=different.conversationKey;await nextTick();
@@ -102,9 +104,12 @@ test('actual QQ handlers preserve members and browser position across a canonica
   }finally{cleanup.forEach(fn=>fn());scope.stop();}
 });
 
-test('shared mobile navigation stays under the app header and tabs without a second message scroller',()=>{
+test('shared history owns a thin internal message scroller with fixed mobile navigation',()=>{
   const source=readFileSync(componentPath('HistoryConversationLayout'),'utf8');
-  assert.match(source,/history-mobile-actions\{[^}]*position:sticky;top:112px;/);
+  assert.match(source,/class="history-message-scroll" data-history-scroll/);
+  assert.match(source,/history-message-scroll\{[^}]*overflow-y:auto/);
+  assert.match(source,/scrollbar-width:thin/);
+  assert.match(source,/::-webkit-scrollbar\{width:6px/);
   assert.doesNotMatch(source,/history-detail\{[^}]*overflow-y:(?:auto|scroll)/);
 });
 
