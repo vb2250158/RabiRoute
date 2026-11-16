@@ -232,8 +232,15 @@ if (process.argv.includes(WORKER_ARGUMENT)) {
     assert.ok(Number(readyUrl.port) > 0, `Manager did not publish a dynamic TCP endpoint: ${ready.baseUrl}`);
 
     mark("health");
-    const healthResponse = await fetch(`${ready.baseUrl}/health`);
-    const healthPayload = await healthResponse.json() as Record<string, any>;
+    let healthResponse = await fetch(`${ready.baseUrl}/health`);
+    let healthPayload = await healthResponse.json() as Record<string, any>;
+    // READY publishes the listener; required plugin capabilities reconcile asynchronously.
+    const pluginDeadline = Date.now() + 20000;
+    while (!healthPayload.health.requiredReady && Date.now() < pluginDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      healthResponse = await fetch(`${ready.baseUrl}/health`);
+      healthPayload = await healthResponse.json() as Record<string, any>;
+    }
     assert.equal(healthResponse.status, 200, JSON.stringify(healthPayload));
     assert.equal(healthPayload.health.live, true);
     assert.equal(healthPayload.health.requiredReady, true);

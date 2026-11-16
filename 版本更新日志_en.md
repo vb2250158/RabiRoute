@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.11 - 2026-11-16
+
+- Align YeYu and QQ test fixtures with explicit synthetic endpoints, independent authenticated connections across the computer-work switch, the current NapCat host capability and attachment metadata path, and bounded readiness of asynchronously loaded required plugins.
+
 ## 0.15.10 - 2026-11-16
 
 - Upgrade the voice assistant plugin to 1.1.10: unify conversation avatars, names, bubbles and timestamps while preserving message and speech state, and scope resource credentials to Manager URLs.

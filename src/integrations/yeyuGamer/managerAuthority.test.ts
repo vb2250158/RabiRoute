@@ -46,7 +46,7 @@ async function fixture(t: TestContext, stage?: Stage, mutation = false) {
   const pause = async (at: Stage) => {
     if (stage === at) { entered.resolve(); await gate.promise; }
   };
-  const client = new YeYuGamerManagerApiClient({ runtimeDir: root }, {
+  const client = new YeYuGamerManagerApiClient({ baseUrl: "http://127.0.0.1:8877/api/v1", runtimeDir: root }, {
     readFile: async () => {
       await pause(stage === "credential-reject" ? "credential-reject" : "credential");
       if (stage === "credential-reject") throw new Error("credential-failure-secret");
@@ -102,7 +102,7 @@ async function fixture(t: TestContext, stage?: Stage, mutation = false) {
   };
 }
 
-for (const mode of ["node-aba", "node-reenroll", "global-aba"] as const) {
+for (const mode of ["node-reenroll", "global-aba"] as const) {
   for (const stage of ["body", "credential", "credential-reject", "fetch", "fetch-reject", "json"] as const) {
     test(`YeYu original ${mode} lease is fenced across ${stage}`, { timeout: 10000 }, async t => {
       const f = await fixture(t, stage, true);
@@ -126,6 +126,37 @@ for (const mode of ["node-aba", "node-reenroll", "global-aba"] as const) {
     assert.equal(response.status, 403); assert.doesNotMatch(result, /7777777|sensitive-cursor|data/);
   });
 }
+
+// The computer-work switch is not the credential switch: independent APIs retain
+// the authenticated connection across disable/re-enable. Actual credential and
+// global admission replacement remain fenced by the tests above.
+for (const stage of ["body", "credential", "credential-reject", "fetch", "fetch-reject", "json"] as const) {
+  test(`YeYu independent work-item call survives the computer-work switch across ${stage}`, { timeout: 10000 }, async t => {
+    const f = await fixture(t, stage, true);
+    const pending = requestOwned(`${f.url}/api/agent/yeyu-gamer/work-items`, { method: "POST", headers: f.headers, body: JSON.stringify(body) });
+    await f.entered.promise; f.revoke("node-aba"); f.gate.resolve();
+    const response = await pending;
+    const result = await response.json();
+    if (stage === "credential-reject" || stage === "fetch-reject") {
+      assert.equal(response.status, 503);
+      assert.equal(result.mutationOutcome, stage === "fetch-reject" ? "unknown" : "not_started");
+      assert.doesNotMatch(JSON.stringify(result), /credential-failure-secret|fetch-failure-secret/);
+      assert.equal(f.dispatches(), stage === "fetch-reject" ? 1 : 0);
+    } else {
+      assert.equal(response.status, 202);
+      assert.deepEqual(result.data, receipt);
+      assert.equal(f.dispatches(), 1);
+    }
+  });
+}
+test("YeYu independent read retains its authenticated connection across the computer-work switch", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "json");
+  const pending = requestOwned(`${f.url}/api/agent/yeyu-gamer/snapshot`, { headers: f.headers });
+  await f.entered.promise; f.revoke("node-aba"); f.gate.resolve();
+  const response = await pending;
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, snapshot);
+});
 
 test("enabled authenticated YeYu Agent retains read and work-item contracts", async t => {
   const f = await fixture(t);
