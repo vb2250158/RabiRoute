@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.6 - 2026-11-16
+
+- Synchronize the generated Agent capability catalog with the desktop voice assistant so clean builds match tracked source.
+
 ## 0.15.5 - 2026-11-16
 
 - Integrate single-pass Markdown browser-profile cleanup with the desktop voice assistant and test-fixture changes; wait for the owned browser to exit before cleanup and retain ownership checks, original errors, and both version records.
