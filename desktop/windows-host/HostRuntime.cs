@@ -352,7 +352,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
     {
         var environment = new Dictionary<string, string?>(BuildTrayEnvironment(packageRoot, stateRoot, generationId));
         environment["RABIROUTE_HOST_ACCEPTANCE"] = "1";
-        environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.GetFullPath(stateRoot));
+        environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(stateRoot)));
         return environment;
     }
 
@@ -378,7 +378,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         {
             environment["RABIROUTE_MANAGER_READ_ONLY"] = "1";
             environment["RABIROUTE_MANAGER_AUTOSTART"] = "0";
-            environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.GetFullPath(stateRoot));
+            environment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(stateRoot)));
         }
         return environment;
     }

@@ -666,3 +666,17 @@ test("voice assistant package migration retains existing instance configuration"
   assert.deepEqual(result.instances[0]?.config, instance.config);
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
+
+test("NapCat package migration preserves the existing instance settings", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-napcat-migration-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json");
+  const instances = ["0.1.4", "0.1.9", "0.1.10"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
+  await fs.writeFile(profilePath, raw);
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  const result = await readPluginProfile(profilePath, { migrationsPath });
+  assert.deepEqual(result.instances.map(item => item.version), ["0.1.11", "0.1.11", "0.1.11"]);
+  assert.deepEqual(result.instances.map(item => item.config), instances.map(item => item.config));
+  assert.equal(await fs.readFile(profilePath, "utf8"), raw);
+});

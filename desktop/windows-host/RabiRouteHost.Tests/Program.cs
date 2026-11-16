@@ -239,6 +239,12 @@ Check(isolatedTrayEnvironment["RABIROUTE_HOST_ACCEPTANCE"] == "1" && isolatedTra
     && isolatedTrayEnvironment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] == Path.GetDirectoryName(acceptanceRootA),
     "acceptance Tray routes Host commands to its fixture without inheriting the control token");
 
+var trailingFixtureRoot = acceptanceRootA + Path.DirectorySeparatorChar;
+var trailingManagerEnvironment = ApplicationGeneration.BuildManagerEnvironment("package", trailingFixtureRoot, "fixture-generation", "fixture-token", "auto", true);
+var trailingTrayEnvironment = ApplicationGeneration.BuildAcceptanceTrayEnvironment("package", trailingFixtureRoot, "fixture-generation");
+Check(trailingManagerEnvironment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] == Path.GetDirectoryName(acceptanceRootA)
+    && trailingTrayEnvironment["RABIROUTE_ACCEPTANCE_TEMP_PARENT"] == Path.GetDirectoryName(acceptanceRootA),
+    "bootstrap-style fixture roots with trailing separators retain the real temporary parent");
 var envFixtureRoot = Path.Combine(Path.GetTempPath(), $"rabi-acceptance-env-{Guid.NewGuid():N}");
 Directory.CreateDirectory(envFixtureRoot);
 var previousFixtureSecret = Environment.GetEnvironmentVariable("RABI_FIXTURE_SECRET");
