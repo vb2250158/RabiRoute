@@ -21,7 +21,7 @@ export type QqMessageRoutesContext = {
 };
 const activeReads = new WeakMap<QqMessageRoutesContext, number>();
 
-/** One exact current-message read owner for both public QQ reads and outbound quote validation. */
+/** Exact current-message reads share the original target and request budget. */
 export async function readExactQqMessage(input: {
   endpoint: { httpUrl: string; accessToken: string };
   kind: "group" | "private";
@@ -33,14 +33,26 @@ export async function readExactQqMessage(input: {
 }): Promise<QqMessage> {
   const historyPage = async () => {
     input.current();
-    const data = await qqRead(input.endpoint, input.kind === "group" ? "get_group_msg_history" : "get_friend_msg_history", {
+    const action = input.kind === "group" ? "get_group_msg_history" : "get_friend_msg_history";
+    const parameters = {
       [input.kind === "group" ? "group_id" : "user_id"]: input.target,
-      count: QQ_READ_LIMITS.fallbackCount,
-      message_seq: input.messageId,
       reverseOrder: true,
       disable_get_url: true,
       parse_mult_msg: false
-    }, input.signal, input.transport);
+    };
+    let data: Record<string, unknown>;
+    try {
+      data = await qqRead(input.endpoint, action, {
+        ...parameters, count: QQ_READ_LIMITS.fallbackCount, message_seq: input.messageId
+      }, input.signal, input.transport);
+    } catch (error) {
+      if (!(error instanceof QqReadError) || error.code !== "QQ_UPSTREAM_UNAVAILABLE" || error.upstreamRetcode !== 200 || input.signal.aborted) throw error;
+      input.current();
+      // NapCat's short-ID map may be cold after restart. The same ID cannot anchor its recovery.
+      data = await qqRead(input.endpoint, action, {
+        ...parameters, count: QQ_READ_LIMITS.historyMax
+      }, input.signal, input.transport);
+    }
     input.current();
     if (!Array.isArray(data.messages)) throw new QqReadError(503, "QQ_HISTORY_INVALID_RESPONSE");
     const found = data.messages.find(item => qqMessageHasId(item, input.messageId));

@@ -9,3 +9,5 @@ New WS ingress uses automatic port `0`. The original Gateway retains the actual 
 Supports read-only merged-forward pages, nested nodes and node attachments. Reads remain scoped to the original message and conversation. The persona plugin owns the cards; the shared message storage format remains unchanged.
 
 When the selected message or forward node already provides an image URL, read it directly under the existing deadline and byte quota instead of waiting for another file lookup. Images without a URL use `get_image`; video, voice and files keep `get_file`. Callers cannot supply the URL, and downloads never carry OneBot credentials.
+
+When NapCat reports an expired message lookup, first read history around the original ID. If that anchor is also unavailable, read one recent page from the same conversation (at most 100 messages) and require the original message ID and target to match. The existing request deadline, cancellation and concurrency budget remain in force. A page miss does not establish absence from the full history.

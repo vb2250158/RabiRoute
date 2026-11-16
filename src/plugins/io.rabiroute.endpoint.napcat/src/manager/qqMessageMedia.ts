@@ -19,7 +19,7 @@ export function qqMessageTimestamp(value: unknown): number | undefined {
 }
 
 export class QqReadError extends Error {
-  constructor(public readonly status: number, public readonly code: string, detail?: string) { super(detail ? `${code}: ${detail}` : code); }
+  constructor(public readonly status: number, public readonly code: string, detail?: string, public readonly upstreamRetcode?: number) { super(detail ? `${code}: ${detail}` : code); }
 }
 
 async function boundedBytes(response: Response, max: number, limitSetting?: string): Promise<Buffer> {
@@ -55,7 +55,7 @@ export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_
       body: JSON.stringify(payload) });
     if(!response.ok)throw new QqReadError(503,'QQ_UPSTREAM_UNAVAILABLE',`NapCat HTTP ${response.status}`);
     const envelope = JSON.parse((await boundedBytes(response, MAX_JSON_BYTES, "RABIROUTE_QQ_JSON_MAX_BYTES")).toString("utf8"));
-    if (envelope?.status !== "ok" || envelope.retcode !== 0 || !envelope.data || typeof envelope.data !== "object") throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE",`NapCat retcode ${typeof envelope?.retcode==='number'?envelope.retcode:'invalid'}`);
+    if (envelope?.status !== "ok" || envelope.retcode !== 0 || !envelope.data || typeof envelope.data !== "object") throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE",`NapCat retcode ${typeof envelope?.retcode==='number'?envelope.retcode:'invalid'}`, typeof envelope?.retcode === "number" ? envelope.retcode : undefined);
     return envelope.data;
   } catch (error) {
     if (error instanceof QqReadError || error instanceof ReadSettingsError) throw error;

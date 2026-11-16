@@ -98,6 +98,51 @@ test("expired get_msg falls back to a bounded page anchored on the same message"
   } finally { await app.close(); }
 });
 
+test("cold provider IDs recover from one unanchored scoped page and still require the exact target", async () => {
+  for (const kind of ["group", "private"] as const) {
+    const expected = kind === "group" ? row : { ...row, message_type: "private", user_id: "456" };
+    let rows = [expected];
+    const calls: Array<Record<string, unknown>> = [];
+    const app = await serve(async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      calls.push(body);
+      if (String(url).endsWith("get_msg") || body.message_seq) return Response.json({ status: "failed", retcode: 200 });
+      assert.ok(String(url).endsWith(kind === "group" ? "get_group_msg_history" : "get_friend_msg_history"));
+      assert.equal(body[kind === "group" ? "group_id" : "user_id"], "456");
+      assert.equal(body.count, 100);
+      assert.equal(body.disable_get_url, true);
+      return envelope({ messages: rows });
+    });
+    try {
+      const base = app.base + "/api/agent/qq/messages/123" + query.replace("kind=group", `kind=${kind}`);
+      const recovered = await nativeHttpTestFetch(base);
+      assert.equal(recovered.status, 200);
+      assert.equal((await recovered.json()).data.messageId, "123");
+      assert.equal(calls.length, 3);
+      assert.equal(calls[1].message_seq, "123");
+      assert.equal(Object.hasOwn(calls[2], "message_seq"), false);
+      rows = [{ ...expected, ...(kind === "group" ? { group_id: "999" } : { user_id: "999" }) }];
+      assert.equal((await nativeHttpTestFetch(base)).status, 409);
+      rows = [];
+      assert.equal((await nativeHttpTestFetch(base)).status, 404);
+      assert.equal(calls.length, 9);
+    } finally { await app.close(); }
+  }
+});
+
+test("cold provider recovery retains its original cancellation budget without reading another page", async () => {
+  let calls = 0;
+  const app = await serve(async () => {
+    calls++;
+    if (calls === 1) return Response.json({ status: "failed", retcode: 200 });
+    throw new DOMException("Cancelled", "AbortError");
+  });
+  try {
+    assert.equal((await nativeHttpTestFetch(app.base + "/api/agent/qq/messages/123" + query)).status, 503);
+    assert.equal(calls, 2);
+  } finally { await app.close(); }
+});
+
 test("download reads actual video bytes returned by get_file, never its thumbnail", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "qq-media-test-"));
   const file = path.join(dir, "video.mp4");
