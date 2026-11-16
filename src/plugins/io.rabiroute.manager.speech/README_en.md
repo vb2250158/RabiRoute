@@ -6,6 +6,8 @@ Built-in Manager plugin. Instance `manager:speech` provides `manager.speech@1`. 
 
 This plugin registers 39 executable endpoints: 32 typed operations and 7 exact HTTP proxies. Discovery, parameter decoding and execution share one contract. The common registry decodes normal JSON once; existing services validate business values. Each contract derives its compatibility alias, `speech:METHOD:PATH`, from its own method and path, without another endpoint table.
 
+
+Speech message lists asynchronously scan delivery receipts once per request; the existing ledger remains the owner of history and completed delivery status.
 ## Public endpoints
 
 All paths below are relative to `/api/speech`. Typed operation IDs use the `manager.speech.` prefix. Multiple names in one row follow the method order.

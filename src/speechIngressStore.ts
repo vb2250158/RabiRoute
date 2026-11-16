@@ -291,6 +291,61 @@ export class SpeechIngressStore {
     return [...latestByRoute.values()].sort((left, right) => left.routeId.localeCompare(right.routeId));
   }
 
+  /** Read the requested records in one asynchronous pass without blocking Manager health. */
+  async listDeliveryReceiptsBatch(recordIds: readonly string[], signal?: AbortSignal): Promise<Map<string, SpeechRouteDeliveryReceipt[]>> {
+    const ids = new Set(recordIds.map(id => oneLine(id, 200)).filter(Boolean));
+    const latest = new Map([...ids].map(id => [id, new Map<string, SpeechRouteDeliveryReceipt>()]));
+    if (!ids.size) return new Map();
+    signal?.throwIfAborted();
+    let entries: import("node:fs").Dirent[];
+    try { entries = await fs.promises.readdir(this.deliveryRoot, { withFileTypes: true }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map([...ids].map(id => [id, []]));
+      throw error;
+    }
+    const files = entries.filter(item => item.isFile() && /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(item.name))
+      .map(item => item.name).sort((left, right) => right.localeCompare(left));
+    let processed = 0;
+    for (const name of files) {
+      signal?.throwIfAborted();
+      const fileLatest = new Map<string, Map<string, SpeechRouteDeliveryReceipt>>();
+      const collect = (line: string) => {
+        if (!line.trim()) return;
+        try {
+          const receipt = JSON.parse(line) as SpeechRouteDeliveryReceipt;
+          if (receipt?.schemaVersion !== 1 || !ids.has(receipt.recordId) || !receipt.routeId
+            || (receipt.status !== "delivered" && receipt.status !== "recorded")) return;
+          const routes = fileLatest.get(receipt.recordId) ?? new Map<string, SpeechRouteDeliveryReceipt>();
+          routes.set(receipt.routeId, receipt);
+          fileLatest.set(receipt.recordId, routes);
+        } catch { /* Malformed historical rows are skipped, as in the original reader. */ }
+      };
+      const filePath = path.join(this.deliveryRoot, name);
+      // Capture each file's size so a live append cannot extend this request indefinitely.
+      const size = (await fs.promises.stat(filePath)).size;
+      if (!size) continue;
+      const stream = fs.createReadStream(filePath, { encoding: "utf8", end: size - 1 });
+      let pending = "";
+      for await (const chunk of stream) {
+        signal?.throwIfAborted();
+        pending += chunk;
+        let end: number;
+        while ((end = pending.indexOf("\n")) >= 0) {
+          collect(pending.slice(0, end));
+          pending = pending.slice(end + 1);
+          if (++processed % 256 === 0) { await new Promise<void>(resolve => setImmediate(resolve)); signal?.throwIfAborted(); }
+        }
+      }
+      if (pending) collect(pending);
+      for (const [recordId, routes] of fileLatest) {
+        const target = latest.get(recordId)!;
+        for (const [routeId, receipt] of routes) if (!target.has(routeId)) target.set(routeId, receipt);
+      }
+    }
+    signal?.throwIfAborted();
+    return new Map([...latest].map(([id, routes]) => [id, [...routes.values()].sort((a, b) => a.routeId.localeCompare(b.routeId))]));
+  }
+
   appendDeliveryReceipt(receipt: SpeechRouteDeliveryReceipt): SpeechRouteDeliveryReceipt {
     const recordId = oneLine(receipt.recordId, 200);
     const routeId = oneLine(receipt.routeId, 200);

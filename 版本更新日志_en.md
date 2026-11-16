@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.12 - 2026-11-16
+
+- Read speech message delivery receipts asynchronously in one batch per request, preserving latest historical receipts and existing authorization without repeated scans blocking the Manager, and migrate previously published voice assistant package selections.
+
 ## 0.15.11 - 2026-11-16
 
 - Align YeYu and QQ test fixtures with explicit synthetic endpoints, independent authenticated connections across the computer-work switch, the current NapCat host capability and attachment metadata path, and bounded readiness of asynchronously loaded required plugins.

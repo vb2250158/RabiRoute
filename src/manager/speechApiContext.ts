@@ -19,7 +19,7 @@ export type SpeechApiContext = Readonly<{
   speechRuntimeControl: SpeechRuntimeControl;
   speechModelManager: SpeechModelManager;
   selectionSpeechSettings: SelectionSpeechSettingsStore;
-  speechIngressStore: Pick<SpeechIngressStore, "read" | "query" | "listDeliveryReceipts">;
+  speechIngressStore: Pick<SpeechIngressStore, "read" | "query" | "listDeliveryReceipts" | "listDeliveryReceiptsBatch">;
   capture(request: http.IncomingMessage, computeDeviceId?: string): SpeechApiAdmission;
   readOnly(): boolean;
   identity(): { applicationGenerationId: string; managerInstanceId: string };

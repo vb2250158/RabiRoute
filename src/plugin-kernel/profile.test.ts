@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 import { loadPluginProfile, parsePluginProfile, readPluginProfile, PluginPackageCatalog } from "./profile.js";
 import { GenerationRuntime, RequiredPluginCapabilitiesUnavailableError } from "./generationRuntime.js";
 import type { LoadedPluginPackage } from "./packageLoader.js";
@@ -636,4 +637,32 @@ test("required-first cancellation joins entered metadata and never schedules pac
   stopped = true; first.resolve(); await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
   second.resolve(); await rejected;
   assert.deepEqual(entered, ["io.test.one", "io.test.two"]);
+});
+
+test("speech receipt update migrates existing package selections without changing configuration", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-speech-migration-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json");
+  const instances = ["0.1.4", "0.1.5", "1.0.0"].map((version, index) => ({ id: `speech:fixture-${index}`, package: "io.rabiroute.manager.speech", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
+  await fs.writeFile(profilePath, raw);
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  const resolved = await readPluginProfile(profilePath, { migrationsPath });
+  assert.deepEqual(resolved.instances.map(item => item.version), ["0.1.6", "0.1.6", "0.1.6"]);
+  assert.deepEqual(resolved.instances.map(item => item.config), instances.map(item => item.config));
+  assert.equal(await fs.readFile(profilePath, "utf8"), raw);
+});
+
+test("voice assistant package migration retains existing instance configuration", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-voice-assistant-migration-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json");
+  const instance = { id: "assistant:fixture", package: "io.rabiroute.manager.voice-assistant", version: "1.1.9", enabled: true, config: { selected: "fixture" }, grants: [] };
+  const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
+  await fs.writeFile(profilePath, raw);
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  const result = await readPluginProfile(profilePath, { migrationsPath });
+  assert.equal(result.instances[0]?.version, "1.1.10");
+  assert.deepEqual(result.instances[0]?.config, instance.config);
+  assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
