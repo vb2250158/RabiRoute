@@ -21,7 +21,7 @@ NapCat 保留 ws 原生握手、帧解析、ping/pong、文本／二进制帧和
 
 `feishuHttpOwner.ts` 接收 IncomingMessage／ServerResponse，复用原 handleFeishuCallback、appId／chat／message／event 身份、持久去重、状态与转发回调。`napcatWsOwner.ts` 持有原 loopback HTTP listener 与 noServer WS server，共享注册表的 upgrade handler 调用同一 server.handleUpgrade；adapter 继续拥有业务映射。
 
-`platformNativeOperations.ts` 声明合同与地址 binding。实际请求通过既有 ManagerPluginRouteRegistry.registerExternalListener，不建立平行 registry。绑定发布实际监听端口、协议、鉴权说明、租约与合同摘要，不包含平台密钥或 handler。本地合同名为 `gateway.feishu.<实际端口>.callback` 与 `gateway.napcat.<实例摘要>.<实际端口>.events`；生产入口再经共享 Gateway runtime 添加原 Gateway 摘要命名空间，不同进程／地址互不混淆。
+`platformNativeOperations.ts` 声明合同与地址 binding。实际请求通过既有 ManagerPluginRouteRegistry.registerExternalListener，不建立平行 registry。绑定发布实际监听端口、协议、鉴权说明、租约与合同摘要，不包含平台密钥或 handler。本地合同名为 `gateway.feishu.<实际端口>.callback` 与 `gateway.napcat.<实例摘要>.events`；生产入口再经共享 Gateway runtime 添加原 Gateway 摘要命名空间，不同进程／地址互不混淆。
 
 `/:nativePath` raw remainder 覆盖原服务 URL 空间；飞书精确入口仍由原生 owner 决定。生产默认直接调用 getGatewayListenerRuntime()，通过原 Gateway stdout／supervisor IPC 发布和撤回真实 binding。原 Gateway ID、generation 与 PID 来自宿主；缺失身份时失败，不创建临时身份或另一套 registry。受控测试可显式注入 apiOperations.registerExternalListener；publishListener 只用于观察绑定或测试。汇总由共享 runtime／supervisor owner 核验原进程与租约。两种平台都标注 discovery-only：目录准确说明协议，不把平台入口转为通用 Manager JSON 调用或绕过平台鉴权。
 

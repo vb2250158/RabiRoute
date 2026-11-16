@@ -38,3 +38,20 @@ test("Gateway listener address readback follows the original active owner and re
   assert.equal(runtime.listenerAddress(localName), undefined);
   await runtime.dispose();
 });
+
+test("matching local listener identities remain distinct across Gateway owners", async () => {
+  const make = (gatewayId: string) => createGatewayListenerRuntime({ identity: { gatewayId, gatewayGenerationId: "fixture", pid: process.pid }, publish() {} });
+  const first = make("fixture-gateway-a"), second = make("fixture-gateway-b");
+  const localName = "gateway.napcat.same-instance.events";
+  const firstId = first.operationId(localName), secondId = second.operationId(localName);
+  assert.notEqual(firstId, secondId);
+  const firstLease = first.registerExternalListener("fixture", { ...definition, listenerId: firstId });
+  const secondLease = second.registerExternalListener("fixture", { ...definition, listenerId: secondId });
+  try {
+    assert.notEqual(firstLease.binding.leaseId, secondLease.binding.leaseId);
+    assert.deepEqual(first.listenerAddress(localName), definition.address);
+    assert.deepEqual(second.listenerAddress(localName), definition.address);
+  } finally {
+    await Promise.all([first.dispose(), second.dispose()]);
+  }
+});
