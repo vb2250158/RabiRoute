@@ -8,6 +8,22 @@ import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng, renderM
 
 type Command = { id: number; method: string };
 
+test("Markdown profile cleanup keeps its owned boundary and reports a locked profile without recursive retries", async () => {
+  const root = path.resolve("fixture-temp");
+  const profile = path.join(root, "rabiroute-markdown-browser-fixture");
+  const calls: Array<{ target: fs.PathLike; options: fs.RmOptions }> = [];
+  const locked = Object.assign(new Error("Profile is still busy"), { code: "EBUSY" });
+  const remove = async (target: fs.PathLike, options: fs.RmOptions = {}) => {
+    calls.push({ target, options });
+    throw locked;
+  };
+  await assert.rejects(markdownImageInternals.removeBrowserProfile(profile, root, remove), error => error === locked);
+  assert.deepEqual(calls, [{ target: profile, options: { recursive: true, force: true, maxRetries: 0 } }]);
+  await markdownImageInternals.removeBrowserProfile(path.join(root, "another-owner"), root, remove);
+  await markdownImageInternals.removeBrowserProfile(path.join(root, "nested", "rabiroute-markdown-browser-fixture"), root, remove);
+  assert.equal(calls.length, 1);
+});
+
 class FakeCdpSocket extends EventEmitter {
   readyState = 0;
   commands: Command[] = [];

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.4 - 2026-11-16
+
+- Clean temporary Markdown browser profiles in one pass. Locked files retain their original error, avoiding recursive retry amplification that can starve Manager page and asset reads. Existing temporary-directory ownership checks remain enforced.
+
 ## 0.15.3 - 2026-11-15
 
 - Advance io.rabiroute.manager.voice-assistant to 1.0.2 with owned English and Japanese translation registration and disposal. Complete translations for computer-control settings and new phone recording status messages.

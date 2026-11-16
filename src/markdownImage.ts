@@ -380,7 +380,15 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts, removeBrowserProfile };
+
+async function removeBrowserProfile(profileDir: string, tempRoot: string, remove = fs.promises.rm): Promise<void> {
+  if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
+    // Node retries every child and ancestor of a locked Chromium profile. Nested
+    // retries multiply filesystem work and starve unrelated Manager requests.
+    await remove(profileDir, { recursive: true, force: true, maxRetries: 0 });
+  }
+}
 
 /** Only fenced Mermaid diagrams are executed by the trusted local renderer. */
 export function mermaidDiagramSource(markdown: string): string | undefined {
@@ -475,8 +483,6 @@ async function renderMarkdownImages(markdown: string, paginate: boolean, documen
     return await captureHtml(launched.port, markdownImageHtml(markdown));
   } finally {
     browser?.kill();
-    if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
-      await fs.promises.rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
+    await removeBrowserProfile(profileDir, tempRoot);
   }
 }
