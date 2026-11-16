@@ -76,6 +76,9 @@ class FlightTest(unittest.TestCase):
         flight.advance(1 / 240, (256, 256), [self.area])
         self.assertAlmostEqual(flight.vy, -(600 + 1400 / 240) * .78)
         self.assertAlmostEqual(flight.vx, 1000 * math.exp(-2.5 / 240))
+        self.assertAlmostEqual(flight.landing_speed, 600 + 1400 / 240)
+        flight.advance(1 / 240, (256, 256), [self.area])
+        self.assertEqual(flight.landing_speed, 0)
 
     def test_adjacent_panels_pass_through_seam(self):
         left = DisplayArea((-1920, -200, 0, 1080), (-1920, -200, 0, 1040))
@@ -208,6 +211,15 @@ class ThrowWindowTest(unittest.TestCase):
         self.assertIsNone(self.window._flight)
         self.assertTrue(self.window.pointer_engaged)
         self.assertEqual(len(self.window._release_trail.samples), 1)
+
+    def test_landing_squash_compresses_recovers_and_is_cancelled_by_grab(self):
+        self.window._start_landing_squash(1500)
+        self.window._display_squash(.45)
+        self.assertAlmostEqual(self.window._squash_scale, .55)
+        self.window._display_squash(.8)
+        self.assertGreater(self.window._squash_scale, 1)
+        self.press()
+        self.assertEqual(self.window._squash_scale, 1)
 
     def test_hiding_cancels_without_saving_a_flight_position(self):
         placed = QSignalSpy(self.window.placement_changed)

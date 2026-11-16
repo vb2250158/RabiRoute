@@ -3,12 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { createAssistantPanel } from '@rabilink/assistant-runtime/ui';
 import './app.css';
 
-const token = location.hash.slice(1) || sessionStorage.getItem('assistant-token');
-if (location.hash) { sessionStorage.setItem('assistant-token', token); history.replaceState(null, '', '/'); }
-async function request(path, body) {
-  const result = await fetch('/api/' + path, { method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-  const value = await result.json(); if (!result.ok) throw Error(value.error); return value;
-}
+import {createBrowserAccess} from './browser-access.mjs';
+let accessRequired=()=>{};
+const access=createBrowserAccess({origin:location.origin,hash:location.hash,storage:localStorage,session:sessionStorage,
+  clearHash:()=>history.replaceState(null,'','/'),onRequired:()=>accessRequired()});
+const request=(path,body)=>access.request(path,body);
 const adapter = {
   read: () => request('state'), command: body => request('command', body),
   subscribeConversation(_id, listener, onError) {
@@ -17,23 +16,27 @@ const adapter = {
     void poll(); return () => { closed = true; clearTimeout(timer); };
   },
 };
-function Modal({ children, open, onClose, title }) {
-  const dialog = React.useRef(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement, node = dialog.current;
-    node.showModal();
-    return () => { node.close(); previous?.focus(); };
-  }, [open]);
-  return <dialog ref={dialog} className="settings-dialog" aria-labelledby="settings-title" onCancel={event => { event.preventDefault(); onClose(); }}>
-    <div className="settings-heading"><h2 id="settings-title">{title}</h2><button aria-label="关闭设置" onClick={onClose}>关闭</button></div>
-    <div className="settings-content">{open && children}</div>
-  </dialog>;
+function ScreenModeButton(){
+  const [expanded,setExpanded]=React.useState(Boolean(document.fullscreenElement)),[error,setError]=React.useState('');
+  React.useEffect(()=>{const update=()=>setExpanded(Boolean(document.fullscreenElement));document.addEventListener('fullscreenchange',update);return()=>document.removeEventListener('fullscreenchange',update)},[]);
+  const toggle=async()=>{setError('');try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch{setError('浏览器未允许全屏，请最大化窗口。')}};
+  return <><button onClick={toggle}>{expanded?'退出全屏':'全屏显示'}</button>{error&&<span role="status">{error}</span>}</>;
 }
-const Panel = createAssistantPanel(React, { Modal });
+function SettingsPage({children,open,onClose,title}) {
+  if(!open)return null;
+  return <section className="assistant-settings-page" aria-label="助手设置">
+    <div className="settings-heading"><h2 id="settings-title">{title}</h2><div className="app-window-actions"><ScreenModeButton/><button aria-label="关闭设置" onClick={onClose}>返回对话</button></div></div>
+    <div className="settings-content">{children}</div>
+  </section>;
+}
+const Panel = createAssistantPanel(React, { Modal:SettingsPage,settingsPresentation:'page' });
 function App() {
+  const [authenticationRequired,setAuthenticationRequired]=React.useState(!access.hasToken());
+  const [entryLink,setEntryLink]=React.useState(''),[connecting,setConnecting]=React.useState(false),[accessError,setAccessError]=React.useState('');
+  React.useEffect(()=>{accessRequired=()=>setAuthenticationRequired(true);return()=>{accessRequired=()=>{}}},[]);
+  const reconnect=async event=>{event.preventDefault();setConnecting(true);setAccessError('');try{access.acceptLink(entryLink);await request('state');setEntryLink('');setAuthenticationRequired(false)}catch(error){setAccessError(error.message==='ASSISTANT_LINK_INVALID'?'请粘贴这台助手的完整启动链接。':error.message==='ASSISTANT_AUTH_REQUIRED'?'这个启动链接已失效，请使用最新的本机启动链接。':'暂时无法连接，请确认助手正在运行后重试。')}finally{setConnecting(false)}};
   const [exited, setExited] = React.useState(false), [error, setError] = React.useState('');
   const exit = async () => { try { await adapter.command({ action: 'exit' }); setExited(true); } catch (error) { setError(error.message); } };
-  return <><header><div><h1>语音助手</h1><p>随时开口，打断播报也能继续处理任务。</p></div><button onClick={exit} disabled={exited}>退出助手</button></header>{error && <p role="alert">{error}</p>}{exited ? <main>助手已退出，音频资源已释放。</main> : <Panel adapter={adapter} />}<footer>关闭这个页面不会停止助手。停止收听请使用“停止语音”，结束后台进程请使用“退出助手”。</footer></>;
+  return <><header><div><h1>语音助手</h1><p>文字聊天与语音对话</p></div><div className="app-window-actions"><ScreenModeButton/><button onClick={exit} disabled={exited||authenticationRequired}>退出助手</button></div></header>{error && <p role="alert">{error}</p>}{exited ? <main>助手已退出，音频资源已释放。</main> : authenticationRequired ? <main className="access-required"><h2>重新连接语音助手</h2><p>使用本机启动链接连接一次，之后这个浏览器会记住连接。</p><form onSubmit={reconnect}><label htmlFor="assistant-entry">本机启动链接</label><input id="assistant-entry" type="password" autoComplete="off" value={entryLink} onChange={event=>setEntryLink(event.target.value)} placeholder="粘贴完整启动链接" required /><button type="submit" disabled={connecting||!entryLink.trim()}>{connecting?'正在连接…':'连接助手'}</button></form><p className="access-help">使用助手启动时提供的完整链接，直接输入端口地址不能完成首次连接。</p>{accessError&&<p role="alert">{accessError}</p>}</main> : <Panel adapter={adapter} />}<footer>关闭这个页面不会停止助手。停止收听请使用“结束语音”，结束后台进程请使用“退出助手”。</footer></>;
 }
 createRoot(document.getElementById('root')).render(<App />);

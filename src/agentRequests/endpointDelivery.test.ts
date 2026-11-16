@@ -12,8 +12,59 @@ import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, resolv
 import { normalizeAgentRequestEndpoint, agentDeliveryCallerSourceIdentity, sameAgentPartyAddress, sameAgentEndpoint } from "./endpoint.js";
 import { agentReplyRequest } from "./replyParameters.js";
 import type { AgentThreadRequest } from "../agentThreads.js";
+import { verifyLocalDeliveryImages } from "./localDeliveryImages.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "../manager/agentEndpointDelivery.js";
 import { EndpointDeliveryNotSentError } from "./deliveryFailure.js";
+import { executeEndpointOnOwner } from "./ownerExecution.js";
+import type { AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
+
+test("owner directory failure stays prepared and retries the same frozen request only after recovery", async t => {
+  const f = fixture(), root = fs.mkdtempSync(path.join(os.tmpdir(), "endpoint-owner-cwd-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "late-owner"), request = { ...f.request, deliveryId: "owner-cwd-recovery", cwd };
+  let invocations = 0;
+  const invokeAgentOperation: AgentManagerOperationInvoker = async <T>() => {
+    invocations++;
+    return { threadId: party("b").threadId, action: "started", transport: "fixture" } as T;
+  };
+  const options = { ...f.options, dispatch: async (delivery: PreparedEndpointDelivery, guard: () => void) => {
+    await executeEndpointOnOwner(delivery, { invokeAgentOperation }, guard);
+    return f.options.dispatch(delivery, guard);
+  } };
+  const failed = await executeEndpointAgentDelivery(request, options);
+  assert.equal(failed.statusCode, 503); assert.equal(invocations, 0); assert.equal(f.dispatched(), 0);
+  assert.equal(f.store.listEndpointDeliveryMetadata()[0]!.state, "prepared");
+  fs.mkdirSync(cwd);
+  const recovered = await executeEndpointAgentDelivery(request, options);
+  assert.equal(recovered.statusCode, 200); assert.equal(invocations, 1); assert.equal(f.dispatched(), 1);
+  assert.equal(f.store.listEndpointDeliveryMetadata()[0]!.state, "committed");
+});
+
+test("local screenshot attachments retain their hashes and receipt across store restoration while remote sources are rejected", async t => {
+  const f = fixture(), directory = fs.mkdtempSync(path.join(os.tmpdir(), "local-delivery-images-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const image = path.join(directory, "screenshot.png"), other = path.join(directory, "other.png");
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+  fs.writeFileSync(image, png); fs.writeFileSync(other, png);
+  const source = { threadId: "", agentType: "agent", connection: { kind: "connection" as const, managerInstanceId: "manager", transport: "local" as const, id: "desktop" } };
+  const target = { ...party("b"), workspace: directory, endpoint: { kind: "local" as const, managerInstanceId: "manager", agentId: "local:dsh", provider: "dsh", sessionId: party("b").threadId, authorizationIncarnation: "incarnation-1" } };
+  const options = { ...f.options, resolveSource: () => source, resolveTarget: () => target,
+    resolveExecutionOptions: (request: AgentThreadRequest) => resolveEndpointExecutionOptions(request, directory, undefined) };
+  const request = { ...f.request, sourceThreadId: undefined, messageSource: undefined, responsePolicy: "none" as const,
+    agentTargetId: "local:dsh", deliveryId: "screenshot-original", cwd: directory, imagePaths: [image] };
+  assert.equal((await executeEndpointAgentDelivery(request, options)).data.ok, true);
+  const record = f.store.listEndpointDeliveryMetadata()[0]!;
+  const restored = new AgentRequestStore(f.persistence).getEndpointDelivery(record.deliveryId)!;
+  assert.deepEqual(verifyLocalDeliveryImages(restored.executionOptions.localImages), [image]);
+  await executeEndpointAgentDelivery(request, options);
+  assert.equal(f.dispatched(), 1);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, imagePaths: [other] }, options), /different|conflict|original|input/i);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, deliveryId: "remote", imagePaths: ["not-a-local-file"] },
+    { ...options, resolveSource: () => ({ ...source, connection: { ...source.connection, transport: "rabilink" as const } }) }), /local desktop caller/);
+  fs.writeFileSync(image, Buffer.concat([png, Buffer.from("changed")]));
+  assert.throws(() => verifyLocalDeliveryImages(restored.executionOptions.localImages), /changed/);
+  assert.equal(f.dispatched(), 1);
+});
 
 test("a transport acceptance followed by store close stays unconfirmed when both commit and error tracking reject", async () => {
   const f = fixture();

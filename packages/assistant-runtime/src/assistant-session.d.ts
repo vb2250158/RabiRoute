@@ -27,6 +27,8 @@ export interface AssistantSession {
     /** Capture the original target in this synchronous check. Throw when its binding is stale. */
     assertCurrent?(): void;
     limits?: TurnLimits; turnId?: string; inputScope?: string; takeGuidance?(): string[];
+    speechCapabilities?: import('./speech-expression.js').SpeechExpressionPolicy;
+    speechObservation?: import('./speech-observation.js').SpeechObservation;
     onText?(value: { delta: string; text: string }): void;
     onState?(value: TurnStatus): void;
   }): Promise<TurnResult>;

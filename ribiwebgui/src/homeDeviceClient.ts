@@ -54,9 +54,13 @@ async function execute(resourceId: string, choice: DeviceActionChoice, parameter
  return result;
 }
 async function directory(): Promise<DeviceDirectory> {
- const devices = await readHomeDirectory<DeviceDirectory["devices"][number]>(root + "/devices?view=detail&limit=5", request);
- const unassignedResources = await readHomeDirectory<DeviceResource>(root + "/resources?view=detail&deviceId=unassigned&limit=50", request);
- return { schemaVersion: 1, observedAt: new Date().toISOString(), devices, unassignedResources };
+ let coverage: DeviceDirectory["coverage"];
+ const observe = (page: { coverage?: DeviceDirectory["coverage"] }) => {
+  if (page.coverage?.state === "partial" || !coverage) coverage = page.coverage;
+ };
+ const devices = await readHomeDirectory<DeviceDirectory["devices"][number]>(root + "/devices?view=detail&limit=5", request, observe);
+ const unassignedResources = await readHomeDirectory<DeviceResource>(root + "/resources?view=detail&deviceId=unassigned&limit=50", request, observe);
+ return { schemaVersion: 1, observedAt: new Date().toISOString(), devices, unassignedResources, ...(coverage ? { coverage } : {}) };
 }
 export const homeDeviceClient = { directory,
  capabilities: () => request<{ actions: Array<{ capability: string; argumentsSchema?: Record<string, unknown> }> }>(root + "/capabilities"), inspect, execute, receipt };

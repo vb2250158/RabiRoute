@@ -1,8 +1,8 @@
-# Agent: RabiLink AIUI（眼镜应用宿主模型与受控工具）
+# Agent: 拉比小助手（RabiLink AIUI 宿主模型与受控工具）
 
 > **设备 Agent 等待**：QuickJS 只有有限 HTTP Relay。消息 notice 与 receipt 使用由 PC 状态变化唤醒的有界阻塞 GET；页面退出停止等待。不得假称 AIUI 已接入手机 LAN/P2P。
 
-- **Version**: 1.0.39
+- **Version**: 1.0.40
 - **Description**: Rokid AR 眼镜应用，默认由 AIUI 宿主模型处理对话，通过手机管理设备配置，通过受控 HTTP 使用 PC 工具。
 - **Author**: RabiLink Project
 
@@ -42,7 +42,7 @@ RabiLink AIUI 在同一页面承载对话、状态和配置，不硬编码特定
 - **AIUI `SpeechRecognition`**：前台连续自然语言采集，状态机受控续轮，具备快速重复文本与标点抑制。
 - **AIUI `LanguageModel`**：宿主模型会话，通过 `create(options)` 传入角色与应用动作协议，工具声明放在应用协议中；原生 `tools` 为空。使用 `promptStreaming()` / `prompt()` 串行推理，实际结果经普通应用观察消息续轮，同一会话只允许一个活跃请求。原生 `tool` role 与结果提交 API 仍未证实。
 - **AIUI `speechSynthesis`**：宿主原生语音合成，流式分句播报，生命周期与文本时长双重超时监控；实际声音取决于宿主能力。
-- **智能打断与回声抑制（Barge-in）**：过滤自身 TTS 回声与快速重复输入；检测到新的用户语音时只中断播报，完整输入在当前请求结束后引导后续推理，实际效果须真机验证。
+- **智能打断与回声抑制（Barge-in）**：过滤自身 TTS 回声与快速重复输入；首个通过过滤的非空 ASR 文字只中断播报；原始 VAD 与空文字不打断，完整输入在当前请求结束后引导后续推理，实际效果须真机验证。
 - **极简 AR HUD 渲染**：绿色高对比度字幕及名称、状态、时钟、电量显示；保持边缘安全和中央视野，小尺寸布局须单独验收。
 - **设备 Agent 配置**：手机 profile 管理名称、系统提示、Skill 指引与 MCP 引用。保存、模型应用、工具连接和实际调用分别确认；新配置在当前轮结束后再应用。
 

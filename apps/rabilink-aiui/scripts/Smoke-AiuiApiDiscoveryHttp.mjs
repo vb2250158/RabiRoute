@@ -2,7 +2,7 @@ import http from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ManagerPluginRouteRegistry } from '../../../src/manager/managerPluginRouteRegistry.ts';
-import { createApiDiscoveryOperations } from '../../../src/manager/apiDiscoveryRoutes.ts';
+import { createApiDiscoveryOperations } from '../../../src/plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.ts';
 import { fixtureApiContract } from '../../../src/manager/apiOperationContractFixtures.ts';
 import { createApiToolRuntime } from '../utils/api-tool-runtime.js';
 import { createAgentTurnRuntime } from '../utils/agent-turn-runtime.js';
@@ -89,7 +89,7 @@ test('the model traverses a large real HTTP catalog, reads an exact contract and
     executeTool: value => f.api.handleToolCall(value) }).run('查找并读取目标接口');
   assert.equal(outcome.state, 'completed'); assert.equal(step, 5);
   assert.equal(new Set(visited).size, visited.length);
-  assert.equal(visited.length, 43); // 40 business operations + 3 discovery routes.
+  assert.deepEqual([...visited].sort(), JSON.parse(unpaged).data.operations.map(row => row.id).sort());
   assert.ok(observationSizes.every(size => size < 100000));
   assert.deepEqual(f.businessCalls, [target]);
   assert.equal(f.requests.length, 4);

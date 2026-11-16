@@ -1,36 +1,16 @@
-import { join } from 'node:path';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { openSettingsStore } from './settings-store.mjs';
-import { createStandaloneConversation } from './conversation.mjs';
-import { openAssistantServer } from './server.mjs';
-import { createResidentHost } from '@rabilink/desktop-voice-service/host';
-import { openDesktopDevice } from '@rabilink/desktop-voice-service/node';
-import { createSpeechProviders } from '@rabilink/desktop-voice-service/speech-providers';
-import { speechProviders } from '@rabilink/desktop-voice-service/provider-profiles';
-import { modelProviders } from '@rabilink/desktop-voice-service/model-providers';
+import {join} from 'node:path';
+import {mkdir,writeFile,rm} from 'node:fs/promises';
+import {openAssistantRuntime} from './runtime.mjs';
+import {openAccessToken} from './access-store.mjs';
+import {openAssistantServer} from './server.mjs';
 
-/** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function startStandalone({ directory, publicDirectory, port = 0, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, onExit = () => {} }) {
-  const store = await openSettingsStore(directory);
-  let conversation, server, disposed = false;
-  const host = createResidentHost({ settings: store.read, saveSettings: store.save, previewSettings: store.preview, saveSettingsBatch: store.saveBatch, credentials: store.credentials, deviceFactory,
-    conversation: ({ onError }) => conversation = createStandaloneConversation({ settings: store.read, credentials: store.credentials, onError }),
-    observeOutput: ({ conversation, ...observer }) => conversation.observe(observer),
-    createProviders: config => providerFactory({ config, credentials: store.credentials }),
-    openSettings: () => server && host.openSettings(server.url),
-  });
-  const bound = {
-    async state() {
-      const state = await host.state();
-      return { ...state, capabilities: { host: 'standalone', tools: false, modelProviders, speechProviders: Object.fromEntries(Object.entries(speechProviders).map(([kind, values]) => [kind, values.filter(item => !item.host).map(({ id, label }) => ({ id, label }))])) },
-        credentials: { ...state.credentials, llm: await store.credentials.describe('llm', store.read().llmEndpoint,store.read().llmProvider) } };
-    },
-    command: host.command,
-    async dispose() { if (disposed) return; await host.dispose(); await conversation.drain(); disposed = true; },
-  };
-  try { server = await openAssistantServer({ host: bound, messages: conversation.messages, directory: publicDirectory, port, onExit }); }
-  catch (error) { await bound.dispose(); throw error; }
-  return { ...server, state: bound.state, async dispose() { await bound.dispose(); await server.close(); } };
+/** The standalone process adds only its loopback server, browser authentication and process exit. */
+export async function startStandalone({directory,publicDirectory,port=0,deviceFactory,providerFactory,onExit=()=>{}}){
+  let server;
+  const runtime=await openAssistantRuntime({directory,deviceFactory,providerFactory,onOpenSettings:()=>server&&runtime.host.openSettings(server.origin+'/?voice-assistant=1')});
+  try{server=await openAssistantServer({host:runtime,messages:runtime.messages,directory:publicDirectory,port,onExit,accessToken:await openAccessToken(directory)});}
+  catch(error){await runtime.dispose();throw error}
+  return {...server,state:runtime.state,async dispose(){await runtime.dispose();await server.close()}};
 }
 
 if (process.argv[1] && import.meta.url === new URL('file:///' + process.argv[1].replaceAll('\\', '/')).href) {

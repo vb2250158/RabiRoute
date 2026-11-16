@@ -162,9 +162,16 @@ test("Agent entry catalog exposes media capabilities, public settings and bounde
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const request = (suffix: string, init: RequestInit = {}) => fetch("http://127.0.0.1:" + address.port + "/api/agent/xiaomi-home" + suffix, { ...init, headers: { authorization: "Bearer " + credential.token, "content-type": "application/json", ...init.headers } });
   const catalog = registry.catalogSnapshot().operations;
-  assert.equal(catalog.length, 53); assert.ok(catalog.every(row => row.contract.exposure === "public"));
-  for (const [method, suffix] of [["GET", "/health"], ["GET", "/capabilities"], ["GET", "/resources/:resourceId"], ["GET", "/action-requests"], ["GET", "/settings"], ["PUT", "/settings"]]) assert.ok(catalog.some(row => row.contract.method === method && row.contract.pathTemplate === "/api/agent/xiaomi-home" + suffix));
+  assert.equal(catalog.length, 54); assert.ok(catalog.every(row => row.contract.exposure === "public"));
+  assert.equal(catalog.filter(row => row.contract.operationId === "manager.xiaomi-home.recordings.latest").length, 1);
+  for (const [method, suffix] of [["GET", "/health"], ["GET", "/capabilities"], ["GET", "/resources/:resourceId"], ["GET", "/action-requests"], ["GET", "/settings"], ["PUT", "/settings"], ["GET", "/recordings/latest"]]) assert.ok(catalog.some(row => row.contract.method === method && row.contract.pathTemplate === "/api/agent/xiaomi-home" + suffix));
   assert.equal((await request("/health")).status, 200); assert.equal((await request("/settings")).status, 200);
+  const beforeRecording = calls.length;
+  assert.equal((await request("/recordings/latest")).status, 400);
+  const recording = await request("/recordings/latest", { headers: { "x-rabiroute-expected-application-generation-id": fence.applicationGenerationId, "x-rabiroute-expected-manager-instance-id": fence.managerInstanceId } });
+  assert.equal(recording.status, 409);
+  assert.equal((await recording.json()).error.code, "xiaomi_home_recording_role_required");
+  assert.equal(calls.length, beforeRecording, "Reading the recording index must not call Home Assistant.");
   const capabilities = await request("/capabilities"); assert.equal(capabilities.status, 200);
   const advertised = (await capabilities.json()).data;
   assert.ok(advertised.actions.some((entry: { capability: string }) => entry.capability === "home.media.set_volume@1"));

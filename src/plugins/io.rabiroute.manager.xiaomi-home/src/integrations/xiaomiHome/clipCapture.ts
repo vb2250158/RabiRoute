@@ -193,6 +193,10 @@ export class XiaomiHomeClipCaptureWorker {
   private readonly maxSegments: number;
   private readonly maxSegmentBytes: number;
   private readonly inFlight = new Map<string, Promise<XiaomiHomeArtifactPublicRecord>>();
+  private readonly queue: Array<{ candidate: XiaomiMiotMotionClipCandidate; resolve: (record: XiaomiHomeArtifactPublicRecord) => void; reject: (error: Error) => void }> = [];
+  private readonly maxConcurrent: number;
+  private readonly maxQueued: number;
+  private active = 0;
   private stopped = false;
 
   constructor(
@@ -200,7 +204,8 @@ export class XiaomiHomeClipCaptureWorker {
     private readonly artifacts: XiaomiHomeArtifactStore,
     private readonly fetchImpl: FetchLike = fetch,
     private readonly roleDirectory?: () => string,
-    private readonly ownerRoleId?: string
+    private readonly ownerRoleId?: string,
+    limits: { maxConcurrent?: number; maxQueued?: number } = {}
   ) {
     this.enabled = config.cameraClipCaptureEnabled === true;
     this.allowedHosts = normalizedAllowedHosts(config.cameraClipAllowedHosts);
@@ -210,6 +215,8 @@ export class XiaomiHomeClipCaptureWorker {
     this.requestTimeoutMs = getTimeoutMs("backend.integrations.xiaomiHome.clipCapture.owner.Number.cameraClipRequestTimeoutMs", Math.min(30000, Math.max(1000, Number(config.cameraClipRequestTimeoutMs ?? 10000))));
     this.maxSegments = Math.min(500, Math.max(1, Number(config.cameraClipMaxSegments ?? 120)));
     this.maxSegmentBytes = Math.min(128 * 1024 * 1024, Math.max(1024, Number(config.cameraClipMaxSegmentBytes ?? 32 * 1024 * 1024)));
+    this.maxConcurrent = Number.isSafeInteger(limits.maxConcurrent) ? Math.max(1, Math.min(16, limits.maxConcurrent!)) : 2;
+    this.maxQueued = Number.isSafeInteger(limits.maxQueued) ? Math.max(0, Math.min(256, limits.maxQueued!)) : 32;
   }
 
   isEnabled(): boolean {
@@ -226,7 +233,9 @@ export class XiaomiHomeClipCaptureWorker {
       ready: this.enabled && this.ffmpegAvailability.status() === "ready",
       ffmpegStatus: this.ffmpegAvailability.status(),
       allowedHostCount: this.allowedHosts.length,
-      inFlight: this.inFlight.size
+      inFlight: this.inFlight.size,
+      active: this.active,
+      queued: this.queue.length
     };
   }
 
@@ -238,14 +247,29 @@ export class XiaomiHomeClipCaptureWorker {
     if (captured) return Promise.resolve(captured);
     const existing = this.inFlight.get(candidate.sourceEventId);
     if (existing) return existing;
-    const operation = this.captureOnce(candidate).finally(() => this.inFlight.delete(candidate.sourceEventId));
+    if (this.active >= this.maxConcurrent && this.queue.length >= this.maxQueued) {
+      return Promise.reject(Object.assign(new Error("Camera capture queue is full."), {code:"camera_capture_queue_full"}));
+    }
+    const operation = new Promise<XiaomiHomeArtifactPublicRecord>((resolve, reject) => {
+      this.queue.push({candidate,resolve,reject});
+    }).finally(() => this.inFlight.delete(candidate.sourceEventId));
     this.inFlight.set(candidate.sourceEventId, operation);
+    this.pump();
     return operation;
+  }
+
+  private pump(): void {
+    while (!this.stopped && this.active < this.maxConcurrent && this.queue.length) {
+      const item = this.queue.shift()!;
+      this.active++;
+      void this.captureOnce(item.candidate).then(item.resolve,item.reject).finally(() => { this.active--; this.pump(); });
+    }
   }
 
   /** No new capture is admitted; accepted native fetches/tools are joined, never detached. */
   async close(): Promise<void> {
     this.stopped = true;
+    for (const item of this.queue.splice(0)) item.reject(new Error("Camera clip owner stopped before capture."));
     await Promise.all([this.ffmpegAvailability.close(), Promise.allSettled(this.inFlight.values())]);
   }
 

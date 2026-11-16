@@ -1,2 +1,16 @@
-*{box-sizing:border-box}body{margin:0;font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#fff;background:transparent}#caption{height:100vh;border:1px solid #ffffff40;border-radius:14px;padding:12px 18px;background:rgba(15,23,42,.85);overflow:hidden}header{display:flex;align-items:center;justify-content:space-between;font-size:12px;-webkit-app-region:drag;color:#b9c7da}nav{display:flex;gap:6px;-webkit-app-region:no-drag}button{border:0;border-radius:5px;background:#ffffff15;color:inherit;padding:5px 8px;cursor:pointer}p{margin:12px 0 0;font-size:24px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}body[data-skin="light"]{color:#142033}body[data-skin="light"] header{color:#465870}body[data-skin="light"] button{background:#00000010}
-body[data-locked="true"] header{-webkit-app-region:no-drag}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#fff;background:transparent}
+#caption{height:100vh;display:flex;flex-direction:column;border:1px solid #ffffff40;border-radius:14px;padding:12px 18px;background:rgba(15,23,42,.85);overflow:hidden;-webkit-app-region:drag;user-select:none}
+header{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#b9c7da}
+nav{display:flex;gap:6px}
+button{border:0;border-radius:5px;background:#ffffff15;color:inherit;padding:5px 8px;cursor:pointer;-webkit-app-region:no-drag}
+p{margin:12px 0 0;font-size:24px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;flex:1;min-height:0;overflow:hidden}
+.spoken{color:#a8ffe0;text-shadow:0 0 5px #8affd533}.remaining{color:#bdc8d5}
+body[data-skin="light"] .spoken{color:#075c46;text-shadow:none}body[data-skin="light"] .remaining{color:#576775}
+body[data-skin="light"]{color:#142033}
+body[data-skin="light"] header{color:#465870}
+body[data-skin="light"] button{background:#00000010}
+body[data-locked="true"] #caption{border-color:transparent;background:transparent!important;-webkit-app-region:no-drag}
+body[data-locked="true"] header{display:none}
+body[data-locked="true"] p{margin-top:0;text-shadow:0 1px 3px #000,0 0 2px #000}
+body[data-locked="true"][data-skin="light"] p{text-shadow:0 1px 3px #fff,0 0 2px #fff}

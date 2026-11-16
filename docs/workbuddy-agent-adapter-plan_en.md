@@ -263,7 +263,7 @@ Merge semantics: only entries carrying the `rabi-workbuddy-hook.mjs` fingerprint
 | Agent profiles from `dispatch-context` | Model/capability catalog display | Not wired; `modelInherited` does not map onto Rabi's model selection, so ownership must be decided first |
 | `POST /auth/login`, `auth/status` | `auth` state and re-login entry | Partially implemented (`auth.required=true` plus wording; `loggedIn` stays unknown rather than guessed) |
 | Session rename, delete, archived-session resume | — | To be decided; Rabi does not currently claim to rewrite host task metadata |
-| Attachments (`payload.attachments`) | Inbound image/attachment support | Not implemented; evaluate after the delivery path is accepted |
+| Attachments (`payload.attachments`) | Local image input | Uses `type=image`, `urlType=local-path`, `url` and `name`; the same task reads the reference with Read. Installed delivery and model inspection still require runtime acceptance |
 
 The principle is unchanged: business and policy stay in Rabi, the host only supplies sessions and execution, and WorkBuddy's job system is never modelled as Rabi's plan or memory source of truth.
 

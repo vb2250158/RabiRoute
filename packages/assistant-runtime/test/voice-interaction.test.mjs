@@ -4,6 +4,49 @@ import { createAiuiAssistantRuntime } from '../src/aiui-runtime.js';
 import { createVoiceInteraction, splitSpeechText } from '../src/voice-interaction.js';
 
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+test('non-streaming cues retain UTF-16 offsets across whitespace, appends and a segment flush',async()=>{
+ const jobs=[],events=[];
+ const runtime=createAiuiAssistantRuntime({asr:{createRound(){return{}},start(){},stop(){}},tts:{async synthesize(text,options){
+  const audio=new EventTarget(),job={text,options,task:{abort(){}},player:{audioPlayer:audio,play(){},destroy(){}},end:()=>audio.dispatchEvent(new Event('ended'))};jobs.push(job);return job;
+ }}});
+ const voice=createVoiceInteraction({runtime,onInput(){},onEvent:event=>events.push(event)});
+ try{
+  const response=voice.beginResponse({id:'reply'});response.append('  😀鱼。 鱼');await flush();assert.equal(jobs[0].text,'😀鱼。');
+  assert.equal(response.finishSpeechSegment(),true);response.append(' 鱼。');response.finish();
+  for(let index=0;index<3;index++){await flush();assert.ok(jobs[index]);jobs[index].options.onCue({charIndex:0,charLength:jobs[index].text.length,mode:'sentence'});jobs[index].end()}
+  await flush();assert.deepEqual(jobs.map(job=>job.text),['😀鱼。','鱼','鱼。']);
+  assert.deepEqual(events.filter(event=>event.type==='playback'&&event.event.type==='cue').map(event=>event.event.cue.charIndex),[2,7,9]);
+ }finally{voice.dispose();runtime.dispose()}
+});
+
+test('identical non-streaming sentences map to their own ranges',async()=>{
+ const jobs=[],events=[];
+ const runtime=createAiuiAssistantRuntime({asr:{createRound(){return{}},start(){},stop(){}},tts:{async synthesize(text,options){
+  const audio=new EventTarget(),job={text,options,task:{abort(){}},player:{audioPlayer:audio,play(){},destroy(){}},end:()=>audio.dispatchEvent(new Event('ended'))};jobs.push(job);return job;
+ }}});
+ const voice=createVoiceInteraction({runtime,onInput(){},onEvent:event=>events.push(event)});
+ try{
+  const response=voice.beginResponse({id:'repeat'});response.append('哈。 哈。');response.finish();
+  for(let index=0;index<2;index++){await flush();assert.ok(jobs[index]);jobs[index].options.onCue({charIndex:0,charLength:jobs[index].text.length,mode:'sentence'});jobs[index].end()}
+  await flush();assert.deepEqual(events.filter(event=>event.type==='playback'&&event.event.type==='cue').map(event=>event.event.cue.charIndex),[0,3]);
+ }finally{voice.dispose();runtime.dispose()}
+});
+
+test('tool boundaries finish the current speech segment without finishing the response; later cues retain message offsets',async()=>{
+ const jobs=[],events=[];
+ const runtime=createAiuiAssistantRuntime({asr:{createRound(){return{}},start(){},stop(){}},tts:{async synthesize(){throw Error('not used')},async openStream(options){
+  const audio=new EventTarget(),job={options,text:'',finished:false,task:{abort(){}},player:{audioPlayer:audio,play(){},destroy(){}},input:{append:text=>{job.text+=text},finish:()=>{job.finished=true}},end:()=>audio.dispatchEvent(new Event('ended'))};jobs.push(job);return job;
+ }}});
+ const voice=createVoiceInteraction({runtime,onInput(){},onEvent:e=>events.push(e)});
+ try{
+  const output=voice.beginResponse({id:'tool-answer'});output.append('先查。');await flush();assert.equal(jobs.length,1);
+  assert.equal(output.finishSpeechSegment(),true);await flush();assert.equal(jobs[0].finished,true);assert.equal(output.getState().finished,false);jobs[0].end();await flush();
+  assert.equal(output.setSpeech({expression:{style:'自然'}}),true);output.append('查到了。');output.finish();await flush();assert.equal(jobs.length,2);assert.equal(jobs[1].text,'查到了。');
+  jobs[1].options.onCue({charIndex:0,charLength:1,startTime:0,endTime:.2,mode:'word'});const cue=events.filter(e=>e.type==='playback'&&e.event.type==='cue').at(-1).event.cue;assert.equal(cue.charIndex,3);
+  voice.interruptSpeech('user');const count=events.filter(e=>e.type==='playback'&&e.event.type==='cue').length;jobs[1].options.onCue({charIndex:1,charLength:1,startTime:.2,endTime:.4,mode:'word'});assert.equal(events.filter(e=>e.type==='playback'&&e.event.type==='cue').length,count);
+ }finally{voice.dispose();runtime.dispose()}
+});
 function fixture(options = {}) {
   const rounds = [], jobs = [], timers = new Map(), inputs = [], events = [], errors = [];
   let nextTimer = 0, time = 0;
@@ -36,24 +79,30 @@ test('short sentences stream immediately while decimal/URL chunk boundaries reta
   assert.equal(f.jobs[1].played, 1); f.jobs[1].end(); f.clean();
 });
 
-test('speech onset interrupts only playback; late original text is retained without restarting TTS', async () => {
+test('only the first accepted ASR text interrupts playback; raw onset and empty results keep it playing', async () => {
   const f = fixture(); f.voice.activate({ continuous: true });
   const output = f.voice.beginResponse({ id: 'original-work' }); output.append('原任务开始。'); await flush();
   f.rounds[0].handlers.onSpeechStart();
+  f.rounds[0].handlers.onInterim({text:''});f.rounds[0].handlers.onInterim({text:'  '});
+  assert.equal(f.jobs[0].aborted,0);assert.equal(output.getState().suppressed,false);
+  output.append('仍然播放。');await flush();assert.equal(output.getState().suppressed,false);
+  f.rounds[0].handlers.onInterim({text:'你'});
   assert.equal(f.jobs[0].aborted, 1); assert.equal(f.jobs[0].destroyed, 1);
   assert.equal(f.rounds[0].stopped, 0);
   output.append('原任务仍然继续。'); output.finish(); await flush();
-  assert.equal(f.jobs.length, 1); assert.equal(output.getState().text, '原任务开始。原任务仍然继续。');
+  assert.equal(f.jobs.length, 1); assert.equal(output.getState().text, '原任务开始。仍然播放。原任务仍然继续。');
   f.rounds[0].handlers.onFinal({ text: '用户的新话' }); f.rounds[0].handlers.onSpeechEnd();
   assert.equal(f.inputs[0].text, '用户的新话'); assert.equal(f.runtime.getState().inputPending, false);
   f.clean();
 });
 
-test('a completed response still stops queued audio on later onset, without a second microphone', async () => {
+test('a completed response stops its queued tail on first recognized text without a second microphone', async () => {
   const f = fixture(); f.voice.activate();
   const output = f.voice.beginResponse(); output.append('第一句。第二句。'); output.finish(); await flush();
   assert.equal(f.voice.playback.getState().queued, 1);
   f.rounds[0].handlers.onSpeechStart(); await flush();
+  assert.equal(f.voice.playback.getState().queued,1);assert.equal(f.jobs[0].aborted,0);
+  f.rounds[0].handlers.onInterim({text:'停'});await flush();
   assert.equal(f.voice.playback.getState().queued, 0); assert.equal(output.getState().suppressed, true);
   assert.equal(f.rounds.length, 1); f.clean();
 });
@@ -61,10 +110,30 @@ test('a completed response still stops queued audio on later onset, without a se
 test('non-echo interim stops audio and stays visible; rejected transcript never reaches the assistant', async () => {
   const f = fixture({ acceptTranscript: text => text !== '回声' }); f.voice.activate();
   const output = f.voice.beginResponse(); output.append('正在播报。'); await flush();
+  f.rounds[0].handlers.onSpeechStart();
   f.rounds[0].handlers.onInterim({ text: '回声' }); assert.equal(f.jobs[0].aborted, 0);
+  output.append('过滤掉的回声不应禁止后续播报。');assert.equal(output.getState().suppressed,false);
   f.rounds[0].handlers.onInterim({ text: '新输入' }); assert.equal(f.jobs[0].aborted, 1);
   assert.equal(f.voice.getState().transcript, '新输入');
   f.rounds[0].handlers.onFinal({ text: '回声' }); assert.equal(f.inputs.length, 0); f.clean();
+});
+
+test('final-only ASR interrupts when nonempty text arrives, not at onset or empty final',async()=>{
+ const f=fixture();f.voice.activate();const output=f.voice.beginResponse();output.append('继续播报。');await flush();
+ const handlers=f.rounds[0].handlers;handlers.onSpeechStart();handlers.onFinal({text:'  '});
+ assert.equal(f.jobs[0].aborted,0);assert.equal(output.getState().suppressed,false);assert.equal(f.inputs.length,0);
+ handlers.onFinal({text:'新的问题'});assert.equal(f.jobs[0].aborted,1);assert.equal(f.inputs.length,1);
+ output.append('打断后保留文字。');output.finish();assert.match(output.getState().text,/保留文字/);f.clean();
+});
+
+test('capture priority alone allows a new reply; accepted pending words gate audio until final delivery',async()=>{
+ const f=fixture();f.voice.activate();const handlers=f.rounds[0].handlers;
+ handlers.onSpeechStart();assert.equal(f.runtime.getState().inputPending,true);
+ const first=f.voice.beginResponse();first.append('首字之前仍可播报。');await flush();assert.equal(f.jobs.length,1);
+ handlers.onInterim({text:'新'});assert.equal(f.jobs[0].aborted,1);
+ const blocked=f.voice.beginResponse();blocked.append('等待用户最终转写。');blocked.finish();await flush();assert.equal(f.jobs.length,1);
+ handlers.onSpeechEnd();handlers.onFinal({text:'新的问题'});
+ const next=f.voice.beginResponse();next.append('新的回复。');next.finish();await flush();assert.equal(f.jobs.length,2);f.clean();
 });
 
 test('speechend before final retains foreground input ownership and does not mistake silence for final text', () => {

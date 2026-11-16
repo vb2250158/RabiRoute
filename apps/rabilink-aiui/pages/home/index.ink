@@ -1,7 +1,7 @@
 <script type="application/json" def>
 {
-  "navigationBarTitleText": "RabiLink AIUI",
-  "description": "打开 RabiLink AIUI 完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：乐奇原生模型在眼镜执行消息与通用接口工具；ASR 在推理与 TTS 期间保持输入，最终文字引导同一推理循环。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
+  "navigationBarTitleText": "拉比小助手",
+  "description": "打开拉比小助手完整交互页；适合在独立窗口或 modal 中持续使用，聊天内卡片仅显示当前状态并可展开进入。transcription 进入连接会话：乐奇原生模型在眼镜执行消息与通用接口工具；ASR 在推理与 TTS 期间保持输入，最终文字引导同一推理循环。configuration 打开同页配置助手，由 AIUI 原生 ASR 和 LanguageModel 理解自然语言，再通过白名单工具执行配置动作。两种模式可用触摸板滑动切换，不退出当前页面；不要在页面参数中手工声明 target。",
   "schema": {
     "data": {
       "type": "object",
@@ -146,6 +146,8 @@ import { apiResultPageMethods } from "../../utils/api-result-page.js";
 import { deviceAgentPageMethods } from "../../utils/device-agent-page.js";
 import { apiToolPageMethods } from "../../utils/api-tool-page.js";
 import { taskFollowPageMethods } from "../../utils/task-follow-page.js";
+import { speechCaption } from "../../utils/speech-caption.js";
+import { modelHistoryPageMethods } from "../../utils/model-history-page.js";
 import { aiuiConversationPageMethods } from "../../utils/aiui-conversation-page.js";
 import { guidancePageMethods } from "../../utils/guidance-page.js";
 import { inputReviewPageMethods } from "../../utils/input-review-page.js";
@@ -658,6 +660,7 @@ export default {
   ...apiToolPageMethods,
   ...taskFollowPageMethods,
   ...aiuiConversationPageMethods,
+  ...modelHistoryPageMethods,
   ...guidancePageMethods,
   ...inputReviewPageMethods,
   data: {
@@ -903,12 +906,14 @@ export default {
     assistantListening: false,
     assistantModelBusy: false,
     lingzhuAgentId: "",
-    lingzhuAgentName: "灵珠智能体",
+    lingzhuAgentName: "拉比小助手",
     lingzhuSystemPrompt: "",
     agentStatus: "等待语音",
     agentReplyText: "Agent 的回复会显示在这里",
+    hudDisplayReply: "",
     agentSpeaking: false,
     agentSpeakingCue: "",
+    playbackCaptionText: "", playbackCaptionStart: 0, playbackCaptionLength: 0,
     transcriptionDesired: true,
     transcriptionListening: false,
     transcriptionState: "准备中",
@@ -992,7 +997,7 @@ export default {
     }
     const invocation = resolveToolInvocation(query);
     const lingzhuAgentId = invocation.agentId || "";
-    const lingzhuAgentName = invocation.agentName || "灵珠智能体";
+    const lingzhuAgentName = invocation.agentName || "拉比小助手";
     const lingzhuSystemPrompt = invocation.systemPrompt || "";
     const asrHostPolicy = resolveAsrHostPolicy();
     const relayBaseUrl = rabiLinkDefaults.relayBaseUrl;
@@ -1205,9 +1210,8 @@ export default {
         const stored = wx.getStorageSync("rabilink_lingzhu_agent");
         if (stored && typeof stored === "object") {
           const finalId = optionalPersonaText(this.data.lingzhuAgentId) || optionalPersonaText(stored.id);
-          const finalName = (this.data.lingzhuAgentName && this.data.lingzhuAgentName !== "灵珠智能体")
-            ? this.data.lingzhuAgentName
-            : (optionalPersonaText(stored.name) || "灵珠智能体");
+          const finalName = optionalPersonaText(invocation.agentName)
+            || optionalPersonaText(stored.name) || "拉比小助手";
           const finalPrompt = optionalPersonaText(this.data.lingzhuSystemPrompt) || optionalPersonaText(stored.prompt);
           this.setData({
             lingzhuAgentId: finalId,
@@ -1691,7 +1695,7 @@ export default {
       status: extra.status || this.data.statusText || "",
       device,
       runtime: {
-        appName: "RabiLink AIUI",
+        appName: "拉比小助手",
         appVersion: this.data.releaseVersion,
         selectedWorkerId: selectedWorker.id || selectedWorker.guid || this.data.targetDeviceId || "",
         selectedWorkerName: selectedWorker.name || ""
@@ -4373,12 +4377,16 @@ export default {
       runtime: this.aiuiRuntime,
       isActive: () => !this.destroyed,
       outputEnabled: this.pageVisible && this.voiceOutputAllowed !== false,
-      acceptTranscript: text => this.pageVisible && !(this.listeningPurpose === "transcription"
-        && (this.speechActive || this.data.agentSpeaking) && this.isAiuiPlaybackEcho(text)),
+      acceptTranscript: text => this.pageVisible
+        && (this.transcriptPolicy?.evaluate(text, Date.now(), { commit: false }).accepted ?? /[\p{L}\p{N}]/u.test(text))
+        && !(this.listeningPurpose === "transcription"
+          && (this.speechActive || this.data.agentSpeaking) && this.isAiuiPlaybackEcho(text)),
       onInput: ({ text }) => this.listeningPurpose === "configuration"
         ? this.handleConfigurationSpeechResult(text) : this.handleTranscriptionResult(text),
       onError: error => console.warn("AIUI voice failed:", cloudSafeMessage(error?.message || error)),
       onEvent: event => {
+        if (event.type === "speech-started") this.setData({ transcriptionState: "正在收音" });
+        if (event.type === "input") this.setData({ transcriptionState: "正在聆听" });
         if (event.type === "speech-interrupted" && event.reason !== "response-replaced")
           this.interruptAiuiPlayback(event.reason, true);
       },
@@ -4477,6 +4485,7 @@ export default {
     this.listeningPurpose = purpose;
     this.ensureVoiceInteraction().activate({ continuous: purpose === "transcription", interimResults: true,
       startupTimeoutMs: this.recognitionStartupTimeoutMs(), handlers: {
+        onSpeechEnd: () => { if (this.recognition?.interimResults === false) this.setData({ transcriptionState: "正在转写" }); },
         onInterim: result => {
           const text = String(result?.text || "").trim();
           if (!text) return;
@@ -4809,7 +4818,7 @@ export default {
       const protocolFailureReason = getAgentProtocolFailureReason(error);
       if (protocolFailureReason) console.warn("[RabiLink AIUI] decision validation failed:", protocolFailureReason);
       this.cleanupChatModel();
-      const messages = { AIUI_HISTORY_STORAGE_FAILED: "聊天记录保存失败，请检查设备存储", TURN_TIMEOUT: "模型响应超时，当前请求已停止", TURN_EMPTY_RESPONSE: "模型未返回文本或工具请求",
+      const messages = { AIUI_MODEL_HISTORY_STORAGE_FAILED: "模型上下文保存失败，请检查设备存储", AIUI_MODEL_HISTORY_INVALID: "模型上下文读取失败，未覆盖原记录", AIUI_HISTORY_STORAGE_FAILED: "聊天记录保存失败，请检查设备存储", TURN_TIMEOUT: "模型响应超时，当前请求已停止", TURN_EMPTY_RESPONSE: "模型未返回文本或工具请求",
         TURN_INTERJECTION_TOOL_FORBIDDEN: "插话回复请求了新工具，未执行；原工具结果待核对",
         TURN_DECISION_INVALID: "模型动作格式无效，未执行该动作", TURN_TOOL_NOT_AVAILABLE: "模型请求了未连接的工具", TURN_STEP_LIMIT: "本轮步骤已达上限，请查看当前结果",
         TURN_TOOL_LIMIT: "本轮接口调用已达上限", TURN_OBSERVATION_LIMIT: "接口结果过大，请使用目标接口的分页或查询方式",
@@ -4955,7 +4964,7 @@ export default {
             } finally { clearTimeout(timer); }
             if (!current() || signal.aborted) throw new Error("VOICE_CONTEXT_CHANGED");
             let expired = false, creationTimer;
-            const creating = Promise.resolve().then(() => ModelCtor.create(framedOptions)).then(model => {
+            const creating = this.modelHistory().createModel(seeded => ModelCtor.create(seeded), framedOptions).then(model => {
               if (expired) {
                 try { Promise.resolve(model?.destroy?.()).catch(() => {}); } catch (_) { /* Late model is never published. */ }
                 throw new Error("创建模型会话超时");
@@ -5385,15 +5394,17 @@ export default {
       this.speechActive = true;
       this.aiuiPlaybackText = event.text;
       this.transcriptPolicy?.rememberPlayback(event.text, Date.now());
-      this.setData({ agentSpeaking: true, voiceErrorText: "", transcriptionState: `${activeName}正在播报` });
+      this.setData({ agentSpeaking: false, voiceErrorText: "", transcriptionState: "正在合成语音",
+        playbackCaptionText: event.text, playbackCaptionStart: 0, playbackCaptionLength: 0 });
     } else if (event.type === "cue") {
       const word = String(event.cue?.text || "").trim();
-      if (word) this.setData({ agentSpeakingCue: word, agentStatus: `${activeName}播报中「${word}」` });
+      this.setData({ ...speechCaption(event.text, event.cue), agentSpeakingCue: word, agentStatus: `${activeName}播报中` });
     } else if (event.type === "play-requested") {
+      this.setData({ agentSpeaking: true, transcriptionState: "正在播报" });
       console.info("[RabiLink AIUI] SpeechAudioPlayer playback requested");
     } else if (event.type === "cancelled") {
       this.speechActive = false;
-      if (this.data.agentSpeaking || this.data.agentSpeakingCue) this.setData({ agentSpeaking: false, agentSpeakingCue: "" });
+      this.setData({ agentSpeaking: false, agentSpeakingCue: "", playbackCaptionText: "", playbackCaptionLength: 0 });
     } else if (event.type === "ended" || event.type === "error") {
       const error = event.error;
       this.speechActive = false;
@@ -5404,7 +5415,7 @@ export default {
         this.transcriptPolicy?.rememberPlayback(event.text, Date.now());
         console.info("[RabiLink AIUI] SpeechAudioPlayer playback ended");
       }
-      this.setData({ agentSpeaking: false, agentSpeakingCue: "", voiceErrorText: error ? "语音播放失败" : "",
+      this.setData({ agentSpeaking: false, agentSpeakingCue: "", playbackCaptionText: "", playbackCaptionLength: 0, voiceErrorText: error ? "语音播放失败" : "",
         agentStatus: error ? "TTS 播放失败" : "可以继续说话",
         transcriptionState: this.data.transcriptionDesired ? "准备继续聆听" : "已暂停",
         assistantStatus: this.data.assistantListeningDesired ? "准备继续聆听" : this.data.assistantStatus });
@@ -5802,7 +5813,7 @@ export default {
             <text class="hudUserSpeechText">我：「{{hudDisplayUser}}」</text>
           </view>
           <view class="hudAgentReplyCard">
-            <text class="hudAgentReplyText">{{hudDisplayReply}}</text>
+            <timed-text class="hudAgentReplyText {{agentSpeaking ? 'captionPlaying' : ''}}" text="{{agentSpeaking ? playbackCaptionText : hudDisplayReply}}" active-start="{{agentSpeaking ? playbackCaptionStart : 0}}" active-length="{{agentSpeaking ? playbackCaptionLength : 0}}"></timed-text>
             <view class="hudCueRow {{agentSpeakingCue ? '' : 'statusHidden'}}">
               <text class="hudCueWord">🔊 {{hudDisplayCue}}</text>
             </view>
@@ -6012,6 +6023,8 @@ export default {
 }
 
 .hudAgentReplyText {
+  --timed-text-color: #40ff5e;
+  --timed-text-active-color: #40ff5e;
   display: block;
   font-size: 20px;
   font-weight: 600;
@@ -6019,6 +6032,8 @@ export default {
   color: #40ff5e;
   word-break: break-word;
 }
+
+.captionPlaying { --timed-text-color: rgba(64, 255, 94, 0.45); }
 
 .hudCueRow {
   margin-top: 4px;

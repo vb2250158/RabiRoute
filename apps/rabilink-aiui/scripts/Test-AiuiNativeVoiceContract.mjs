@@ -163,7 +163,7 @@ test('startup rejects serialized null identity and shows an instruction, not a f
   p.installCloudConsoleCapture = () => {};
   p.scheduleDeferredStartup = () => {};
   p.onLoad({ agentName: 'null', agentId: 'undefined', systemPrompt: ' null ' });
-  assert.equal(p.data.lingzhuAgentName, '灵珠智能体');
+  assert.equal(p.data.lingzhuAgentName, '拉比小助手');
   assert.equal(p.data.lingzhuAgentId, '');
   assert.equal(p.data.lingzhuSystemPrompt, '');
   assert.match(p.data.agentReplyText, /轻触/);
@@ -960,7 +960,7 @@ test('packaged page connects recognition input ownership to mailbox waiting', as
   }
 });
 
-test('host speech onset stops playback before any transcript without cancelling work or capture', () => {
+test('only accepted ASR text stops playback; onset, empty and punctuation retain sound and work', () => {
   let stopped = 0, cancelled = 0;
   class Recognition { start() { this.onstart?.(); } abort() {} }
   const p = page(); p.deviceAgentTurnActive = true; p.promptGeneration = 31;
@@ -972,6 +972,10 @@ test('host speech onset stops playback before any transcript without cancelling 
   p.speechActive = true; p.data.agentSpeaking = true;
   assert.equal(typeof recognition.onspeechstart, 'function');
   recognition.onspeechstart({ type: 'speechstart' });
+  assert.equal(stopped, 0, 'Raw VAD must not stop audio');
+  recognition.onresult({ resultIndex: 0, results: [result('……', false)] });
+  assert.equal(stopped, 0, 'Rejected punctuation must not stop audio');
+  recognition.onresult({ resultIndex: 0, results: [result('新的有效文字', false)] });
   assert.equal(stopped, 1);
   assert.equal(cancelled, 0); assert.equal(p.promptGeneration, 31);
   assert.equal(p.deviceAgentTurnActive, true); assert.equal(p.recognition, recognition);
@@ -1010,7 +1014,9 @@ test('recognition onset during thinking retains the old answer as text while use
   const pending = p.executeLingzhuAgentPrompt('测试'); await settle();
   try {
     p.resumeTranscription('tap');
-    assert.equal(p.aiuiSpeechSuppressed, true, 'User onset must suppress old output without cancelling the pending model');
+    assert.equal(p.aiuiSpeechSuppressed, false, 'VAD alone must retain old output');
+    p.recognition.onresult({ resultIndex: 0, results: [result('有效的追加文字', false)] });
+    assert.equal(p.aiuiSpeechSuppressed, true, 'Accepted text suppresses only voice');
   } finally { release(); await pending; }
   await settle();
   assert.equal(synthesized, 0);
@@ -1252,4 +1258,22 @@ test('hide never claims a new mailbox delivery and does not retire its existing 
   p.onHide(); await p.runDeviceAgentMailbox(owner);
   assert.equal(claims, 0); assert.equal(p.deviceAgentOwner, owner);
   p.deviceAgentOwner = null;
+});
+
+
+test('first launch uses the submission name and reopening preserves saved or explicitly supplied persona names', () => {
+  for (const [saved, supplied, expected] of [[null, null, '拉比小助手'], ['自定义角色', null, '自定义角色'], ['自定义角色', '启动角色', '启动角色']]) {
+    fixtureWx.setStorageSync('rabilink_lingzhu_agent', saved ? { name: saved, id: 'custom-persona', prompt: 'custom prompt' } : null);
+    const p = page();
+    p.installCloudConsoleCapture = () => {}; p.scheduleDeferredStartup = () => {};
+    for (const name of ['restoreDeviceAgentProfile', 'recoverAiuiConversations', 'recoverAiuiInputs', 'startDeviceStatus', 'scheduleCloudLogFlush', 'scheduleTranscriptionRestart']) p[name] = () => {};
+    p.initializeAiuiVoiceContext = async () => ({ ok: true });
+    p.onLoad(supplied ? { agentName: supplied } : {}); p.onReady();
+    p.activateDeferredStartup();
+    clearTimeout(p.startupNetworkTimer);
+    assert.equal(p.data.lingzhuAgentName, expected);
+    if (saved) assert.equal(p.data.lingzhuSystemPrompt, 'custom prompt');
+    p.destroyed = true;
+  }
+  fixtureWx.setStorageSync('rabilink_lingzhu_agent', null);
 });

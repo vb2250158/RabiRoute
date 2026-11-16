@@ -22,7 +22,7 @@ function frozenCapability(input) {
     networkFallback: false,
     locale: input.locale,
     locales: Object.freeze([input.locale]),
-    supportsPartial: input.kind === "asr" ? input.available : undefined,
+    supportsPartial: input.kind === "asr" ? (input.available ? null : false) : undefined,
     supportsContinuous: input.kind === "asr" ? input.available : undefined,
     supportsCancel: input.supportsCancel,
     supportsPlaybackReceipt: input.kind === "tts" ? false : undefined,
@@ -83,7 +83,7 @@ export function createAiuiAsrInputAdapter(options = {}) {
   const now = typeof options.now === "function" ? options.now : Date.now;
   const idFactory = typeof options.idFactory === "function" ? options.idFactory : defaultId;
   const available = Boolean(RecognitionCtor);
-  const capability = frozenCapability({
+  let capability = frozenCapability({
     adapterId,
     kind: "asr",
     available,
@@ -240,6 +240,7 @@ export function createAiuiAsrInputAdapter(options = {}) {
       if (typeof SessionCtor?.getCapabilities !== "function") return start();
       return Promise.resolve(SessionCtor.getCapabilities()).then((host) => {
         if (stoppedRounds.has(recognition)) return;
+        capability = Object.freeze({ ...capability, supportsPartial: host.interimResults === true });
         recognition.interimResults = Boolean(recognition.interimResults && host.interimResults);
         recognition.maxAlternatives = Math.max(1, Math.min(recognition.maxAlternatives || 1, host.maxAlternatives || 1));
         start();
@@ -340,6 +341,8 @@ export function createAiuiTtsOutputAdapter(options = {}) {
               : null) || player.activeCue;
             synthesizeOptions.onCue?.({
               text: cue?.text || "",
+                charIndex: cue?.charIndex,
+                charLength: cue?.charLength,
               startTime: cue?.startTime,
               endTime: cue?.endTime
             }, event);

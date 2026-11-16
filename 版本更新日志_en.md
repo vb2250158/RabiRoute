@@ -6,11 +6,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.5 - 2026-11-16
+
+- Integrate single-pass Markdown browser-profile cleanup with the desktop voice assistant and test-fixture changes; wait for the owned browser to exit before cleanup and retain ownership checks, original errors, and both version records.
+
 ## 0.15.4 - 2026-11-16
 
 - Updated io.rabiroute.manager.persona to 0.1.16. Initial history, pagination and automatic updates use saved names and summaries, with live task metadata on manual refresh. The first event connection reuses the initial read to reduce duplicate requests.
 
 
+- Generate the desktop assistant recognition-check sample using system speech; keep public test fixtures and the shared PCM generator in test directories while private runtime data remains ignored.
+- Add React dependencies required by the Web build; retain reads and receipt reconciliation when an MCP write outcome is uncertain to avoid repeated dispatch.
+- Cover Xiaomi Home recording operations and QQ merged-forward registrations against their existing contracts and connection permissions.
 - Clean temporary Markdown browser profiles in one pass. Locked files retain their original error, avoiding recursive retry amplification that can starve Manager page and asset reads. Existing temporary-directory ownership checks remain enforced.
 
 ## 0.15.3 - 2026-11-15
@@ -22,6 +29,37 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Advance Host API to 1.15.0 and Plugin SDK to 1.4.0 for the added listener-access contracts and synchronize dependency metadata. Rabi Agent advances to 0.4.6 for the owner-lease and endpoint-session changes. Adoption by remote nodes is verified in their own normal maintenance windows.
 
 ## Unreleased - 2026-11-05
+
+- 2026-11-16: Restore playback highlighting across tool waits. Shared voice responses can seal opening audio before a tool executes and resume with a new segment afterwards. Actual subtitle cues receive the segment text offset; late events from an older playback cannot end the new segment. The same reply, model/tool work and first-accepted-text interruption remain intact. All 250 regression tests pass; real WorkBuddy search, Volcano TTS and Windows playback verify advancing answer highlights and frozen highlights after interruption.
+
+- 2026-11-16: Add standalone web search, following the selected WorkBuddy model through official WebSearch and existing login by default, with explicit official OpenAI and independent Tavily adapters. Search settings, live tests, progress/errors and persisted clickable sources are available; DSH retains native host tool configuration. Prevent voice-control headers leaking after tool narration. Bind and normalize observed WorkBuddy native search actions to the current request and discard invented trailing observations from model history. All 248 regression tests pass; real WorkBuddy search receipts and answer continuation pass. OpenAI/Tavily have protocol tests only, without live quota acceptance.
+
+- 2026-11-16: Actual ASR emotion, age/gender, language, speaker, rate/volume and confidence values now enter hidden Agent context with their utterance and persist encrypted with successful model turns. Chat bubbles retain the transcript. Keep model estimates distinct from user-stated facts, do not fill missing values, and exclude requests, credentials and logs. All 237 tests passed; real fixed audio and WorkBuddy verified reading the previous utterance’s original estimates after restart.
+
+- 2026-11-16: ASR settings separate recognition capabilities, tool-owned inputs and user preferences. Emotion, gender, age, speaker, language, rate and volume metadata default on; sensitive filtering defaults off. Supply the latest assistant reply from the current conversation automatically instead of exposing context payloads or wire result modes as manual inputs. New profiles use second-pass correction, with individual switches and enable-all. All 234 tests and real Volcano fixed-audio recognition passed, including returned metadata.
+
+- 2026-11-16: Isolate malformed Xiaomi Home data, bound delivery and camera capture concurrency, and distinguish proven unsent from unconfirmed delivery. Device listings expose partial coverage; video lookup isolates attributable damaged records by role.
+
+- 2026-11-16: The standalone assistant binds a complete official WorkBuddy CLI from private host-options.json for conversation and model catalogs. Validate package metadata before launch, distinguish installation failures from account issues, and terminate the owned text-only CLI on cancellation while awaiting observed exit. All 227 tests passed; real WorkBuddy, Volcano TTS, Windows playback and caption following passed.
+
+- 2026-11-16: Shared voice captions now highlight consumed PCM in chat and the desktop overlay. Volcano Chinese/English uses word timing; OpenAI PCM follows sentences. Interruption freezes highlighting while retaining remaining text. All 223 tests passed. Fixed-reply acceptance exercised real Volcano TTS and Windows playback/captions, without a model call or human microphone.
+
+- November 15: shared voice interruption now requires the first accepted nonempty ASR text. Raw onset/VAD and empty or rejected transcripts neither cancel playback nor suppress later spoken chunks; scheduling inputPending is separate from the audio gate. Final input still submits automatically while original text and background work continue. All 217 regressions and a real Volcano ASR/TTS plus Windows-player fixed-sample check passed; human microphone and echo remain separate acceptance.
+
+- November 15: clickable TTS capabilities explain purpose, conditions, current limitations and official sources, separating provider ranges from actual Agent constraints. TTS uses two aligned equal-width voice/expression cards, available capabilities come first, and secondary controls use consistent disclosures. Equal-width ASR columns give model names more space. All 215 regressions passed; this static frontend update does not restart the backend or modify settings/conversations.
+
+- November 15: assistant settings use wide columns and 16px form controls with duplicate title bars removed. Model/identity, ASR connection/options and TTS voice/expression sit side by side; voice search/favorites, playback preferences and the complete capability inventory expand on demand. In-app browser checks at 1920×1080, 1366×768 and 1280×720 show the three common settings pages without vertical scrolling; 390px uses one column without horizontal overflow. Search/disclosure checks and all 215 tests passed. Static frontend assets were updated without restarting the backend on 10099. The fullscreen control shows a maximize-window hint if the browser denies it.
+
+- November 15: standalone web encrypts and persists complete conversation history, speech details and provider context, restoring the same session after refresh or restart. Paged display history is independent of the 24-message / 64,000-character model window. Explicit clearing, busy/stale guards, save-failure feedback and interrupted-message recovery avoid automatic replay. All 215 tests passed; real WorkBuddy recalled test content after a different backend process restored history, and browser refresh retained messages. DSH uses native sessions and separate isolated acceptance.
+
+- November 15: standalone assistant settings use a full page. Per-message details show actual ASR detections and TTS payloads, expression and playback state on demand. Bounded process-memory details exclude credentials/audio and never enter model context. All 209 tests and fixed-PCM real Volcano/WorkBuddy/Windows playback and interruption acceptance passed. Detection remains default-off: a small emotion benchmark measured approximately 46 ms higher median final latency; equal billing and zero overhead are unconfirmed. Human microphone acceptance and DSH integration remain separate.
+
+- November 15: standalone desktop captions are independent of capture and appear when enabled and saved. Stopping voice retains enabled captions; exiting clears them. Caption areas outside buttons can be dragged; locking disables movement and resizing and hides the frame, background and controls. Unlock from the web settings or tray; a three-second caption test is available. All 199 combined tests passed; mouse-drag and final visual acceptance remain pending.
+
+- November 15: speech settings separate user recognition options, playback preferences, per-reply Agent expression and tool integration. The shared SDK extracts optional expression in the same generation and validates model/voice capabilities without persisting overrides. Added Volcano dynamic style/speed and official OpenAI sentence-based PCM streaming; retained local Whisper ASR without adding local TTS. 195 tests passed, plus real WorkBuddy/Volcano/Windows expression, auto-submit and interruption acceptance. The original OpenAI credential returned 401; live OpenAI acceptance remains incomplete.
+
+- November 15: the screenshot composer selects a role or a local Agent declaring image support, with conversation search, pagination and saved target selection. Voice input defaults off and remembers its state, checks RabiSpeech/ASR before enabling, and opens setup for local models or an API when unavailable. Prepared delivery binds image digests; Codex/DSH receive image input and WorkBuddy uses official attachment references. Uncertain results only reconcile the original receipt. Source tests and local builds pass; installed acceptance remains separate.
+- Shared development coordinates actual file, interface and semantic intersections. Independent work proceeds separately; overlapping work contacts its original Agent for changes and closure. Avoidance does not create extra branches, worktrees or duplicate records. Updated project, pull, submission, build and hot-patch guidance.
 
 - Desktop voice plugin `1.0.1` and AIUI use shared loop `0.10.3`: hiding or pausing stops capture/output while retaining admitted work and text. Showing does not reopen the microphone or replay old replies, and manual mute persists. The glasses session renews its existing lease and validates the original ownerEpoch before resuming receipt reconciliation or claims. AIUI 51, device-owner 31 and desktop lifecycle 3 regressions pass; physical audio and installation acceptance are recorded separately.
 

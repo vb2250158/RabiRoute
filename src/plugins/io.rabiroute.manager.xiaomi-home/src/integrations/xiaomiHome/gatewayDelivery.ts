@@ -42,10 +42,15 @@ export function parseXiaomiHomeEventCliDelivery(stdout: string): XiaomiHomeGatew
 }
 
 /** The platform owns its ledger, event routing and delivery workers; the host supplies existing Route execution resources. */
-export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExecution, roleDirectory: (roleId: string) => string) {
+export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExecution, roleDirectory: (roleId: string) => string,
+  limits: { maxConcurrent?: number; maxQueued?: number } = {}) {
   const ledger = new XiaomiHomeEventLedger(roleDirectory);
   const children = new Map<ChildProcess, Promise<void>>();
   const pending = new Set<Promise<XiaomiHomeGatewayDeliveryResult[]>>();
+  const maxConcurrent = Math.max(1, Math.min(32, Math.trunc(limits.maxConcurrent ?? 4) || 4));
+  const maxQueued = Math.max(0, Math.min(1024, Math.trunc(limits.maxQueued ?? 128)));
+  const queue: Array<{ definition: GatewayDefinition; event: XiaomiHomeEvent; resolve: (result: XiaomiHomeGatewayDeliveryResult) => void }> = [];
+  let active = 0;
   let closed = false;
   let retirement: Promise<void> | undefined;
   const assertActive = () => {
@@ -64,8 +69,9 @@ export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExec
     }
     return new Promise(resolve => {
       const command = execution.childCommand([SYSTEM_EVENT_STDIN_FLAG]);
+      const env = execution.environmentForGateway(definition);
       const child = spawn(command.command, command.args, {
-        cwd: execution.rootDir, env: execution.environmentForGateway(definition), shell: command.shell, windowsHide: true
+        cwd: execution.rootDir, env, shell: command.shell, windowsHide: true
       });
       const childClosed = new Promise<void>(resolve => child.once("close", () => { children.delete(child); resolve(); }));
       children.set(child, childClosed);
@@ -78,14 +84,16 @@ export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExec
         execution.appendLog(definition.id, `xiaomi home event delivery status=${result.status} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`);
         resolve(result);
       };
+      let timedOut = false;
       const timeout = setTimeout(() => {
+        timedOut = true;
         child.kill();
-        finish({ gatewayId: definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_timeout" });
       }, getTimeoutMs("deadline.manager.controlPlaneRoutes.deliverXiaomiHomeEventViaGateway", 10 * 60 * 1000));
       child.stdout!.on("data", data => { if (stdout.length < 256 * 1024) stdout += data.toString(); });
       child.stderr!.resume();
       child.on("error", () => finish({ gatewayId: definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_spawn_failed" }));
-      child.on("exit", () => {
+      child.on("close", () => {
+        if (timedOut) return finish({ gatewayId: definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_timeout" });
         const delivery = parseXiaomiHomeEventCliDelivery(stdout);
         finish(delivery ? { gatewayId: definition.id, ...delivery } : {
           gatewayId: definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0,
@@ -95,6 +103,25 @@ export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExec
       child.stdin!.on("error", () => { /* Process termination owns the original delivery result. */ });
       child.stdin!.end(JSON.stringify(ingress));
     });
+  }
+
+  function pump(): void {
+    while (!closed && active < maxConcurrent && queue.length) {
+      const item = queue.shift()!;
+      active++;
+      void deliverViaGateway(item.definition, item.event).catch(() => {
+        execution.appendLog(item.definition.id, "xiaomi home event delivery status=failed reason=delivery_process_setup_failed");
+        return { gatewayId: item.definition.id, status: "failed" as const, matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_setup_failed" };
+      }).then(item.resolve).finally(() => { active--; pump(); });
+    }
+  }
+
+  function schedule(definition: GatewayDefinition, event: XiaomiHomeEvent): Promise<XiaomiHomeGatewayDeliveryResult> {
+    if (active >= maxConcurrent && queue.length >= maxQueued) {
+      execution.appendLog(definition.id, "xiaomi home event delivery status=failed reason=delivery_queue_full");
+      return Promise.resolve({ gatewayId: definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_queue_full" });
+    }
+    return new Promise(resolve => { queue.push({ definition, event, resolve }); pump(); });
   }
 
   async function deliver(event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext, access?: XiaomiHomeRequestAuthority): Promise<XiaomiHomeGatewayDeliveryResult[]> {
@@ -114,7 +141,10 @@ export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExec
       && (sanitizeRoleId(definition.agentRoleId) || routeRuntimeParts(definition.id).roleId) === roleId
       && gatewayAdapterTypes(definition).includes("xiaomiHome")) : [];
     if (!candidates.length) return [{ status: "missed", matchedRuleCount: 0, sentPacketCount: 0, reason: "no_matching_xiaomi_home_gateway" }];
-    const deliveries = candidates.map(({ definition }) => { access?.dispatch(); return deliverViaGateway(definition, event); });
+    const deliveries = candidates.map(({ definition }) => {
+      access?.dispatch();
+      return schedule(definition, event);
+    });
     try {
       const results = await Promise.all(deliveries);
       access?.assert();
@@ -131,6 +161,7 @@ export function createXiaomiHomeGatewayDelivery(execution: XiaomiHomeGatewayExec
     stop(): Promise<void> {
       closed = true;
       return retirement ??= (async () => {
+        for (const item of queue.splice(0)) item.resolve({ gatewayId: item.definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_plugin_retired" });
         for (const child of children.keys()) child.kill();
         await Promise.allSettled([...pending, ...children.values()]);
         await ledger.drain();

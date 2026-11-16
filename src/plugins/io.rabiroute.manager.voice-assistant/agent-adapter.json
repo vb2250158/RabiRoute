@@ -1,0 +1,26 @@
+{
+  "type": "voice-assistant",
+  "capability": "agent.adapter.voice-assistant@1",
+  "manifest": {
+    "type": "voice-assistant",
+    "label": "语音助手",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "in-process",
+      "mode": "owned-session"
+    },
+    "host": {
+      "name": "Rabi PC",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "agentThreads": true,
+        "deliveryReceiptRecovery": true
+      },
+      "nativeThreadOperations": true
+    }
+  },
+  "sessionBinding": {}
+}

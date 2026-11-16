@@ -20,6 +20,8 @@ export type ManagedTaskAgentFeature =
    * adapters whose delivery is a handoff into someone else's runtime.
    */
   | "agentThreads"
+  /** Native local owner accepts content-bound screenshot attachments. */
+  | "imageAttachments"
   /**
    * The adapter transport keeps a durable, locally readable log of inbound
    * prompts, so a lost delivery receipt can be reconstructed after the fact.
@@ -29,6 +31,8 @@ export type ManagedTaskAgentFeature =
   | "deliveryReceiptRecovery";
 
 export type AgentAdapterCapabilities = {
+  /** The original provider implements threads.request; never fall back to another adapter. */
+  nativeThreadOperations?: true;
   managedTasks?: Partial<Record<ManagedTaskAgentFeature, true>>;
 };
 

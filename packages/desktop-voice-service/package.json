@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workbuddy-cli": "./src/workbuddy-cli.mjs",
+    "./web-search": "./src/web-search.mjs",
+    "./web-search-catalog": "./src/web-search-catalog.mjs",
     "./speech-catalog": "./src/speech-catalog.mjs",
     "./model-providers": "./src/model-providers.mjs",
     "./windows-secrets": "./src/windows-secrets.mjs",
     "./host": "./src/assistant-host.mjs",
+    "./speech-sample": "./src/speech-sample.mjs",
     "./settings": "./src/assistant-settings.mjs",
     "./provider-profiles": "./src/provider-profiles.mjs",
     "./chat-model": "./src/chat-model.mjs",
@@ -20,7 +24,9 @@
     "./providers": {
       "import": "./src/providers.mjs",
       "types": "./src/providers.d.ts"
-    }
+    },
+    "./expression": "./src/tts-expression.mjs",
+    "./speech-details": "./src/speech-details.mjs"
   },
   "files": [
     "src",

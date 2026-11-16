@@ -74,7 +74,7 @@ export function queryHomeDevices(directory: HomeDeviceDirectory<XiaomiHomeResour
   const matches = directory.devices.filter(device => device.resources.some(resource => matchesResource(resource, query))
     && matchesText(deviceText(device) + " " + device.resources.map(resourceText).join(" "), query.q))
     .sort((a, b) => a.deviceId.localeCompare(b.deviceId));
-  return { ...homeDirectoryPage(matches.map(device => query.view === "detail" ? device : homeDeviceSummary(device)), query),
+  return { ...homeDirectoryPage(matches.map(device => query.view === "detail" ? device : homeDeviceSummary(device)), query), coverage: directory.coverage,
     unassignedResourceCount: directory.unassignedResources.length,
     unassignedResourcesPath: "/api/agent/xiaomi-home/resources?deviceId=unassigned" };
 }
@@ -83,6 +83,7 @@ export function filterHomeResources(resources: XiaomiHomeResource[], query: Home
   const deviceByEntityId = new Map<string, Device>();
   for (const device of directory?.devices || []) for (const resource of device.resources) deviceByEntityId.set(resource.entityId, device);
   if (query.deviceId && query.deviceId !== "unassigned" && !directory?.devices.some(device => device.deviceId === query.deviceId)) {
+    if (directory?.coverage?.state === "partial") throw new XiaomiHomeManagerApiError(503, "xiaomi_home_directory_partial", "Device registry is incomplete; the requested device cannot be confirmed absent.");
     throw new XiaomiHomeManagerApiError(404, "xiaomi_home_device_not_found", "Device was not found in the current registry.");
   }
   return resources.filter(resource => {

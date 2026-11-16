@@ -48,6 +48,10 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
   const modules = new Set();
   const inputs = new Set();
   const initializationImports = new Map();
+  const externalPackagePaths = specification.externalPackagePaths ?? {};
+  for (const [name, target] of Object.entries(externalPackagePaths)) {
+    if (!name || typeof target !== 'string' || !target.startsWith('./') || target.includes('\\') || target.split('/').some(part => part === '..' || part === 'node_modules')) throw new Error('Invalid package-owned external module path.');
+  }
   const entry = specification.exports
     ? specification.exports.map(item => `export { ${item.exportName ?? item.name} as ${item.name} } from ${JSON.stringify(item.hostModule ? "@rabiroute/host-api/" + item.hostModule : path.join(root, item.source))};`).join("\n")
     : `export { ${specification.factory} as create } from ${JSON.stringify(path.join(root, specification.source))};`;
@@ -57,8 +61,12 @@ export async function bundleMessageEndpointRuntime(root, specification, outputFi
     bundle: true, write: false, platform: "node", format: "iife", globalName: "endpointImplementation", target: "node22", metafile: true,
     define: { "import.meta.url": "__endpointModuleUrl", ...(specification.scopedEnvironment ? { "process.env": "__endpointEnvironment" } : {}) },
     nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
-    external: ["bufferutil", "utf-8-validate"],
-    plugins: [{ name: "plugin-owned-resource-urls", setup(builder) {
+    external: ["bufferutil", "utf-8-validate", ...(specification.externalPackages ?? [])],
+    ...(specification.aliases ? {alias:Object.fromEntries(Object.entries(specification.aliases).map(([name,target])=>[name,path.resolve(root,target)]))}:{}),
+    plugins: [{ name: 'package-owned-native-modules', setup(builder) {
+      builder.onResolve({filter: /.*/}, args => Object.hasOwn(externalPackagePaths, args.path)
+        ? {path:externalPackagePaths[args.path],external:true}:undefined);
+    } }, { name: "plugin-owned-resource-urls", setup(builder) {
       if (!specification.packageId) return;
       const pluginRoot = path.join(root, "src/plugins", specification.packageId);
       builder.onLoad({ filter: /\.(?:[cm]?js|[jt]sx?)$/, namespace: "file" }, async args => {

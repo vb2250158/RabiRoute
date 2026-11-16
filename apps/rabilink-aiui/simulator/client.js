@@ -65,7 +65,7 @@ async function mount() {
     view.setOnCloseRequested(() => { void stop().catch(showError); });
     setControls(true);
     $('status').textContent = config.configured ? '页面已加载，可开始测试' : '页面已加载；请先配置对话 API';
-    report('runtime', '页面已加载', `Ink 0.19.1 / ${mountedMode === 'text' ? '模拟文字' : '真实麦克风'}`);
+    report('runtime', '页面已加载', `Ink 0.20.0 / ${mountedMode === 'text' ? '模拟文字' : '真实麦克风'}`);
   } finally { loading = false; $('reload').disabled = false; }
 }
 

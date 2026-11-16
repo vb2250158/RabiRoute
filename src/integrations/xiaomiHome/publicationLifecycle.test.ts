@@ -33,7 +33,7 @@ const { activate } = await import('data:text/javascript;base64,' + Buffer.from(s
 
 function gate(){let release!:()=>void;const promise=new Promise<void>(resolve=>{release=resolve;});return {promise,release};}
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
-function fixture(t:test.TestContext,readOnly=false){
+function fixture(t:test.TestContext,readOnly=false,agentRoleId=''){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'xiaomi-publication-')),directory=path.join(root,'runtime');
   const contexts:XiaomiHomeManagerRoutesContext[]=[],controllers:ControlledController[]=[],counts={deployment:0,subscribed:0,unsubscribed:0,activation:0,retired:0};
   const behavior:{stop?:()=>Promise<void>;failSubscribe?:boolean}={};
@@ -57,7 +57,7 @@ function fixture(t:test.TestContext,readOnly=false){
   };
   const closures:Array<()=>Promise<unknown>>=[];
   t.after(async()=>{for(const close of closures.reverse())await close();assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith('xiaomi-publication-'));fs.rmSync(root,{recursive:true,force:true});});
-  const prepared=async()=>{const harness=createPluginTestHarness({config:{runtimeDir:directory,eventMonitorEnabled:false},services:[['host.message-endpoints@1',host]]});const publication=new PublicationScope(harness.effects);await activate({...harness.context,publication});await harness.effects.commit();closures.push(()=>harness.dispose());return {harness,publication,context:contexts.at(-1)!,controller:controllers.at(-1)!};};
+  const prepared=async()=>{const harness=createPluginTestHarness({config:{runtimeDir:directory,eventMonitorEnabled:false,agentRoleId},services:[['host.message-endpoints@1',host]]});const publication=new PublicationScope(harness.effects);await activate({...harness.context,publication});await harness.effects.commit();closures.push(()=>harness.dispose());return {harness,publication,context:contexts.at(-1)!,controller:controllers.at(-1)!};};
   const candidate=(revision:string):PluginCandidate=>({instanceId:'manager:xiaomi-home',revision,config:{runtimeDir:directory,eventMonitorEnabled:false},entry:{execution:'in_process',path:'fixture.mjs'},manifest:{schemaVersion:2,id:'io.test.xiaomi',version:'1.0.0',entries:{manager:{execution:'in_process',module:'./fixture.mjs'}},provides:['manager.xiaomi-home@1'],requires:['host.message-endpoints@1'],optional:[],permissions:[]},policy:{restart:{mode:'never',maxAttempts:0,windowMs:1,initialBackoffMs:1,maximumBackoffMs:1},resources:{maxChildProcesses:0,shutdownTimeoutMs:1000}}});
   return {root,directory,runtime,host,counts,contexts,controllers,behavior,prepared,candidate,closures};
 }
@@ -95,7 +95,17 @@ test('published readiness gates native work while authenticated non-Lan connecti
   const read=await call();assert.equal(read.status,200);const write=await call('PUT',{settings:read.body.data.settings,revision:read.body.data.revision});assert.equal(write.status,200);assert.equal(write.body.data.source,'runtime');
 });
 test('explicit Manager read-only mode publishes read contracts without initialization, recovery or subscription',async t=>{
-  const f=fixture(t,true),p=await f.prepared();p.publication.publish();p.publication.seal()();await p.publication.afterPublish(Promise.resolve());p.context.assertRuntimeAvailable!();assert.equal(f.runtime.managerPluginRoutes.catalogSnapshot().operations.length,53);assert.equal(fs.existsSync(f.directory),false);assert.equal(f.counts.deployment,0);assert.equal(f.counts.subscribed,0);
+  const f=fixture(t,true,'FixtureRole'),p=await f.prepared();p.publication.publish();p.publication.seal()();await p.publication.afterPublish(Promise.resolve());p.context.assertRuntimeAvailable!();
+  const catalog=f.runtime.managerPluginRoutes.catalogSnapshot().operations;
+  assert.equal(catalog.length,54);
+  assert.equal(catalog.filter(row=>row.contract.operationId==='manager.xiaomi-home.recordings.latest'&&row.contract.method==='GET'&&row.contract.pathTemplate==='/api/agent/xiaomi-home/recordings/latest').length,1);
+  assert.equal(fs.existsSync(f.directory),false);
+  const server=http.createServer((request,response)=>{if(!f.runtime.managerPluginRoutes.handle(request,new URL(request.url!,'http://fixture'),response))response.writeHead(404).end('{}');});
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));});
+  const response=await fetch('http://127.0.0.1:'+(server.address() as {port:number}).port+'/api/agent/xiaomi-home/recordings/latest',{headers:{'x-rabiroute-expected-application-generation-id':f.runtime.lifecycleFence.applicationGenerationId,'x-rabiroute-expected-manager-instance-id':f.runtime.lifecycleFence.managerInstanceId}});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{code:0,data:{artifact:null,settingsRevision:p.controller.settings().revision}});
+  assert.equal(fs.existsSync(f.directory),false);assert.equal(f.counts.deployment,0);assert.equal(f.counts.subscribed,0);
 });
 test('real generation handoff awaits actual previous retirement and old cleanup cannot stop its replacement',async t=>{
   const f=fixture(t);const kernel=new GenerationRuntime({host:'manager',hostServices:[{capability:'host.message-endpoints@1',value:f.host}],executor:{prepare:async()=>({activate})}});f.closures.push(()=>kernel.dispose());

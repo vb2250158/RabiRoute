@@ -131,7 +131,9 @@ class RecordingLayoutInstrumentation : Instrumentation() {
             val stage = tree.single { it.contentDescription == "实时记录预览" }
             onUi { check(stage.isShown) { "Initial page did not show live recording" } }
             val listBounds = Rect(); onUi { records.getGlobalVisibleRect(listBounds) }
+            screenshot("fixture-before-drag")
             drag(listBounds.exactCenterX(),listBounds.bottom-40f,listBounds.top+40f)
+            screenshot("fixture-after-drag")
             val historyBounds = Rect(); var first = 0; var offset = 0
             onUi {
                 check(!stage.isShown) { "History scrolling left the live area on screen" }
@@ -159,16 +161,28 @@ class RecordingLayoutInstrumentation : Instrumentation() {
                 onUi {
                     playback = RecordingReviewPanel::class.java.getDeclaredField("player").apply { isAccessible = true }.get(fixture) as? com.rabi.link.recording.RecordingPlaybackPanel
                     seek = views(openedDialog!!.window!!.decorView).filterIsInstance<android.widget.SeekBar>().singleOrNull()
-                    ready = playback != null && seek?.isEnabled == true
+                    val engine = playback?.let { com.rabi.link.recording.RecordingPlaybackPanel::class.java.getDeclaredField("player").apply { isAccessible = true }.get(it) as androidx.media3.exoplayer.ExoPlayer }
+                    ready = seek?.let { it.isEnabled && it.isShown && it.width > 0 && it.height > 0 } == true && engine?.playbackState == androidx.media3.common.Player.STATE_READY
                 }
                 if(ready) break
                 SystemClock.sleep(100)
             }
             check(playback != null && seek?.isEnabled == true) { "Paused/offline history could not load a valid local recording" }
-            val seekBounds = Rect(); onUi { seek!!.getGlobalVisibleRect(seekBounds) }
+            waitForIdleSync()
+            screenshot("fixture-audio-dialog")
+            val seekBounds = Rect(); onUi {
+                val origin = IntArray(2); seek!!.getLocationOnScreen(origin)
+                seekBounds.set(origin[0],origin[1],origin[0]+seek!!.width,origin[1]+seek!!.height)
+            }
+            check(!seekBounds.isEmpty) { "Seek control has no visible touch bounds" }
             val touchTime = SystemClock.uptimeMillis()
             val seekX = seekBounds.left+seekBounds.width()*0.6f
-            sendPointerSync(MotionEvent.obtain(touchTime,touchTime,MotionEvent.ACTION_DOWN,seekX,seekBounds.exactCenterY(),0))
+            val seekStart = seekBounds.left+seekBounds.width()*0.2f
+            sendPointerSync(MotionEvent.obtain(touchTime,touchTime,MotionEvent.ACTION_DOWN,seekStart,seekBounds.exactCenterY(),0))
+            for(step in 1..8) {
+                SystemClock.sleep(25)
+                sendPointerSync(MotionEvent.obtain(touchTime,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,seekStart+(seekX-seekStart)*step/8,seekBounds.exactCenterY(),0))
+            }
             sendPointerSync(MotionEvent.obtain(touchTime,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,seekX,seekBounds.exactCenterY(),0))
             SystemClock.sleep(300)
             onUi {
@@ -197,12 +211,27 @@ class RecordingLayoutInstrumentation : Instrumentation() {
             waitForIdleSync()
             onUi { check(records.firstVisiblePosition >= 185); check(records.count == 205) }
             screenshot("history-expanded")
+            onUi { records.setSelectionFromTop(8,0) }
+            waitForIdleSync()
+            onUi { records.getGlobalVisibleRect(listBounds) }
+            drag(listBounds.exactCenterX(),listBounds.top+100f,listBounds.top+260f)
+            onUi { check(!stage.isShown) { "Pulling inside older history incorrectly returned to live" } }
+            onUi { records.setSelectionFromTop(0,-80) }
+            waitForIdleSync()
+            onUi { records.getGlobalVisibleRect(listBounds) }
+            drag(listBounds.exactCenterX(),listBounds.top+200f,listBounds.top+950f)
+            onUi { check(stage.isShown) { "Pulling beyond the newest record did not restore live" } }
+            screenshot("pull-return-live")
+            onUi { records.getGlobalVisibleRect(listBounds) }
+            drag(listBounds.exactCenterX(),listBounds.bottom-40f,listBounds.top+40f)
+            onUi { check(!stage.isShown) { "History could not collapse again after pull-to-live" } }
             onUi { views(activity!!.window.decorView).single { it.contentDescription == "返回实时" }.performClick() }
             waitForIdleSync()
             onUi { check(stage.isShown) { "Return to live did not restore the live pane" } }
             output.putString("result","PASS: history scrolling removes the whole live pane; 205 isolated records remain scrollable; record dialogs preserve the underlying list; return-to-live restores the live pane")
             output.putInt("fixtureRecords",205)
             output.putString("playback","PASS: paused local playback loads without a recording owner; seek preserves pause; completed media replays in one tap")
+            output.putString("pullToLive","PASS: older history stays expanded; pulling past the newest row returns to live in the same gesture; history can collapse again")
         } catch(error: Throwable) { code=Activity.RESULT_CANCELED; output.putString("error",error.stackTraceToString()) }
         finally {
             onUi { fixture?.close(); activity?.finish() }

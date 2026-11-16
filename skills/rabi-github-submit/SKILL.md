@@ -5,6 +5,8 @@ description: Prepares, reviews, commits, and publishes RabiRoute changes with a 
 
 # RabiRoute GitHub Submit
 
+协作按实际交集处理：默认沿当前统一开发线，不为避开已有改动另建分支、worktree 或重复记录。文件、接口和语义互不影响时各自推进，无需找人或通知；确有交集、冲突或集成依赖才查 Agent 归属和完成状态，直接向原会话协调改法并请其完成验证收尾，未完成项向用户说明。在已有授权内及时整合验证与同步，不积压差异；提交、推送、运行切换各守原授权。
+
 Use this skill with `github-submit-workflow` and `ai-code-security-review`; read both before changing submission state. A request to “prepare” does not authorize commit or push. A request to “commit” does not authorize push.
 
 ## Scope boundary: submission checks are not API permissions

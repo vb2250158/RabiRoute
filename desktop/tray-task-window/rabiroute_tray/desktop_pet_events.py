@@ -46,6 +46,7 @@ class DesktopPetEventStream(QObject):
     companion_changed = Signal(object)
     companion_reaction = Signal(object)
     playback_changed = Signal(object)
+    voice_assistant_presentation = Signal(object)
     connection_changed = Signal(bool)
 
     def __init__(self, manager_url: str, *, path: str = "/api/events") -> None:
@@ -110,6 +111,8 @@ class DesktopPetEventStream(QObject):
                             self.companion_changed.emit(payload)
                         elif event_name == "companion_reaction" and isinstance(payload, dict):
                             self.companion_reaction.emit(payload)
+                        elif event_name == "voice_assistant_presentation" and isinstance(payload, dict):
+                            self.voice_assistant_presentation.emit(payload)
                         elif event_name == "playback_changed" and isinstance(payload, dict):
                             self.playback_changed.emit(payload)
             except AttributeError:

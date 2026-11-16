@@ -210,7 +210,7 @@ Behavior notes:
 
 ### Methods
 
-- `abort()`
+- `abort()`: Cancelling a pending request calls its `fail` and `complete` callbacks.
 - `onHeadersReceived(callback)`
 - `offHeadersReceived(callback?)`
 - `onChunkReceived(callback)`

@@ -8,6 +8,7 @@ export type HomeDirectoryPage<T> = {
   offset: number;
   limit: number;
   nextOffset: number | null;
+  coverage?: { state: "complete" | "partial"; invalidRows: number; invalidStates?: number };
 };
 
 /** Summary values help choose a resource; read its current detail before acting. */

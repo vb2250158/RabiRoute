@@ -3,11 +3,20 @@ import assert from 'node:assert/strict';
 import { initialAssistantSettings,patchAssistantSettings } from '../src/assistant-settings.mjs';
 import { encodeVolcanoAsrRequest,encodeVolcanoTtsParams,volcanoCatalog,parameterEnabled } from '../src/speech-catalog.mjs';
 const initial=()=>patchAssistantSettings(initialAssistantSettings(),{asrMode:'volcengine',ttsProvider:'volcengine'});
+
+test('continuous conversation defaults to silence endpointing and retains explicit provider overrides',()=>{
+  const config=initial();
+  assert.equal(config.asrEndWindowEnabled,true);
+  assert.equal(encodeVolcanoAsrRequest(config).end_window_size,800);
+  assert.equal('vad_segment_duration' in encodeVolcanoAsrRequest(config),false);
+  const custom=patchAssistantSettings(config,{asrEndWindowEnabled:false});
+  assert.equal('end_window_size' in encodeVolcanoAsrRequest(custom),false);
+});
 test('restoring an ASR model restores its mode and matching endpoint together',()=>{
   let config=patchAssistantSettings(initial(),{asrRecognitionMode:'utterance'});
   assert.ok(config.asrEndpoint.endsWith('bigmodel_nostream'));
   config=patchAssistantSettings(config,{asrModel:'bigmodel-1.0'});
-  assert.equal(config.asrRecognitionMode,'realtime');
+  assert.equal(config.asrRecognitionMode,'twopass');
   assert.ok(config.asrEndpoint.endsWith('bigmodel_async'));
   config=patchAssistantSettings(config,{asrModel:'bigmodel'});
   assert.equal(config.asrRecognitionMode,'utterance');
@@ -25,7 +34,7 @@ test('ASR GUI options encode mode, detection, acceleration, VAD and context with
   assert.equal(request.enable_poi_fc,true);assert.equal('vad_segment_duration' in request,false);
   assert.deepEqual(JSON.parse(request.corpus.context).hotwords,[{word:'Rabi'},{word:'WorkBuddy'}]);
   const off=encodeVolcanoAsrRequest(patchAssistantSettings(config,{asrRecognitionMode:'utterance',asrEnableAccelerateText:false}));
-  assert.equal('accelerate_score' in off,false);assert.equal('enable_poi_fc' in off,false);
+  assert.equal('accelerate_score' in off,false);assert.equal(off.enable_poi_fc,true);
   assert.equal(patchAssistantSettings(config,{asrRecognitionMode:'utterance'}).asrEndpoint.endsWith('bigmodel_nostream'),true);
 });
 test('models retain independent typed parameter selections and reject invalid GUI values',()=>{

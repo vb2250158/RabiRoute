@@ -11,7 +11,7 @@ const repoRoot = path.resolve(projectRoot, "..", "..");
 
 const files = {
   quickSetup: path.join(repoRoot, "ribiwebgui", "src", "components", "QuickSetupDialog.vue"),
-  routeConfig: path.join(repoRoot, "ribiwebgui", "src", "pages", "RouteConfigPage.vue"),
+  routeConfig: path.join(repoRoot, "src/plugins/io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue"),
   gatewayConfigModel: path.join(repoRoot, "src", "shared", "gatewayConfigModel.ts"),
   aiuiPage: path.join(projectRoot, "pages", "home", "index.ink"),
   configSurface: path.join(projectRoot, "utils", "config-surface.js")
@@ -64,7 +64,21 @@ function assertSharedTypeCoveredByFields(typeName, fields, fieldSet, label) {
 
 const quickSetupSource = read(files.quickSetup);
 const routeConfigSource = read(files.routeConfig);
-const webguiSource = `${quickSetupSource}\n${routeConfigSource}`;
+// Settings now belong to registered plugins, not one monolithic route page.
+function webSources(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? webSources(file) : /\.(vue|ts|mjs)$/.test(entry.name) ? [read(file)] : [];
+  });
+}
+const pluginsRoot = path.join(repoRoot, 'src/plugins');
+const pluginSettingsSources = fs.readdirSync(pluginsRoot, { withFileTypes: true }).flatMap(entry => {
+  const directory = path.join(pluginsRoot, entry.name), manifest = path.join(directory, 'rabi.plugin.json');
+  if (!entry.isDirectory() || !fs.existsSync(manifest) || !JSON.parse(read(manifest)).entries?.web) return [];
+  return webSources(path.join(directory, 'web'));
+});
+const webguiSource = [quickSetupSource, routeConfigSource, ...pluginSettingsSources].join('\n');
 const sharedConfigSource = read(files.gatewayConfigModel);
 const aiuiPageSource = read(files.aiuiPage);
 const configSurfaceSource = read(files.configSurface);

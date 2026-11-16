@@ -262,7 +262,7 @@ WorkBuddy 的 CLI 内核（CodeBuddy Code）提供与 Codex 同族的生命周�
 | `dispatch-context` 的 Agent 配置列表 | 模型/能力目录展示 | 未接；`modelInherited` 语义与 Rabi 的模型选择不同，需先定归属 |
 | `POST /auth/login`、`auth/status` | `auth` 状态与重新登录入口 | 部分实现（`auth.required=true` + 文案；只声明本地凭据**已配置**，不做假的登录校验） |
 | 会话重命名、删除、归档恢复 | — | 按需再定；Rabi 当前不主张改写宿主任务元数据 |
-| 附件（`payload.attachments`） | 图片/附件入站 | 未实现，等投递通道验收后再评估 |
+| 附件（`payload.attachments`） | 本机图片入站 | 已接入 `type=image`、`urlType=local-path`、`url`、`name`；同一任务通过 Read 读取，正式安装与模型读取仍需运行验收 |
 
 原则不变：业务与策略在 Rabi，宿主只提供会话与执行；不把 WorkBuddy 的作业系统建模成 Rabi 的计划或记忆真源。
 

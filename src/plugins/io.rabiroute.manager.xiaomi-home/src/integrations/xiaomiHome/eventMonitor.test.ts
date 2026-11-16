@@ -9,6 +9,45 @@ class FakeSocket extends EventEmitter {
   close(): void { this.emit("close"); }
 }
 
+test("a synchronous authentication send error is contained and the next connection can subscribe", async () => {
+  class FailingSocket extends FakeSocket { override send(): void { throw new Error("injected send failure"); } }
+  const first = new FailingSocket(), second = new FakeSocket();
+  let connections = 0;
+  const monitor = new XiaomiHomeEventMonitor({ agentRoleId: "TestRole" }, {
+    credentialToken: "fixture-token", createSocket: () => ++connections === 1 ? first : second,
+    deliverEvent: async () => undefined, reconnectDelayMs: 1
+  });
+  monitor.start();
+  assert.doesNotThrow(() => first.emit("message", JSON.stringify({ type: "auth_required" })));
+  assert.equal(monitor.status().connectionState, "reconnecting");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  second.emit("message", JSON.stringify({ type: "auth_required" }));
+  second.emit("message", JSON.stringify({ type: "auth_ok" }));
+  second.emit("message", JSON.stringify({ type: "result", id: 1, success: true }));
+  assert.equal(monitor.status().connectionState, "subscribed");
+  await monitor.stop();
+});
+
+test("a failing close is contained and terminates the original socket before reconnect", async () => {
+  class BrokenClose extends FakeSocket {
+    override send(): void { throw new Error("injected send failure"); }
+    override close(): void { throw new Error("injected close failure"); }
+    terminate(): void { this.emit("close"); }
+  }
+  const first = new BrokenClose(), second = new FakeSocket(); let connections = 0;
+  const monitor = new XiaomiHomeEventMonitor({agentRoleId:"TestRole"}, {
+    credentialToken:"fixture",createSocket:()=>++connections === 1 ? first : second,
+    deliverEvent:async()=>undefined,reconnectDelayMs:1
+  });
+  monitor.start();
+  assert.doesNotThrow(()=>first.emit("message",JSON.stringify({type:"auth_required"})));
+  assert.equal(monitor.status().lastTransportError,"socket_close_failed");
+  await new Promise(resolve=>setTimeout(resolve,20));
+  second.emit("message",JSON.stringify({type:"result",id:1,success:true}));
+  assert.equal(monitor.status().connectionState,"subscribed");
+  await monitor.stop();
+});
+
 test("malformed source events are isolated from later event delivery", async () => {
   const socket = new FakeSocket();
   let delivered = 0;
@@ -25,6 +64,21 @@ test("malformed source events are isolated from later event delivery", async () 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(delivered, 1);
   monitor.stop();
+});
+
+test("delivery status distinguishes queue overflow from acceptance and clears its stale reason", async () => {
+  const socket = new FakeSocket(); let overflow = true;
+  const monitor = new XiaomiHomeEventMonitor({agentRoleId:"TestRole",eventDeliveryMode:"all"}, {
+    credentialToken:"fixture",createSocket:()=>socket,
+    deliverEvent:async()=>overflow ? [{status:"failed",reason:"delivery_queue_full"}] : [{status:"delivered"}]
+  });
+  monitor.start();
+  const send = (state:string) => socket.emit("message", JSON.stringify({type:"event",id:1,event:{event_type:"state_changed",data:{new_state:{entity_id:"light.fixture",state}}}}));
+  send("on"); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(monitor.status().lastDeliveryState,"missed"); assert.equal(monitor.status().lastDeliveryReason,"delivery_queue_full");
+  overflow=false; send("off"); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(monitor.status().lastDeliveryState,"accepted"); assert.equal(monitor.status().lastDeliveryReason,undefined);
+  await monitor.stop();
 });
 
 test("silent event transport reconnects after a missing heartbeat response", t => {
@@ -178,6 +232,20 @@ test("significant mode drops ordinary state churn but retains offline state", ()
     data: { entity_id: "light.desk", new_state: { entity_id: "light.desk", state: "unavailable" } }
   });
   assert.equal(offline?.kind, "device_offline");
+});
+
+test("attribute-only updates do not repeat offline or active motion alerts", () => {
+  const cases = [
+    { entity_id: "light.fixture", state: "unavailable", attributes: {} },
+    { entity_id: "binary_sensor.motion", state: "on", attributes: { device_class: "motion" } }
+  ];
+  for (const state of cases) {
+    const change = { event_type: "state_changed", data: {
+      old_state: state, new_state: { ...state, attributes: { ...state.attributes, updated: true } }
+    } };
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change), undefined);
+    assert.equal(xiaomiHomeEventFromHomeAssistantStateChange(change, { cameraMotionEntityIds: [state.entity_id] }), undefined);
+  }
 });
 
 test("ordinary changes require all mode or an explicit monitored entity and skip unchanged states", () => {

@@ -8,6 +8,7 @@ import { startSimulator } from './server.mjs';
 // This fixture supplies marked synthetic text/audio. It is not a provider or hearing test.
 const calls = [];
 let chatCount = 0;
+const modelMessages = [];
 let finishHeldReply;
 let heldReplyClosed = false;
 const upstream = http.createServer(async (request, response) => {
@@ -17,6 +18,7 @@ const upstream = http.createServer(async (request, response) => {
   calls.push({ path: request.url, bytes: body.length });
   if (request.url === '/v1/chat/completions') {
     chatCount++;
+    modelMessages.push(JSON.parse(body.toString()).messages);
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: '这是测试夹具回复。' }, finish_reason: null }] })}\n\n`);
     const finish = () => response.end(`data: ${JSON.stringify({ id: 'fixture', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
@@ -78,23 +80,32 @@ try {
   assert.equal(heldReplyClosed, false, 'Model stream must still be pending at onset');
   const asrResultsBefore = await page.locator('#events p').filter({ hasText: '模拟识别结果' }).count();
   await page.click('#speech-start');
-  await page.waitForFunction(() => globalThis.audioTestPlayers.at(-1).paused, null, { timeout: 3000 });
-  assert.equal(await page.locator('#events p').filter({ hasText: '模拟识别结果' }).count(), asrResultsBefore, 'Onset must stop audio before a transcript exists');
+  assert.equal(await page.evaluate(() => globalThis.audioTestPlayers.at(-1).paused), false, 'VAD alone retains playback');
+  assert.equal(await page.locator('#events p').filter({ hasText: '模拟识别结果' }).count(), asrResultsBefore, 'Onset must not manufacture recognized words');
   assert.equal(heldReplyClosed, false, 'Stopping speech must not close the active model stream');
   assert.equal(chatCount, 3, 'Onset must not create a new model request');
   assert.doesNotMatch(await page.locator('#events').innerText(), /识别已停止|识别已结束/);
-  finishHeldReply();
   await page.fill('#utterance', '打断后继续对话。');
   await page.click('#send');
+  await page.waitForFunction(() => globalThis.audioTestPlayers.at(-1).paused, null, { timeout: 3000 });
+  assert.equal(heldReplyClosed, false, 'Accepted ASR text only stops sound, not the pending model');
+  finishHeldReply();
   await page.waitForFunction(() => [...document.querySelectorAll('#events p')].filter(p => p.textContent.includes('playback ended')).length >= 3, null, { timeout: 20000 });
   assert.equal(chatCount, 4, 'The same recognition session must accept a subsequent turn');
   await page.click('#stop');
   await page.waitForFunction(() => document.getElementById('status').textContent.includes('已停止'));
   await page.click('#reload');
   await page.waitForFunction(() => !document.getElementById('send').disabled);
+  await page.fill('#utterance', '重开后的新问题。');
+  await page.click('#send');
+  await page.waitForFunction(() => [...document.querySelectorAll('#events p')].filter(p => p.textContent.includes('playback ended')).length >= 4, null, { timeout: 20000 });
+  assert.equal(chatCount, 5);
+  const historyRestored = modelMessages.at(-1).some(message => message.role === 'user' && message.content.includes('请用一句话介绍自己'));
+  console.log('Native storage recreation diagnostic:', JSON.stringify({ historyRestored, host: 'official-ink-wasm-0.20.0', scope: 'destroy-view-and-create-new-view' }));
+  if (!historyRestored) console.log('NOT VERIFIED: the WASM host loses wx storage across whole-view destruction; native device persistence still requires acceptance.');
   fs.mkdirSync(path.resolve(import.meta.dirname, '../dist'), { recursive: true });
   await page.screenshot({ path: path.resolve(import.meta.dirname, '../dist/simulator-preview.png'), fullPage: true });
-  console.log('Ink 0.19.1 simulator: two replies played; host speech onset stopped real Ink playback before text, preserved pending model/capture, and accepted the next turn; stop/reopen passed. Synthetic input/audio only.');
+  console.log('Ink 0.20.0 simulator: two replies played; VAD retained sound, accepted ASR text stopped real Ink playback, preserved pending model/capture, and accepted the next turn; stop/reopen passed. Synthetic input/audio only.');
   console.log(logs.filter(line => /tts|speech|Speech|error|Error/i.test(line)).slice(-35).join('\n'));
 } catch (error) {
   console.error(await page?.locator('#events').innerText().catch(() => 'unavailable'));

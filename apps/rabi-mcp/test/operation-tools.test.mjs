@@ -71,3 +71,12 @@ test('MCP launch session budgets default and validate explicit environment value
       assert.throws(() => readOperationSessionSettings({ [name]: bad }), new RegExp(name));
   }
 });
+
+test('canonical dispatch forwards the host-owned write fence and effect observer; model arguments cannot override it',async t=>{
+  const f=fixture();t.after(()=>f.tools.close());const effects=[];
+  const blocked=await f.tools.call('rabi_call',{operation:'notes.write',input:{pathParams:{id:'one'},body:{value:'new'}}},{writeReconciliationRequired:true,onOperationEffect:value=>effects.push(value)});
+  assert.equal(blocked.error,'WRITE_RECONCILIATION_REQUIRED');assert.equal(f.writes.length,0);assert.deepEqual(effects,[]);
+  await assert.rejects(f.tools.call('rabi_call',{operation:'notes.write',writeReconciliationRequired:false}),/Unknown/);
+  await f.tools.call('rabi_call',{operation:'notes.write',input:{pathParams:{id:'one'},body:{value:'new'}}},{onOperationEffect:value=>effects.push(value)});
+  assert.equal(f.writes.length,1);assert.deepEqual(effects,[true]);
+});

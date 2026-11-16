@@ -26,6 +26,7 @@ test("event ledger preserves ordered records and audits without exposing event t
   await assert.rejects(ledger.append("../invalid", event));
   await assert.rejects(ledger.append("example", { ...event, summary: "x".repeat(256 * 1024) }), /too large/);
   assert.equal(records.filter(record => record.outcome === "committed").length, 2);
+  assert.ok(records.some(record => record.outcome === "failed" && record.result === "ledger_queue_full"));
   assert.equal(JSON.stringify(records).includes(event.summary), false);
   assert.equal(JSON.stringify(records).includes(root), false);
 });

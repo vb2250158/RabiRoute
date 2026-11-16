@@ -47,6 +47,8 @@ export type WorkbuddyDeliveryRequest = {
   sessionId: string;
   /** Message body. Never logged, never persisted by this module. */
   text: string;
+  /** Official generic gateway attachments, read by the same local task owner. */
+  imagePaths?: string[];
   /** Local loopback gateway endpoint from the live session descriptor. */
   endpoint: string;
   /** Stable sender identifier shown to the task owner. */
@@ -137,7 +139,10 @@ export async function deliverWorkbuddyMessage(
       sender: { id: textOf(request.senderId) || "rabiroute" },
       conversation: { id: sessionId, type: "direct" }
     },
-    payload: { text }
+    payload: { text, ...(request.imagePaths?.length ? { attachments: request.imagePaths.map(file => {
+      if (!path.isAbsolute(file) || !fs.statSync(file).isFile()) throw new WorkbuddyDeliveryError("WorkBuddy 图片附件不可用。", "rejected");
+      return { type: "image", urlType: "local-path", url: file, name: path.basename(file) };
+    }) } : {}) }
   };
 
   await request.assertAuthorized?.();

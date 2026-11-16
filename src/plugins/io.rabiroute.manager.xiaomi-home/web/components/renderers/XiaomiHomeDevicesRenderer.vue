@@ -60,6 +60,7 @@ onMounted(()=>{
  <div class="device-directory">
   <div class="device-toolbar"><div><h3>已接入设备</h3><p>Rabi 通过当前连接提供设备查询和控制。</p></div><v-btn variant="tonal" prepend-icon="mdi-refresh" :loading="loading" @click="load">刷新设备</v-btn></div>
   <v-alert v-if="error" type="error" variant="tonal" class="my-3">{{error}}</v-alert>
+  <v-alert v-if="directory?.coverage?.state === 'partial'" type="warning" variant="tonal" class="my-3">部分设备数据异常，列表可能不完整；请检查 Home Assistant 中的设备状态与登记。</v-alert>
   <v-progress-linear v-if="loading" indeterminate color="secondary" />
   <template v-if="directory"><p>{{directory.devices.length}} 台已登记设备 · {{directory.devices.reduce((sum,d)=>sum+d.resources.length,0)}} 个设备实体 · {{directory.unassignedResources.length}} 个场景与辅助实体</p>
    <v-text-field v-model="search" label="搜索设备、房间或型号" prepend-inner-icon="mdi-magnify" clearable @click:clear="search=''" />

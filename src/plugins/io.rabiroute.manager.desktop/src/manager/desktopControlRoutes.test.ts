@@ -143,6 +143,20 @@ test("role selection survives an HTTP update and an independent owner read", asy
   assert.deepEqual(new DesktopSettingsStore(f.file).read().lastRoleSelection, choice);
 });
 
+test("screenshot composer preferences share the HTTP store without overwriting other desktop settings", async t => {
+  const f = await fixture(t);
+  const target = { kind: "agent", provider: "codex", threadId: "full-session-id", cwd: "C:/project" };
+  assert.equal((await f.send()).body.data.screenshotComposer.voiceInputEnabled, false);
+  assert.equal((await f.send(undefined, "PATCH", { screenshotComposer: { lastTarget: target } })).status, 200);
+  assert.equal((await f.send(undefined, "PATCH", { screenshotComposer: { voiceInputEnabled: true } })).status, 200);
+  await f.send(undefined, "PATCH", { screenshot: { shortcut: "F4" }, theme: "dark" });
+  const restored = (await f.send()).body.data;
+  assert.deepEqual(restored.screenshotComposer, { voiceInputEnabled: true, lastTarget: target });
+  assert.deepEqual(new DesktopSettingsStore(f.file).read().screenshotComposer, restored.screenshotComposer);
+  assert.equal(restored.screenshot.shortcut, "F4");
+  assert.equal(restored.theme, "dark");
+});
+
 test("read-only Desktop settings reject malformed writes before parsing while public open behavior remains available", async t => {
   const f = await fixture(t, { readOnly: true });
   assert.equal((await f.send()).status, 200);

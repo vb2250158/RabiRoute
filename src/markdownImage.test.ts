@@ -8,6 +8,18 @@ import { markdownImageHtml, markdownImageInternals, renderMarkdownToPng, renderM
 
 type Command = { id: number; method: string };
 
+test("Markdown browser shutdown joins the owned process before cleanup", async () => {
+  let killed = false, completed = false;
+  const browser = Object.assign(new EventEmitter(), { pid: 42, exitCode: null, signalCode: null, kill() { killed = true; return true; } });
+  const closing = markdownImageInternals.stopMarkdownBrowser(browser as unknown as Parameters<typeof markdownImageInternals.stopMarkdownBrowser>[0]).then(() => { completed = true; });
+  assert.equal(killed, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, false);
+  browser.emit("close", 0, null);
+  await closing;
+  assert.equal(completed, true);
+});
+
 test("Markdown profile cleanup keeps its owned boundary and reports a locked profile without recursive retries", async () => {
   const root = path.resolve("fixture-temp");
   const profile = path.join(root, "rabiroute-markdown-browser-fixture");

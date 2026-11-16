@@ -17,4 +17,7 @@ export function assertCurrentRemoteSurface({webgui, aiui, shared, runtime, owner
   }
   if (!owner.includes('this.ensureChatModel()') || !owner.includes('this.executeLingzhuAgentPrompt(delivery.prompt,{deviceContext:') || owner.includes('legacy-remote-observer')) throw new Error('Missing actual device inference owner boundary');
 }
-export function missingSharedFields(fields, exposed) { return fields.filter(field=>!retiredGatewayFields.includes(field) && !exposed.has(field)); }
+// Written by configMigration, not a user preference. Editing the marker can
+// incorrectly skip or repeat schedule migration; ordinary config edits retain it.
+const programOwnedFields = new Set(['automationScheduleSchemaVersion']);
+export function missingSharedFields(fields, exposed) { return fields.filter(field=>!retiredGatewayFields.includes(field) && !programOwnedFields.has(field) && !exposed.has(field)); }

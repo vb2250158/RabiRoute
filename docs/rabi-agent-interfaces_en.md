@@ -12,6 +12,8 @@ English | <a href="./rabi-agent-interfaces.md">简体中文</a>
 
 # Rabi Interfaces for Handlers
 
+The local screenshot composer uses `POST /api/agent/threads`, `action=send`, with an explicit `agentTargetId=local:<provider>`, complete `threadId`, `imagePaths` and stable `deliveryId`. Adapter metadata declares `managedTasks.imageAttachments`. Local image paths are accepted only from the local desktop to a local target; remote requests cannot read PC image paths. Paths and SHA256 digests are frozen in delivery execution options and checked before dispatch. Uncertain results reconcile the original receipt without resending. Role screenshots retain their role-message interface. See the [Desktop guide](../desktop/tray-task-window/README_en.md).
+
 
 
 See [Unified CLI and MCP API](unified-agent-api_en.md) for categories, keyword search, shared CLI/MCP input and current native Agent capabilities. Use short summaries and single-operation input descriptions for normal discovery. Complete Help supports compatible clients and exports.

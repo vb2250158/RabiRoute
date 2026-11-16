@@ -4,7 +4,7 @@ let api;
 export function transformWindowsSecret(value, decrypt=false) {
   if(process.platform!=='win32'||process.arch!=='x64')throw Error('ASSISTANT_CREDENTIAL_PLATFORM_UNSUPPORTED');
   if(!api){
-    const blob=koffi.struct('RabiAssistantSecretBlob',{cbData:'uint32',pbData:'void *'});
+    const blob=koffi.struct({cbData:'uint32',pbData:'void *'});
     const crypt=koffi.load('crypt32.dll'),kernel=koffi.load('kernel32.dll');
     const args=[koffi.pointer(blob),'void *','void *','void *','void *','uint32',koffi.out(koffi.pointer(blob))];
     api={protect:crypt.func('__stdcall','CryptProtectData','int',args),unprotect:crypt.func('__stdcall','CryptUnprotectData','int',args),free:kernel.func('__stdcall','LocalFree','void *',['void *'])};

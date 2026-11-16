@@ -1,0 +1,39 @@
+[
+  {
+    "id": "style",
+    "label": "语气与风格",
+    "type": "text",
+    "maxLength": 512,
+    "setting": "ttsContextText"
+  },
+  {
+    "id": "emotion",
+    "label": "情绪",
+    "type": "enum",
+    "setting": "ttsEmotion"
+  },
+  {
+    "id": "intensity",
+    "label": "情绪强度",
+    "type": "number",
+    "min": 1,
+    "max": 5,
+    "setting": "ttsEmotionScale"
+  },
+  {
+    "id": "rate",
+    "label": "临时语速比例",
+    "type": "number",
+    "min": 0.75,
+    "max": 1.4,
+    "setting": "ttsSpeechRate"
+  },
+  {
+    "id": "pitch",
+    "label": "临时音调",
+    "type": "number",
+    "min": -6,
+    "max": 6,
+    "setting": "ttsPitch"
+  }
+]

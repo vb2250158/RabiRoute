@@ -11,9 +11,11 @@ export function hudText(value, columns, lines = 1) {
   return output;
 }
 export function hudDisplayFields(data) {
+  const captureStatus = ['正在收音', '正在转写', '正在识别'].includes(data.transcriptionState)
+    ? data.transcriptionState : '';
   return {
-    hudDisplayName: hudText(data.modelProbe ? "Rabi 宿主模型测试" : data.lingzhuAgentName || "灵珠智能体", 14),
-    hudDisplayStatus: hudText(data.voiceErrorText || (data.agentSpeaking ? "播报中" : data.assistantModelBusy ? "回复中" : (data.transcriptionListening || data.assistantListening) ? "正在聆听" : data.agentPolling ? "连接中" : data.agentStatus || "就绪"), 12),
+    hudDisplayName: hudText(data.modelProbe ? "Rabi 宿主模型测试" : data.lingzhuAgentName || "拉比小助手", 14),
+    hudDisplayStatus: hudText(data.voiceErrorText || captureStatus || (data.agentSpeaking ? "播报中" : data.assistantModelBusy ? (data.agentReplyText ? "正在回复" : "思考中") : (data.transcriptionListening || data.assistantListening) ? "正在聆听" : data.agentPolling ? "连接中" : data.agentStatus || "就绪"), 12),
     hudDisplayReply: hudText(data.agentReplyText || data.assistantReplyText, 26, 2),
     hudDisplayUser: hudText(data.transcriptionText || data.assistantUserText, 32),
     hudDisplayCue: hudText(data.agentSpeakingCue, 24),

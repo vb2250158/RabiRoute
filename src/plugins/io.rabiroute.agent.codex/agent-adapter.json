@@ -20,6 +20,7 @@
         "memoryConsolidationAgent": true,
         "hooks": true,
         "agentThreads": true,
+        "imageAttachments": true,
         "deliveryReceiptRecovery": true
       }
     }

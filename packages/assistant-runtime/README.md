@@ -37,7 +37,7 @@ const playback = createSpeechPlayback({
 });
 playback.speak('第一句', { voice: selectedVoice, volume: 1 });
 playback.speak('第二句', { voice: selectedVoice, volume: 1 });
-// Call from the owner's accepted speech-onset/interim/gesture handler:
+// Explicit manual/gesture cancellation; ASR cancellation is owned by createVoiceInteraction:
 playback.cancel();
 // Dispose on unload; cancel on hide.
 ```
@@ -208,7 +208,7 @@ try {
 ```
 
 - 构造装配实例不启动录音、模型或网络。`ready()` 才准备模型与工具，`asr.start(round)` 必须由有效交互触发；宿主需提供真实能力和麦克风权限。`createModel` 仍由调用方做服务可用性检查，普通网页不会因为导入本包而获得 Rokid 服务。
-- `runtime.asr` 与 `runtime.tts` 保持注入适配器的收音/合成用法；一次持有一个识别轮和一个合成/播报输出。新轮次屏蔽旧轮事件，开口事件立即停止持有的声音，不停止识别、不取消模型、不撤销后台任务。事件是否代表用户而非回声仍取决于宿主 VAD/AEC 与调用方过滤。
+- `runtime.asr` 与 `runtime.tts` 保持注入适配器的收音/合成用法；一次持有一个识别轮和一个合成/播报输出。新轮次屏蔽旧轮事件；原始开口事件只更新输入占用，不释放声音。共享交互层在首个非空且通过过滤的识别文字到达后取消播报，不停止识别、不取消模型或后台任务。回声判断仍依赖宿主 AEC 与调用方过滤。
 - `runtime.tts.synthesize()` 返回真实 `{task, player}`，不会自动播放。调用方按宿主 canplay/ended/error 事件启动播放、更新字幕与超时。自然播放结束调用 `releaseSpeech({task,player})`；主动取消使用 `releaseSpeech(...,{abort:true})` 或 `interruptSpeech()`。仍在合成时可把原合成 Promise 作为 `task` 交给 `releaseSpeech`。已释放资源再次交还不会重复释放，旧输出不能释放新输出。
 - 取消合成会立即结束等待；迟到的任务和播放器会清理，旧字幕不会再交给 UI。清理尽力执行，`onCleanupError` 报告原生清理失败；不能把本地清理调用当作硬件已停止的证明。
 - `suspendVoice()` 只释放语音，保留模型会话；隐藏页面时由调用方按产品行为决定是否还需结束模型。`dispose()` 永久关闭装配实例并释放当前模型与语音，不取消后端持久任务。取消/失败的 `run()` 仍须由原调用方接住 `pendingGuidance`。
@@ -281,7 +281,7 @@ const result = await assistant.run(userText);
 
 0.10.1 在中断资源时先调用原生播放器的可选 `stop()`，再 `destroy()`，避免把释放对象等同于停止播放。开发包、源码与实际安装分别核验。
 
-`@rabilink/assistant-runtime/voice` 的 `createVoiceInteraction` 统一收音、开口停播、流式切句和串行播放。眼镜、Web、DSH 与 Rabi 使用相同代码；GUI 和可选桌宠订阅事件，不创建第二份收音或模型。打断只停止 TTS，旧回复文字和已派发工作继续。人设、全局提示词、工具及持久输入由助手层持有，远端连接另由工具适配层提供。接口与验收边界见 [宿主合同](VOICE_HOST_CONTRACT.md)。当前测试为注入式宿主验证，实际接入与真机验收分别记录。
+`@rabilink/assistant-runtime/voice` 的 `createVoiceInteraction` 统一收音、首个有效转写停播、流式切句和串行播放。眼镜、Web、DSH 与 Rabi 使用相同代码；GUI 和可选桌宠订阅事件，不创建第二份收音或模型。打断只停止 TTS，旧回复文字和已派发工作继续。人设、全局提示词、工具及持久输入由助手层持有，远端连接另由工具适配层提供。接口与验收边界见 [宿主合同](VOICE_HOST_CONTRACT.md)。当前测试为注入式宿主验证，实际接入与真机验收分别记录。
 
 ## Rabi 与 DSH 共同方向
 
@@ -326,7 +326,7 @@ const result = await assistant.run(userText);
 
 ## 0.11 常驻宿主与可选 UI
 
-`./resident` 的 `createResidentInteraction` 由原生宿主持有。明确 start 后，移除所有 GUI/桌宠订阅仍保持语音；`pauseCapture` 只暂停输入，`setOutputEnabled(false)` 只静音输出，`stop`/`dispose` 释放语音服务，但不取消独立原生 Session 已受理的模型或工具任务。开口打断只停止当前声音，继续保留文字。
+`./resident` 的 `createResidentInteraction` 由原生宿主持有。明确 start 后，移除所有 GUI/桌宠订阅仍保持语音；`pauseCapture` 只暂停输入，`setOutputEnabled(false)` 只静音输出，`stop`/`dispose` 释放语音服务，但不取消独立原生 Session 已受理的模型或工具任务。首个有效识别文字打断当前声音，继续保留文字。
 
 `openServices` 必须返回可等待的 `dispose`。启动取消、权限延迟、设备清理失败均受代际围栏保护；清理未确认时不能新开设备。宿主进程的原生 Job 所有权由 PC 壳负责，不由 SDK 定时轮询代替。
 
@@ -345,3 +345,7 @@ const result = await assistant.run(userText);
 DSH 插件自动读取当前 DSH 的提供商和模型，无需在助手里重复填写对话密钥。先选模型，发送一句文字并确认收到真实回复，再配置识别、音色和音频设备；服务目录为空或仅配置了默认模型名，不代表模型已经可调用。隔离测试环境必须实际加载所需提供商插件和凭据，不能用示例模型证明可用。
 
 界面预览明确标注不能对话；设置窗口、示例模型和保存反馈同样保留该标识。预览禁用密钥输入、发送、语音启动与音频测试。首次配置按对话、识别、播报、设备逐项引导；参数默认值可先保留。
+
+### 首个有效转写触发打断
+
+原始开口/VAD 只反馈收音活动。空白或被过滤的转写不会停止当前声音，也不会禁止后续文字继续播报。首个非空且通过过滤的中间结果才取消当前声音和排队音频；最终结果仍自动提交。只有最终结果的识别模式，要等非空最终结果才能打断。`inputPending` 保留调度优先级，与停声分开；模型/工具任务和原回复文字继续完成，已取消的声音不重播。识别结束、失败或暂停会释放待完成文字的播报门控。

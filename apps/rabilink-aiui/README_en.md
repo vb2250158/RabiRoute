@@ -6,13 +6,13 @@ English | <a href="./README.md">简体中文</a>
 
 New routes and NapCat instances use `gatewayPort: 0` to request an automatically assigned WS listener, and configuration input/save preserves zero. NapCat management carries the original route/instance identity so the current PC owner resolves its endpoint. Missing HTTP/WebUI URLs are not replaced with guessed addresses; explicit upstream URLs retain their configured values.
 
-# RabiLink AIUI - Agent and Lingzhu Collaboration Framework for Rokid AR Glasses
+# 拉比小助手 (RabiLink AIUI)
 
 RabiLink AIUI brings speech recognition, a host model, speech synthesis and a transparent HUD into one glasses application page for conversations, result presentation and controlled configuration. It is not tied to a specific preset persona. By default, the **AIUI host `LanguageModel`** handles conversation; PC supplies controlled HTTP tools rather than replacing the glasses application's model.
 
 > **Maturity**: Phone persona binding, generic HTTP APIs, history and voice steering are wired in source; installation and hardware acceptance remain pending. Source, mocks and local builds do not establish installation or device acceptance. An application multi-step loop has source and fixture evidence; complete Route and real-host acceptance remain pending. Arbitrary Lingzhu binding and physically offline inference are not promised.
 
-The page loads global instructions and connected tools through the shared assistant session, serializing model requests and returning actual tool observations for the next decision. Touch or speech-onset interruption stops playback while reasoning and backend work continue. Explicit session cancellation destroys the model and fences late results; timed-out tools are never automatically replayed. Advanced settings retain the persona source computer ID when saving remote-persona configuration. See [generic transport and host capabilities](docs/generic-api-transport_en.md), [model-turn runtime](docs/agent-turn-runtime_en.md) and [personas, generic APIs and steering](docs/persona-agent_en.md).
+The page loads global instructions and connected tools through the shared assistant session, serializing model requests and returning actual tool observations for the next decision. Touch or the first accepted nonempty ASR transcript stops playback while reasoning and backend work continue. Explicit session cancellation destroys the model and fences late results; timed-out tools are never automatically replayed. Advanced settings retain the persona source computer ID when saving remote-persona configuration. See [generic transport and host capabilities](docs/generic-api-transport_en.md), [model-turn runtime](docs/agent-turn-runtime_en.md) and [personas, generic APIs and steering](docs/persona-agent_en.md).
 
 
 Speech arriving during tool waits now has per-input receipts for independent answers, original-ID deferred work and interrupted-input recovery. The footer record viewer shows original text, saved answers and status without replaying tasks. See [input receipts](docs/input-receipts_en.md).

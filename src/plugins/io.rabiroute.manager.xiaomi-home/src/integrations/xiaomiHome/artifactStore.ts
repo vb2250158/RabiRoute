@@ -43,6 +43,8 @@ type ArtifactIndex = {
   latestVideoByRole: Record<string, string>;
   blockedArtifacts: Record<string, true>;
   blockedSources: Record<string, true>;
+  uncertainVideoRoles: Record<string, true>;
+  unattributedVideoUncertainty: boolean;
   coverage: {
     state: "complete" | "partial";
     invalidRecords: number;
@@ -152,7 +154,7 @@ export class XiaomiHomeArtifactStore {
 
   private readLedgerIndex(): ArtifactIndex {
     const index: ArtifactIndex = { schemaVersion: 1, byArtifactId: Object.create(null), bySourceEventId: Object.create(null), latestVideoByRole: Object.create(null),
-      blockedArtifacts: Object.create(null), blockedSources: Object.create(null),
+      blockedArtifacts: Object.create(null), blockedSources: Object.create(null), uncertainVideoRoles: Object.create(null), unattributedVideoUncertainty: false,
       coverage: { state: "complete", invalidRecords: 0, identityComplete: true, sourceIdentityComplete: true, artifactIdentityComplete: true, samples: [] } };
     const block = (artifactId?: string, sourceEventId?: string) => {
       const prior = artifactId ? index.byArtifactId[artifactId] : undefined;
@@ -164,7 +166,14 @@ export class XiaomiHomeArtifactStore {
         if (previousId) { index.blockedArtifacts[previousId] = true; delete index.byArtifactId[previousId]; }
       }
     };
-    const invalid = (shard: string, line: number, reason: string, artifactId?: string, sourceEventId?: string) => {
+    const invalid = (shard: string, line: number, reason: string, artifactId?: string, sourceEventId?: string, ownerRoleId?: string) => {
+      const priorArtifact = artifactId ? index.byArtifactId[artifactId] : undefined;
+      const priorSourceId = sourceEventId ? index.bySourceEventId[sourceEventId] : undefined;
+      const priorSource = priorSourceId ? index.byArtifactId[priorSourceId] : undefined;
+      if (ownerRoleId) index.uncertainVideoRoles[ownerRoleId] = true;
+      else index.unattributedVideoUncertainty = true;
+      if (priorArtifact?.ownerRoleId) index.uncertainVideoRoles[priorArtifact.ownerRoleId] = true;
+      if (priorSource?.ownerRoleId) index.uncertainVideoRoles[priorSource.ownerRoleId] = true;
       index.coverage.state = "partial"; index.coverage.invalidRecords++;
       if (!sourceEventId) index.coverage.sourceIdentityComplete = false;
       if (!artifactId) index.coverage.artifactIdentityComplete = false;
@@ -193,13 +202,13 @@ export class XiaomiHomeArtifactStore {
           || typeof record.occurredAt !== "string" || !Number.isFinite(Date.parse(record.occurredAt))
           || typeof record.ingestedAt !== "string" || !Number.isFinite(Date.parse(record.ingestedAt)) || record.contentAvailable !== true
           || typeof record.localPath !== "string" || !path.isAbsolute(record.localPath)) {
-          invalid(name, offset + 1, "invalid_record", artifactId, sourceEventId); continue;
+          invalid(name, offset + 1, "invalid_record", artifactId, sourceEventId, stableIdentity(record?.ownerRoleId) ? record.ownerRoleId : undefined); continue;
         }
         const previous = index.byArtifactId[artifactId];
         const previousSource = index.bySourceEventId[sourceEventId];
         if (index.blockedArtifacts[artifactId] || index.blockedSources[sourceEventId]
           || previous && !isDeepStrictEqual(previous, record) || previousSource && previousSource !== artifactId) {
-          invalid(name, offset + 1, "identity_conflict", artifactId, sourceEventId); continue;
+          invalid(name, offset + 1, "identity_conflict", artifactId, sourceEventId, stableIdentity(record.ownerRoleId) ? record.ownerRoleId : undefined); continue;
         }
         index.byArtifactId[record.artifactId] = record;
         index.bySourceEventId[artifactSourceKey(record.sourceEventId, record.ownerRoleId)] = record.artifactId;
@@ -222,8 +231,7 @@ export class XiaomiHomeArtifactStore {
 
   latestVideoForRole(roleId: string): XiaomiHomeArtifactPublicRecord | undefined {
     if (!stableIdentity(roleId)) throw new Error("A bound role is required.");
-    const coverage = this.index.coverage;
-    if (coverage.state !== "complete" || !coverage.identityComplete || !coverage.sourceIdentityComplete || !coverage.artifactIdentityComplete) throw new XiaomiHomeArtifactEvidenceError();
+    if (this.index.unattributedVideoUncertainty || this.index.uncertainVideoRoles[roleId]) throw new XiaomiHomeArtifactEvidenceError();
     const id = this.index.latestVideoByRole[roleId];
     if (!id) return undefined;
     const record = this.checkedRecord(id);

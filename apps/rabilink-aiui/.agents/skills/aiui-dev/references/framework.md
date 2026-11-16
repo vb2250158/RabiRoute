@@ -278,6 +278,8 @@ Declare only capabilities the agent uses in `app.json.permissions`:
 | `GEOLOCATION` | Get the current location or watch position changes. |
 | `CAMERA` | Access the camera and capture images or video. |
 | `RECORD_AUDIO` | Access the microphone and capture audio. |
+| `READ_MEDIA_IMAGES` / `READ_MEDIA_AUDIO` | List and read image / audio library assets. |
+| `CREATE_MEDIA_IMAGES` / `CREATE_MEDIA_AUDIO` | Create image / audio library assets. |
 
 Names are case-sensitive. Unrecognized names grant no capability, and an API
 that requires an undeclared permission fails. A manifest declaration does not

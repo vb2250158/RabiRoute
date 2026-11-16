@@ -17,7 +17,8 @@
       "managedTasks": {
         "messageProcessingAgent": true,
         "hooks": true,
-        "agentThreads": true
+        "agentThreads": true,
+        "imageAttachments": true
       }
     }
   },

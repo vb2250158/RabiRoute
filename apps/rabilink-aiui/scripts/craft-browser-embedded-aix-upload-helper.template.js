@@ -9,8 +9,8 @@
   };
   const DEFAULT_TOOLS = JSON.parse(__RABILINK_TOOLS_JSON_STRING__);
   const DEFAULTS = {
-    agentName: "RabiLink",
-    version: "1.0.39",
+    agentName: "拉比小助手",
+    version: "1.0.40",
     description: "AI glasses continuous Agent stream and native AIUI LanguageModel configuration surface through RabiLink Relay.",
     iconUrl: "https://basecloud.rokidcdn.com/basecloud/prod/coze/default_agent_icon.png",
     permissions: __RABILINK_AIX_PERMISSIONS_JSON__,
@@ -343,7 +343,7 @@
   const title = document.createElement("div");
   title.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px";
   const h = document.createElement("strong");
-  h.textContent = "RabiLink AIUI Embedded AIX Upload";
+  h.textContent = "拉比小助手 AIX 上传";
   h.style.color = "#00ff00";
   const close = document.createElement("button");
   close.textContent = "x";

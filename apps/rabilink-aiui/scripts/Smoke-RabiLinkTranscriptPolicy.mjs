@@ -43,3 +43,8 @@ seeded.seedAccepted([{ text: "跨重载重复", createdAt: 20000 }]);
 assert(seeded.evaluate("跨重载重复", 21000).reason === "rapid-duplicate", "Pending persisted observations should seed duplicate protection after page reload.");
 
 console.log("RabiLink transcript policy smoke test passed.");
+
+const preview = createTranscriptPolicy();
+assert(preview.evaluate("预检不消费输入", 50000, { commit: false }).accepted, "Preview accepts text");
+assert(preview.evaluate("预检不消费输入", 50000).accepted, "Final still admits previewed text");
+assert(!preview.evaluate("预检不消费输入", 50001, { commit: false }).accepted, "Duplicate precheck rejects without interrupting sound");

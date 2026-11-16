@@ -110,6 +110,14 @@ class DesktopPetWindow(QWidget):
         self._flight: PetFlight | None = None
         self._airborne_started = 0.0
         self._airborne_angle = 0.0
+        self._squash_depth = 1.0
+        self._squash_scale = 1.0
+        self._squash_animation = QVariantAnimation(self)
+        self._squash_animation.setDuration(220)
+        self._squash_animation.setStartValue(0.0)
+        self._squash_animation.setEndValue(1.0)
+        self._squash_animation.valueChanged.connect(self._display_squash)
+        self._squash_animation.finished.connect(self._reset_squash)
         self._drag_native: NativeDrag | None = None
         self._drag_follow: DragFollow | None = None
         self._drag_last_tick = 0.0
@@ -783,12 +791,42 @@ class DesktopPetWindow(QWidget):
             painter.drawPixmap(-rendered.width() // 2, -rendered.height() // 2, rendered)
             painter.end()
             rendered = tilted
+        if self._squash_scale != 1.0:
+            squashed = QPixmap(frame.size())
+            squashed.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(squashed)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.translate(0, squashed.height())
+            painter.scale(1, self._squash_scale)
+            painter.drawPixmap(0, -rendered.height(), rendered)
+            painter.end()
+            rendered = squashed
         rendered.setDevicePixelRatio(max(.1, self.devicePixelRatioF()))
         self._label.setPixmap(rendered)
         floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
         self._label.move(0, round(floor_offset))
         if self._bubble.isVisible():
             self._place_bubble()
+
+    def _display_squash(self, progress: float) -> None:
+        if progress < .45:
+            self._squash_scale = 1 - (1 - self._squash_depth) * (progress / .45) ** 2
+        else:
+            p = (progress - .45) / .55
+            easing = 1 + 2.70158 * (p - 1) ** 3 + 1.70158 * (p - 1) ** 2
+            self._squash_scale = min(1.12, self._squash_depth + (1 - self._squash_depth) * max(easing, 0))
+        self._display_png_frame()
+
+    def _reset_squash(self) -> None:
+        self._squash_animation.stop()
+        self._squash_scale = 1.0
+        self._display_png_frame()
+
+    def _start_landing_squash(self, speed: float) -> None:
+        intensity = min(1.0, max(0.0, (speed - 300) / 1200))
+        self._squash_depth = min(.8, 1 - intensity * .45)
+        self._squash_animation.stop()
+        self._squash_animation.start()
 
     def resizeEvent(self, event) -> None:
         self._label.setGeometry(self.rect())
@@ -798,6 +836,7 @@ class DesktopPetWindow(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._reset_squash()
             self._double_click_release = False
             if self._locked:
                 event.accept()
@@ -1039,6 +1078,8 @@ class DesktopPetWindow(QWidget):
                         for screen in QApplication.screens()]
         elapsed = max(0, min(.05, now - self._drag_last_tick))
         x, y = flight.advance(elapsed, size, displays)
+        if flight.landing_speed:
+            self._start_landing_squash(flight.landing_speed)
         self._drag_last_tick = now
         scale = max(.1, size[0] / 256)
         target_angle = max(-14, min(14, flight.vx / (90 * scale)))

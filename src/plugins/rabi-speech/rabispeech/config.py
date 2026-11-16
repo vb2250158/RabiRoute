@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .worker_supervisor import WorkerLaunch
+from .worker_paths import current_builtin_command
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -568,6 +569,7 @@ def _api_providers(value: object, kind: str) -> tuple[ApiProviderSettings, ...]:
 def _worker_launch(base: Path, row: dict[str, Any]) -> WorkerLaunch:
     raw_command = row.get("command") if isinstance(row.get("command"), list) else []
     command = tuple(str(item) for item in raw_command if str(item).strip())
+    command = current_builtin_command(command, SERVICE_ROOT, os.environ.get("RABIROUTE_STATE_ROOT", ""))
     raw_workdir = str(row.get("working_directory") or "").strip()
     raw_environment = row.get("environment") if isinstance(row.get("environment"), dict) else {}
     return WorkerLaunch(

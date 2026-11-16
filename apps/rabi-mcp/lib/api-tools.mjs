@@ -39,6 +39,8 @@ function serializedReceipt(receipt) {
   if (bodyBytes !== undefined) value.bodyBase64 = Buffer.from(bodyBytes).toString('base64');
   return value;
 }
+const reconciliationRequired=identity=>({ok:false,state:'not_started',dispatched:false,mutation:true,uncertain:true,noReplay:true,
+  error:'WRITE_RECONCILIATION_REQUIRED',businessCompletion:false,...identity});
 function roleTargets(value, schema, found = new Set(), root = schema, depth = 0) {
   if (!value || typeof value !== 'object' || !schema || typeof schema !== 'object') return found;
   if (depth > 64) throw new KnowledgePolicyError('Role scope exceeds the supported schema depth under RABI_MCP_ALLOWED_ROLES; simplify the request or edit that launch setting.');
@@ -136,11 +138,13 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
       if (!session && args.action === 'close') return { ok: true, state: 'not_present', sessionId: args.sessionId, businessCompletion: false };
       if (!session) throw new KnowledgePolicyError('Session not found in this MCP process; do not recreate or replay its business request.');
       if (args.action === 'close') {
+        context.onOperationEffect?.(false);
         session.controller.abort(); session.channel?.close();
         await session.flight; sessions.delete(args.sessionId);
         return { ok: !session.error, state: 'closed', sessionId: args.sessionId, operation: session.operation, requestId: session.requestId, ...(session.error ? { error: session.error } : {}), receipt: session.receipt };
       }
       if (args.action === 'read') {
+        context.onOperationEffect?.(false);
         const frames = session.queue.splice(0); session.bytes = 0;
         for (const ready of [...session.space]) ready();
         const released = ['completed', 'closed', 'failed'].includes(session.state);
@@ -150,6 +154,8 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
       if (args.action !== 'send' || session.transport !== 'websocket' || !session.channel || session.state !== 'open') throw new KnowledgePolicyError('Send requires an open WebSocket session; use read or close for an HTTP stream.');
       if (!allowWrites) throw new KnowledgePolicyError('WebSocket frame sends disabled by RABI_MCP_ALLOW_WRITES=false in the MCP launch environment.');
       if (['text', 'base64', 'json'].filter(key => own(args, key)).length !== 1 || own(args, 'text') && typeof args.text !== 'string') throw new KnowledgePolicyError('Choose one frame: text, base64 or json.');
+      if(context.writeReconciliationRequired)return reconciliationRequired({sessionId:args.sessionId,operation:session.operation});
+      context.onOperationEffect?.(true);
       if (own(args, 'json')) await session.channel.sendJsonAsync(args.json);
       else await session.channel.sendAsync(own(args, 'base64') ? bytes(args.base64) : args.text);
       return { ok: true, sessionId: args.sessionId, operation: session.operation, requestId: session.requestId, state: 'frame_sent', businessCompletion: false };
@@ -164,10 +170,16 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
     policy(entry, options);
     if (entry.binding?.invocation === 'discovery-only') return { ok: false, state: 'not_started', error: 'NATIVE_CONNECTOR_REQUIRED', noReplay: true,
       operationId: entry.id, binding: entry.binding, message: 'This public listener requires the native protocol connector and authentication described by its binding; no business request was sent.' };
+    // The actual selected contract decides the effect, including POST queries,
+    // touching GETs and body-selected modes. This context belongs to the host,
+    // never to the model's JSON arguments or an operation-name allowlist.
+    const mutation=!operationIsReadOnly(entry.contract,options.method??entry.contract.method,options.body??options.bodyText??options.bodyBytes);
+    if(context.writeReconciliationRequired&&mutation)return reconciliationRequired({operation:args.operationId});
     const transport = entry.contract.transport ?? 'http';
     if (options.outputPath !== undefined || transport !== 'websocket' && transport !== 'sse' && options.responseMode !== 'stream') {
       const successResponses = Object.entries(entry.contract.responses ?? {}).filter(([status]) => /^2\d\d$/.test(status)).map(([, response]) => response.mediaType);
       const defaultMode = successResponses.length && successResponses.every(type => typeof type === 'string' && /^(?:text\/|application\/(?:json|xml|javascript)|[^;]+\+(?:json|xml))/.test(type)) ? 'text' : 'bytes';
+      context.onOperationEffect?.(mutation);
       const receipt = projectManagerReceiptMedia(await client.invokeOperation(args.operationId, { ...options, responseMode: options.responseMode ?? defaultMode, signal: context.signal }), entry.contract);
       if (receipt.bodyJson !== undefined) receipt.data = receipt.bodyJson;
       if (receipt.bodyBytes !== undefined) {
@@ -186,6 +198,7 @@ export function createApiTools({ client, progressive = false, allowedRoles, allo
     const sessionId = randomUUID(), controller = new AbortController();
     const requestKey = Object.entries(options.headers ?? {}).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1];
     const session = { controller, transport, operation: args.operationId, requestId: requestKey, queue: [], bytes: 0, space: new Set(), state: 'opening' };
+    context.onOperationEffect?.(mutation);
     sessions.set(sessionId, session);
     if (transport === 'websocket') {
       const cancelOpening = () => controller.abort();

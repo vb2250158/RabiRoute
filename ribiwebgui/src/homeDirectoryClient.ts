@@ -1,7 +1,7 @@
 import type { HomeDirectoryPage } from "../../src/shared/homeDeviceQueryContract.js";
 
 /** Collect explicitly requested detail pages without accepting a partial directory. */
-export async function readHomeDirectory<T>(path: string, read: (url: string) => Promise<HomeDirectoryPage<T>>): Promise<T[]> {
+export async function readHomeDirectory<T>(path: string, read: (url: string) => Promise<HomeDirectoryPage<T>>, observePage?: (page: HomeDirectoryPage<T>) => void): Promise<T[]> {
   const items: T[] = [];
   let offset = 0;
   let expectedTotal: number | undefined;
@@ -9,6 +9,7 @@ export async function readHomeDirectory<T>(path: string, read: (url: string) => 
     const url = new URL(path, "http://localhost");
     url.searchParams.set("offset", String(offset));
     const page = await read(url.pathname + url.search);
+    observePage?.(page);
     if (!Array.isArray(page.items) || !Number.isSafeInteger(page.total) || page.total < 0 || page.offset !== offset
       || expectedTotal !== undefined && page.total !== expectedTotal) throw Error("Device directory changed or returned an invalid page; refresh before continuing.");
     expectedTotal = page.total;

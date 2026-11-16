@@ -46,7 +46,7 @@ export async function openDesktopDevice({ electronExecutable, runtimeEntry = def
   const receive = message => {
     if (message.event === 'ready') { clearTimeout(readiness); resolveReady(); return; }
     if (message.event === 'record.level') {
-      const record = records.get(message.id); if (record && Number.isFinite(message.value)) record.level = message.value; return;
+      const record = records.get(message.id); if (record && Number.isFinite(message.value)) { record.level = Math.max(0,Math.min(1,message.value)); notify({event:'capture.level',level:record.level}); } return;
     }
     if (message.event === 'record.error') { recordError(records.get(message.id), Error('DEVICE_CAPTURE_INTERRUPTED')); return; }
     if (message.event === 'record.pcm') {
@@ -56,6 +56,10 @@ export async function openDesktopDevice({ electronExecutable, runtimeEntry = def
       const audio = Buffer.from(message.audio, 'base64');
       if (!audio.length || audio.length % 2) { recordError(record, Error('DEVICE_PCM_INVALID')); return; }
       try { Promise.resolve(record.onPcm(audio)).catch(error => recordError(record, error)); } catch (error) { recordError(record, error); }
+      return;
+    }
+    if(message.event==='player.progress'){
+      if(Number.isFinite(message.seconds)&&message.seconds>=0&&message.seconds<=3600)players.get(message.id)?.dispatchEvent(Object.assign(new Event('progress'),{seconds:message.seconds}));
       return;
     }
     if (message.event === 'player.ended' || message.event === 'player.error') {

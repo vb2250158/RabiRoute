@@ -191,7 +191,7 @@ async function launchBrowser(profileDir: string, diagrams = false): Promise<{ pr
       });
       return { process: child, port };
     } catch (error) {
-      child.kill();
+      await stopMarkdownBrowser(child);
       lastError = error instanceof Error ? error : new Error(String(error));
       if (process.env.RABIROUTE_MARKDOWN_BROWSER_PATH) break;
     }
@@ -380,7 +380,7 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts, removeBrowserProfile };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts, removeBrowserProfile, stopMarkdownBrowser };
 
 async function removeBrowserProfile(profileDir: string, tempRoot: string, remove = fs.promises.rm): Promise<void> {
   if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
@@ -430,6 +430,16 @@ export async function renderMarkdownFileToPngPages(file: string): Promise<Buffer
     images.set(reference, `data:${mime};base64,${bytes.toString("base64")}`);
   }));
   return renderMarkdownImages(markdown, true, { images, diagrams: [] });
+}
+
+async function stopMarkdownBrowser(browser: ChildProcessWithoutNullStreams): Promise<void> {
+  if (browser.pid === undefined || browser.exitCode !== null || browser.signalCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => { browser.off("close", onClose); reject(new Error("Markdown browser did not exit before cleanup.")); }, markdownImageSettings.timeoutMs);
+    const onClose = () => { clearTimeout(timeout); resolve(); };
+    browser.once("close", onClose);
+    browser.kill();
+  });
 }
 
 async function renderMarkdownImages(markdown: string, paginate: boolean, document?: { images: ReadonlyMap<string, string>; diagrams: Array<{ id: string; source: string }> }): Promise<Buffer[]> {
@@ -482,7 +492,7 @@ async function renderMarkdownImages(markdown: string, paginate: boolean, documen
     }
     return await captureHtml(launched.port, markdownImageHtml(markdown));
   } finally {
-    browser?.kill();
+    if (browser) await stopMarkdownBrowser(browser);
     await removeBrowserProfile(profileDir, tempRoot);
   }
 }

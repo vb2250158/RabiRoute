@@ -238,6 +238,10 @@ Behavior notes:
 
 - `createPattern(image, repetition)` snapshots a Canvas source. Repetition is `repeat`, `repeat-x`, `repeat-y`, or `no-repeat`; `''` means `repeat`. Invalid repetition throws `SyntaxError`. Do not assume other source types work.
 
+#### Creating bitmaps
+
+`createImageBitmap(source, options?)` and `createImageBitmap(source, sx, sy, sw, sh, options?)` accept a `Blob`, `ImageData`, open `ImageBitmap`, or `Canvas`. The second form crops first. Options include `resizeWidth`, `resizeHeight`, `resizeQuality`, `imageOrientation`, `premultiplyAlpha`, and `colorSpaceConversion`. Supplying one resize dimension preserves aspect ratio. Close the bitmap after use.
+
 #### Image drawing
 
 - `drawImage(image, dx, dy)`

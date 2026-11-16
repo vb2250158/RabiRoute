@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "test:windows-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-host.ps1",
     "build": "npm run build:backend && npm run build:plugins && npm run webgui:build -- --finalize-plugin-build",
     "build:backend": "node scripts/generate-computer-settings-definition.mjs && node scripts/generate-plugin-source-catalog.mjs && node scripts/generate-agent-plugin-metadata.mjs && node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json --declaration --declarationDir dist/host-api-types && node scripts/rewrite-built-host-api-imports.mjs && node scripts/collect-plugin-host-api.mjs && node scripts/generate-plugin-host-api.mjs && node scripts/copy-plugin-runtime-host-assets.mjs && node scripts/copy-markdown-renderer.mjs && node scripts/copy-agent-adapter-resources.mjs && node scripts/instrument-automatic-code.mjs && node scripts/build-source-patches.mjs && npm run check:codex-contract && npm run check:event-driven && npm run check:plugin-architecture",
-    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/automatic-delivery-producers.test.mjs scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/generate-plugin-host-api.test.mjs plugins/contracts/plugin-sdk/builder.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/windows-process-identity.test.mjs scripts/copy-agent-native-assets.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills && npm run test:plugins",
+    "test": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/**/*.test.ts\" && node --import ./scripts/test-manager-runtime-env.mjs --test apps/desktop-assistant/test/diagnostic-distribution.test.mjs scripts/automatic-delivery-producers.test.mjs scripts/data-mutation-audit-coverage.test.mjs scripts/build-plugin-packages.test.mjs scripts/generate-plugin-host-api.test.mjs plugins/contracts/plugin-sdk/builder.test.mjs scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs scripts/windows-process-identity.test.mjs scripts/copy-agent-native-assets.test.mjs scripts/developer-channel.test.mjs scripts/manager-storage-parent-boundary.test.mjs scripts/create-windows-release-manifest.test.mjs scripts/windows-release-transaction.test.mjs scripts/legacy-wearable-task-migration.test.mjs scripts/dynamic-manager-active-truth.test.mjs scripts/android-sdk-dynamic-manager-contract.test.mjs apps/rabi-mobile-android/scripts/wearable-companion-lifecycle.test.mjs && npm run check:skills && npm run test:plugins",
     "test:plugins": "node --test-concurrency=2 --import ./scripts/test-manager-runtime-env.mjs --import tsx --test \"src/plugins/**/*.test.mjs\"",
     "check:codex-contract": "node scripts/check-codex-adapter-contract.mjs",
     "check:event-driven": "node scripts/check-event-driven-architecture.mjs",
@@ -105,7 +105,9 @@
     "vue-tsc": "^2.2.12",
     "vuetify": "^3.12.8",
     "yauzl": "3.4.0",
-    "@noble/hashes": "1.8.0"
+    "@noble/hashes": "1.8.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
   },
   "engines": {
     "node": ">=22.13.0"

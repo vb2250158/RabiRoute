@@ -57,7 +57,7 @@ export function createApiToolRuntime({ call, storage, sessionId, defaultTargetDe
     if (!/^[A-Za-z0-9:._-]{1,128}$/.test(event.callId || '')) fail('TOOL_CALL_ID_INVALID');
     const args = typeof event.arguments === 'string' ? JSON.parse(event.arguments) : event.arguments;
     if (!args || typeof args !== 'object' || Array.isArray(args)) fail('TOOL_ARGUMENTS_INVALID');
-    let packet;
+    let packet, helpView;
     let canonicalMutation = false;
     const targetDeviceId = args.targetDeviceId || defaultTargetDeviceId;
     if (targetDeviceId !== undefined && (typeof targetDeviceId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(targetDeviceId))) fail('TOOL_TARGET_INVALID');

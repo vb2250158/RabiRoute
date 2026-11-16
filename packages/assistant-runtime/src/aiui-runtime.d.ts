@@ -41,6 +41,7 @@ export interface AiuiAssistantRuntime<Round extends object = object, Result = un
   createSession(options: AssistantSessionOptions): AssistantSession;
   /** Requires a current session and adapter-owned durable notification receipts. */
   createConversation(options: Omit<ConversationOptions, 'session'>): AssistantConversation;
+  /** Explicit owner cancellation; raw ASR onset never cancels output by itself. */
   interruptSpeech(): unknown[];
   /** Use the original task/player, or the pending synthesize() Promise. */
   releaseSpeech(output: { task?: object; player?: object }, options?: { abort?: boolean }): { handled: boolean; errors: unknown[] };

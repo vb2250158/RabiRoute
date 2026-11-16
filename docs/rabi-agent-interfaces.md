@@ -12,6 +12,8 @@
 
 # Agent 需要关注的 Rabi 接口
 
+本机“发送截图”使用 `POST /api/agent/threads` 的 `action=send`，明确指定 `agentTargetId=local:<provider>`、完整 `threadId`、`imagePaths` 与稳定 `deliveryId`。适配器目录的 `managedTasks.imageAttachments` 声明图片能力。只有本机桌面来源到本机目标可引用本地图片；远端请求继续禁止读取 PC 图片路径。图片路径与 SHA256 保存为正式投递执行参数，发送前复核，结果不确定时沿原回执核对，不重发。角色截图继续使用角色消息接口。使用步骤见[桌面说明](../desktop/tray-task-window/README.md)。
+
 
 
 分类、关键词搜索、CLI / MCP 参数和当前原生 Agent 功能统一见 [CLI 与 MCP 统一接口](unified-agent-api.md)。日常先读取短摘要和单项输入合同，完整 Help 用于兼容客户端与导出。

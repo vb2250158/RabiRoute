@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { noteCodexDesktopLateStartForTest } from "../plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt as recoverPublishedOwnerReceipt } from "./ownerExecution.js";
@@ -37,6 +38,15 @@ test("owner directory checks existence rather than configured workspace membersh
   await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [] }, () => { checks++; }), error => (error as { code?: string }).code === "AGENT_ADAPTER_UNAVAILABLE");
   assert.equal(checks, 1);
   await assert.rejects(executeEndpointOnOwner(delivery, { allowedWorkspaces: [path.join(directory, "different")] }, () => {}), error => (error as { code?: string }).code === "AGENT_ADAPTER_UNAVAILABLE");
+});
+
+test("owner directory failure before native dispatch is positively not sent", async () => {
+  const missing = path.join(os.tmpdir(), `missing-owner-${randomUUID()}`);
+  const delivery = { target: { provider: "codex" }, executionOptions: { cwd: missing } } as PreparedEndpointDelivery;
+  let calls = 0;
+  await assert.rejects(executeEndpointOnOwner(delivery, { invokeAgentOperation: async () => { calls++; throw new Error("must not dispatch"); } }, () => {}),
+    { code: "DELIVERY_NOT_SENT" });
+  assert.equal(calls, 0);
 });
 
 test("exact owner recovery accepts a historical suffix only with the original scoped ID and reserved prompt hash", async t => {

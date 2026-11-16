@@ -32,7 +32,8 @@ const bootstrap = `
   const messages=createQqMessageOperations(context),stickers=createQqStickerOperations(context);
   const diagnostics=createAgentQqDiagnosticsOperation({route:()=>definition,readStatus:()=>({}),routeRunning:()=>true,routeStartedAt:()=>'',jsonResponse:()=>{}});
   const personas=createPersonaResourceOperations({rolesRoot:root,roleDirectory:()=>role,identity,validate:async()=>({})});
-  assert.deepEqual(messages.map(operation=>operation.contract.operationId),['agent.qq.history.read','agent.qq.message.read','agent.qq.attachment.read','agent.qq.contacts.read','agent.qq.members.read']);
+  assert.deepEqual(messages.map(operation=>operation.contract.operationId),['agent.qq.history.read','agent.qq.message.read','agent.qq.attachment.read','agent.qq.forward.read','agent.qq.forward-node.read','agent.qq.forward-attachment.read','agent.qq.contacts.read','agent.qq.members.read']);
+  for (const kind of ['forward','forward-node','forward-attachment']) { const operation=messages.find(item=>item.contract.operationId==='agent.qq.'+kind+'.read'); assert.equal(operation.contract.method,'GET'); assert.ok(operation.contract.pathTemplate.startsWith('/api/agent/qq/messages/:messageId/forwards/:forwardPath')); }
   assert.equal(stickers.length,2);assert.ok(diagnostics.contract);assert.equal(personas.length,6);
   const request=()=>Object.assign(new http.IncomingMessage(new Socket()),{method:'GET'});
   const call=(operation,url,params={})=>operation.handler({request:request(),response:new EventEmitter(),url:new URL(url),path:params,body:{}});

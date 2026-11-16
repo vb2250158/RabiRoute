@@ -17,6 +17,25 @@ import { assertWorkbuddyLoopback } from "./workbuddyHttpAuth.js";
 
 const PASSWORD = "rabi-test-gateway-password-0001";
 
+test("screenshots use official attachment fields on the original session gateway", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-image-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const image = path.join(root, "screenshot.png"); fs.writeFileSync(image, "fixture");
+  const previous = process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
+  process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
+  try {
+    const { impl, calls } = fakeFetch([{ status: 202, body: { runId: "image-run" } }, { status: 200, body: { active: false } }]);
+    await deliverWorkbuddyMessage({ sessionId: "original-full-session", text: "Inspect screenshot", imagePaths: [image],
+      endpoint: "http://127.0.0.1:5762", fetchImpl: impl });
+    const sent = JSON.parse(String(calls[0]!.init!.body));
+    assert.equal(sent.source.conversation.id, "original-full-session");
+    assert.deepEqual(sent.payload.attachments, [{ type: "image", urlType: "local-path", url: image, name: "screenshot.png" }]);
+  } finally {
+    if (previous === undefined) delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
+    else process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = previous;
+  }
+});
+
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabi-workbuddy-bridge-"));
 }

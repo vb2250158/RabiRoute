@@ -36,7 +36,7 @@ function validateReader(reader, label) {
   }
   assert(!names.some((name) => name.endsWith(".ink") || name.startsWith("utils/")), `${label} must contain only the generated self-contained runtime, not source modules.`);
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(version), `${label} VERSION is not UUIDv4: ${version}`);
-  assert(title === "RabiLink AIUI", `Unexpected ${label} title: ${title}`);
+  assert(title === "拉比小助手", `Unexpected ${label} title: ${title}`);
   assert(pages.some((page) => page.name === "pages/home/index"), `${label} reader did not find pages/home/index.`);
   assert(pages.length === 1, `${label} must expose one page containing both product modes.`);
 
@@ -60,6 +60,8 @@ function validateReader(reader, label) {
   const markup = Buffer.from(reader.read_file("pages/home/index.wxml")).toString("utf8");
   const pageScript = Buffer.from(reader.read_file("pages/home/index.js")).toString("utf8");
   const appScript = Buffer.from(reader.read_file("app.js")).toString("utf8");
+  assert(appScript.includes('appName: "拉比小助手"'), `${label} application name is not 拉比小助手.`);
+  assert(JSON.parse(Buffer.from(reader.read_file("pages/home/index.json")).toString("utf8")).navigationBarTitleText === "拉比小助手", `${label} entry title differs from the submission name.`);
   assert(appScript.includes(`releaseVersion: ${JSON.stringify(releaseVersion)}`), `${label} app version differs from the Craft release version.`);
   assert(!appScript.includes("__RABILINK_RELEASE_VERSION__"), `${label} app version marker is unresolved.`);
   const appJson = JSON.parse(Buffer.from(reader.read_file("app.json")).toString("utf8"));

@@ -47,7 +47,10 @@ export class SourcePatchWatcher {
     try { await watcher.refreshWatches(definitions); }
     catch (error) { await watcher.stop(); throw error; }
     for (const definition of definitions) if (!options.service.status().modules.some(module => module.id === definition.id)) watcher.pending.add(definition.id);
-    if (watcher.pending.size) watcher.timer = setTimeout(() => { watcher.timer = undefined; watcher.startApply(); }, 200);
+    // Discovery and watch installation are asynchronous. Rescan once after the
+    // watches exist so a module created between those steps cannot be missed.
+    watcher.schedule(path.join(sourceRoot, "source-patches", "modules.json"));
+    if (watcher.pending.size && !watcher.timer) watcher.timer = setTimeout(() => { watcher.timer = undefined; watcher.startApply(); }, 200);
     return watcher;
   }
 

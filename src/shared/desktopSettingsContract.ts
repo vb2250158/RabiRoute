@@ -90,7 +90,24 @@ export type DesktopPetCorner = typeof DESKTOP_PET_CORNERS[number]["id"];
 
 export type DesktopRoleSelection = { roleId: string; sourceDeviceId: string };
 
+export type ScreenshotDeliverySelection = { kind: "role"; gatewayId: string }
+  | { kind: "agent"; provider: string; threadId: string; cwd: string };
+export type ScreenshotComposerSettings = { voiceInputEnabled: boolean; lastTarget: ScreenshotDeliverySelection | null };
+
+export function normalizeScreenshotComposerSettings(value: unknown): ScreenshotComposerSettings {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const raw = row.lastTarget && typeof row.lastTarget === "object" ? row.lastTarget as Record<string, unknown> : {};
+  const id = (key: string, limit = 512) => typeof raw[key] === "string" && raw[key].length <= limit && !/[\u0000-\u001f\u007f]/.test(raw[key]) ? raw[key].trim() : "";
+  let lastTarget: ScreenshotDeliverySelection | null = null;
+  if (raw.kind === "role" && id("gatewayId")) lastTarget = { kind: "role", gatewayId: id("gatewayId") };
+  if (raw.kind === "agent" && /^[A-Za-z][A-Za-z0-9_.-]*$/.test(id("provider", 80)) && id("threadId", 4096)) {
+    lastTarget = { kind: "agent", provider: id("provider", 80), threadId: id("threadId", 4096), cwd: id("cwd", 32768) };
+  }
+  return { voiceInputEnabled: row.voiceInputEnabled === true, lastTarget };
+}
+
 export type DesktopSettings = {
+  screenshotComposer: ScreenshotComposerSettings;
   lastRoleSelection: DesktopRoleSelection | null;
   screenshot: DesktopScreenshotSettings;
   autostart: boolean;
@@ -121,6 +138,7 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
 };
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  screenshotComposer: { voiceInputEnabled: false, lastTarget: null },
   lastRoleSelection: null,
   screenshot: {
     enabled: false,
@@ -223,6 +241,7 @@ export function normalizeDesktopSettings(value: unknown): DesktopSettings {
   const sourceDeviceId = typeof selection.sourceDeviceId === "string" && selection.sourceDeviceId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(selection.sourceDeviceId)
     ? selection.sourceDeviceId : null;
   return {
+    screenshotComposer: normalizeScreenshotComposerSettings(row.screenshotComposer),
     lastRoleSelection: roleId && roleId === selection.roleId && sourceDeviceId !== null ? { roleId, sourceDeviceId } : null,
     screenshot: {
       enabled: screenshot.enabled === true,

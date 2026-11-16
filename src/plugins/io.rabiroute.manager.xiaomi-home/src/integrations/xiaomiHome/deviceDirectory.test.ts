@@ -6,7 +6,13 @@ const resources=["vacuum.test","sensor.battery","light.other","script.scene"].ma
 test("device registry groups exact IDs, keeps duplicate names separate and retains unassigned entities",()=>{
  const result=deviceDirectory(resources,[{entityId:"vacuum.test",deviceId:"device-a",displayName:"Same",token:"not-returned"},{entityId:"sensor.battery",deviceId:"device-a",displayName:"Same"},{entityId:"sensor.battery",deviceId:"device-a"},{entityId:"light.other",deviceId:"device-b",displayName:"Same"},{entityId:"sensor.no_current_state",deviceId:"device-b"}]);
  assert.equal(result.devices.length,2);assert.equal(result.devices[0]!.resources.length,2);assert.deepEqual(result.unassignedResources.map(r=>r.entityId),["script.scene"]);assert.ok(!JSON.stringify(result).includes("not-returned"));
- assert.throws(()=>deviceDirectory(resources,{}));assert.throws(()=>deviceDirectory(resources,[{deviceId:"../../path",entityId:"vacuum.test"}]));
+ assert.throws(()=>deviceDirectory(resources,{}));
+});
+test("a bad registry row preserves unrelated devices and reports incomplete coverage", () => {
+ const result=deviceDirectory(resources,[{deviceId:"device-a",entityId:"vacuum.test"},{deviceId:"../../path",entityId:"light.other"},null]);
+ assert.equal(result.devices.length,1); assert.equal(result.devices[0]!.deviceId,"device-a");
+ assert.deepEqual(result.coverage,{state:"partial",invalidRows:2});
+ assert.ok(result.unassignedResources.some(item=>item.entityId==="light.other"));
 });
 test("directory reads use only provider-owned fixed registry template and states",async()=>{
  const calls:string[]=[];

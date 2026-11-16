@@ -14,6 +14,7 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, opti
     if (model !== undefined || reasoningEffort !== undefined || sandbox !== undefined || dshDeliveryMode !== undefined) throw new Error("WorkBuddy owner protocol cannot apply model, reasoningEffort, sandbox or dshDeliveryMode.");
     const thread = readWorkbuddyThread(endpoint.sessionId) as { cwd?: string };
     if (!thread || !thread.cwd || !sameCodexWorkspace(thread.cwd, cwd)) throw new Error("Exact WorkBuddy owner is unavailable.");
-    return sendWorkbuddyThreadMessage({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd, assertAuthorized });
+    return sendWorkbuddyThreadMessage({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd, assertAuthorized,
+      imagePaths: delivery.executionOptions.localImages?.map(image => image.path) });
 
 }

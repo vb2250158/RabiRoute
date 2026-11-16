@@ -1,0 +1,5 @@
+# System Navigation
+
+Check `await navigator.maps.getCapabilities()` before starting: `supported` and `travelModes` (`walking`, `cycling`, `driving`) vary by environment. Start with `await navigator.maps.navigate({ destination, travelMode })`. A destination is `{ type: 'address', address: 'full address' }` or `{ type: 'poi', provider: 'amap', id: 'POI ID' }`. Handle rejection and `error.reason`; no prior geolocation call is needed.
+
+Keep the returned session. `await session.reroute({ destination?, travelMode? })` is allowed while active and idle; omitted values are retained, and a failed reroute keeps the previous route. `await session.end()` requests termination and is idempotent, including during startup via `navigator.maps.currentSession`. `session.finished` always resolves to `{ reason, error }`; reasons are `requested`, `user`, `arrived`, `interrupted`, and `error`. `state`, `destination`, `travelMode`, and `id` are read-only. Observe `statechange`, `error`, and `end` through event listeners or `onstatechange`, `onerror`, and `onend`. Only one session may exist at a time. Page changes do not end navigation.

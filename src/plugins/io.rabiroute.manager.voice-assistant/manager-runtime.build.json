@@ -1,0 +1,71 @@
+{
+  "exports": [
+    {
+      "source": "src/plugins/io.rabiroute.manager.voice-assistant/src/runtime.mjs",
+      "name": "createVoiceAssistantOwner"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.voice-assistant/src/agent-endpoint.mjs",
+      "name": "createVoiceAssistantAgent"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.manager.voice-assistant/src/operations.mjs",
+      "name": "createVoiceAssistantOperations"
+    }
+  ],
+  "packageId": "io.rabiroute.manager.voice-assistant",
+  "ownedPrefixes": [
+    "src/plugins/io.rabiroute.manager.voice-assistant/"
+  ],
+  "aliases": {
+    "@rabilink/assistant-runtime/protocol": "packages/assistant-runtime/src/decision-protocol.js",
+    "@rabilink/assistant-runtime/turn": "packages/assistant-runtime/src/turn-runtime.js",
+    "@rabilink/assistant-runtime/session": "packages/assistant-runtime/src/assistant-session.js",
+    "@rabilink/assistant-runtime/aiui": "packages/assistant-runtime/src/aiui-runtime.js",
+    "@rabilink/assistant-runtime/conversation": "packages/assistant-runtime/src/conversation-runtime.js",
+    "@rabilink/assistant-runtime/listening": "packages/assistant-runtime/src/listening-lifecycle.js",
+    "@rabilink/assistant-runtime/playback": "packages/assistant-runtime/src/speech-playback.js",
+    "@rabilink/assistant-runtime/voice": "packages/assistant-runtime/src/voice-interaction.js",
+    "@rabilink/assistant-runtime/resident": "packages/assistant-runtime/src/resident-interaction.js",
+    "@rabilink/assistant-runtime/ui": "packages/assistant-runtime/ui/assistant-panel.js",
+    "@rabilink/desktop-voice-service/workbuddy-cli": "packages/desktop-voice-service/src/workbuddy-cli.mjs",
+    "@rabilink/desktop-voice-service/web-search": "packages/desktop-voice-service/src/web-search.mjs",
+    "@rabilink/desktop-voice-service/web-search-catalog": "packages/desktop-voice-service/src/web-search-catalog.mjs",
+    "@rabilink/desktop-voice-service/speech-catalog": "packages/desktop-voice-service/src/speech-catalog.mjs",
+    "@rabilink/desktop-voice-service/model-providers": "packages/desktop-voice-service/src/model-providers.mjs",
+    "@rabilink/desktop-voice-service/windows-secrets": "packages/desktop-voice-service/src/windows-secrets.mjs",
+    "@rabilink/desktop-voice-service/host": "packages/desktop-voice-service/src/assistant-host.mjs",
+    "@rabilink/desktop-voice-service/speech-sample": "packages/desktop-voice-service/src/speech-sample.mjs",
+    "@rabilink/desktop-voice-service/settings": "packages/desktop-voice-service/src/assistant-settings.mjs",
+    "@rabilink/desktop-voice-service/provider-profiles": "packages/desktop-voice-service/src/provider-profiles.mjs",
+    "@rabilink/desktop-voice-service/chat-model": "packages/desktop-voice-service/src/chat-model.mjs",
+    "@rabilink/desktop-voice-service/speech-providers": "packages/desktop-voice-service/src/speech-providers.mjs",
+    "@rabilink/desktop-voice-service/node": "packages/desktop-voice-service/src/node-device.mjs",
+    "@rabilink/desktop-voice-service/services": "packages/desktop-voice-service/src/services.mjs",
+    "@rabilink/desktop-voice-service/providers": "packages/desktop-voice-service/src/providers.mjs",
+    "@rabilink/desktop-voice-service/expression": "packages/desktop-voice-service/src/tts-expression.mjs",
+    "@rabilink/desktop-voice-service/speech-details": "packages/desktop-voice-service/src/speech-details.mjs"
+  },
+  "resources": [
+    {
+      "source": "packages/desktop-voice-service/runtime",
+      "target": "native-device"
+    },
+    {
+      "source": "node_modules/koffi",
+      "target": "native-deps/koffi"
+    },
+    {
+      "source": "node_modules/ws",
+      "target": "native-deps/ws"
+    },
+    {
+      "source": "node_modules/@koromix/koffi-win32-x64",
+      "target": "native-deps/@koromix/koffi-win32-x64"
+    }
+  ],
+  "externalPackagePaths": {
+    "koffi": "./native-deps/koffi/index.js",
+    "ws": "./native-deps/ws/index.js"
+  }
+}

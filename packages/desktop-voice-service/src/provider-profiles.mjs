@@ -4,6 +4,7 @@ import { speechParameterDefinitions, speechSelectionDefinitions, applySpeechSele
 /** Public defaults contain no credentials. Each kind/provider owns its saved selection. */
 export const speechProviders = Object.freeze({
   asr: [
+    { id: 'local-whisper', label: '本机 Whisper · 离线', host: 'standalone', credentialMode: 'local', defaults: { endpoint: 'local://whisper', model: 'base' } },
     { id: 'native', label: 'DSH 已配置的识别服务', host: 'dsh', defaults: {} },
     { id: 'compatible', label: 'OpenAI / 兼容服务', defaults: { endpoint: 'https://api.openai.com/v1/audio/transcriptions', model: '' } },
     { id: 'volcengine', label: '火山豆包', defaults: { endpoint: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async', model: 'bigmodel', resourceId: 'volc.seedasr.sauc.duration' } },
@@ -20,6 +21,10 @@ const fieldKey = (kind, name) => kind + name[0].toUpperCase() + name.slice(1);
 const extraDefinitions={...speechParameterDefinitions,...speechSelectionDefinitions};
 
 export function validateProviderEndpoint(value, provider) {
+  if(provider==='local-whisper') {
+    if(value!=='local://whisper')throw Error('SPEECH_ENDPOINT_INVALID');
+    return value;
+  }
   let url;
   try { url = new URL(value); } catch { throw Error('SPEECH_ENDPOINT_INVALID'); }
   if (url.username || url.password || url.search || url.hash) throw Error('SPEECH_ENDPOINT_INVALID');
@@ -68,7 +73,7 @@ export function updateProviderProfiles(previous, patch, host = 'standalone') {
     profiles[kind][newId] = current;
     const oldModelKey=oldId+'::'+previous[kind+'Model'],newModelKey=newId+'::'+next[kind+'Model'];
     const modelChanged=oldId===newId&&Object.hasOwn(patch,kind+'Model')&&patch[kind+'Model']!==previous[kind+'Model'];
-    if(oldId==='volcengine'){
+    if(['volcengine','compatible'].includes(oldId)){
       profiles[kind][oldModelKey]={...profiles[kind][oldModelKey],...Object.fromEntries(Object.keys(extraDefinitions).filter(key=>key.startsWith(kind)&&previous[key]!==undefined).map(key=>[key,previous[key]])),...(kind==='tts'?{ttsVoice:previous.ttsVoice||''}:{})};
     }
     for(const [key,spec] of Object.entries(extraDefinitions).filter(([key])=>key.startsWith(kind))){
@@ -86,7 +91,7 @@ export function updateProviderProfiles(previous, patch, host = 'standalone') {
     // Persist effective protocol fields as well as parameter values.
     for(const name of fieldNames){if(kind==='asr'&&name==='voice')continue;profiles[kind][newId][name]=next[fieldKey(kind,name)]}
     for(const key of Object.keys(extraDefinitions).filter(key=>key.startsWith(kind)))profiles[kind][newId][key]=next[key];
-    if(newId==='volcengine')profiles[kind][newModelKey]={...Object.fromEntries(Object.keys(extraDefinitions).filter(key=>key.startsWith(kind)).map(key=>[key,next[key]])),...(kind==='tts'?{ttsVoice:next.ttsVoice}:{})};
+    if(['volcengine','compatible'].includes(newId))profiles[kind][newModelKey]={...Object.fromEntries(Object.keys(extraDefinitions).filter(key=>key.startsWith(kind)).map(key=>[key,next[key]])),...(kind==='tts'?{ttsVoice:next.ttsVoice}:{})};
   }
   next.speechProfiles = profiles;
   return next;

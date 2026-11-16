@@ -1,9 +1,10 @@
 import { encodeAsr, decodeFrame } from './volcano-codec.mjs';
 import { openSpeechSocket } from './speech-socket.mjs';
 import { encodeVolcanoAsrRequest } from './speech-catalog.mjs';
+import {safeSpeechDetails} from './speech-details.mjs';
 
-/** Real-time 16k mono PCM input, with local onset for immediate barge-in. */
-export function createVolcanoAsr({ createRecording, settings, connection, connect = openSpeechSocket }) {
+/** Real-time 16k mono PCM input. Local onset reports capture activity only. */
+export function createVolcanoAsr({ createRecording, settings, connection, recognitionContext=()=>[], connect = openSpeechSocket }) {
   const rounds = new WeakMap();
   const stop = state => {
     if (!state) return Promise.resolve();
@@ -33,7 +34,8 @@ export function createVolcanoAsr({ createRecording, settings, connection, connec
               for (const item of utterances) {
                 if (item.definite === true && typeof item.text === 'string' && item.text.trim() && Number.isFinite(item.end_time) && item.end_time > state.committedEnd) {
                   state.committedEnd = item.end_time;
-                  state.handlers.onFinal?.({ text: item.text, additions: item.additions, startTime:item.start_time,endTime:item.end_time });
+                  state.handlers.onFinal?.({ text: item.text, additions: item.additions, startTime:item.start_time,endTime:item.end_time,
+                    providerDetails:safeSpeechDetails({request:state.request,result:{...item,additions:{...result.additions,...item.additions}}}) });
                 }
               }
               const partial = utterances.filter(item => item.definite !== true).map(item => item.text || '').join('');
@@ -44,10 +46,10 @@ export function createVolcanoAsr({ createRecording, settings, connection, connec
           },
         });
         if (state.closed) { await state.socket.close(); return; }
-        await state.socket.send(encodeAsr({ user: { uid: 'desktop-assistant' }, audio: { format: 'pcm', codec: 'raw', rate: 16000, bits: 16, channel: 1 },
-          request: encodeVolcanoAsrRequest(config) }));
+        state.request=encodeVolcanoAsrRequest(config,config.asrUseContext===false?{}:{context:recognitionContext()});
+        await state.socket.send(encodeAsr({ user: { uid: 'desktop-assistant' }, audio: { format: 'pcm', codec: 'raw', rate: 16000, bits: 16, channel: 1 },request:state.request }));
         await state.recording.start(fail, { onPcm(bytes) {
-          if (state.closed) return;
+          if (state.closed || state.inputFinished) return;
           state.pcm = Buffer.concat([state.pcm, bytes]);
           // Two 64ms capture chunks form one 128ms protocol frame.
           while (state.pcm.length >= 4096) {
@@ -69,6 +71,11 @@ export function createVolcanoAsr({ createRecording, settings, connection, connec
           }
         }, config.sampleMs);
       } catch (error) { await stop(state); throw error; }
+    },
+    async finish(round) {
+      const state=rounds.get(round);if(!state||state.closed||state.inputFinished)return;
+      state.inputFinished=true;clearInterval(state.monitor);await state.chain;
+      if(!state.closed)await state.socket.send(encodeAsr(state.pcm,{audio:true,last:true}));
     },
     stop(round) { return stop(rounds.get(round)); },
   };

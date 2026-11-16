@@ -45,8 +45,8 @@
   "devDependencies": {
     "@yodaos-pkg/aix": "0.12.0",
     "@yodaos-pkg/aix-cli": "0.12.0",
-    "@yodaos-pkg/ink": "0.19.1",
-    "@yodaos-pkg/ink-daily": "npm:@yodaos-pkg/ink@0.19.1",
+    "@yodaos-pkg/ink": "0.20.0",
+    "@yodaos-pkg/ink-daily": "npm:@yodaos-pkg/ink@0.20.0",
     "esbuild": "0.28.0",
     "playwright-core": "1.61.1"
   }

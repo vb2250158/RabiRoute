@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 export async function openSpeechSocket({ endpoint, headers, signal, handshakeSignalOnly = false, onMessage, onError, WebSocketClass = WebSocket }) {
   signal?.throwIfAborted();
   const socket = new WebSocketClass(endpoint, { headers, followRedirects: false, maxPayload: 2 * 1024 * 1024, handshakeTimeout: 15000 });
-  let ready = false, stopping = false, closed = false, closeTask, queued = 0, chain = Promise.resolve();
+  let ready = false, stopping = false, closed = false, closeTask, queued = 0, readingPaused=false, chain = Promise.resolve();
   let resolveClosed;
   const closure = new Promise(resolve => { resolveClosed = resolve; });
   const failure = () => onError?.(Error('SPEECH_SOCKET_FAILED'));
@@ -15,11 +15,16 @@ export async function openSpeechSocket({ endpoint, headers, signal, handshakeSig
     if (!binary) { onError?.(Error('SPEECH_BINARY_FRAME_REQUIRED')); return; }
     queued += value.length;
     if (queued > 4 * 1024 * 1024) { onError?.(Error('SPEECH_RECEIVE_BACKLOG')); void close(); return; }
-    chain = chain.then(() => { if (!stopping) return onMessage(value); }).catch(error => { if (!stopping) onError?.(error); }).finally(() => { queued -= value.length; });
+    if(!readingPaused&&queued>=256*1024){socket.pause();readingPaused=true;}
+    chain = chain.then(() => { if (!stopping) return onMessage(value); }).catch(error => { if (!stopping) onError?.(error); }).finally(() => {
+      queued -= value.length;
+      if(readingPaused&&!stopping&&!closed&&queued<=128*1024){readingPaused=false;socket.resume();}
+    });
   });
   function close() {
     if (closeTask) return closeTask;
     stopping = true;
+    if(readingPaused){readingPaused=false;socket.resume();}
     closeTask = (async () => {
       if (!closed) {
         const timer = setTimeout(() => socket.terminate(), 1500);

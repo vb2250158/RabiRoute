@@ -2,13 +2,15 @@ import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {validAccessToken} from './access-store.mjs';
 
 const safeError = error => /^[A-Z][A-Z0-9_]{1,100}$/.test(error?.message) ? error.message : 'ASSISTANT_OPERATION_FAILED';
 /** Local control plane. A browser connection never owns or stops resident audio. */
-export async function openAssistantServer({ host, messages, directory, port = 0, onExit = () => {} }) {
-  const token = randomBytes(32).toString('base64url');
+export async function openAssistantServer({ host, messages, directory, port = 0, onExit = () => {}, accessToken }) {
+  const token = accessToken ?? randomBytes(32).toString('base64url');
+  if(!validAccessToken(token))throw Error('ASSISTANT_ACCESS_TOKEN_INVALID');
   let origin, closing = false;
-  const allowed = value => typeof value === 'string' && value.length === token.length && timingSafeEqual(Buffer.from(value), Buffer.from(token));
+  const allowed = value => validAccessToken(value) && timingSafeEqual(Buffer.from(value), Buffer.from(token));
   const server = createServer(async (request, response) => {
     const send = (status, data) => { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); };
     response.setHeader('Cache-Control', 'no-store');
@@ -44,5 +46,5 @@ export async function openAssistantServer({ host, messages, directory, port = 0,
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = 'http://127.0.0.1:' + server.address().port;
   function close() { return new Promise((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeIdleConnections(); }); }
-  return { origin, url: origin + '/#' + token, close };
+  return { origin, url: origin + '/?connect=1#' + token, close };
 }

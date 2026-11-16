@@ -3,6 +3,9 @@ import path from "node:path";
 import type { EndpointDeliveryReceipt } from "./endpointDelivery.js";
 import type { NativeOwnerDelivery, NativeOwnerDeliveryEvidence } from "./nativeOwnerDelivery.js";
 import type { AgentThreadRequestOptions } from "../agentThreads.js";
+import { verifyLocalDeliveryImages } from "./localDeliveryImages.js";
+import { EndpointDeliveryNotSentError } from "./deliveryFailure.js";
+import { agentAdapterSupportsManagedTaskFeature } from "../shared/agentAdapterCapabilities.js";
 import { invokeScopedAgentManagerOperation, withAgentManagerInvocation } from "../agentAdapters/managerInvocation.js";
 
 /** A concrete host directory is execution context, never a configured-workspace grant. */
@@ -24,7 +27,15 @@ export async function executeEndpointOnOwner(
   transport?: { sendCodex: import("../agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"] }
 ): Promise<{ threadId: string; action: string; transport: string }> {
   await assertAuthorized();
-  assertEndpointOwnerDirectory(delivery.executionOptions.cwd);
+  try { assertEndpointOwnerDirectory(delivery.executionOptions.cwd); }
+  catch (error) { throw new EndpointDeliveryNotSentError(error); }
+  if (delivery.executionOptions.localImages) {
+    try {
+      if (delivery.target.kind !== "local") throw new Error("Local images cannot cross an instance boundary.");
+      if (!agentAdapterSupportsManagedTaskFeature(delivery.target.provider, "imageAttachments")) throw new Error("This Agent owner does not support image attachments.");
+      verifyLocalDeliveryImages(delivery.executionOptions.localImages);
+    } catch (error) { throw new EndpointDeliveryNotSentError(error); }
+  }
   const execute = () => invokeScopedAgentManagerOperation<{ threadId: string; action: string; transport: string }>(
     delivery.target.provider, "endpoint.execute", { delivery }, { nativeArgs: [delivery, options, assertAuthorized, transport] }
   );

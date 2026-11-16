@@ -20,6 +20,17 @@ const onlineStatus: SpeechRuntimeStatus = {
   providers: { tts: [], asr: [] }
 };
 
+test('native ASR and TTS pass the original caller cancellation signal to the existing transport',async()=>{
+  let current:AbortController,calls=0;
+  const control=new ManagerSpeechControl({serviceUrl:()=> 'http://127.0.0.1:1',personas:()=>[],route:()=>undefined,routes:()=>[],deliverTranscript:async()=>({status:'delivered'}),appendRouteLog:()=>{},localSpeech:{inspect:async()=>onlineStatus,requestJson:async()=>({status:200,data:{}}),requestBinary:async(_url,_path,init)=>{
+    calls++;assert.equal(init?.signal,current.signal);
+    return new Promise((_resolve,reject)=>{init?.signal?.addEventListener('abort',()=>reject(init.signal?.reason),{once:true});queueMicrotask(()=>current.abort(Error('caller cancelled')))});
+  }}});
+  current=new AbortController();await assert.rejects(control.synthesize({model:'fixture',input:'test',voice:'fixture',responseFormat:'wav',speed:1,language:null,instructions:null,play:false,sessionId:null,routeId:null},()=>current.signal.throwIfAborted(),current.signal),/caller cancelled/);
+  current=new AbortController();await assert.rejects(control.transcribe('multipart/form-data; boundary=fixture',Buffer.from('fixture'),()=>current.signal.throwIfAborted(),current.signal),/caller cancelled/);
+  assert.equal(calls,2);
+});
+
 test("Manager preserves unavailable selection diagnostics and private recovery identity through the existing choice API", async () => {
   const raw = { enabled: true, source: "unavailable", selected_client_id: null, selected_online: false,
     selection_storage_error: "音频设备选择存档损坏或版本不受支持。重新选择设备会保留原始恢复副本，并使用本版本的设备选择格式。",
