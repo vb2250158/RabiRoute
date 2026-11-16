@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const privateDirectories = new Set(["node_modules", "dist", ".git", "data", "logs", "credentials", "session", "sessions", "auth", "storage", "cache", "runtime", ".deps", ".builddeps"]);
 const generatedDirectories = new Set(["node_modules", "dist", ".git", ".venv", "venv", "__pycache__"]);
-const publicJson = new Set(["package.json", "package-lock.json", "rabi.plugin.json", "rabi-plugin.json", "plugin.json", "manifest.json", "hooks.json", "catalog.json", "model-catalog.json", "storage-migrations.json", "agent-adapter.json", "route-config.json", "route-message-endpoint.json", "config.schema.json", "tsconfig.json"]);
+const publicJson = new Set(["package.json", "package-lock.json", "rabi.plugin.json", "rabi-plugin.json", "plugin.json", "manifest.json", "hooks.json", "catalog.json", "model-catalog.json", "workbench-definition.json", "storage-migrations.json", "agent-adapter.json", "route-config.json", "route-message-endpoint.json", "config.schema.json", "tsconfig.json"]);
 
 /** Repository defaults and schemas are public. Local accounts, saves and build outputs are separate owners. */
 export function isPublicPluginSource(relative) {

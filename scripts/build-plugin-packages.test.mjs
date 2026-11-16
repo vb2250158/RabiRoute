@@ -78,6 +78,47 @@ test("endpoint bundles own frozen implementation, module URL, resources and stan
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test("video package preserves the workbench JSON definition through selected builds and relocation", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-json-closure-"));
+  try {
+    const pluginId = "io.rabiroute.manager.video";
+    const source = path.resolve(import.meta.dirname, "../src/plugins", pluginId);
+    const manifest = JSON.parse(await fs.readFile(path.join(source, "rabi.plugin.json"), "utf8"));
+    const pluginRoot = path.join(root, "src/plugins", pluginId);
+    await fs.cp(source, pluginRoot, { recursive: true });
+    const hostInputs = new Set(["plugin-kernel/runtimeTimeouts"]);
+    for (const relative of await fs.readdir(source, { recursive: true })) {
+      if (!/\.(?:ts|mjs)$/.test(relative) || /\.test\./.test(relative)) continue;
+      const content = await fs.readFile(path.join(source, relative), "utf8");
+      for (const match of content.matchAll(/["']@rabiroute\/host-api\/([^"']+)["']/g)) hostInputs.add(match[1]);
+    }
+    for (const moduleId of hostInputs) {
+      const relative = `src/${moduleId}.ts`, target = path.join(root, relative);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(path.resolve(import.meta.dirname, "..", relative), target);
+    }
+    await fs.cp(path.resolve(import.meta.dirname, "../plugins/contracts/plugin-sdk"), path.join(root, "plugins/contracts/plugin-sdk"), { recursive: true });
+    await writeJson(path.join(root, "plugins/profiles/desktop.json"), {
+      schemaVersion: 2, readyRequires: [],
+      instances: [{ id: "manager:video", package: pluginId, version: manifest.version, enabled: true, config: {}, grants: [] }]
+    });
+    await fs.writeFile(path.join(pluginRoot, "credentials.json"), '{"privateFixture":true}');
+    const built = await buildPluginPackages(root, { packages: [pluginId], outputDirectory: "candidate" });
+    const output = path.join(built.packagesRoot, pluginId, manifest.version);
+    const definitionBytes = await fs.readFile(path.join(source, "workbench-definition.json"));
+    assert.deepEqual(await fs.readFile(path.join(output, "workbench-definition.json")), definitionBytes);
+    const evidence = JSON.parse(await fs.readFile(path.join(built.outputRoot, "build-evidence.json"), "utf8"));
+    assert.ok(evidence.inputs.files.some(file => file.path === `src/plugins/${pluginId}/workbench-definition.json`));
+    assert.ok(evidence.artifacts.files.some(file => file.path === `packages/${pluginId}/${manifest.version}/workbench-definition.json`));
+    await assert.rejects(fs.access(path.join(output, "credentials.json")), { code: "ENOENT" });
+    const relocated = path.join(root, "relocated", pluginId);
+    await fs.cp(output, relocated, { recursive: true });
+    const { VideoProjects } = await import(pathToFileURL(path.join(relocated, "projects.mjs")).href);
+    const projects = new VideoProjects({ stateRoot: path.join(root, "state") });
+    assert.deepEqual(projects.definition, JSON.parse(definitionBytes.toString("utf8")));
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test("route-control package includes the Manager and independently generated Web command entry", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-route-control-build-"));
   try {

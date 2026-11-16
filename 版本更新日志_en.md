@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.22 - 2026-11-17
+
+- Advance the plugin SDK to `1.4.2`. Native packages retain the public workbench definition required at runtime, restoring workbench activation in complete releases and adding a packaged import regression outside the source tree.
+
 ## 0.15.21 - 2026-11-17
 
 - Advance `io.rabiroute.manager.video` to `0.2.2`, merging workbench response discovery and the project serial-queue fix while retaining cancellation, draft and log-pagination fixes.

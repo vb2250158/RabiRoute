@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/plugin-sdk",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "type": "module",
   "license": "MIT",
   "types": "./index.d.ts",
