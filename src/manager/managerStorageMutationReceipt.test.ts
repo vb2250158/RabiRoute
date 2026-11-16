@@ -93,7 +93,7 @@ test("a real new worker rejects an old protocol command before domain access",as
  });
  const response=Promise.race([once(child,"message"),once(child,"exit").then(([code])=>{throw Error("Fixture worker exited before response: "+code);})]);
  child.send({protocolVersion:2,requestId:"old-protocol",mode:"receipt_only",fence:{applicationGenerationId:"app",managerInstanceId:"manager",storageGenerationLease:"lease",roleId:"Fixture",planId:"p"},expectedRevision:null,task:{type:"plan_update",patch:{title:"must never execute"}}});
- const [result]=await response;assert.equal(result.ok,false);assert.match(result.message,/protocol version/);assert.equal(result.protocolVersion,3);assert.deepEqual(fs.readdirSync(root),[]);
+ const [result]=await response;assert.equal(result.ok,false);assert.match(result.message,/protocol version/);assert.equal(result.protocolVersion,MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION);assert.deepEqual(fs.readdirSync(root),[]);
 });
 
 

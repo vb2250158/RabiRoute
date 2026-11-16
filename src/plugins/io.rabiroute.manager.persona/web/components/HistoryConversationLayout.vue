@@ -6,7 +6,7 @@ import { qqConversationTime } from '../../../../../ribiwebgui/src/qqChatLayout';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
 const props = defineProps<{items:HistoryConversationItem[];selected:string;search:string;loading?:boolean;detailsTitle?:string;hasDetails?:boolean;detailOpen?:boolean;infoOpen?:boolean}>();
-const emit = defineEmits<{select:[string];'update:search':[string];'update:detailOpen':[boolean];'update:infoOpen':[boolean];back:[]}>();
+const emit = defineEmits<{select:[string];search:[];'update:search':[string];'update:detailOpen':[boolean];'update:infoOpen':[boolean];back:[]}>();
 const {t,locale} = useI18n();
 const localDetail = ref(false), localInfo = ref(false), root = ref<HTMLElement>();
 const detailOpen = computed({ get: () => props.detailOpen ?? localDetail.value, set: value => { localDetail.value = value; emit('update:detailOpen', value); } });
@@ -23,7 +23,7 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
 <template>
   <div ref="root" class="history-conversations" :class="{'history-with-details':hasDetails,'history-detail-open':detailOpen,'history-dragging':dragging||details.dragging.value}" :style="style">
     <aside class="history-list" :aria-label="t('会话列表')">
-      <div class="history-search"><v-text-field :model-value="search" @update:model-value="emit('update:search',$event||'')" :placeholder="t('搜索会话或任务')" :aria-label="t('搜索会话或任务')" prepend-inner-icon="mdi-magnify" density="compact" variant="solo-filled" flat clearable hide-details /><slot name="list-actions" /></div>
+      <div class="history-search"><v-text-field :model-value="search" @update:model-value="emit('update:search',$event||'')" @keydown.enter.prevent="emit('search')" :placeholder="t('搜索会话或任务')" :aria-label="t('搜索会话或任务')" prepend-inner-icon="mdi-magnify" density="compact" variant="solo-filled" flat clearable hide-details /><slot name="list-actions" /></div>
       <v-progress-linear v-if="loading" indeterminate :aria-label="t('正在加载历史记录')" />
       <slot name="list-notice" />
       <v-list class="history-session-scroll" bg-color="transparent">

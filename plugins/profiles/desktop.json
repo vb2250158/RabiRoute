@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.16",
+      "version": "0.1.19",
       "enabled": true,
       "config": {},
       "grants": []
@@ -46,7 +46,7 @@
     {
       "id": "manager:performance",
       "package": "io.rabiroute.manager.performance",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "enabled": true,
       "config": {},
       "grants": []
@@ -170,7 +170,7 @@
     {
       "id": "manager:agent-thread-control",
       "package": "io.rabiroute.manager.agent-thread-control",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -186,7 +186,7 @@
     {
       "id": "manager:diagnostics",
       "package": "io.rabiroute.manager.diagnostics",
-      "version": "0.1.7",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -305,7 +305,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []
@@ -337,7 +337,7 @@
     {
       "id": "agent:dsh",
       "package": "io.rabiroute.agent.dsh",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": []

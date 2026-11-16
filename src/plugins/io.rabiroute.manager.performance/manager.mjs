@@ -25,16 +25,17 @@ export const activate = definePlugin({
                 }
             },
             {
-                "kind": "navigation",
-                "id": "performance",
+                "kind": "status-card",
+                "id": "performance-diagnostics",
                 "value": {
-                    "surface": "web.navigation",
+                    "surface": "shared.status",
                     "label": {
                         "fallback": "性能监控"
                     },
-                    "routeId": "global.performance",
+                    "queryId": "manager.performance-status",
+                    "rendererId": "builtin.performance-diagnostics.v1",
                     "icon": "mdi-chart-timeline-variant",
-                    "slot": "utility",
+                    "slot": "diagnostics.performance",
                     "hosts": [
                         "web"
                     ],

@@ -151,6 +151,15 @@ test("query planning streams common terms and uses postings for selective terms"
   assert.equal(rare.metrics.strategy, "postings"); assert.equal(rare.entries.length, 1);
   assert.match(common.coverage.indexVersion, /^[a-f0-9]{64}$/);
   assert.equal(common.coverage.sourceVersion, rare.coverage.sourceVersion);
+  const unifiedQuery = { limit: 10, query: 'common', includeArchives: true,
+    unified: { sort: 'relevance' as const, offset: 0, kinds: [] } };
+  const unified = searchMessageHistoryIndexResult(f.directory, unifiedQuery, f.index);
+  assert.equal(unified.metrics.strategy, 'postings', 'ranked search must evaluate the postings set once');
+  const expected = Array.from({ length: 3000 }, (_, i) => `record-${10 + i}`).sort();
+  assert.deepEqual(unified.entries.map(row => row.id), expected.slice(0, 10));
+  const second = searchMessageHistoryIndexResult(f.directory, { ...unifiedQuery,
+    unified: { ...unifiedQuery.unified, offset: 10 } }, f.index);
+  assert.deepEqual(second.entries.map(row => row.id), expected.slice(10, 20));
 });
 
 test("index generation changes remain distinct from the source snapshot version", t => {

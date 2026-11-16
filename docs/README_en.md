@@ -13,6 +13,8 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 - [Host and plugin boundaries](host-plugin-boundaries_en.md)
 
+- [Agent call history](agent-call-history_en.md) — diagnostics tabs, request and response payloads, MCP / CLI correlation and capture coverage.
+
 ## Start here
 
 - [RibiWebGUI user guide](user-guide/README_en.md): find setup, operation, and troubleshooting instructions by task.

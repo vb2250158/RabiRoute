@@ -12,6 +12,7 @@ import { createOperationSdk } from "./operation-sdk.mjs";
 import { validApiHttpMethod } from "./api-path-template.mjs";
 import { openApiWebSocket } from "./api-websocket-client.mjs";
 import { submitDeliveryToOwner, rememberDeliveryDescriptor, readDeliveryDescriptor } from "./delivery-control.mjs";
+import { createClientCallRecorder, currentCallObservation } from "./call-observation.mjs";
 
 // Keep aligned with the server skill ZIP archive ceiling (68 MiB).
 export const MAX_SKILL_DOWNLOAD_BYTES = 68 * 1024 * 1024;
@@ -232,7 +233,8 @@ async function boundedResponse(response) {
 }
 
 /** Transport only: Manager owns authorization, business state and mutation receipts. */
-function buildManagerClient({ managerUrl, credential, agentType, sessionId, config, configPath, endpointSession, discover, localHost = false, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }, networkTransport = false) {
+function buildManagerClient({ managerUrl, credential, agentType, sessionId, config, configPath, endpointSession, discover, localHost = false, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000, callHistory }, networkTransport = false) {
+  let callRecorder;
   if (!config && configPath) config = JSON.parse(readFileSync(configPath, "utf8"));
   const timeouts = createTimeoutSettings(config?.timeoutOverridesCache ?? config?.timeoutOverrides);
   let origin = managerOrigin(config?.managerUrl || managerUrl);
@@ -343,6 +345,12 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     const readOnly = selectedOperationReadOnly(options) ?? (["GET", "HEAD", "OPTIONS"].includes(method) && responseMode !== "stream" && options.onResponse === undefined);
     const responseHeaders = () => Object.fromEntries([...response.headers].filter(([name]) => !transportHeader(name) || ["content-length", "transfer-encoding", "connection", "keep-alive", "trailer"].includes(name)));
     try {
+      const observation = currentCallObservation();
+      if (observation && !nativeBinding) {
+        outgoing['x-rabiroute-call-id'] = observation.callId;
+        outgoing['x-rabiroute-call-source'] = observation.source;
+        if (observation.toolName) outgoing['x-rabiroute-tool-name'] = observation.toolName;
+      }
       response = await withSignal(() => fetchImpl(url, {
         method, headers: outgoing, redirect: "error", signal,
         ...(upload ? { body: upload.stream, duplex: "half" } : payload === undefined ? {} : { body: payload, ...(bodyStream ? { duplex: "half" } : {}) })
@@ -396,6 +404,15 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
     for (let attempt = 0; ; attempt++) {
       const requestOrigin = managerOrigin(endpoint.managerUrl);
       const identity = endpoint.meta || {};
+      const observationTarget = String(identity.rabiGuid || config?.managerGuid || `instance:${identity.managerInstanceId || requestOrigin}`);
+      if (new URL(target, requestOrigin).pathname === '/api/diagnostics/calls/client' && options.callHistoryTargetKey && options.callHistoryTargetKey !== observationTarget) {
+        return { statusCode: 0, ok: false, transportError: 'CALL_HISTORY_TARGET_CHANGED', body: 'Original call-history target is unavailable.', headers: {} };
+      }
+      if (!options.callHistoryTargetKey) {
+        callRecorder?.setTarget?.(observationTarget);
+        const scope = currentCallObservation();
+        if (scope?.target) scope.target.key = observationTarget;
+      }
       timeouts.adopt(identity);
       const verifiedModern = Boolean(transportCache.get()) && identity.apiTransport?.abi === MANAGER_TRANSPORT_ABI;
       // Authenticated exact /meta remains an Agent authorization check; public preflight is credential-free.
@@ -440,6 +457,14 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
    * reads may replay once unless replaySafe:false; mutations never replay.
    * outputPath saves bytes atomically without overwrite or printing binary. */
   async function publicRequest(method, target, options = {}, transport = verifiedRequest) {
+    if (!callRecorder) return unobservedRequest(method, target, options, transport);
+    const url = new URL(target, origin);
+    return callRecorder.run({ boundary: 'client', method, pathname: url.pathname, agentType, sessionId,
+      request: { query: Object.fromEntries(url.searchParams), queryValues: Object.fromEntries([...new Set(url.searchParams.keys())].map(key => [key, url.searchParams.getAll(key)])), headers: options.headers,
+        body: options.body ?? options.bodyText ?? options.bodyBytes ?? (options.bodyStream ? { captured: 'stream' } : undefined) } },
+      () => unobservedRequest(method, target, options, transport));
+  }
+  async function unobservedRequest(method, target, options = {}, transport = verifiedRequest) {
     const verb = String(method).toUpperCase();
     // Explicit enrolled Agent sources use their durable owner. Generic connected
     // callers use the public Manager ledger without inventing an Agent session.
@@ -791,8 +816,20 @@ function buildManagerClient({ managerUrl, credential, agentType, sessionId, conf
   const operations = createOperationSdk({ request: publicRequest, openWebSocket, requestExternal, openExternalWebSocket });
   // Business requests/streams keep their caller-owned signals. Only the cache's
   // own background metadata work is joined here (important for short CLI processes).
-  const close = async () => { metadataLifetime.abort(); try { await metadataRefresh; } catch { /* Rebuildable metadata must not replace an original receipt. */ } };
-  return { request: publicRequest, invoke, upload, download, catalog, operations, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation, close };
+  if (callHistory && !networkTransport) callRecorder = createClientCallRecorder({
+    source: callHistory.source, directory: callHistory.directory ?? (configPath ? path.join(path.dirname(configPath), 'call-history-outbox') : undefined),
+    redactValues: credential ? [credential] : [],
+    targetKey: callHistory.targetKey || config?.managerGuid || config?.managerUrl || managerUrl || 'configured-manager',
+    send: (observation, options = {}) => verifiedRequest('POST', '/api/diagnostics/calls/client', { body: observation, replaySafe: false,
+      callHistoryTargetKey: observation.target?.key, signal: options.signal ?? AbortSignal.timeout(1500) })
+  });
+  const observeCall = (toolName, request, action) => callRecorder
+    ? callRecorder.run({ boundary: 'tool', toolName, agentType, sessionId, operationId: request?.operationId, request }, action) : action();
+  const close = async () => {
+    await callRecorder?.close();
+    metadataLifetime.abort(); try { await metadataRefresh; } catch { /* Rebuildable metadata must not replace an original receipt. */ }
+  };
+  return { request: publicRequest, invoke, upload, download, catalog, operations, invokeOperation: catalog.invokeOperation, openOperation: catalog.openOperation, observeCall, close };
 }
 
 export function createManagerClient(options) { return buildManagerClient(options); }

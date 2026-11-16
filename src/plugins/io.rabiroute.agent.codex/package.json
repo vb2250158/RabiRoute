@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.agent.codex",
-  "version": "0.1.7",  "type": "module",
+  "version": "0.1.8",  "type": "module",
   "license": "MIT",
   "files": [
     "rabi.plugin.json",

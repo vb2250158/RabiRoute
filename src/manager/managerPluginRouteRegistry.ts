@@ -1,4 +1,9 @@
 import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
+
+const observedOperations = new WeakMap<IncomingMessage, string>();
+export function operationForObservedRequest(request: IncomingMessage): string | undefined {
+  return observedOperations.get(request);
+}
 import { getTimeoutMs, registerTimeoutCatalog } from "../shared/timeoutSettings.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -352,6 +357,7 @@ export class ManagerPluginRouteRegistry {
       match: { kind: "dynamic" as const, description: operation.contract.pathTemplate, methods: [operation.contract.method],
         test: (_request: IncomingMessage, url: URL) => operation.pathPattern.test(url.pathname) },
       handler: tracker.wrap((request, url, response) => {
+        observedOperations.set(request, operation.contract.operationId);
         // Capture the published contract once. Its async work retains the original activation until completion.
         response.setHeader("x-rabiroute-api-contract", operation.digest);
         let executionStarted = false;

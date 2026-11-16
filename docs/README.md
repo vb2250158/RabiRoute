@@ -13,6 +13,8 @@
 
 - [宿主与插件边界](host-plugin-boundaries.md)
 
+- [Agent 调用记录](agent-call-history.md) — 日志诊断标签卡、请求与返回正文、MCP / CLI 关联和捕获范围。
+
 ## 先看这里
 
 - [RibiWebGUI 使用手册](user-guide/README.md)：按任务找到配置、操作和排障步骤。

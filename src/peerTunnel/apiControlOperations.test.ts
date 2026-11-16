@@ -61,7 +61,7 @@ test("selection revalidates original admission after target bootstrap and before
   const pending = f.request("selection", { method: "PUT", body: JSON.stringify({ deviceId: "target" }) });
   try {
     await Promise.race([f.acquiring, pending.then(() => assert.fail("Selection settled before target acquisition."))]);
-    f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); release();
+    f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId); release();
     const response = await pending; assert.equal(response.status, 403); await response.arrayBuffer();
     assert.equal(f.runtime.selected(), "");
     await assert.rejects(fs.access(path.join(f.root, "native/tunnel.json")), { code: "ENOENT" });

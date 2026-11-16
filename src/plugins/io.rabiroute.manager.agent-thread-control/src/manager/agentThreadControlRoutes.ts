@@ -70,7 +70,8 @@ async function handleAgentThreadBody(
   context: AgentThreadControlRoutesContext,
   remoteSource?: AgentThreadRemoteSource,
   requestAuthority?: () => void,
-  trustedDeviceSource?: RabiLinkAgentPrincipal
+  trustedDeviceSource?: RabiLinkAgentPrincipal,
+  requestSignal?: AbortSignal
 ): Promise<AgentThreadControlResult> {
   // Capture only caller-selected execution fields before Route defaults are applied.
   // The request body cannot supply this internal snapshot itself.
@@ -85,6 +86,7 @@ async function handleAgentThreadBody(
       managedBody,
       context.agentThreadRequestOptions(managedBody, {
         remoteSource, requestAuthority, callerExecutionOptions,
+        ...(body.action === "read" && body.history ? { requestSignal } : {}),
         agentRequests: context.agentRequests,
         onMessageProcessingHandoff: (event) => {
           requestAuthority?.();
@@ -259,7 +261,7 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
             fence();
             const forwarded = await context.forwardPeerReply?.(invocationBody, fence);
             if (forwarded) return { status: forwarded.statusCode, body: forwarded.data };
-            const result = await handleAgentThreadBody(invocationBody, context, remoteSource, fence, deviceSource);
+            const result = await handleAgentThreadBody(invocationBody, context, remoteSource, fence, deviceSource, signal);
             try { fence(); }
             catch (error) {
               if (body.action !== "list" && body.action !== "read" && error && typeof error === "object") Object.assign(error, { uncertain: true });

@@ -114,7 +114,7 @@ test("HTTP disconnect retains accepted delivery and audit ownership until comple
 test("original caller revocation suppresses a completed role-panel result without replaying the accepted request", { timeout: 10000 }, async t => {
   const f = await fixture(t), hold = f.hold();
   const pending = f.send({ text: "undisclosed original payload" }); await hold.started;
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId); hold.release();
   const response = await pending; assert.equal(response.status, 403); assert.ok(!(await response.text()).includes("undisclosed original payload"));
   assert.equal(f.state.accepted, 1);
 });

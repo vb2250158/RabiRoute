@@ -55,9 +55,12 @@ test("seeding never rewrites an existing configured Route's explicit listener or
   fs.writeFileSync(file, original);repository.ensureDataDirs();assert.equal(fs.readFileSync(file, "utf8"), original);
 });
 
-test("XiaoAI environment defaults and explicit zero retain the same automatic request", () => {
+test("XiaoAI environment defaults and explicit zero retain the same automatic request", t => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-xiaoai-env-"));
+  t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
   for (const configured of [undefined, "0", "43210"]) {
     const env = { ...process.env };for (const key of ["XIAOAI_WEBHOOK_PORT", "WEBHOOK_PORT", "GATEWAY_PORT", "DOTENV_CONFIG_PATH"]) delete env[key];
+    env.RABIROUTE_STATE_ROOT = stateRoot;
     if (configured !== undefined) env.XIAOAI_WEBHOOK_PORT = configured;
     const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
       "const {config}=await import('./src/config.ts');process.stdout.write(JSON.stringify(config.xiaoaiWebhookPort));"],

@@ -740,7 +740,7 @@ test("late reads, reconciliation and positive no-frame replies do not create rec
   const f = await managementFixture(t), client = await f.connect("original");
   let changes = 0; f.registry.onDeliveryRecoveryEvent(() => changes++);
   const cases: Array<[string, Record<string, unknown>]> = [["scan", {}], ["threads", { action: "list" }], ["threads", { action: "read" }],
-    ["threads", { action: "creation_status" }], ["reconcile_prepared_delivery", {}], ["delivery_records", {}], ["terminal", {}], ["computer", {}]];
+    ["threads", { action: "creation_status" }], ["reconcile_prepared_delivery", {}], ["delivery_records", {}], ["terminal", {}], ["computer", { action: "control.status" }]];
   for (const [operation, params] of cases) {
     const before = client.messages.filter(message => message.type === "manageAgent").length;
     const expired = assert.rejects(f.registry.manageAgent("original", operation, params, 10), /timed out/);

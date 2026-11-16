@@ -46,6 +46,8 @@ export type ManagerWebSocketOptions = Pick<ManagerOperationOptions, "path" | "qu
   drainOnRemoteClose?: boolean;
 };
 export type ManagerClient = {
+  close(): Promise<void>;
+  observeCall<T>(toolName: string, request: unknown, action: () => Promise<T>): Promise<T>;
   request(method: string, target: string, options?: ManagerRequestOptions): Promise<ManagerReceipt>;
   invoke(method: string, target: string, options?: ManagerRequestOptions): Promise<ManagerReceipt>;
   invokeOperation(operationId: string, options?: ManagerOperationOptions): Promise<ManagerReceipt>;
@@ -61,10 +63,11 @@ export type ManagerClient = {
 };
 export function decodeManagerJsonReceipt(receipt: ManagerReceipt): ManagerReceipt;
 export function createManagerClient(options: {
-  managerUrl: string; localHost: true; timeoutMs?: number; fetchImpl?: typeof fetch;
+  managerUrl: string; localHost: true; timeoutMs?: number; fetchImpl?: typeof fetch; callHistory?: { source: string; directory?: string; targetKey?: string };
   endpointSession: { ensure(options?: { diagnostic?: boolean; forceDiscovery?: boolean }): Promise<LocalManagerEndpoint> };
 } | {
   managerUrl?: string; credential?: string; agentType?: string; sessionId?: string; timeoutMs?: number; fetchImpl?: typeof fetch;
+  callHistory?: { source: string; directory?: string; targetKey?: string };
   configPath?: string; config?: { managerUrl: string; nodeCredential?: string; managerGuid?: string; [key: string]: unknown };
   discover?: (...args: unknown[]) => Promise<unknown>;
 }): ManagerClient;

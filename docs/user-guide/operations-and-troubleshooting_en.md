@@ -16,15 +16,9 @@ Message adapter -> event record -> rule match -> AgentPacket -> handler -> Outbo
 
 Message adapter scans use background diagnostic snapshots for history evidence instead of reading shared message files on the Manager HTTP thread. History remains unconfirmed while the snapshot is warming or a read fails; refresh later. Historical records do not confirm a current login. Slow shared storage should not block Host health checks.
 
-## Start with Diagnosis Summary
+## Read runtime logs
 
-Open **Log Diagnostics**. **Diagnosis Summary** places known connection and configuration breaks first.
-
-`Path healthy` only means no known break was detected. If delivery still fails, continue through connection details and recent logs.
-
-![Log diagnostics showing the diagnosis summary before runtime, message-input, and handler states](../../assets/screenshots/webgui-diagnostics-en.png)
-
-The documentation sample is not running and is not bound to a real Desktop task, so its cards clearly show **Disabled** and **Not bound**. Fix visible breaks like these before moving to the connection details and recent logs below.
+Open **Logs & diagnostics → Runtime logs** to inspect the current Route's latest 30 output lines. Refresh reloads the original diagnostic data. This tab shows log content and its source. Connection details are available in the relevant message and Agent configuration pages.
 
 ## Locate the break with evidence
 
@@ -171,3 +165,17 @@ Collect only:
 - sanitized status screenshots.
 
 See [FAQ and support](faq-and-support_en.md) for a report template.
+
+## Inspect Agent call history
+
+Open **Logs & diagnostics → Call history**. The **Runtime logs** tab shows the current Route’s latest 30 output lines. **Performance monitor** shows resource and latency metrics and recording settings.
+
+Filter by MCP, CLI, HTTP or SDK source, session, operation, status and time. Open a call and expand a server, client transport or actual tool-result stage to inspect redacted requests and responses. Stages load on demand. The preview shows the first 65,536 characters and the complete saved stage can be downloaded. A callId correlates stages, which have distinct spanId and boundary values.
+
+Manager captures successful reads, failures and interruptions. Updated Rabi CLI and MCP clients also capture the final Agent-visible result and connection failures that never reach Manager. Offline observations remain in a client outbox and upload after reconnecting to the same Manager. Client versions, source markers and identity metadata determine coverage. Missing identity is shown explicitly. Other MCP servers and ordinary shell commands require host integration.
+
+Recording settings control server capture, body capture and the per-side size limit. Capture and bodies default to enabled with a 4 MiB limit. Credential fields are redacted before persistence. Oversized bodies are omitted and marked incomplete. Binary responses retain media type and size. Streams share the same capture budget. Metadata remains available with body capture disabled.
+
+The index and gzip payloads live under the state root at `data/.runtime/call-history`. Date directories provide physical partitioning. History is retained, with no automatic deletion or archival in this version. Client outbox entries are removed after durable server acknowledgment. The list reports write failures, dropped observations and conflicting duplicate receipts. Observation failures preserve business results. History APIs and event subscriptions are excluded from capture to avoid feedback loops.
+
+See [Agent call history](../agent-call-history_en.md) for developer contracts.

@@ -158,7 +158,9 @@ test("installer commits its autostart choice to the Manager desktop settings tru
 });
 
 test("Host owns one complete Manager and Tray application generation", () => {
-  assert.match(hostProgram, /NamedMutexLease\(HostIdentity\.MutexName\)/);
+  assert.match(hostProgram, /HostAcceptanceScope\.Validate\(stateRoot, command is null or "activate"\)/);
+  assert.match(hostProgram, /NamedMutexLease\(acceptance\?\.Mutex \?\? HostIdentity\.MutexName\)/);
+  assert.match(hostProgram, /controlPipeName: acceptance\?\.Pipe/);
   assert.match(windowsJob, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
   assert.match(windowsJob, /CREATE_SUSPENDED/);
   assert.match(windowsJob, /AssignProcessToJobObject/);
@@ -258,7 +260,8 @@ test("Host control and diagnostics cannot wedge the lifecycle owner", () => {
   assert.match(hostRuntime, /if \(!CanAdoptGeneration\(generation\.Failure\)\) return false/);
   assert.match(hostRuntime, /TrySelectPublishedManagerUrl\(_publication, generationId, out managerUrl\)/);
   assert.doesNotMatch(hostRuntime, /case "activate":[\s\S]{0,120}generation\.Ready\.BaseUrl/);
-  assert.match(hostRuntime, /server = HostProtocol\.CreateServer\(\)/);
+  assert.match(hostRuntime, /server = HostProtocol\.CreateServer\(_controlPipeName\)/);
+  assert.match(hostProtocol, /pipeName \?\? HostIdentity\.PipeName/);
   assert.match(hostRuntime, /string\.IsNullOrWhiteSpace\(request\.Command\)/);
   assert.match(hostRuntime, /catch \(Exception exception\)/);
 

@@ -437,8 +437,10 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       // be common even when their intersection identifies just one document.
       const estimate = Number(frequency.get(matchExpression, threshold + 1)?.n || 0);
       if (!estimate) return finish([]);
-      if (estimate > threshold) strategy = "ordered";
-      else orderedMembership = estimate >= 512;
+      // Ranked unified queries sort their candidate set. A write-order scan with
+      // a correlated FTS lookup repeats the postings search for every document.
+      if (!query.unified && estimate > threshold) strategy = "ordered";
+      else orderedMembership = !query.unified && estimate >= 512;
     } else strategy = "ordered";
     const args: (string | number)[] = [];
     const eligible = sourceClause(query, "s", args);

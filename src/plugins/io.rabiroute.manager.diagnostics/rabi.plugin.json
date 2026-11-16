@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.diagnostics",
-  "version": "0.1.7",
-  "displayName": "运行诊断",
-  "description": "查看路由与消息网关的运行状态",
+  "version": "0.1.11",
+  "displayName": "日志诊断",
+  "description": "查看运行日志、Agent 调用记录与性能指标",
   "icon": "mdi-stethoscope",
   "entries": {
     "manager": {
@@ -24,6 +24,7 @@
     "manager.core@1"
   ],
   "optional": [
+    "host.manager.call-history@1",
     "manager.gateway-runtime@1",
     "manager.performance@1",
     "manager.message-processing-control@1"

@@ -68,7 +68,7 @@ test("read-only native mode rejects before consuming malformed JSON and still pe
 
 test("original-node revocation suppresses a native negotiated answer without replacing its session", { timeout: 30000 }, async t => {
   const f = await fixture(t), hold = f.holdOffer(), { body } = await f.makeOffer(); const pending = f.request("/api/rabilink/video/offer", body); await hold.started;
-  assert.equal(f.receiver.status().length, 1); f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  assert.equal(f.receiver.status().length, 1); f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId); hold.release();
   const response = await pending; assert.equal(response.status, 403); assert.ok(!(await response.text()).includes("v=0")); assert.equal(f.receiver.status().length, 1);
 });
 

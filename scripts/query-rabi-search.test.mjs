@@ -17,3 +17,22 @@ test('total budget includes the response body and terminates even an uncooperati
   const meta={managerBaseUrl:'http://127.0.0.1:12345',applicationGenerationId:'generation',managerInstanceId:'manager',health:{live:true,state:'healthy'}};
   await assert.rejects(queryRabiSearch({budgetMs:30,discovery:{explicit:meta.managerBaseUrl},fetch:async url=>new URL(url).pathname==='/meta'?Response.json(meta):{ok:true,json:()=>new Promise(()=>{})}}),/deadline/);
 });
+
+test('a source exhausting its server budget still delivers partial results within the client deadline', async () => {
+  const meta = { managerBaseUrl: 'http://127.0.0.1:12345', applicationGenerationId: 'generation', managerInstanceId: 'manager', health: { live: true, state: 'healthy' } };
+  const result = await queryRabiSearch({
+    budgetMs: 500,
+    discovery: { explicit: meta.managerBaseUrl },
+    fetch: async url => {
+      if (new URL(url).pathname === '/meta') return Response.json(meta);
+      const serverBudgetMs = Number(new URL(url).searchParams.get('budgetMs'));
+      await new Promise(resolve => setTimeout(resolve, serverBudgetMs));
+      return { ok: true, json: async () => {
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return { code: 0, data: { ...meta, state: 'partial', items: [{ label: 'Available result' }] } };
+      } };
+    }
+  });
+  assert.equal(result.data.state, 'partial');
+  assert.equal(result.data.items[0].label, 'Available result');
+});

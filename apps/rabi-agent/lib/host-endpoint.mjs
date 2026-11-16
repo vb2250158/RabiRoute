@@ -6,6 +6,7 @@ import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { readPublicJson } from "./manager-discovery.mjs";
 import { businessReady } from "./endpoint-session.mjs";
 import { discoverWindowsHostIdentity } from '../../../scripts/lib/windows-host-discovery.mjs';
+import { discoverManagerIdentity } from '../../../scripts/lib/discover-manager-url.mjs';
 
 const MAX_DESCRIPTOR_BYTES = 65536;
 function nonempty(value) { return typeof value === "string" && value.trim().length > 0; }
@@ -34,6 +35,12 @@ export function createHostEndpointSession({ hostExecutable, env = process.env, s
       let descriptor, managerContext;
       const readMeta = async (...args) => { const response = await fetchImpl(...args); if (new URL(args[0]).pathname === "/meta") managerContext = managerContextFromHeaders(response.headers); return response; };
       try {
+        if (spawnSync === defaultSpawnSync) {
+          const current = await discoverManagerIdentity({ ...discoveryOptions,
+            env: { ...env, RABIROUTE_HOST_EXE: executable }, fetch: readMeta, timeoutMs, includeMeta: true, diagnostic: true });
+          configureTimeouts(current.meta.timeoutOverrides);
+          return { managerUrl: current.managerBaseUrl, meta: current.meta, managerContext };
+        }
         const result = spawnSync(executable, ["--command", "status", "--json"], {
           encoding: "utf8", windowsHide: true, shell: false, timeout: timeoutMs,
           maxBuffer: MAX_DESCRIPTOR_BYTES, env

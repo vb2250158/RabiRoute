@@ -595,7 +595,7 @@ test("source changes during original asynchronous evidence verification prevent 
 test("Node revocation during verification hides the result and prevents a native Board mutation", async t => {
   const f = await nativeBoardFixture(t); await f.register(); const hold = f.holdVerification();
   const pending = f.request("/api/message-processing/requirements/native-requirement/outcome", f.outcome); await hold.started;
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false); hold.release();
+  f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId); hold.release();
   const response = await pending; assert.equal(response.status, 403); assert.equal((await response.json()).data, undefined);
   assert.equal(new MessageProcessingBoardStore(f.boardPath, f.now).getRequirement("native-requirement")?.status, "pending_dispatch");
 });

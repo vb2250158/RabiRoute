@@ -18,7 +18,9 @@ test("HTTP enrollment and credential recovery expose public resources without an
   const authority = new LanAgentAuthority({ statePath: path.join(root, "authority.json") });
   const binding = { agentId: "worker", name: "Fixture", provider: "dsh", enabled: true, sessionId: "session-fixture" };
   fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify({ schemaVersion: 2, nodes: [{ nodeId: "node-fixture", version: "1", platform: "fixture", agents: [binding] }], tasks: [] }));
-  const registry = new LanAgentRegistry({ statePath: path.join(root, "registry.json") });
+  const registry = new LanAgentRegistry({ statePath: path.join(root, "registry.json"),
+    computerSettings: id => authority.getComputerSettings(id),
+    patchComputerSettings: (id, patch, revision, restorePaths) => authority.patchComputerSettings(id, patch, revision, restorePaths) });
   const server = http.createServer((request, response) => {
     if (request.url === "/.well-known/rabiroute-manager" || request.url === "/meta") {
       const token = String(request.headers.authorization ?? "").replace(/^Bearer /, "");
@@ -60,8 +62,11 @@ test("HTTP enrollment and credential recovery expose public resources without an
     assert.equal((await fetch(`${base}/api/lan-agent/instances/node-fixture/agents/worker/authorization`,{method:"PUT",headers:{"x-rabiroute-webgui-token":"fixture-admin"}})).status,404);
     const renamed=await fetch(`${base}/api/lan-agent/instances/node-fixture/name`,{method:"PUT",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({name:"Test computer",expectedName:""})});assert.equal(renamed.status,200,"enrollment credential renames a computer without browser login");
     const instanceView=await (await fetch(`${base}/api/lan-agent/instances`,{headers})).json();assert.equal(instanceView.instances.find((n:any)=>n.instanceId==="node-fixture").enabled,true);
-    const off=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({enabled:false,expectedEnabled:true})});assert.equal(off.status,403,"Production response authority suppresses results after self-revocation.");assert.equal((await off.json()).uncertain,true);assert.equal(authority.isNodeEnabled("node-fixture"),false,"The original mutation committed; do not resend it.");assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,403);
-    const on=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{"x-rabiroute-webgui-token":"fixture-admin","content-type":"application/json"},body:JSON.stringify({enabled:true,expectedEnabled:false})});assert.equal(on.status,200);assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,200);
+    const off=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({enabled:false,expectedEnabled:true})});
+    assert.equal(off.status,200);assert.equal((authority.getComputerSettings("node-fixture",true).settings as { enabled: boolean }).enabled,false);
+    assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,200,"Computer control disable preserves the authenticated connection.");
+    const on=await fetch(`${base}/api/lan-agent/instances/node-fixture/enabled`,{method:"PUT",headers:{"x-rabiroute-webgui-token":"fixture-admin","content-type":"application/json"},body:JSON.stringify({enabled:true,expectedEnabled:false})});assert.equal(on.status,200);
+    authority.revokeNode("node-fixture");assert.equal((await fetch(`${base}/api/lan-agent/resources`,{headers})).status,403);
     const repairTicket=authority.issueBootstrapTicket().ticket;
     const repair=await fetch(`${base}/api/lan-agent/enroll`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({ticket:repairTicket,nodeId:"node-fixture",enrollmentSecret:"r".repeat(43)})});assert.equal(repair.status,201);
     assert.equal((await fetch(`${base}/api/lan-agent/self`,{headers:{authorization:`Bearer ${token}`}})).status,403);

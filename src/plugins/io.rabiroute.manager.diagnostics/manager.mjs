@@ -56,7 +56,8 @@ export const activate = definePlugin({
         ])
             context.contributions.register(contribution);
         context.effects.add(async () => {
-            const routes = createDiagnosticsRoutes({ gatewayDiagnosticsPayload: () => statuses.readStatuses() });
+            const routes = createDiagnosticsRoutes({ gatewayDiagnosticsPayload: () => statuses.readStatuses(),
+                callHistory: context.services.optional("host.manager.call-history@1") });
             const registration = await api.registerOperationsAsync(routes.operations, context.lifecycle.signal);
             return () => registration.dispose();
         }, "activate Manager diagnostics operations");

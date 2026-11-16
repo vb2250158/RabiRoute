@@ -5,10 +5,10 @@ import type { MessageEndpointCatalogEntry } from '../src/messageEndpoints/messag
 const endpoints=[{type:'napcat',title:'NapCat / OneBot',icon:'mdi-message-badge-outline'},{type:'speech',title:'语音消息端',icon:'mdi-microphone-message'},{type:'heartbeat',title:'定时触发',icon:'mdi-timer-outline'}] as MessageEndpointCatalogEntry[];
 test('built-in delivery history stays available alongside configured endpoint names and icons',()=>{
   const channels=historyChannels({adapters:['speech','napcat','heartbeat','napcat'],chatCategories:['agent','panel','replies','aiui']},endpoints);
-  assert.equal(channels.length,7);
+  assert.equal(channels.length,8);
   for(const endpoint of endpoints){const channel=channels.find(item=>item.adapter===endpoint.type)!;assert.equal(channel.label,endpoint.title);assert.equal(channel.icon,endpoint.icon);}
   assert.equal(channels.some(channel=>/全部|all/i.test(channel.id+channel.label)),false);
-  assert.deepEqual(historyChannels({adapters:[],chatCategories:['agent','replies']}).map(row=>row.id),['chat:agent','chat:panel','chat:replies','endpoint:system']);
+  assert.deepEqual(historyChannels({adapters:[],chatCategories:['agent','replies']}).map(row=>row.id),['chat:agent','agent:sessions','chat:panel','chat:replies','endpoint:system']);
   assert.equal(historyChannels({adapters:['speech'],chatCategories:[]},endpoints).some(item=>item.adapter==='napcat'),false);
 });
 test('new plugin metadata and missing-plugin rows keep the original configured endpoint identity',()=>{

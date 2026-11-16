@@ -77,7 +77,7 @@ test('a never-started avatar download cancels and closes its original file befor
 
 test('a revoked node cannot disclose the current persona resource',async t=>{
   const f=await fixture(t,true);assert.equal((await f.call('persona-reference')).status,200);
-  f.authority.setNodeEnabled(f.credential.nodeId,false,true);
+  f.authority.revokeNode(f.credential.nodeId);
   assert.equal((await f.call('persona-reference')).status,403);assert.equal((await f.call('persona-document')).status,403);
 });
 

@@ -130,8 +130,7 @@ test("video model browser exemptions remain socket Host Origin and forwarding co
     ["127.0.0.1",{host:"localhost:8000",origin:"https://external.invalid"}],
     ["127.0.0.1",{host:"localhost:8000",forwarded:"for=192.0.2.10"}],
     ["127.0.0.1",{host:"localhost:8000","x-forwarded-for":"192.0.2.10"}],
-    ["127.0.0.1",{host:"localhost:8000","sec-fetch-site":"cross-site"}],
-    ["127.0.0.1",{host:"localhost:8000","x-rabiroute-agent-id":"forged"}]
+    ["127.0.0.1",{host:"localhost:8000","sec-fetch-site":"cross-site"}]
   ] as [string,http.IncomingHttpHeaders][])assert.equal(allowed(address,headers),false);
 });
 

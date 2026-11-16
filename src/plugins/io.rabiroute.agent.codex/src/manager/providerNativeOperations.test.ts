@@ -83,6 +83,17 @@ test("Codex complete large events require an explicit larger page budget without
   await assert.rejects(f.reader.read(sessionId), /does not belong/);
 });
 
+test("message-view filtering advances through large hidden events without exhausting the visible page budget", async t => {
+  const rows = [metadata, JSON.stringify({ type: "response_item", payload: { type: "function_call_output", output: "x".repeat(4000) } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "task_complete", last_agent_message: "Final reply" } })];
+  const f = temporary(t, rows.join("\n") + "\n");
+  const page = await f.reader.read(sessionId, { maxBytes: 512, includeRecord: (value: any) => value.type === "event_msg" });
+  assert.equal(page.entries.length, 1);
+  assert.equal(page.entries[0]!.sequence, 3);
+  assert.equal(page.coverage.scannedRecords, 3);
+  assert.equal(page.nextCursor, null);
+});
+
 test("Codex compressed native histories reuse the same decoded archive for subsequent pages", { skip: !(zlib as any).zstdCompressSync }, async t => {
   const f = temporary(t, metadata + "\n"), archived = f.rollout + ".zst";
   fs.writeFileSync(archived, (zlib as any).zstdCompressSync(Buffer.from(metadata + "\n" + JSON.stringify({ type: "response_item", payload: { id: "archive-original" } }) + "\n")));

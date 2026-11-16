@@ -93,6 +93,6 @@ test("authenticated nodes use native style validation without an Agent registrat
   });
   const first = await invoke(); assert.equal(first.status, 200); assert.equal((await first.json()).data.violations[0].ruleId, "AUTH-ONLY-RULE");
   const reached = new Promise<void>(resolve => { entered = resolve; }); gate = new Promise<void>(resolve => { release = resolve; });
-  const pending = invoke(); await reached; authority.setNodeEnabled(credential.nodeId, false, true); authority.setNodeEnabled(credential.nodeId, true, false); release!();
+  const pending = invoke(); await reached; authority.revokeNode(credential.nodeId); authority.enroll(authority.issueBootstrapTicket().ticket, credential.nodeId); release!();
   const revoked = await pending; assert.equal(revoked.status, 403); assert.ok(!(await revoked.text()).includes("AUTH-ONLY-RULE"));
 });

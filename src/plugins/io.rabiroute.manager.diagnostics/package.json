@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.diagnostics",
-  "version": "0.1.7",
+  "version": "0.1.11",
   "type": "module",
   "license": "MIT",
   "files": [

@@ -20,7 +20,7 @@ type Cursor = {
   size: number;
   modified: number
 };
-type HistoryOptions = { cursor?: string; limit?: number; maxBytes?: number; signal?: AbortSignal };
+type HistoryOptions = { cursor?: string; limit?: number; maxBytes?: number; signal?: AbortSignal; includeRecord?: (record: unknown) => boolean };
 
 export class CodexNativeReadError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -78,6 +78,12 @@ export class CodexNativeHistoryReader {
         sequence++;
         offset = nextOffset;
         warnings.push({ sequence, errorCode: "CODEX_HISTORY_ROW_INVALID" });
+        return true;
+      }
+      if (options.includeRecord && !options.includeRecord(record)) {
+        scanned++;
+        sequence++;
+        offset = nextOffset;
         return true;
       }
       const size = Buffer.byteLength(line);

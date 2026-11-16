@@ -251,10 +251,14 @@ test("atomic release keeps old HTML, lazy assets, documentation and module entry
   assert.deepEqual(restored.operation("publish"), receipt);
 });
 
-test("Web release construction rejects a declared but missing plugin entry", async context => {
+test("Web release records a declared but missing plugin entry without hiding healthy resources", async context => {
   const sample = await fixture(context);
   await fs.unlink(path.join(sample.packageRoot, "dist/plugins/packages/example/web/client.mjs"));
-  await assert.rejects(sample.candidate(), /Web Bundle entry is missing: example/);
+  const candidate = await sample.candidate();
+  const manifest = await verifyWebPatch(candidate.source, candidate.revision);
+  assert.ok(manifest.moduleDiagnostics?.some(item => item.pluginId === "example" && item.code === "PLUGIN_WEB_RESOURCE_INVALID" && /ENOENT/.test(item.message)));
+  assert.equal(manifest.modules.some(item => item.pluginId === "example"), false);
+  assert.ok(manifest.files.some(item => item.path === "web/index.html"));
 });
 
 test("code and Web share one durable publication and recover together", async context => {

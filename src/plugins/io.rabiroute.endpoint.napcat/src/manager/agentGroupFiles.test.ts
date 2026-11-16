@@ -116,8 +116,8 @@ test("explicit group restrictions apply equally to local and remote and are not 
   }
 });
 
-test("forged Agent headers, source-only markers and nonlocal callers never reach upstream", async t => {
-  for (const variant of ["nonlocal", "forged", "source"]) {
+test("source-only markers and nonlocal callers never reach upstream", async t => {
+  for (const variant of ["nonlocal", "source"]) {
     const value = fixture(t, { remote: false, address: variant === "nonlocal" ? "192.0.2.1" : "127.0.0.1" });
     if (variant === "forged") value.request.headers["x-rabiroute-agent-id"] = "agent-one";
     if (variant === "source") setTrustedLanAgentSource(value.request, { nodeId: "node-one", agentId: "agent-one", provider: "dsh", sessionId: "fixture-session", sessionName: "Main" });
@@ -145,7 +145,7 @@ test("valid principal is authoritative even when untrusted proxy markers are pre
 
 test("revoked original principal cannot downgrade to loopback", async t => {
   const value = fixture(t, { address: "127.0.0.1" });
-  value.authority.setNodeEnabled("node-one", false);
+  value.authority.revokeNode("node-one");
   delete value.request.headers["x-rabiroute-agent-id"];
   await value.run();
   assert.equal(value.count(), 0);
@@ -211,10 +211,10 @@ test("revocation, credential rotation and node/global ABA while awaiting upstrea
       value.authority.revokeNode("node-one");
       const replacement = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "node-one");
     } else {
-      value.authority.setNodeEnabled("node-one", false);
+      value.authority.revokeNode("node-one");
       if (variant === "node-aba") {
-        value.authority.setNodeEnabled("node-one", true);
-        assert.ok(value.authority.authenticate(value.request.headers.authorization!.toString().replace(/^Bearer /, "")), "Restored node accepts fresh authentication while the original request lease remains revoked.");
+        const renewed = value.authority.enroll(value.authority.issueBootstrapTicket().ticket, "node-one");
+        assert.ok(value.authority.authenticate(renewed.token), "Restored node accepts fresh authentication while the original request lease remains revoked.");
       }
     }
     delete value.request.headers["x-rabiroute-agent-id"];

@@ -44,8 +44,9 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
   const agentType = option("--agent-type");
   const sessionId = option("--id");
 
-  const client = createManagerClient({ config, configPath, agentType, sessionId, fetchImpl, discover });
+  const client = createManagerClient({ config, configPath, agentType, sessionId, fetchImpl, discover, callHistory: { source: 'cli' } });
   try {
+  return await client.observeCall('cli', { operationId, method, target }, async () => {
   if (downloading) {
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -165,5 +166,6 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, d
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
   }
+  });
   } finally { await client.close(); }
 }

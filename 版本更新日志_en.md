@@ -6,6 +6,22 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.17 - 2026-11-17
+
+- Isolated publication verification copies the built owner and its relative dependency closure, fingerprints every included module, and fixes missing-module failures for Web candidates.
+- Persona pages wrap within the available narrow-screen width. Terminal admission failures remove newly created empty sessions. Backend regression runs resolve shared Web aliases and update historical protocol and explicit-setting fixtures while retaining real credential-revocation and in-flight result protection.
+- Agent call history persists CLI, MCP, HTTP and SDK observations with original call identities, deduplication and pending-write state. Diagnostics separates runtime logs, calls and performance, loading bodies on demand. Submitted filters remain stable during event refresh and pagination.
+- Search API testing supports the persona and its bound primary Agent, editable parameters, coverage and raw responses. Session history retains native pagination and cancels read-only work when the client disconnects. Sends and uncertain receipts retain their original IDs.
+- Plugin versions are `io.rabiroute.agent.codex` `0.1.8`, `io.rabiroute.agent.dsh` `0.1.7`, `io.rabiroute.manager.agent-thread-control` `0.1.6`, `io.rabiroute.manager.diagnostics` `0.1.11`, `io.rabiroute.manager.performance` `0.1.5` and `io.rabiroute.manager.persona` `0.1.19`.
+- Advance the standalone Agent package to `0.4.7` and the MCP package to `0.2.6`, synchronizing their lockfiles. CLI/MCP observation outboxes clear entries after durable acknowledgement.
+- Consolidate Agent search, call history, message assembly, delivery envelope and session terminology documents, preserving their implementation-stage statements and generic public example workspaces.
+
+- Persona message history gains an Agent sessions tab with second-level tabs for configured local and remote Agents, session search, pagination and native history reads. Codex and DSH retain their original cursors. The conversation displays user inputs and final replies.
+
+## Workflow update - 2026-11-16
+
+- Task retrieval in Rabi-connected workspaces completes at least one `/api/search`, reads contents, coverage and real entries, then chooses detail queries, keyword changes or local search. Known files, previous standards and direct collaboration follow the same sequence. When Rabi is unavailable, record the actual error before falling back.
+- The search Skill summary and invocation prompt use the unified entry and explicitly read `label`, `excerpt` and `handle`, querying all roles and sources by default.
 ## 0.15.16 - 2026-11-17
 
 - Cover Xiaomi latest-recording discovery and distinguish work switches from credential revocation in native read tests.
@@ -52,6 +68,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - `io.rabiroute.endpoint.napcat` advances to `0.1.11`. When an expired short-ID history anchor returns retcode 200, one bounded recent page in the same conversation can recover the exact message. Original ID/target checks and deadlines remain, with no added recovery read after transport failure or cancellation.
 
+- Persona message history adds Search API test beside Refresh channels. The dialog uses the persona or its configured primary Agent session, accepts editable parameters and shows the actual request, full response, coverage gaps and call handles. Persona advances to 0.1.17.
+
+- Reserve response delivery and body-reading time in the unified-search helper so a slow source exhausting its budget preserves results from other sources.
+- Ranked unified-message search evaluates the full-text candidate set once, eliminating repeated per-document full-text lookups for common terms while preserving write-order queries for ordinary timelines.
+- Include the version metadata required to start the MCP server in Windows runtime packages.
+- Capture requests, responses and final results from the unified CLI entry alongside the existing CLI entry.
+- Local MCP and CLI share asynchronous discovery and verified Manager metadata, avoiding connection failures caused by empty synchronous Windows Host output.
+
+- The Runtime logs tab shows current Route logs and refresh. Connection/status cards, manual triggers and Route controls are removed from this tab with their page logic. Diagnostics advances to 0.1.10.
+
+- Performance monitor is available as a Logs & diagnostics tab with one sidebar entry. Existing `/performance` bookmarks share the original performance page, and tab changes preserve settings drafts. Diagnostics advances to 0.1.9 and performance to 0.1.5.
+
 - Synchronize the generated Agent capability catalog with the desktop voice assistant so clean builds match tracked source.
 
 ## 0.15.5 - 2026-11-16
@@ -62,6 +90,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Updated io.rabiroute.manager.persona to 0.1.16. Initial history, pagination and automatic updates use saved names and summaries, with live task metadata on manual refresh. The first event connection reuses the initial read to reduce duplicate requests.
 
+
+- Logs & diagnostics adds Runtime diagnostics and Call history tabs. Manager HTTP, Rabi MCP and CLI capture requests, responses and final tool results, with session/source/operation/status/time filters, stage downloads, live updates and capture settings. Payloads are redacted before persistence, with target-scoped client outboxes for offline observations. Diagnostics plugin advances to 0.1.8.
 
 - Generate the desktop assistant recognition-check sample using system speech; keep public test fixtures and the shared PCM generator in test directories while private runtime data remains ignored.
 - Add React dependencies required by the Web build; retain reads and receipt reconciliation when an MCP write outcome is uncertain to avoid repeated dispatch.

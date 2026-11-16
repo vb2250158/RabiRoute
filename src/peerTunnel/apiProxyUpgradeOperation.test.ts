@@ -172,10 +172,10 @@ test("retirement waits for native target acquisition and does not start a stream
   await retiring; assert.equal(await opening, "closed"); assert.equal(f.receiver.streams.size, 0); assert.equal(f.paths.length, 0);
 });
 
-test("node disable/re-enable cannot disclose another byte through the original admitted proxy", { timeout: 15000 }, async t => {
+test("node credential replacement cannot disclose another byte through the original admitted proxy", { timeout: 15000 }, async t => {
   const f = await fixture(t), received = deferred<unknown>(); const channel = await f.open({ onMessage: value => received.resolve(value) });
   channel.send("before"); assert.equal(await received.promise, "before");
-  f.authority.setNodeEnabled(f.credential.nodeId, false, true); f.authority.setNodeEnabled(f.credential.nodeId, true, false);
+  f.authority.revokeNode(f.credential.nodeId); f.authority.enroll(f.authority.issueBootstrapTicket().ticket, f.credential.nodeId);
   channel.send("revoked"); await channel.closed; await f.registration.dispose();
   assert.deepEqual(f.payloads.map(value => value.toString()), ["before"]); assert.equal(f.caller.closed, false);
 });
@@ -222,7 +222,7 @@ test("revocation while a native frame is queued sends no later data and preserve
   const f = await fixture(t), release = deferred(), channel = await f.open({ onMessage: () => {} });
   try {
     f.frameGate(release.promise); channel.send(Buffer.alloc(256 * 1024, 9)); await f.frameWaiting.promise;
-    f.authority.setNodeEnabled(f.credential.nodeId, false, true); release.resolve(); await channel.closed; await f.registration.dispose();
+    f.authority.revokeNode(f.credential.nodeId); release.resolve(); await channel.closed; await f.registration.dispose();
     assert.equal(f.wireSizes.length, 0, "A frame queued before revocation must recheck authority at actual dispatch.");
     assert.equal(f.caller.closed, false); assert.ok(Number.isFinite(await f.caller.ping()));
   } finally {

@@ -230,7 +230,7 @@ function nativeComputerOperations(): ApiPublishedOperation[] {
   const definitions = [
     ...createPeerControlOperations({} as Parameters<typeof createPeerControlOperations>[0]),
     ...createPeerProxyHttpOperations({} as Parameters<typeof createPeerProxyHttpOperations>[0]),
-    ...createLanAgentManagementOperations({} as Parameters<typeof createLanAgentManagementOperations>[0]),
+    ...createLanAgentManagementOperations({ registry: {} } as Parameters<typeof createLanAgentManagementOperations>[0]),
     ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => ({ contract: interactiveApiContract(route) }))
   ];
   const ids = new Set(["manager.rabilink.peer.servers.read", "manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"]);

@@ -13,7 +13,7 @@ function fixture(t: TestContext) {
   fs.mkdirSync(path.dirname(config), { recursive: true });
   const base = path.join(root, "data", "napcat");
   fs.mkdirSync(base, { recursive: true });
-  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789, workingDir,
+  const instance = { id: "bot", botUserId: "10000", gatewayPort: 8789, workingDir, launchCommand: "fixture-launcher",
     httpUrl: "http://127.0.0.1:12345", webuiUrl: "http://127.0.0.1:6099/webui" };
   const ctx = { rootDir: root, getRuntimes: () => [{ definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } }],
     normalizeNapCatInstances: () => [instance], appendLog: () => {}, checkHttpEndpoint: async () => true };

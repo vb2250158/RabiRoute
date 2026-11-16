@@ -96,6 +96,8 @@ export type AgentThreadRequest = {
   limit?: number;
   offset?: number;
   threadId?: string;
+  /** Read the original provider's paged native history without changing the task. */
+  history?: { cursor?: string; limit?: number };
   deliveryId?: string;
   title?: string;
   prompt?: string;
@@ -200,6 +202,8 @@ export type AgentThreadRequestOptions = {
   callerExecutionOptions?: EndpointDeliveryOptions["callerExecutionOptions"];
   /** Original HTTP admission fence, captured by the Manager route, never by request JSON. */
   requestAuthority?: () => void;
+  /** Original request cancellation for explicitly cancellable read-only history. */
+  requestSignal?: AbortSignal;
   /** Target-local new-work admission only; original DSBot receipt reads do not call this guard. */
   assertNewAgentTask?: () => void;
   remoteSource?: AgentThreadRemoteSource;
@@ -1007,6 +1011,13 @@ async function executeAgentThreadRequest(
   if (action === "read") {
     const agentAdapter = threadAgentAdapter(request);
     const threadId = normalizeThreadId(request.threadId);
+    if (request.history !== undefined) {
+      const history = await invokeScopedAgentManagerOperation(agentAdapter, "threads.history", {
+        sessionId: threadId, cursor: request.history.cursor, limit: request.history.limit,
+        ...(agentAdapter === "dsh" ? { baseUrl: await dshBaseUrlFor(options) } : {})
+      }, { assertCurrent: options.requestAuthority, signal: options.requestSignal });
+      return { statusCode: 200, data: { action, agentAdapter, threadId, history } };
+    }
     const thread = await readAgentThreadForAdapter(agentAdapter, threadId, options, driver);
     const deliveryId = optionalText(request.deliveryId, "deliveryId", 200) || undefined;
     const rolloutReceiptConfirmed = Boolean(

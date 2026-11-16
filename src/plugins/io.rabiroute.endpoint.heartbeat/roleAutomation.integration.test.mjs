@@ -30,6 +30,8 @@ test("independent role schedules use original local, instance and peer thread ro
   const calls = [], diagnostics = [];
   let complete;
   const delivered = new Promise(resolve => { complete = resolve; });
+  let completeOffline;
+  const offlineFinished = new Promise(resolve => { completeOffline = resolve; });
   const receipt = request => ({ statusCode: 200, data: { dsBot: { state: "accepted", botScopeId: "scope", botId: "bot", deliveryId: request.deliveryId } } });
   const record = (kind, request) => {
     assert.match(request.dsBot.scheduledAt, /^\d{4}-\d{2}-\d{2}T.*Z$/);
@@ -44,7 +46,10 @@ test("independent role schedules use original local, instance and peer thread ro
     async peer(owner, request) { assert.deepEqual(owner, peerBinding); record("peer", request); return receipt(request); }
   };
   const ports = {
-    managerOperationalLog: { record(_level, event, detail) { diagnostics.push({ event, detail }); } },
+    managerOperationalLog: { record(_level, event, detail) {
+      diagnostics.push({ event, detail });
+      if (event === "role_automation_delivery_failed" && detail.automationRuleId === "offline") completeOffline();
+    } },
     agentThreadRequestOptions(request, extra) { return { allowedWorkspaces: [], dshBaseUrl: request.dshBaseUrl, ...extra,
       async invokeAgentOperation(provider, operation, payload) {
         assert.equal(provider, "dsh"); assert.equal(operation, "ds-bot.request"); assert.equal(payload.baseUrl, target.dshBaseUrl);
@@ -58,13 +63,12 @@ test("independent role schedules use original local, instance and peer thread ro
   const scheduler = createOwnedRuntime(ports).createScheduler(source);
   t.after(async () => { await scheduler.stop(); await source.dispose(); });
   await scheduler.start();
-  await Promise.race([delivered, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("Native routes did not receive their schedules.")), 5000); timer.unref(); })]);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await Promise.race([Promise.all([delivered, offlineFinished]), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("Native routes did not finish their schedules.")), 5000); timer.unref(); })]);
   await scheduler.stop();
   assert.deepEqual(new Set(calls.map(call => call.kind)), new Set(["local", "remote", "peer"]));
   assert.ok(diagnostics.some(item => item.event === "role_automation_delivery_failed" && item.detail.automationRuleId === "offline"));
   const ledger = (await fs.readFile(path.join(root, "ledger", "automation-executions.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
   for (const call of calls) assert.ok(ledger.some(item => item.runId === call.request.deliveryId && item.scheduledAt === call.request.dsBot.scheduledAt));
   assert.equal(ledger.filter(item => item.status === "accepted").length, 3);
-  assert.equal(ledger.filter(item => item.status === "failed").length, 1);
+  assert.equal(ledger.filter(item => item.status === "failed").length, 1, JSON.stringify({ diagnostics, ledger }));
 });

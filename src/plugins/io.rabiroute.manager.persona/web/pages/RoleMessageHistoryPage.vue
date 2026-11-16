@@ -42,3 +42,7 @@ onBeforeUnmount(() => { events?.close(); });
     <v-alert v-else type="info" variant="tonal">{{ t('请选择或新建角色。') }}</v-alert>
   </div>
 </template>
+
+<style scoped>
+.page-shell { grid-template-columns: minmax(0, 1fr); }
+</style>

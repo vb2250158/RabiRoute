@@ -97,6 +97,7 @@ $requiredPortableRuntimeFiles = @(
     "apps/rabi-agent/lib/operation-tool-definitions.mjs",
     "apps/rabi-agent/lib/host-endpoint.mjs",
     "apps/rabi-mcp/knowledge-mcp.mjs",
+    "apps/rabi-mcp/package.json",
     "apps/rabi-mcp/lib/operation-tools.mjs",
     "apps/rabi-mcp/lib/api-tools.mjs",
     "apps/rabi-mcp/lib/manager-client.mjs",
