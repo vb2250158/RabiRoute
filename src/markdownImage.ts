@@ -191,7 +191,7 @@ async function launchBrowser(profileDir: string, diagrams = false): Promise<{ pr
       });
       return { process: child, port };
     } catch (error) {
-      child.kill();
+      await stopMarkdownBrowser(child);
       lastError = error instanceof Error ? error : new Error(String(error));
       if (process.env.RABIROUTE_MARKDOWN_BROWSER_PATH) break;
     }
@@ -380,7 +380,15 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
 }
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
-export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts };
+export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts, removeBrowserProfile, stopMarkdownBrowser };
+
+async function removeBrowserProfile(profileDir: string, tempRoot: string, remove = fs.promises.rm): Promise<void> {
+  if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
+    // Node retries every child and ancestor of a locked Chromium profile. Nested
+    // retries multiply filesystem work and starve unrelated Manager requests.
+    await remove(profileDir, { recursive: true, force: true, maxRetries: 0 });
+  }
+}
 
 /** Only fenced Mermaid diagrams are executed by the trusted local renderer. */
 export function mermaidDiagramSource(markdown: string): string | undefined {
@@ -422,6 +430,16 @@ export async function renderMarkdownFileToPngPages(file: string): Promise<Buffer
     images.set(reference, `data:${mime};base64,${bytes.toString("base64")}`);
   }));
   return renderMarkdownImages(markdown, true, { images, diagrams: [] });
+}
+
+async function stopMarkdownBrowser(browser: ChildProcessWithoutNullStreams): Promise<void> {
+  if (browser.pid === undefined || browser.exitCode !== null || browser.signalCode !== null) return;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => { browser.off("close", onClose); reject(new Error("Markdown browser did not exit before cleanup.")); }, markdownImageSettings.timeoutMs);
+    const onClose = () => { clearTimeout(timeout); resolve(); };
+    browser.once("close", onClose);
+    browser.kill();
+  });
 }
 
 async function renderMarkdownImages(markdown: string, paginate: boolean, document?: { images: ReadonlyMap<string, string>; diagrams: Array<{ id: string; source: string }> }): Promise<Buffer[]> {
@@ -474,9 +492,7 @@ async function renderMarkdownImages(markdown: string, paginate: boolean, documen
     }
     return await captureHtml(launched.port, markdownImageHtml(markdown));
   } finally {
-    browser?.kill();
-    if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
-      await fs.promises.rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
+    if (browser) await stopMarkdownBrowser(browser);
+    await removeBrowserProfile(profileDir, tempRoot);
   }
 }

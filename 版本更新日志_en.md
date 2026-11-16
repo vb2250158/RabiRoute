@@ -6,11 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.5 - 2026-11-16
+
+- Integrate single-pass Markdown browser-profile cleanup with the desktop voice assistant and test-fixture changes; wait for the owned browser to exit before cleanup and retain ownership checks, original errors, and both version records.
+
 ## 0.15.4 - 2026-11-16
 
 - Generate the desktop assistant recognition-check sample using system speech; keep public test fixtures and the shared PCM generator in test directories while private runtime data remains ignored.
 - Add React dependencies required by the Web build; retain reads and receipt reconciliation when an MCP write outcome is uncertain to avoid repeated dispatch.
 - Cover Xiaomi Home recording operations and QQ merged-forward registrations against their existing contracts and connection permissions.
+- Clean temporary Markdown browser profiles in one pass. Locked files retain their original error, avoiding recursive retry amplification that can starve Manager page and asset reads. Existing temporary-directory ownership checks remain enforced.
 
 ## 0.15.3 - 2026-11-15
 
