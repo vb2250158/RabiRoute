@@ -24,6 +24,8 @@ const json = (response: http.ServerResponse, status: number, body: unknown) => {
   response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(body));
 };
 const fence = { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance" };
+type FixtureChange = "work-disabled" | "work-toggle" | "global-aba" | "credential-revoked" | "credential-replaced";
+const providerBody = JSON.stringify([{ entity_id: "sensor.fixture", state: "fixture-provider-state", attributes: {}, last_updated: "2026-01-01T00:00:00Z" }]);
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 async function fixture(t: TestContext, handler: http.RequestListener) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaomi-authority-"));
@@ -31,7 +33,12 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
   const global = new RabiGlobalConfigStore(root);
   global.patch({ webguiLan: { enabled: true } });
   const credential = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-  const binding = { agentId: "worker", provider: "dsh", sessionId: "fixture-session" };
+  const headers = { authorization: `Bearer ${credential.token}`, "x-rabiroute-expected-application-generation-id": fence.applicationGenerationId, "x-rabiroute-expected-manager-instance-id": fence.managerInstanceId };
+  const reenroll = () => {
+    authority.revokeNode("fixture-node");
+    const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
+    return { ...headers, authorization: `Bearer ${replacement.token}` };
+  };
   const server = http.createServer((request, response) => {
     const access = evaluateLanAgentRequest(request, authority, true, () => global.getLanAgentAdmissionPolicy());
     if (access.kind !== "agent") { json(response, 403, { error: "ingress denied" }); return; }
@@ -42,15 +49,12 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
   const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, authority, global, url: `http://127.0.0.1:${address.port}/api/agent/xiaomi-home`,
-    headers: { authorization: `Bearer ${credential.token}`, "x-rabiroute-agent-id": "worker", "x-rabiroute-expected-application-generation-id": fence.applicationGenerationId, "x-rabiroute-expected-manager-instance-id": fence.managerInstanceId },
-    revoke(mode: string) {
+    headers, reenroll,
+    change(mode: FixtureChange) {
       if (mode === "global-aba") { global.patch({ webguiLan: { enabled: false } }); global.patch({ webguiLan: { enabled: true } }); }
-      else if (mode === "binding") authority.setNodeEnabled("fixture-node", false);
-      else if (mode === "reenroll") {
-        authority.revokeNode("fixture-node");
-        const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, "fixture-node");
-      }
-      else { authority.setNodeEnabled("fixture-node", false); if (mode === "agent-aba") authority.setNodeEnabled("fixture-node", true); }
+      else if (mode === "credential-replaced") reenroll();
+      else if (mode === "credential-revoked") authority.revokeNode("fixture-node");
+      else { authority.setNodeEnabled("fixture-node", false); if (mode === "work-toggle") authority.setNodeEnabled("fixture-node", true); }
     }
   };
 }
@@ -64,38 +68,48 @@ test("authenticated remote Agent reaches inventory and deployment without WebGUI
   for (const suffix of ["/resources", "/deployment"]) { const response = await fetch(f.url + suffix, { headers: f.headers }); assert.equal(response.status, 200); }
 });
 
-for (const mode of ["disable", "agent-aba", "global-aba", "binding", "reenroll"]) {
-  test(`original Xiaomi lease rejects settings body continuation after ${mode}`, async t => {
+for (const { mode, revoked } of [
+  { mode: "work-disabled", revoked: false }, { mode: "work-toggle", revoked: false },
+  { mode: "global-aba", revoked: true }, { mode: "credential-revoked", revoked: true }, { mode: "credential-replaced", revoked: true }
+] as const) {
+  test(`original Xiaomi lease ${revoked ? "rejects" : "preserves"} settings body continuation after ${mode}`, async t => {
     const entered = deferred(); const gate = deferred(); t.after(gate.resolve); let writes = 0;
     const f = await fixture(t, (request, response) => invokeFixtureXiaomiOperation(request, new URL(request.url!, "http://fixture.invalid"), response,
       context({ update: () => { writes++; return { secret: "not-disclosed" }; } }, async () => { entered.resolve(); await gate.promise; return { settings: {}, revision: "fixture" } as never; })));
     const pending = fetch(f.url + "/settings", { method: "PUT", headers: f.headers, body: "{}" });
-    await entered.promise; f.revoke(mode); gate.resolve(); const response = await pending;
-    assert.equal(response.status, 403); assert.match(await response.text(), /not_started/); assert.equal(writes, 0);
+    await entered.promise; f.change(mode); gate.resolve(); const response = await pending;
+    const body = await response.text();
+    assert.equal(response.status, revoked ? 403 : 200); assert.equal(writes, revoked ? 0 : 1);
+    if (revoked) { assert.match(body, /not_started/); assert.doesNotMatch(body, /not-disclosed/); }
+    else { assert.deepEqual(JSON.parse(body), { code: 0, data: { secret: "not-disclosed" } }); assert.equal(f.authority.isNodeEnabled("fixture-node"), mode === "work-toggle"); }
   });
-  test(`provider body rechecks original Xiaomi lease after ${mode}`, async t => {
+  test(`provider body ${revoked ? "rejects disclosure" : "remains available"} after ${mode}`, async t => {
     const entered = deferred(); const gate = deferred(); t.after(gate.resolve);
     const f = await fixture(t, (request, response) => {
-      const client = new XiaomiHomeManagerApiClient({ runtimeDir: f.root }, async () => Object.assign(new Response("[]"), {
-        text: async () => { entered.resolve(); await gate.promise; return "[]"; }
+      const client = new XiaomiHomeManagerApiClient({ runtimeDir: f.root }, async () => Object.assign(new Response(providerBody), {
+        text: async () => { entered.resolve(); await gate.promise; return providerBody; }
       }), "fixture-provider-token");
       invokeFixtureXiaomiOperation(request, new URL(request.url!, "http://fixture.invalid"), response, context({ client }, async () => ({} as never)));
     });
-    const pending = fetch(f.url + "/resources", { headers: f.headers });
+    const pending = fetch(f.url + "/resources?view=detail", { headers: f.headers });
     await Promise.race([entered.promise, pending.then(response => assert.fail(`Provider body was not reached before HTTP ${response.status}.`))]);
-    f.revoke(mode); gate.resolve();
-    const response = await pending; assert.equal(response.status, 403); assert.match(await response.text(), /not_started/);
+    f.change(mode); gate.resolve();
+    const response = await pending, body = await response.text(); assert.equal(response.status, revoked ? 403 : 200);
+    if (revoked) { assert.match(body, /not_started/); assert.doesNotMatch(body, /fixture-provider-state|fixture-provider-token/); }
+    else { assert.equal(JSON.parse(body).data.items[0].state, "fixture-provider-state"); assert.equal(f.authority.isNodeEnabled("fixture-node"), mode === "work-toggle"); }
   });
 }
 
-test("revoked loopback-shaped Agent cannot use WebGUI or localhost fallback", async t => {
+for (const mode of ["credential-revoked", "credential-replaced"] as const) {
+test(`${mode} loopback-shaped Agent cannot use WebGUI or localhost fallback`, async t => {
   let reads = 0;
   const f = await fixture(t, (request, response) => {
-    f.revoke("agent-aba"); Object.defineProperty(request.socket, "remoteAddress", { value: "127.0.0.1" });
+    f.change(mode); Object.defineProperty(request.socket, "remoteAddress", { value: "127.0.0.1" });
     invokeFixtureXiaomiOperation(request, new URL(request.url!, "http://fixture.invalid"), response, context({ settings: () => { reads++; return {}; } }, async () => ({} as never)));
   });
   const response = await fetch(f.url + "/settings", { headers: f.headers }); assert.equal(response.status, 403); assert.equal(reads, 0);
 });
+}
 
 test("deployment process await does not start the next probe or fallback after revocation", { timeout: 10000 }, async t => {
   const entered = deferred(); const gate = deferred(); t.after(gate.resolve); let calls = 0;
@@ -105,13 +119,13 @@ test("deployment process await does not start the next probe or fallback after r
     }, { inspect: async () => { calls++; entered.resolve(); await gate.promise; return { state: "installed", message: "fixture" }; }, run: async () => { assert.fail("unexpected install"); } });
     invokeFixtureXiaomiOperation(request, new URL(request.url!, "http://fixture.invalid"), response, context({ deployment }, async () => ({} as never)));
   });
-  const pending = fetch(f.url + "/deployment", { headers: f.headers }); await entered.promise; f.revoke("global-aba"); gate.resolve();
+  const pending = fetch(f.url + "/deployment", { headers: f.headers }); await entered.promise; f.change("global-aba"); gate.resolve();
   const response = await pending; assert.equal(response.status, 403); assert.equal(calls, 1);
 });
 
 test("dispatch classification is unknown without replacing the captured lease", async t => {
   const f = await fixture(t, (request, response) => {
-    const guard = createXiaomiHomeRequestAuthority(request); guard.dispatch(); f.revoke("global-aba");
+    const guard = createXiaomiHomeRequestAuthority(request); guard.dispatch(); f.change("global-aba");
     assert.throws(guard.assert, (error: unknown) => error instanceof XiaomiHomeRequestAuthorityError && error.outcome === "unknown");
     json(response, 200, { ok: true });
   });
@@ -130,7 +144,7 @@ test("candidate token verification revocation cannot replace protected credentia
   runtime = new RuntimeController(new XiaomiHomeSettingsStore(f.root, {}), new XiaomiHomeArtifactStore(f.root), {
     deliverEvent: async () => undefined, fetchImpl: async () => { entered.resolve(); await gate.promise; return new Response('{"name":"Fixture"}'); }
   }, credentialStore);
-  const pending = fetch(f.url + "/auth", { headers: f.headers }); await entered.promise; f.revoke("global-aba"); gate.resolve();
+  const pending = fetch(f.url + "/auth", { headers: f.headers }); await entered.promise; f.change("global-aba"); gate.resolve();
   const response = await pending; assert.equal(response.status, 403); assert.equal(credentialStore.resolve().token, "existing-fixture-token");
   assert.equal(runtime.settings().source, "profile");
 });
@@ -149,10 +163,10 @@ test("pre-dispatch action revocation releases the durable key for a fresh admitt
     return new Response(JSON.stringify(posts ? { ...state, state: "on" } : state));
   }, "fixture-token");
   const pending = fetch(f.url + "/actions", { headers: f.headers });
-  await entered.promise; f.revoke("disable"); gate.resolve();
+  await entered.promise; f.change("credential-revoked"); gate.resolve();
   const rejected = await pending; assert.equal(rejected.status, 403); assert.deepEqual(await rejected.json(), { outcome: "not_started" }); assert.equal(posts, 0);
-  f.authority.setNodeEnabled("fixture-node", true);
-  const fresh = await fetch(f.url + "/actions", { headers: f.headers });
+  assert.equal((await fetch(f.url + "/actions", { headers: f.headers })).status, 403); assert.equal(posts, 0);
+  const fresh = await fetch(f.url + "/actions", { headers: f.reenroll() });
   assert.equal(fresh.status, 200); assert.equal((await fresh.json() as { status: string }).status, "succeeded"); assert.equal(posts, 1);
 });
 
@@ -168,15 +182,19 @@ test("action revoked after POST stays unknown, hides receipt and never retries P
     void client.executeAction({ resourceId: "home:ha:switch.fixture", capability: "home.switch.turn_on@1", expectedStateVersion: normalizeHomeAssistantState(state).stateVersion }, "fixture-action-key-0001", guard)
       .then(result => json(response, 200, result)).catch(error => json(response, error.status || 500, { outcome: error.outcome }));
   });
-  const pending = fetch(f.url + "/actions", { headers: f.headers }); await entered.promise; f.revoke("agent-aba"); gate.resolve();
+  const pending = fetch(f.url + "/actions", { headers: f.headers }); await entered.promise; const freshHeaders = f.reenroll(); gate.resolve();
   const response = await pending; assert.equal(response.status, 403); assert.deepEqual(await response.json(), { outcome: "unknown" });
   assert.equal(posts, 1); assert.equal(reads, 1);
-  const replay = await fetch(f.url + "/actions", { headers: f.headers });
+  assert.equal((await fetch(f.url + "/actions", { headers: f.headers })).status, 403);
+  const replay = await fetch(f.url + "/actions", { headers: freshHeaders });
   assert.equal(replay.status, 409); assert.equal(posts, 1);
 });
 
-for (const continuation of ["chunk", "drain", "close"]) {
-  test(`enabled instance reads artifacts without another key and stream ${continuation} continuation stays bounded`, { timeout: 10000 }, async t => {
+for (const [continuation, mode] of [
+  ["chunk", "global-aba"], ["drain", "global-aba"], ["close", "global-aba"],
+  ["chunk", "credential-revoked"], ["drain", "credential-revoked"], ["chunk", "credential-replaced"], ["drain", "credential-replaced"]
+] as const) {
+  test(`artifact stream ${continuation} continuation stays bounded ${continuation === "close" ? "on cancellation" : "after " + mode}`, { timeout: 10000 }, async t => {
   let access!: XiaomiHomeArtifactAccess; let artifactId = ""; let written = 0;
   const f = await fixture(t, (request, response) => {
     void (async () => {
@@ -185,7 +203,7 @@ for (const continuation of ["chunk", "drain", "close"]) {
         for await (const chunk of content.frames) {
           written += chunk.length;
           if (continuation === "close") { await content.cancel(); break; }
-          f.revoke("global-aba");
+          f.change(mode);
           if (continuation === "drain") await new Promise<void>(resolve => setImmediate(resolve));
         }
         assert.equal(continuation, "close", "revoked stream must not reach EOF");
@@ -221,7 +239,7 @@ test("deployment queue admission rechecks the original lease before OS dispatch"
   const autonomous = deployment.install(revision); await entered.promise;
   const pending = fetch(f.url + "/deployment/install", { headers: f.headers });
   await admitted.promise;
-  f.revoke("global-aba"); gate.resolve(); await autonomous;
+  f.change("global-aba"); gate.resolve(); await autonomous;
   const response = await pending; assert.equal(response.status, 403); assert.equal(dispatched, 1);
 });
 

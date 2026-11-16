@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.14 - 2026-11-16
+
+- Update the MCP Hono transitive dependencies to resolve production audit findings; align Xiaomi authority and delivery receipt tests with connection revocation and no-replay contracts.
+
 ## 0.15.13 - 2026-11-16
 
 - Fix isolated Host acceptance when the install root has a trailing separator, so Manager and Tray use the same candidate scope, and migrate existing published NapCat package selections.

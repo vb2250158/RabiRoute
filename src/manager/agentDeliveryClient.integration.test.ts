@@ -96,10 +96,12 @@ async function fixture(t: test.TestContext) {
     } };
 }
 
-test("real caller HTTP recovers a dropped POST ACK across Manager restart and a changed port without another dispatch", async t => {
+test("original caller reconciles a dropped POST ACK after Manager restart without another dispatch", async t => {
   const f = await fixture(t); f.dropAck(); f.submit("ack-lost"); await f.owner.flight;
   assert.equal(f.owner.query({ action: "get", intentId: "ack-lost" }).item!.state, "awaiting_confirmation"); assert.equal(f.dispatches(), 1, JSON.stringify(f.responses));
   await f.restart(); f.advance(); await f.owner.tick();
+  assert.equal(f.owner.query({ action: "get", intentId: "ack-lost" }).item!.state, "awaiting_confirmation");
+  await f.owner.control({ action: "reconcile", intentId: "ack-lost" });
   assert.equal(f.owner.query({ action: "get", intentId: "ack-lost" }).item!.state, "received"); assert.equal(f.dispatches(), 1);
   assert.equal((await f.store().listEndpointDeliveries()).length, 1);
 });
@@ -108,15 +110,20 @@ test("real dispatching HTTP reconciliation preserves the formal source body and 
   const f = await fixture(t); f.loseDispatchAck(); f.submit("dispatching-original"); await f.owner.flight;
   assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "dispatching"); assert.equal(f.dispatches(), 1);
   f.recoverTargetReceipt(); f.advance(); await f.owner.tick();
+  assert.equal(f.owner.query({ action: "get", intentId: "dispatching-original" }).item!.state, "awaiting_confirmation");
+  await f.owner.control({ action: "reconcile", intentId: "dispatching-original" });
   assert.equal(f.owner.query({ action: "get", intentId: "dispatching-original" }).item!.state, "received");
   assert.equal(f.dispatches(), 1); assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "committed");
 });
 
-test("real prepared reservation resumes the exact caller intent after pre-send target recovery", async t => {
+test("prepared reservation is not replayed after pre-send target recovery", async t => {
   const f = await fixture(t); f.deny(true); f.submit("prepared-original"); await f.owner.flight;
   assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "prepared", JSON.stringify(f.responses)); assert.equal(f.dispatches(), 0);
   f.deny(false); f.advance(); await f.owner.tick();
-  assert.equal(f.owner.query({ action: "get", intentId: "prepared-original" }).item!.state, "received"); assert.equal(f.dispatches(), 1);
+  assert.equal(f.owner.query({ action: "get", intentId: "prepared-original" }).item!.state, "awaiting_confirmation");
+  await f.owner.control({ action: "reconcile", intentId: "prepared-original" });
+  assert.equal(f.owner.query({ action: "get", intentId: "prepared-original" }).item!.state, "awaiting_confirmation");
+  assert.equal(f.dispatches(), 0);
   assert.equal((await f.store().listEndpointDeliveries()).length, 1);
 });
 
@@ -128,7 +135,9 @@ test("cancelling a node's prepared intent stops both durable owners over real HT
   assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "prepared");
   const result = await f.owner.control({ action: "cancel", intentId: "prepared-cancelled" });
   assert.equal(result.record.state, "cancelled");
-  assert.equal(result.record.managerCancelPending, undefined);
+  assert.equal(result.record.managerCancelPending, true);
+  await f.owner.flight;
+  assert.equal(f.owner.query({ action: "get", intentId: "prepared-cancelled" }).item!.managerCancelPending, undefined);
   assert.equal((await f.store().listEndpointDeliveries())[0]?.state, "cancelled");
   f.deny(false);
   f.advance();
