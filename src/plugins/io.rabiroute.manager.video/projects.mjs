@@ -7,7 +7,7 @@ import {WorkbenchProjects} from './workbenchProjects.mjs';
 import definition from './workbench-definition.json' with {type:'json'};
 
 export class VideoProjects extends WorkbenchProjects {
-  constructor(runtime) { super(runtime,definition); this.serial=Promise.resolve(); this.recordIssues=[]; }
+  constructor(runtime) { super(runtime,definition); this.recordIssues=[]; }
   file(id) { if(!new RegExp(projectFields.id.pattern).test(id)) throw new VideoError('项目不存在。',404); return path.join(this.legacyRoot,`${id}.json`); }
   async read(id,access) {
     this.file(id);

@@ -1,5 +1,6 @@
 // Native field definitions own validation, normalization and executable discovery.
 // Wire schemas describe deferred fields without intercepting original owner errors.
+import { workbenchResponses } from "./workbenchContracts.mjs";
 const field = (description, schema = {}) => Object.freeze({ description, ...schema });
 export const commandFields = Object.freeze({
   model: field("Model ID from the current catalog; required.", { type: "string" }),
@@ -109,6 +110,7 @@ export function createVideoContracts(catalog) {
   }, projectFields.value.description);
   requests.command.anyOf[0].properties.model.description += " Available IDs: " + catalog.models.map(row => row.id).join(", ") + ".";
   const responses = {
+    ...workbenchResponses,
     "projects.list": object({ recordIssues, projects: { type: "array", items: summary } }), "projects.create": project, "project.read": project, "project.save": object({ revision: { type: "integer" } }),
     status: peerResult(status), "runtime.start": peerResult(status), "runtime.stop": peerResult(status),
     "compute.status": status, "compute.runtime-start": status, "compute.runtime-stop": status,

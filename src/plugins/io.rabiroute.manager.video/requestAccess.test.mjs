@@ -22,8 +22,10 @@ test("filesystem publication rechecks before every dispatch",async t=>{
   await assert.rejects(guarded.rename(path.join(directory,"partial"),path.join(directory,"published")),/revoked/);assert.equal(await fs.readFile(path.join(directory,"partial"),"utf8"),"accepted");assert.equal(access.mutationStarted,true);
 });
 test("project queue checks access after a concurrent mutation completes",async t=>{
-  const stateRoot=await root(t),projects=new VideoProjects({stateRoot}),gate=deferred(),access=authority();projects.serial=gate.promise;
-  const id=randomUUID(),pending=projects.create({id},access);access.revoke();gate.resolve();await assert.rejects(pending,/revoked/);assert.deepEqual(await projects.list(),[]);
+  const stateRoot=await root(t),projects=new VideoProjects({stateRoot}),gate=deferred(),entered=deferred(),access=authority(),id=randomUUID();
+  t.after(()=>gate.resolve());
+  const held=projects.locked(`project:${id}`,undefined,async()=>{entered.resolve();await gate.promise;});await entered.promise;
+  const pending=projects.create({id},access);access.revoke();gate.resolve();await held;await assert.rejects(pending,/revoked/);assert.deepEqual(await projects.list(),[]);
 });
 test("asset inspection failures preserve sticky revocation and do not publish metadata",async t=>{
   const stateRoot=await root(t),access=authority();const assets=new VideoAssets({stateRoot,installed:async()=>true,inspectAsset:async()=>{access.revoke();throw new Error("bad media");}});

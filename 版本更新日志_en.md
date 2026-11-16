@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.21 - 2026-11-17
+
+- Describe workbench response contracts and verify the real queue and connection revocation behavior.
+
 ## 0.15.20 - 2026-11-17
 
 - Add independent workbench canvases, execution and artifacts with migration recovery and existing Agent session bridging.
