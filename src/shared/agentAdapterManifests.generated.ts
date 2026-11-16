@@ -138,6 +138,27 @@ export const installedAgentAdapterManifests = [
     "capabilities": {}
   },
   {
+    "type": "voice-assistant",
+    "label": "语音助手",
+    "maturity": "experimental",
+    "transport": {
+      "protocol": "in-process",
+      "mode": "owned-session"
+    },
+    "host": {
+      "name": "Rabi PC",
+      "required": true
+    },
+    "capabilities": {
+      "managedTasks": {
+        "messageProcessingAgent": true,
+        "agentThreads": true,
+        "deliveryReceiptRecovery": true
+      },
+      "nativeThreadOperations": true
+    }
+  },
+  {
     "type": "workbuddy",
     "label": "WorkBuddy（腾讯 AI 办公工作台）",
     "maturity": "experimental",
