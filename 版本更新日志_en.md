@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.9 - 2026-11-16
+
+- Add an isolated temporary Host acceptance entry with separate control pipes, a read-only Manager lock and sanitized child environments while retaining the formal singleton and data; normalize a machine-specific user path in the workbench design document.
+
 ## 0.15.8 - 2026-11-16
 
 - Correct native-listener test fixture identities and ports, cover matching local identities across Gateway owners, and align listener-name documentation.

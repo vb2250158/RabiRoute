@@ -307,3 +307,9 @@ Desktop keeps one crash-evidence bundle per launch; Manager, plugins, and Routes
 6. `--command status --json` matches Manager `/meta` generation, instance, and URL;
 7. retired lifecycle entries, fixed-port defaults, and Manager HTTP application-start/stop routes are absent from the production path and package.
 8. Manager and its Node.js children execute through `<install-root>/runtime/RabiRoute.Runtime.exe`; an upgrade does not fall back to `versions/<releaseId>/node.exe`.
+
+## Isolated Host acceptance
+
+For development acceptance, prepare a separate distribution under a local temporary directory. Its root contains only the verified `RabiRouteHost.exe`, `current.json` and `versions/`; do not copy `.env`, `data/`, routes, roles or credentials. Create `.rabiroute-acceptance` at the root with the exact content `RabiRoute isolated acceptance fixture v1` and no newline. Set the launcher process `TEMP` and `TMP` to the local parent directory, and launch it with an environment that contains no business credentials.
+
+Start that Host with `--acceptance`; add the same flag to status and generation-fenced quit commands. Acceptance uses a separate singleton and control pipe, a read-only Manager, an independent lock and children that do not inherit the business environment. Route autostart is disabled and no formal elevated task is registered or changed. Normal startup and status behavior remain unchanged. Verify the separate generation, Manager and Tray identities, page resources and normal exit, and independently confirm that the formal Host identity and health remain unchanged. An acceptance directory is not a formal installation; passing acceptance does not mean the release was activated.

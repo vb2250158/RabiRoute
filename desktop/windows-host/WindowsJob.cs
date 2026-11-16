@@ -142,7 +142,8 @@ internal sealed class NativeChildProcess : IDisposable
         string executable,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        IReadOnlyDictionary<string, string?> environmentOverrides)
+        IReadOnlyDictionary<string, string?> environmentOverrides,
+        bool isolatedEnvironment = false)
     {
         SafeFileHandle? stdoutRead = null;
         SafeFileHandle? stdoutWrite = null;
@@ -164,7 +165,11 @@ internal sealed class NativeChildProcess : IDisposable
                 hStdError = stderrWrite.DangerousGetHandle()
             };
             var commandLine = new StringBuilder(BuildCommandLine(executable, arguments));
-            var environment = BuildEnvironmentBlock(environmentOverrides);
+            var inherited = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+                .Select(entry => new KeyValuePair<string, string?>((string)entry.Key, (string?)entry.Value));
+            var environment = BuildEnvironmentBlock(isolatedEnvironment
+                ? AcceptanceEnvironment(workingDirectory, inherited)
+                : inherited, environmentOverrides);
             NativeMethods.PROCESS_INFORMATION processInformation;
             fixed (byte* environmentPointer = environment)
             {
@@ -330,11 +335,18 @@ internal sealed class NativeChildProcess : IDisposable
         return readHandle;
     }
 
-    private static byte[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> overrides)
+    internal static IEnumerable<KeyValuePair<string, string?>> AcceptanceEnvironment(
+        string stateRoot, IEnumerable<KeyValuePair<string, string?>> inherited)
     {
-        return BuildEnvironmentBlock(Environment.GetEnvironmentVariables()
-            .Cast<System.Collections.DictionaryEntry>()
-            .Select(entry => new KeyValuePair<string, string?>((string)entry.Key, (string?)entry.Value)), overrides);
+        var permitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "SystemDrive",
+            "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "OS"
+        };
+        var values = inherited.Where(pair => permitted.Contains(pair.Key)).ToList();
+        foreach (var key in new[] { "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "TEMP", "TMP" })
+            values.Add(new KeyValuePair<string, string?>(key, stateRoot));
+        return values;
     }
 
     internal static byte[] BuildEnvironmentBlock(

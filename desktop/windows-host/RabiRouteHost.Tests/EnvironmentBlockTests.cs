@@ -33,6 +33,19 @@ internal static class EnvironmentBlockTests
             check(overridden.Contains("ADDED=value\0", StringComparison.Ordinal), "new explicit variables are included");
             check(inherited[0].Value == "lower.example" && overrides["pAtH"] is null, "environment inputs remain unchanged");
             check(Encoding.Unicode.GetString(NativeChildProcess.BuildEnvironmentBlock([], new Dictionary<string, string?>())) == "\0\0", "empty environment block remains double-NUL terminated");
+            var acceptanceSource = new KeyValuePair<string, string?>[] {
+                new("SystemRoot", "C:\\Windows"), new("Path", "C:\\Windows\\System32"),
+                new("PRIVATE_TOKEN", "fixture-secret"), new("ROUTE_DIR", "private-routes"),
+                new("LOCALAPPDATA", "private-appdata"), new("TEMP", "private-temp") };
+            var acceptanceText = Encoding.Unicode.GetString(NativeChildProcess.BuildEnvironmentBlock(
+                NativeChildProcess.AcceptanceEnvironment("fixture-root", acceptanceSource), new Dictionary<string, string?>()));
+            check(!acceptanceText.Contains("fixture-secret", StringComparison.Ordinal) && !acceptanceText.Contains("private-routes", StringComparison.Ordinal),
+                "acceptance children cannot inherit user credentials or route overrides");
+            check(!acceptanceText.Contains("private-appdata", StringComparison.Ordinal) && !acceptanceText.Contains("private-temp", StringComparison.Ordinal),
+                "acceptance children do not inherit user profile or temporary directories");
+            check(acceptanceText.Contains("LOCALAPPDATA=fixture-root\0", StringComparison.OrdinalIgnoreCase)
+                && acceptanceText.Contains("SystemRoot=C:\\Windows\0", StringComparison.OrdinalIgnoreCase),
+                "acceptance children use fixture-local profile paths and retain the Windows system root");
         }
         catch (Exception exception)
         {

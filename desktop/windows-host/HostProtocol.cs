@@ -53,6 +53,15 @@ internal static class HostIdentity
 
     internal static string MutexName => $"Local\\RabiRoute.Host.{CurrentUserKey()}";
     internal static string PipeName => $"RabiRoute.Host.{CurrentUserKey()}";
+
+    internal static (string Mutex, string Pipe) AcceptanceNames(string stateRoot)
+    {
+        if (string.IsNullOrWhiteSpace(stateRoot) || !Path.IsPathFullyQualified(stateRoot) || !LocalRuntimePath.IsLocal(stateRoot))
+            throw new ArgumentException("Acceptance state root must be an absolute local path.", nameof(stateRoot));
+        var canonicalRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(stateRoot)).ToUpperInvariant();
+        var key = UserKey($"{CurrentUserKey()}\0{canonicalRoot}");
+        return ($"Local\\RabiRoute.Host.Acceptance.{key}", $"RabiRoute.Host.Acceptance.{key}");
+    }
 }
 
 internal static class HostProtocol

@@ -46,7 +46,7 @@
 
 ### 1.2 要复刻的对象：早报工作流
 
-真源在 `C:\Users\GAN\WorkBuddy\Claw\tools\workflow-gui\`：
+真源位于工作流 GUI 的本地安装根目录（下文记作 `WORKFLOW_GUI_ROOT`）：
 
 | 项 | 事实 |
 | --- | --- |
