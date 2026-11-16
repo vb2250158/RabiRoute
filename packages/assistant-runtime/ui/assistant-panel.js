@@ -2,6 +2,8 @@ export {createMessageDetailsView,recognitionRows,speechParameterRows} from './me
 /** Optional shared presenter. No capture, playback, model loop, or owner teardown. */
 import { assistantPanelStyles } from './assistant-panel-styles.js'
 import {speechCapabilityHelp,createSpeechCapabilityChip} from './speech-capability-help.js'
+import {assistantParticipants,messageTimeLabel,createMessageAvatar} from './message-presentation.js'
+export {assistantParticipants,messageTimeLabel} from './message-presentation.js'
 const settingsDelta=(value,base)=>Object.fromEntries(Object.entries(value).filter(([key,item])=>!['speechProfiles','llmProfiles'].includes(key)&&item!==base?.[key]))
 export function assistantSetupGaps(state){
   if(!state)return []
@@ -80,6 +82,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
   const h = React.createElement
   const MessageDetails=createMessageDetailsView(React)
   const CapabilityChip=createSpeechCapabilityChip(React)
+  const MessageAvatar=createMessageAvatar(React)
   const layout = { display:'flex', flexDirection:'column', gap:12, padding:16, maxWidth:1000, margin:'0 auto', color:'var(--dsw-alias-text-primary, inherit)' }
   const row = { display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }
   const label = { display:'flex', flexDirection:'column', gap:6, marginBottom:12 }
@@ -160,6 +163,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const checksPassed=serviceRows.length>0&&serviceRows.every(item=>item.status==='passed')
     const showChecks=testRunning||(checksExpanded??!checksPassed)
     const live=assistantLiveState(state,connectionError)
+    const participants=assistantParticipants(state)
     const chat=React.useRef(null),composer=React.useRef(null),follow=React.useRef(true),onboardingOpened=React.useRef(false)
     const [unseen,setUnseen]=React.useState(false)
     const [detailId,setDetailId]=React.useState(null),[detailData,setDetailData]=React.useState(null),[detailError,setDetailError]=React.useState(''),[detailLoading,setDetailLoading]=React.useState(false)
@@ -209,6 +213,11 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     React.useEffect(()=>{if(state?.settings?.onboardingComplete===false&&!onboardingOpened.current){onboardingOpened.current=true;openSettings('setup')}},[state?.settings?.onboardingComplete])
     const messageRevision=messages.map(item=>item.id+':'+(item.text?.length||0)).join('|')
     React.useLayoutEffect(()=>{const node=chat.current;if(!node)return;if(historyRestore.current){const previous=historyRestore.current;historyRestore.current=null;node.scrollTop=previous.top+node.scrollHeight-previous.height;return}if(follow.current){node.scrollTop=node.scrollHeight;setUnseen(false)}else setUnseen(true)},[messageRevision,state?.inputPreview?.text])
+    React.useEffect(()=>{
+      const node=chat.current;if(!node||typeof ResizeObserver==='undefined')return
+      const observer=new ResizeObserver(()=>{if(follow.current)node.scrollTop=node.scrollHeight})
+      observer.observe(node);return()=>observer.disconnect()
+    },[editing,detailId])
     const loadHistory=async()=>{
       if(historyBusy||!messages.length)return;setHistoryBusy(true);const scope=state.sessionId;
       try{const page=await adapter.command({action:'message-history',before:messages[0].id});if(!mounted.current||conversationScope.current!==scope||page.sessionId!==scope)return;
@@ -419,6 +428,17 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       return h('div',{className:'va-timed-message'},h('p',null,h('span',{className:'va-sr-only'},item.text),h('span',{className:'va-spoken','aria-hidden':true},item.text.slice(0,end)),h('span',{className:'va-unspoken','aria-hidden':true},item.text.slice(end))),
         h('small',{className:'va-follow-label'},(progress.timingMode==='word'?'逐字跟随':'按句跟随')+(progress.speechStatus==='cancelled'?' · 已打断':progress.speechStatus==='ended'?' · 播放结束':'')))
     }
+    const avatar=(person,kind)=>h(MessageAvatar,{...person,kind,resolveUrl:adapter.resolveAvatarUrl})
+    const renderMessage=(item,index)=>{
+      const kind=item.notice?'system':item.role==='user'?'user':'assistant',person=participants[kind]
+      const time=messageTimeLabel(item,messages[index-1])
+      return h(React.Fragment,{key:item.id},time&&h('div',{className:'va-message-time'},h('time',{dateTime:item.createdAt},time)),
+        h('article',{className:'va-message','data-role':item.role,'data-notice':item.notice||undefined,role:item.notice?'alert':undefined},
+          avatar(person,kind),h('div',{className:'va-message-main'},
+            h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',{title:person.name},person.name),item.source==='speech'&&h('span',{className:'va-message-source'},'语音')),
+              item.hasDetails&&h(Button,{className:'va-message-details',title:'查看语音详情','aria-label':item.role==='user'?'查看语音识别详情':'查看语音播报详情',onClick:()=>openDetails(item)},'⋯')),
+            h('div',{className:'va-message-bubble'},messageBody(item),item.search&&h('small',{role:'status'},item.search.status==='searching'?'正在搜索：'+item.search.query:item.search.status==='failed'?'搜索未完成：'+(errors[item.search.error]||item.search.error):'已搜索 · '+item.search.provider),sourceLinks(item.sources),item.status==='interrupted'&&h('small',{className:'va-note'},'上次未完成 · 没有自动重发')))))
+    }
     const setupGaps=assistantSetupGaps(state)
     const serviceTests=state?.capabilities?.serviceTests&&h('section',{className:'va-checks','aria-label':'连接与测试状态'},
       h('div',{className:'va-check-heading'},h('div',null,h('h2',null,'连接与测试'),
@@ -496,7 +516,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
       state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
       state?.context?.interruptedCount>0&&h('p',{className:'va-note'},'上次有 '+state.context.interruptedCount+' 条消息未完成，已保留记录，没有自动重发。'),
-      h('div',{'aria-label':'对话',className:'va-conversation',role:'log','aria-live':'polite','aria-relevant':'additions text',ref:chat,onScroll:()=>{const node=chat.current;follow.current=node.scrollHeight-node.scrollTop-node.clientHeight<60;if(follow.current)setUnseen(false)}},state?.capabilities?.messageHistory&&messages.length>0&&moreHistory!==false&&(moreHistory===true||state.context?.messageCount>messages.length)&&h(Button,{className:'va-history-more',disabled:historyBusy,onClick:()=>void loadHistory()},historyBusy?'正在加载…':'加载更早消息'),!messages.length&&!live.listening&&!live.working&&h('div',{className:'va-empty'},h('strong',null,preview?'请在实际助手中开始对话':conversationMissing?'先选择一个对话模型':'先试一句文字消息'),h('p',null,preview?'本页只展示设置，发送和语音功能不可用。':conversationMissing?'完成“对话”设置并保存后，就可以在下方输入消息。':'输入“你好”并发送；确认收到回复后，再开启语音。'),state?.capabilities?.host==='standalone'&&!state.capabilities.tools&&h('small',null,'独立助手暂未连接宿主工具。')),messages.map(item=>h('article',{key:item.id,className:'va-message','data-role':item.role,role:item.notice?'alert':undefined},h('div',{className:'va-message-heading'},h('strong',null,item.notice?'系统：':item.role==='user'?(item.source==='speech'?'我 · 语音：':'我：'):(state?.settings?.assistantName||'助手')+'：'),item.hasDetails&&h(Button,{className:'va-message-details',title:'查看语音详情','aria-label':item.role==='user'?'查看语音识别详情':'查看语音播报详情',onClick:()=>openDetails(item)},'⋯')),messageBody(item),item.search&&h('small',{role:'status'},item.search.status==='searching'?'正在搜索：'+item.search.query:item.search.status==='failed'?'搜索未完成：'+(errors[item.search.error]||item.search.error):'已搜索 · '+item.search.provider),sourceLinks(item.sources),item.status==='interrupted'&&h('small',{className:'va-note'},'上次未完成 · 没有自动重发'))),live.listening&&state?.inputPreview&&!state.inputPreview.final&&h('div',{className:'va-live-input',role:'status'},h('strong',null,'你 · 正在说话'),h('p',null,state.inputPreview.text||'正在聆听…'))),
+      h('div',{'aria-label':'对话',className:'va-conversation',role:'log','aria-live':'polite','aria-relevant':'additions text',ref:chat,onScroll:()=>{const node=chat.current;follow.current=node.scrollHeight-node.scrollTop-node.clientHeight<60;if(follow.current)setUnseen(false)}},state?.capabilities?.messageHistory&&messages.length>0&&moreHistory!==false&&(moreHistory===true||state.context?.messageCount>messages.length)&&h(Button,{className:'va-history-more',disabled:historyBusy,onClick:()=>void loadHistory()},historyBusy?'正在加载…':'加载更早消息'),!messages.length&&!live.listening&&!live.working&&h('div',{className:'va-empty'},h('strong',null,preview?'请在实际助手中开始对话':conversationMissing?'先选择一个对话模型':'先试一句文字消息'),h('p',null,preview?'本页只展示设置，发送和语音功能不可用。':conversationMissing?'完成“对话”设置并保存后，就可以在下方输入消息。':'输入“你好”并发送；确认收到回复后，再开启语音。'),state?.capabilities?.host==='standalone'&&!state.capabilities.tools&&h('small',null,'独立助手暂未连接宿主工具。')),messages.map((item,index)=>renderMessage(item,index)),live.listening&&state?.inputPreview&&!state.inputPreview.final&&h('div',{className:'va-message va-message-live','data-role':'user',role:'status'},avatar(participants.user,'user'),h('div',{className:'va-message-main'},h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',null,participants.user.name),h('span',{className:'va-message-source'},'正在说话'))),h('div',{className:'va-live-input'},h('p',null,state.inputPreview.text||'正在聆听…'))))),
       unseen&&h(Button,{className:'va-latest',onClick:()=>{follow.current=true;chat.current.scrollTop=chat.current.scrollHeight;setUnseen(false)}},'回到最新回复'),
       state?.voice.phase==='running'&&state?.asrFeedback==='utterance'&&h('div',{className:'va-waveform','data-active':live.listening},h('span',null,live.listening?(Date.now()-(state.waveform?.updatedAt||0)<1500?'正在收音 · 说完后转写':'等待麦克风数据'):'麦克风已暂停'),h('svg',{viewBox:'0 0 288 56',role:'img','aria-label':live.listening?'真实麦克风音量波形':'麦克风已暂停，波形停止'},Array.from({length:48},(_,i)=>{const fresh=live.listening&&Date.now()-(state.waveform?.updatedAt||0)<1500,value=fresh?(state.waveform?.samples?.[i]||0):0,height=Math.max(1,Math.min(52,Math.sqrt(value)*170));return h('rect',{key:i,x:i*6,y:(56-height)/2,width:3,height,rx:1})}))),
       h('div',{className:'va-actions'},

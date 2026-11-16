@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import {onBeforeUnmount,onMounted,ref} from 'vue';
 import {mountAssistantPanel} from './assistant-app';
+import {managerResourceUrl} from '../../../../ribiwebgui/src/managerApi';
+import {managerAvatarUrl} from './avatar-resource-url.mjs';
 const container=ref<HTMLElement>();let dispose:(()=>void)|undefined;
-onMounted(()=>{if(container.value)dispose=mountAssistantPanel(container.value)});
+onMounted(()=>{if(container.value)dispose=mountAssistantPanel(container.value,{resolveAvatarUrl:url=>managerAvatarUrl(url,managerResourceUrl,window.location.href)})});
 onBeforeUnmount(()=>{dispose?.()});
 </script>
 <template><section class="rabi-voice-assistant"><h1>语音助手</h1><div ref="container" class="rabi-voice-assistant-body" /></section></template>

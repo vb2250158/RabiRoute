@@ -10,6 +10,12 @@ Version 0.10.0 adds `@rabilink/assistant-runtime/voice`: one injected capture, i
 
 ## Interfaces and ownership
 
+### Conversation presentation
+
+Standalone Web, Rabi PC and DSH share participant avatars, names and aligned message bubbles. Rabi PC reads the selected persona's public avatar. Other hosts may provide user and assistant `name`/`avatarUrl` through `state.participants`; absent or failed images fall back locally without borrowing another persona. Hosts that authenticate resource URLs use their existing resolver through `adapter.resolveAvatarUrl`.
+
+Names and speech-source labels sit outside the bubble. Time separators use existing timestamps and remain absent when the host supplies none. Message details, search citations, spoken-text highlighting and scroll following retain their existing message/playback sources. Presentation does not take ownership of models, audio or storage.
+
 ### Settings layout (0.12.1)
 
 Navigation and save controls remain fixed while settings scroll independently. Parameters use two columns on wide screens and one on narrow screens, with functional search and optional API names. Closing with unsaved changes offers keep-editing or discard actions; saving disables the button until another change. Scoped styles load with `./ui`.

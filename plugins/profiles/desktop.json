@@ -377,7 +377,7 @@
     {
       "id": "manager:voice-assistant",
       "package": "io.rabiroute.manager.voice-assistant",
-      "version": "1.1.9",
+      "version": "1.1.10",
       "enabled": true,
       "config": {},
       "grants": []

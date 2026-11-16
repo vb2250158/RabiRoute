@@ -28,6 +28,6 @@ ASR、TTS 分别选择「本机服务」或「自定义」，允许混用。本�
 
 完整仓库构建先在根目录运行 `npm ci`，再运行 `npm run build`。仓库不是 npm workspaces；Web 构建所需 React、React DOM 与 Vue/Vite 一样由根 `devDependencies` 和根锁文件提供，版本与本插件声明一致。插件自己的 `dependencies` 保留独立包依赖归属，不能用已存在的本机 `node_modules` 代替根锁文件安装验证。
 
-沿仓库官方插件/Web 流程构建 `1.1.9` 候选。包内带共享模块闭包、设备脚本和 `koffi/ws`。WorkBuddy/Electron 启动路径只在本机私有 host-options 配置，不进入公开源码，不复制官方令牌，不依赖独立测试服务或固定端口。
+沿仓库官方插件/Web 流程构建 `1.1.10` 候选。包内带共享模块闭包、设备脚本和 `koffi/ws`。WorkBuddy/Electron 启动路径只在本机私有 host-options 配置，不进入公开源码，不复制官方令牌，不依赖独立测试服务或固定端口。
 
 `runtime.test.mjs` 覆盖持久化、人格、Agent 归属和工具回执；`voice-sources.test.mjs` 通过受控设备执行四组合 ASR→自动提交→模型→TTS→唯一播放器→资源释放。夹具不等同真实麦克风、扬声器、回声、远端电脑或安装版验收。正式安装切换沿原发布 owner，活动状态未知时不能重启共享 Host。
