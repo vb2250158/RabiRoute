@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.20 - 2026-11-17
+
+- Add independent workbench canvases, execution and artifacts with migration recovery and existing Agent session bridging.
+- Advance `io.rabiroute.manager.video` to `0.2.1`. Cancellation stops prepared nodes before dispatch while retaining original receipts and resource locks for submitted external work. New runs recheck request access before durable acceptance.
+- Workbench saves, exports and node changes retain parameter drafts, variables and layout. Canvas and run-history pagination retain loaded entries, and logs provide controls to continue reading or return to the beginning.
+
+## 0.15.19 - 2026-11-17
+
+- Merge Agent call history and search updates while retaining candidate verification dependencies and the NapCat test fixture.
+
 ## 0.15.18 - 2026-11-17
 
 - Advance the plugin SDK to `1.4.1`. Windows Web builds retry temporary directory-sharing failures within a fixed budget and restore the previous complete output if publication still fails.
@@ -13,6 +23,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Advance `io.rabiroute.manager.persona` to `0.1.21`. Message history runs from oldest to newest with the latest messages at the bottom. Session lists, messages and details use separate thin internal scrollbars.
 - Shared chat scroll state preserves the reading anchor when loading older messages and follows the bottom for initial reads and new messages. A disposable ResizeObserver handles virtual-row size changes while preserving the view when reading earlier messages.
 - Align QQ, task, Agent, role-panel and system-message entry points while retaining native cursors, cancellation and session bindings.
+- Provide a synthetic launch command for NapCat discovery tests while retaining owner and asynchronous-read assertions.
 
 ## 0.15.17 - 2026-11-17
 

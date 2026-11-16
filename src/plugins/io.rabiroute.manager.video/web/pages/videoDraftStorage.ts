@@ -25,11 +25,12 @@ function decode(value: unknown): unknown {
   }
   return value;
 }
-export async function readDraft<T>(key: string): Promise<DraftRecord<T>> {
-  const record=await api(`/api/video/projects/${encodeURIComponent(key)}`);
+function draftPath(key:string,canvasId?:string) { return canvasId ? `/api/video/v2/projects/${encodeURIComponent(key)}/canvases/${encodeURIComponent(canvasId)}/editor` : `/api/video/projects/${encodeURIComponent(key)}`; }
+export async function readDraft<T>(key: string,canvasId?:string): Promise<DraftRecord<T>> {
+  const record=await api(draftPath(key,canvasId));
   return {...record,value:decode(record.value)};
 }
-export async function writeDraft<T>(key: string,value:T,revision:number,title:string):Promise<number> {
-  const record=await api(`/api/video/projects/${encodeURIComponent(key)}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({value:await encode(value),revision,title})});
+export async function writeDraft<T>(key: string,value:T,revision:number,title:string,canvasId?:string):Promise<number> {
+  const record=await api(draftPath(key,canvasId),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({value:await encode(value),revision,title})});
   return record.revision;
 }

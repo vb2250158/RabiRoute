@@ -9,6 +9,7 @@ import { createSpeechControlClient } from "../../../io.rabiroute.manager.speech/
 import type { SpeechModel } from "@shared/speechControlContract";
 import { readDraft, writeDraft } from "./videoDraftStorage";
 import { useVideoCanvas } from "./useVideoCanvas";
+import WorkbenchPanel from "./WorkbenchPanel.vue";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
 import MediaVideoPlayer from "../components/MediaVideoPlayer.vue";
@@ -560,24 +561,41 @@ let pendingDraft: SavedCanvas | undefined;
 const projectId = ref(new URL(location.href).searchParams.get("project") || "");
 const projectTitle = ref("未命名项目");
 const projectHome = ref(!projectId.value);
-const projects = ref<{id:string;title:string;updatedAt:string;cardCount:number}[]>([]);
+const workbenchMode = ref(false), mediaCanvasId = ref("");
+const projects = ref<{id:string;title:string;updatedAt:string;cardCount:number;migrationPending?:boolean;migrationSourceRevision?:number}[]>([]);
 async function loadProjects() { projects.value = (await request<{projects: typeof projects.value}>("/projects")).projects; }
 async function openProject(id: string) {
   if (savingDraft) return;
+  const changed=id!==projectId.value;
   projectId.value = id; projectHome.value = false; draftLoaded.value = false;
-  const url=new URL(location.href);url.searchParams.set("project",id);history.replaceState(null,"",url);
+  const url=new URL(location.href);url.searchParams.set("project",id);if(changed){url.searchParams.delete("canvas");url.searchParams.delete("view");}history.replaceState(null,"",url);
+  const modern=await fetch(`/api/video/v2/projects/${encodeURIComponent(id)}`);
+  if(modern.ok) { workbenchMode.value=true;mediaCanvasId.value="";draftLoaded.value=true;return; }
+  if(modern.status!==409) throw new Error((await modern.json()).message||"项目读取失败。");
+  workbenchMode.value=false;mediaCanvasId.value="";
   await restoreCanvasDraft();
 }
 async function createProject() {
-  const project=await request<{id:string}>("/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:browserUuid()})});
+  const project=await request<{id:string}>("/v2/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:browserUuid()})});
   await openProject(project.id);
-  pendingDraft = canvasRecord(); await saveCanvasDraft();
 }
+async function openMediaCanvas(id:string) {mediaCanvasId.value=id;workbenchMode.value=false;draftLoaded.value=false;await restoreCanvasDraft();}
+async function returnToWorkbench() {await saveCanvasDraft();if(savingDraft||draftFailure.value)return;workbenchMode.value=true;}
+async function migrateProject() {
+  await saveCanvasDraft();if(savingDraft||draftFailure.value)return;
+  await request(`/v2/projects/${projectId.value}/migrate`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({revision:draftRevision})});
+  await openProject(projectId.value);
+}
+async function recoverProjectMigration(id:string,revision:number) {
+  await request(`/v2/projects/${id}/migrate`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({revision})});
+  await openProject(id);
+}
+async function workbenchHome() {projectHome.value=true;workbenchMode.value=false;const url=new URL(location.href);url.searchParams.delete("project");url.searchParams.delete("canvas");url.searchParams.delete("view");history.replaceState(null,"",url);await loadProjects();}
 async function showProjects() {
   await saveCanvasDraft();
   if (savingDraft || draftFailure.value) return;
   projectHome.value = true;
-  const url=new URL(location.href);url.searchParams.delete("project");history.replaceState(null,"",url);
+  const url=new URL(location.href);url.searchParams.delete("project");url.searchParams.delete("canvas");url.searchParams.delete("view");history.replaceState(null,"",url);
   await loadProjects();
 }
 function canvasRecord(): SavedCanvas {
@@ -601,23 +619,23 @@ async function saveCanvasDraft() {
   try {
     while (pendingDraft) {
       const value = pendingDraft; pendingDraft = undefined;
-      draftRevision = await writeDraft(projectId.value, value, draftRevision, projectTitle.value);
+      draftRevision = await writeDraft(projectId.value, value, draftRevision, projectTitle.value,mediaCanvasId.value||undefined);
     }
-    draftStatus.value = "已保存到此浏览器";
+    draftStatus.value = "已保存";
   } catch (failure) {
     draftFailure.value = failure instanceof Error ? failure.message : "草稿保存失败。";
     draftStatus.value = "保存失败";
   } finally { savingDraft = false; }
 }
 watch(() => [captureDraft(), canvasItems.value, canvas.positions.value, activeVideoId.value, selectedIds.value, projectTitle.value, serviceDeviceId.value], () => {
-  if (!draftLoaded.value || projectHome.value || !projectId.value || draftFailure.value) return;
+  if (!draftLoaded.value || projectHome.value || workbenchMode.value || !projectId.value || draftFailure.value) return;
   pendingDraft = canvasRecord(); draftStatus.value = "保存中…";
   void saveCanvasDraft();
 }, { deep: true, flush: "post" });
 async function restoreCanvasDraft() {
   try {
     draftFailure.value = "";
-    const record = await readDraft<SavedCanvas>(projectId.value);
+    const record = await readDraft<SavedCanvas>(projectId.value,mediaCanvasId.value||undefined);
     draftRevision = record.revision; projectTitle.value = record.title;
     if (record.value) {
       const value = record.value;
@@ -683,7 +701,7 @@ async function connectModelService() {
   showModels.value = false; audioModels.value = []; audioCatalogError.value = "";
   void loadAudioModels(); await action(refresh);
 }
-onMounted(() => { if (projectId.value) { draftLoaded.value=false; void restoreCanvasDraft(); } else void action(loadProjects); window.addEventListener("beforeunload", protectUnsavedDraft); });
+onMounted(() => { if (projectId.value) { draftLoaded.value=false; void action(()=>openProject(projectId.value)); } else void action(loadProjects); window.addEventListener("beforeunload", protectUnsavedDraft); });
 onBeforeUnmount(() => window.removeEventListener("beforeunload", protectUnsavedDraft));
 onMounted(() => {
   if (!projectId.value) void connectModelService();
@@ -716,14 +734,17 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <div class="project-grid">
         <button class="project-tile project-new" :disabled="busy" @click="action(createProject)"><v-icon icon="mdi-plus" size="30" /><span>新建项目</span></button>
-        <button v-for="project in projects" :key="project.id" class="project-tile" :disabled="busy" @click="action(()=>openProject(project.id))"><div class="project-cover"><v-icon icon="mdi-movie-open-outline" size="44" /></div><strong>{{ project.title }}</strong><small>{{ project.cardCount }} 张卡片 · {{ new Date(project.updatedAt).toLocaleString() }}</small></button>
+        <button v-for="project in projects" :key="project.id" class="project-tile" :disabled="busy" @click="action(()=>project.migrationPending ? recoverProjectMigration(project.id,project.migrationSourceRevision!) : openProject(project.id))"><div class="project-cover"><v-icon icon="mdi-movie-open-outline" size="44" /></div><strong>{{ project.title }}</strong><small>{{ project.migrationPending ? '恢复迁移' : `${project.cardCount} 张卡片` }} · {{ new Date(project.updatedAt).toLocaleString() }}</small></button>
       </div>
     </section>
-    <div v-show="!projectHome">
+    <WorkbenchPanel v-if="workbenchMode && !projectHome" :project-id="projectId" @back="action(workbenchHome)" @media="id=>action(()=>openMediaCanvas(id))"/>
+    <div v-show="!projectHome && !workbenchMode">
     <div class="video-heading workspace-heading">
       <v-btn icon="mdi-arrow-left" variant="text" aria-label="我的项目" @click="action(showProjects)" />
       <input v-model="projectTitle" class="project-title" aria-label="项目名称" maxlength="100" />
-      <div><h1>媒体工作台</h1><span>{{ snapshot ? (snapshot.online ? '服务已就绪' : '服务未启动') : '正在连接' }}</span></div>
+      <div><h1>工作台</h1><span>{{ snapshot ? (snapshot.online ? '服务已就绪' : '服务未启动') : '正在连接' }}</span></div>
+      <v-btn v-if="mediaCanvasId" variant="text" @click="action(returnToWorkbench)">流程画布</v-btn>
+      <v-btn v-else variant="text" @click="action(migrateProject)">迁移为多画布项目</v-btn>
 
       <PeerServerSelect :model-value="serviceDeviceId" :disabled="serviceBusy" label="模型服务电脑" @changed="selectModelService" />
       <v-btn variant="text" size="small" prepend-icon="mdi-cube-outline" @click="action(openModels)">模型管理</v-btn>

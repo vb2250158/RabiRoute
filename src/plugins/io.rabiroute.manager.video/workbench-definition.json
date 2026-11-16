@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "capabilities": {
+    "asset": { "label": "资产", "executable": false, "ports": { "in": [], "out": [] } },
+    "command": { "label": "命令", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
+    "agent": { "label": "Agent", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
+    "human": { "label": "人工检查", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
+    "generate": { "label": "生成", "executable": true, "ports": { "in": ["control"], "out": ["control"] } }
+  },
+  "edgeConditions": ["success", "completed"],
+  "variableTypes": ["string", "number", "boolean", "date"],
+  "freshness": ["produced", "validated", "reused"],
+  "templates": [],
+  "runStates": {
+    "running": {"label":"运行中","terminal":false},
+    "waiting_human": {"label":"等待人工","terminal":false},
+    "waiting_agent": {"label":"等待 Agent","terminal":false},
+    "cancelling": {"label":"正在停止","terminal":false},
+    "cancelled": {"label":"已停止","terminal":true},
+    "succeeded": {"label":"成功","terminal":true},
+    "completed_with_errors": {"label":"完成，存在错误","terminal":true},
+    "failed": {"label":"失败","terminal":true},
+    "interrupted": {"label":"需恢复原执行","terminal":false}
+  },
+  "nodeStates": {
+    "pending": { "label": "待运行", "terminal": false },
+    "ready": { "label": "就绪", "terminal": false },
+    "running": { "label": "运行中", "terminal": false },
+    "succeeded": { "label": "成功", "terminal": true },
+    "failed": { "label": "失败", "terminal": true },
+    "skipped": { "label": "已跳过", "terminal": true },
+    "blocked": { "label": "依赖阻塞", "terminal": true },
+    "waiting_human": { "label": "等待人工", "terminal": false },
+    "waiting_agent": { "label": "等待 Agent", "terminal": false },
+    "cancelling": { "label": "正在停止", "terminal": false },
+    "cancelled": { "label": "已停止", "terminal": true },
+    "interrupted": { "label": "执行中断", "terminal": true }
+  }
+}

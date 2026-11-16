@@ -51,6 +51,15 @@ async function validateLocalModelRoot(value: unknown, access?: VideoRequestAcces
   if (stdout.trim() !== "fixed") throw new Error("Video models require a local fixed disk");
   return root;
 }
+async function validateWorkbenchLocalPath(directory:string) {
+  const real=await rawFs.realpath(directory);
+  if(process.platform!=="win32") {if(real.startsWith("\\\\"))throw new Error("工作台执行目录必须在本机。");return;}
+  if(!/^[A-Za-z]:[\\/]/.test(directory)||!/^[A-Za-z]:[\\/]/.test(real))throw new Error("工作台执行目录不能指向网络或设备路径。");
+  const drives=[...new Set([directory.slice(0,2),real.slice(0,2)])];
+  const script="foreach($drive in ($env:RABIROUTE_WORKBENCH_DRIVES -split ',')){$disk=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID=' + [char]39 + $drive + [char]39);if($disk.DriveType -ne 3){exit 1}};'fixed'";
+  const {stdout}=await promisify(execFile)("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{encoding:"utf8",timeout:5000,maxBuffer:4096,windowsHide:true,env:{...process.env,RABIROUTE_WORKBENCH_DRIVES:drives.join(",")}});
+  if(stdout.trim()!=="fixed")throw new Error("工作台执行目录所在磁盘尚未核实为本机固定磁盘。");
+}
 
 /** Only the installed, fixed video component can be launched; API callers never supply commands. */
 export function createVideoRuntime(rootDir: string, identity: PluginIdentity, leases: ProcessLeaseRegistry, readOnly = false, peerFetch?: (deviceId: string, pathname: string, init: RequestInit) => Promise<Response>) {
@@ -63,6 +72,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
   let mediaProbe: ProcessLease | undefined;
   let probesClosed = false;
   const exitListeners = new Set<() => void>();
+  const workbenchProcesses = new Map<string, ProcessLease>();
   async function start(modelRoot?: string | string[], access?: VideoRequestAccess): Promise<string> {
     const fs = checkedFs(access); access?.assert();
     if(mediaProbe) throw new Error("请等待素材检查完成。");
@@ -131,6 +141,54 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
   }
   return Object.freeze({
     getTimeoutMs,
+    machineId: process.env.COMPUTERNAME || process.env.HOSTNAME || identity.managerInstanceId,
+    generation: identity.applicationGenerationId,
+    workbenchRuntimeRoot: path.join(rootDir, "data", "workbench-runtime"),
+    async workbenchBindings() {
+      return JSON.parse(await rawFs.readFile(path.join(componentRoot, "workbench-bindings.json"), "utf8"));
+    },
+    validateWorkbenchRuntimeRoot:validateWorkbenchLocalPath,
+    validateWorkbenchExecutable:validateWorkbenchLocalPath,
+    async workbenchProjectRoot() {
+      const settings=JSON.parse(await rawFs.readFile(path.join(componentRoot,"workbench-bindings.json"),"utf8").catch(error=>{if(error.code==="ENOENT")return "{}";throw error;}));
+      if(settings.projectsRoot===undefined)return undefined;
+      if(typeof settings.projectsRoot!=="string"||!path.isAbsolute(settings.projectsRoot))throw new Error("工作台项目根目录必须为绝对路径。");
+      return path.normalize(settings.projectsRoot);
+    },
+    auditWorkbench(event: string, id: string, outcome: "started" | "committed" | "failed") {
+      recordDataMutationAudit({ group:"config.video", event, owner:"Workbench", action:"write", target:{type:"workbench_run",id}, dataSource:{kind:"file",id:"data/workbench-runtime"}, outcome });
+    },
+    launchWorkbenchProcess(request: { attemptId:string; executable:string; argv:string[]; cwd:string; env:Record<string,string>; timeoutMs:number }, output: (stream:string, text:string)=>void|Promise<void>) {
+      if (readOnly) throw new Error("当前服务只读。");
+      if (workbenchProcesses.has(request.attemptId)) throw new Error("此 attempt 已有执行租约。");
+      const owned = leases.launch(identity, `workbench:${request.attemptId}`, {kind:"spawn",command:request.executable,args:request.argv,
+        options:{cwd:request.cwd,env:request.env,shell:false,windowsHide:true,stdio:["ignore","pipe","pipe"]}}, {exclusiveAcrossOwners:true});
+      workbenchProcesses.set(request.attemptId,owned);
+      // Job-empty notification can precede Node's close event and exit-code projection.
+      // Join both owners before publishing a completion receipt or validating outputs.
+      const closed=new Promise<{exitCode:number|null;signal:NodeJS.Signals|null}>(resolve=>owned.child.once("close",(exitCode,signal)=>resolve({exitCode,signal})));
+      owned.child.stdout?.setEncoding("utf8");owned.child.stderr?.setEncoding("utf8");
+      const outputTasks=new Set<Promise<void>>();let outputError=false;
+      const observe=(stream:typeof owned.child.stdout,name:string)=>stream?.on("data",chunk=>{
+        if(outputError)return;
+        stream.pause();
+        const task=Promise.resolve().then(()=>output(name,String(chunk))).then(()=>{},()=>{outputError=true;void leases.terminate(owned).catch(()=>{});}).finally(()=>{outputTasks.delete(task);stream.resume();});
+        outputTasks.add(task);
+      });
+      observe(owned.child.stdout,"stdout");observe(owned.child.stderr,"stderr");
+      let timeout = false;
+      const timer = setTimeout(()=>{timeout=true;void leases.terminate(owned).catch(()=>{});}, request.timeoutMs);
+      const settled = Promise.all([owned.settled,closed]).then(async([,result])=>{await Promise.all([...outputTasks]);return {...result,timedOut:timeout,outputError,leaseId:owned.id,terminated:true};}).finally(()=>{
+        clearTimeout(timer);
+        if(workbenchProcesses.size>64)for(const [id,lease]of workbenchProcesses){if(!leases.list(identity).some(active=>active.id===lease.id))workbenchProcesses.delete(id);if(workbenchProcesses.size<=64)break;}
+      });
+      return {id:owned.id,settled,cancel:()=>leases.terminate(owned)};
+    },
+    queryWorkbenchProcess(attemptId:string) {
+      const owned=workbenchProcesses.get(attemptId);
+      if(!owned)return {state:"unknown"};
+      return {state:leases.list(identity).some(lease=>lease.id===owned.id)?"running":"exited",leaseId:owned.id,exitCode:owned.child.exitCode};
+    },
     stateRoot: path.join(rootDir, "data", "video"),
     readOnly,
     componentRoot,

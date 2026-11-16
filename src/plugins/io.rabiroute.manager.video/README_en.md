@@ -1,10 +1,10 @@
 English | [简体中文](README.md)
 
-# Video generation plugin
+# Workbench plugin
 
-Provides a separate video page, job APIs, H3 workflow and job persistence. The page is enabled by default; users start the GPU service explicitly. `host.manager.video@1` provides the constrained local process lease and contract factory. `host.manager.operations@1` registers authenticated Manager APIs; events and the original conditional body reader still come from `host.manager.http@1`.
+Provides independent canvas folders, graph execution, media editing, H3 generation and durable runs. The page is enabled by default; users start the GPU service explicitly. `host.manager.video@2` reuses process leases, original Agent delivery and the contract factory. `host.manager.operations@1` registers authenticated Manager APIs; events and the original conditional body reader still come from `host.manager.http@1`.
 
-One definition set installs 34 fixed endpoints and one native dynamic model exchange and populates active discovery, including PNG/MP4/WAV, Range, SSE, projects and compute receipts. The current plugin module creates and injects its native functional owner without wrapping the retired HTTP dispatcher. See the [executable API contract](../../../../docs/video-api-contract_en.md) for methods, bodies, recovery and retirement.
+Media and new `/api/video/v2/*` Workbench endpoints share operation definitions and active discovery, including PNG/MP4/WAV, Range, SSE, independent canvas CAS and run receipts. The current plugin module creates and injects its native owner without wrapping the retired HTTP dispatcher. See the [media API contract](../../../../docs/video-api-contract_en.md) and [Workbench guide](../../../../docs/workbench-canvas_en.md) for directory layout, bindings, graph contracts and acceptance scope.
 
 The Host provides `requestAccess(request)`; the plugin revalidates after asynchronous waits and before filesystem/process/network/stream dispatch. Accepted background tasks belong to the plugin lifecycle and do not retain initiating request authority. Revocation returns a sanitized 403; mutation outcomes distinguish `not_started` from `unknown` without claiming rollback.
 

@@ -15,7 +15,7 @@ export const activate = definePlugin({ async activate(context) {
   const lifecycle = createVideoPluginLifecycle({ identity: context.identity, signal: context.lifecycle.signal, http, host, api, runtime, catalog });
   context.effects.adopt(lifecycle.publication.retire, "prepared video native owner");
   context.services.provide("manager.video@1", Object.freeze({ instanceId: context.identity.instanceId }));
-  const common = { label: { fallback: "媒体工作台" }, routeId: "global.video", hosts: ["web"], order: 51 };
+  const common = { label: { fallback: "工作台" }, routeId: "global.video", hosts: ["web"], order: 51 };
   context.contributions.register({ kind: "page", id: "video-page", value: { ...common, surface: "web.pages", rendererId: "builtin.web-page.video.v1", slot: "route" } });
   context.contributions.register({ kind: "navigation", id: "video", value: { ...common, surface: "web.navigation", icon: "mdi-video-outline", slot: "utility" } });
   context.effects.add(lifecycle.prepare, "prepare video snapshots and operations");

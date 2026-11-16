@@ -8,7 +8,7 @@ export function activate(api: Api & WebTranslationModuleApi): () => void {
   const disposers = api.instanceIds.map(id => api.forInstance(id).registerPage({
     routeId: "global.video", rendererId: "builtin.web-page.video.v1",
     loader: () => import("./pages/VideoPage.vue"),
-    paths: [{ path: "/video", title: "视频生成" }],
+    paths: [{ path: "/video", title: "工作台" }],
     navigation: { resolvePath: () => "/video", allowedSlots: ["utility"], allowedIcons: ["mdi-video-outline"] }
   }));
   disposers.unshift(disposeTranslations);

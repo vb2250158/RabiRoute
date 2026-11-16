@@ -38,6 +38,10 @@ export class VideoService {
     this.serial = next.catch(() => {});
     return next;
   }
+  submissionReceipt(key,computeOnly=false) {
+    const keyHash=createHash("sha256").update(`${computeOnly?"compute:":""}${key}`).digest("hex");
+    return [...this.jobs.values()].find(job=>job.keyHash===keyHash&&Boolean(job.computeOnly)===computeOnly);
+  }
   async initialize({ recover = true } = {}) {
     // Candidate validation may load existing records, but only the published owner
     // may recover or persist them. Reload after the previous owner actually drains.
