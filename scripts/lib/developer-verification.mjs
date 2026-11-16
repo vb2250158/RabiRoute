@@ -185,7 +185,9 @@ async function inspectPublicationArtifact(candidateRoot, artifactKind, expected,
   if (!['source-patch', 'web-patch'].includes(artifactKind) || !/^[a-f0-9]{64}$/.test(expected ?? '')) throw new Error('Declare source-patch/web-patch and its original artifact SHA-256.');
   const ownerFiles = artifactKind === 'source-patch'
     ? ['dist/plugin-kernel/hotPatchCandidateStore.js', 'dist/plugin-kernel/hotPatchResourceStore.js']
-    : ['dist/manager/webPatchCatalog.js', 'dist/plugin-kernel/automaticCodeRuntime.js', 'dist/plugin-kernel/hotPatchIterator.js'];
+    : ['dist/manager/webPatchCatalog.js', 'dist/manager/webPluginModules.js', 'dist/plugin-kernel/packageLoader.js',
+      'dist/plugin-kernel/manifest.js', 'dist/plugin-kernel/types.js', 'dist/plugin-kernel/capabilityReference.js',
+      'dist/plugin-kernel/automaticCodeRuntime.js', 'dist/plugin-kernel/hotPatchIterator.js'];
   const repository = fileURLToPath(new URL('../../', import.meta.url));
   const ownerBefore = await fingerprintFiles(repository, ownerFiles);
   const compiled = path.join(tempRoot, 'artifact-owner');

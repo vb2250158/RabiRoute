@@ -14,7 +14,7 @@ async function fixture(t: any) {
   const sourceRoot = path.join(root, "source"), candidateRoot = path.join(root, "candidate"), tests = path.join(root, "tests");
   await fs.mkdir(sourceRoot); await fs.mkdir(candidateRoot); await fs.mkdir(tests);
   await fs.writeFile(path.join(sourceRoot, "package.json"), '{"type":"module"}');
-  for (const file of ["scripts/verify-plugin-candidate.mjs", "scripts/lib/developer-verification.mjs", "dist/plugin-kernel/hotPatchCandidateStore.js", "dist/plugin-kernel/hotPatchResourceStore.js", "dist/manager/webPatchCatalog.js", "dist/plugin-kernel/automaticCodeRuntime.js", "dist/plugin-kernel/hotPatchIterator.js"]) {
+  for (const file of ["scripts/verify-plugin-candidate.mjs", "scripts/lib/developer-verification.mjs", "dist/plugin-kernel/hotPatchCandidateStore.js", "dist/plugin-kernel/hotPatchResourceStore.js", "dist/manager/webPatchCatalog.js", "dist/manager/webPluginModules.js", "dist/plugin-kernel/packageLoader.js", "dist/plugin-kernel/manifest.js", "dist/plugin-kernel/types.js", "dist/plugin-kernel/capabilityReference.js", "dist/plugin-kernel/automaticCodeRuntime.js", "dist/plugin-kernel/hotPatchIterator.js"]) {
     await fs.mkdir(path.dirname(path.join(sourceRoot, file)), { recursive: true }); await fs.copyFile(path.join(repository, file), path.join(sourceRoot, file));
   }
   await fs.symlink(path.join(repository, "node_modules"), path.join(sourceRoot, "node_modules"), "junction");

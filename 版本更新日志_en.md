@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.17 - 2026-11-17
+
+- Fix incomplete frozen module dependencies in developer Web candidate verification and verify their hashes.
+
 ## 0.15.16 - 2026-11-17
 
 - Cover Xiaomi latest-recording discovery and distinguish work switches from credential revocation in native read tests.
