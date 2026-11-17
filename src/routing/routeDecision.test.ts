@@ -394,7 +394,8 @@ test("AgentPacket injects processing-time context confirmation protocol", () => 
   });
 
   assert.match(packet.message, /\[处理前上下文确认\]/);
-  assert.match(packet.message, /回复、发布任务、更新计划、写入记忆或执行外部动作之前/);
+  assert.match(packet.message, /需要其中的事实或流程时，按 GET 路径读取原文并确认适用范围/);
+  assert.match(packet.message, /读取失败时记录一次实际原因.*缺少依据的事实标明未确认/);
   assert.match(packet.message, /GET \/api\/roles\/Rabi\/memory\/recent\/memory-required/);
   assert.match(packet.message, /memory-required：任务发布上下文 — 任务发布上下文（近期记忆，score=20）/);
 });

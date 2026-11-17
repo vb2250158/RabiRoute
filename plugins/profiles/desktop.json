@@ -221,7 +221,7 @@
     {
       "id": "manager:xiaomi-home",
       "package": "io.rabiroute.manager.xiaomi-home",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "enabled": true,
       "config": {},
       "grants": []

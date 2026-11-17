@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.28 - 2026-11-17
+
+- Migrate saved voice-assistant instances to 1.1.12 while preserving identity, enabled state, configuration and grants.
+- Add a Xiaomi account tab that reuses the existing protected cloud session and update the plugin to 0.1.9.
+- Audit NapCat reply-image writes without private content and update the plugin to 0.1.13.
+- Use browser-safe local ports for stream and LAN-agent tests, cover blocked-port retry and cleanup, and align AgentPacket tests with the upstream conditional-read contract.
+
 ## 0.15.27 - 2026-11-17
 
 - New elevated Host tasks explicitly use Windows task priority `4`, avoiding the default low I/O and memory priorities intended for background work. Existing tasks are repaired through their Windows permission boundary and verified at startup.

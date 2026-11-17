@@ -4,8 +4,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { once } from "node:events";
 import test, { type TestContext } from "node:test";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
@@ -40,7 +40,7 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
     setTrustedLanAgentSource(request, { nodeId: "fixture-node", agentId: "worker", provider: "dsh", sessionId: "fixture-session", sessionName: "Fixture" });
     handler(request, response);
   });
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => {
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));

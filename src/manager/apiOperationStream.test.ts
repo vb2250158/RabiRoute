@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import test, { type TestContext } from "node:test";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { compileApiOperation, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationStream } from "./apiOperationContract.js";
 import { cancelApiOperationStream, writeApiOperationStream } from "./apiOperationStream.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
@@ -56,11 +57,39 @@ async function serve(t: TestContext, definition: ApiOperationDefinition) {
   const server = http.createServer((request, response) => {
     if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
   });
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   t.after(async () => { await registration.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
   return { registry, registration, url: `http://127.0.0.1:${address.port}/api/example/stream` };
 }
+
+test("stream fixture port allocation closes blocked listeners and bounds retries", async () => {
+  class AutomaticPortServer extends EventEmitter {
+    listens = 0;
+    closes = 0;
+    port = 0;
+    constructor(private readonly ports: number[]) { super(); }
+    listen(port: number, host: string) {
+      assert.equal(port, 0); assert.equal(host, "127.0.0.1");
+      this.listens++; this.port = this.ports.shift() ?? 6000;
+      queueMicrotask(() => this.emit("listening"));
+      return this;
+    }
+    address() { return { address: "127.0.0.1", family: "IPv4", port: this.port }; }
+    close(done: () => void) {
+      this.closes++; this.port = 0; queueMicrotask(done); return this;
+    }
+  }
+  const rebound = new AutomaticPortServer([6000, 6679, 55000]);
+  const endpoint = await listenManagerEndpoint({ server: rebound as unknown as http.Server, host: "127.0.0.1", policy: { mode: "auto" } });
+  assert.equal(endpoint.port, 55000); assert.equal(rebound.listens, 3); assert.equal(rebound.closes, 2);
+  assert.equal(rebound.listenerCount("listening"), 0); assert.equal(rebound.listenerCount("error"), 0);
+  await new Promise<void>(resolve => rebound.close(resolve));
+  const exhausted = new AutomaticPortServer([]);
+  await assert.rejects(listenManagerEndpoint({ server: exhausted as unknown as http.Server, host: "127.0.0.1", policy: { mode: "auto" } }), /browser-safe Manager port/);
+  assert.equal(exhausted.listens, 128); assert.equal(exhausted.closes, 128); assert.equal(exhausted.port, 0);
+  assert.equal(exhausted.listenerCount("listening"), 0); assert.equal(exhausted.listenerCount("error"), 0);
+});
 
 test("real SSE streams validate and frame each event without buffering the complete response", async t => {
   let cleaned = false; let cancellations = 0;

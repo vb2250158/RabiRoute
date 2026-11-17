@@ -16,6 +16,8 @@ This plugin owns its message-endpoint menu and card, authentication, device prot
 
 ## Configuration and authorization
 
+The Xiaomi Account tab in the adapter provides a shared QR login backed by the existing protected Mi Home cloud session. Existing features such as vacuum maps use the same session. The Mi Home cloud session and Home Assistant access token are managed separately. Camera recording availability still depends on the connected media source.
+
 Connection failures and authorization guidance appear in the connection card. Event monitoring status and its check action sit beside the monitoring switch; disabled recording shows “Off”; device control becomes available after connection. The Xiaomi card keeps only its overall status at the top, without a duplicate environment/dependency alert list. Unsaved switch changes are marked separately rather than presented as active settings.
 
 ### Home Assistant installation and startup

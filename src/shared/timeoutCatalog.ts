@@ -2103,16 +2103,9 @@ export const timeoutCatalog: readonly TimeoutCatalogEntry[] = [
     "effect": "next-operation-or-owner-initialization"
   },
   {
-    "key": "backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS",
-    "defaultMs": 120000,
-    "label": "Agent 接口 · waitForWorkbuddyTurn / DEFAULT_SETTLE_TIMEOUT_MS",
-    "scope": "src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts",
-    "effect": "next-operation-or-owner-initialization"
-  },
-  {
     "key": "backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS",
     "defaultMs": 30000,
-    "label": "Agent 接口 · waitForWorkbuddyTurn / REQUEST_TIMEOUT_MS",
+    "label": "Agent 接口 · deliverWorkbuddyMessage / REQUEST_TIMEOUT_MS",
     "scope": "src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts",
     "effect": "next-operation-or-owner-initialization"
   },

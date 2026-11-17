@@ -189,6 +189,11 @@ export async function readPluginProfile(profilePath: string, options: Readonly<{
   const profileValue: unknown = JSON.parse(await fs.readFile(profilePath, "utf8"));
   const profile = parsePluginProfile(profileValue);
   const migrationsPath = options.migrationsPath ?? path.join(path.dirname(profilePath), "package-migrations.json");
+  return migratePluginProfile(profile, migrationsPath);
+}
+
+/** Apply only declared package migrations to an already parsed effective profile. */
+export async function migratePluginProfile(profile: PluginProfile, migrationsPath: string): Promise<PluginProfile> {
   let migrationText: string;
   try { migrationText = await fs.readFile(migrationsPath, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return profile; throw error; }
@@ -221,8 +226,7 @@ export async function readPluginProfile(profilePath: string, options: Readonly<{
     const targets = mappings.get(JSON.stringify([instance.package, instance.version]));
     if (!targets) return [instance];
     if (targets.size > 1) {
-      const rowIndex = (profileValue as { instances: Record<string, unknown>[] }).instances
-        .findIndex(row => typeof row?.id === "string" && row.id.trim() === instance.id);
+      const rowIndex = profile.instances.findIndex(row => row.id === instance.id);
       diagnostics.push(Object.freeze({ source: "profile", rowIndex, instanceId: instance.id, packageId: instance.package,
         version: instance.version, message: `Conflicting package migrations for ${instance.package}@${instance.version}.` }));
       return [];
