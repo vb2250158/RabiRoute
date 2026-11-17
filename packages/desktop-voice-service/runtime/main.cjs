@@ -2,6 +2,8 @@ const {app,BrowserWindow,ipcMain,session,screen,Tray,Menu,nativeImage,shell}=req
 const {join}=require('node:path')
 const {pathToFileURL}=require('node:url')
 const {connect}=require('node:net')
+const {createCanvasPresenter}=require('./canvas-presenter.cjs')
+let canvasPresenter
 const option=name=>process.argv.find(value=>value.startsWith('--voice-'+name+'='))?.split('=').slice(1).join('=')
 const pipe=option('pipe'),nonce=option('nonce'),userData=option('user-data')
 if(!pipe||!nonce||!userData)process.exit(2)
@@ -16,7 +18,7 @@ const send=value=>{const frame=JSON.stringify(value)+'\n';if(frame.length>MAX||s
 socket.on('connect',()=>send({auth:nonce}))
 socket.on('close',()=>app.quit());socket.on('error',()=>app.quit())
 app.on('window-all-closed',()=>app.quit())
-app.on('before-quit',()=>{quitting=true;clearTimeout(moveTimer)})
+app.on('before-quit',()=>{quitting=true;clearTimeout(moveTimer);canvasPresenter?.close()})
 const safeWindow=window=>{
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}))
   window.webContents.on('will-navigate',event=>event.preventDefault())
@@ -42,7 +44,7 @@ async function configureCaption(settings){
     safeWindow(caption)
     caption.on('close',event=>{if(quitting)return;event.preventDefault();caption.hide();send({event:'presenter.action',action:'captions-hide'})})
     const rememberBounds=()=>{clearTimeout(moveTimer);moveTimer=setTimeout(()=>{if(caption&&!caption.isDestroyed())send({event:'presenter.bounds',bounds:caption.getBounds()})},300)}
-    caption.on('move',rememberBounds);caption.on('resize',rememberBounds)
+    caption.on('move',()=>{rememberBounds();canvasPresenter?.follow(caption.getBounds())});caption.on('resize',()=>{rememberBounds();canvasPresenter?.follow(caption.getBounds())})
     await caption.loadFile(join(__dirname,'caption.html'))
   }
   if(caption){
@@ -54,6 +56,7 @@ async function configureCaption(settings){
     caption.webContents.send('device-command',{method:'caption',params:{settings:captionSettings,presentation:lastPresentation}})
     if(captionSettings.enabled)caption.showInactive();else caption.hide()
   }
+  await canvasPresenter?.update(lastPresentation.canvas,caption?.getBounds())
   return {visible:Boolean(caption&&!caption.isDestroyed()&&caption.isVisible()),movable:caption?.isMovable()??false,resizable:caption?.isResizable()??false,bounds:caption?.getBounds()||null}
 }
 function trayMenu(){
@@ -76,13 +79,15 @@ app.whenReady().then(async()=>{
   isolated.webRequest.onBeforeRequest((details,callback)=>callback({cancel:!details.url.startsWith(ROOT)&&!details.url.startsWith('blob:')}))
   win=new BrowserWindow({show:false,title:'语音助手音频',webPreferences:{session:isolated,preload:join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false,backgroundThrottling:false}})
   safeWindow(win);win.webContents.on('render-process-gone',()=>app.quit())
+  canvasPresenter=createCanvasPresenter({BrowserWindow,screen,session:isolated,preload:join(__dirname,'preload.cjs'),send,safeWindow})
   tray=new Tray(nativeImage.createFromPath(join(__dirname,'voice.png')));tray.setToolTip('语音助手');tray.on('double-click',()=>send({event:'presenter.action',action:'open-settings'}));trayMenu()
   ipcMain.on('device-message',(event,value)=>{
     if(!value||typeof value!=='object')return
+    if(canvasPresenter.action(event.sender,value.action))return
     if(event.sender===win.webContents){if(JSON.stringify(value).length>MAX){app.quit();return}send(value)}
     else if(event.sender===caption?.webContents&&['open-settings','toggle-capture','toggle-output','stop','captions-hide','toggle-caption-lock'].includes(value.action))send({event:'presenter.action',action:value.action})
   })
-  for(const event of ['display-removed','display-metrics-changed'])screen.on(event,()=>{if(caption)caption.setBounds(clampBounds(caption.getBounds()))})
+  for(const event of ['display-removed','display-metrics-changed'])screen.on(event,()=>{if(caption)caption.setBounds(clampBounds(caption.getBounds()));canvasPresenter.follow(caption?.getBounds())})
   let buffer=''
   socket.setEncoding('utf8')
   socket.on('data',chunk=>{
@@ -101,7 +106,7 @@ app.whenReady().then(async()=>{
           captionQueue=captionQueue.then(()=>configureCaption(message.params)).then(value=>{trayMenu();send({id:message.id,ok:true,value})},()=>send({id:message.id,ok:false,error:'CAPTION_CONFIG_FAILED'}))
         }
         else if(message.method==='presenter.update'){
-          lastPresentation=message.params;caption?.webContents.send('device-command',{method:'caption',params:{settings:captionSettings,presentation:lastPresentation}});trayMenu();send({id:message.id,ok:true,value:true})
+          lastPresentation=message.params;caption?.webContents.send('device-command',{method:'caption',params:{settings:captionSettings,presentation:lastPresentation}});trayMenu();captionQueue=captionQueue.then(()=>canvasPresenter.update(lastPresentation.canvas,caption?.getBounds())).then(()=>send({id:message.id,ok:true,value:true}),()=>send({id:message.id,ok:false,error:'CANVAS_PRESENTATION_FAILED'}))
         }else if(METHODS.has(message.method))win.webContents.send('device-command',message)
         else throw Error('method')
       }catch{app.quit();return}

@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.24 - 2026-11-17
+
+- Add a shared 16:9 assistant canvas for charts, text and diagrams, with temporary and persistent lifecycles.
+- Integrate the canvas with Web, desktop captions and AIUI glasses while preserving conversation snapshots and role isolation.
+- Generate desktop canvas resources during plugin builds and use isolated local HTTP clients for device API regression fixtures.
+- Wait for both Job-tree completion and child close in the Windows process regression to avoid an exit-status race.
+
 ## 0.15.23 - 2026-11-17
 
 - Run speech playback alongside tool execution, show tool steps and results, and explain unresolved work naturally when a turn reaches its limits.

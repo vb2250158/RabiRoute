@@ -53,9 +53,9 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     try{return await deviceOpening}finally{deviceOpening=undefined;deviceOpeningAbort=undefined}
   }
   async function releaseUnusedDevice() {
-    if(deviceUsers||!closed&&settings().captionsEnabled)return
+    if(deviceUsers||!closed&&(settings().captionsEnabled||native.canvasState?.().visible))return
     await deviceOpening?.catch(()=>{})
-    if(deviceUsers||!closed&&settings().captionsEnabled)return
+    if(deviceUsers||!closed&&(settings().captionsEnabled||native.canvasState?.().visible))return
     if(deviceClosing)return deviceClosing
     const target=device;if(!target)return
     device=undefined
@@ -118,6 +118,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
         case 'toggle-caption-lock': await command({ action: 'settings', patch: { captionLocked: !config.captionLocked } }); break
         case 'toggle-captions': await command({ action: 'settings', patch: { captionsEnabled: !config.captionsEnabled } }); break
         case 'captions-hide': await command({ action: 'settings', patch: { captionsEnabled: false } }); break
+        case 'canvas-close': await command({action:'canvas-close'});break
         case 'stop': await command({ action: 'stop' }); break
       }
     } catch (failure) { report(failure) }
@@ -187,6 +188,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
         }
         if(e.type==='playback'&&e.event?.responseId)native.recordSpeechDetails?.(e.event.responseId,{type:'playback',status:e.event.type,...(e.event.error?{error:'SPEECH_PLAYBACK_FAILED'}:{})})
         if (e.type === 'speech-started') inputPreview = {text:'',final:false}
+        if(e.type==='transcript'&&e.text?.trim()&&!inputPreview?.text)native.beginVisualInput?.()
         if (e.type === 'transcript') inputPreview = {text:e.text,final:false}
         if (e.type === 'input') inputPreview = {text:e.input.text,final:true,corrected:Boolean(inputPreview&&!inputPreview.final&&inputPreview.text&&inputPreview.text!==e.input.text)}
         if (e.type === 'transcript') presentation = projectCaptionText(presentation,{text:e.text,responseId:null})
@@ -196,6 +198,14 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     },
   })
   const unobserve = observeOutput({ conversation: native, voice, onError: report,
+    onCanvas(value){
+      presentation={...presentation,canvas:value};changed()
+      presenterQueue=presenterQueue.then(async()=>{
+        if(closed)return
+        if(value.visible){const target=await leaseDevice(settings());try{await target.configurePresenter(captionSettings(settings()));await target.present(presentation)}finally{await target.close()}}
+        else{if(device)await device.present(presentation);await releaseUnusedDevice()}
+      }).catch(failure=>report(failure))
+    },
     onText(value) {
       recognitionSession=native.getSessionId?.();latestRecognitionText=value.responseId?String(value.text||'').slice(0,2048):''
       if(!value.responseId)speechProgress.clear()
@@ -253,6 +263,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     if (closed) throw Error('ASSISTANT_CLOSED')
     if(request.action!=='message-details')error = null
     switch (request.action) {
+      case 'canvas-close': if(!native.closeCanvas)throw Error('ASSISTANT_CANVAS_UNAVAILABLE');return native.closeCanvas()
       case 'preview-settings': {
         validateDraftPatches(request.patches)
         if (!previewSettings || !saveSettingsBatch) throw Error('ASSISTANT_DRAFT_UNAVAILABLE')
@@ -339,7 +350,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       try { return await credentials.describe(kind, config[kind + 'Endpoint'], kind === 'asr' ? config.asrMode : config.ttsProvider || 'compatible') }
       catch { return { configured: false, writable: false, error: 'SPEECH_ENDPOINT_INVALID' } }
     }
-    return { revision, sessionId: native.getSessionId() ?? null, voice: voice.getState(), interaction: voice.getPresentationState(), inputPreview, waveform:{samples:levels,updatedAt:levelUpdatedAt},asrFeedback:recognitionFeedback(config), presentation, caption, playback, error, settings: config, settingsDraft:Boolean(previewSettings&&saveSettingsBatch),
+    return { revision, sessionId: native.getSessionId() ?? null, canvas:native.canvasState?.(),voice: voice.getState(), interaction: voice.getPresentationState(), inputPreview, waveform:{samples:levels,updatedAt:levelUpdatedAt},asrFeedback:recognitionFeedback(config), presentation, caption, playback, error, settings: config, settingsDraft:Boolean(previewSettings&&saveSettingsBatch),
       speechProgress:[...speechProgress.values()].map(({responseId,spokenEnd,timingMode,speechStatus})=>({responseId,spokenEnd,timingMode,speechStatus})),
       speechCatalogs:{volcengine:volcanoCatalog,compatible:openaiCatalog},
       speechExpression:{...speechExpressionPolicy(config),available:supportsDynamicExpression},

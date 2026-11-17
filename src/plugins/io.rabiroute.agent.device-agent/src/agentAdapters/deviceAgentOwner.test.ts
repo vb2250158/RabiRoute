@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createDeviceAgentOwner } from './deviceAgentOwner.js';
 import { createDeviceAgentOperations } from './deviceAgentOperations.js';
 import { ManagerPluginRouteRegistry } from '../../../../manager/managerPluginRouteRegistry.js';
+import { nativeHttpTestFetch } from '../../../../manager/nativeHttpTestClient.js';
 import { createDeviceAgentAdapter } from './deviceAgentAdapter.js';
 import type { RabiDeliveryEnvelope } from '../../../../shared/rabiMessage.js';
 
@@ -26,7 +27,7 @@ async function fixture(run: (f: any) => Promise<void>) {
   const server=http.createServer((request,response)=>{if(!registry.handle(request,new URL(request.url!,'http://fixture.invalid'),response))response.writeHead(404,{'content-type':'application/json'}).end(JSON.stringify({code:'DEVICE_AGENT_PATH_NOT_FOUND'}));});
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+ (server.address() as any).port;
-  const call=async(auth:string,method:string,suffix:string,body?:unknown)=>{const response=await fetch(base+'/api/device-agents'+suffix,{method,headers:{authorization:auth,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,...await response.json() as any};};
+  const call=async(auth:string,method:string,suffix:string,body?:unknown)=>{const response=await nativeHttpTestFetch(base+'/api/device-agents'+suffix,{method,headers:{authorization:auth,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,...await response.json() as any};};
   try{await run({directory,allowAgent:(id:string)=>allowedAgents.add(id),call,owner:()=>owner,restart:()=>{owner=createDeviceAgentOwner(settings);},revoke:()=>{revoked=true;},onAssignment:(hook:()=>Promise<void>)=>{assignmentHook=hook;},authorityCalls:()=>authorityCalls});}
   finally{await registration.dispose();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));assert.equal(path.dirname(path.resolve(directory)),path.resolve(os.tmpdir()));assert.ok(path.basename(directory).startsWith('device-agent-owner-'));fs.rmSync(directory,{recursive:true,force:true});}
 }

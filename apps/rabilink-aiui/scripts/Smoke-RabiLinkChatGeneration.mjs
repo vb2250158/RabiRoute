@@ -90,7 +90,8 @@ test('rename persists full profile and fences old deferred creation without clea
   assert.equal(destroyed, 1); assert.equal(f.page.chatModelPromise, activePromise);
   const current = { prompt: async () => '当前回答', destroy() {} }; f.pending[1](current);
   const assistant = await replacement; assert.equal(f.page.chatAssistant, assistant); assert.equal(assistant.getState().ready, true);
-  assert.match(f.modelOptions[1].initialPrompts[0].content, /\n\nprompt$/);
+  assert.match(f.modelOptions[1].initialPrompts[0].content, /\n\nprompt(?:\n\n|$)/);
+  assert.match(f.modelOptions[1].initialPrompts[0].content, /assistant_canvas/);
   assert.deepEqual(f.modelOptions[1].tools, []);
   assert.equal((await assistant.run('测试')).text, '当前回答'); f.page.cleanupChatModel();
 });

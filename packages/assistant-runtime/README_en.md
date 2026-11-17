@@ -352,9 +352,13 @@ Hosts expose `previewSettings(patches)` and `saveSettingsBatch(patches)` with ma
 
 ### First use and preview boundaries
 
-The DSH plugin reads providers and models from its current DSH host without duplicate chat credentials. Select a model and confirm a real text reply before configuring recognition, a voice and audio devices. An empty catalog or a default model name does not prove the model is callable. Isolated environments need the actual provider plugins and credentials.
+The DSH plugin reads providers and models from its current DSH host without duplicate chat credentials. Select a model and confirm a real reply through connection diagnostics before configuring recognition, a voice and audio devices. An empty catalog or a default model name does not prove the model is callable. Isolated environments need the actual provider plugins and credentials.
 
 UI previews explicitly state that conversation is unavailable, including inside settings and sample model results. Credentials, sending, voice start and audio tests are disabled in previews. First-use guidance proceeds through conversation, recognition, output and devices; model parameters may initially keep their defaults.
+
+### Charts and diagrams
+
+`@rabilink/assistant-runtime/canvas` supplies validation, drawing, lifetime and the `assistant_canvas` tool adapter for one declarative 16:9 surface. Hosts persist it through their existing conversations and include the current canvas observation in each model request. Temporary surfaces hide on new input; persistent surfaces stay until the Agent or user closes them. The shared UI defaults to voice controls; an optional text composer requires explicit `capabilities.textInput: true`. See the [canvas contract](../../docs/assistant-visual-canvas_en.md).
 
 ### Text-confirmed voice interruption
 

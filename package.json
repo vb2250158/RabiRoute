@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.15.23",
+  "version": "0.15.24",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -53,7 +53,7 @@
     "relay:rabilink:speech:check": "node --check scripts/rabilink-relay-server.mjs && node --import ./scripts/test-manager-runtime-env.mjs --test scripts/rabilink-proxy-request-queue.test.mjs && node --import ./scripts/test-manager-runtime-env.mjs --import tsx --test src/manager/rabiLinkRelayRuntime.test.ts",
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs",
-    "build:plugins": "node scripts/generate-computer-settings-definition.mjs && node scripts/build-plugin-packages.mjs && node scripts/build-agent-hook-packages.mjs && node scripts/build-agent-native-assets.mjs",
+    "build:plugins": "npm --prefix packages/desktop-voice-service run build && node scripts/generate-computer-settings-definition.mjs && node scripts/build-plugin-packages.mjs && node scripts/build-agent-hook-packages.mjs && node scripts/build-agent-native-assets.mjs",
     "check:plugin-architecture": "node scripts/check-plugin-platform-architecture.mjs",
     "check:skills": "node --test scripts/sync-agent-skills.test.mjs scripts/skill-catalog.test.mjs scripts/dynamic-manager-active-truth.test.mjs",
     "start:linux": "node scripts/linux-host.mjs",

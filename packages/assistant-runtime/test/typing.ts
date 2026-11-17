@@ -110,3 +110,12 @@ void resident.start(); resident.pauseCapture(); void resident.resumeCapture();
 resident.setOutputEnabled(false); resident.beginResponse()?.finish(); void resident.stop(); void resident.dispose();
 // @ts-expect-error Only explicit booleans are valid output commands.
 resident.setOutputEnabled('false');
+
+import {createVisualCanvas,createVisualCanvasTools,paintVisualCanvas} from '../src/visual-canvas.js';
+const visualCanvas=createVisualCanvas();
+visualCanvas.show({title:'Example',nodes:[{kind:'text',x:0,y:0,width:960,height:540,text:'Example'}]},{persistent:true});
+visualCanvas.snapshot().persistent satisfies boolean;
+createVisualCanvasTools(visualCanvas).instructions satisfies string|undefined;
+void paintVisualCanvas;
+// @ts-expect-error Persistence is an explicit boolean.
+visualCanvas.show({title:'Example',nodes:[]},{persistent:'yes'});

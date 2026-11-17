@@ -58,6 +58,7 @@
 
 <script setup>
 import wx from "wx";
+import {visualCanvasPageMethods} from '../../utils/visual-canvas-page.js';
 import {
   claimRabiLinkDeviceToken,
   getMobileWebgui,
@@ -654,6 +655,7 @@ const WEBGUI_TOOL_PATHS = {
 };
 
 export default {
+  ...visualCanvasPageMethods,
   ...agentProfilePageMethods,
   ...apiResultPageMethods,
   ...deviceAgentPageMethods,
@@ -914,6 +916,7 @@ export default {
     agentSpeaking: false,
     agentSpeakingCue: "",
     playbackCaptionText: "", playbackCaptionStart: 0, playbackCaptionLength: 0,
+    visualCanvasVisible: false, visualCanvasTitle: '', visualCanvasPersistent: false, visualCanvasWidth: 448, visualCanvasHeight: 252,
     transcriptionDesired: true,
     transcriptionListening: false,
     transcriptionState: "准备中",
@@ -1164,6 +1167,7 @@ export default {
     if (this.data.modelProbe) { void this.runHostModelProbe("onReady"); return; }
     console.info("[RabiLink AIUI] page:onReady");
     this.pageReady = true;
+    this.paintVisualCanvas();
     this.scheduleDeferredStartup();
   },
 
@@ -4385,6 +4389,8 @@ export default {
         ? this.handleConfigurationSpeechResult(text) : this.handleTranscriptionResult(text),
       onError: error => console.warn("AIUI voice failed:", cloudSafeMessage(error?.message || error)),
       onEvent: event => {
+        if(event.type==='transcript'&&event.text?.trim())this.beginVisualCanvasInput();
+        if(event.type==='input'){this.beginVisualCanvasInput();this.visualCanvasInputPending=false;}
         if (event.type === "speech-started") this.setData({ transcriptionState: "正在收音" });
         if (event.type === "input") this.setData({ transcriptionState: "正在聆听" });
         if (event.type === "speech-interrupted" && event.reason !== "response-replaced")
@@ -4700,6 +4706,7 @@ export default {
   },
 
   async executeChatTool(event, runtime) {
+    if(event.functionName==='assistant_canvas')return this.visualCanvasBackend().executeTool(event);
     if (["rabi_api_help", "rabi_api_call", "rabi_task_follow"].includes(event.functionName)) {
       if (!runtime || runtime !== this.chatModelApiRuntime) throw new Error("API_NOT_CONNECTED");
       return runtime.handleToolCall(event);
@@ -4801,6 +4808,7 @@ export default {
         turnOptions.turnId = inputEntry.input.id;
       }
       const modelInput = nativeDeviceContext ? userText + "\n\n[设备 Agent 连接上下文]\n当前设备会话来源见下方。新正式 Agent 请求 POST /api/agent/threads 可显式选择任何经鉴权的目标 PC；已有回传参数的正式回复必须使用以下 targetDeviceId（原投递账本所在 PC），不要用角色来源 PC 或设备所在 PC 替代它。此目标只定位原请求账本，不改变普通接口的默认角色 PC、聊天记录来源或权限。\n" + JSON.stringify(nativeDeviceContext) : userText;
+      this.visualCanvasActiveTurnEpoch=this.visualCanvasTurnEpoch??this.ensureVisualCanvas().canvas.beginInput();
       const result = await (this.chatConversation || runtime).run(modelInput, turnOptions);
       inputResult = result;
       if (!current() || result.state === "cancelled") return;
@@ -4942,14 +4950,17 @@ export default {
         const availabilityTimeout = requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.available", 10000);
         const creationTimeout = requestTimeout(this.config(), this.data.targetDeviceId, "aiui.model.create", 15000);
         assistant = this.aiuiRuntime.createSession({
-          protocol: rabiAgentProtocol,
+          protocol: this.visualCanvasProtocol(rabiAgentProtocol),
           profile: { systemPrompt: initialPrompts[0].content, modelOptions: { ...modelOptions, initialPrompts: initialPrompts.slice(1) } },
           initializationTimeoutMs: Math.min(2147483647, availabilityTimeout + creationTimeout),
           discoverTools: async ({ signal }) => {
             const found = await this.prepareRabiApiTools({ isCurrent: current, signal });
             if (!current() || signal.aborted) { found.runtime?.dispose(); throw new Error("VOICE_CONTEXT_CHANGED"); }
             knowledge = found;
-            return { tools: found.tools, toolPolicy: rabiAgentToolPolicy,
+            const visual=this.visualCanvasBackend();
+            return { instructions:visual.instructions,tools:[...found.tools,...visual.tools],toolPolicy:{
+              classify:decision=>decision.name==='assistant_canvas'?visual.toolPolicy.classify(decision):rabiAgentToolPolicy.classify(decision),
+              inspectOutcome:(result,decision)=>decision.name==='assistant_canvas'?visual.toolPolicy.inspectOutcome(result,decision):rabiAgentToolPolicy.inspectOutcome(result,decision)},
               executeTool: event => current() ? this.executeChatTool(event, found.runtime) : { cancelled: true },
               dispose: () => found.runtime?.dispose() };
           },
@@ -5787,7 +5798,7 @@ export default {
 <page bindtap="onPageTap">
   <view class="pageScroll" bindtap="onPageTap">
     <view class="page" bindtap="onPageTap">
-      <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}}">
+      <view class="unifiedModeHud {{modeFrameRelayout ? 'modeFrameRelayout' : ''}} {{visualCanvasVisible ? 'hasVisualCanvas' : ''}}">
         <!-- TOP STATUS BAR (H: 28px) -->
         <view class="hudTopBar">
           <view class="hudBrandRow">
@@ -5807,23 +5818,27 @@ export default {
           </view>
         </view>
 
+        <view class="visualCanvasRegion {{visualCanvasVisible ? '' : 'statusHidden'}}" style="width: {{visualCanvasWidth}}px;">
+          <view class="visualCanvasHeading"><text>{{visualCanvasTitle}}</text><text catchtap="closeVisualCanvas">关闭</text></view>
+          <canvas id="assistantVisualCanvas" width="960" height="540" style="width: {{visualCanvasWidth}}px; height: {{visualCanvasHeight}}px;"></canvas>
+        </view>
         <!-- BOTTOM HUD (LARGE 20px SUBTITLES + BARGE-IN) -->
-        <view class="hudBottomArea">
-          <view class="hudUserSpeech {{transcriptionText || assistantUserText ? '' : 'statusHidden'}}">
+        <view class="hudBottomArea" style="{{visualCanvasVisible ? 'bottom: 6px; height: 54px;' : ''}}">
+          <view class="hudUserSpeech {{!visualCanvasVisible && (transcriptionText || assistantUserText) ? '' : 'statusHidden'}}">
             <text class="hudUserSpeechText">我：「{{hudDisplayUser}}」</text>
           </view>
-          <view class="hudAgentReplyCard">
+          <view class="hudAgentReplyCard" style="{{visualCanvasVisible ? 'max-height: 48px; overflow: hidden;' : ''}}">
             <timed-text class="hudAgentReplyText {{agentSpeaking ? 'captionPlaying' : ''}}" text="{{agentSpeaking ? playbackCaptionText : hudDisplayReply}}" active-start="{{agentSpeaking ? playbackCaptionStart : 0}}" active-length="{{agentSpeaking ? playbackCaptionLength : 0}}"></timed-text>
             <view class="hudCueRow {{agentSpeakingCue ? '' : 'statusHidden'}}">
               <text class="hudCueWord">🔊 {{hudDisplayCue}}</text>
             </view>
           </view>
-          <view class="hudFooterRow">
+          <view class="hudFooterRow {{visualCanvasVisible ? 'statusHidden' : ''}}">
             <text class="hudBargeInText">{{agentSpeaking ? '⚡ 单击打断' : '⚡ 单击打断 / 接收 · 双击退出'}}</text>
             <text class="inputRecordEntry {{inputRecordCount > 0 || inputRecordError ? '' : 'statusHidden'}}" catchtap="openAiuiInputReview">↑ 记录 {{inputRecordError ? '!' : inputRecordCount}}</text>
             <text class="releaseVersion">v{{releaseVersion}}</text>
           </view>
-          <text class="agentProfileStatus" catchtap="refreshAgentAndApiTools">{{hudDisplayKnowledge}}</text>
+          <text class="agentProfileStatus {{visualCanvasVisible ? 'statusHidden' : ''}}" catchtap="refreshAgentAndApiTools">{{hudDisplayKnowledge}}</text>
         </view>
       </view>
       <view class="phoneBridgeSetup {{phoneBridgeSetup ? '' : 'statusHidden'}}">
@@ -5857,6 +5872,11 @@ export default {
 </page>
 
 <style>
+.visualCanvasRegion { position: absolute; top: 36px; left: 16px; background: #000000; }
+.visualCanvasHeading { display: flex; flex-direction: row; align-items: center; justify-content: space-between; height: 24px; color: #00ff88; font-size: 12px; }
+.hasVisualCanvas .hudUserSpeech { display: none; }
+.hasVisualCanvas .hudAgentReplyCard { max-height: 54px; overflow: hidden; }
+.hasVisualCanvas .agentProfileStatus { display: none; }
 .inputReview { position: absolute; left: 0; top: 0; width: 100vw; height: 100%; box-sizing: border-box; padding: 12px 16px; background-color: #000000; color: #40ff5e; display: flex; flex-direction: column; gap: 4px; z-index: 40; }
 .inputReviewRow { display: flex; flex-direction: row; align-items: center; gap: 10px; height: 22px; flex: 0 0 22px; }
 .inputReviewTitle, .inputReviewPosition { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; }

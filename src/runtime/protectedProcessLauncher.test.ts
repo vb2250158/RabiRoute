@@ -354,7 +354,9 @@ test("native Node spawn keeps env/config file flags inside the admitted Job", wi
       : await write(root, "node.config.json", JSON.stringify({ nodeOptions: { import: [pathToFileURL(preload).href] } }));
     const entry = await write(root, "native-entry.mjs", "export const executed=true;");
     const lease = registry.launch({ ...owner, activationId: flag }, "native-file-flags", { kind: "spawn", command: process.execPath, args: [flag, config, entry], options: { cwd: root, stdio: "ignore", windowsHide: true } });
-    await lease.settled; assert.equal(lease.child.exitCode, 0); assert.equal(registry.list().length, 0);
+    // The Windows Job can report an empty tree before Node delivers the child close event.
+    const childClosed = once(lease.child, "close");
+    await Promise.all([lease.settled, childClosed]); assert.equal(lease.child.exitCode, 0); assert.equal(registry.list().length, 0);
     assert.equal(JSON.parse(await fs.readFile(marker, "utf8")).descriptorStillPresent, false);
   }
 });

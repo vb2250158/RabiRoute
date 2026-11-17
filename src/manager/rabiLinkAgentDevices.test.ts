@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { createRabiLinkAgentDevices } from './rabiLinkAgentDevices.js';
 import { createRabiLinkAgentDeviceOperations } from '../plugins/io.rabiroute.manager.rabilink-relay/src/manager/rabiLinkAgentDeviceOperations.js';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
+import { nativeHttpTestFetch } from './nativeHttpTestClient.js';
 
 test('PC owns scoped profile CAS, signed self receipts, source validation and restart-safe operations', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rabi-pc-profile-'));
@@ -30,7 +31,7 @@ test('PC owns scoped profile CAS, signed self receipts, source validation and re
   const base = 'http://127.0.0.1:' + (server.address() as { port: number }).port;
   const url = '/api/rabilink/agent-devices/self/profile';
   async function call(route: string, method = 'GET', body?: unknown, headers: Record<string, string> = { 'x-test-auth': '1' }) {
-    const response = await fetch(base + route, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const response = await nativeHttpTestFetch(base + route, { method, headers: { 'content-type': 'application/json', ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, body: await response.json() };
   }
   assert.equal((await call(url, 'GET', undefined, {})).status, 401);

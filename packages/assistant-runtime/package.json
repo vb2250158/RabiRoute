@@ -5,6 +5,10 @@
   "type": "module",
   "description": "Host-injected assistant decision protocol and serial tool loop.",
   "exports": {
+    "./canvas": {
+      "types": "./src/visual-canvas.d.ts",
+      "import": "./src/visual-canvas.js"
+    },
     "./protocol": {
       "types": "./src/decision-protocol.d.ts",
       "import": "./src/decision-protocol.js"

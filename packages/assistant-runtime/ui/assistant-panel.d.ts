@@ -6,7 +6,7 @@ export function createAssistantPanel(React: typeof import('react'), components: 
   command(request: Record<string, unknown>): Promise<any>;
   /** Resolve host-owned images with the host's existing prefix and authentication. */
   resolveAvatarUrl?(url:string):string;
-  subscribeConversation(sessionId: string, onMessages: (messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; notice?: boolean;source?:string;hasDetails?:boolean;createdAt?:string }>) => void,
+  subscribeConversation(sessionId: string, onMessages: (messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; notice?: boolean;source?:string;hasDetails?:boolean;createdAt?:string;canvas?:import('../src/visual-canvas.js').VisualCanvasState }>) => void,
     onError: (error: Error) => void): () => void;
 } }>;
 

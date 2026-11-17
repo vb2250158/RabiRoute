@@ -59,7 +59,7 @@ export async function openConversationStore(directory,{protect=value=>transformW
   }});
   let closed=false;
   return {
-   read(){return{id:meta('id'),context:context(),interruptedCount}},
+   read(){return{id:meta('id'),context:context(),interruptedCount,...(meta('canvas')?{canvas:decode(Buffer.from(meta('canvas'),'base64'))}:{})}},
    count:()=>db.prepare('SELECT count(*) AS n FROM messages').get().n,
    find(id){const row=db.prepare('SELECT payload FROM messages WHERE id=?').get(id);return row?decode(row.payload):undefined},
    page({before,limit=100}={}){
@@ -69,13 +69,13 @@ export async function openConversationStore(directory,{protect=value=>transformW
     const rows=cursor===undefined?db.prepare('SELECT payload FROM messages ORDER BY seq DESC LIMIT ?').all(limit+1):db.prepare('SELECT payload FROM messages WHERE seq<? ORDER BY seq DESC LIMIT ?').all(cursor,limit+1);
     return{messages:rows.slice(0,limit).reverse().map(row=>decode(row.payload)),hasMore:rows.length>limit};
    },
-   commit({id,messages=[],context:nextContext}){
+   commit({id,messages=[],context:nextContext,canvas}){
     if(closed)throw failed('ASSISTANT_CONTEXT_CLOSED');
-    try{transaction(()=>{if(id!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');for(const message of messages)put(message);if(nextContext!==undefined)setMeta('context',encode(nextContext).toString('base64'));setMeta('savedAt',new Date().toISOString())})}catch(e){throw failed(e.code==='ASSISTANT_CONTEXT_CHANGED'?e.code:'ASSISTANT_CONTEXT_SAVE_FAILED',e)}
+    try{transaction(()=>{if(id!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');for(const message of messages)put(message);if(nextContext!==undefined)setMeta('context',encode(nextContext).toString('base64'));if(canvas!==undefined)setMeta('canvas',encode(canvas).toString('base64'));setMeta('savedAt',new Date().toISOString())})}catch(e){throw failed(e.code==='ASSISTANT_CONTEXT_CHANGED'?e.code:'ASSISTANT_CONTEXT_SAVE_FAILED',e)}
    },
    clear(expectedId){
     if(expectedId!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');
-    const id=newId();transaction(()=>{db.exec('DELETE FROM messages');setMeta('id',id);setMeta('context',encode([]).toString('base64'));setMeta('savedAt',new Date().toISOString())});interruptedCount=0;return id;
+    const id=newId();transaction(()=>{db.exec('DELETE FROM messages');db.prepare('DELETE FROM metadata WHERE name=?').run('canvas');setMeta('id',id);setMeta('context',encode([]).toString('base64'));setMeta('savedAt',new Date().toISOString())});interruptedCount=0;return id;
    },
    async close(){if(closed)return;closed=true;try{db.close()}finally{key.fill(0);await lock.close();if(await readFile(lockPath,'utf8')===lease)await unlink(lockPath)}}
   };

@@ -131,3 +131,6 @@ assets/reference-cache/
 
 # Retired pre-plugin-layout Speech runtime data; keep local state out of the repository.
 /plugin-adapters/rabi-speech/
+
+# Generated desktop canvas bundle; produced by build:plugins.
+/packages/desktop-voice-service/runtime/canvas.js
