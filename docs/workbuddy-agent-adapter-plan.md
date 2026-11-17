@@ -6,30 +6,46 @@
 
 # WorkBuddy 作为 Agent 端的接入方案
 
-> 2026-11-17 更新。WorkBuddy 插件 0.1.5 的当前实现通过通用 Agent 会话 API 自由查询任务、按字节游标读取原生聊天记录，并在 Windows 首次扫描或指定 ID 投递时自动发现和鉴权原任务进程的回环网关。凭据驻留内存，角色绑定用于默认路由。自动探测使用 Manager 已有系统权限读取目标 WorkBuddy 进程；当前桌面启动时间记录为估计值，按一秒内误差结合进程名、PID 及网关鉴权核对。当前 Windows 机器已实测自动发现和鉴权两个原生 owner。真实消息投递及运行包采用按本轮验收记录跟进，成熟度保持 experimental。下方 5.5.6 调查及手工凭据步骤保留为历史协议与旧版本配置依据。
+> 2026-11-17 验收边界修正。正式采用的 WorkBuddy 插件仍为 **0.1.5 / experimental**；当前源码和文档修改未作为新插件版本采用。0.1.5 的原任务接收、查询、历史和自动鉴权证据保留，桌面实时输入、任意任务寻址、权限保持、创建与自动初始化分别验收。
 
-> 状态：**已实现；投递链路已端到端验证，凭据获取仍需手工一步**。文中“已核实事实”来自对 WorkBuddy 5.5.6 本机安装的探测与实测。会话发现、任务库读取、标准 resolver、凭据读取与投递桥均已落地并通过自动化测试，投递在独立进程（无 `CODEBUDDY_*` 环境变量）下验证：消息进入绑定任务的对话区、由同一任务 owner 执行、同 ID 复投不新建任务。因凭据仍需用户手工录入本地文件、桌面配对入口尚未提供，`maturity` 保持 `experimental`，不得写成 `verified`。
->
 > 阅读前置：本文按 [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) 编写，执行流程受 `skills/create-rabiroute-agent-adapter/SKILL.md` 和其 [owner-first 设计门](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md) 约束。
+
+## 当前能力与验收
+
+| 能力 | 已取得的证据 | 当前边界 |
+| --- | --- | --- |
+| 安装与采用 | Host 0.15.27 保持采用冻结的插件 0.1.5 | 文档修正不改运行字节；下一实现使用独立版本与候选 |
+| 无绑定查询、原生历史分页 | 公共 Agent API 可按完整任务 ID 读取任务与字节游标历史 | 角色绑定只决定默认路由 |
+| Windows 自动发现与鉴权 | 使用 Manager 已有 OS 权限核对原进程、PID、创建时间及回环网关，临时凭据进入内存 | WorkBuddy 已提升权限时需要相应的进程读取权限；不自动提升权限 |
+| 原进程主会话接收 | 原任务烟测及后续通知在同一任务的原生 user/assistant 记录、原生回放和正式回执中得到确认；当前宿主为 WorkBuddy 5.11.3 | 仅覆盖已核对的原进程主会话（primary session） |
+| Rabi 消息记录页面 | Persona 0.1.25 列表约 538 ms，历史分页及摘要回读通过 | 这是 Rabi 页面证据，须与 WorkBuddy 桌面实时显示分开 |
+| 任意 `conversation.id` 寻址 | 当前网关 `getOrCreateSession` 优先返回 `primarySession` | 不能凭该字段推断任意目标已路由正确；未完成跨目标验收 |
+| WorkBuddy 桌面实时显示 | 原生回放返回通知的 `user_message_chunk` | 尚未观察已打开桌面的即时输入显示；回放和回执不能替代该项 |
+| 模型、工具与权限 | 原任务模型及工具执行已有记录；宿主 `runMessageOnSession` 会临时选择 `BypassPermissions` | 保持原任务审批/权限的合同尚未通过，不能声称完全沿用桌面审批 |
+| 创建、打开、改名、未加载任务初始化 | 当前 Rabi 适配器未实现；真实 `action=create` 返回 400 | 依赖创建能力的任务迁移尚未完成；宿主内部 handler 的存在不等于已有外部桌面调用入口 |
+
+原始已受理及 unknown 记录保持原 ID；结果待确认时只查询原回执和原任务。下面的 5.5.6 调研保留协议与历史观测，当前结论以本表为准。
 
 ## 1. 目标与范围
 
 把 WorkBuddy（腾讯 AI 办公工作台）接成 RabiRoute 的一个 **Agent 处理端**：RabiRoute 收到消息后，把正文投递到用户配置好的 WorkBuddy 任务（会话）里，由该任务真实执行，结果回到 RabiRoute 现有回传链路。
 
-本文只解决“RabiRoute → WorkBuddy 的投递与发现”。不包含：
+本文覆盖查询、发现与投递，并记录创建、打开和自动初始化的目标及未完成项。不包含：
 
 - 方向 ②（WorkBuddy 通过 MCP / Hook 调用 Rabi 接口）：属于工具接入，不是 Agent 端投递，另立方案。
 - 消息入口：WorkBuddy 不是消息端，不新增 `src/adapters/` 下的消息适配器。
 
 ### Agent 会话桥与分页边界
 
-WorkBuddy 的会话桥支持列出、读取和向既有任务投递。创建、改名、打开任务仍由 WorkBuddy 桌面负责；不声明计划助手、记忆整理或丢失投递回执恢复能力，成熟度仍为 `experimental`。
+WorkBuddy 会话桥已实现列出、读取和既有任务网关投递；实际接收证据限上表的原进程主会话。创建、改名、打开及初始化需要通过 WorkBuddy 桌面 owner 补齐。适配器未声明计划助手、记忆整理或丢失投递回执恢复能力，成熟度为 `experimental`。
 
 列表的 `allowedWorkspaces` 在 store 内与可选单项 `workspace` 取交集，使用同一套路径规范化，再按最近活动时间降序、任务 ID 升序排序；工作空间过滤先于 10,000 行读取上限和 `offset` / `limit` 分页。空 allowlist 表示不额外限制。查询及归档过滤在该有界结果内执行，因此这不是任意规模的完整任务目录。多个工作空间交织、同名任务和较大的 offset 不再因 bridge 的页后过滤产生空洞。详情读取与 resolver 的精确 ID 路径使用参数化单行查询，不受发现列表的 10,000 行上限影响；workspace 冲突和归档校验仍保留。
 
 验证使用临时 SQLite 数据库和 mock HTTP，不等于本轮已经完成真实桌面投递验收。真实发送继续复用唯一 session gateway，owner 不在线或 workspace 不匹配时失败关闭，不创建备用 Runtime。
 
-## 2. 零号关卡：用户可观察合同
+## 2. 零号关卡：用户可观察目标合同
+
+本节定义仍需达到的产品要求，实际验收状态见顶部表格。
 
 | 要求 | 必需 | 唯一真源 | 验收证据 | 禁止替代 |
 | --- | --- | --- | --- | --- |
@@ -65,7 +81,9 @@ WorkBuddy 的会话桥支持列出、读取和向既有任务投递。创建、�
 
 因此不选 CLI 类型：`codebuddy -p` 无头进程无法满足“消息出现在用户已有任务里”，只能作为最后手段的 `stub`（人工接力）以外的降级，且不得与主路径共存。
 
-## 5. 已核实事实（WorkBuddy 5.5.6，本机只读探测）
+## 5. 历史协议与本机观测（WorkBuddy 5.5.6）
+
+本节的网关报文、旧凭据配置和 Hook 调研是历史依据；其接收记录不构成当前桌面实时显示或权限保持验收。
 
 ### 5.1 会话进程描述文件
 
@@ -153,7 +171,7 @@ WorkBuddy 的会话桥支持列出、读取和向既有任务投递。创建、�
   "source": {
     "platform": "rabiroute",
     "sender": { "id": "<发送者稳定标识>" },
-    "conversation": { "id": "<会话路由键>", "type": "direct" }
+    "conversation": { "id": "<声明的会话 ID>", "type": "direct" }
   },
   "payload": { "text": "<正文>", "attachments": [] }
 }
@@ -162,23 +180,19 @@ WorkBuddy 的会话桥支持列出、读取和向既有任务投递。创建、�
 两个必须记住的点：
 
 1. 内置 OpenAPI 规范写的 `{text, sender:{id,name}}` **是错的**，实测缺 `id`/`type` 会返回 `400 BAD_REQUEST: Invalid generic message format`。字段默认值：`version`、`source`、`payload` 可省略，`payload.text` 也可由顶层 `text` 或 `prompt` 提供，`source.conversation.id` 缺省为消息 `id`。
-2. **`source.conversation.id` 是会话路由键**：处理函数随后执行 `getOrCreateSession(source.conversation.id)`，同一个 `conversation.id` 复用同一个会话。这把 P0 的“同 ID 续投、不重复创建”变成协议原生能力：RabiRoute 把 `conversation.id` 固定为绑定的完整 `sessionId` 即可。
+2. **`source.conversation.id` 不能单独证明目标身份**：当前宿主的 `getOrCreateSession` 在存在 `primarySession` 时直接返回该主会话。固定该字段仍不能证明任意 ID 的寻址；须核对原任务进程、实际主会话和原任务回读。
 
-未通过的一项（**已解决**，见 5.5.1）：用临时会话键投递烟测消息后返回 `202`、`GET /runs/{runId}` 返回 `active:true`，但 30 秒内**没有**产生新的桌面任务行。当时的判断“消息没进用户任务”是错的——根因是把“新增任务行”当成了成功证据，而投递到指定 ID 的已有任务时**本来就不该**新建任务行。
+早期临时会话键烟测曾返回 `202` 和 `active:true`，但未新增桌面任务行。当前主会话优先行为说明：这组观测既不证明新建成功，也不能证明指定的临时会话键被执行；保留原记录，不据此重投或扩大验收。
 
-### 5.5.1 桌面可见性与同 ID 复投（本次实测通过）
+### 5.5.1 原任务记录与重复接收的历史观测
 
-用绑定的真实 `sessionId` 作为 `source.conversation.id` 投递后，在 `~/.workbuddy/projects/<project-slug>/<sessionId>.jsonl` 中观察到：
+使用同一原任务进程的网关投递后，原 `<sessionId>.jsonl` 保存了逐字一致的 user 正文与随后完成的 assistant 回复，模型记录为该任务使用的模型。连续两次观测写入同一会话文件，任务表行数保持 18 → 18。
 
-- 一条 `type: "message" / role: "user"` 记录，`parentId` 指向该会话原有的最后一条 assistant 消息，正文与投递内容逐字一致。也就是说它是一条**正式用户回合**，不是旁路作业。
-- 紧随其后是一条 `role: "assistant" / status: "completed"` 回复，`providerData.model` 为该会话自身的模型（实测 `deepseek-v4.1-flash`），由该任务的 Agent Runtime 执行。
-- 连续两次投递写入**同一个** `<sessionId>.jsonl`；`sessions` 表行数保持不变（18 → 18），确认“同 ID 续投不新建任务”为协议原生行为。
+这些证据只确认被测原进程主会话接收和回复。它们不能证明 `conversation.id` 能选择其它任务、WorkBuddy 桌面即时显示了输入，或宿主保持了原审批权限。独立调用进程读取本地凭据文件的旧烟测也仅覆盖同一范围。
 
-独立进程复现（关键：该进程**没有** `CODEBUDDY_GATEWAY_PASSWORD`）：删除环境变量后，仅凭本地凭据文件读取网关密码，动态发现存活会话进程，投递成功返回 `202`，任务总数不变，消息出现在目标任务。这证明凭据获取路径与投递链路不依赖会话进程环境。
+### 5.5.2 旧版手工凭据配置（历史参考）
 
-### 5.5.2 凭据获取（已定：本地忽略文件）
-
-桌面把 `CODEBUDDY_GATEWAY_PASSWORD` 注入每个会话进程，RabiRoute Manager 是独立进程，读不到别人的环境。已实现的解析顺序：
+早期实现未使用进程外只读探测，采用以下手工凭据来源；当前 0.1.5 自动鉴权及可选本地文件见第 8.1 节：
 
 1. `RABI_WORKBUDDY_GATEWAY_PASSWORD` 进程环境变量（测试与包装脚本用）。
 2. `<state>/data/workbuddy-auth.json` 的 `{"password":"..."}`，与 `data/dsh-auth.json` 同址同形，已被 `.gitignore` 覆盖。
@@ -205,10 +219,10 @@ WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用�
 已落地并测试通过：
 
 - `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.ts`：会话进程描述读取（含 `prewarm` 池的命名管道只作元数据）、任务库读取、工作目录规范化比较、标准 resolver。`deliverable` 判定要求**进程存活 + 心跳未过期 + 已发布网关地址 + 非 prewarm/teammate 类型**四条同时成立。
-- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`：网关凭据读取与缓存。多来源按序解析（环境变量 → 本地忽略文件）；只允许回环地址；凭据只驻内存与本地文件，不入仓库、不入日志；5 分钟 TTL + 401 立即失效。
+- `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`：网关凭据读取与缓存。原进程临时凭据、显式环境变量与本地文件解析；只允许回环地址；凭据只驻内存与本地文件，不入仓库、不入日志；5 分钟 TTL + 401 立即失效。
 - `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`：**唯一真实消息路径**。绑定读取、投递前 owner/目录再校验、`POST /api/v1/runs` 投递、`GET /runs/{runId}` 结算轮询。四种失败结局可区分：`unreachable`（可安全重试）/ `rejected`（未生效）/ `unauthorized`（未生效且不重放）/ `unknown`（可能已生效，必须先核对）。
 - `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`：Manager 侧扫描/状态（`installed`、`auth`、`endpoints`、`projects`、`sessions` + 分页、`warnings`），并报告本地凭据是否已配置。
-- `workbuddy` 已注册进 `agentAdapterTypes` 与 manifest，`maturity: experimental`、`transport: http/session-gateway`、`host: WorkBuddy Desktop(required)`，并声明 `managedTasks.messageProcessingAgent`（投递已可用）与 `managedTasks.hooks`（生命周期 Hook 已可用）；**未**声明计划秘书与记忆整理（这两条路径走 Codex/DSH 线程驱动，尚未适配），也**未**声明 `deliveryReceiptRecovery`——网关只返回一次性受理回执，不保留可读的入站日志。
+- `workbuddy` 已注册进 `agentAdapterTypes` 与 manifest，`maturity: experimental`、`transport: http/session-gateway`、`host: WorkBuddy Desktop(required)`，并声明 `managedTasks.messageProcessingAgent`（原主会话接收已验）与 `managedTasks.hooks`（生命周期 Hook 已可用）；**未**声明计划秘书与记忆整理（这两条路径走 Codex/DSH 线程驱动，尚未适配），也**未**声明 `deliveryReceiptRecovery`——网关只返回一次性受理回执，不保留可读的入站日志。
 - Route 绑定与 DSH 同形：`adapterConfig.json` 只保存 `workbuddySessionId` / `workbuddySessionName` / `workbuddyCwd` / `workbuddyEndpoint`（末项仅作展示与兜底，投递始终优先用会话描述文件里的实时地址），凭据不写入路由配置。
 - WebGUI：Agent 列表新增 WorkBuddy 卡片、任务下拉（带在线状态）、工作目录与可选网关地址字段。
 - 生命周期 Hook：`plugins/rabi-workbuddy-context` 插件包 + `updateAgentHooks` 的 WorkBuddy 安装分支（详见 5.5.3）。
@@ -238,12 +252,12 @@ WorkBuddy 的 CLI 内核（CodeBuddy Code）提供与 Codex 同族的生命周�
 
 ### 5.6 待办与阻塞项
 
-1. **桌面可见性**（**已解决**，见 5.5.1）：投递进入用户已有任务的对话区，并由同一 owner 以该会话自身的模型执行；同 ID 复投不新建任务。
-2. **凭据获取**（**已定，仍需手工一步**）：RabiRoute Manager 是独立进程，拿不到会话进程的 `CODEBUDDY_GATEWAY_PASSWORD`。当前由用户在 `<state>/data/workbuddy-auth.json` 一次性录入。**未解决问题**：桌面侧的“远程控制/配对”入口尚未提供自动交接，因此仍是手工步骤，也是等级停在 `experimental` 的主因。
-3. **凭据轮换**：`regeneratePassword()` 的触发条件与频次未知；当前用 5 分钟 TTL + 401 立即失效兜底，轮换足够快时表现为一次可行动的失败而非错误投递。
-4. **steer / 排队**：任务正在执行时，投递是排队、`steer`，还是直接 busy。已知同会话连续两次投递不新建任务且都能执行；具体排队语义尚未逐项验证。
-5. **幂等键**：`/api/v1/runs` 实测未发现调用方幂等键；需要时由 RabiRoute 侧的去重账本承担。
-6. **端点不一致**：`/api/v1/instances` 与 `/runs/{runId}/stream` 在实测网关上 404，说明内置 OpenAPI 规范包含未启用或模式相关的端点，集成时不能按规范假定可用。当前未依赖这两个端点。
+1. **原生桌面入口**：补齐能调用原 Desktop owner 的创建、打开、未加载任务初始化及投递入口，完成任务迁移。当前 Rabi 创建明确返回不支持，不转建到其它处理端。
+2. **目标寻址与显示**：分别验证 primary 与其它任务的完整 ID、原生输入事件、实时运行状态及结果；原任务记录和 Rabi 页面不能替代 WorkBuddy 桌面验证。
+3. **权限保持**：当前网关 handler 临时选择 `BypassPermissions`，需解决后才能宣称沿用原任务审批；不通过修改用户权限配置消除验收缺口。
+4. **凭据与进程访问**：0.1.5 在现有 OS 权限下自动探测；权限不足时报告原进程访问失败，不自动提升权限。凭据轮换以 TTL 与鉴权拒绝失效处理。
+5. **active turn 与幂等**：原生排队/steer/busy 语义仍需逐项实测；网关没有已确认的调用方幂等键。Rabi 保留原 intent、delivery 和 unknown，只核对原回执。
+6. **生命周期与兼容**：分别独立冷启动、任务重载及宿主升级后重复验证。旧网关上的 404 作为该版本观测保留，不推断其它模式的能力。
 
 ### 5.7 能力对照：WorkBuddy 有什么，Rabi 这边就要有什么
 
@@ -255,15 +269,15 @@ WorkBuddy 的 CLI 内核（CodeBuddy Code）提供与 Codex 同族的生命周�
 | `cwd=*` 跨项目查询 + `projectId` | `listWorkspaces()`、按工作目录筛选 | **已实现**（`listWorkbuddyWorkspaces` + 规范化比较） |
 | `isUserDefinedTitle` 区分用户命名与自动标题 | 下拉名称真源 + `userNamed` | **已实现**（`custom_title` 优先，`title` 只作展示与检索） |
 | `jobs/resumable`（`hasMore`/`nextOffset`） | 分页契约 `sessionPage` | **已实现**（`AgentScanSession` 分页字段） |
-| 会话进程描述 + 心跳 | `health()`、owner 是否加载 | **已实现**（进程存活 + 心跳 + 已发布端点三重判定） |
-| `POST /runs`（网关投递入口，`conversation.id` 即会话路由键） | `send(sessionId, delivery)` | **已实现**（`deliverWorkbuddyMessage`，失败关闭 + 四类结局可区分） |
+| 会话进程描述 + 心跳、原进程探测 | `health()`、owner 是否加载 | 已实现发现；自动探测可更新缺少地址或过期的描述，访问权限不足单独报告 |
+| `POST /runs`（当前进程主会话优先） | `send(sessionId, delivery)` | 已实现网关调用；原主会话接收已验，其它目标、桌面实时输入与权限保持待验 |
 | `GET /runs/{runId}` → `active` | `getTurnStatus(turnId)` | **已实现**（`waitForWorkbuddyTurn` 结算轮询，超时不视为失败） |
 | CodeBuddy 生命周期 Hook（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`） | `updateAgentHooks(adapter)`、上下文注入、计划完成回传 | **已实现**（`plugins/rabi-workbuddy-context` + 用户级 settings 安装器；安装已实测，真实任务端到端待验收，见 5.5.3） |
 | SSE `/jobs/events`、`/runs/{runId}/stream` | 流式事件 / `readResult` | 未实现；且实测部分网关上 404，须按能力探测后再声明 |
 | `jobs/{id}/reply`（活会话立即投递 / 退出会话存 pending） | `steer` / `queue` | 未实现（语义与 `/runs` 的差异需实测确定） |
 | `dispatch-context` 的 Agent 配置列表 | 模型/能力目录展示 | 未接；`modelInherited` 语义与 Rabi 的模型选择不同，需先定归属 |
-| `POST /auth/login`、`auth/status` | `auth` 状态与重新登录入口 | 部分实现（`auth.required=true` + 文案；只声明本地凭据**已配置**，不做假的登录校验） |
-| 会话重命名、删除、归档恢复 | — | 按需再定；Rabi 当前不主张改写宿主任务元数据 |
+| `POST /auth/login`、`auth/status` | `auth` 状态与重新登录入口 | 0.1.5 自动鉴权已在原进程验证；鉴权成功不替代目标身份和桌面显示验收 |
+| 创建、打开、重命名、归档恢复与初始化 | 原 Desktop owner 元数据操作 | 当前 Rabi 适配器未实现；内部 handler 不是已接通的外部接口 |
 | 附件（`payload.attachments`） | 本机图片入站 | 已接入 `type=image`、`urlType=local-path`、`url`、`name`；同一任务通过 Read 读取，正式安装与模型读取仍需运行验收 |
 
 原则不变：业务与策略在 Rabi，宿主只提供会话与执行；不把 WorkBuddy 的作业系统建模成 Rabi 的计划或记忆真源。
@@ -272,12 +286,15 @@ WorkBuddy 的 CLI 内核（CodeBuddy Code）提供与 Codex 同族的生命周�
 ## 6. 唯一真实消息路径
 
 ```text
-RabiRoute event -> workbuddy adapter -> loopback HTTP (会话网关) -> 该 sessionId 的会话进程 -> turn -> 桌面任务可见结果
+RabiRoute event -> workbuddy adapter -> 原任务进程的 loopback 网关 -> primary session -> 原任务历史与回复
+待验收：目标 ID 寻址、原生桌面实时输入/状态/结果、原权限保持
 ```
 
 可能执行真实正文的代码路径数量必须为 1。`readWorkbuddySession`、`scanWorkbuddy`、`health`、以及任何只读探测都不得携带正文；这条要求要有测试守住。
 
 ## 7. 身份与 resolver 合同
+
+以下是标准需求的目标合同。当前适配器已实现已有任务的读取与解析；归档后创建、零匹配创建、打开及初始化尚未实现，当前失败关闭。不能把目标规则作为已交付能力。
 
 映射到标准需求的 P0 六条：
 
@@ -292,7 +309,7 @@ create 幂等键：`agentProfile + normalizedWorkspace + requestedName`，single
 
 ## 8. 能力等级
 
-**`experimental`**（投递可用，凭据手工配置）。已在 `src/shared/agentAdapterCapabilities.ts` 注册，并声明 `managedTasks.messageProcessingAgent` 与 `managedTasks.hooks`；**不声明**计划秘书与记忆整理（尚未适配），也**不声明** `deliveryReceiptRecovery`（网关只返回一次性受理回执，不保留可读的入站日志）。只有 S5 冷启动验证完成、且桌面配对入口可用后，才可升 `verified`。
+**`experimental`**。当前 0.1.5 有查询、原生历史、自动鉴权和原主会话接收证据。任意任务寻址、原生桌面实时显示、权限保持、创建/初始化及独立生命周期验收未完成，不能升为 `verified`。包中声明消息处理与 Hook，不声明计划助手、记忆整理或宿主丢失回执恢复；声明可用入口不等于这些待验项已通过。
 
 ```ts
 // 已落地的声明（只声明已经成立的事实）
@@ -302,9 +319,8 @@ workbuddy: {
   maturity: "experimental",
   transport: { protocol: "http", mode: "session-gateway" },
   host: { name: "WorkBuddy Desktop", required: true },
-  // 只声明已经验证过的两条路径：计划秘书与记忆整理要走 Codex/DSH 线程驱动，
-  // 适配完成前不声明，界面也就不会给出必然失败的操作面板。凭据仍需手工一步，
-  // 故同样不声明回执恢复。
+  // 声明消息处理与 Hook 入口；原生桌面与权限验收边界见上表。
+  // 计划助手、记忆整理和宿主丢失回执恢复尚未适配。
   capabilities: {
     managedTasks: {
       messageProcessingAgent: true,
@@ -314,15 +330,17 @@ workbuddy: {
 }
 ```
 
-## 8.1 凭据准备（使用前唯一的手工步骤）
+## 8.1 自动鉴权与可选本地凭据
 
-在 `<stateRoot>/data/workbuddy-auth.json` 写入（该路径已被 `.gitignore` 覆盖）：
+Windows 0.1.5 首次扫描或投递使用 Manager 已有权限只读探测原任务进程，核对进程名、PID、创建时间与回环网关。凭据通过私有管道进入按端点隔离的内存缓存。目标进程不可访问时返回原因，不改变 OS 权限或 WorkBuddy 配置。
+
+已配置的 `RABI_WORKBUDDY_GATEWAY_PASSWORD` 和本地凭据文件仍可使用。文件入口为扫描诊断返回的插件存储路径，也可通过 `RABI_WORKBUDDY_AUTH_FILE` 指定绝对路径；旧版 `data/workbuddy-auth.json` 仅是历史配置位置，不是当前自动鉴权的必填步骤。
 
 ```json
 { "password": "<WorkBuddy 会话网关密码>" }
 ```
 
-未配置时扫描会给出可行动提示，投递直接失败关闭，不会发出未鉴权的请求。若已配置但被拒绝，请更新该文件后重试——RabiRoute 不会重放被 401 拒绝的投递。
+鉴权拒绝使缓存失效；不重放被拒绝的请求。通信中断、5xx 或不可解析的成功响应继续保留原 unknown，并查询原回执。
 
 ## 9. 代码落点
 
@@ -350,7 +368,7 @@ workbuddy: {
 - [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionStore.test.ts`（新）— 8 个用例，含真实数据形态的回归
 - [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyHttpAuth.ts`（新）— 凭据读取与缓存、回环限制、TTL 与失效
 - [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.ts`（新）— 绑定解析、投递前校验、投递、结算轮询
-- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.test.ts`（新）— 12 个用例：报文格式、路由键、401/不可达/无 runId/空正文、超时、绑定与失败关闭
+- [x] `src/plugins/io.rabiroute.agent.workbuddy/src/workbuddySessionBridge.test.ts`（新）— 12 个历史用例：报文格式、声明的目标字段、401/不可达/无 runId/空正文、超时、绑定与失败关闭
 - [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts`（新）— `scanWorkbuddyAgentAdapter`，含凭据配置状态
 - [x] `src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.test.ts`（新）— 3 个用例：真实形态列会话、分页与筛选、干净机器上的可行动空结果
 - [x] `src/shared/agentAdapterCapabilities.ts` — 类型与 manifest（声明 `managedTasks.messageProcessingAgent` 与 `hooks`，不声明计划秘书、记忆整理与 `deliveryReceiptRecovery`）
@@ -370,13 +388,13 @@ workbuddy: {
 
 | 阶段 | 内容 | 退出条件（必须留证据） |
 | --- | --- | --- |
-| **S0 探测** | 用临时脚本回答 5.6 的问题；只读 + 一次无害烟测 | **已完成**：鉴权模型、会话列表字段、`runs` 报文格式、`conversation.id` 路由键、凭据解析顺序全部确认 |
-| **S1 最小纵向链路** | 发现一个真实任务 → 投递一条标记消息 → 在**桌面任务里**看到它 | **已通过**：消息以正式用户回合写入目标 `<sessionId>.jsonl`，由该任务以自身模型执行并回复；独立进程（无环境变量）复现成功 |
-| **S2 同 ID 复投** | 向同一 ID 投第二条消息 | **已通过**：两次投递写入同一会话文件，任务总数 18 → 18 不变 |
+| **S0 探测** | 网关、会话、凭据与 owner 探测 | 报文与鉴权已观测；`primarySession` 优先，不能把 `conversation.id` 当作任意 ID 寻址保证 |
+| **S1 最小纵向链路** | 原任务投递与桌面显示分别核对 | 原主会话 user/assistant 记录、回放及回执通过；原生桌面实时输入仍待验 |
+| **S2 同 ID 复投** | 同一已核对原主会话重复接收 | 历史两次记录及任务数未变；不外推其它 `conversation.id` 目标 |
 | **S3 负例** | owner 缺席、ID 归档、cwd 冲突、凭据失效 | 单测覆盖（不可达 / 401 / 无 runId / 空正文 / owner 缺席 / 无绑定）；尚未在真实网关上逐项制造 |
 | **S4 WorkGUI** | 卡片、参数面板、扫描、诊断、动作按钮 | 卡片与参数面板已落地；扫描计数符合 P0 第 6 条；不写脏配置 |
 | **S5 端到端与冷启动** | RabiRoute 停 → WorkBuddy 独立启动；WorkBuddy 停 → Manager 独立启动 | 未做：需在真实 Manager 进程上验证冷启动与重启后重新发现 |
-| **S6 文档与成熟度** | README、配置、当前能力、中英文同步；必要时升 `verified` | 文档与代码一致；构建通过。升 `verified` 的前置是 S5 完成且桌面配对入口可用 |
+| **S6 文档与成熟度** | 文档与实际验收一致 | 文档边界修正；升 `verified` 仍需原生显示、寻址、权限、创建/初始化和独立生命周期验收 |
 
 任何阶段发现需要“第二条执行路径”“写用户级配置”或“只能证明记录可读”，立即停止并按停止条件回到设计门。
 
