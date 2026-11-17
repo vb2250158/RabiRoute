@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { acquireFileLockSync, atomicWriteFileSync } from "../shared/filePersistence.js";
 import { applicationRuntimeLayout } from "../shared/runtimeLayout.js";
-import { parsePluginProfile, readPluginProfile, type PluginProfile, type PluginProfileDiagnostic, type PluginProfileEntry } from "../plugin-kernel/profile.js";
+import { parsePluginProfile, migratePluginProfile, type PluginProfile, type PluginProfileDiagnostic, type PluginProfileEntry } from "../plugin-kernel/profile.js";
 
 type Override = { enabled?: boolean; config?: Record<string, unknown> };
 export type PluginProfileSettingsSnapshot = Readonly<{
@@ -37,13 +37,14 @@ export class PluginProfileSettings {
 
   private async readSnapshot(trace?: FsAwaitDiagnostics): Promise<PluginProfileSettingsSnapshot> {
     let base: PluginProfile;
-    try { base = await traceFsAwait(trace, "profile.readPluginProfile", readPluginProfile(this.options.profilePath, { migrationsPath: this.options.migrationsPath
-      ?? path.join(applicationRuntimeLayout().packageRoot, "dist", "plugins", "profiles", "package-migrations.json") })); }
+    try { base = parsePluginProfile(JSON.parse(await traceFsAwait(trace, "profile.readPluginProfile", fs.readFile(this.options.profilePath, "utf8")))); }
     catch (error) {
       if (error instanceof SyntaxError) throw new Error("Plugin profile is invalid JSON.");
       throw error;
     }
-    const diagnostics: Array<PluginProfileSettingsSnapshot["diagnostics"][number]> = [...(base.diagnostics ?? [])];
+    const migrationsPath = this.options.migrationsPath
+      ?? path.join(applicationRuntimeLayout().packageRoot, "dist", "plugins", "profiles", "package-migrations.json");
+    const diagnostics: Array<PluginProfileSettingsSnapshot["diagnostics"][number]> = [];
     const hash = createHash("sha256").update(JSON.stringify(base));
     const definitions = new Map(base.instances.map(instance => [instance.id, instance]));
     const extraFiles = new Map<string, string>();
@@ -91,7 +92,13 @@ export class PluginProfileSettings {
       hash.update(JSON.stringify([row.instance.id, row.revision]));
       if (row.error) diagnostics.push({ instanceId: row.instance.id, message: row.error });
     }
-    return { revision: hash.digest("hex"), profile: { ...base, instances: rows.filter(row => !row.removed).map(row => row.instance) },
+    // Saved instance definitions can pin an older package than the release profile.
+    // Apply the same explicit migration rules after combining both sources.
+    const profile = await traceFsAwait(trace, "profile.migrateEffective", migratePluginProfile(
+      { ...base, instances: rows.filter(row => !row.removed).map(row => row.instance) }, migrationsPath));
+    diagnostics.unshift(...(profile.diagnostics ?? []));
+    hash.update(JSON.stringify(profile));
+    return { revision: hash.digest("hex"), profile,
       removedInstances: rows.filter(row => row.removed).map(row => row.instance), diagnostics };
   }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 import { readExactQqMessage } from "./manager/qqMessageRoutes.js";
 import { qqMessageMedia, readQqMedia } from "./manager/qqMessageMedia.js";
 import { QQ_READ_LIMITS } from "./manager/qqReadContract.js";
@@ -24,6 +25,9 @@ export async function readReplySource(input: {
     const imagePath = path.join(directory, `${createHash("sha256").update(bytes).digest("hex")}.image`);
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(imagePath, bytes);
+    recordDataMutationAudit({ group: "napcat", event: "reply_source_image_written", owner: "napcat-reply-source",
+      action: "store-reply-source-image", target: { type: "reply-source-image", id: "managed-image" },
+      dataSource: { kind: "file", id: "napcat-media/reply-source" }, outcome: "committed" });
     attachments.push({ id: `${input.messageId}:image:${index + 1}`, kind: "image", status: "ready", path: imagePath });
   }
   current();

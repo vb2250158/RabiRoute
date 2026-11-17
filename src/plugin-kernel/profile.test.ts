@@ -643,27 +643,51 @@ test("speech receipt update migrates existing package selections without changin
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-speech-migration-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
-  const instances = ["0.1.4", "0.1.5", "1.0.0"].map((version, index) => ({ id: `speech:fixture-${index}`, package: "io.rabiroute.manager.speech", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const instances = ["0.1.4", "0.1.5", "0.1.6", "1.0.0"].map((version, index) => ({ id: `speech:fixture-${index}`, package: "io.rabiroute.manager.speech", version, enabled: true, config: { fixture: index }, grants: [] }));
   const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
   await fs.writeFile(profilePath, raw);
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
   const resolved = await readPluginProfile(profilePath, { migrationsPath });
-  assert.deepEqual(resolved.instances.map(item => item.version), ["0.1.6", "0.1.6", "0.1.6"]);
+  assert.deepEqual(resolved.instances.map(item => item.version), ["0.1.7", "0.1.7", "0.1.7", "0.1.7"]);
   assert.deepEqual(resolved.instances.map(item => item.config), instances.map(item => item.config));
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
 
-test("voice assistant package migration retains existing instance configuration", async t => {
+test("voice assistant migration advances old pinned packages without changing instance settings", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-voice-assistant-migration-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
-  const instance = { id: "assistant:fixture", package: "io.rabiroute.manager.voice-assistant", version: "1.1.9", enabled: true, config: { selected: "fixture" }, grants: [] };
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  for (const version of ["1.1.8", "1.1.9", "1.1.10", "1.1.11"]) {
+    const instance = { id: "manager:voice-assistant", package: "io.rabiroute.manager.voice-assistant", version, enabled: false, config: { selected: "fixture", nested: { retained: true } }, grants: ["network.local"] };
+    const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
+    await fs.writeFile(profilePath, raw);
+    const result = await readPluginProfile(profilePath, { migrationsPath });
+    assert.equal(result.instances.length, 1);
+    assert.equal(result.instances[0]?.version, "1.1.12");
+    assert.equal(result.instances[0]?.id, instance.id);
+    assert.equal(result.instances[0]?.enabled, instance.enabled);
+    assert.deepEqual(result.instances[0]?.config, instance.config);
+    assert.deepEqual(result.instances[0]?.grants, instance.grants);
+    assert.equal(await fs.readFile(profilePath, "utf8"), raw);
+  }
+});
+
+test("Xiaomi account package migration retains existing instance settings", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-xiaomi-migration-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json");
+  const instance = { id: "manager:xiaomi-home", package: "io.rabiroute.manager.xiaomi-home", version: "0.1.8", enabled: false, config: { sample: "fixture" }, grants: ["network.local"] };
   const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
   await fs.writeFile(profilePath, raw);
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
   const result = await readPluginProfile(profilePath, { migrationsPath });
-  assert.equal(result.instances[0]?.version, "1.1.10");
+  assert.equal(result.instances.length, 1);
+  assert.equal(result.instances[0]?.version, "0.1.9");
+  assert.equal(result.instances[0]?.id, instance.id);
+  assert.equal(result.instances[0]?.enabled, false);
   assert.deepEqual(result.instances[0]?.config, instance.config);
+  assert.deepEqual(result.instances[0]?.grants, instance.grants);
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
 
@@ -671,12 +695,12 @@ test("NapCat package migration preserves the existing instance settings", async 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-napcat-migration-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
-  const instances = ["0.1.4", "0.1.9", "0.1.10"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const instances = ["0.1.4", "0.1.9", "0.1.10", "0.1.11", "0.1.12"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
   const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
   await fs.writeFile(profilePath, raw);
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
   const result = await readPluginProfile(profilePath, { migrationsPath });
-  assert.deepEqual(result.instances.map(item => item.version), ["0.1.11", "0.1.11", "0.1.11"]);
+  assert.deepEqual(result.instances.map(item => item.version), ["0.1.13", "0.1.13", "0.1.13", "0.1.13", "0.1.13"]);
   assert.deepEqual(result.instances.map(item => item.config), instances.map(item => item.config));
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });

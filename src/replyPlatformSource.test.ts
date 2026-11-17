@@ -8,6 +8,7 @@ import { handleAgentSend, prepareAgentSendRequest, validateAgentSendReplyImageDe
 import type { AgentReplyOptions } from "./outbox.js";
 import { readPlatformReplySource } from "./replyPlatformSource.js";
 import { readReplySource } from "./plugins/io.rabiroute.endpoint.napcat/src/napcatReplySource.js";
+import { installDataMutationAuditSink } from "@rabiroute/host-api/observability/dataMutationAudit";
 
 function fixture(t: test.TestContext, image = false) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-platform-quote-"));
@@ -82,6 +83,21 @@ test("provider and credential changes while Markdown rendering is pending preven
     assert.match(result.reason ?? "", /provider changed/);
     assert.equal(f.sent.length, 0);
   }
+});
+
+test("managed reply-source image writes emit a private-data-safe audit record", async t => {
+  const f = fixture(t, true);
+  const records: Array<{ event: string; target: { type: string; id: string }; dataSource: { id: string }; outcome: string }> = [];
+  const remove = installDataMutationAuditSink(record => records.push(record));
+  t.after(remove);
+  await readPlatformReplySource(prepareAgentSendRequest(f.request), f.options, () => {});
+  const matching = records.filter(record => record.event === "reply_source_image_written");
+  assert.equal(matching.length, 1);
+  assert.deepEqual(matching[0]?.target, { type: "reply-source-image", id: "managed-image" });
+  assert.equal(matching[0]?.dataSource.id, "napcat-media/reply-source");
+  assert.equal(matching[0]?.outcome, "committed");
+  assert.equal(JSON.stringify(matching).includes(f.dataDir), false);
+  assert.equal(JSON.stringify(matching).includes("media.example"), false);
 });
 
 test("a platform image still needs concrete descriptions and a readable managed image", async t => {
