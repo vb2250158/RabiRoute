@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RabiRoute — 自托管 Agent 消息网关</title>
+<meta name="description" content="RabiRoute 把 QQ、微信、飞书的消息接给你已经在跑的 Agent。自托管，MIT，不依赖云服务。Self-hosted message gateway that routes chat messages into an existing agent task.">
+<meta property="og:title" content="RabiRoute — 自托管 Agent 消息网关">
+<meta property="og:description" content="把聊天消息投进你桌面上那个 Agent 任务，而不是每句话新开一个会话。">
+<meta property="og:image" content="assets/rabiroute-hero-connections.webp">
+<meta property="og:type" content="website">
+<link rel="icon" href="assets/rabiroute-icon.png">
+<style>
+  :root{
+    --ink:#142036; --ink2:#4a5a72; --ink3:#7a8899;
+    --line:#e3ecf1; --bg:#ffffff; --bg2:#f5fafc;
+    --teal:#19bfc1; --teal-d:#0e8f91; --pink:#ff7eae;
+    --radius:16px;
+    --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);color:var(--ink);background:var(--bg);line-height:1.65;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .lang-en .zh{display:none}
+  body:not(.lang-en) .en{display:none}
+  body:not(.lang-en) .shot-en{display:none}
+  .lang-en .shot-zh{display:none}
+
+  header{border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);z-index:20}
+  .nav{display:flex;align-items:center;gap:16px;height:64px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px;letter-spacing:-.01em}
+  .brand img{width:26px;height:26px;border-radius:7px}
+  .nav-spacer{flex:1}
+  .nav a.link{font-size:14px;color:var(--ink2);padding:6px 8px}
+  .nav a.link:hover{color:var(--ink)}
+  .btn{display:inline-flex;align-items:center;gap:7px;font-size:14px;font-weight:500;padding:9px 16px;border-radius:9px;border:1px solid var(--line);transition:.15s}
+  .btn:hover{border-color:#c8d8e0;background:var(--bg2)}
+  .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .btn.primary:hover{background:#0b1525}
+  .langbtn{font-size:13px;color:var(--ink2);border:1px solid var(--line);border-radius:8px;padding:5px 10px;background:none;cursor:pointer;font-family:inherit}
+
+  .hero{padding:44px 0 20px}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--teal-d);background:#e8f9f8;border:1px solid #cbeceb;border-radius:999px;padding:5px 13px;margin-bottom:20px;font-weight:500;letter-spacing:.01em}
+  .hero h1{font-size:clamp(28px,4.3vw,46px);line-height:1.2;letter-spacing:-.025em;font-weight:600;max-width:18em}
+  .hero p.lede{font-size:clamp(15px,1.9vw,17.5px);color:var(--ink2);max-width:38em;margin-top:16px}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+  .heroimg{margin-top:36px;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);background:var(--bg2)}
+  .heroimg img{display:block;width:100%;height:auto}
+  .shotcap{font-size:13px;color:var(--ink3);margin-top:14px;text-align:center}
+
+  section{padding:64px 0}
+  section.alt{background:var(--bg2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  h2{font-size:clamp(22px,2.9vw,30px);letter-spacing:-.02em;font-weight:600;margin-bottom:10px}
+  .sub{color:var(--ink2);font-size:16px;max-width:40em;margin-bottom:36px}
+
+  .fit{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .fitcard{border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;background:#fff}
+  .fitcard h3{font-size:15px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot.yes{background:var(--teal)}
+  .dot.no{background:#c9d3dc}
+  .fitcard ul{list-style:none;font-size:14px;color:var(--ink2);display:grid;gap:9px}
+  .fitcard li{position:relative;padding-left:15px}
+  .fitcard li::before{content:"";position:absolute;left:0;top:.68em;width:5px;height:5px;border-radius:50%;background:#c3d0da}
+  .fitcard.no li::before{background:#dde5ea}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+  .panel{border:1px solid var(--line);border-radius:var(--radius);padding:24px;background:#fff}
+  .panel h3{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3);margin-bottom:16px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px dashed #edf3f6;font-size:14px}
+  .row:last-child{border-bottom:none}
+  .row .name{font-weight:500}
+  .tag{font-size:11px;padding:2px 8px;border-radius:999px;white-space:nowrap;font-weight:500}
+  .tag.ok{background:#e2f7f5;color:#0b7c76}
+  .tag.exp{background:#f3f5f7;color:#6b7986}
+  .tag.wait{background:#fdf0e6;color:#a05a2c}
+
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:20px}
+  .step{border-left:2px solid var(--teal);padding-left:18px}
+  .step .n{font-size:12px;color:var(--teal-d);font-weight:600;letter-spacing:.08em}
+  .step h4{font-size:15px;font-weight:600;margin:6px 0 6px}
+  .step p{font-size:14px;color:var(--ink2)}
+
+  .shotrow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:32px}
+  .shotrow figure{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column}
+  .shotrow figure.wide{grid-column:1 / -1}
+  .shotrow img{display:block;width:100%;height:auto}
+  .shotrow figcaption{font-size:12.5px;color:var(--ink3);padding:11px 14px;border-top:1px solid var(--line);margin-top:auto}
+
+  table{width:100%;border-collapse:collapse;font-size:14px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink3);font-weight:600;background:var(--bg2)}
+  tr:last-child td{border-bottom:none}
+
+  .final{text-align:center;padding:72px 0}
+  .final h2{margin-bottom:14px}
+  .final p{color:var(--ink2);max-width:32em;margin:0 auto 28px}
+
+  footer{border-top:1px solid var(--line);padding:32px 0;font-size:13px;color:var(--ink3)}
+  footer .fgrid{display:flex;flex-wrap:wrap;gap:18px;justify-content:space-between;align-items:center}
+  footer a:hover{color:var(--ink2)}
+  .note{font-size:12.5px;color:var(--ink3);margin-top:18px;padding-top:16px;border-top:1px dashed var(--line)}
+  @media (max-width:640px){
+    .nav a.link{display:none}
+    section{padding:48px 0}
+    .hero{padding:44px 0 12px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="./"><img src="assets/rabiroute-icon.png" alt=""><span>RabiRoute</span></a>
+    <div class="nav-spacer"></div>
+    <a class="link" href="#plugs"><span class="zh">能接什么</span><span class="en">Integrations</span></a>
+    <a class="link" href="#how"><span class="zh">怎么工作</span><span class="en">How it works</span></a>
+    <a class="link" href="#status"><span class="zh">成熟度</span><span class="en">Status</span></a>
+    <button class="langbtn" id="langbtn" type="button">EN</button>
+    <a class="btn primary" href="https://github.com/vb2250158/RabiRoute">GitHub</a>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div class="eyebrow">
+      <span class="zh">自托管 · MIT · 不依赖云服务</span>
+      <span class="en">Self-hosted · MIT · No cloud dependency</span>
+    </div>
+    <h1>
+      <span class="zh">出门在外，<br>让 Agent 接着干。</span>
+      <span class="en">Your agent keeps working,<br>wherever you are.</span>
+    </h1>
+    <p class="lede">
+      <span class="zh">RabiRoute 把 QQ、微信、企业微信、飞书的消息接给你已经在跑的 Agent。不是每句话新开一个会话——是投进桌面上那个任务里，上下文还在。</span>
+      <span class="en">RabiRoute routes chat messages from QQ, WeChat, WeCom and Feishu into the agent task you already have running. Not a fresh session per message — the same task, the same context.</span>
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/vb2250158/RabiRoute#get-started">
+        <span class="zh">从 GitHub 开始</span><span class="en">Get started on GitHub</span>
+      </a>
+      <a class="btn" href="https://github.com/vb2250158/RabiRoute">
+        <span class="zh">看源码</span><span class="en">Read the source</span>
+      </a>
+    </div>
+
+    <div class="heroimg">
+      <img src="assets/rabiroute-hero-connections.webp" alt="RabiRoute 把通讯、智能设备与桌面自动化连接到 Agent">
+    </div>
+  </div>
+
+  <section class="alt" id="fit">
+    <div class="wrap">
+      <h2><span class="zh">这套东西适合你吗</span><span class="en">Is it for you?</span></h2>
+      <p class="sub"><span class="zh">先说清楚，省得你装完才发现不对路。</span><span class="en">Better to know up front than after you have installed it.</span></p>
+      <div class="fit">
+        <div class="fitcard">
+          <h3><span class="dot yes"></span><span class="zh">适合，如果</span><span class="en">A good fit if you</span></h3>
+          <ul>
+            <li><span class="zh">已经在自己的机器上跑 Codex、DSH 或 WorkBuddy</span><span class="en">already run Codex, DSH or WorkBuddy on a machine you control</span></li>
+            <li><span class="zh">有一台常开的设备：Windows 主机、NAS 或小主机</span><span class="en">keep an always-on box — desktop, NAS or mini PC</span></li>
+            <li><span class="zh">想在手机上接着用桌面上那个任务</span><span class="en">want to continue a desktop task from your phone</span></li>
+          </ul>
+        </div>
+        <div class="fitcard no">
+          <h3><span class="dot no"></span><span class="zh">不适合，如果</span><span class="en">Not a fit if you</span></h3>
+          <ul>
+            <li><span class="zh">你想要注册完就能用的托管服务</span><span class="en">want a hosted service you sign up for</span></li>
+            <li><span class="zh">你没有常开的设备</span><span class="en">have no always-on machine</span></li>
+            <li><span class="zh">你只需要简单的提醒和通知</span><span class="en">only need reminders and notifications</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="plugs">
+    <div class="wrap">
+      <h2><span class="zh">能接什么</span><span class="en">What plugs in</span></h2>
+      <p class="sub"><span class="zh">每个接入项都标了真实成熟度。标「实验」的不是不能用，是需要按你的环境验收过才算数。</span><span class="en">Every integration is marked with its real maturity. "Experimental" does not mean broken — it means it has not been accepted in your environment yet.</span></p>
+      <div class="grid2">
+        <div class="panel">
+          <h3><span class="zh">Agent 处理端</span><span class="en">Agent backends</span></h3>
+          <div class="row"><span class="name">Codex Desktop</span><span class="tag ok"><span class="zh">已验证</span><span class="en">Verified</span></span></div>
+          <div class="row"><span class="name">DSH (DeepSeek Harness)</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">WorkBuddy</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">Antigravity</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">Copilot CLI</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">AstrBot</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">Grok Bot</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name">Marvis</span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+        </div>
+        <div class="panel">
+          <h3><span class="zh">消息入口</span><span class="en">Message inputs</span></h3>
+          <div class="row"><span class="name"><span class="zh">QQ（NapCat / OneBot）</span><span class="en">QQ via NapCat / OneBot</span></span><span class="tag ok"><span class="zh">已验证</span><span class="en">Verified</span></span></div>
+          <div class="row"><span class="name"><span class="zh">飞书</span><span class="en">Feishu</span></span><span class="tag wait"><span class="zh">待真实联调</span><span class="en">Awaiting credentials</span></span></div>
+          <div class="row"><span class="name"><span class="zh">企业微信</span><span class="en">WeCom</span></span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name"><span class="zh">个人微信</span><span class="en">Personal WeChat</span></span><span class="tag exp"><span class="zh">实验原型</span><span class="en">Prototype</span></span></div>
+          <div class="row"><span class="name"><span class="zh">定时任务 / Webhook</span><span class="en">Schedules / Webhook</span></span><span class="tag ok"><span class="zh">已验证</span><span class="en">Verified</span></span></div>
+          <div class="row"><span class="name"><span class="zh">桌面截图与滑词</span><span class="en">Desktop capture</span></span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name"><span class="zh">语音与智能设备</span><span class="en">Speech &amp; devices</span></span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+          <div class="row"><span class="name"><span class="zh">局域网另一台电脑</span><span class="en">LAN computers</span></span><span class="tag exp"><span class="zh">实验</span><span class="en">Experimental</span></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt" id="how">
+    <div class="wrap">
+      <h2><span class="zh">一条消息怎么变成结果</span><span class="en">From message to result</span></h2>
+      <p class="sub"><span class="zh">RabiRoute 只负责连接和路由。模型、工具、执行都在你的 Agent 那边——所以换模型不用改网关。</span><span class="en">RabiRoute connects and routes. The model, the tools and the execution stay with your agent — swapping models does not touch the gateway.</span></p>
+      <div class="steps">
+        <div class="step">
+          <div class="n">01</div>
+          <h4><span class="zh">消息进来</span><span class="en">Message arrives</span></h4>
+          <p><span class="zh">群里的一句话、一条定时任务、一次桌面截图，都会先落成一条可查的事件记录。</span><span class="en">A chat line, a schedule tick or a desktop capture lands as a recorded event first.</span></p>
+        </div>
+        <div class="step">
+          <div class="n">02</div>
+          <h4><span class="zh">路由挑角色</span><span class="en">Route picks a role</span></h4>
+          <p><span class="zh">按你配的规则选角色、挑一个已经存在的 Agent 任务，再把最近上下文一起带过去。</span><span class="en">Rules select the role and a specific existing agent task, then attach recent context.</span></p>
+        </div>
+        <div class="step">
+          <div class="n">03</div>
+          <h4><span class="zh">结果按规则回传</span><span class="en">Reply with rules</span></h4>
+          <p><span class="zh">发送是独立动作：过发送规则、写回执。哪些话该发、发到哪，都由你定。</span><span class="en">Sending is its own step: apply sending rules, record a receipt. You decide what goes where.</span></p>
+        </div>
+      </div>
+
+      <div class="shotrow">
+        <figure class="wide">
+          <img class="shot-zh" src="assets/webgui-overview-zh.png" alt="RabiRoute 控制台">
+          <img class="shot-en" src="assets/webgui-overview-en.png" alt="RabiRoute control deck">
+          <figcaption><span class="zh">控制台：消息包裹在排队分诊</span><span class="en">Control deck: queued messages being routed</span></figcaption>
+        </figure>
+        <figure>
+          <img class="shot-zh" src="assets/webgui-adapters-zh.png" alt="消息适配器配置">
+          <img class="shot-en" src="assets/webgui-adapters-en.png" alt="Message adapter configuration">
+          <figcaption><span class="zh">消息适配器：每个 Route 绑一个入口</span><span class="en">Adapters: one input per Route</span></figcaption>
+        </figure>
+        <figure>
+          <img class="shot-zh" src="assets/webgui-persona-rules-zh.png" alt="人格与规则配置">
+          <img class="shot-en" src="assets/webgui-persona-rules-en.png" alt="Role rules configuration">
+          <figcaption><span class="zh">角色规则：上下文、记忆与发送策略</span><span class="en">Role rules: context, memory and sending policy</span></figcaption>
+        </figure>
+      </div>
+      <p class="shotcap"><span class="zh">截图来自本地 WebGUI，版本 0.15.22。</span><span class="en">Screenshots from the local WebGUI, version 0.15.22.</span></p>
+    </div>
+  </section>
+
+  <section id="status">
+    <div class="wrap">
+      <h2><span class="zh">说实话的成熟度</span><span class="en">Status, stated plainly</span></h2>
+      <p class="sub"><span class="zh">这个项目不把实验功能说成已完成。下面这张表来自仓库的能力矩阵，也是它在 README 里公开的样子。</span><span class="en">This project does not describe experiments as finished features. The table comes from the repository's capability matrix and is public in the README.</span></p>
+      <table>
+        <thead>
+          <tr>
+            <th><span class="zh">范围</span><span class="en">Area</span></th>
+            <th><span class="zh">现状</span><span class="en">Current state</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="zh">QQ / NapCat + Codex Desktop</span><span class="en">QQ / NapCat + Codex Desktop</span></td><td><span class="zh">核心投递路径已验证</span><span class="en">Core delivery path verified</span></td></tr>
+          <tr><td><span class="zh">路由、定时、WebGUI、角色计划与记忆</span><span class="en">Routes, schedules, WebGUI, role plans and memory</span></td><td><span class="zh">核心路径已验证</span><span class="en">Core paths verified</span></td></tr>
+          <tr><td><span class="zh">Windows 桌面端</span><span class="en">Windows desktop</span></td><td><span class="zh">已实现；系统交互需真机验收</span><span class="en">Implemented; system interactions need device acceptance</span></td></tr>
+          <tr><td><span class="zh">个人微信、企业微信、飞书</span><span class="en">Personal WeChat, WeCom, Feishu</span></td><td><span class="zh">实验 / 原型；真机验收各不相同</span><span class="en">Experimental / prototype; acceptance varies</span></td></tr>
+          <tr><td><span class="zh">手机、眼镜、手表、Home Assistant</span><span class="en">Phones, glasses, wearables, Home Assistant</span></td><td><span class="zh">实验；模型、网络与硬件分别验收</span><span class="en">Experimental; validated separately</span></td></tr>
+        </tbody>
+      </table>
+      <p class="note">
+        <span class="zh">安装门槛：Node.js 22.13 以上；Windows 源码构建另需 .NET 9 SDK。这不是双击就能用的软件。</span>
+        <span class="en">Requirements: Node.js 22.13+, plus the .NET 9 SDK for a Windows source build. This is not a double-click installer.</span>
+      </p>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap final" style="padding:0">
+      <h2><span class="zh">自己机器上的东西，自己拿主意</span><span class="en">Your machine, your call</span></h2>
+      <p><span class="zh">MIT 协议，没有账号体系，没有额度，没有中转服务器。跑起来要花点时间，但跑起来之后它就是你的。</span><span class="en">MIT licensed. No accounts, no quota, no relay server. Setup takes effort — afterwards it is yours.</span></p>
+      <div class="cta" style="justify-content:center">
+        <a class="btn primary" href="https://github.com/vb2250158/RabiRoute"><span class="zh">去 GitHub</span><span class="en">Open GitHub</span></a>
+        <a class="btn" href="https://github.com/vb2250158/RabiRoute/blob/main/docs/user-guide/first-route_en.md"><span class="zh">第一条路由怎么配</span><span class="en">First Route walkthrough</span></a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>RabiRoute · MIT License</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap">
+        <a href="https://github.com/vb2250158/RabiRoute">GitHub</a>
+        <a href="https://github.com/vb2250158/RabiRoute/blob/main/README_zh.md"><span class="zh">中文文档</span><span class="en">Chinese docs</span></a>
+        <a href="https://github.com/vb2250158/RabiRoute/blob/main/docs/current-capabilities_en.md"><span class="zh">能力矩阵</span><span class="en">Capability matrix</span></a>
+        <a href="https://github.com/vb2250158/RabiRoute/issues">Issues</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var btn = document.getElementById('langbtn');
+  var stored = localStorage.getItem('rabiroute-lang');
+  if (stored === 'en') { document.body.classList.add('lang-en'); btn.textContent = '中'; }
+  btn.addEventListener('click', function(){
+    var en = document.body.classList.toggle('lang-en');
+    btn.textContent = en ? '中' : 'EN';
+    localStorage.setItem('rabiroute-lang', en ? 'en' : 'zh');
+    document.documentElement.lang = en ? 'en' : 'zh-CN';
+  });
+})();
+</script>
+</body>
+</html>

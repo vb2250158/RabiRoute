@@ -28,6 +28,25 @@ RabiRoute is a **self-hosted message gateway and policy router for AI agents**. 
 
 [Overview](#what-it-connects) · [Get started](#get-started) · [Architecture](#architecture) · [Docs](#documentation) · [Community](#community)
 
+<p align="center">
+  <img src="assets/screenshots/webgui-overview-en.png" alt="RabiRoute control deck showing queued messages being routed" width="49%">
+  <img src="assets/screenshots/webgui-adapters-en.png" alt="Message adapter configuration" width="49%">
+</p>
+
+## Is it for you?
+
+**A good fit if you**
+
+- already run Codex, DSH or WorkBuddy on a machine you control
+- keep an always-on box — a Windows desktop, a NAS or a mini PC
+- want to continue a desktop agent task from your phone or from a chat app
+
+**Not a fit if you**
+
+- want a hosted service you sign up for and use immediately
+- have no always-on machine
+- only need reminders and notifications
+
 ## What it connects
 
 ```mermaid
@@ -172,6 +191,24 @@ flowchart TB
 | Connect voice, devices or another computer | [Client apps](apps/README_en.md) · [RabiSpeech](docs/rabispeech-plugin_en.md) · [Home devices](docs/user-guide/home-devices_en.md) · [PC onboarding](docs/lan-rabi-agent-bootstrap_en.md) |
 | Integrate or extend RabiRoute | [API discovery](docs/api-reference_en.md) · [Architecture](docs/architecture_en.md) · [Function map](docs/project-function-map_en.md) |
 | Browse all documentation | [Documentation index](docs/README_en.md) · [Configuration](docs/configuration_en.md) |
+
+## FAQ
+
+**Is this a QQ or WeChat bot?**
+
+RabiRoute is a gateway, not a bot. It routes incoming messages to an agent you already run, and that agent decides what to answer. QQ through NapCat / OneBot is the verified input path. WeCom is experimental, personal Weixin is an experimental prototype, and Feishu is implemented but still waiting on real-credential acceptance.
+
+**Does it need a cloud server?**
+
+No. It runs on a machine you control — a Windows desktop app, or a headless Linux host. There is no account system, no quota, and no relay server between you and your agent.
+
+**Which agent backends work today?**
+
+Codex Desktop is the verified path. DSH, WorkBuddy, Antigravity, Copilot CLI, AstrBot, Grok Bot and Marvis all have adapters, but they are experimental and validate per environment. The [capability matrix](docs/current-capabilities_en.md) states what each one can actually do.
+
+**Can I run it on a NAS?**
+
+The Windows package expects a desktop session. Linux Host runs headless without tray, screenshots or global hotkeys. Check the [packaging guide](docs/windows-launcher-and-packaging_en.md) before committing a device.
 
 ## Community
 

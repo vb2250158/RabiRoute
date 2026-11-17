@@ -28,6 +28,25 @@ RabiRoute 是一个**可自托管的 AI Agent 消息网关与策略路由器**�
 
 [连接总览](#连接总览) · [开始使用](#开始使用) · [运行架构](#运行架构) · [文档入口](#文档入口) · [交流群](#交流与反馈)
 
+<p align="center">
+  <img src="assets/screenshots/webgui-overview-zh.png" alt="RabiRoute 控制台：消息包裹正在排队分诊" width="49%">
+  <img src="assets/screenshots/webgui-adapters-zh.png" alt="消息适配器配置页面" width="49%">
+</p>
+
+## 这套东西适合你吗？
+
+**适合，如果**
+
+- 你已经在自己的机器上跑 Codex、DSH 或 WorkBuddy
+- 你有一台常开的设备——Windows 主机、NAS 或小主机
+- 你想在手机上或聊天软件里，接着用桌面上那个任务
+
+**不适合，如果**
+
+- 你想要一个注册完就能用的托管服务
+- 你没有常开的设备
+- 你只需要简单的提醒和通知
+
 ## 连接总览
 
 ```mermaid
@@ -172,6 +191,24 @@ flowchart TB
 | 接入语音、设备或另一台电脑 | [客户端](apps/README.md) · [RabiSpeech](docs/rabispeech-plugin.md) · [家庭设备](docs/user-guide/home-devices.md) · [电脑接入](docs/lan-rabi-agent-bootstrap.md) |
 | 接 API 或开发扩展 | [API 发现](docs/api-reference.md) · [架构](docs/architecture.md) · [功能地图](docs/project-function-map.md) |
 | 查找完整资料 | [文档索引](docs/README.md) · [配置](docs/configuration.md) |
+
+## 常见问题
+
+**这是 QQ 机器人或者微信机器人吗？**
+
+RabiRoute 是网关，不是机器人。它把收到的消息转给你已经在运行的 Agent，由 Agent 决定怎么回答。QQ 走 NapCat / OneBot，是唯一已验证的入口路径；企业微信是实验支持，个人微信是实验原型，飞书本地实现已验收但还在等真实凭证联调。
+
+**需要云服务器吗？**
+
+不需要。跑在你自己控制的机器上——Windows 桌面端，或者无图形界面的 Linux Host。没有账号体系，没有额度，你和 Agent 之间没有中转服务器。
+
+**现在能接哪些 Agent？**
+
+Codex Desktop 是已验证的路径。DSH、WorkBuddy、Antigravity、Copilot CLI、AstrBot、Grok Bot、Marvis 都有适配器，但属于实验支持，按各自环境验收。[能力矩阵](docs/current-capabilities.md)写清了每一项实际能做到什么。
+
+**能跑在 NAS 上吗？**
+
+Windows 安装包需要桌面会话。Linux Host 可以无界面运行，但不含托盘、截图和全局快捷键。动手前先看[打包指南](docs/windows-launcher-and-packaging.md)。
 
 ## 交流与反馈
 
