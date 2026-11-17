@@ -22,9 +22,11 @@ English | <a href="./README_zh.md">简体中文</a> | <a href="./README_ja.md">�
   <a href="#community"><img alt="QQ community: 1130935416" src="https://img.shields.io/badge/QQ-1130935416-12b9bf?logo=qq&amp;logoColor=white"></a>
 </p>
 
-RabiRoute is a **self-hosted message gateway and policy router for AI agents**. Connect chats, desktop events and smart devices to the Agent you already use, with role context, scheduled tasks and recorded results.
+RabiRoute is a **self-hosted connection layer between your agent and everything you already use** — chat platforms, desktop automation, smart devices and schedules. It routes, delivers and records; your agent keeps the model, tools and execution.
 
-**RabiRoute connects and routes. Your Agent owns the model, tools and execution.**
+- **The context carries over.** A message lands in the agent task you already have open, not a fresh session, so switching devices does not mean starting over.
+- **The agent can reach.** Chat, desktop, glasses, watch and schedules all end up at the same agent.
+- **You decide the combination.** Message inputs and agent backends are two separate boxes of plugins. Adding one does not disturb the others.
 
 [Overview](#what-it-connects) · [Get started](#get-started) · [Architecture](#architecture) · [Docs](#documentation) · [Contributing](CONTRIBUTING.md) · [Community](#community)
 
@@ -69,6 +71,10 @@ flowchart LR
     class A agent
     class O output
 ```
+
+### One directory, not a fixed API
+
+An agent does not need to know in advance what RabiRoute supports. It lists the operation catalog, reads the contract for what it needs, then calls it — over HTTP, MCP or the CLI. A new plugin appears in that catalog by itself, so "everything" can keep growing without breaking what already works.
 
 QQ and Codex Desktop have verified core paths. Other adapters and physical-device integrations have their own maturity and setup requirements; see [integration status](#integration-status).
 
