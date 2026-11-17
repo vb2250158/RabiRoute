@@ -7,9 +7,9 @@
  * on the single real message path in `workbuddySessionBridge.ts`. No second
  * transport is introduced here — the gateway remains the only writer.
  *
- * WorkBuddy tasks have no create or rename surface: a task is created inside the
- * desktop app, and its title is owned there. The bridge treats those actions as
- * unsupported for this adapter, which is why they are deliberately absent.
+ * Creation and rename are not implemented by this Rabi adapter. WorkBuddy's
+ * desktop owns those operations; internal desktop handlers are not an external
+ * transport contract. Their absence here does not describe the host's abilities.
  */
 import {
   deliverWorkbuddyMessage,
@@ -96,6 +96,7 @@ export async function sendWorkbuddyThreadMessage(params: {
   action: "started";
   openedThread: boolean;
   transport: "http";
+  warning: string;
 }> {
   const task = readWorkbuddyTask(params.threadId);
   if (!task) throw new Error(`WorkBuddy task ${params.threadId} was not found.`);
@@ -120,5 +121,7 @@ export async function sendWorkbuddyThreadMessage(params: {
     imagePaths: params.imagePaths,
     endpoint
   });
-  return { threadId: resolved.id, action: "started", openedThread: false, transport: "http" };
+  // The shared legacy action denotes accepted dispatch; native work may still be queued.
+  return { threadId: resolved.id, action: "started", openedThread: false, transport: "http",
+    warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。" };
 }

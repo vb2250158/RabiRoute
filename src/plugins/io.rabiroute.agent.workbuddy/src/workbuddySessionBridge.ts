@@ -1,28 +1,11 @@
 import { getTimeoutMs } from "@rabiroute/host-api/shared/timeoutSettings";
 /**
- * WorkBuddy session delivery bridge.
- *
- * This is the ONLY code path that may put real message text into a WorkBuddy
- * task. Everything else (scanning, health, resolver) is read-only and must
- * never carry a body.
- *
- * Verified on WorkBuddy 5.5.6 (see docs/workbuddy-agent-adapter-plan.md):
- *
- *   POST <endpoint>/api/v1/runs
- *     Authorization: Bearer <gateway password>
- *     { id, type, source: { platform, sender:{id}, conversation:{id} }, payload:{ text } }
- *
- * `source.conversation.id` IS the session routing key: the gateway calls
- * `getOrCreateSession(source.conversation.id)`, so pinning it to the bound
- * full session id gives same-id redelivery natively (no new task is created).
- *
- * `type` and the message `id` are mandatory; the bundled OpenAPI spec omits
- * them and returns `400 Invalid generic message format` if either is missing.
- * Reply text lands in `<home>/projects/<project-slug>/<sessionId>.jsonl` as a
- * normal user turn executed by the same desktop task owner.
+ * Sends through the original native session's exact-ID reply endpoint.
+ * Native permission mode and queue remain owned by WorkBuddy. A successful
+ * reply acknowledges admission, including queued work; it does not prove
+ * completion or live rendering in the desktop window.
  */
 
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { applicationRuntimeLayout } from "@rabiroute/host-api/shared/runtimeLayout";
@@ -41,33 +24,17 @@ import {
   type WorkbuddyTask
 } from "./workbuddySessionStore.js";
 
-/** One delivery attempt. Text is the only field that may vary between runs. */
 export type WorkbuddyDeliveryRequest = {
   assertAuthorized?: () => void | Promise<void>;
-  /** Bound task id; becomes `source.conversation.id` (the routing key). */
   sessionId: string;
-  /** Message body. Never logged, never persisted by this module. */
   text: string;
-  /** Official generic gateway attachments, read by the same local task owner. */
+  /** Native gateway-compatible file references, read through WorkBuddy's Read tool. */
   imagePaths?: string[];
-  /** Local loopback gateway endpoint from the live session descriptor. */
   endpoint: string;
-  /** Stable sender identifier shown to the task owner. */
-  senderId?: string;
-  /** Platform label surfaced in the task's message source. */
-  platform?: string;
-  /** Maximum time to wait for the task to stop reporting `active`. */
-  settleTimeoutMs?: number;
-  /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 };
 
-export type WorkbuddyDeliveryResult = {
-  ok: true;
-  runId: string;
-  /** True when the gateway reported the turn finished before the timeout. */
-  settled: boolean;
-};
+export type WorkbuddyDeliveryResult = { ok: true; sessionId: string; accepted: true };
 
 export class WorkbuddyDeliveryError extends Error {
   readonly outcome: "rejected" | "unknown" | "unreachable" | "unauthorized";
@@ -78,31 +45,23 @@ export class WorkbuddyDeliveryError extends Error {
   }
 }
 
-const DEFAULT_SETTLE_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
 function textOf(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-/** Extract the run id from either the flat or `{data:...}` response shape. */
-export function parseWorkbuddyRunId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const record = payload as Record<string, unknown>;
-  const direct = textOf(record.runId);
-  if (direct) return direct;
-  const nested = record.data;
-  if (nested && typeof nested === "object") return textOf((nested as Record<string, unknown>).runId);
-  return "";
-}
-
-export function parseWorkbuddyRunActive(payload: unknown): boolean | null {
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
-  const data = record.data && typeof record.data === "object"
-    ? (record.data as Record<string, unknown>)
-    : record;
-  return typeof data.active === "boolean" ? data.active : null;
+/** Preserve the native generic gateway's local-image reference semantics. */
+export function prepareWorkbuddyReplyText(text: string, imagePaths: string[] = []): string {
+  if (!text.trim()) throw new WorkbuddyDeliveryError("WorkBuddy 投递正文为空。", "rejected");
+  const references = imagePaths.map(file => {
+    try {
+      if (!path.isAbsolute(file) || /[\r\n]/.test(file) || !fs.statSync(file).isFile()) throw new Error();
+      fs.accessSync(file, fs.constants.R_OK);
+    } catch { throw new WorkbuddyDeliveryError("WorkBuddy 图片附件不可用。", "rejected"); }
+    return `- [图片] ${path.basename(file)} （本地路径，可用 Read）: ${file}`;
+  });
+  return (text + (references.length ? `\n\n附件列表（请按需使用 Read / WebFetch 等工具查看）：\n${references.join("\n")}` : "")).trim();
 }
 
 /**
@@ -117,11 +76,8 @@ export async function deliverWorkbuddyMessage(
   request: WorkbuddyDeliveryRequest
 ): Promise<WorkbuddyDeliveryResult> {
   const sessionId = textOf(request.sessionId);
-  const text = typeof request.text === "string" ? request.text : "";
+  const text = prepareWorkbuddyReplyText(typeof request.text === "string" ? request.text : "", request.imagePaths);
   if (!sessionId) throw new WorkbuddyDeliveryError("WorkBuddy 投递缺少任务 ID。", "rejected");
-  // Whitespace-only bodies must not reach the gateway: an empty turn would be
-  // accepted and would still consume the task owner.
-  if (!text.trim()) throw new WorkbuddyDeliveryError("WorkBuddy 投递正文为空。", "rejected");
 
   const origin = assertWorkbuddyLoopback(request.endpoint);
   const fetchImpl = request.fetchImpl ?? fetch;
@@ -132,24 +88,10 @@ export async function deliverWorkbuddyMessage(
     throw error;
   });
 
-  const body = {
-    id: randomUUID(),
-    type: "message",
-    source: {
-      platform: textOf(request.platform) || "rabiroute",
-      sender: { id: textOf(request.senderId) || "rabiroute" },
-      conversation: { id: sessionId, type: "direct" }
-    },
-    payload: { text, ...(request.imagePaths?.length ? { attachments: request.imagePaths.map(file => {
-      if (!path.isAbsolute(file) || !fs.statSync(file).isFile()) throw new WorkbuddyDeliveryError("WorkBuddy 图片附件不可用。", "rejected");
-      return { type: "image", urlType: "local-path", url: file, name: path.basename(file) };
-    }) } : {}) }
-  };
-
   await request.assertAuthorized?.();
   let response: Response;
   try {
-    response = await fetchImpl(`${origin}/api/v1/runs`, {
+    response = await fetchImpl(`${origin}/api/v1/sessions/${encodeURIComponent(sessionId)}/reply`, {
       method: "POST",
       redirect: "manual",
       signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
@@ -158,7 +100,7 @@ export async function deliverWorkbuddyMessage(
         "X-CodeBuddy-Request": "1",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ text })
     });
   } catch (error) {
     const code = (error as { cause?: { code?: string } })?.cause?.code;
@@ -174,7 +116,7 @@ export async function deliverWorkbuddyMessage(
   if (response.status === 401 || response.status === 403) {
     invalidateWorkbuddyGatewayPassword();
     throw new WorkbuddyDeliveryError(
-      "WorkBuddy 会话网关拒绝凭据；请更新本地凭据文件后重试，本次投递未被接受。",
+      "WorkBuddy 会话网关拒绝凭据；请重新发现原任务的连接，本次投递未被接受。",
       "unauthorized"
     );
   }
@@ -204,53 +146,11 @@ export async function deliverWorkbuddyMessage(
     );
   }
 
-  const runId = parseWorkbuddyRunId(parsed);
-  if (!runId) {
-    throw new WorkbuddyDeliveryError(
-      "WorkBuddy 会话网关已接受请求但未返回 runId；请先在目标任务中核对，再决定是否重试。",
-      "unknown"
-    );
+  if (!parsed || typeof parsed !== "object" ||
+    (parsed as { data?: { delivered?: unknown } }).data?.delivered !== true) {
+    throw new WorkbuddyDeliveryError("WorkBuddy 未返回原生任务接收回执；请核对原任务和原回执。", "unknown");
   }
-
-  const settled = await waitForWorkbuddyTurn(origin, runId, password, {
-    fetchImpl,
-    timeoutMs: Math.max(0, request.settleTimeoutMs ?? getTimeoutMs("backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS", DEFAULT_SETTLE_TIMEOUT_MS))
-  });
-  return { ok: true, runId, settled };
-}
-
-/**
- * Poll `/runs/{runId}` until the turn stops reporting `active`.
- * Returns false on timeout — the message was accepted, it is simply still
- * running. That is not an error and must not trigger a second delivery.
- */
-export async function waitForWorkbuddyTurn(
-  endpoint: string,
-  runId: string,
-  password: string,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}
-): Promise<boolean> {
-  const origin = assertWorkbuddyLoopback(endpoint);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const deadline = Date.now() + (options.timeoutMs ?? getTimeoutMs("backend.workbuddySessionBridge.DEFAULT_SETTLE_TIMEOUT_MS", DEFAULT_SETTLE_TIMEOUT_MS));
-  // First poll is immediate: short turns finish long before the deadline.
-  for (;;) {
-    try {
-      const response = await fetchImpl(`${origin}/api/v1/runs/${encodeURIComponent(runId)}`, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
-        headers: { Authorization: `Bearer ${password}`, "X-CodeBuddy-Request": "1" }
-      });
-      if (response.ok) {
-        const active = parseWorkbuddyRunActive(await response.json().catch(() => null));
-        if (active === false) return true;
-      }
-    } catch {
-      // A transient poll failure does not change the delivery outcome.
-    }
-    if (Date.now() >= deadline) return false;
-    await new Promise(resolve => setTimeout(resolve, Math.min(2000, Math.max(250, deadline - Date.now()))));
-  }
+  return { ok: true, sessionId, accepted: true };
 }
 
 /**
@@ -360,9 +260,9 @@ export async function ensureWorkbuddyOwnerConnected(binding: WorkbuddyPrimaryBin
  */
 export async function notifyWorkbuddySession(
   message: string,
-  options: { senderId?: string; settleTimeoutMs?: number } = {},
+  _options: Record<string, never> = {},
   configuration?: Record<string, unknown>
-): Promise<{ sessionId: string; runId: string }> {
+): Promise<{ sessionId: string; accepted: true }> {
   const binding = readWorkbuddyPrimaryBinding(undefined, configuration);
   if (!binding) {
     throw new WorkbuddyDeliveryError(
@@ -374,11 +274,9 @@ export async function notifyWorkbuddySession(
   const result = await deliverWorkbuddyMessage({
     sessionId: task.id,
     text: message,
-    endpoint,
-    ...(options.senderId ? { senderId: options.senderId } : {}),
-    ...(options.settleTimeoutMs !== undefined ? { settleTimeoutMs: options.settleTimeoutMs } : {})
+    endpoint
   });
-  return { sessionId: task.id, runId: result.runId };
+  return { sessionId: task.id, accepted: result.accepted };
 }
 
 /** Normalized workspace helper re-exported for settings save-time validation. */

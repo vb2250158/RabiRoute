@@ -101,7 +101,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主角色、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，DSH 也使用统一来源身份和消息投递合同。代码、WebGUI 和插件测试已覆盖；匿名测试 profile 已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
 | Copilot CLI | 实验支持 | 调用本机 Copilot CLI，使用独立 session name 和 cwd，记录输出和状态；扫描接口明确提示尚未完成连续同会话端到端烟测。 |
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
-| WorkBuddy（腾讯 AI 办公工作台） | 实验支持 | 0.1.5 已验证无绑定查询、原生历史分页、Windows 原进程自动鉴权及被测原主会话接收。`POST /api/v1/runs` 会优先使用 `primarySession`，固定 `conversation.id` 不能证明任意任务寻址；原生记录与回放不替代桌面实时显示。宿主会临时选择 `BypassPermissions`，原审批保持尚未通过。创建、打开、初始化与依赖创建的任务迁移未完成。详见 [WorkBuddy 验收边界](workbuddy-agent-adapter-plan.md)。 |
+| WorkBuddy（腾讯 AI 办公工作台） | 实验支持 | 0.1.6 已正式采用，保留无绑定查询、原生历史分页与 Windows 原进程自动鉴权。发送改用带完整任务 ID 的原生 `/sessions/{id}/reply`；错目标 409、原任务新消息接收及正式回传已验证。调用链不改权限模式，200 仅表示接收或入队。真实审批、图片读取、桌面实时显示、跨目标联调及创建/打开/初始化/任务迁移仍待验收。详见 [WorkBuddy 验收边界](workbuddy-agent-adapter-plan.md)。 |
 | Marvis | 人工接力 | 写 prompt、复制剪贴板并打开/聚焦 Marvis；不能可靠列出、创建或重复注入同一会话。 |
 
 处理端与 Manager 扩展使用共享 SDK 和 Plugin Kernel 的正式注册、发布与撤销入口。Manager 通过 `/api/plugins/catalog` 发布目录，WebGUI 与 Desktop 展示对应入口。发布、替换与失败时保留原实例的合同见[插件生命周期](plugin-publication-lifecycle.md)。

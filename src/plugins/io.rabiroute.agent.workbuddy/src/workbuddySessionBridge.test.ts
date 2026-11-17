@@ -8,10 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import {
   deliverWorkbuddyMessage,
   ensureWorkbuddyDeliverable,
-  parseWorkbuddyRunActive,
-  parseWorkbuddyRunId,
+  prepareWorkbuddyReplyText,
   readWorkbuddyPrimaryBinding,
-  waitForWorkbuddyTurn,
   WorkbuddyDeliveryError
 } from "./workbuddySessionBridge.js";
 import { assertWorkbuddyLoopback, discoverWorkbuddyOwners, invalidateWorkbuddyGatewayPassword, workbuddyGatewayPassword } from "./workbuddyHttpAuth.js";
@@ -43,19 +41,24 @@ test("native owner discovery refreshes stale metadata and initializes private en
   } finally { invalidateWorkbuddyGatewayPassword(); }
 });
 
-test("screenshots use official attachment fields on the original session gateway", async t => {
+test("image references preserve native Read permission and reject unusable paths before POST", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-image-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const image = path.join(root, "screenshot.png"); fs.writeFileSync(image, "fixture");
+  const image = path.join(root, "截图 test.png"); fs.writeFileSync(image, "fixture");
   const previous = process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
   process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
   try {
-    const { impl, calls } = fakeFetch([{ status: 202, body: { runId: "image-run" } }, { status: 200, body: { active: false } }]);
+    const { impl, calls } = fakeFetch([{ status: 200, body: { data: { delivered: true } } }]);
     await deliverWorkbuddyMessage({ sessionId: "original-full-session", text: "Inspect screenshot", imagePaths: [image],
       endpoint: "http://127.0.0.1:5762", fetchImpl: impl });
     const sent = JSON.parse(String(calls[0]!.init!.body));
-    assert.equal(sent.source.conversation.id, "original-full-session");
-    assert.deepEqual(sent.payload.attachments, [{ type: "image", urlType: "local-path", url: image, name: "screenshot.png" }]);
+    assert.equal(sent.text, `Inspect screenshot\n\n附件列表（请按需使用 Read / WebFetch 等工具查看）：\n- [图片] 截图 test.png （本地路径，可用 Read）: ${image}`);
+    assert.deepEqual(Object.keys(sent), ["text"]);
+    for (const bad of ["relative.png", root, path.join(root, "missing.png"), image + "\ninjected"]) {
+      await assert.rejects(deliverWorkbuddyMessage({ sessionId: "original-full-session", text: "image", imagePaths: [bad], endpoint: "http://127.0.0.1:5762", fetchImpl: impl }), /图片附件不可用/);
+    }
+    assert.equal(calls.length, 1);
+    assert.equal(prepareWorkbuddyReplyText("  hello  "), "hello");
   } finally {
     if (previous === undefined) delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
     else process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = previous;
@@ -94,51 +97,39 @@ test("loopback guard rejects non-loopback endpoints before any credential is sen
   assert.throws(() => assertWorkbuddyLoopback("http://user:pw@127.0.0.1:5762"), /不带凭据/);
 });
 
-test("run id and active flag parse from both flat and data-wrapped shapes", () => {
-  assert.equal(parseWorkbuddyRunId({ runId: "r1" }), "r1");
-  assert.equal(parseWorkbuddyRunId({ data: { runId: "r2" } }), "r2");
-  assert.equal(parseWorkbuddyRunId({}), "");
-  assert.equal(parseWorkbuddyRunId(null), "");
-  assert.equal(parseWorkbuddyRunActive({ active: true }), true);
-  assert.equal(parseWorkbuddyRunActive({ data: { active: false } }), false);
-  assert.equal(parseWorkbuddyRunActive({}), null);
-});
-
-test("delivery uses conversation.id as the routing key and settles on poll", async () => {
+test("native reply addresses the exact encoded ID, retains native permissions, and acknowledges admission only", async () => {
   process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
   try {
-    const { impl, calls } = fakeFetch([
-      { status: 202, body: { data: { runId: "run-1", status: "accepted" } } },
-      { status: 200, body: { data: { runId: "run-1", active: true } } },
-      { status: 200, body: { data: { runId: "run-1", active: false } } }
-    ]);
+    const { impl, calls } = fakeFetch([{ status: 200, body: { data: { delivered: true } } }]);
+    let authorized = false;
     const result = await deliverWorkbuddyMessage({
-      sessionId: "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-      text: "hello task",
-      endpoint: "http://127.0.0.1:5762",
-      fetchImpl: impl,
-      settleTimeoutMs: 5_000
+      sessionId: "exact/id?with#characters", text: "hello task", endpoint: "http://127.0.0.1:5762", fetchImpl: impl,
+      assertAuthorized: () => { authorized = true; }
     });
-    assert.equal(result.ok, true);
-    assert.equal(result.runId, "run-1");
-    assert.equal(result.settled, true);
-    assert.equal(calls.length, 3);
-    assert.equal(calls[0].url, "http://127.0.0.1:5762/api/v1/runs");
-    const sent = JSON.parse(String(calls[0].init?.body)) as Record<string, unknown>;
-    // Mandatory fields the bundled OpenAPI spec omits.
-    assert.equal(typeof sent.id, "string");
-    assert.equal(sent.type, "message");
-    const source = sent.source as Record<string, unknown>;
-    assert.deepEqual(source.conversation, {
-      id: "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-      type: "direct"
-    });
-    assert.deepEqual(sent.payload, { text: "hello task" });
+    assert.deepEqual(result, { ok: true, sessionId: "exact/id?with#characters", accepted: true });
+    assert.equal(authorized, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "http://127.0.0.1:5762/api/v1/sessions/exact%2Fid%3Fwith%23characters/reply");
+    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { text: "hello task" });
     assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, `Bearer ${PASSWORD}`);
-    assert.ok(calls.every(call => new Headers(call.init?.headers).get("X-CodeBuddy-Request") === "1"));
-  } finally {
-    delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
-  }
+    assert.equal(new Headers(calls[0].init?.headers).get("X-CodeBuddy-Request"), "1");
+    assert.equal(calls[0].init?.redirect, "manual");
+  } finally { delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD; }
+});
+
+test("a different native live ID is rejected without trying the generic runs path", async () => {
+  process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
+  try {
+    const { impl, calls } = fakeFetch([{ status: 409, body: { error: { code: "SESSION_FOLLOW_NOT_LIVE" } } }]);
+    await assert.rejects(deliverWorkbuddyMessage({ sessionId: "wrong-session", text: "hello", endpoint: "http://127.0.0.1:5762", fetchImpl: impl }),
+      (error: unknown) => error instanceof WorkbuddyDeliveryError && error.outcome === "rejected");
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith("/sessions/wrong-session/reply"));
+    const denied = fakeFetch([{ status: 200, body: { data: { delivered: true } } }]);
+    await assert.rejects(deliverWorkbuddyMessage({ sessionId: "exact", text: "hello", endpoint: "http://127.0.0.1:5762", fetchImpl: denied.impl,
+      assertAuthorized: () => { throw new Error("grant revoked"); } }), /grant revoked/);
+    assert.equal(denied.calls.length, 0);
+  } finally { delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD; }
 });
 
 test("a 401 fails closed, invalidates the credential, and does not replay", async () => {
@@ -212,7 +203,7 @@ test("an accepted request with a lost response remains unknown and is sent once"
   }
 });
 
-test("a 2xx without a runId is reported as unknown, not success", async () => {
+test("a 2xx without native delivered:true remains unknown", async () => {
   process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
   try {
     const { impl } = fakeFetch([{ status: 202, body: { status: "accepted" } }]);
@@ -269,15 +260,6 @@ test("empty delivery text is rejected before any network call", async () => {
   } finally {
     delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
   }
-});
-
-test("turn polling returns false on timeout without failing the delivery", async () => {
-  const { impl } = fakeFetch([{ status: 200, body: { data: { runId: "run-1", active: true } } }]);
-  const settled = await waitForWorkbuddyTurn("http://127.0.0.1:5762", "run-1", PASSWORD, {
-    fetchImpl: impl,
-    timeoutMs: 0
-  });
-  assert.equal(settled, false);
 });
 
 test("binding reads the route config and prefers the live session endpoint", () => {

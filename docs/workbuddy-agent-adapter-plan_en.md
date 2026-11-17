@@ -6,7 +6,7 @@ English | <a href="./workbuddy-agent-adapter-plan.md">简体中文</a>
 
 # WorkBuddy as an Agent Endpoint
 
-> Acceptance correction, 2026-11-17. The adopted WorkBuddy plugin remains **0.1.5 / experimental**. Current source and documentation changes have not been adopted as a new plugin version. Keep the evidence for original-task receipt, queries, history and automatic authentication separate from desktop live input, arbitrary-task addressing, permission preservation, creation and automatic initialization.
+> 2026-11-17: WorkBuddy plugin **0.1.6 / experimental** is formally adopted, retaining the Host 0.15.27 and Manager processes. A new message appears in the original task's native user record and its formal request returns the acceptance marker. This does not establish desktop live rendering or actual tool approval behavior.
 
 > Prerequisites: this plan follows [Standard Agent Endpoint Requirements](agent-adapter-standard-requirements.md) and is executed under `skills/create-rabiroute-agent-adapter/SKILL.md` and its [owner-first design gate](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md).
 
@@ -14,17 +14,23 @@ English | <a href="./workbuddy-agent-adapter-plan.md">简体中文</a>
 
 | Capability | Evidence obtained | Current boundary |
 | --- | --- | --- |
-| Installation and adoption | Host 0.15.27 retains the frozen plugin 0.1.5 | Documentation corrections do not change running bytes; the next implementation needs a separate version and candidate |
-| Unbound queries and native history pagination | Public Agent APIs read exact task IDs and byte-cursor history | Persona bindings only select default routes |
-| Automatic Windows discovery and authentication | Manager uses its existing OS access to check the original process, PID, creation time and loopback gateway; temporary credentials enter memory | Elevated WorkBuddy processes require corresponding read access; privileges are not raised automatically |
-| Original process's primary-session receipt | The original smoke and subsequent notice are confirmed by same-task native user/assistant records, native replay and formal receipts; the current host is WorkBuddy 5.11.3 | Evidence covers only the verified original process's primary session |
+| Installation and adoption | 0.1.6 imported, selected by CAS on the original instance and naturally reconciled; three stable checks and actual Web asset hashes pass on the same Host/Manager | Source, build, adoption and real business acceptance remain separate; no Host restart |
+| Unbound queries and native history pagination | Public Agent APIs read exact task IDs and byte-cursor history; installed 0.1.6 readback passes | Persona bindings only select default routes |
+| Automatic Windows discovery and authentication | Existing Manager OS access checks the original process, PID, creation time and loopback gateway; temporary credentials enter memory | Elevated WorkBuddy requires corresponding process read access; privileges are not raised automatically |
+| New original-task message and reply | Formal 0.1.6 delivery is accepted; the same task records the native user message and the original request returns the acceptance marker; WorkBuddy 5.11.3 | Verified for that original task; does not establish all other targets or live desktop rendering |
+| Exact-ID validation | Native `/sessions/{id}/reply` checks the current native ID before execution admission; a wrong target on the original process returns 409 | Unloaded tasks still need their original owner; no generic runs fallback or independent runtime |
 | Rabi message-history page | Persona 0.1.25 lists tasks in approximately 538 ms and passes paged-history and preview readback | Rabi UI evidence is separate from WorkBuddy desktop live rendering |
-| Arbitrary `conversation.id` addressing | The gateway's `getOrCreateSession` prefers `primarySession` | That field alone does not prove correct routing to arbitrary targets; cross-target acceptance is incomplete |
-| WorkBuddy desktop live rendering | Native replay returns the notice as `user_message_chunk` | Live input rendering in the open desktop has not been observed; replay and receipts do not establish it |
-| Model, tools and permissions | Original-task model/tool execution is recorded; the host's `runMessageOnSession` temporarily selects `BypassPermissions` | Preserving the original task's approval/permission contract has not passed acceptance |
-| Creation, opening, renaming and unloaded-task initialization | Not implemented by the current Rabi adapter; a real `action=create` returns 400 | Dependent task migration is incomplete; an internal host handler is not an externally callable desktop entry |
+| WorkBuddy desktop live rendering | Native records, formal receipt and reply confirm reception | Input rendering in the open desktop has not been observed; these records do not establish it |
+| Model, tools and permissions | The 0.1.6 call chain does not write permission mode and uses the native queue; local images retain Read-tool path references | Static review does not establish actual tool approval or image reading; new sends do not use 0.1.5's temporary BypassPermissions |
+| Creation, opening, renaming and unloaded-task initialization | Not implemented by the Rabi adapter; third-party SDK access is host-restricted and task deep links only prefill input | Native background jobs are a different task form and are not integrated; dependent task migration remains incomplete |
 
-Preserve original IDs for accepted and unknown records. Query the original receipt and task when the outcome is uncertain. The 5.5.6 investigation below retains historical protocol observations; this table defines current acceptance boundaries.
+Preserve original IDs for accepted and unknown records. Query the original receipt and task when uncertain. Version 0.1.6 adds no old-receipt recovery or automatic resend path.
+
+### Native reply contract in 0.1.6
+
+`POST /api/v1/sessions/{exact-task-ID}/reply` uses the original process's loopback address, temporary Bearer credential and `X-CodeBuddy-Request: 1`, with `{ "text": "…" }`. The host first checks the current native ID; a mismatch returns `409 SESSION_FOLLOW_NOT_LIVE`. `200` with `data.delivered: true` acknowledges admission or queueing, not execution start, completion or desktop rendering. Default native streaming need not await the whole turn, but admission, authentication and initialization may still take time. Network interruption, 5xx or missing native admission receipts remain uncertain without automatic resend. Local images use the host's existing textual attachment format with absolute paths for the original task's Read tool and native permission handling.
+
+The 5.5.6 investigation below retains historical protocols and observations. Its `/runs` examples describe the old implementation; current sends use only the native reply entry above.
 
 ## 1. Goal and scope
 

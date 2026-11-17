@@ -300,8 +300,7 @@ test("delivery posts to the live session gateway and reports the http receipt", 
   const originalPassword = process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
   const calls: Array<{ url: string; body: unknown }> = [];
   const responses = [
-    { status: 202, body: { data: { runId: "run-1", status: "accepted" } } },
-    { status: 200, body: { data: { runId: "run-1", active: false } } }
+    { status: 200, body: { data: { delivered: true } } }
   ];
   let index = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -322,12 +321,14 @@ test("delivery posts to the live session gateway and reports the http receipt", 
         threadId: "t1",
         action: "started",
         openedThread: false,
-        transport: "http"
+        transport: "http",
+        warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。"
       });
     });
-    assert.equal(calls[0]?.url, "http://127.0.0.1:5762/api/v1/runs");
-    const delivery = calls[0]?.body as { payload?: { text?: string } } | undefined;
-    assert.equal(delivery?.payload?.text, "请处理这条缺陷");
+    assert.equal(calls[0]?.url, "http://127.0.0.1:5762/api/v1/sessions/t1/reply");
+    const delivery = calls[0]?.body as { text?: string } | undefined;
+    assert.equal(delivery?.text, "请处理这条缺陷");
+    assert.equal(calls.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalPassword === undefined) delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
