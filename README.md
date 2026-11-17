@@ -26,7 +26,7 @@ RabiRoute is a **self-hosted message gateway and policy router for AI agents**. 
 
 **RabiRoute connects and routes. Your Agent owns the model, tools and execution.**
 
-[Overview](#what-it-connects) · [Get started](#get-started) · [Architecture](#architecture) · [Docs](#documentation) · [Community](#community)
+[Overview](#what-it-connects) · [Get started](#get-started) · [Architecture](#architecture) · [Docs](#documentation) · [Contributing](CONTRIBUTING.md) · [Community](#community)
 
 <p align="center">
   <img src="assets/screenshots/webgui-overview-en.png" alt="RabiRoute control deck showing queued messages being routed">

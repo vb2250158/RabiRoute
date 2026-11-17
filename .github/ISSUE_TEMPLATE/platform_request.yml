@@ -1,0 +1,51 @@
+name: Platform or feature request
+description: Connect a platform that is missing, or ask for a capability
+title: "[request] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        如果你想自己把这个平台接进来，看 [CONTRIBUTING](../../CONTRIBUTING_zh.md) 里的「接一个新平台」一节 —— 接一个消息入口或一个 Agent 处理端都是可独立完成的贡献。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 这是哪一类
+      options:
+        - 新的消息入口（聊天平台）
+        - 新的 Agent 处理端
+        - 现有功能增强
+        - 文档或示例
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: 平台或能力名称
+      description: 比如「Signal」「Zulip」「Cursor CLI」
+      placeholder: "平台名"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 你现在卡在哪
+      description: 说清你现在用什么替代方案、哪里不顺手。功能清单不如一个具体场景有用。
+    validations:
+      required: true
+  - type: textarea
+    id: interface
+    attributes:
+      label: 这个平台有可用的接口吗
+      description: 官方 SDK、WebSocket、Webhook、CLI 都算。有文档链接就贴上来。
+    validations:
+      required: false
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: 你愿意自己实现吗
+      options:
+        - label: 我愿意提 PR 实现这一项
+          required: false
+        - label: 我可以提供测试账号或真机环境
+          required: false
