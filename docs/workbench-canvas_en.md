@@ -37,6 +37,8 @@ Agent nodes require an exact target (agentAdapter and threadId), source (sourceA
 
 Generate nodes submit through the original media owner or reference an existing jobId, then await that owner's terminal receipt. Human completion includes the original attemptId, reviewer identity and evidence. All use the same artifact validator.
 
+Drag an output port to another node’s input to connect them; cycles and invalid ports are rejected. Stage layout, basic parameter forms and advanced JSON edit the same graph data.
+
 ## Artifacts and recovery
 
 Requirements declare key, root, relative path, type=file, required, minCount and freshness. Only single-level filename wildcards are supported. Every required declaration must pass. Produced artifacts are compared with stable pre-execution hashes; old files, empty directories and missing required results fail. Identical rewrites need attempt-specific write evidence. Validation-only commands bind validated receipts to input hashes.
@@ -45,8 +47,20 @@ Runs freeze graphs, variables, resolved templates, bindings and external input h
 
 Versioned project APIs use `/api/video/v2/projects`; run APIs use `/api/video/v2/runs`. They retain Manager authentication and unified discovery. Logs use incremental sequence cursors. Artifact reads require the owning run and opaque artifact ID, then recheck ownership, canonical roots and hashes. Active content is downloaded.
 
+## Material bundles and edition triggers
+
+Import accepts either a plain workflow definition or a bundle `{source,materials}`. Each material has a canvas-relative path, base64 payload and optional sha256. The owner checks size, digest, duplicate paths and ownership before publishing. Reusing an import ID with different content returns 409.
+
+Nodes retain parameterSchema and parameterValues. Typed ordinary parameters become argv; check overrides require a trusted per-machine parameterDocuments binding to the original configuration. Unbound checks remain read-only. Explicit default flags already present in the source argv are preserved.
+
+Trusted root bindings may expand date variables, while argv and briefs use `{root:name}` references. Agent nodes can select exact frozen target/source bindings with agentBindingKey. contextProjection supplies declared fields from upstream structured input. Accepted Agent requests are observed automatically and resume the graph only after formal completion.
+
+Existing schedulers and event callers share `POST /api/video/v2/projects/:projectId/canvases/:canvasId/trigger`, with a stable id, a Hong Kong edition date and optional label. Each template/date creates its own canvas; retrying the same request returns the original run. Query uncertain results through `GET .../canvases/:canvasId/triggers/:id` instead of changing the request identity. The existing automation system retains scheduling ownership.
+
+Use untilSourceNodeId on a trigger, or untilNodeId on run creation, to execute the selected boundary and its complete dependency closure without later production/publication. Template edits leave existing editions unchanged. Production scheduler cutover requires explicit execution ownership handover.
+
 ## Acceptance scope
 
 Tests cover independent CAS, interrupted migration, material copies, 5000-summary pagination, graph/parameter rejection, real Node command artifacts, failure propagation, resume, idempotency, cancellation and original Agent receipt queries. Templates, concurrency and the media-owner bridge have matching tests.
 
-The real 15-node collection workflow and three Agents, production, review, publication, cross-machine handover, installed runtime and scheduled entry points require separate acceptance. The legacy news workflow remains authoritative. Import only converts data and reports unresolved contracts. Scheduled/event canvas execution is not connected yet.
+The real 15-node collection workflow and three Agents, production, review, publication, cross-machine handover, installed runtime and scheduled entry points require separate acceptance. The legacy news workflow remains authoritative. Import only converts data and reports unresolved contracts. The edition trigger API is implemented; production scheduler cutover still requires acceptance.

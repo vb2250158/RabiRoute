@@ -1,0 +1,11 @@
+import fs from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import definition from '../src/plugins/io.rabiroute.manager.video/workbench-definition.json' with {type:'json'};
+import {resolveLinearWorkbench} from '../src/plugins/io.rabiroute.manager.video/workbenchMigration.mjs';
+const [sourceFile,profileFile,materialsFile,outputFile]=process.argv.slice(2);
+if(!outputFile)throw new Error('Usage: prepare-workbench-import.mjs source.json profile.json materials.json output.json');
+const source=JSON.parse(await fs.readFile(sourceFile,'utf8')),profile=JSON.parse(await fs.readFile(profileFile,'utf8')),materials=JSON.parse(await fs.readFile(materialsFile,'utf8'));
+const converted=resolveLinearWorkbench(source,definition,profile);
+await fs.writeFile(outputFile,JSON.stringify({id:randomUUID(),source:converted.canvas,materials},null,2),{flag:'wx'});
+await fs.writeFile(outputFile+'.report.json',JSON.stringify(converted.report,null,2),{flag:'wx'});
+console.log(JSON.stringify({nodeCount:converted.report.nodeCount,edgeCount:converted.report.edgeCount,materials:materials.length,gaps:converted.report.gaps}));

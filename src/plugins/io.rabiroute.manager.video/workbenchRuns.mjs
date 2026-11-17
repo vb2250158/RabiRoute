@@ -8,6 +8,8 @@ import { validateCanvas, expandVariables,resolveTemplates } from "./workbenchGra
 import { fingerprint, inspectRequirements, validateArtifacts, ownedFile } from "./workbenchArtifacts.mjs";
 import definition from "./workbench-definition.json" with {type:"json"};
 import {openMedia} from "./media.mjs";
+import {triggerWorkbench} from "./workbenchTriggers.mjs";
+import {resolveWorkbenchBinding, expandRootReferences, resolveNodeParameters} from "./workbenchBindings.mjs";
 
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const terminalRuns = new Set(Object.entries(definition.runStates).filter(([,row])=>row.terminal).map(([state])=>state));
@@ -19,7 +21,7 @@ export class WorkbenchRuns {
   constructor(runtime, projects, media, publish) {
     this.runtime = runtime; this.projects = projects; this.media = media; this.publish = publish;
     this.root = runtime.workbenchRuntimeRoot; this.runs = new Map(); this.flights = new Map(); this.repump = new Set(); this.writes=new Map(); this.logWrites=new Map(); this.mediaWaiters=new Map(); this.processes = new Map(); this.releases = new Map(); this.serial = Promise.resolve(); this.closing = false;
-    this.recordIssues=[];
+    this.recordIssues=[]; this.agentEventStream=undefined; this.agentEventFlight=undefined;
   }
   async atomic(file, value) {
     await fs.mkdir(path.dirname(file), { recursive: true }); const temp = `${file}.${randomUUID()}.tmp`;
@@ -36,6 +38,7 @@ export class WorkbenchRuns {
   }
   async initialize() {
     if (!this.root) return;
+    this.observeAgentEvents();
     const names = await fs.readdir(path.join(this.root, "locks")).catch(error => { if (error.code === "ENOENT") return []; throw error; });
     const activeIds=new Set();
     for(const name of names.filter(name=>/^[a-f0-9]{64}$/.test(name))) {
@@ -56,6 +59,7 @@ export class WorkbenchRuns {
       }
       }catch{this.recordIssues.push({id,scope:"runs",code:"unreadable_record"});}
     }
+    for(const run of this.runs.values())if(Object.values(run.attempts).some(attempt=>attempt.dispatchStarted&&!attempt.completionConfirmed))this.pump(run);
   }
   async read(id) {
     this.projects.id(id);let run=this.runs.get(id);
@@ -81,7 +85,8 @@ export class WorkbenchRuns {
   }
   async bindings(canvas) {
     const bindings = await this.runtime.workbenchBindings();
-    const binding = bindings.workspaces?.[canvas.workspaceBindingKey];
+    const rawBinding = bindings.workspaces?.[canvas.workspaceBindingKey];
+    const binding = rawBinding && resolveWorkbenchBinding(rawBinding,canvas.variables);
     if (!binding) throw new VideoError("执行电脑未配置此工作目录绑定。", 409);
     for (const key of ["runtime", "output", "materials"]) if (typeof binding.roots?.[key] !== "string" || !path.isAbsolute(binding.roots[key])) throw new VideoError(`缺少绝对路径绑定：${key}`, 409);
     const runtimePath = await fs.realpath(binding.roots.runtime);
@@ -89,6 +94,13 @@ export class WorkbenchRuns {
     await this.runtime.validateWorkbenchRuntimeRoot?.(binding.roots.runtime);
     return structuredClone(binding);
   }
+  async readTrigger(projectId,canvasId,id) {
+    this.projects.id(projectId);this.projects.id(canvasId);this.projects.id(id);
+    const record=JSON.parse(await fs.readFile(path.join(this.root,'triggers',id+'.json'),'utf8').catch(error=>{if(error.code==='ENOENT')throw new VideoError('触发记录不存在。',404);throw error;}));
+    if(record.projectId!==projectId||record.templateId!==canvasId)throw new VideoError('触发记录不属于此模板。',404);
+    return {trigger:record,...(record.runId?{run:await this.read(record.runId)}:{})};
+  }
+  trigger(projectId,canvasId,body,access) { return triggerWorkbench(this,projectId,canvasId,body,access); }
   async start(projectId, canvasId, body, access) {
     access?.beforeMutation();
     if (this.closing || this.runtime.readOnly || !this.root) throw new VideoError("运行拥有者不可用或只读。", 423);
@@ -101,7 +113,9 @@ export class WorkbenchRuns {
       const graph = validateCanvas(canvas, this.projects.definition), binding = await this.bindings(canvas);
       binding.roots={...binding.roots,canvas:this.projects.canvasDirectory(projectId,canvasId)};
       if(canvas.graph.nodes.some(node=>node.config.unresolved)) throw new VideoError("导入流程仍有未解析的命令、目标或检查项，请先补齐转换报告中的缺项。",409);
-      const snapshot = expandVariables(resolveTemplates(canvas,this.projects.definition), canvas.variables);
+      const resolved=resolveTemplates(canvas,this.projects.definition);
+      resolved.graph.nodes=resolved.graph.nodes.map(resolveNodeParameters);
+      const snapshot = expandVariables(resolved, canvas.variables);
       const concurrency=body.concurrency??1;
       if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>16)throw new VideoError("并发数量须为 1–16。",400);
       const selected = new Set(snapshot.graph.nodes.map(node => node.id));
@@ -111,6 +125,11 @@ export class WorkbenchRuns {
         if (body.mode === "from") for (const id of selected) for (const edge of graph.outgoing.get(id)) selected.add(edge.to);
         // Do not bypass dependencies outside the selected closure.
         for (const node of snapshot.graph.nodes.filter(node => selected.has(node.id))) if (graph.incoming.get(node.id).some(edge => !selected.has(edge.from)) || (node.inputs || []).some(input => input.producerNodeId && !selected.has(input.producerNodeId))) throw new VideoError("所选范围缺少前置完成证据，请先运行完整流程。", 409);
+      }
+      if(body.untilNodeId) {
+        if(body.nodeId||!graph.nodes.has(body.untilNodeId))throw new VideoError('运行边界节点无效。',400);
+        selected.clear();selected.add(body.untilNodeId);
+        for(const id of selected){for(const edge of graph.incoming.get(id))selected.add(edge.from);for(const input of graph.nodes.get(id).inputs||[])if(input.producerNodeId)selected.add(input.producerNodeId);}
       }
       const previous = body.resumeRunId ? await this.read(body.resumeRunId) : undefined;
       if (body.resumeRunId && (!previous || previous.projectId !== projectId || previous.canvasId !== canvasId || !terminalRuns.has(previous.state))) throw new VideoError("原运行仍未结束或不属于此画布。", 409);
@@ -145,6 +164,16 @@ export class WorkbenchRuns {
     const flight = this.advance(run, previous).catch(async error => { run.state = "interrupted"; run.reason = error.message; await this.persist(run); }).finally(() => {this.flights.delete(run.id);if(this.repump.delete(run.id)&&!terminalRuns.has(run.state)&&!run.cancelRequested&&!this.closing)this.pump(run);});
     void flight.catch(error=>{run.state="interrupted";run.reason=error.message;try{this.runtime.auditWorkbench?.("workbench_run_persistence_failed",run.id,"failed");}catch{/* Original failure remains queryable in memory; retirement still joins the rejected flight. */}});
     this.flights.set(run.id, flight); return flight;
+  }
+  observeAgentEvents() {
+    if(this.agentEventFlight||this.closing||!this.runtime.agentTasks?.events)return;
+    const stream=this.runtime.agentTasks.events();if(!stream)return;
+    this.agentEventStream=stream;
+    this.agentEventFlight=(async()=>{for await(const frame of stream.frames){
+      if(this.closing)break;
+      if(frame.event!=='agent_requests_changed'&&frame.event!=='ready')continue;
+      for(const run of this.runs.values())if(!run.cancelRequested&&!terminalRuns.has(run.state)&&Object.values(run.attempts).some(attempt=>attempt.dispatchStarted&&!attempt.completionConfirmed))this.pump(run);
+    }})().catch(error=>{if(!this.closing)this.recordIssues.push({scope:'agent-events',code:'subscription_interrupted'});}).finally(()=>{this.agentEventStream=undefined;this.agentEventFlight=undefined;});
   }
   async advance(run, previous) {
     const { order, nodes, incoming } = validateCanvas(run.snapshot, this.projects.definition);
@@ -269,15 +298,30 @@ export class WorkbenchRuns {
       : run.failures.length ? "completed_with_errors"
       : attempts.every(row => this.projects.definition.nodeStates[row.state]?.terminal) ? "succeeded" : "interrupted";
   }
+  async applyCheckParameters(run,node,attempt) {
+    const changes=node.config.checkOverrides;if(!changes||!Object.keys(changes).length)return;
+    const sink=run.binding.parameterDocuments?.[node.config.checkParameterSink];
+    if(!sink||!sink.group||!sink.ref)throw new Error('阈值配置未在执行电脑绑定。');
+    const file=await ownedFile(run.binding.roots[sink.ref.root],sink.ref.path),before=await fingerprint(run.binding.roots[sink.ref.root],sink.ref.path);
+    const data=JSON.parse(await fs.readFile(file,'utf8')),group=data[sink.group];
+    if(!Array.isArray(group?.items))throw new Error('阈值配置分组不存在。');
+    for(const [key,value] of Object.entries(changes)){const row=group.items.find(row=>row.key===key);if(!row)throw new Error('阈值配置没有此字段：'+key);row.limit=value;}
+    const current=await fingerprint(run.binding.roots[sink.ref.root],sink.ref.path);if(current.sha256!==before.sha256)throw new Error('阈值配置已被其它执行者修改。');
+    await this.atomic(file,data);attempt.parameterDocument={ref:sink.ref,...await fingerprint(run.binding.roots[sink.ref.root],sink.ref.path)};
+    this.runtime.auditWorkbench?.('workbench_parameters_saved',attempt.id,'committed');
+  }
   async command(run, node, attempt) {
+    await this.applyCheckParameters(run,node,attempt);
     const tool = run.binding.tools?.[node.config.toolKey];
     if (!tool || typeof tool.executable !== "string" || !path.isAbsolute(tool.executable)) throw new Error("命令工具未在执行电脑绑定。");
     await this.runtime.validateWorkbenchExecutable?.(tool.executable);
     if (!Array.isArray(node.config.argv) || node.config.argv.some(arg => typeof arg !== "string" || arg.includes("\0"))) throw new Error("命令参数必须为字符串数组。");
     const env = Object.fromEntries(Object.entries(process.env).filter(([key, val]) => val && ["path", "systemroot", "windir", "temp", "tmp", "pathext"].includes(key.toLowerCase())));
+    for(const [key,value] of Object.entries(tool.env||{})){if(typeof value!=="string"||value.includes("\0"))throw new Error("工具环境配置无效。");env[key]=expandRootReferences(expandVariables(value,run.snapshot.variables),run.binding.roots);}
     const secrets = [];
     for (const [key, reference] of Object.entries(tool.envRefs || {})) { if (!process.env[reference]) throw new Error("命令环境变量引用不可用。"); env[key] = process.env[reference]; secrets.push(env[key]); }
-    const redact = text => secrets.reduce((result, secret) => result.split(secret).join("[redacted]"), text);
+    const redactions = [...new Set(secrets.flatMap(secret => [secret, ...secret.split(/[\r\n]+/) ]).filter(Boolean))].sort((a, b) => b.length - a.length);
+    const redact = text => redactions.reduce((result, secret) => result.split(secret).join("[redacted]"), text);
     const buffers = new Map(),withheld=new Set(); let logQueue = Promise.resolve();
     const output = (stream, text) => {
       if(withheld.has(stream)){const end=text.indexOf("\n");if(end<0)return;withheld.delete(stream);text=text.slice(end+1);}
@@ -290,7 +334,7 @@ export class WorkbenchRuns {
     const timeoutMs = node.config.timeoutMs ?? 600000;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86400000) throw new Error("命令超时参数无效。");
     if (run.cancelRequested || this.closing) return;
-    const handle = this.runtime.launchWorkbenchProcess({ attemptId: attempt.id, executable: tool.executable, argv: [...(tool.argvPrefix || []), ...node.config.argv], cwd: run.binding.roots.runtime, env, timeoutMs }, output);
+    const handle = this.runtime.launchWorkbenchProcess({ attemptId: attempt.id, executable: tool.executable, argv: [...(tool.argvPrefix || []), ...node.config.argv].map(arg=>expandRootReferences(arg,run.binding.roots)), cwd: run.binding.roots.runtime, env, timeoutMs }, output);
     this.processes.set(attempt.id, handle); attempt.leaseId = handle.id; await this.persist(run);
     try {
       const receipt = await handle.settled;delete attempt.uncertain;for (const [stream, text] of buffers) if (text) output(stream, "\n"); await logQueue;
@@ -300,26 +344,34 @@ export class WorkbenchRuns {
     } finally { this.processes.delete(attempt.id); }
   }
   async agent(run,node,attempt) {
+    await this.applyCheckParameters(run,node,attempt);
     attempt.state="waiting_agent";
-    const target=node.config.target;
-    if(!this.runtime.agentTasks || !target?.threadId || !target.agentAdapter || !node.config.source?.sourceThreadId || !node.config.source?.sourceAgentType) {attempt.reason="exact_agent_target_and_source_required";return;}
+    const agentBinding=run.binding.agents?.[node.config.agentBindingKey]||{};
+    const target=node.config.target||agentBinding.target;
+    const source=node.config.source||agentBinding.source;
+    if(!this.runtime.agentTasks || !target?.threadId || !target.agentAdapter || !source?.sourceThreadId || !source?.sourceAgentType) {attempt.reason="exact_agent_target_and_source_required";return;}
     if(node.config.independentFromNodeId) {
-      const author=run.snapshot.graph.nodes.find(row=>row.id===node.config.independentFromNodeId)?.config?.target;
+      const authorNode=run.snapshot.graph.nodes.find(row=>row.id===node.config.independentFromNodeId);
+      const author=authorNode?.config.target||run.binding.agents?.[authorNode?.config.agentBindingKey]?.target;
       if(!author || author.threadId===target.threadId && author.agentAdapter===target.agentAdapter) {attempt.state="failed";attempt.reason="independent_reviewer_required";return;}
     }
     if(!attempt.dispatchStarted) {
       if(!node.config.briefRef) {attempt.reason="agent_brief_reference_required";return;}
       const briefPath=await ownedFile(run.binding.roots[node.config.briefRef.root],node.config.briefRef.path);
-      const brief=await fs.readFile(briefPath,"utf8");
+      const rawBrief=await fs.readFile(briefPath,"utf8");
+      let contextText="";
+      if(node.config.contextProjection){const projection=node.config.contextProjection,root=run.binding.roots[projection.ref?.root];if(!root)throw new Error("结构化上下文缺少绑定根。");const file=await ownedFile(root,projection.ref.path),stat=await fs.stat(file);if(stat.size>2*1024*1024)throw new Error("结构化上下文超过大小上限。");const data=JSON.parse(await fs.readFile(file,"utf8"));let list=data;for(const key of String(projection.list||"").split(".").filter(Boolean))list=list?.[key];if(!Array.isArray(list))throw new Error("结构化上下文列表不存在。");if(!Array.isArray(projection.fields)||projection.fields.some(key=>typeof key!=="string"))throw new Error("结构化上下文字段无效。");contextText="\n本期结构化输入（沿用上游结果）：\n"+JSON.stringify(list.map(row=>Object.fromEntries(projection.fields.map(key=>[key,row?.[key]??null]))));}
+      const brief=expandRootReferences(expandVariables(rawBrief,run.snapshot.variables),run.binding.roots)+contextText+"\n\n"+JSON.stringify({attemptId:attempt.id,variables:run.snapshot.variables,context:node.config.context||{},parameters:node.config.parameterValues||{},requirements:node.requirements||[],roots:run.binding.roots});
       if (run.cancelRequested || this.closing) { attempt.state = "cancelled"; return; }
       attempt.briefHash=hash(brief);attempt.dispatchStarted=true;await this.persist(run);
       if (run.cancelRequested || this.closing) {
         attempt.state = "cancelled"; delete attempt.dispatchStarted; delete attempt.uncertain; delete attempt.reason; return;
       }
       try {
-        const {threadId,agentAdapter,instanceBinding,agentTargetId,cwd}=target,{sourceThreadId,sourceAgentType,messageSource}=node.config.source;
+        const {threadId,agentAdapter,instanceBinding,agentTargetId,cwd}=target,{sourceThreadId,sourceAgentType,messageSource}=source;
         attempt.acceptance=await this.runtime.agentTasks.send({threadId,agentAdapter,instanceBinding,agentTargetId,cwd,sourceThreadId,sourceAgentType,messageSource,action:"send",createIfMissing:false,deliveryId:attempt.id,responsePolicy:"required",
-          responseInstruction:'Return a formal reply with JSON result {"status":"succeeded"|"failed","reason":"..."}. Required artifact checks still apply.',prompt:brief});
+          model:node.config.parameterValues?.model || node.config.parameterSchema?.find(row=>row.name==="model")?.default,
+          responseInstruction:'Return a formal JSON result with status succeeded|failed and reason. For validated requirements include validated:[{path,sha256}]; for unchanged produced files provide writes:[{root,path,sha256,attemptId}] only when this attempt actually wrote them. All required artifacts are independently checked.',prompt:brief});
       } catch {attempt.reason="delivery_outcome_unknown_query_original_request";}
     }
     const original=await this.runtime.agentTasks.inspect(attempt.id,target.threadId,target.agentAdapter);
@@ -331,15 +383,16 @@ export class WorkbenchRuns {
     let completion;try{completion=JSON.parse(original.request.response.result);}catch{attempt.reason="structured_completion_receipt_required";return;}
     if(completion.status==="failed") {attempt.state="failed";attempt.reason=String(completion.reason||"Agent 执行失败。");return;}
     if(completion.status!=="succeeded") {attempt.reason="structured_completion_receipt_required";return;}
-    try {Object.assign(attempt,await validateArtifacts(node,run.binding.roots,attempt.baseline,{},attempt.id,run.machineId));attempt.state="succeeded";attempt.receipt={requestId:original.request.id,deliveryId:original.deliveryId,response:original.request.response};}
+    try {Object.assign(attempt,await validateArtifacts(node,run.binding.roots,attempt.baseline,completion,attempt.id,run.machineId));attempt.state="succeeded";attempt.receipt={requestId:original.request.id,deliveryId:original.deliveryId,response:original.request.response};}
     catch(error){attempt.state="failed";attempt.reason=error.message;}
   }
   async refresh(id,access) {
+    this.observeAgentEvents();
     access?.beforeMutation();await this.read(id);const run=this.runs.get(id);
     if(run.cancelRequested) {
       for(const attempt of Object.values(run.attempts).filter(attempt=>attempt.uncertain)) {
         const node=run.snapshot.graph.nodes.find(node=>node.id===attempt.nodeId);
-        const exited=node.kind==="agent"? (await this.runtime.agentTasks?.inspect(attempt.id,node.config.target?.threadId,node.config.target?.agentAdapter))?.request?.status==="responded"
+        const exited=node.kind==="agent"? (await this.runtime.agentTasks?.inspect(attempt.id,(node.config.target||run.binding.agents?.[node.config.agentBindingKey]?.target)?.threadId,(node.config.target||run.binding.agents?.[node.config.agentBindingKey]?.target)?.agentAdapter))?.request?.status==="responded"
           :node.kind==="generate"? this.media.catalog?.states[this.media.jobs.get(attempt.jobId)?.status]?.terminal
           :this.runtime.queryWorkbenchProcess?.(attempt.id)?.state==="exited";
         if(exited){attempt.state="cancelled";delete attempt.uncertain;}
@@ -432,5 +485,5 @@ export class WorkbenchRuns {
       await fs.unlink(path.join(directory, "owner.json")); await fs.rmdir(directory);
     }})();this.releases.set(run.id,flight);return flight;
   }
-  async close() { this.closing = true; await Promise.all([...this.runs.values()].filter(run => !terminalRuns.has(run.state)).map(run => this.cancel(run.id))); await Promise.all([...this.flights.values()]); }
+  async close() { this.closing = true; const cancellations=Promise.all([...this.runs.values()].filter(run => !terminalRuns.has(run.state)).map(run => this.cancel(run.id))); await Promise.all([cancellations,Promise.resolve(this.agentEventStream?.cancel()).then(()=>this.agentEventFlight)]); await Promise.all([...this.flights.values()]); }
 }

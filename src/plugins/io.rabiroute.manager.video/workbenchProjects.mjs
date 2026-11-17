@@ -186,12 +186,28 @@ export class WorkbenchProjects {
   }
   async importCanvas(projectId,body,access) {
     this.id(body?.id);
-    return this.locked(`canvas:${this.id(projectId)}:${body.id}`,access,async()=>{
+    if(body.materials!==undefined&&!Array.isArray(body.materials))throw new VideoError('导入材料必须是数组。');
+    const entries=body.materials||[],keys=new Set();let bytes=0;
+    if(entries.length>2000)throw new VideoError('导入材料数量超过上限。');
+    const materials=entries.map(entry=>{
+      const relative=relativeMaterialPath(entry.path);
+      if(!relative.startsWith('materials/')||relative==='materials/import-source.json'||keys.has(relative))throw new VideoError('导入材料路径重复或不属于材料目录。');keys.add(relative);
+      if(typeof entry.base64!=='string'||entry.base64.length>48*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(entry.base64))throw new VideoError('导入材料编码无效。');
+      const content=Buffer.from(entry.base64,'base64');if(content.toString('base64')!==entry.base64)throw new VideoError('导入材料编码不是规范 Base64。');
+      bytes+=content.length;if(content.length>32*1024*1024||bytes>48*1024*1024)throw new VideoError('导入材料超过大小上限。');
+      const sha256=digest(content);if(entry.sha256&&entry.sha256!==sha256)throw new VideoError('导入材料摘要不匹配。');
+      return {path:relative,content,sha256,bytes:content.length};
+    });
+    const intent=digest(JSON.stringify({source:body.source,materials:materials.map(({path,sha256,bytes})=>({path,sha256,bytes}))}));
+    return this.locked('canvas:'+this.id(projectId)+':'+body.id,access,async()=>{
       await this.readProject(projectId,access);
-      const existing=await this.json(path.join(this.canvasDirectory(projectId,body.id),"canvas.json"),access).catch(absent);if(existing)return existing;
+      const existing=await this.json(path.join(this.canvasDirectory(projectId,body.id),'canvas.json'),access).catch(absent);
+      if(existing){if(existing.importRequestHash&&existing.importRequestHash!==intent)throw new VideoError('同一导入身份已用于不同内容。',409);return existing;}
       let converted;try{converted=importWorkbench(body.source,this.definition);}catch(error){throw new VideoError(error.message);}
-      const record={...converted.canvas,id:body.id,updatedAt:now(),importReport:converted.report,importSource:{path:"materials/import-source.json"}};
-      await this.atomic(path.join(this.projectDirectory(projectId),".pending",body.id,"materials","import-source.json"),body.source,access);
+      const record={...converted.canvas,id:body.id,updatedAt:now(),importRequestHash:intent,importReport:{...converted.report,materials:materials.map(({path,sha256,bytes})=>({path,sha256,bytes}))},importSource:{path:'materials/import-source.json'}};
+      const stage=path.join(this.projectDirectory(projectId),'.pending',body.id),fs=checkedFs(access);
+      await this.atomic(path.join(stage,'materials','import-source.json'),body.source,access);
+      for(const material of materials){const target=path.join(stage,material.path),temp=target+'.'+randomUUID()+'.tmp';await this.safeParent(target,access);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(temp,material.content,{flag:'wx'});await fs.rename(temp,target);if(digest(await fs.readFile(target))!==material.sha256)throw new VideoError('材料写入回读不一致。',409);}
       return this.publishCanvas(projectId,record,undefined,access);
     });
   }

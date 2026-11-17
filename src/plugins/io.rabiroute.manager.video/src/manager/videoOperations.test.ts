@@ -9,6 +9,7 @@ import { apiCatalogOpenApi } from "../../../../manager/apiOperationCatalog.js";
 import { compileApiContract, validateApiOperationResult } from "../../../../manager/apiOperationContract.js";
 import { createVideoOperations } from "./videoOperations.js";
 import { createVideoRequestAccess } from "./videoRuntime.js";
+import { ManagerEventHub } from "../../../../manager/managerEvents.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../../../../manager/lanAgentRequestAccess.js";
@@ -112,8 +113,8 @@ async function fixture(t: test.TestContext) {
 test("original Video contracts and separate Workbench contracts register with public connection access", async t => {
   const f = await fixture(t), original = (row: { contract: { operationId: string } }) => !row.contract.operationId.startsWith("manager.video.workbench.");
   assert.equal(f.bundle.operations.filter(original).length, 25); assert.equal(f.bundle.proxies.filter(original).length, 10);
-  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 22); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
-  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 58); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,58); assert.ok(rows.every(row => row.contract.exposure === "public"));
+  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 24); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
+  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 60); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,60); assert.ok(rows.every(row => row.contract.exposure === "public"));
   for (const path of ["/jobs/:mediaId", "/projects/:mediaId", "/assets/:mediaId"]) assert.ok(rows.some(row => row.contract.aliases?.includes("video:GET:/api/video" + path)));
   assert.equal((await f.request("/status")).status, 200); assert.equal((await f.request("/models/settings")).status, 200); assert.equal((await f.request("/compute/status")).status, 200);
 });
@@ -309,4 +310,32 @@ test("native local settings keep revision and unknown-field 409 while selected-p
   for (const body of [{ providerOption: { arbitrary: [null, true] }, expectedRevision: "provider-owned" }, [1, 2], null]) {
     const response = await f.request("/models/settings?computeDeviceId=owned-compute", "PATCH", JSON.stringify(body)); assert.equal(response.status, 200); assert.deepEqual((await response.json()).body, body);
   }
+});
+
+test('native material import and dated trigger expose one discoverable idempotent receipt',async t=>{
+ const f=await fixture(t),projectId=randomUUID(),canvasId=randomUUID(),triggerId=randomUUID();
+ const created=await f.request('/v2/projects','POST',{id:projectId,title:'Bundle fixture'});assert.equal(created.status,200);
+ const source={version:2,name:'Bundle template',workspaceBindingKey:'fixture',variables:[],graph:{nodes:[{id:'human',kind:'human',config:{}}],edges:[],groups:[]}};
+ const imported=await f.request('/v2/projects/'+projectId+'/canvases/import','POST',{id:canvasId,source,materials:[{path:'materials/brief.txt',base64:Buffer.from('native bundle').toString('base64')}]});assert.equal(imported.status,200,await imported.clone().text());
+ const root='/v2/projects/'+projectId+'/canvases/'+canvasId;
+ const accepted=await f.request(root+'/trigger','POST',{id:triggerId,date:'2026-11-17'});assert.equal(accepted.status,202,await accepted.clone().text());const first=await accepted.json();
+ const queried=await f.request(root+'/triggers/'+triggerId);assert.equal(queried.status,200);assert.equal((await queried.json()).run.id,first.run.id);
+ const replay=await f.request(root+'/trigger','POST',{id:triggerId,date:'2026-11-17'});assert.equal(replay.status,202);assert.equal((await replay.json()).run.id,first.run.id);
+ const material=path.join(f.root,'projects',projectId,'canvases',canvasId,'materials','brief.txt');assert.equal(await fs.readFile(material,'utf8'),'native bundle');
+ assert.ok(f.registry.catalogSnapshot().operations.some(row=>row.contract.operationId==='manager.video.workbench.trigger-read'));
+});
+
+test('native Manager event stream resumes an accepted Agent and retires without a subscriber leak',async t=>{
+ const f=await fixture(t),hub=new ManagerEventHub();let responded=false,sends=0,finish!:()=>void;
+ const completed=new Promise<void>(resolve=>{finish=resolve;});
+ Object.assign(f.runtime,{agentTasks:{events:()=>hub.open(),send:async()=>{sends++;return{};},inspect:async()=>({request:responded?{id:'request',status:'responded',response:{by:{threadId:'exact-target',agentAdapter:'test'},result:JSON.stringify({status:'succeeded'})}}:{status:'awaiting_response'}})}});
+ f.runs.publish=(_name:string,event:{state:string})=>{if(event.state==='succeeded')finish();};f.runs.observeAgentEvents();assert.equal(hub.activeSubscriberCount(),1);
+ await fs.writeFile(path.join(f.root,'brief.txt'),'Native Agent event fixture');
+ const project=await f.projects.createProjectV2({id:randomUUID()}),canvas=await f.projects.readCanvas(project.id,project.defaultCanvasId);
+ const saved=await f.projects.saveCanvas(project.id,canvas.id,{...canvas,workspaceBindingKey:'fixture',graph:{nodes:[{id:'agent',kind:'agent',config:{target:{threadId:'exact-target',agentAdapter:'test'},source:{sourceThreadId:'source',sourceAgentType:'codex'},briefRef:{root:'materials',path:'brief.txt'}}}],edges:[],groups:[]}});
+ const original=await f.runs.start(project.id,canvas.id,{id:randomUUID(),revision:saved.revision});await f.runs.flights.get(original.id);
+ responded=true;hub.publish('agent_requests_changed',{requestId:'request',status:'responded'});
+ let timer:ReturnType<typeof setTimeout>|undefined;try{await Promise.race([completed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Agent event was not consumed')),2000);})]);}finally{clearTimeout(timer);}
+ assert.equal((await f.runs.read(original.id)).state,'succeeded');assert.equal(sends,1);
+ await f.runs.close();assert.equal(hub.activeSubscriberCount(),0);
 });

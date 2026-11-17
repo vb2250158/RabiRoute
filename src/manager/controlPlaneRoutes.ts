@@ -7762,6 +7762,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.voice-assistant@2", value: voiceAssistantHostPort }),
     Object.freeze({ capability: "host.manager.video@2", value: Object.freeze({ ...managerFeatureHostPorts, get rootDir() { return rootDir; },
 agentTasks: Object.freeze({
+  events: () => managerEventHub.open(),
   send: (request: AgentThreadRequest) => {
     if(request.action !== "send" || !request.threadId || request.createIfMissing) throw new Error("An exact existing Agent task is required.");
     return handleAgentThreadRequest(request, agentThreadRequestOptions(request));

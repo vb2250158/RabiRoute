@@ -21,7 +21,7 @@ projects/<projectId>/
 
 ## 编辑和运行
 
-画布提供 command、agent、human、generate、asset 节点、控制边、变量及分组合同。原媒体编辑器保留在「媒体编辑」入口；它和图编辑共用画布 revision。媒体草稿作为画布材料保存，画布节点保留其稳定引用。
+画布提供 command、agent、human、generate、asset 节点、控制边、变量及分组合同。拖动节点输出端口到另一节点输入端口即可连线；环与非法端口会被拒绝。可按阶段排列，基础参数表单与高级 JSON 编辑同一份配置。原媒体编辑器保留在「媒体编辑」入口；它和图编辑共用画布 revision。媒体草稿作为画布材料保存，画布节点保留其稳定引用。
 
 节点参数、inputs 和 requirements 可在参数面板编辑。连接条件为 success 或 completed，多入边为 AND；必需门禁失败停止后续派发，普通失败仍保留错误汇总。默认串行；统一运行 API 可显式指定并发 1–16，同一 resourceKey 的节点串行执行。
 
@@ -69,8 +69,20 @@ requirements 声明 key、root、相对 path、type=file、required、minCount �
 
 项目和画布 API 位于 `/api/video/v2/projects`；运行位于 `/api/video/v2/runs`，沿用原 Manager 鉴权并进入统一操作目录。日志以 sequence 游标增量读取。产物只能用所属 run 和 opaque artifactId 读取，重新检查归属、根路径和哈希；主动内容按下载处理。
 
+## 完整材料导入与按期次运行
+
+导入文件可为原工作流定义，也可为完整包 `{source,materials}`。materials 每项包含画布内相对 path、base64 和可选 sha256；服务端核对大小、摘要、重复路径和归属，再原子发布画布。任务书随目录保存，重复导入同一身份但内容不同返回 409。
+
+节点保留 parameterSchema 与 parameterValues。普通参数按类型校验后组成 argv，检查阈值通过执行电脑可信 parameterDocuments 绑定写回原配置拥有者；未绑定写入口的检查项保持只读。已在基础命令声明的默认 flag 会保留，不重复拼接或静默移除。
+
+执行电脑绑定根可使用日期变量，例如 output 为本机期次根下的 `${date}`；仅 date 类型变量可展开路径。argv 和任务书用 `{root:name}` 引用已配置根。Agent 可用 agentBindingKey 引用本机 agents 里的精确 target/source，完整绑定随 run 冻结；不因目标缺失而换执行者。contextProjection 按声明的输入文件、列表与字段提供上游结构化结果。已接收 Agent 的原请求会自动观察，正式完成后继续图执行。
+
+定时与事件调用复用同一 `POST /api/video/v2/projects/:projectId/canvases/:canvasId/trigger`：正文为稳定 id、香港时区计算的 date 及可选 label。按模板和日期生成独立画布；同一触发请求重试返回原 run。结果未知时，先用 `GET .../canvases/:canvasId/triggers/:id` 查询原回执，不更换身份重发。自动化仍由现有定时系统持有，工作台不另开第二个调度器。
+
+验收采集段可传 untilSourceNodeId，执行到该源节点及其完整前置闭包，不运行后续制作/发布。普通 run 创建可传 untilNodeId，含义相同。模板更新不会改写已生成的历史画布；旧早报自动化切换前需完成执行权移交。
+
 ## 当前验收范围
 
 新增测试覆盖独立画布 CAS、迁移中断恢复、材料目录复制、5000 张画布摘要分页、DAG/参数拒绝、真实 Node 命令产物、失败传播、续跑、幂等、取消和原 Agent 回执查询。模板、并发和媒体拥有者桥另有匹配测试。
 
-真实早报 15 节点和 3 个 Agent、后续制作/审片/投稿、跨机执行权移交、完整安装及定时接入仍分别验收。旧早报流程保持正式真源；导入只产生定义和转换缺口报告，不执行流程。定时与事件触发尚未接入新画布。
+真实早报 15 节点和 3 个 Agent、后续制作/审片/投稿、跨机执行权移交、完整安装及定时接入仍分别验收。旧早报流程保持正式真源；导入只产生定义和转换缺口报告，不执行流程。期次触发接口已实现；现有真实早报定时入口切换仍须在验收后完成。

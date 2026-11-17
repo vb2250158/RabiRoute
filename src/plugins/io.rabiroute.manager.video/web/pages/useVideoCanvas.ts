@@ -139,5 +139,5 @@ export function useVideoCanvas() {
   });
   onBeforeUnmount(() => observer?.disconnect());
   function world(point: Point) { return { x: (point.x - offset.value.x) / scale.value, y: (point.y - offset.value.y) / scale.value }; }
-  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, handMode, dragging, positions, transform, grid, add, position, zoom, center, fit, begin, backgroundDown, move, end, wheel, nudge, world };
+  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, dragging, positions, transform, grid, add, position, zoom, center, fit, begin, backgroundDown, move, end, wheel, nudge, world };
 }

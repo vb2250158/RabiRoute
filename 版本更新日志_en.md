@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.30 - 2026-11-18
+
+- Redact multiline environment references and match longer credentials first to prevent line and prefix fragments from leaking into logs.
+- Update the Workbench plugin to 0.2.5 with port connections, cycle checks, stage groups, automatic layout, typed parameters and paginated canvas lists while preserving drafts across conflicts and navigation. Migrate recognized older instances without changing saved settings, grants or disabled state; leave unrecognized versions unchanged.
+- Preserve task briefs, input producers, soft and hard gates, and parameters during workflow import, validate material paths and hashes, and support dated local roots and controlled threshold updates.
+- Trigger independent edition canvases with durable idempotent receipts and bounded execution. Agent completion uses original request receipts and Manager events, with independent artifact validation.
+- Preserve legacy routes and media APIs. Private workflows, execution bindings and artifacts remain outside source publication; formal imports, scheduling handoff and real-edition acceptance are separate steps.
+
 ## 0.15.29 - 2026-11-17
 
 - Allow voice-assistant initialization in isolated read-only environments while still blocking business writes, deliveries and audio device startup; preserve normal-mode authorization and invocation contracts.

@@ -329,3 +329,60 @@ test("cancelling one canvas isolates its waiter while other canvases observe the
     assert.equal((await f.owner.read(first.id)).state,"cancelled");assert.equal(f.owner.mediaWaiters.size,0);
   });
 });
+
+test('event retry reuses one dated canvas and the accepted original run',async t=>{
+ const f=await fixture(t),current=await f.projects.readCanvas(f.project.id,f.canvas.id);
+ await f.projects.saveCanvas(f.project.id,f.canvas.id,{...current,workspaceBindingKey:'test',graph:{nodes:[{id:'human',kind:'human',config:{}}],edges:[],groups:[]}});
+ const body={id:randomUUID(),date:'2026-11-17'};
+ const first=await f.owner.trigger(f.project.id,f.canvas.id,body);await f.owner.flights.get(first.run.id);
+ const again=await f.owner.trigger(f.project.id,f.canvas.id,body);assert.equal(again.run.id,first.run.id);assert.equal(again.trigger.canvasId,first.trigger.canvasId);assert.notEqual(first.trigger.canvasId,f.canvas.id);
+ await assert.rejects(f.owner.trigger(f.project.id,f.canvas.id,{...body,date:'2026-11-18'}),error=>error.status===409);
+ const copied=await f.projects.readCanvas(f.project.id,first.trigger.canvasId);assert.equal(copied.variables.find(row=>row.name==='date').value,'2026-11-17');
+});
+
+test('until boundary executes its complete dependency closure and excludes later side effects',async t=>{
+ const f=await fixture(t),run=await f.run([f.command('a'),f.command('b'),f.command('later')],[f.edge('a','b'),f.edge('b','later')],{untilNodeId:'b'});
+ assert.equal(run.state,'succeeded');assert.deepEqual(run.selected,['b','a']);assert.equal(run.attempts.later,undefined);await assert.rejects(fs.stat(path.join(f.output,'later.txt')),error=>error.code==='ENOENT');
+});
+
+test('trusted check document overrides reach the command and preserve unrelated configuration',async t=>{
+ const f=await fixture(t),file=path.join(f.output,'checks.json');await fs.writeFile(file,JSON.stringify({group:{items:[{key:'limit',limit:1},{key:'other',limit:9}]}}));
+ const original=f.owner.runtime.workbenchBindings;f.owner.runtime.workbenchBindings=async()=>{const value=await original();value.workspaces.test.parameterDocuments={checks:{ref:{root:'output',path:'checks.json'},group:'group'}};return value;};
+ const node={id:'check',kind:'command',config:{toolKey:'node',argv:['-e',"const d=JSON.parse(require('fs').readFileSync("+JSON.stringify(file)+",'utf8'));if(d.group.items[0].limit!==3)process.exit(8)"],parameterSchema:[{name:'limit',type:'number',kind:'check',default:1,min:1,max:5}],parameterValues:{limit:3},checkParameterSink:'checks'}};
+ const run=await f.run([node]);assert.equal(run.state,'succeeded');const saved=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(saved.group.items[0].limit,3);assert.equal(saved.group.items[1].limit,9);assert.ok(run.attempts.check.parameterDocument.sha256);
+});
+test('agent binding and structured context deliver only declared fields from the selected input',async t=>{
+ const f=await fixture(t);await fs.writeFile(path.join(f.output,'brief.txt'),'Task for this edition');await fs.writeFile(path.join(f.output,'input.json'),JSON.stringify({picks:[{subject:'subject',number:'42',ignored:'must-not-project'}]}));
+ const original=f.owner.runtime.workbenchBindings;f.owner.runtime.workbenchBindings=async()=>{const value=await original();value.workspaces.test.agents={reviewer:{target:{agentAdapter:'test',threadId:'original-reviewer'},source:{sourceAgentType:'codex',sourceThreadId:'original-source'}}};return value;};
+ let observed;
+ f.owner.runtime.agentTasks={send:async req=>{observed=req;return{};},inspect:async()=>({request:{id:'request',status:'responded',response:{by:{threadId:'original-reviewer',agentAdapter:'test'},result:JSON.stringify({status:'succeeded'})}}})};
+ const run=await f.run([{id:'agent',kind:'agent',config:{agentBindingKey:'reviewer',briefRef:{root:'output',path:'brief.txt'},contextProjection:{ref:{root:'output',path:'input.json'},list:'picks',fields:['subject','number']}}}]);
+ assert.equal(run.state,'succeeded');assert.equal(observed.threadId,'original-reviewer');assert.match(observed.prompt,/42/);assert.doesNotMatch(observed.prompt,/must-not-project/);
+});
+
+test('formal Agent events resume the original request and retirement drains the subscription',async t=>{
+ const f=await fixture(t);await fs.writeFile(path.join(f.output,'event-brief.txt'),'event-driven task');
+ const queued=[],finished=deferred();let wake,closed=false,completed=false,sends=0;
+ const push=event=>{queued.push(event);wake?.();wake=undefined;};
+ f.owner.runtime.agentTasks={events:()=>({frames:(async function*(){while(!closed){if(queued.length)yield queued.shift();else await new Promise(resolve=>{wake=resolve;});}})(),cancel(){closed=true;wake?.();}}),send:async()=>{sends++;return{};},inspect:async()=>({request:completed?{id:'original',status:'responded',response:{by:{threadId:'target',agentAdapter:'test'},result:JSON.stringify({status:'succeeded'})}}:{status:'awaiting_response'}})};
+ f.owner.publish=(_name,event)=>{if(event.state==='succeeded')finished.resolve();};f.owner.observeAgentEvents();
+ const run=await f.run([{id:'agent',kind:'agent',config:{target:{threadId:'target',agentAdapter:'test'},source:{sourceThreadId:'source',sourceAgentType:'codex'},briefRef:{root:'output',path:'event-brief.txt'}}}]);
+ assert.equal(run.state,'running');completed=true;push({event:'agent_requests_changed',data:{requestId:'original'}});
+ let timer;try{await Promise.race([finished.promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('completion event did not resume graph')),2000);})]);}finally{clearTimeout(timer);}
+ assert.equal((await f.owner.read(run.id)).state,'succeeded');assert.equal(sends,1);
+ await f.owner.close();assert.equal(closed,true);assert.equal(f.owner.agentEventFlight,undefined);
+});
+
+test("environment references redact multiline values and longer overlapping secrets first", async t => {
+  const f = await fixture(t);
+  const values = { WORKBENCH_TEST_SHORT: "fixture-prefix", WORKBENCH_TEST_LONG: "fixture-prefix-extended", WORKBENCH_TEST_MULTILINE: "fixture-first-line\nfixture-second-line" };
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) process.env[key] = value;
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const binding = (await f.owner.runtime.workbenchBindings()).workspaces.test;
+  binding.tools.node.envRefs = Object.fromEntries(Object.keys(values).map(key => [key, key]));
+  const result = await f.run([{ id: "multiline-log", kind: "command", config: { toolKey: "node", argv: ["-e", "console.log(process.env.WORKBENCH_TEST_LONG);console.log(process.env.WORKBENCH_TEST_MULTILINE)"] } }]);
+  assert.equal(result.state, "succeeded");
+  const logs = await f.owner.logs(result.id);
+  assert.equal(logs.entries.filter(row => row.stream === "stdout").map(row => row.text).join("\n"), "[redacted]\n[redacted]\n[redacted]");
+});

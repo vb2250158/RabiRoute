@@ -16,11 +16,11 @@ export function importWorkbench(source, definition) {
     ids.set(row.id, randomUUID());
   }
   for (const [index, row] of source.nodes.entries()) {
-    const kind = row.kind === "cli" ? "command" : row.kind;
+    const kind = row.kind === "cli" || row.kind === "shell" && Array.isArray(row.cmd) ? "command" : row.kind;
     if (!definition.capabilities[kind]?.executable) throw new Error(`不支持的导入节点类型：${row.kind}`);
     const id = ids.get(row.id), stage = row.stage || "未分组"; stages[stage] = (stages[stage] || 0) + 1;
     // Shell command strings, private installation paths and Agent fallback chains need explicit resolution.
-    const config = { importedNodeId: row.id, unresolved: true };
+    const config = { importedNodeId: row.id, unresolved: true, parameterSchema: structuredClone(row.params||[]), parameterValues: {}, legacy: structuredClone(row) };
     gaps.push({ nodeId: id, code: kind === "agent" ? "exact_agent_target_required" : "trusted_tool_and_argv_required" });
     const expected = Array.isArray(row.expect) ? row.expect : row.expect ? [row.expect] : [];
     const outputs = Array.isArray(row.outputs) ? row.outputs : [];
@@ -32,7 +32,7 @@ export function importWorkbench(source, definition) {
     if (!expected.length) gaps.push({ nodeId: id, code: "required_artifact_contract_missing" });
     if (row.context?.inputs || row.upstream) gaps.push({ nodeId: id, code: "data_input_mapping_required" });
     nodes.push({ id, kind, title: row.title || row.name || row.label || row.id, optional: Boolean(row.defaultOff), enabled: !row.defaultOff,
-      gate: Boolean(row.gate), config, requirements, artifacts: outputs.map((value, number) => ({ key: `output-${number + 1}`, imported: value })),
+      gate: Boolean(row.gate) && row.gate !== "soft", config, requirements, artifacts: outputs.map((value, number) => ({ key: `output-${number + 1}`, imported: value })),
       layout: { x: index * 380, y: 0 }, importSource: { nodeId: row.id, stage } });
   }
   const edges = nodes.slice(1).map((node, index) => ({ id: randomUUID(), from: nodes[index].id, to: node.id,

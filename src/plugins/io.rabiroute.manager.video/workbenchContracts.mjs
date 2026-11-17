@@ -32,6 +32,8 @@ export const workbenchResponses = Object.freeze({
   "workbench.media-read": object({ revision: integer, title: string, value: { anyOf: [{ type: "null" }, object({ version: integer, items: array(opaque), drafts: array(opaque) })] } }),
   "workbench.media-save": revision,
   "workbench.index-rebuild": object({ count: integer }),
+  "workbench.trigger-read": object({trigger:object({id:string,canvasId:string,runId:string,phase:string}),run}),
+  "workbench.trigger": object({trigger:object({id:string,canvasId:string,runId:string,phase:string}),run}),
   "workbench.run-create": run,
   "workbench.runs-list": object({ runs: array(object({ id: string, projectId: string, canvasId: string, state: { enum: Object.keys(definition.runStates) }, createdAt: string, updatedAt: string })), nextCursor: cursor, recordIssues: issues }),
   "workbench.run-read": run,

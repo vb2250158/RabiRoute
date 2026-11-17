@@ -704,3 +704,26 @@ test("NapCat package migration preserves the existing instance settings", async 
   assert.deepEqual(result.instances.map(item => item.config), instances.map(item => item.config));
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
+
+test("workbench migration preserves saved settings and leaves unknown versions unchanged", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-workbench-migration-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const profilePath = path.join(root, "profile.json");
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  for (const version of ["1.0.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.2", "0.2.3", "0.2.4", "0.2.99"]) {
+    const instance = { id: "manager:video", package: "io.rabiroute.manager.video", version, enabled: false,
+      config: { selected: "fixture", nested: { retained: true } }, grants: ["network.local"],
+      policy: { resources: { maxChildProcesses: 2, shutdownTimeoutMs: 5000 } } };
+    const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
+    await fs.writeFile(profilePath, raw);
+    const result = await readPluginProfile(profilePath, { migrationsPath });
+    assert.equal(result.instances.length, 1);
+    assert.equal(result.instances[0]?.version, version === "0.2.99" ? version : "0.2.5");
+    assert.equal(result.instances[0]?.id, instance.id);
+    assert.equal(result.instances[0]?.enabled, false);
+    assert.deepEqual(result.instances[0]?.config, instance.config);
+    assert.deepEqual(result.instances[0]?.grants, instance.grants);
+    assert.equal(result.instances[0]?.policy?.resources?.maxChildProcesses, 2);
+    assert.equal(await fs.readFile(profilePath, "utf8"), raw);
+  }
+});
