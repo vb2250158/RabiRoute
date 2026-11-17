@@ -8,6 +8,8 @@
 
 Windows 启动新增一次 UAC 注册的最高权限 Host 任务、拒绝后的降级模式与登录自启同步。权限边界、HA 托管子进程、旧任务迁移和安装后验收见[摄像头与 HA 恢复](home-camera-events.md)。这些源码改动不自动升级当前稳定 Host，也不自动触发 UAC。
 
+新建的 Host 任务使用 Windows 任务优先级 `4`，使交互服务采用普通 CPU、I/O 和内存优先级。Windows 默认任务优先级 `7` 适合后台工作，磁盘或内存繁忙时可能延迟 Host 与子程序启动。现有任务的修正由 Windows 管理员在原任务上完成，保留其动作、账号和登录自启设置，修改后核对实际 Host、Manager 和托盘就绪情况。
+
 Host 在原任务归属核对通过后，发现登录自启值已经相同时直接返回，不重新注册计划任务，也不为同值更新要求管理员令牌。真正改变任务仍由原 Windows 权限边界处理；安装提交与快照恢复共用这一 owner。相邻原生回归：`dotnet run --project desktop/windows-bootstrap-autostart-tests/RabiRouteAutostartOwner.Tests.csproj -c Release`。这组使用受控 OS 适配器验证原 owner，不等同真实登录验收。
 
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。

@@ -59,14 +59,45 @@ function computerSettingsContract(context:LanAgentRoutesContext,route:Management
 }
 type ComputerSettingsResetRoute = Readonly<{key:"computer-settings.reset";method:"POST";pathTemplate:string}>;
 
+
+const managementPurposes: Record<string, [string, string[]]> = {
+  "self.read": ["查询当前执行节点身份", ["本机节点", "连接身份", "current node identity"]],
+  "enrollments.create": ["创建执行节点接入邀请", ["节点接入", "注册邀请码", "node enrollment"]],
+  "enroll.exchange": ["使用邀请接入执行节点", ["节点注册", "接入兑换", "exchange enrollment"]],
+  "instances.list": ["当前 Manager 的执行节点列表（本机及已接入）", ["执行节点", "本机电脑", "computer instances"]],
+  "instances.enabled": ["启用或停用执行节点", ["节点开关", "停用电脑", "enable instance"]],
+  "instances.name": ["修改执行节点名称", ["电脑名称", "节点改名", "rename instance"]],
+  "nodes.list": ["查询登记 SDK 节点与版本", ["SDK 节点", "登记节点", "节点版本", "registered SDK nodes"]],
+  "nodes.update": ["更新登记节点 SDK", ["节点升级", "更新SDK", "update node SDK"]],
+  "nodes.tasks": ["查询登记节点的 Agent 任务", ["节点任务", "会话任务", "node agent tasks"]],
+  "agents.create": ["在执行节点创建 Agent", ["新建Agent", "创建处理端", "create agent"]],
+  "agents.tasks": ["查询执行节点 Agent 的任务", ["Agent任务", "会话列表", "agent tasks"]],
+  "agents.configure": ["配置执行节点的 Agent", ["Agent配置", "处理端配置", "configure agent"]],
+  "agents.scan": ["扫描执行节点的 Agent 环境", ["环境扫描", "发现Agent", "scan agent"]],
+  "agents.threads": ["操作执行节点的 Agent 会话", ["Agent会话", "任务投递", "agent threads"]],
+  "agents.hooks": ["安装执行节点的 Agent Hook", ["Hook安装", "事件接入", "agent hooks"]]
+};
+function managementDiscovery(key: string): ApiOperationDefinition["discovery"] {
+  const purpose = managementPurposes[key];
+  if (!purpose) return undefined;
+  return { title: purpose[0], summary: key === "instances.list"
+    ? "查询当前 Manager 的本机与已接入执行实例，使用 instanceId 访问该实例能力。此目录不是 Rabi 主机目录，也不是登记 SDK 节点版本目录。"
+    : key === "nodes.list" ? "查询登记 SDK 节点、nodeId 与版本状态。主机目录和当前 Manager 执行实例目录分别查询。" : purpose[0],
+    category: key === "instances.list" || key === "nodes.list" ? { id: "devices", title: "电脑与设备" } : { id: "agents", title: "Agent 与执行节点" }, keywords: purpose[1],
+    ...(key === "instances.list" ? { relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"] }
+      : key === "nodes.list" ? { relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.instances.list"] }
+      : key.startsWith("agents.") || key.startsWith("instances.") ? { inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }] }
+      : key.startsWith("nodes.") ? { inputSources: [{ field: "path.nodeId", operationId: "manager.lan-agent.nodes.list", resultPath: "/nodes", valuePath: "/nodeId" }] } : {}) };
+}
+
 export function createLanAgentManagementOperations(context: LanAgentRoutesContext): readonly ApiOperationDefinition[] {
-  const operations:ApiOperationDefinition[] = LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: computerSettingsContract(context,route),
+  const operations:ApiOperationDefinition[] = LAN_AGENT_MANAGEMENT_ROUTES.map(route => ({ contract: computerSettingsContract(context,route), discovery: managementDiscovery(route.key),
     ...(route.key === "computers.list" || route.key.startsWith("computer-settings.") ? { discovery: {
       title: route.key === "computers.list" ? "电脑列表" : route.key.endsWith("patch") ? "修改电脑控制设置" : "读取电脑控制设置",
       summary: "本机、远端节点和完整主机的电脑功能、真实能力与可见设置。列表非空ownerDeviceId表示所属远端Manager；按目标声明经原Peer manager服务转接同一路径与正文，不把远端instanceId投到本机。",
       relatedOperations:["manager.rabilink.peer.http.get","manager.rabilink.peer.http.post","manager.rabilink.peer.http.patch"],
       category: {id:"devices",title:"设备与电脑"}, keywords:["电脑","电脑控制","computer","computer control","settings"],
-      ...(route.key !== "computers.list" ? { inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"instances",valuePath:"instanceId"}] } : {})
+      ...(route.key !== "computers.list" ? { inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"/instances",valuePath:"/instanceId"}] } : {})
     } } : {}), handler: input => run(context, route, input) }));
   const readRoute=LAN_AGENT_MANAGEMENT_ROUTES.find(route=>route.key==="computer-settings.read")!;
   const resetRoute:ComputerSettingsResetRoute={key:"computer-settings.reset",method:"POST",pathTemplate:readRoute.pathTemplate+"/reset"};
@@ -76,7 +107,7 @@ export function createLanAgentManagementOperations(context: LanAgentRoutesContex
     request:{...readContract.request,headers:{type:"object",additionalProperties:true,required:["if-match"],properties:{"if-match":{type:"string",description:"Use the exact ETag from GET computer-settings for this instance."}}},body:{kind:"json",maxBytes:Number.MAX_SAFE_INTEGER,schema:{type:"object",additionalProperties:false,required:["paths"],properties:{paths:{type:"array",items:{type:"string",minLength:1},minItems:1}}}}},
     effects:{mode:"existing-owner-mutation",description:"One original settings-owner CAS deletes only the explicitly selected override paths. No task/input is replayed."}},
     discovery:{title:"恢复电脑设置默认值",summary:"先读同目标computer-settings的schema；paths使用属性的点分路径。仅移除明确选中的覆盖值，保留其他原值及自定义扩展。",category:{id:"devices",title:"设备与电脑"},keywords:["恢复默认","电脑设置","restore defaults","computer settings"],
-      inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"instances",valuePath:"instanceId"}]},
+      inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"/instances",valuePath:"/instanceId"}]},
     handler:input=>run(context,resetRoute,input)});
   return operations;
 }

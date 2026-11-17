@@ -71,10 +71,14 @@ const ranges = computed(() => [
   { title: t('全部角色'), value: '' },
   ...(range.value && range.value !== props.roleId ? [{ title: range.value, value: range.value }] : []),
 ]);
-const sourceLabels: Record<string, string> = { all: '全部来源', knowledge: '计划与记忆', messages: '聊天记录', operations: '接口', entities: '设备' };
+const sourceLabels: Record<string, string> = { all: '全部来源', knowledge: '计划与记忆', messages: '聊天记录', skills: '技能', operations: '接口', entities: '设备' };
 const kindLabels: Record<string, string> = { plan: '计划', recent: '近期记忆', consolidated: '整理记忆', message: '消息', group: '群聊', private: '私聊', operation: '接口', entity: '设备' };
 const statusLabels: Record<string, string> = { ok: '已完成', partial: '部分完成', unavailable: '不可用', skipped: '已跳过' };
-const sources = computed(() => Object.entries(sourceLabels).map(([value, title]) => ({ value, title: t(title) })));
+const sources = computed(() => {
+  const active = receipt.value?.body.data?.capabilities;
+  return (active?.scopes ? ['all', ...active.scopes] : Object.keys(sourceLabels)).map(value => ({ value,
+    title: sourceLabels[value] ? t(sourceLabels[value]) : active?.sources?.find(source => source.scope === value)?.legend || value }));
+});
 const identityItems = computed(() => identities.value.map(item => ({ value: item.key,
   title: (item.key === 'role' ? t('当前角色') : t('绑定的主 Agent')) + ' · ' + item.label })));
 const selectedIdentity = computed(() => identities.value.find(item => item.key === identityKey.value));

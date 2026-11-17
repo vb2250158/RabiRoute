@@ -10,6 +10,8 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import type { FormatsPlugin } from "ajv-formats";
 import type { ValidateFunction } from "ajv";
 import type { ApiExternalListenerDefinition, ApiExternalListenerRegistration } from "./apiExternalListenerBinding.js";
+import type { SearchLane } from "./unifiedSearch.js";
+export type { SearchLane } from "./unifiedSearch.js";
 
 export type ApiMethod = "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" | "PATCH" | "DELETE" | "*";
 export type ApiSchema = boolean | Readonly<Record<string, unknown>>;
@@ -112,10 +114,16 @@ export type ApiDiscoveryInputSource = Readonly<{
   field: string; operationId: string; resultPath: string; valuePath?: string;
   parameters?: Readonly<Record<string, Readonly<{ from: string }> | Readonly<{ value: unknown }>>>;
 }>;
+export type ApiDiscoveryExample = Readonly<{
+  title: string;
+  input: Readonly<{ path?: Readonly<Record<string, unknown>>; query?: Readonly<Record<string, unknown>>;
+    headers?: Readonly<Record<string, unknown>>; body?: unknown }>;
+}>;
 export type ApiOperationDiscovery = Readonly<{
   title?: string; summary?: string; category?: ApiDiscoveryCategory;
   tags?: readonly string[]; keywords?: readonly string[]; provider?: string;
   inputSources?: readonly ApiDiscoveryInputSource[]; relatedOperations?: readonly string[];
+  examples?: readonly ApiDiscoveryExample[];
   automationTemplates?: readonly Readonly<{
     id: string; version: string; title: string; description?: string; triggerType?: "message" | "schedule";
     message?: string; template?: string; [key: string]: unknown;
@@ -125,6 +133,9 @@ export type ApiOperationDiscovery = Readonly<{
 export type ApiOperationDefinition = Readonly<{
   discovery?: ApiOperationDiscovery;
   contract: ApiOperationContract;
+  /** Optional native source reader, retired and drained with this operation's activation.
+   * The matching contract.searchable declares its scope and kinds in the public catalog. */
+  searchLanes?(input: { request: IncomingMessage; roles: readonly { roleId: string; directory: string }[] }): readonly SearchLane[];
   handler(input: ApiOperationInput): ApiOperationResult | Promise<ApiOperationResult>;
   /** Capture the original owner admission before body consumption. Preparation performs no business action.
    * Return an early rejection or a request-bound handler retaining that original admission. */
@@ -308,7 +319,7 @@ export type CompiledApiContract = Readonly<{
   upgradeIncomingValidator?: ValidateFunction;
   upgradeOutgoingValidator?: ValidateFunction;
 }>;
-export type CompiledApiOperation = CompiledApiContract & Pick<ApiOperationDefinition, "handler" | "prepare">;
+export type CompiledApiOperation = CompiledApiContract & Pick<ApiOperationDefinition, "handler" | "prepare" | "searchLanes">;
 
 /** Registration already owns validated, immutable metadata; route pairs need no parsing or cache keys. */
 export function compiledApiPathsEquivalent(left: CompiledApiContract, right: CompiledApiContract): boolean {
@@ -352,19 +363,96 @@ function captureApiContract(input: ApiOperationContract): ApiOperationContract {
 }
 
 /** Invalid navigation metadata stays local to its operation and never rejects its handler. */
-export function captureApiDiscoveryMetadata(value: unknown): Pick<CompiledApiContract, "discovery" | "discoveryIssues"> {
-  if (value === undefined) return {};
+export function captureApiDiscoveryMetadata(value: unknown, contract?: ApiOperationContract): Pick<CompiledApiContract, "discovery" | "discoveryIssues"> {
+  if (value === undefined && !contract) return {};
+  const issues: string[] = [];
+  let metadata: Record<string, unknown> = {};
   try {
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid discovery metadata.");
-    return { discovery: freezeApiData(JSON.parse(JSON.stringify(value))) as ApiOperationDiscovery };
+    if (value !== undefined) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid discovery metadata.");
+      metadata = JSON.parse(JSON.stringify(value));
+    }
   } catch {
-    return { discoveryIssues: Object.freeze(["discovery_metadata_invalid"]) };
+    issues.push("discovery_metadata_invalid");
   }
+  const legacy = contract?.discovery;
+  const fallback: Record<string, unknown> = contract ? {
+    title: legacy?.title || contract.operationId, summary: contract.description,
+    keywords: contract.searchKeywords ?? [], tags: legacy?.tags ?? [], provider: legacy?.provider ?? "",
+    ...(legacy?.categoryId ? { category: { id: legacy.categoryId, title: legacy.categoryId } } : {})
+  } : {};
+  for (const field of ["title", "summary", "provider"] as const) {
+    if (metadata[field] !== undefined && (typeof metadata[field] !== "string" || field !== "provider" && !metadata[field].trim())) {
+      issues.push(`discovery_${field}_invalid`);
+      delete metadata[field];
+    }
+  }
+  for (const field of ["keywords", "tags", "relatedOperations"] as const) {
+    const values = metadata[field];
+    if (values === undefined) continue;
+    if (!Array.isArray(values)) {
+      issues.push(`discovery_${field}_invalid`);
+      delete metadata[field];
+      continue;
+    }
+    if (values.some(item => typeof item !== "string" || !item.trim())) issues.push(`discovery_${field}_item_invalid`);
+    metadata[field] = [...new Set(values.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map(item => item.trim()))];
+  }
+  const category = metadata.category as Record<string, unknown> | undefined;
+  if (category !== undefined && (!category || typeof category !== "object" || Array.isArray(category)
+    || typeof category.id !== "string" || !category.id.trim() || typeof category.title !== "string" || !category.title.trim())) {
+    issues.push("discovery_category_invalid");
+    delete metadata.category;
+  }
+  for (const field of ["inputSources", "examples"] as const) {
+    const entries = metadata[field];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries)) {
+      issues.push(`discovery_${field}_invalid`);
+      delete metadata[field];
+      continue;
+    }
+    metadata[field] = entries.filter(entry => {
+      const valid = entry && typeof entry === "object" && !Array.isArray(entry) && (field === "inputSources"
+        ? ["field", "operationId"].every(key => typeof entry[key] === "string" && entry[key].trim()) && typeof entry.resultPath === 'string'
+        : typeof entry.title === "string" && entry.title.trim() && entry.input && typeof entry.input === "object" && !Array.isArray(entry.input));
+      if (!valid) issues.push(`discovery_${field}_item_invalid`);
+      return valid;
+    });
+  }
+  const discovery = { ...fallback, ...metadata } as ApiOperationDiscovery;
+  if (contract?.exposure === "public") {
+    if (!discovery.title || discovery.title === contract.operationId) issues.push("discovery_title_missing");
+    if (!metadata.summary) issues.push("discovery_summary_missing");
+    if (!discovery.keywords?.length) issues.push("discovery_keywords_missing");
+    if (!discovery.category) issues.push("discovery_category_missing");
+    const body = contract.request.body;
+    if (body.kind === "json" && !hasUsefulInputSchema(body.schema)
+      && !discovery.examples?.some(example => Object.hasOwn(example.input, "body"))
+      && !discovery.inputSources?.some(source => source.field === "body" || source.field.startsWith("body."))) {
+      issues.push("discovery_body_guidance_missing");
+    }
+  }
+  return { discovery: freezeApiData(discovery), ...(issues.length ? { discoveryIssues: Object.freeze([...new Set(issues)]) } : {}) };
+}
+
+function hasUsefulInputSchema(schema: ApiSchema): boolean {
+  if (typeof schema !== "object" || !schema) return false;
+  if (Object.hasOwn(schema, "const") || schema.enum) return true;
+  const branches = schema.anyOf ?? schema.oneOf ?? schema.allOf;
+  if (Array.isArray(branches)) {
+    const objects = branches.filter(branch => typeof branch === "object" && branch?.type === "object");
+    return (objects.length ? objects : branches).some(branch => hasUsefulInputSchema(branch));
+  }
+  if (schema.type === "object" || schema.properties) {
+    return Object.values(schema.properties ?? {}).some(property => hasUsefulInputSchema(property));
+  }
+  return Boolean(schema.type);
 }
 
 export function compileApiContract(definition: Pick<ApiOperationDefinition, "contract" | "discovery">): CompiledApiContract {
-  return Object.freeze({ ...compileCapturedApiContract(captureApiContract(definition.contract)),
-    ...captureApiDiscoveryMetadata(definition.discovery) });
+  const compiled = compileCapturedApiContract(captureApiContract(definition.contract));
+  return Object.freeze({ ...compiled, ...captureApiDiscoveryMetadata(definition.discovery, compiled.contract) });
 }
 
 function compileCapturedApiContract(contract: ApiOperationContract): CompiledApiContract {
@@ -474,11 +562,12 @@ function compileCapturedApiContract(contract: ApiOperationContract): CompiledApi
     ...(websocket?.outgoingSchema === undefined ? {} : { upgradeOutgoingValidator: compileApiSchema(websocket.outgoingSchema) }) });
 }
 export function prepareApiOperation(definition: ApiOperationDefinition): () => CompiledApiOperation {
-  const { handler, prepare } = definition;
+  const { handler, prepare, searchLanes } = definition;
+  if (searchLanes !== undefined && (typeof searchLanes !== 'function' || !definition.contract.searchable)) throw new Error('A native search reader requires searchable source metadata.');
   if (prepare !== undefined && typeof prepare !== "function") throw new Error("Invalid API request preparation.");
   const contract = captureApiContract(definition.contract);
-  const discovery = captureApiDiscoveryMetadata(definition.discovery);
-  return () => Object.freeze({ ...compileCapturedApiContract(contract), ...discovery, handler, ...(prepare ? { prepare } : {}) });
+  const discovery = captureApiDiscoveryMetadata(definition.discovery, contract);
+  return () => Object.freeze({ ...compileCapturedApiContract(contract), ...discovery, handler, ...(prepare ? { prepare } : {}), ...(searchLanes ? { searchLanes } : {}) });
 }
 
 export function compileApiOperation(definition: ApiOperationDefinition): CompiledApiOperation {

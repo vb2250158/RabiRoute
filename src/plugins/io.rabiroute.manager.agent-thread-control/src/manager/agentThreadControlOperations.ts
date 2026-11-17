@@ -74,9 +74,16 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
       validators: [{ id: 'original-thread-ingress', description: 'Capture trusted connector/device identity before body parsing, and recheck the admitted connection and original source after awaited owner work and before tracking updates. Unsaved source sessions may be explicitly attributed to the authenticated connector; saved context is not a feature allowlist. Body remoteSource/callerExecutionOptions/trustedDeviceSource fields cannot create authority.' },
         { id: 'native-thread-request', description: 'Original owner/adapter validates action support, full opaque IDs, workspace/path roots, source message fields, prompt/image bounds, model/tools/approval, creation reservations and idempotency. Explicit caller execution options are frozen before Route defaults. Native list Number coercion, default/clamping/flooring, duplicate query first-value semantics and ignored extension fields remain. Structural schemas do not duplicate adapter-specific business limits.' },
         { id: 'original-thread-lifetime', description: 'Registration stops new admission and joins accepted body/driver work through actual cleanup, even after the HTTP response closes. Cancellation fences prevent new work and tracking; already dispatched native work must settle rather than being reported as cancelled by the registry.' }]
+    }, discovery: {
+      title: method === 'GET' ? '查询 Agent 会话任务目录' : '查询、读取、创建和投递 Agent 会话任务',
+      summary: method === 'GET' ? '查询当前宿主可见的会话名称与完整ID。' : '先用action=list及目标agentAdapter查询真实会话，再用read读取原任务或send投递。create、open、resolve和rename按宿主支持的动作执行；配置与绑定另走路由配置接口。',
+      category:{id:'agents',title:'Agent 协作'}, keywords:['Agent会话','任务列表','读取会话','配置Agent','绑定任务','投递消息','agent sessions','session history','agent configuration',...agentAdapterTypes],
+      relatedOperations:['agent.adapters.catalog.get','manager.gateway-runtime.config.save','agent.deliveries.caller.read'],
+      ...(method === 'POST' ? {inputSources:[{field:'body.threadId',operationId:'manager.agent.threads.action',resultPath:'/threads',valuePath:'/id',parameters:{'body.action':{value:'list'},'body.agentAdapter':{from:'body.agentAdapter'},'body.agentTargetId':{from:'body.agentTargetId'}}}],examples:[{title:'查询指定宿主的任务，保留返回的完整ID',input:{body:{action:'list',agentAdapter:'codex',agentTargetId:'local:codex',limit:20}}}]} : {})
     }, prepare: bind, handler: async input => { const prepared = bind(input); return typeof prepared === 'function' ? prepared(input) : prepared; } };
   });
   const lookup: ApiOperationDefinition = {
+    discovery:{title:'查询原 Agent 投递或任务创建回执',summary:'使用调用方原deliveryId查询原投递阶段和创建结果，再决定是否能够沿同一意图继续。',category:{id:'agents',title:'Agent 协作'},keywords:['投递回执','创建回执','delivery receipt','creation receipt'],relatedOperations:['manager.agent.threads.action']},
     contract: { operationId: 'agent.deliveries.caller.read', aliases: ['agent:GET:/api/agent/deliveries/caller/:callerDeliveryId'],
       contractVersion: '1.0.0', method: 'GET', pathTemplate: '/api/agent/deliveries/caller/:callerDeliveryId', exposure: 'public', transport: 'http',
       description: 'Read original prompt delivery and separate creation metadata scoped to the current authenticated source and stable caller ID. Does not dispatch.',

@@ -47,6 +47,21 @@ const failure = { mediaType: "application/json; charset=utf-8", schema: { type: 
   help: { type: "object", required: ["method", "path"], properties: { method: { const: "GET" }, path: string }, additionalProperties: false },
   uncertain: { const: true }, mutationOutcome: { enum: ["not_started", "unknown"] }
 } } } as const;
+
+const rolePurposes: Record<string, string> = {
+  "list": "查询角色目录",
+  "create": "创建角色",
+  "detail": "读取角色配置与版本",
+  "references": "查询角色引用与运行任务",
+  "config": "保存完整角色配置",
+  "config-patch": "修改部分角色配置",
+  "document-read": "读取角色人格文档",
+  "document": "保存角色人格文档",
+  "archive": "归档角色",
+  "restore": "恢复已归档角色",
+  "delete": "删除角色"
+};
+
 const commands = ["config", "config-patch", "document", "archive", "restore", "delete"] as const;
 type Action = "list" | "create" | "detail" | "document-read" | "references" | typeof commands[number];
 const entries: readonly [Action, "GET" | "POST" | "PUT" | "PATCH", string, ApiSchema][] = [
@@ -153,7 +168,15 @@ export function createRoleConfigurationOperations(context: RoleConfigurationCont
         }
       };
     };
-    return { contract, prepare, handler: async input => { const bound = prepare(input); return typeof bound === "function" ? bound(input) : bound; } };
+    return { contract, discovery: {
+      title: rolePurposes[action], summary: rolePurposes[action] + "。配置与人格正文分别读取当前 revision，写后核对 committed 回执和返回配置。",
+      category: { id: "settings.personas", title: "角色配置与人格", parentId: "settings" }, keywords: [rolePurposes[action], action, "role configuration", "persona"],
+      inputSources: [
+        ...(pathTemplate.includes(":roleId") ? [{ field: "path.roleId", operationId: "manager.roles.list", resultPath: "/data/roles", valuePath: "/roleId" }] : []),
+        ...(nativeCommand ? [{ field: "body.expectedRevision", operationId: action === "document" ? "manager.roles.document-read" : "manager.roles.detail", resultPath: "/data", valuePath: "/revision", parameters: { "path.roleId": { from: "path.roleId" } } }] : [])
+      ], relatedOperations: action === "list" ? [] : ["manager.roles.detail", "manager.roles.references"],
+      ...(action === "create" ? { examples: [{ title: "创建独立角色", input: { body: { roleId: "ExampleRole", title: "示例角色" } } }] } : {})
+    }, prepare, handler: async input => { const bound = prepare(input); return typeof bound === "function" ? bound(input) : bound; } };
   });
   return [...definitions, ...createRoleAutomationOperations(context)];
 }

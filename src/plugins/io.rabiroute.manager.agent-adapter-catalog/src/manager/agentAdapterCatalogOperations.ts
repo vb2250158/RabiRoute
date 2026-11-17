@@ -34,8 +34,9 @@ export async function runAgentAdapterCatalogOperation(key: AgentCatalogOperation
   } finally { lifetime?.dispose(); }
 }
 
+const catalogPurposes: Record<string,string> = {catalog:'查询可用 Agent 适配器与支持能力',all:'扫描全部 Agent 的安装与会话状态',hooks:'安装或更新指定 Agent 的生命周期 Hook'};
 export function createAgentAdapterCatalogOperations(service: AgentAdapterCatalogService): readonly ApiOperationDefinition[] {
-  return AGENT_CATALOG_OPERATIONS.filter(definition => ["catalog", "all", "hooks"].includes(definition.key)).map(definition => ({ contract: agentAdapterCatalogContract(definition), handler: input =>
+  return AGENT_CATALOG_OPERATIONS.filter(definition => ["catalog", "all", "hooks"].includes(definition.key)).map(definition => ({ contract: agentAdapterCatalogContract(definition), discovery:{title:catalogPurposes[definition.key],summary:catalogPurposes[definition.key]+"。按实际适配器能力继续查询会话和保存路由绑定；单端扫描失败保留其它端结果。",category:{id:"agents",title:"Agent 协作"},keywords:[catalogPurposes[definition.key],definition.key,"agent adapters","Agent接入","Agent配置"],relatedOperations:["manager.agent.threads.action","manager.gateway-runtime.config.save"],...(definition.key==="hooks"?{inputSources:[{field:"query.adapter",operationId:"agent.adapters.catalog.get",resultPath:"/data/adapters",valuePath:"/type"}]}:{})}, handler: input =>
     runAgentAdapterCatalogOperation(definition.key, input.request, input.url, input.response, service,
       definition.key === "connect" || definition.key === "disconnect" ? { value: input.body, signal: input.signal } : undefined) }));
 }

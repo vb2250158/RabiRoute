@@ -211,3 +211,14 @@ test('project rows retain first-seen project order, task identity and within-pro
   const ungrouped = {key:'no-project',title:'Untitled',preview:'',time:''};
   assert.deepEqual(historyConversationRows([ungrouped],true),[{kind:'conversation',key:'no-project',conversation:ungrouped}]);
 });
+
+
+test('project folder view previews five sessions and expands only the requested folder',()=>{
+  const items=Array.from({length:8},(_,index)=>({key:'task-'+index,title:'Task',preview:'Last reply',time:'',group:{key:'project',title:'Project',path:'/project'}}));
+  const options={limit:5,expanded:new Set<string>()};
+  const rows=historyConversationRows(items,true,new Set(),options);
+  assert.equal(rows.filter(row=>row.kind==='conversation').length,5);assert.equal(rows.at(-1)?.kind,'more');
+  options.expanded.add('project:project');
+  assert.equal(historyConversationRows(items,true,new Set(),options).filter(row=>row.kind==='conversation').length,8);
+  assert.equal(historyConversationRows(items,false,new Set(),options).length,8);
+});

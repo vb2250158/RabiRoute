@@ -308,3 +308,42 @@ test("confirmed not_committed stays terminal when a write response cannot be enc
   assert.equal(body.retryable, false);
   validateApiOperationResult(operation, failure);
 });
+
+
+test('discovery capture keeps valid fields and execution when one navigation field is malformed', async () => {
+  const original = fixtureApiContract();
+  const operation = compileApiOperation({ contract: original,
+    discovery: { title: 42 as unknown as string, summary: 'Write a fixture record.', category: { id: 'fixture', title: 'Fixture' },
+      keywords: ['fixture write', null as unknown as string, 'fixture write'],
+      inputSources: [{ field: 'path.recordId', operationId: 'fixture.records.list', resultPath: '/data/items', valuePath: '/id' },
+        { field: 'body.value', operationId: 'fixture.value.read', resultPath: '' },
+        { field: 'body.bad', operationId: 'fixture.invalid', resultPath: null as unknown as string }],
+      examples: [{ title: 'Write a known record', input: { path: { recordId: 'record' }, body: { value: 1 } } }] },
+    handler: () => ({ status: 200, body: { ok: true, value: 1 } }) });
+  assert.equal(operation.discovery?.summary, 'Write a fixture record.');
+  assert.deepEqual(operation.discovery?.keywords, ['fixture write']);
+  assert.equal(operation.discovery?.inputSources?.[0].operationId, 'fixture.records.list');
+  assert.equal(operation.discovery?.inputSources?.[1].resultPath, '', 'The empty JSON Pointer selects the original response root.');
+  assert.equal(operation.discovery?.inputSources?.length, 2);
+  assert.ok(operation.discoveryIssues?.includes('discovery_inputSources_item_invalid'));
+  assert.ok(operation.discoveryIssues?.includes('discovery_title_invalid'));
+  assert.ok(operation.discoveryIssues?.includes('discovery_keywords_item_invalid'));
+  assert.equal(operation.contract.request.body.kind, original.request.body.kind);
+  assert.deepEqual(await operation.handler({} as never), { status: 200, body: { ok: true, value: 1 } });
+});
+
+test('OpenAPI projects plugin-owned search and parameter navigation beside the unchanged execution contract', async () => {
+  const registry = new ManagerPluginRouteRegistry();
+  const registered = registry.registerOperations('plugin-with-new-discovery', [{ contract: fixtureApiContract(),
+    discovery: { title: '写入星图记录', summary: '按记录 ID 保存星图值。', category: { id: 'atlas', title: '星图' }, keywords: ['星图 写入', 'atlas write'],
+      relatedOperations: ['atlas.records.list'], examples: [{ title: '保存记录', input: { path: { recordId: 'record' }, body: { value: 1 } } }] },
+    handler: () => ({ status: 200, body: { ok: true, value: 1 } }) }]);
+  try {
+    const openapi = await apiCatalogOpenApi(registry.catalogSnapshot()) as any;
+    const operation = openapi.paths['/api/example/records/{recordId}'].post;
+    assert.equal(operation.summary, '写入星图记录');
+    assert.deepEqual(operation['x-rabiroute-discovery'].keywords, ['星图 写入', 'atlas write']);
+    assert.equal(operation['x-rabiroute-discovery-quality'].state, 'complete');
+    assert.deepEqual(operation['x-rabiroute-request'].body.schema, fixtureApiContract().request.body.kind === 'json' ? (fixtureApiContract().request.body as any).schema : undefined);
+  } finally { await registered.dispose(); }
+});

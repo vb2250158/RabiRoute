@@ -1,6 +1,10 @@
 {
   "exports": [
     {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcatReplySource.ts",
+      "name": "readReplySource"
+    },
+    {
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcat.ts",
       "name": "getLoginInfo"
     },

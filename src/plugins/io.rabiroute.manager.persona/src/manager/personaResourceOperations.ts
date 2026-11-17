@@ -27,9 +27,20 @@ function failed(error:unknown,kind:'avatar'|'document'|'reference'):ApiOperation
   if(kind==='reference')return {status,headers:{'cache-control':'no-store'},body:{code:-1,error:error instanceof RemotePersonaError?error.code:status===403?'REMOTE_PERSONA_ACCESS_DENIED':status===409?'MANAGER_IDENTITY_MISMATCH':'REMOTE_PERSONA_UNAVAILABLE',message:error instanceof RemotePersonaError?message:status===403||status===409?message:'人格读取失败，请检查远端设备、版本及 RabiLink 连接。'}};
   return {status,body:errorResponsePresentation({code:-1,message,...(cause?.uncertain?{uncertain:true}:{})},status)};
 }
+
+const resourcePurposes: Record<string, string> = {
+  "avatar.read": "读取角色头像",
+  "avatar.save": "设置角色头像",
+  "avatar.remove": "移除角色头像",
+  "document.read": "读取人格Markdown文档",
+  "reference.read": "读取角色人格与配置快照",
+  "reference.language-style.validate": "检查人格语言风格"
+};
+
 const define=<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperationInput,'body'>)=>T,execute:(owner:T,input:ApiOperationInput)=>ApiOperationResult|Promise<ApiOperationResult>,kind:'avatar'|'document'|'reference'):ApiOperationDefinition=>{
   const bind=(input:Omit<ApiOperationInput,'body'>)=>{try{const owner=prepare(input);return async(parsed:ApiOperationInput)=>{try{return await execute(owner,parsed);}catch(error){parsed.signal?.throwIfAborted();return failed(error,kind);}};}catch(error){input.signal?.throwIfAborted();return failed(error,kind);}};
-  return {contract,prepare:bind,handler:async input=>{const prepared=bind(input);return typeof prepared==='function'?prepared(input):prepared;}};
+  const id=contract.operationId.slice('manager.personas.resources.'.length),title=resourcePurposes[id]||contract.description;
+  return {contract,discovery:{title,summary:title+'。',category:{id:'settings.personas',title:'角色配置与人格',parentId:'settings'},keywords:[title,id.replace(/[.-]/g,' '),'persona resources'],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'}],...(id==='reference.language-style.validate'?{relatedOperations:['manager.personas.resources.reference.read'],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'},{field:'body.revision',operationId:'manager.personas.resources.reference.read',resultPath:'/data',valuePath:'/revision',parameters:{'path.roleId':{from:'path.roleId'}}}]}:{})},prepare:bind,handler:async input=>{const prepared=bind(input);return typeof prepared==='function'?prepared(input):prepared;}};
 };
 
 /** Persona resources only. Other plan/memory/activity owners remain separate registrations. */

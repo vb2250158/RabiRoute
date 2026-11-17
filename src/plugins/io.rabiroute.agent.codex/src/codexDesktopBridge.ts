@@ -32,6 +32,9 @@ export type CodexDesktopThread = {
   title: string;
   /** Raw SQLite metadata retained only for diagnostics; never use for name decisions. */
   stateTitle?: string;
+  parentThreadId?: string;
+  agentNickname?: string;
+  agentRole?: string;
   cwd: string;
   updatedAt: string;
   rolloutPath: string;
@@ -50,6 +53,10 @@ type CodexDesktopThreadRow = {
   recency_at_ms?: unknown;
   archived?: unknown;
   first_user_message?: unknown;
+  source?: unknown;
+  parent_thread_id?: unknown;
+  agent_nickname?: unknown;
+  agent_role?: unknown;
 };
 
 type IpcResponse = {
@@ -310,6 +317,11 @@ export function listCodexDesktopThreadsFromRowsForTest(
       }
     }
 
+    let spawn: Record<string, unknown> = {};
+    try { spawn = JSON.parse(nonEmptyString(row.source) || '{}')?.subagent?.thread_spawn ?? {}; } catch { /* This row retains its regular metadata. */ }
+    const parentThreadId = nonEmptyString(row.parent_thread_id) || nonEmptyString(spawn.parent_thread_id);
+    const agentNickname = nonEmptyString(row.agent_nickname) || nonEmptyString(spawn.agent_nickname);
+    const agentRole = nonEmptyString(row.agent_role) || nonEmptyString(spawn.agent_role);
     const candidate = {
       id,
       title,
@@ -317,7 +329,10 @@ export function listCodexDesktopThreadsFromRowsForTest(
       rolloutPath,
       firstUserMessage: nonEmptyString(row.first_user_message),
       updatedAt: new Date(updatedAtMs).toISOString(),
-      archived
+      archived,
+      ...(parentThreadId ? {parentThreadId} : {}),
+      ...(agentNickname ? {agentNickname} : {}),
+      ...(agentRole ? {agentRole} : {})
     };
     const current = byId.get(id);
     if (!current || Date.parse(candidate.updatedAt) > Date.parse(current.updatedAt)) byId.set(id, candidate);
@@ -350,25 +365,45 @@ export function findCodexDesktopStateDatabase(): string | null {
   return candidates[0]?.filePath ?? null;
 }
 
-function readDesktopThreadRows(databasePath: string, limit = 10_000, offset = 0): CodexDesktopThreadRow[] {
+function readDesktopThreadRows(databasePath: string, limit = 10_000, offset = 0,
+  filter: { rootsOnly?: boolean; parentSessionId?: string } = {}): CodexDesktopThreadRow[] {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const hasSource = database.prepare("PRAGMA table_info(threads)").all().some(column => column.name === "source");
-    // Approval children remain readable by exact ID, and do not occupy conversation pages.
-    const conversationFilter = hasSource
-      ? "WHERE CASE WHEN json_valid(source) THEN json_extract(source, '$.subagent.other') IS NOT 'guardian' ELSE 1 END"
-      : "";
+    const columns = new Set(database.prepare("PRAGMA table_info(threads)").all().map(column => column.name));
+    const hasSource = columns.has('source');
+    const hasEdges = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_spawn_edges'").get());
+    const sourceParent = "CASE WHEN json_valid(source) THEN json_extract(source, '$.subagent.thread_spawn.parent_thread_id') END";
+    const sourceRelations = hasSource
+      ? `SELECT ${sourceParent} AS parent_thread_id, id AS child_thread_id FROM threads
+         WHERE ${sourceParent} IS NOT NULL ${hasEdges ? 'AND NOT EXISTS (SELECT 1 FROM thread_spawn_edges e WHERE e.child_thread_id=threads.id)' : ''}`
+      : 'SELECT NULL AS parent_thread_id, id AS child_thread_id FROM threads WHERE 0';
+    const relations = hasEdges
+      ? `SELECT parent_thread_id, child_thread_id FROM thread_spawn_edges UNION ALL ${sourceRelations}` : sourceRelations;
+    const clauses: string[] = [], parameters: (string | number)[] = [];
+    if (hasSource) clauses.push("CASE WHEN json_valid(t.source) THEN json_extract(t.source, '$.subagent.other') IS NOT 'guardian' ELSE 1 END");
+    if (filter.rootsOnly) {
+      clauses.push('r.parent_thread_id IS NULL', 't.archived=0');
+      if (hasSource) clauses.push("CASE WHEN json_valid(t.source) THEN COALESCE(json_type(t.source, '$.subagent'),'null')='null' ELSE 1 END");
+    }
+    const descendants = filter.parentSessionId
+      ? ', descendants(id) AS (SELECT child_thread_id FROM relations WHERE parent_thread_id=? UNION SELECT r.child_thread_id FROM relations r JOIN descendants d ON r.parent_thread_id=d.id)' : '';
+    if (filter.parentSessionId) {
+      parameters.push(filter.parentSessionId,filter.parentSessionId);
+      clauses.push('t.id IN (SELECT id FROM descendants)', 't.id<>?');
+    }
+    const optionalColumn = (name:string) => columns.has(name) ? `t.${name}` : 'NULL';
     return database.prepare(`
-      SELECT id, title, cwd, rollout_path, updated_at, updated_at_ms,
-             recency_at, recency_at_ms, archived, first_user_message
-      FROM threads
-      ${conversationFilter}
-      ORDER BY COALESCE(NULLIF(recency_at_ms, 0), NULLIF(updated_at_ms, 0), recency_at * 1000, updated_at * 1000) DESC
+      WITH RECURSIVE relations(parent_thread_id,child_thread_id) AS (${relations}) ${descendants}
+      SELECT t.id, t.title, t.cwd, t.rollout_path, t.updated_at, t.updated_at_ms,
+             t.recency_at, t.recency_at_ms, t.archived, t.first_user_message,
+             ${optionalColumn('source')} AS source, r.parent_thread_id,
+             ${optionalColumn('agent_nickname')} AS agent_nickname, ${optionalColumn('agent_role')} AS agent_role
+      FROM threads t LEFT JOIN relations r ON r.child_thread_id=t.id
+      ${clauses.length ? 'WHERE '+clauses.join(' AND ') : ''}
+      ORDER BY COALESCE(NULLIF(t.recency_at_ms, 0), NULLIF(t.updated_at_ms, 0), t.recency_at * 1000, t.updated_at * 1000) DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset) as CodexDesktopThreadRow[];
-  } finally {
-    database.close();
-  }
+    `).all(...parameters,limit,offset) as CodexDesktopThreadRow[];
+  } finally { database.close(); }
 }
 
 export function listCodexDesktopWorkspaces(databasePath = findCodexDesktopStateDatabase()): string[] {
@@ -413,6 +448,8 @@ export function listCodexDesktopThreads(options: {
 /** Native API pages advance the SQLite source offset, including entries beyond legacy scan budgets. */
 export function listCodexNativeSessionPage(options: {
   query?: string;
+  rootsOnly?: boolean;
+  parentSessionId?: string;
   limit?: number;
   offset?: number;
   databasePath?: string;
@@ -427,7 +464,7 @@ export function listCodexNativeSessionPage(options: {
   const items: CodexDesktopThread[] = [];
   const batchSize = Math.min(Math.max(limit, 50), 500);
   for (;;) {
-    const rows = readDesktopThreadRows(databasePath, batchSize, offset);
+    const rows = readDesktopThreadRows(databasePath, batchSize, offset, options);
     if (!rows.length) return { items, nextOffset: null };
     const projected = applyCodexSidebarTaskNames(listCodexDesktopThreadsFromRowsForTest(rows, {
       limit: rows.length, includeArchived: true

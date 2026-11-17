@@ -1,5 +1,13 @@
 export const pluginTranslations = {
   "en": {
+    "子 Agent": "Subagents",
+    "刷新子 Agent": "Refresh subagents",
+    "主会话": "Main session",
+    "返回主会话": "Back to main session",
+    "此会话暂无子 Agent。": "This session has no subagents.",
+    "加载更多子 Agent": "Load more subagents",
+    "消息摘要暂不可用": "Message preview unavailable",
+    "展开显示": "Show more",
     "调用身份": "Caller identity",
     "搜索范围": "Persona scope",
     "全部角色": "All personas",
@@ -706,6 +714,14 @@ export const pluginTranslations = {
     "等待 QA 验收": "Awaiting QA acceptance"
   },
   "ja": {
+    "子 Agent": "サブエージェント",
+    "刷新子 Agent": "サブエージェントを更新",
+    "主会话": "メインセッション",
+    "返回主会话": "メインセッションに戻る",
+    "此会话暂无子 Agent。": "このセッションにはサブエージェントがありません。",
+    "加载更多子 Agent": "サブエージェントをさらに読み込む",
+    "消息摘要暂不可用": "メッセージのプレビューを取得できません",
+    "展开显示": "さらに表示",
     "调用身份": "呼び出し元",
     "搜索范围": "検索対象",
     "全部角色": "すべてのペルソナ",

@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import {
   deliverWorkbuddyMessage,
@@ -13,9 +14,34 @@ import {
   waitForWorkbuddyTurn,
   WorkbuddyDeliveryError
 } from "./workbuddySessionBridge.js";
-import { assertWorkbuddyLoopback } from "./workbuddyHttpAuth.js";
+import { assertWorkbuddyLoopback, discoverWorkbuddyOwners, invalidateWorkbuddyGatewayPassword, workbuddyGatewayPassword } from "./workbuddyHttpAuth.js";
+import { parseWorkbuddySessionDescriptor } from "./workbuddySessionStore.js";
 
 const PASSWORD = "rabi-test-gateway-password-0001";
+
+test("native owner discovery refreshes stale metadata and initializes private endpoint credentials once", async () => {
+  const original = parseWorkbuddySessionDescriptor({ pid: process.pid, sessionId: "exact-owner", kind: "interactive",
+    lastHeartbeat: 1, processIdentity: { procStartFt: "123" } })!;
+  assert.equal(original.stale, true);
+  let probes = 0;
+  const probe = async () => {
+    probes++;
+    await Promise.resolve();
+    return { owners: [{ pid: process.pid, sessionId: "exact-owner", endpoint: "http://127.0.0.1:5763",
+      password: PASSWORD, processStartFileTime: "123" }], warnings: [] };
+  };
+  try {
+    const results = await Promise.all([discoverWorkbuddyOwners([original], { probe }), discoverWorkbuddyOwners([original], { probe })]);
+    assert.equal(probes, 1);
+    assert.equal(results[0][0].stale, false);
+    assert.equal(results[0][0].deliverable, true);
+    assert.equal(original.stale, true);
+    assert.equal(JSON.stringify(results).includes(PASSWORD), false);
+    assert.equal(await workbuddyGatewayPassword({ endpoint: "http://127.0.0.1:5763" }), PASSWORD);
+    const reusedPid = { ...original, processStartFileTime: "different-process" };
+    assert.equal((await discoverWorkbuddyOwners([reusedPid], { probe }))[0].deliverable, false);
+  } finally { invalidateWorkbuddyGatewayPassword(); }
+});
 
 test("screenshots use official attachment fields on the original session gateway", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workbuddy-image-"));
@@ -109,6 +135,7 @@ test("delivery uses conversation.id as the routing key and settles on poll", asy
     });
     assert.deepEqual(sent.payload, { text: "hello task" });
     assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, `Bearer ${PASSWORD}`);
+    assert.ok(calls.every(call => new Headers(call.init?.headers).get("X-CodeBuddy-Request") === "1"));
   } finally {
     delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
   }
@@ -137,7 +164,7 @@ test("a 401 fails closed, invalidates the credential, and does not replay", asyn
 test("an unreachable gateway reports a safe-to-retry outcome", async () => {
   process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
   try {
-    const impl = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    const impl = (async () => { throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }); }) as unknown as typeof fetch;
     await assert.rejects(
       () => deliverWorkbuddyMessage({
         sessionId: "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
@@ -149,6 +176,39 @@ test("an unreachable gateway reports a safe-to-retry outcome", async () => {
     );
   } finally {
     delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
+  }
+});
+
+test("an accepted request with a lost response remains unknown and is sent once", async () => {
+  process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = PASSWORD;
+  let requests = 0;
+  let failure = "socket";
+  const server = http.createServer(async (request, response) => {
+    for await (const _chunk of request) { /* Receive the complete request before disconnecting. */ }
+    requests++;
+    if (failure === "server-error") {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end('{"error":"response lost after acceptance"}');
+    } else if (failure === "body") {
+      response.writeHead(202, { "content-type": "application/json" });
+      response.flushHeaders();
+      response.write('{"runId":');
+      setImmediate(() => response.destroy());
+    } else request.socket.destroy();
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const endpoint = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+    for (const kind of ["socket", "body", "server-error"]) {
+      failure = kind;
+      await assert.rejects(deliverWorkbuddyMessage({ sessionId: "original-owner", text: "one request", endpoint }),
+        (error: unknown) => error instanceof WorkbuddyDeliveryError && error.outcome === "unknown");
+    }
+    assert.equal(requests, 3);
+  } finally {
+    delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
 

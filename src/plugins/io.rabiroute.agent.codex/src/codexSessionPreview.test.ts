@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import test, {type TestContext} from 'node:test';
+import * as zlib from 'node:zlib';
+import {CodexSessionPreviewReader} from './codexSessionPreview.js';
+import {agentMessagePreview} from '../../../shared/agentSessionMessages.js';
+const record=(type:string,payload:Record<string,unknown>)=>JSON.stringify({type,timestamp:'2026-11-17T07:30:00Z',payload});
+function fixture(t:TestContext){const root=fs.mkdtempSync(path.join(os.tmpdir(),'rabi-session-preview-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const file=path.join(root,'session.jsonl');return{file,thread:{id:'thread',rolloutPath:file}};}
+test('latest preview ignores tools, reasoning, commentary and a partial newest tail',async t=>{const f=fixture(t);fs.writeFileSync(f.file,[record('session_meta',{id:'thread'}),record('event_msg',{type:'user_message',message:'Question'}),record('response_item',{type:'message',role:'assistant',phase:'final_answer',content:[{type:'output_text',text:'Final answer'}]}),record('response_item',{type:'message',role:'assistant',phase:'commentary',content:[{type:'output_text',text:'Working'}]}),record('response_item',{type:'function_call',arguments:'x'.repeat(600000)}),'partial'].join('\n'));assert.equal((await new CodexSessionPreviewReader().read(f.thread))?.preview,'Final answer');});
+test('append invalidates cached summaries and attachment wrappers display the actual request',async t=>{const f=fixture(t),reader=new CodexSessionPreviewReader();fs.writeFileSync(f.file,record('event_msg',{type:'task_complete',last_agent_message:'Old'})+'\n');assert.equal((await reader.read(f.thread))?.preview,'Old');fs.appendFileSync(f.file,record('event_msg',{type:'user_message',message:'# Files mentioned by the user:\nfile.png\n## My request:\n新的问题🙂'})+'\n');assert.equal((await reader.read(f.thread))?.preview,'新的问题🙂');});
+test('large complete messages span chunks and keep a bounded single-line excerpt',async t=>{const f=fixture(t);fs.writeFileSync(f.file,record('event_msg',{type:'user_message',message:'🙂'.repeat(300000)})+'\n');const p=await new CodexSessionPreviewReader().read(f.thread);assert.equal(Array.from(p!.preview).length,160);assert(!p!.preview.includes('\uFFFD'));});
+test('Zstandard exact sibling uses native identity validation and malformed rows remain local',async t=>{const f=fixture(t);const bytes=Buffer.from(record('session_meta',{id:'thread'})+'\nwrong\n'+record('event_msg',{type:'task_complete',last_agent_message:'Archived answer'})+'\n');fs.writeFileSync(f.file+'.zst',zlib.zstdCompressSync(bytes));assert.equal((await new CodexSessionPreviewReader().read(f.thread))?.preview,'Archived answer');assert.equal(await new CodexSessionPreviewReader().read({...f.thread,id:'wrong'}),undefined);});
+test('missing transcripts stay local, and cancellation remains cancellation',async t=>{const f=fixture(t),reader=new CodexSessionPreviewReader();assert.equal(await reader.read(f.thread),undefined);fs.writeFileSync(f.file,'');const c=new AbortController();c.abort();await assert.rejects(reader.read(f.thread,c.signal),/abort/i);});
+test('message transport headers and receipt parameters do not occupy the excerpt',()=>{assert.equal(agentMessagePreview('## 消息源\nmeta\n## 消息内容\n完成了。\n[回传参数]\n{}'),'完成了。');});

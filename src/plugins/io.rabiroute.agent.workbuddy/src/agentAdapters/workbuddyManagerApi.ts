@@ -10,7 +10,7 @@
  */
 
 import { agentAdapterManifest } from "@rabiroute/host-api/shared/agentAdapterCapabilities";
-import { workbuddyCredentialStatus } from "../workbuddyHttpAuth.js";
+import { workbuddyCredentialStatus, discoverWorkbuddyOwners } from "../workbuddyHttpAuth.js";
 import {
   listWorkbuddySessionDescriptors,
   listWorkbuddyTasks,
@@ -47,7 +47,7 @@ export async function scanWorkbuddyAgentAdapter(
   let rows: ReturnType<typeof readWorkbuddyTaskRows> = [];
   const warnings: string[] = [];
   try {
-    descriptors = listWorkbuddySessionDescriptors({ sessionsDir });
+    descriptors = await discoverWorkbuddyOwners(listWorkbuddySessionDescriptors({ sessionsDir }));
   } catch (error) {
     warnings.push(`读取 WorkBuddy 会话进程描述失败：${error instanceof Error ? error.message : String(error)}`);
   }
@@ -109,7 +109,7 @@ export async function scanWorkbuddyAgentAdapter(
     warnings.push("当前没有可投递的 WorkBuddy 会话进程；请在 WorkBuddy 中打开目标任务后再投递。");
   }
   warnings.push(
-    "WorkBuddy 投递会进入绑定任务的对话区并由该任务 owner 执行；仍为实验性：凭据需手工配置，桌面配对入口尚未提供。"
+    "WorkBuddy 通过原任务 owner 执行投递，可按完整任务 ID 直接调用。Windows 自动探测依赖系统允许读取该 owner 的进程信息；能力仍为实验性。"
   );
 
   const workspaces = listWorkbuddyWorkspaces(databasePath);
@@ -133,9 +133,11 @@ export async function scanWorkbuddyAgentAdapter(
           // Only ever claim "configured" — never imply a live login check that
           // was not performed.
           ...(credential.configured ? { loggedIn: true } : {}),
-          message: credential.configured
-            ? "已检测到 WorkBuddy 本地网关凭据；投递时按会话描述文件动态发现网关地址。"
-            : "需要 WorkBuddy 本地网关凭据：会话进程互相共用桌面生成的密码，RabiRoute 无法从另一进程读取，请在本地凭据文件中一次性录入。"
+          message: credential.source === "owner"
+            ? "已自动发现并鉴权 WorkBuddy 本机任务网关。"
+            : credential.configured
+              ? "已检测到本地配置凭据，投递时自动连接原 WorkBuddy owner。"
+              : "未取得 WorkBuddy owner 的网关凭据；请检查该进程状态及系统访问权限。"
         },
         endpoints,
         projects,

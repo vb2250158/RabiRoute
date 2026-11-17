@@ -18,7 +18,88 @@ import { normalizeHomeAssistantState } from '../plugins/io.rabiroute.manager.xia
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { runUnifiedSearch, parseSearchQuery, type SearchLane } from './unifiedSearch.js';
 import { createSearchLanes } from './unifiedSearchSources.js';
+import { createPersonaSkillOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.js';
+import { listRoleSkills, getRoleSkill } from '../roleKnowledge.js';
 const observed = '2026-11-12T10:00:00.000Z', updated = '2026-11-13T10:00:00.000Z';
+test('role Skills share one native searchable source on every host and retain real detail handles', async t => {
+    const f = await fixture(t, 1000);
+    const skillRoot = path.join(f.roleDirectory('first'), 'skills', 'packaging-guide');
+    fs.mkdirSync(skillRoot, { recursive: true });
+    fs.writeFileSync(path.join(skillRoot, 'SKILL.md'), '---\nname: packaging-guide\ndescription: 打包发布、核验交付与群聊回执\n---\n\n# 打包工作流\n\nOriginal full body stays in its owner.\n');
+    const registration = f.registry.registerOperations('skill-owner', createPersonaSkillOperations({
+        roleDirectory: f.roleDirectory,
+        querySkills: async (directory, id) => id ? getRoleSkill(directory, id) : listRoleSkills(directory),
+        archive: async () => { throw new Error('Archive is outside this search fixture.'); }, reportCleanupError: () => {}
+    }));
+    t.after(() => registration.dispose());
+    const result = await f.read('scope=skills&q=' + encodeURIComponent('打包') + '&agent=first');
+    assert.equal(result.status, 200);
+    assert.equal(result.data.items.length, 1);
+    const item = result.data.items[0];
+    assert.equal(item.source, 'skills');
+    assert.equal(item.origin.skillId, 'packaging-guide');
+    assert.equal(item.agent, 'first');
+    assert.equal(item.handle.operationId, 'manager.personas.skills.detail');
+    const detail = await (await nativeHttpTestFetch(f.base + item.handle.detailUrl)).json();
+    assert.match(detail.data.content, /Original full body/);
+    assert.doesNotMatch(item.excerpt, /Original full body/);
+    const mixed = await f.read('agent=first&limit=20');
+    assert.ok(mixed.data.items.some((entry: any) => entry.source === 'skills'), 'Skills remain visible alongside a large message corpus.');
+    assert.equal((await f.read('scope=skills&q=' + encodeURIComponent('打包') + '&agent=second')).data.items.length, 0);
+    await registration.dispose();
+    assert.equal((await f.read('scope=skills&q=' + encodeURIComponent('打包'))).status, 400);
+});
+
+test('an appended and backdated message does not invalidate or shift the original search continuation', async t => {
+    const f = await fixture(t, 7);
+    const query = 'scope=messages&agent=first&limit=2&q=' + encodeURIComponent('空调');
+    const first = await f.read(query);
+    assert.equal(first.status, 200);
+    assert.ok(first.data.nextCursor);
+    const file = path.join(f.roleDirectory('first'), 'conversation', 'current.jsonl');
+    fs.appendFileSync(file, JSON.stringify({ schemaVersion: 1, id: 'backdated-new', sequence: 8, time: 1794477601, direction: 'inbound', adapter: 'voice', conversationKey: 'group:test', kind: 'group', text: '卧室 空调 新追加' }) + '\n');
+    refreshMessageHistoryIndex(f.roleDirectory('first'), path.join(f.roleDirectory('first'), 'fixture.sqlite'));
+    const items = [...first.data.items];
+    let cursor = first.data.nextCursor;
+    while (cursor) {
+        const page = await f.read(query + '&cursor=' + encodeURIComponent(cursor));
+        assert.equal(page.status, 200, JSON.stringify(page));
+        items.push(...page.data.items); cursor = page.data.nextCursor;
+    }
+    assert.equal(items.length, 6);
+    assert.equal(new Set(items.map(item => item.origin.recordId)).size, 6);
+    assert.ok(!items.some(item => item.origin.recordId === 'backdated-new'));
+    const refreshed = await f.read('scope=messages&agent=first&limit=20&q=' + encodeURIComponent('空调'));
+    assert.ok(refreshed.data.items.some((item: any) => item.origin.recordId === 'backdated-new'));
+});
+
+test('unknown plugin data sources register without host edits and retire with their real operation', async t => {
+    const f = await fixture(t);
+    const source = f.registry.registerOperations('new-atlas-data-owner', [{
+        contract: fixtureApiContract({ operationId: 'new.atlas.catalog', method: 'GET', pathTemplate: '/api/new-atlas/catalog',
+            searchable: { scope: 'new-atlas', legend: '插件地图', kinds: ['map'] } }),
+        searchLanes: () => [{ key: 'catalog', source: 'new-atlas', agent: null, read: async () => ({ version: 'one', complete: true,
+            items: [{ source: 'new-atlas', kind: 'map', agent: null, label: '星图地图', excerpt: '真实插件数据', searchText: '星图地图',
+                origin: { mapId: 'first' }, detailUrl: '/api/new-atlas/catalog', handle: { detailUrl: '/api/new-atlas/catalog' } }] }) }],
+        handler: () => ({ status: 200, body: {} })
+    }]);
+    t.after(() => source.dispose());
+    const result = await f.read('scope=new-atlas&q=' + encodeURIComponent('星图'));
+    assert.equal(result.data.items[0].source, 'new-atlas');
+    assert.ok(result.data.capabilities.scopes.includes('new-atlas'));
+    const broken = f.registry.registerOperations('independent-broken-search-owner', [{
+        contract: fixtureApiContract({ operationId: 'new.broken.catalog', method: 'GET', pathTemplate: '/api/new-broken',
+            searchable: { scope: 'new-broken', legend: '坏来源', kinds: ['map'] } }),
+        searchLanes: () => { throw new Error('OWNER_SEARCH_UNAVAILABLE'); }, handler: () => ({ status: 200, body: {} })
+    }]);
+    t.after(() => broken.dispose());
+    const partial = await f.read('scope=new-atlas,new-broken&q=' + encodeURIComponent('星图'));
+    assert.equal(partial.status, 200);
+    assert.equal(partial.data.items[0].source, 'new-atlas');
+    assert.ok(partial.data.degraded.some((entry: any) => entry.source === 'new-broken'));
+    await source.dispose();
+    assert.equal((await f.read('scope=new-atlas')).status, 400);
+});
 async function fixture(t: test.TestContext, messageCount = 3) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rabi-unified-search-'));
     const roles = [{ roleId: 'first' }, { roleId: 'second' }];
@@ -295,4 +376,63 @@ test('role-directory changes fence the original asynchronous result and historic
   const pending=f.read('q='+encodeURIComponent('空调'));
   await arrived;f.context.roleDirectory=id=>path.join(f.roleDirectory(id),'changed-owner');release();
   const changed=await pending;assert.equal(changed.status,409);assert.equal(changed.errorCode,'SEARCH_SCOPE_CHANGED');
+});
+
+
+test('a newly registered plugin owns searchable task semantics and executable parameter sources across entry points', async t => {
+  const f = await fixture(t, 0);
+  const empty = { type: 'object', additionalProperties: false };
+  const resultSchema = { mediaType: 'application/json', schema: { type: 'object', additionalProperties: true } };
+  const resourceId = '星图-map-1';
+  const definitions = [
+    { contract: fixtureApiContract({ operationId: 'new.StarAtlas.maps', method: 'GET', pathTemplate: '/api/new-star-atlas/maps', description: 'Read star atlas maps.',
+        request: { path: empty, query: empty, headers: { type: 'object' }, body: { kind: 'none' } }, responses: { '200': resultSchema },
+        effects: { mode: 'read', description: 'Read this plugin map inventory.' } }),
+      discovery: { title: '星图地图列表', summary: '列出该插件可预览的地图及真实 ID。', category: { id: 'new.star-atlas', title: '星图' }, keywords: ['星图 地图', 'star atlas maps'] },
+      handler: () => ({ status: 200, body: { code: 0, data: { maps: [{ id: resourceId }] } } }) },
+    { contract: fixtureApiContract({ operationId: 'new.StarAtlas.preview', method: 'GET', pathTemplate: '/api/new-star-atlas/maps/:mapId', description: 'Read a map preview.',
+        request: { path: { type: 'object', required: ['mapId'], properties: { mapId: { type: 'string', minLength: 1 } }, additionalProperties: false }, query: empty, headers: { type: 'object' }, body: { kind: 'none' } },
+        responses: { '200': resultSchema }, effects: { mode: 'read', description: 'Read the chosen map preview.' } }),
+      discovery: { title: '预览星图地图', summary: '从地图目录取得 ID，读取对应星图预览。', category: { id: 'new.star-atlas', title: '星图' },
+        keywords: ['星图 预览', 'star atlas preview'], inputSources: [{ field: 'path.mapId', operationId: 'new.StarAtlas.maps', resultPath: '/data/maps', valuePath: '/id' }], relatedOperations: ['new.StarAtlas.maps'],
+        examples: [{ title: '按目录 ID 读取', input: { path: { mapId: resourceId } } }] },
+      handler: (input: { path: Readonly<Record<string, string>> }) => ({ status: 200, body: { code: 0, data: { id: input.path.mapId, preview: 'actual-plugin-preview' } } }) },
+  ];
+  const registration = f.registry.registerOperations('new-plugin-with-no-host-keyword-entry', definitions);
+  t.after(() => registration.dispose());
+  const query = '星图 预览';
+  const unified = await f.read(new URLSearchParams({ q: query, scope: 'operations', match: 'all' }).toString());
+  const directory = await (await nativeHttpTestFetch(f.base + '/api/agent/operations?' + new URLSearchParams({ query, match: 'all' }))).json();
+  assert.deepEqual(unified.data.items.map((item: any) => item.handle.operationId), directory.data.items.map((item: any) => item.operationId));
+  assert.equal(unified.data.items[0].label, '预览星图地图');
+  assert.equal(unified.data.items[0].handle.discoveryQuality.state, 'complete');
+  const { createManagerClient } = await import(new URL('../../apps/rabi-agent/lib/manager-client.mjs', import.meta.url).href);
+  const client = createManagerClient({ managerUrl: f.base, credential: 'fixture-only' });
+  const described = await client.operations.describe(unified.data.items[0].handle.operationId);
+  const source = described.operation.discovery.inputSources[0];
+  const inventory = await client.operations.call(source.operationId);
+  const actualId = inventory.data.data.maps[0].id;
+  assert.equal(actualId, resourceId);
+  const called = await client.operations.call(described.operation.id, { path: { mapId: actualId } });
+  assert.equal(called.data.data.preview, 'actual-plugin-preview');
+  const english = await f.read('scope=operations&match=all&q=star%20atlas%20preview');
+  assert.equal(english.data.items[0].handle.operationId, described.operation.id);
+  const ties = f.registry.registerOperations('new-tied-operations', ['a', 'A', 'z'].map(id => ({
+    contract: fixtureApiContract({ operationId: 'new.tied.' + id, method: 'GET', pathTemplate: '/api/new-tied/' + id,
+      description: 'Read a provider selection.', request: { path: empty, query: { type: 'object', properties: { provider: { enum: ['new-gazelle-provider'] } } }, headers: { type: 'object' }, body: { kind: 'none' } }, responses: { '200': resultSchema } }),
+    discovery: { title: '同分目录记录', summary: '读取插件选择。', category: { id: 'new.tied', title: '同分目录' }, keywords: ['同分目录'] },
+    handler: () => ({ status: 200, body: { code: 0 } })
+  })));
+  const sameQuery = 'new-gazelle-provider';
+  const sameUnified = await f.read('scope=operations&match=all&q=' + sameQuery);
+  const sameDirectory = await (await nativeHttpTestFetch(f.base + '/api/agent/operations?' + new URLSearchParams({ query: sameQuery, match: 'all' }))).json();
+  assert.deepEqual(sameUnified.data.items.map((item: any) => item.handle.operationId), ['new.tied.A', 'new.tied.a', 'new.tied.z']);
+  assert.deepEqual(sameUnified.data.items.map((item: any) => item.handle.operationId), sameDirectory.data.items.map((item: any) => item.operationId));
+  await ties.dispose();
+  const cursor = (await f.read('scope=operations&limit=1&q=star%20atlas')).data.nextCursor;
+  await registration.dispose();
+  const unloaded = await f.read('scope=operations&q=' + encodeURIComponent(query));
+  assert.equal(unloaded.data.items.length, 0);
+  const staleCursor = await f.read('scope=operations&limit=1&q=star%20atlas&cursor=' + encodeURIComponent(cursor));
+  assert.equal(staleCursor.status, 409);
 });

@@ -1,3 +1,5 @@
+import { agentMessageText, agentMessageTime as timestamp, codexVisibleMessage } from '@shared/agentSessionMessages';
+
 export type AgentSessionMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -15,39 +17,25 @@ type JsonRecord = Record<string, any>;
 function object(value: unknown): JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
-function textContent(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map(part => {
-    const item = object(part);
-    if (['text', 'input_text', 'output_text'].includes(item.type) && typeof item.text === 'string') return item.text;
-    if (['image', 'input_image'].includes(item.type)) return '[图片]';
-    return '';
-  }).filter(Boolean).join('\n');
-}
-function timestamp(value: unknown): string {
-  if (typeof value !== 'string' && typeof value !== 'number') return '';
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
-}
-
 /** Keep only user messages, final text and DSH turn boundaries from native pages. */
 export function agentHistoryEvents(provider: string, page: JsonRecord): AgentHistoryEvent[] {
   if (provider === 'codex') {
     return (page.entries ?? []).flatMap((entry: unknown) => {
-      const row = object(entry), record = object(row.record), payload = object(record.payload);
+      const row = object(entry), record = object(row.record);
       const sequence = Number(row.sequence);
-      let role: AgentSessionMessage['role'] | undefined, text = '';
-      if (record.type === 'event_msg' && payload.type === 'user_message') {
-        role = 'user'; text = typeof payload.message === 'string' ? payload.message : '';
-      } else if (record.type === 'event_msg' && payload.type === 'task_complete') {
-        role = 'assistant'; text = typeof payload.last_agent_message === 'string' ? payload.last_agent_message : '';
-      } else if (record.type === 'response_item' && payload.type === 'message'
-        && (payload.role === 'user' || payload.role === 'assistant' && payload.phase === 'final_answer')) {
-        role = payload.role; text = textContent(payload.content);
-      }
-      if (!role || !text.trim() || !Number.isSafeInteger(sequence)) return [];
+      const visible = codexVisibleMessage(record);
+      if (!visible || !visible.text.trim() || !Number.isSafeInteger(sequence)) return [];
+      const {role,text} = visible;
       return [{ id: `codex:${sequence}`, role, text, sequence, stream: record.type, time: timestamp(record.timestamp) }];
+    });
+  }
+  if (provider === 'workbuddy') {
+    return (page.entries ?? []).flatMap((entry:unknown) => {
+      const row = object(entry), record = object(row.record), sequence = Number(row.sequence);
+      if (!Number.isSafeInteger(sequence) || record.type !== 'message' || !['user','assistant'].includes(record.role)) return [];
+      const text = agentMessageText(record.content);
+      if (!text.trim()) return [];
+      return [{id:`workbuddy:${sequence}`,role:record.role,text,sequence,time:timestamp(record.timestamp)}];
     });
   }
   if (provider === 'dsh') {
@@ -61,7 +49,7 @@ export function agentHistoryEvents(provider: string, page: JsonRecord): AgentHis
       if (!user && event.type !== 'assistant/message') return [];
       const message = user ? data : object(data.message);
       if (user && object(message.source).kind !== 'user') return [];
-      const text = textContent(message.content);
+      const text = agentMessageText(message.content);
       if (user && !text.trim() || data.interrupted) return [];
       return [{ id: `dsh:${sequence}`, role: user ? 'user' : 'assistant', text, time, sequence,
         ...(!user ? { turn: data.turn } : {}) }];
@@ -94,7 +82,7 @@ export function agentHistoryMessages(provider: string, events: readonly AgentHis
 }
 
 export function agentHistoryNextCursor(provider: string, page: JsonRecord): string | null {
-  if (provider === 'codex') return page.nextCursor ?? null;
+  if (provider === 'codex' || provider === 'workbuddy') return page.nextCursor ?? null;
   if (provider === 'dsh' && page.hasMore) {
     const sequences = (page.records ?? []).map((row: unknown) => object(object(row).event).seq).filter(Number.isSafeInteger);
     if (!sequences.length) throw new Error('历史分页未返回下一页位置。');

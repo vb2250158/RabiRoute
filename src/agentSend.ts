@@ -17,6 +17,7 @@ import {
   archiveReplyImageDescriptions,
   prepareReplyImageDescriptions,
   type ReviewedReplySourceEvidence,
+  type PlatformReplySourceEvidence,
   type ReplyImageDescriptionArchive,
   type ReplyImageDescriptionPlan
 } from "./replyImageDescriptions.js";
@@ -452,7 +453,8 @@ export async function inspectAgentSendDelivery(
 function replyImageDescriptionPlan(
   normalized: NormalizedAgentSend,
   options: AgentReplyOptions,
-  reviewedSource?: ReviewedReplySourceEvidence
+  reviewedSource?: ReviewedReplySourceEvidence,
+  platformSource?: PlatformReplySourceEvidence
 ): ReplyImageDescriptionPlan | undefined {
   return prepareReplyImageDescriptions({
     deliveryId: normalized.deliveryId,
@@ -461,25 +463,29 @@ function replyImageDescriptionPlan(
     channel: normalized.channel,
     target: normalized.target,
     replyImageDescriptions: normalized.replyImageDescriptions
-  }, options, reviewedSource);
+  }, options, reviewedSource, platformSource);
 }
 
 export function validateAgentSendReplyImageDescriptions(
   request: AgentSendRequest,
   options: AgentReplyOptions,
-  reviewedSource?: ReviewedReplySourceEvidence
+  reviewedSource?: ReviewedReplySourceEvidence,
+  platformSource?: PlatformReplySourceEvidence
 ): void {
-  replyImageDescriptionPlan(normalizeAgentSend(request), options, reviewedSource);
+  replyImageDescriptionPlan(normalizeAgentSend(request), options, reviewedSource, platformSource);
 }
 
 export async function handleAgentSend(
   request: AgentSendRequest,
   options: AgentReplyOptions,
-  reviewedSource?: ReviewedReplySourceEvidence
+  reviewedSource?: ReviewedReplySourceEvidence,
+  platformSource?: PlatformReplySourceEvidence
 ): Promise<AgentSendResult> {
   const normalized = normalizeAgentSend(request);
-  const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options, reviewedSource);
-  const result = await handleAgentReply(normalized.internal, options);
+  const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options, reviewedSource, platformSource);
+  const result = await handleAgentReply(normalized.internal, platformSource
+    ? { ...options, assertReplySourceCurrent: platformSource.assertCurrent }
+    : options);
   const replyImageDescriptionArchive = result.status === "sent" && imageDescriptionPlan
     ? archiveReplyImageDescriptions(imageDescriptionPlan, {
         rootDir: options.rootDir,

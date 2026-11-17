@@ -6,6 +6,8 @@
 
 # WorkBuddy 作为 Agent 端的接入方案
 
+> 2026-11-17 更新。WorkBuddy 插件 0.1.5 的当前实现通过通用 Agent 会话 API 自由查询任务、按字节游标读取原生聊天记录，并在 Windows 首次扫描或指定 ID 投递时自动发现和鉴权原任务进程的回环网关。凭据驻留内存，角色绑定用于默认路由。自动探测使用 Manager 已有系统权限读取目标 WorkBuddy 进程；当前桌面启动时间记录为估计值，按一秒内误差结合进程名、PID 及网关鉴权核对。当前 Windows 机器已实测自动发现和鉴权两个原生 owner。真实消息投递及运行包采用按本轮验收记录跟进，成熟度保持 experimental。下方 5.5.6 调查及手工凭据步骤保留为历史协议与旧版本配置依据。
+
 > 状态：**已实现；投递链路已端到端验证，凭据获取仍需手工一步**。文中“已核实事实”来自对 WorkBuddy 5.5.6 本机安装的探测与实测。会话发现、任务库读取、标准 resolver、凭据读取与投递桥均已落地并通过自动化测试，投递在独立进程（无 `CODEBUDDY_*` 环境变量）下验证：消息进入绑定任务的对话区、由同一任务 owner 执行、同 ID 复投不新建任务。因凭据仍需用户手工录入本地文件、桌面配对入口尚未提供，`maturity` 保持 `experimental`，不得写成 `verified`。
 >
 > 阅读前置：本文按 [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) 编写，执行流程受 `skills/create-rabiroute-agent-adapter/SKILL.md` 和其 [owner-first 设计门](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md) 约束。

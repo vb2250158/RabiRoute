@@ -189,3 +189,61 @@ test("conversation pages exclude Guardian origins before pagination and preserve
   assert.deepEqual(listCodexDesktopThreads({databasePath,sessionIndexPath,query:'Guardian review'}).map(row=>row.id), ['user-a']);
   assert.equal(readCodexDesktopThread('approval-0',databasePath,sessionIndexPath)?.id,'approval-0');
 });
+
+
+test("root pages exclude workers before pagination and a parent roster follows the native descendant graph",t=>{
+  const f=temporary(t,metadata+"\n"), databasePath=path.join(f.root,'relations.sqlite'),sessionIndexPath=path.join(f.root,'names.jsonl');
+  const db=new DatabaseSync(databasePath);
+  db.exec(`CREATE TABLE threads(id TEXT PRIMARY KEY,title TEXT,cwd TEXT,rollout_path TEXT,updated_at INTEGER,updated_at_ms INTEGER,recency_at INTEGER,recency_at_ms INTEGER,archived INTEGER,first_user_message TEXT,source TEXT,agent_nickname TEXT,agent_role TEXT);
+    CREATE TABLE thread_spawn_edges(parent_thread_id TEXT,child_thread_id TEXT PRIMARY KEY,status TEXT);`);
+  const insert=db.prepare("INSERT INTO threads VALUES(?,?,'fixture','',1,?,1,?,0,'',?,?,?)");
+  const add=(id:string,time:number,source:string,nickname:string|null=null)=>insert.run(id,id,time,time,source,nickname,nickname?'worker':null);
+  add('root-a',100,'vscode');add('root-b',90,'vscode');
+  const edge=db.prepare("INSERT INTO thread_spawn_edges VALUES(?,?,'closed')");
+  for(let index=0;index<60;index++){const id='child-'+index;add(id,1000-index,JSON.stringify({subagent:{thread_spawn:{parent_thread_id:'root-a'}}}),'Worker '+index);edge.run('root-a',id);}
+  add('grandchild',800,JSON.stringify({subagent:{thread_spawn:{parent_thread_id:'child-0'}}}),'Nested worker');edge.run('child-0','grandchild');
+  add('legacy-child',700,JSON.stringify({subagent:{thread_spawn:{parent_thread_id:'root-a',agent_nickname:'Legacy worker'}}}));
+  add('other-child',600,JSON.stringify({subagent:{thread_spawn:{parent_thread_id:'root-b'}}}));edge.run('root-b','other-child');
+  add('approval',2000,JSON.stringify({subagent:{other:'guardian'}}));edge.run('root-a','approval');
+  db.close();
+  const first=listCodexNativeSessionPage({databasePath,sessionIndexPath,rootsOnly:true,limit:1});
+  assert.deepEqual(first.items.map(item=>item.id),['root-a']);assert.equal(first.nextOffset,1);
+  const second=listCodexNativeSessionPage({databasePath,sessionIndexPath,rootsOnly:true,offset:1,limit:1});
+  assert.deepEqual(second.items.map(item=>item.id),['root-b']);assert.equal(second.nextOffset,null);
+  const all=listCodexNativeSessionPage({databasePath,sessionIndexPath,limit:1});assert.equal(all.items[0].id,'child-0');
+  const members=listCodexNativeSessionPage({databasePath,sessionIndexPath,parentSessionId:'root-a',limit:100});
+  assert.equal(members.items.length,62);assert(members.items.some(item=>item.id==='grandchild'));assert(members.items.some(item=>item.id==='legacy-child'));
+  assert(!members.items.some(item=>item.id==='other-child'||item.id==='approval'||item.id==='root-a'));
+  assert.equal(members.items.find(item=>item.id==='child-0')?.agentNickname,'Worker 0');
+  assert.equal(members.items.find(item=>item.id==='grandchild')?.parentThreadId,'child-0');
+  assert.equal(listCodexDesktopThreads({databasePath,sessionIndexPath,limit:100}).some(item=>item.id==='child-0'),true,'configured task lookup still discovers workers');
+});
+
+test("native session scopes are declared and conflicting root/parent requests fail locally",async()=>{
+  const calls:unknown[]=[];
+  const operations=createCodexNativeOperations({listSessions:options=>{calls.push(options);return{items:[],nextOffset:null};}});
+  const list=operations.find(item=>item.contract.operationId==='agent.providers.codex.sessions.list')!;
+  const invoke=(query:string)=>list.handler({url:new URL('http://fixture.invalid/api/agent/providers/codex/sessions?'+query),path:{}} as any) as Promise<any>;
+  assert.equal((await invoke('view=roots&previews=1')).status,200);
+  assert.equal((calls[0] as any).rootsOnly,true);assert.equal((calls[0] as any).previews,true);
+  assert.equal((await invoke('parentSessionId=root')).status,200);assert.equal((calls[1] as any).parentSessionId,'root');
+  assert.equal((await invoke('view=roots&parentSessionId=root')).status,400);
+});
+
+
+test("public message history advances through hidden native records within one visible page",async t=>{
+  const rows=[metadata,...Array.from({length:250},()=>JSON.stringify({type:'response_item',payload:{type:'function_call',arguments:'hidden'}})),JSON.stringify({type:'response_item',payload:{type:'message',role:'assistant',phase:'final_answer',content:[{type:'output_text',text:'Visible final'}]}})];
+  const f=temporary(t,rows.join('\n')+'\n');
+  const operations=createCodexNativeOperations({history:f.reader});
+  const read=operations.find(op=>op.contract.operationId==='agent.providers.codex.sessions.history.read')!;
+  const response=await read.handler({url:new URL('http://fixture.invalid?limit=2&maxBytes=2048&view=messages'),path:{sessionId}} as any) as any;
+  assert.equal(response.status,200);assert.equal(response.body.data.entries.length,1);assert.equal(response.body.data.entries[0].record.payload.content[0].text,'Visible final');assert.equal(response.body.data.nextCursor,null);
+});
+
+
+test("message pages bound malformed-row warnings while retaining the next visible message",async t=>{
+  const f=temporary(t,[metadata,'bad-1','bad-2',JSON.stringify({type:'event_msg',payload:{type:'task_complete',last_agent_message:'Final'}})].join('\n')+'\n');
+  const includeRecord=(record:any)=>record.type==='event_msg';
+  const first=await f.reader.read(sessionId,{limit:2,includeRecord});assert.equal(first.warnings.length,2);assert.equal(first.entries.length,0);assert(first.nextCursor);
+  const second=await f.reader.read(sessionId,{limit:2,includeRecord,cursor:first.nextCursor!});assert.equal(second.entries.length,1);assert.equal((second.entries[0].record as any).payload.last_agent_message,'Final');
+});

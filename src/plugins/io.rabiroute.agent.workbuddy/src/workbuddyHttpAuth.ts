@@ -8,31 +8,54 @@
  * therefore needs an explicit password.
  *
  * The desktop injects `CODEBUDDY_GATEWAY_PASSWORD` into each session process.
- * RabiRoute Manager is a separate process and cannot read that environment, so
- * the credential must be supplied through an explicit local path. This module
- * owns every read of that credential; nothing else in the codebase may reach
- * for it, and nothing here is ever logged.
+ * Windows native discovery reads only the original owner's gateway credential
+ * under the Manager's existing OS token, after checking its process identity.
+ * This module owns the private credential cache and configured legacy sources.
  *
  * Resolution order (first hit wins, all candidates are loopback-only):
- *   1. `RABI_WORKBUDDY_GATEWAY_PASSWORD` process environment (tests, wrappers).
- *   2. `<state>/data/plugins/io.rabiroute.agent.workbuddy/auth.json` -> `{ "password": "..." }`.
- *
- * Status: implemented; the file-based path is the supported operator entry
- * until the desktop exposes a pairing handoff. Missing credential is a hard,
- * actionable failure — never a silent fallback and never an unauthenticated
- * retry.
+ *   1. The authenticated original owner's temporary endpoint credential.
+ *   2. `RABI_WORKBUDDY_GATEWAY_PASSWORD` process environment (tests, wrappers).
+ *   3. `<state>/data/plugins/io.rabiroute.agent.workbuddy/auth.json`.
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pluginStorageRoot } from "@rabiroute/host-api/shared/pluginStorage";
 import { applicationRuntimeLayout } from "@rabiroute/host-api/shared/runtimeLayout";
+import { probeWorkbuddyOwners, type WorkbuddyOwnerProbeResult } from "./workbuddyOwnerProbe.js";
+import type { WorkbuddySessionDescriptor } from "./workbuddySessionStore.js";
 
 /** Cached credential plus the moment it must be re-read. */
 type CachedCredential = { password: string; expires: number };
 
 const cache = new Map<string, CachedCredential>();
 const pending = new Map<string, Promise<string>>();
+const ownerCredentials = new Map<string, { password: string; expires: number }>();
+const ownerProbes = new Map<string, Promise<WorkbuddySessionDescriptor[]>>();
+
+/** Refresh only the original published processes, never unrelated ports or tasks. */
+export async function discoverWorkbuddyOwners(descriptors: WorkbuddySessionDescriptor[], options: {
+  probe?: (owners: readonly WorkbuddySessionDescriptor[]) => Promise<WorkbuddyOwnerProbeResult>;
+} = {}): Promise<WorkbuddySessionDescriptor[]> {
+  const key = JSON.stringify(descriptors.map(owner => [owner.pid, owner.sessionId, owner.processStartFileTime]));
+  let work = ownerProbes.get(key);
+  if (!work) {
+    work = (async () => {
+      const result = await (options.probe ?? probeWorkbuddyOwners)(descriptors);
+      return descriptors.map(descriptor => {
+        const owner = result.owners.find(value => value.pid === descriptor.pid && value.sessionId === descriptor.sessionId
+          && value.processStartFileTime === descriptor.processStartFileTime);
+        if (!owner || !plausiblePassword(owner.password)) return descriptor;
+        const endpoint = assertWorkbuddyLoopback(owner.endpoint);
+        ownerCredentials.set(endpoint, { password: owner.password, expires: Date.now() + CREDENTIAL_TTL_MS });
+        return { ...descriptor, endpoint, stale: false, processAlive: true, deliverable: descriptor.kind === "interactive" };
+      });
+    })();
+    ownerProbes.set(key, work);
+  }
+  try { return await work; }
+  finally { if (ownerProbes.get(key) === work) ownerProbes.delete(key); }
+}
 
 /**
  * Credentials are re-read periodically so an operator rotating the password
@@ -124,7 +147,9 @@ async function readCredentialFile(filePath: string): Promise<string> {
  * Resolve the gateway password. Never logs, never returns a partial value, and
  * never falls back to an unauthenticated request.
  */
-export async function workbuddyGatewayPassword(options: { force?: boolean } = {}): Promise<string> {
+export async function workbuddyGatewayPassword(options: { force?: boolean; endpoint?: string } = {}): Promise<string> {
+  const owner = options.endpoint ? ownerCredentials.get(assertWorkbuddyLoopback(options.endpoint)) : undefined;
+  if (!options.force && owner && owner.expires > Date.now()) return owner.password;
   const envPassword = plausiblePassword(process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD);
   if (envPassword) return envPassword;
 
@@ -156,15 +181,19 @@ export async function workbuddyGatewayPassword(options: { force?: boolean } = {}
 /** Drop a cached credential; called after a 401 so the next call re-reads. */
 export function invalidateWorkbuddyGatewayPassword(): void {
   cache.clear();
+  ownerCredentials.clear();
 }
 
 /** Diagnostics only: never returns the password itself. */
 export async function workbuddyCredentialStatus(): Promise<{
   configured: boolean;
-  source: "environment" | "file" | "none";
+  source: "owner" | "environment" | "file" | "none";
   filePath: string;
 }> {
   const filePath = workbuddyCredentialFilePath();
+  if ([...ownerCredentials.values()].some(owner => owner.expires > Date.now())) {
+    return { configured: true, source: "owner", filePath };
+  }
   if (plausiblePassword(process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD)) {
     return { configured: true, source: "environment", filePath };
   }

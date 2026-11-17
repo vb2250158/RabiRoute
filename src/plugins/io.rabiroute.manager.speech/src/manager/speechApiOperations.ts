@@ -67,6 +67,343 @@ const proxies: readonly Proxy[] = [
   { id: "model-management.settings.read", method: "GET", path: "/model-management/settings" },
   { id: "model-management.settings.write", method: "PATCH", path: "/model-management/settings" }
 ];
+
+const speechPurposes: Record<string, [string, string[]]> = {
+  "events": [
+    "订阅语音状态事件",
+    [
+      "订阅语音状态事件",
+      "events",
+      "speech"
+    ]
+  ],
+  "status": [
+    "查询语音工作站状态",
+    [
+      "查询语音工作站状态",
+      "status",
+      "speech"
+    ]
+  ],
+  "selection-reader.read": [
+    "查询选中文本朗读设置",
+    [
+      "查询选中文本朗读设置",
+      "selection-reader read",
+      "speech"
+    ]
+  ],
+  "selection-reader.write": [
+    "配置选中文本朗读",
+    [
+      "配置选中文本朗读",
+      "selection-reader write",
+      "speech"
+    ]
+  ],
+  "models": [
+    "查询可用语音模型",
+    [
+      "语音模型",
+      "TTS模型",
+      "ASR模型",
+      "speech models"
+    ]
+  ],
+  "personas": [
+    "查询人格声音目录",
+    [
+      "人格声音",
+      "声线",
+      "persona voices"
+    ]
+  ],
+  "speakers.list": [
+    "查询说话人目录",
+    [
+      "查询说话人目录",
+      "speakers list",
+      "speech"
+    ]
+  ],
+  "speakers.create": [
+    "创建说话人档案",
+    [
+      "创建说话人档案",
+      "speakers create",
+      "speech"
+    ]
+  ],
+  "speakers.update": [
+    "修改说话人档案",
+    [
+      "修改说话人档案",
+      "speakers update",
+      "speech"
+    ]
+  ],
+  "speakers.delete": [
+    "删除说话人档案",
+    [
+      "删除说话人档案",
+      "speakers delete",
+      "speech"
+    ]
+  ],
+  "speaker-bindings.write": [
+    "绑定录音说话人",
+    [
+      "绑定录音说话人",
+      "speaker-bindings write",
+      "speech"
+    ]
+  ],
+  "speaker-identities.write": [
+    "确认说话人身份",
+    [
+      "确认说话人身份",
+      "speaker-identities write",
+      "speech"
+    ]
+  ],
+  "speaker-bindings.delete": [
+    "解除说话人绑定",
+    [
+      "解除说话人绑定",
+      "speaker-bindings delete",
+      "speech"
+    ]
+  ],
+  "playback.status": [
+    "查询语音播放队列",
+    [
+      "查询语音播放队列",
+      "playback status",
+      "speech"
+    ]
+  ],
+  "playback.volume": [
+    "调整语音音量",
+    [
+      "调整语音音量",
+      "playback volume",
+      "speech"
+    ]
+  ],
+  "playback.cancel-session": [
+    "取消会话的语音播放",
+    [
+      "取消会话的语音播放",
+      "playback cancel-session",
+      "speech"
+    ]
+  ],
+  "playback.stop": [
+    "停止语音播放",
+    [
+      "停止语音播放",
+      "playback stop",
+      "speech"
+    ]
+  ],
+  "audio-streams.status": [
+    "查询音频输入流",
+    [
+      "查询音频输入流",
+      "audio-streams status",
+      "speech"
+    ]
+  ],
+  "audio-streams.events": [
+    "查询音频流事件",
+    [
+      "查询音频流事件",
+      "audio-streams events",
+      "speech"
+    ]
+  ],
+  "audio-streams.token": [
+    "创建音频流连接凭据",
+    [
+      "创建音频流连接凭据",
+      "audio-streams token",
+      "speech"
+    ]
+  ],
+  "audio-streams.selection": [
+    "选择音频输入流",
+    [
+      "选择音频输入流",
+      "audio-streams selection",
+      "speech"
+    ]
+  ],
+  "records.list": [
+    "查询录音与转写记录",
+    [
+      "查询录音与转写记录",
+      "records list",
+      "speech"
+    ]
+  ],
+  "records.audio": [
+    "读取录音音频",
+    [
+      "读取录音音频",
+      "records audio",
+      "speech"
+    ]
+  ],
+  "microphone.status": [
+    "查询麦克风录音状态",
+    [
+      "查询麦克风录音状态",
+      "microphone status",
+      "speech"
+    ]
+  ],
+  "microphone.settings": [
+    "配置麦克风与语音切句",
+    [
+      "配置麦克风与语音切句",
+      "microphone settings",
+      "speech"
+    ]
+  ],
+  "microphone.reconcile": [
+    "同步麦克风运行设置",
+    [
+      "同步麦克风运行设置",
+      "microphone reconcile",
+      "speech"
+    ]
+  ],
+  "microphone.devices": [
+    "查询可用麦克风",
+    [
+      "查询可用麦克风",
+      "microphone devices",
+      "speech"
+    ]
+  ],
+  "microphone.start": [
+    "开始麦克风录音",
+    [
+      "开始麦克风录音",
+      "microphone start",
+      "speech"
+    ]
+  ],
+  "microphone.stop": [
+    "停止麦克风录音",
+    [
+      "停止麦克风录音",
+      "microphone stop",
+      "speech"
+    ]
+  ],
+  "tts": [
+    "把文字合成为语音",
+    [
+      "文字转语音",
+      "语音合成",
+      "朗读",
+      "TTS",
+      "text to speech"
+    ]
+  ],
+  "asr": [
+    "将音频转写为文字",
+    [
+      "语音转文字",
+      "语音识别",
+      "ASR",
+      "transcription"
+    ]
+  ],
+  "messages.list": [
+    "查询语音消息记录",
+    [
+      "查询语音消息记录",
+      "messages list",
+      "speech"
+    ]
+  ],
+  "messages.accept": [
+    "接收语音消息并按路由处理",
+    [
+      "接收语音消息并按路由处理",
+      "messages accept",
+      "speech"
+    ]
+  ],
+  "runtime.start": [
+    "启动语音服务",
+    [
+      "启动语音服务",
+      "runtime start",
+      "speech"
+    ]
+  ],
+  "runtime.stop": [
+    "停止语音服务",
+    [
+      "停止语音服务",
+      "runtime stop",
+      "speech"
+    ]
+  ],
+  "model-management.read": [
+    "查询语音模型安装状态",
+    [
+      "查询语音模型安装状态",
+      "model-management read",
+      "speech"
+    ]
+  ],
+  "model-management.runtime.install": [
+    "安装语音运行环境",
+    [
+      "安装语音运行环境",
+      "model-management runtime install",
+      "speech"
+    ]
+  ],
+  "model-management.models.install": [
+    "安装指定语音模型",
+    [
+      "安装指定语音模型",
+      "model-management models install",
+      "speech"
+    ]
+  ],
+  "model-management.settings.read": [
+    "查询语音模型存储设置",
+    [
+      "查询语音模型存储设置",
+      "model-management settings read",
+      "speech"
+    ]
+  ],
+  "model-management.settings.write": [
+    "配置语音模型存储目录",
+    [
+      "配置语音模型存储目录",
+      "model-management settings write",
+      "speech"
+    ]
+  ]
+};
+function speechDiscovery(id: string): ApiOperationDefinition["discovery"] {
+  const purpose = speechPurposes[id];
+  return { title: purpose[0], summary: purpose[0] + (id === "tts" ? "。先从模型目录选择 model；需要人格声线时读取人格声音目录，提交 input 后按 play 决定播放或返回音频。" : "。"),
+    category: { id: "speech", title: "语音合成、识别与录音", parentId: "runtime" }, keywords: purpose[1],
+    ...(id === "tts" ? { inputSources: [{ field: "body.model", operationId: "manager.speech.models", resultPath: "/data/models", valuePath: "/id" }], relatedOperations: ["manager.speech.models", "manager.speech.personas", "manager.speech.playback.status"], examples: [{ title: "合成文字并返回音频，model从模型目录选取", input: { body: { input: "你好", play: false } } }] }
+      : id.startsWith("microphone.") && id !== "microphone.devices" && id !== "microphone.status" ? { relatedOperations: ["manager.speech.microphone.devices", "manager.speech.microphone.status"] }
+      : id.startsWith("model-management.") && id !== "model-management.read" ? { relatedOperations: ["manager.speech.model-management.read", "manager.speech.model-management.settings.read"] }
+      : id === "records.audio" ? { inputSources: [{ field: "path.recordId", operationId: "manager.speech.records.list", resultPath: "/data/records", valuePath: "/id" }] } : {}) };
+}
+
 const success = (data: unknown, status = 200): ApiOperationResult => ({ status, body: { code: 0, data } });
 const bytes = (result: LocalSpeechResponse): ApiOperationResult => ({ status: result.status, ...([204, 304].includes(result.status) ? {} : { body: result.body }), headers: { "content-type": result.contentType, "content-length": String(result.body.byteLength), ...result.headers } });
 
@@ -188,7 +525,7 @@ export function createSpeechApiOperations(owner: SpeechApiOwner): { operations: 
       effects: { mode: operation.method === "GET" ? operation.sse ? "native-speech-events" : "native-speech-read" : "native-speech-action", description: "Original ManagerSpeechControl, selection settings and ingress store own normalization, runtime requests, Route delivery receipts and host provenance. A successful HTTP response or a playback job is not proof of completed playback, transcription delivery or physical I/O." },
       recovery: { strategy: operation.sse ? "reconnect-native-stream" : operation.method === "GET" ? "repeatable-native-read" : "inspect-native-state-no-replay", description: "Capture the original Agent authority, peer selection and compute override before body consumption. Revalidate before dispatch and result disclosure; target changes never fall back to local work. Writes retain original receipt/idempotency behavior and must not be blindly replayed after uncertainty. Raw audio remains byte-identical; SSE retains original framing without JSON reinterpretation." },
       validators: [{ id: "native-speech-owner", description: "Retain original speaker IDs, persona/voice ownership, model availability, microphone limits, host-owned message provenance and explicit user disables. There is no additional per-feature grant. JSON decoding is performed once by the common registry; native owners validate business values." }]
-    }, prepare: input => { const admission = owner.capture(input, operation.id === "models" || operation.id === "tts"); return parsed => owner.run(operation, parsed, admission); }, handler } satisfies ApiOperationDefinition;
+    }, discovery: speechDiscovery(operation.id), prepare: input => { const admission = owner.capture(input, operation.id === "models" || operation.id === "tts"); return parsed => owner.run(operation, parsed, admission); }, handler } satisfies ApiOperationDefinition;
   });
   const proxyDefinitions = proxies.map(operation => {
     const params = [...operation.path.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]!);
@@ -200,7 +537,7 @@ export function createSpeechApiOperations(owner: SpeechApiOwner): { operations: 
       effects: { mode: "captured-native-speech-manager", description: "The selected peer carries original raw method, target headers and body. Local runtime/model-management branches call original functional owners. Only local model-directory settings PATCH uses the original Manager JSON decoder; it preserves generation headers, connection provenance, read-only checks, revision and persistent directory validation." },
       recovery: { strategy: "inspect-original-manager-no-replay", description: "Inspect the captured Manager model-management/runtime state and original install job. HTTP 202 is acceptance only. Selected-peer failure never authorizes local installation or runtime startup; settings PATCH preserves its original lifecycle/version contract." },
       validators: [{ id: "native-speech-manager-owner", description: "Directory settings PATCH accepts exactly {modelRoot:string|null,expectedRevision:nonnegative safe integer}, with native fixed-local-disk/protected-root validation, file-lock CAS and expected application generation/Manager instance headers; other POST bodies remain ignored locally. Remote raw bytes remain owned by the native tunnel and target Manager. Native local validation and selected-peer response status/headers remain unchanged." }]
-    }, handler: async input => {
+    }, discovery: speechDiscovery(operation.id), handler: async input => {
       const admission = owner.capture(input, false); admission.guard();
       if (admission.selectedPeer && !admission.targetLocal) {
         try {

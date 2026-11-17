@@ -12,6 +12,8 @@ This describes the current source implementation. Build, installation and live c
 
 ## Find a capability
 
+Begin task retrieval with unified search at `GET /api/search?q=<keywords>` and inspect the content, coverage and actual handles. To execute a capability, select `scope=operations` or use the operation catalog below. MCP `rabi_search` and CLI `search` search the operation catalog; `manager.search` provides unified content search. Both use the current Manager’s active contracts.
+
 From the independent client artifact, use `node rabi-cli.mjs <command>`. From the complete source root, use the path below. Updating independent CLI/MCP clients does not restart Manager. The entry discovers the current Manager through Host and writes a JSON result to stdout.
 
 ```sh
@@ -53,9 +55,27 @@ Read a summary, select an operation and inspect `view=input`. `view=result` desc
 | `automation` | Rules, schedules, events, Hooks and execution records |
 | `runtime` | Rabi plugin installation/removal, versions, lifecycle, status and diagnostics |
 
-Plugins declare categories, titles, keywords and providers in an operation definition's `discovery`; explicit declarations take precedence. Missing Chinese navigation fields for existing APIs belong in the public discovery plugin's base navigation data. This preserves executable contracts, schemas, owners and permissions without inventing APIs for search. Custom categories retain stable IDs, optional parents and plugin ownership. Public operations without category metadata remain globally searchable. Cross-category tags and related-operation links refer to the same operation.
+Plugins declare business titles, summaries, categories, Chinese and English keywords, providers, parameter sources and related operations in their original `ApiOperationDefinition.discovery`. The declaration registers with the original handler and the host extracts it from the active snapshot. New plugins use the same declaration for the catalog, unified search, describe, CLI and MCP, while the core retains generic registration and query logic. Update the original owner’s declaration when evolving a capability. Custom categories retain stable IDs, optional parents and plugin ownership. Public operations without category metadata remain globally discoverable.
 
 `category` filters scope. Search matches actual titles, keywords and relevant phrases; Chinese/English synonym groups expand on the query side rather than adding every category term to each operation. Catalog `provider` identifies a capability provider. Documentation calls a model vendor ModelProvider; wire fields remain unchanged.
+
+## Plugin declarations and host integration
+
+The original business owner implements and registers each capability. Its `discovery` describes the task users can complete. Hosts read capabilities and inputs from the same active declaration, while protocol adapters retain the original handler, schema, permissions and state.
+
+| Declaration field | Content and use |
+| --- | --- |
+| `title`, `summary` | Describe the user’s goal, observable result and capability boundaries using recognizable business objects |
+| `keywords`, `tags`, `provider`, `category` | Declare Chinese and English intent terms, capability ownership and classification within the actual supported scope |
+| `inputSources` | When inputs require directory IDs, versions or configuration fields, reference the original query operation, parameter mappings and result fields |
+| `relatedOperations` | Reference the prerequisite queries, configuration, execution or readback operations needed for the task |
+| `examples` | Optional `{ title, input }` entries. Input uses `path`, `query`, `headers` and `body`. Use public placeholder data and retain schema validation |
+
+An input source declares `field`, `operationId` and `resultPath`, with optional `valuePath` and `parameters` mappings. Operations without external input dependencies may omit parameter sources. Permissive native schemas retain their compatibility semantics. Sources, examples and business descriptions supply callable input guidance. Metadata quality issues appear in catalog diagnostics, while the original business entry continues to handle requests under its existing contract. Full describe, Help and OpenAPI provide `discoveryQuality: { state, issues }`. List responses carry the page-level aggregate `discoveryQuality: { state, countScope: "page", needsAttention, operationCount }`. Read specific issues through describe to preserve the short-list response budget.
+
+Compact host hints provide the stable discovery workflow and current persona. Capability lists, inputs and recovery steps come from the active catalog on demand. Topic documents provide additional business background. A new capability appears through its own declaration and reuses the host’s existing HTTP, CLI or MCP tools.
+
+The calling workflow reads task search results, selects an operation’s input contract, obtains its parameter sources and related operations, then sends the actual business request and verifies the result. If one source, scan or operation fails, retain its error and original receipt and continue through other available entries. If Rabi discovery, connectivity or the retrieval tool is unavailable, record the actual failure once and continue the original task with existing tools. For uncertain writes, query the original request ID and execution stage first. Choose host-specific tools according to the proven capability gap and current authorization.
 
 ## HTTP discovery contract
 
@@ -65,7 +85,7 @@ Plugins declare categories, titles, keywords and providers in an operation defin
 | `GET /api/agent/operations` | Short `data.items`, `count`, `total` and `nextCursor` |
 | `GET /api/agent/operations/:operationId?view=input` | Input contract, parameter sources and related operations in `data.operation` |
 
-List filters are `category`, `query`, `provider`, `owner`, `method`, `pathPrefix`, `limit` and `cursor`. Pages default to 20 items and support `limit` 1–200. Search covers IDs, aliases, titles, summaries, paths and declared keywords; categories filter scope. A cursor binds its original snapshot and filters. After a 409, discover a current page.
+List filters are `category`, `query`, `match`, `provider`, `owner`, `method`, `pathPrefix`, `limit` and `cursor`. Multi-term operation-catalog queries default to `match=all`; use `match=any` for any-term matching. Pages default to 20 items and support `limit` 1–200. Search covers IDs, aliases, titles, summaries, paths and declared keywords; categories filter scope. A cursor binds its original snapshot and filters. After a 409, discover a current page.
 
 Responses include `schemaVersion`, Manager identity, `pluginGenerationId`, `catalogRevision` and `catalogDigest`. The compatible complete help at `/api/agent/help` and OpenAPI export remain available. Normal discovery uses short summaries and a single-operation description.
 
@@ -89,7 +109,7 @@ CLI `--input-file`, `--input-json` or `--input-stdin` and MCP `input` consume th
 | Field | Meaning |
 | --- | --- |
 | `operation` | Stable business operation ID, corresponding to the CLI call positional argument |
-| `input.pathParams` | Path parameters encoded against the current path template |
+| `input.pathParams` | Path parameters encoded against the current path template. `input.path` is an accepted alias used by `examples` |
 | `input.query` | Scalar or scalar-array query parameters |
 | `input.body` | JSON body, including JSON encoding for string values |
 | `input.bodyBase64` | Base64 representation of original binary bytes |
@@ -136,6 +156,10 @@ The memory-and-Skill template reads memories, compares existing Skills, updates 
 Discovery metadata is published with the active registry snapshot. Category and keyword changes update the catalog revision. Executable contract changes update `contractDigest`. SDK caches single-operation contracts and refreshes after catalog events, reconnects or identity changes.
 
 Verify UI, CLI and MCP against the same sources for lists, full text, related records, members, images and merged forwards. Compare IDs, fields and paging coverage. Report an individual failure in its own scope while healthy data remains queryable. Installed versions and external-host tool loading are confirmed by their release and runtime acceptance. Record actual host tools, loaded hints and adapter versions. Scenario searches such as “computer list” and “group history” must locate real APIs and read business resources. HTTP 200, a Host version and a source build establish only their respective scopes.
+
+Task acceptance starts with the user’s wording and records Manager identity, query conditions, the matched operation, describe, parameter-source requests, the actual business call and write readback. Cover Chinese and English expressions, missing inputs, individual failures, empty results and recovery of uncertain results through the original ID. When choosing a host-specific tool, record the actual capability gap that caused the choice.
+
+For a new plugin, use a test capability whose name and keywords are absent from the current core. Complete search, parameter acquisition, invocation and result verification through its original `discovery` declaration. Select representative existing tasks according to the change’s impact and verify equivalent inputs and results through CLI, MCP and generic HTTP.
 
 ## Legacy-data upgrades
 

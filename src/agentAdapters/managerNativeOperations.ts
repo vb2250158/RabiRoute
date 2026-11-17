@@ -85,6 +85,15 @@ export function createAgentScanOperations(
 ): ApiOperationDefinition[] {
   const query = Object.fromEntries(Object.keys(queryFields).map(name => [name, { type: "string" }]));
   return [`/api/agent-adapters/scan/${type}`, ...aliases].map((pathname, index) => ({
+    discovery: {
+      title: `检查 ${type} 连接与可用会话`,
+      summary: `读取 ${type} 的接入状态、已有任务和工作区。角色配置与任务绑定通过相关管理接口完成；扫描故障仅影响本次扫描。`,
+      category: { id: "agents", title: "Agent 协作" },
+      keywords: [type, `${type} 接入`, `${type} 配置`, `${type} 任务`, `${type} 绑定`, `${type} agent scan`, `${type} setup`, `${type} configure`],
+      provider: type,
+      relatedOperations: ["manager.agent.threads.action", "manager.gateway-runtime.config.save", "agent.adapters.hooks.post"],
+      examples: [{ title: `读取 ${type} 的当前会话`, input: { query: {} } }]
+    },
     contract: {
       operationId: `agent.adapters.${type}.scan.get${index ? `.legacy${index}` : ""}`,
       ...(index === 0 && legacyOperationIds.length ? { aliases: legacyOperationIds } : {}),
@@ -126,7 +135,11 @@ export function createAgentScanOperations(
       } catch (error) {
         return {
           status: (error as { statusCode?: number }).statusCode ?? 503,
-          body: { code: -1, message: error instanceof Error ? error.message : "Agent scan is unavailable." }
+          body: { code: -1, message: error instanceof Error ? error.message : "Agent scan is unavailable.",
+            error: { stage: "adapter_scan", adapter: type },
+            repair: { describeUrl: `/api/agent/operations/agent.adapters.${type}.scan.get?view=input`,
+              relatedOperations: ["manager.agent.threads.action", "manager.gateway-runtime.config.save"],
+              message: "Inspect this adapter's scan failure. Its management contracts remain independently discoverable; inspect the required host capability before choosing a desktop action." } }
         };
       }
     }

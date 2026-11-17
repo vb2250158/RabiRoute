@@ -12,6 +12,18 @@ const failure:ApiResponseContract={mediaType:'application/json; charset=utf-8',s
 function failed(error:unknown,outcome:'not_started'|'unknown'):ApiOperationResult{const status=(error as {statusCode?:number}).statusCode??400;return {status,mutationOutcome:outcome,headers:{'cache-control':'no-store'},body:errorResponsePresentation({code:-1,message:error instanceof Error?error.message:String(error),...(outcome==='unknown'?{uncertain:true}:{})},status)};}
 const inputs:Record<string,Record<string,unknown>>={start:{requestId:str,gatewayId:str,presetId:str,title:str,autoReview:bool,voice:bool,saveSummary:bool,observationOwner:str},command:{sessionId:str,revision:num,action:str,positionSeconds:num,pauseReason:str,presetId:str},observation:{sessionId:str,revision:num,observation:{type:'object'}},review:{sessionId:str,revision:num,text:str},reply:{sessionId:str,revision:num,reviewId:str,text:str,state:str,activityKind:str}};
 /** Eight concrete routes; native activity execution remains in CompanionActivity. */
+
+const companionPurposes: Record<string, string> = {
+  "snapshot": "查询主动陪伴状态",
+  "last": "读取最近陪伴活动",
+  "frame": "读取陪伴画面",
+  "start": "启动陪伴活动",
+  "command": "控制陪伴活动",
+  "observation": "提交陪伴观察",
+  "review": "提交陪伴评审",
+  "reply": "回复陪伴活动"
+};
+
 export function createPersonaCompanionOperations(context:PersonaCompanionContext):readonly ApiOperationDefinition[]{
   const owner=createPersonaCompanionOwner(context);
   return (['snapshot','last','frame','start','command','observation','review','reply'] as const).map(action=>{
@@ -23,6 +35,6 @@ export function createPersonaCompanionOperations(context:PersonaCompanionContext
       recovery:{strategy:'original-session-readback',description:'Read the current session and revision. Replay start only with the same requestId and input; reply keeps native review deduplication. An attempted review/delivery or summary failure is uncertain and must be reconciled against the original session.'},
       validators:[{id:'original-owner',description:'Capture the original authenticated connection, role directory, Manager identity and service before body parsing. Public remote access needs no extra functional grant; original local-origin and readOnly checks remain.'},{id:'native-activity',description:'Native service validates settings, session IDs/revisions, frame bounds and expiry. Keep 3 MiB JSON object controls. Await original accepted execution; caller cancellation never releases native work early.'}]};
     const prepare=(input:Omit<ApiOperationInput,'body'>)=>{try{const bound=owner.prepare(input.request,input.path.roleId,action as PersonaCompanionAction,input.signal);return async(parsed:ApiOperationInput)=>{try{const data=await bound.execute(parsed.body,parsed.url.searchParams);bound.assertCurrent();return {status:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':action==='frame'?'private, no-store':'no-store'},body:action==='frame'?data:{code:0,data}} as ApiOperationResult;}catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}};}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
-    return {contract,prepare,handler:async input=>{const handler=prepare(input);return typeof handler==='function'?handler(input):handler;}};
+    return {contract,discovery:{title:companionPurposes[action],summary:companionPurposes[action]+"。",category:{id:"knowledge.companion",title:"主动陪伴",parentId:"knowledge"},keywords:[companionPurposes[action],action.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare,handler:async input=>{const handler=prepare(input);return typeof handler==='function'?handler(input):handler;}};
   });
 }

@@ -4,7 +4,6 @@ import {
   type RoleKnowledgeItemType,
   type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
-import { roleStorageMutationContractLines } from "../shared/roleStorageMutationContract.js";
 
 export type RoleKnowledgeContextView = {
   mode: RoleContextInjectionMode;
@@ -22,40 +21,20 @@ export function roleApiBase(roleId: unknown): string {
   return `/api/roles/${id === ":roleId" ? id : encodeURIComponent(id)}`;
 }
 
+/** Stable discovery protocol; active operations and their inputs come from Manager. */
 export function planMemoryApiHint(roleId: unknown): string[] {
-  const base = roleApiBase(roleId);
   return [
-    "可用 API 提示：",
-    "- 查询可联系角色：GET /api/personas?addressable=true；向其它角色投递：POST /api/personas/{personaId}/messages。请求必须带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 replyContext.personaMessagingCapability；目标有多个已启用 Route 时必须明确提供 targetRouteId。回复时沿用 personaConversationId、把当前 messageId 写入 inReplyToMessageId，并将 personaMessageHopCount 加 1；不得超过 personaMessageMaxHops",
-    `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
-    `- 查看/维护当前角色计划状态：GET ${base}/plan-statuses；新增、修改、移除状态分别使用 POST、PATCH /{statusKey}、DELETE /{statusKey}，写入必须带 If-Match 和 Idempotency-Key`,
-      "- 待审批计划如有实际效果图、演示视频、设计稿、报告或其它相关文件，应通过计划 POST/PATCH 的 attachments 一并提交：本机文件使用 path，内存内容使用 name/mimeType/contentBase64；不要只把文件路径写进标题、focus 或审批说明",
-    "- plan.status 只保存当前角色 planWorkflow.statuses 中启用状态的 key；label、说明、颜色、排序、视图和行为全部来自该配置，不能把界面文字当作固定枚举，也不能从步骤文字派生另一套状态",
-    "- archiveStatus 与 status 独立，只能写未归档或已归档；只有配置为 archiveEligible 的终态可以归档。已归档计划不参与关键词召回，只能按明确 planId 或归档视图读取",
-    "- 调查、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭分别使用 planWorkflow.roles 中对应角色所指的状态 key；写计划前先读取状态目录，不猜 key",
-    "- 用户要求暂停计划时，PATCH 顶层 status 为 roles.paused 指向的 key；恢复时按实际阶段选择 roles.analysis 或 roles.execution",
-    "- 只有完整、可提交且 responseStatus=pending 的 approvalRequest 会由 Manager 自动派生阻塞；isBlocked 是兼容投影，不要手写。其它等待、失败和资源缺口必须继续询问、重试、改道、拆分或补证据",
-    "- 请求审批前必须补齐 approvalRequest：approver、request、recommendation、alternatives、reason、files/commands/changes、validation、rollback、outOfScope、requestedAt、sourceMessageId 或 feedbackId、responseStatus；仍在分析时使用 roles.analysis；只有分析完成但现有信息无法形成可审批的具体方案，且缺失信息影响原因、改法、范围或验收合同时，才使用 roles.informationNeeded；完整等待回执时才使用 roles.approval",
-    "- 暂未复现、疑似历史已修复、缺目标包、等待 QA 或等待是否关闭都不是 roles.informationNeeded：开发侧完成但缺目标包或纳入证明时用 roles.waitingPackage；目标包确认但缺 QA 结论时用 roles.waitingQa；问题无效或历史已修复且无需验收时凭证据用 roles.closed",
-    `- 记录计划反馈：GET ${base}/plans/{planId}/feedback、POST ${base}/plans/{planId}/feedback；计划级引导用 kind=guidance 且不带 stepId，审批意见用 kind=approval_suggestion；QQ 等外部入口记录用户反馈时使用 author=user、source=qq、notifyAgent=false；Agent 处理说明分别用 kind=guidance_response / kind=approval_response、author=agent、notifyAgent=false`,
-    "- 收到计划引导后，先 GET 当前计划和反馈，再按引导 PATCH 计划并在需要时调整后续步骤，最后写 guidance_response；收到审批意见则更新对应计划/步骤和审批回执后写 approval_response。两者都不要只在 Agent 会话里直接回答",
-    "- 用户提交审批意见后，Manager 保存审计记录并将 markerStatus 设为 roles.approved；确认投递成功后才转 roles.analysis，失败或未确认不会推进。已审批只表示意见已提交，不代表所有选项获批，也不自动执行或完成步骤；Agent 必须逐题读取决定，再另行 PATCH 对应计划。计划说明要具体到真实文件、完整命令、变更影响、验证、回退和排除范围",
-    `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
-    `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
-    `- 新增近期记忆：POST ${base}/memory/recent`,
-    `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
-    ...roleStorageMutationContractLines(base),
-    "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；相关记忆进入处理前确认队列时会刷新 viewedAt"
+    "可用 API 提示",
+    `当前角色为 ${String(roleId || ":roleId")}。先核对动态 Manager 身份，再用 GET /api/search?q=<关键词> 检索本次任务，读取 label、excerpt、coverage 和 handle。`,
+    "执行功能前，按 scope=operations 或 GET /api/agent/operations 发现接口。用返回的 operationId 读取 /api/agent/operations/{operationId}?view=input，沿 inputSources、relatedOperations 和 examples 取得实际参数。",
+    "按当前授权调用合同指定的业务接口，再按实际结果、回执和写后回读确认完成。写入沿用动态 Manager 身份、Idempotency-Key 和适用的强 ETag / If-Match。",
+    "局部来源或操作失败时保留错误与原回执，继续其它可用入口。不确定写入先查原 ID。发现、连接或检索工具不可用时记录一次实际错误，继续原任务。",
+    "配置和业务操作优先使用已发现且可调用的 API。遇到明确的宿主能力缺口时，按当前授权选择适用工具。"
   ];
 }
 
 function focusedApiHint(roleId: unknown, interfaceDocPath: string): string[] {
-  const base = roleApiBase(roleId);
-  return [
-    `按需读取：${base}/plans、${base}/memory、${base}/skills；长历史不自动加载。`,
-    `操作说明：${interfaceDocPath}。涉及计划、记忆写入、跨角色投递或远端任务前，必须读取对应章节；无法读取时停止该操作。`,
-    "写入必须遵守当前任务授权、动态 Manager 身份核验、Idempotency-Key、适用的强 ETag / If-Match 和写后回读合同；不得猜测状态 key、发送目标或重试参数。"
-  ];
+  return [...planMemoryApiHint(roleId), `专题文档 ${interfaceDocPath} 按需补充背景，当前输入与恢复步骤以活动接口合同为准。`];
 }
 
 function requiredReadTypeLabel(type: RoleKnowledgeItemType): string {
@@ -86,8 +65,8 @@ export function requiredReadLines(
         ];
   }
   return [
-    "以下条目与当前消息高相关。回复、发布任务、更新计划、写入记忆或执行外部动作之前，必须先按 GET 路径读取每一项内容；不要只凭标题行动。",
-    "如果任一必读项无法读取或内容不足以确认，请说明上下文无法确认，或先向用户追问。",
+    "以下条目与当前消息高相关。需要其中的事实或流程时，按 GET 路径读取原文并确认适用范围。",
+    "读取失败时记录一次实际原因，利用其它可用资料继续原任务；涉及该条目且缺少依据的事实标明未确认。确需用户决定的业务问题再询问。",
     "",
     ...items.map((item) => {
       const summary = String(item.summary || "").trim();

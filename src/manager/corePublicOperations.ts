@@ -62,7 +62,8 @@ export function createManagerMetadataOperation(read: () => unknown): ApiOperatio
       effects: { mode: "diagnostic-read", description: "Reads current identity/status through the existing diagnostic owners and performance instrumentation. Does not launch a Runtime, scan Agent sessions, change Route state or grant business permissions." },
       recovery: { strategy: "repeatable-read", description: "Rediscover through Host/READY on identity change. Health false, startup or unrelated dependency failure remains diagnostic data; it does not authorize a second Manager or a fallback Runtime." },
       validators: [{ id: "manager.diagnostics.owner-payload", description: "Identity strings are nonempty. Health values are validated by type, never required to be healthy/ready. Provider-specific diagnostic sections remain extensible. The same ingress connection authority applies before and after awaited reads; no separate persona, workspace or feature grant is introduced." }] };
-    return { contract, handler: async () => ({ status: 200, headers: { "cache-control": "private, no-store" }, body: await read() }) };
+    return { contract, discovery: { title: '查询当前 Manager 身份与健康状态', summary: '取得当前 Manager 地址、实例身份与各能力状态。',
+      category: { id: 'runtime', title: '插件与运行' }, keywords: ['Manager 身份', '健康', 'meta', 'manager health'] }, handler: async () => ({ status: 200, headers: { "cache-control": "private, no-store" }, body: await read() }) };
 }
 
 export type CorePublicManagerIdentity = Readonly<{ applicationGenerationId: string; managerInstanceId: string }>;
@@ -91,7 +92,11 @@ export function createCorePublicOperations(context: CorePublicOperationsContext)
       const admission = captureCoreOwner(input, context, ownerKey);
       return async prepared => { admission.guard(); const reply = await invoke(prepared, admission.owner, admission.guard); admission.guard(); return reply; };
     });
+    const titles: Record<string, string> = { 'health.read': '检查 Manager 健康', 'automatic-updates.read': '查询自动代码更新状态', 'source-patches.read': '查询源码热补丁状态', 'source-patch-operation.read': '查询源码热补丁回执', 'web-patches.read': '查询页面热补丁状态', 'web-patch-operation.read': '查询页面热补丁回执', 'delivery-authority.read': '查询原投递归属', 'identity-reset.enqueue': '重置主机实例身份', 'identity-reset.status': '查询实例身份重置结果' };
     return ({
+    discovery: { title: titles[name], summary: titles[name] + '。' + description,
+      category: { id: 'runtime', title: '插件与运行' }, keywords: [titles[name], name.replace(/[.-]/g, ' '), 'manager runtime'],
+      relatedOperations: ['manager.meta.read'] },
     contract: { operationId: "manager.core-public." + name, contractVersion: "1.0.0", method, pathTemplate,
       description, exposure: "public", transport: "http",
       request: { path: options.path ?? empty, query: options.query ?? ignored, headers: ignored, body: options.body ?? noBody },

@@ -29,6 +29,7 @@ import { applicationRuntimeLayout } from "@rabiroute/host-api/shared/runtimeLayo
 import {
   assertWorkbuddyLoopback,
   invalidateWorkbuddyGatewayPassword,
+  discoverWorkbuddyOwners,
   workbuddyGatewayPassword,
   WorkbuddyCredentialError
 } from "./workbuddyHttpAuth.js";
@@ -124,7 +125,7 @@ export async function deliverWorkbuddyMessage(
 
   const origin = assertWorkbuddyLoopback(request.endpoint);
   const fetchImpl = request.fetchImpl ?? fetch;
-  const password = await workbuddyGatewayPassword().catch(error => {
+  const password = await workbuddyGatewayPassword({ endpoint: origin }).catch(error => {
     if (error instanceof WorkbuddyCredentialError) {
       throw new WorkbuddyDeliveryError(error.message, "unauthorized");
     }
@@ -154,15 +155,19 @@ export async function deliverWorkbuddyMessage(
       signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
       headers: {
         Authorization: `Bearer ${password}`,
+        "X-CodeBuddy-Request": "1",
         "Content-Type": "application/json"
       },
       body: JSON.stringify(body)
     });
-  } catch {
-    // No proof the gateway accepted anything: safe to report as unreachable.
+  } catch (error) {
+    const code = (error as { cause?: { code?: string } })?.cause?.code;
+    if (code === "ECONNREFUSED" || code === "ENOTFOUND" || code === "EAI_AGAIN") {
+      throw new WorkbuddyDeliveryError("WorkBuddy 会话网关连接未建立，本次投递未发出。", "unreachable");
+    }
     throw new WorkbuddyDeliveryError(
-      "WorkBuddy 会话网关不可达；本次投递未发出，可安全重试。",
-      "unreachable"
+      "WorkBuddy 网关通信中断，投递结果待确认；请核对原任务和原回执。",
+      "unknown"
     );
   }
 
@@ -176,6 +181,12 @@ export async function deliverWorkbuddyMessage(
 
   const raw = await response.text().catch(() => "");
   if (!response.ok) {
+    if (response.status >= 500 || response.status === 408 || response.status >= 300 && response.status < 400) {
+      throw new WorkbuddyDeliveryError(
+        `WorkBuddy 网关返回 HTTP ${response.status}，投递结果待确认；请核对原任务和原回执。`,
+        "unknown"
+      );
+    }
     throw new WorkbuddyDeliveryError(
       `WorkBuddy 会话网关拒绝投递（HTTP ${response.status}）；本次投递未生效。`,
       "rejected"
@@ -228,7 +239,7 @@ export async function waitForWorkbuddyTurn(
       const response = await fetchImpl(`${origin}/api/v1/runs/${encodeURIComponent(runId)}`, {
         redirect: "manual",
         signal: AbortSignal.timeout(getTimeoutMs("backend.workbuddySessionBridge.REQUEST_TIMEOUT_MS", REQUEST_TIMEOUT_MS)),
-        headers: { Authorization: `Bearer ${password}` }
+        headers: { Authorization: `Bearer ${password}`, "X-CodeBuddy-Request": "1" }
       });
       if (response.ok) {
         const active = parseWorkbuddyRunActive(await response.json().catch(() => null));
@@ -294,12 +305,14 @@ export function readWorkbuddyPrimaryBinding(
  * archived id all fail closed; nothing here starts a replacement runtime.
  */
 export function ensureWorkbuddyDeliverable(
-  binding: WorkbuddyPrimaryBinding
+  binding: WorkbuddyPrimaryBinding,
+  descriptors?: ReturnType<typeof listWorkbuddySessionDescriptors>
 ): { task: WorkbuddyTask; endpoint: string } {
   const resolution = resolveWorkbuddyTask({
     sessionId: binding.sessionId,
     sessionName: binding.sessionName,
-    workspace: binding.cwd
+    workspace: binding.cwd,
+    descriptors
   });
   if (resolution.outcome === "archived") {
     throw new WorkbuddyDeliveryError(
@@ -335,6 +348,12 @@ export function ensureWorkbuddyDeliverable(
   return { task, endpoint: task.live.endpoint };
 }
 
+export async function ensureWorkbuddyOwnerConnected(binding: WorkbuddyPrimaryBinding) {
+  const descriptors = listWorkbuddySessionDescriptors().filter(owner => owner.sessionId === binding.sessionId);
+  const connected = await discoverWorkbuddyOwners(descriptors);
+  return ensureWorkbuddyDeliverable(binding, connected);
+}
+
 /**
  * The WorkBuddy adapter entry point, mirroring `notifyDshSession`. Resolves the
  * binding, validates the live owner, then delivers on the single real path.
@@ -351,7 +370,7 @@ export async function notifyWorkbuddySession(
       "rejected"
     );
   }
-  const { task, endpoint } = ensureWorkbuddyDeliverable(binding);
+  const { task, endpoint } = await ensureWorkbuddyOwnerConnected(binding);
   const result = await deliverWorkbuddyMessage({
     sessionId: task.id,
     text: message,

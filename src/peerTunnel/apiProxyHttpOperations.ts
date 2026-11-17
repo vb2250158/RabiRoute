@@ -23,6 +23,14 @@ export function createPeerProxyHttpOperations(owner: Pick<PeerTunnelRuntime, "op
       recovery: { strategy: "reconcile-original-target-before-retry", description: "Never replay a request after target dispatch. Check the target's original resource, idempotency key and receipt when the outcome is uncertain." },
       validators: [{ id: "peer.native-application-connection", description: "Original Manager admission, application scope, fixed peer key and device/service checks remain authoritative." },
         { id: "peer.native-http-stream", description: "The native owner validates target requests, preserves public headers and response metadata, and guards every dispatched frame, write and completion." }] },
+    discovery: {
+      title: method === "GET" ? "读取远程 Rabi 主机服务接口" : `${method} 远程 Rabi 主机服务接口`,
+      summary: "从 Rabi 主机目录取得 deviceId，再按目标服务执行合同提供 service、path 和原请求参数。请求的实际效果与回执由目标接口定义。",
+      category: { id: "devices", title: "电脑与设备" },
+      keywords: ["远程主机服务", "peer HTTP", "remote host service", method],
+      inputSources: [{ field: "path.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }],
+      relatedOperations: ["manager.rabilink.peer.servers.read"]
+    },
     handler: async input => {
       try { await owner.openProxyHttp(input); }
       catch (error) {

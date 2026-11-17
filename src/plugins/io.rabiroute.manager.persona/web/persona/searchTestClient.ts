@@ -54,6 +54,7 @@ export type SearchTestBody = {
   requestId?: string;
   message?: string;
   data?: {
+    capabilities?: { scopes?: string[]; sources?: { scope: string; legend: string; kinds: string[] }[] };
     items?: SearchTestItem[];
     coverage?: { state: string; sources?: SearchTestSource[]; notQueried?: unknown[]; [key: string]: unknown };
     degraded?: { source: string; errorCode?: string; message?: string; agent?: string | null }[];

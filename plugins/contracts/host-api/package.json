@@ -339,6 +339,9 @@
     "./manager/scanController": {
       "types": "./types/src/manager/scanController.d.ts"
     },
+    "./manager/searchText": {
+      "types": "./types/src/manager/searchText.d.ts"
+    },
     "./manager/speechApiContext": {
       "types": "./types/src/manager/speechApiContext.d.ts"
     },

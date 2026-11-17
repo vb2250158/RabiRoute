@@ -58,6 +58,7 @@ export type ReviewedReplySourceEvidence = {
 
 /** Current formal QQ evidence is deliberately separate from human-reviewed source evidence. */
 export type PlatformReplySourceEvidence = {
+  assertCurrent: () => void;
   routeId: string;
   sourceMessageId: string;
   groupId: string;
@@ -173,6 +174,7 @@ function locatePlatformMessage(
   groupId: string,
   instanceId: string
 ): LocatedMessage {
+  evidence.assertCurrent();
   if (text(evidence.routeId) !== routeId
     || text(evidence.sourceMessageId) !== messageId
     || text(evidence.groupId) !== groupId
@@ -318,16 +320,14 @@ export function prepareReplyImageDescriptions(
   let located: LocatedMessage | undefined;
   if (reviewedSource) {
     located = locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId);
+  } else if (platformSource) {
+    located = locatePlatformMessage(platformSource, options, input.routeId, replyToMessageId, groupId, instanceId);
   } else {
     const managedOutbound = locateManagedOutboundMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
     if (managedOutbound) {
-      if (!platformSource) {
-        throw new Error(`Referenced outbound QQ message ${replyToMessageId} requires current platform evidence before it can be quoted.`);
-      }
-      located = locatePlatformMessage(platformSource, options, input.routeId, replyToMessageId, groupId, instanceId);
-    } else {
-      located = locateLegacyMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+      throw new Error(`Referenced outbound QQ message ${replyToMessageId} requires current platform evidence before it can be quoted.`);
     }
+    located = locateLegacyMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
   }
   if (!located) {
     throw new Error(
@@ -379,6 +379,15 @@ export function prepareReplyImageDescriptions(
       description: concreteDescription(input.replyImageDescriptions[index]!, index)
     }))
   };
+}
+
+/** Only the trusted send owner can supply platform evidence; this is not a wire field. */
+export function needsPlatformReplySource(input: ReplyImageDescriptionSend, options: AgentReplyOptions): boolean {
+  const messageId = text(input.target.replyToMessageId);
+  if (input.channel !== "napcat" || text(input.target.target) !== "group" || !messageId) return false;
+  const groupId = text(input.target.groupId), instanceId = text(input.target.instanceId);
+  return Boolean(locateManagedOutboundMessage(options, input.routeId, messageId, groupId, instanceId))
+    || !locateLegacyMessage(options, input.routeId, messageId, groupId, instanceId);
 }
 
 function markdownLine(value: unknown): string {

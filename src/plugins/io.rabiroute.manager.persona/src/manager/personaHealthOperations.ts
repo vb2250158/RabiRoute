@@ -17,6 +17,17 @@ const observationBody=body(Object.fromEntries(['eventId','clientMessageId','capt
 const configBody=body({defaultPolicy:true,devices:true});
 function failed(error:unknown,outcome:'not_started'|'unknown'):ApiOperationResult{const cause=error as {statusCode?:number;state?:string;uncertain?:boolean},status=cause?.statusCode??400;return {status,mutationOutcome:outcome,headers:{'cache-control':'no-store'},body:errorResponsePresentation({code:-1,message:error instanceof Error?error.message:String(error),...(cause?.state?{state:cause.state}:{}),...(cause?.uncertain?{uncertain:true}:{})},status)};}
 /** Fourteen exact health routes keep native persistence, lifecycle headers and optional alert delivery. */
+
+const healthPurposes: Record<string, string> = {
+  "summary.compat": "查询健康摘要",
+  "state": "查询健康状态",
+  "history": "查询健康历史",
+  "summary": "读取健康统计",
+  "config.read": "查询健康提醒设置",
+  "config.patch": "配置健康提醒",
+  "observations": "记录健康观测"
+};
+
 export function createPersonaHealthOperations(context:PersonaHealthContext):readonly ApiOperationDefinition[]{
   const owner=createPersonaHealthOwner(context),operations:ApiOperationDefinition[]=[];
   for(const prefix of ['/api/roles','/roles'])for(const [id,method,suffix,action,response] of [
@@ -29,7 +40,7 @@ export function createPersonaHealthOperations(context:PersonaHealthContext):read
       validators:[{id:'original-health-owner',description:'Authenticated enabled connections use public APIs without feature grants. Capture original role directory and Manager identity before body parsing. Observation POST also preserves existing complete Host-generation headers with 400/409/503 outcomes; recheck before ingest and after awaited alert delivery.'},{id:'native-health-contract',description:'Keep original nested health overlay, policy/sample normalization, bounds, recent-ID window, staleness and query filters. Unknown metric selectors are ignored natively; raw JSON retains the original unlimited application body setting and empty {}. Original alert-driver completion is joined on caller cancellation.'}]
     };
     const bind=(input:Omit<ApiOperationInput,'body'>)=>{try{const bound=owner.prepare(input.request,input.path.roleId,action as PersonaHealthAction,input.signal);return async(parsed:ApiOperationInput)=>{try{const data=method==='GET'?bound.read(parsed.url.searchParams):await bound.mutate(parsed.body,parsed.url.searchParams);return {status:method==='POST'?202:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':'no-store'},body:{code:0,data}} as ApiOperationResult;}catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}};}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
-    operations.push({contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}});
+    operations.push({contract,discovery:{title:healthPurposes[id],summary:healthPurposes[id]+"。",category:{id:"knowledge.health",title:"健康记录与提醒",parentId:"knowledge"},keywords:[healthPurposes[id],id.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}});
   }
   return operations;
 }

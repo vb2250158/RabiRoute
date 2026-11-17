@@ -34,7 +34,7 @@ export function createAutomationTemplateOperations(context: AutomationTemplateCo
   });
   const listContract = contract(false), detailContract = contract(true);
   return [{ contract: listContract,
-    discovery: { title: "自动化投递模板", category: { id: "automation", title: "自动化规则与事件" }, tags: ["模板", "定时", "记忆", "Skill"], automationTemplates: DEFAULT_AUTOMATION_TEMPLATES },
+    discovery: { title: "自动化投递模板", summary: "查询自动化模板的触发方式、输入字段与消息内容。选择模板后使用角色自动化接口保存规则。", keywords:["自动化模板","定时任务模板","automation templates"], relatedOperations:["manager.roles.automations.create"], category: { id: "automation", title: "自动化规则与事件" }, tags: ["模板", "定时", "记忆", "Skill"], automationTemplates: DEFAULT_AUTOMATION_TEMPLATES },
     async handler(input) {
       const source = await current(), query = String(input.query.query ?? "").trim().toLocaleLowerCase();
       const matches = source.items.filter(item => !query || `${item.id} ${item.title} ${item.description}`.toLocaleLowerCase().includes(query));
@@ -52,7 +52,7 @@ export function createAutomationTemplateOperations(context: AutomationTemplateCo
       const nextCursor = end < matches.length ? Buffer.from(JSON.stringify({ revision: source.revision, query, offset: end })).toString("base64url") : null;
       return { status: 200, headers: { "cache-control": "no-cache" }, body: { code: 0, data: { schemaVersion: "1", revision: source.revision, items, total: matches.length, nextCursor, warnings: source.warnings } } };
     }
-  }, { contract: detailContract, async handler(input) {
+  }, { contract: detailContract, discovery:{title:"读取自动化模板",summary:"读取目录中选定模板的详细内容。",category:{id:"automation",title:"自动化规则与事件"},keywords:["模板详情","automation template"],inputSources:[{field:"path.templateId",operationId:"manager.personas.automation.templates.list",resultPath:"/data/items",valuePath:"/id"}]}, async handler(input) {
     const source = await current(), item = source.items.find(template => template.id === input.path.templateId);
     if (!item) throw new ApiContractError(404, "AUTOMATION_TEMPLATE_NOT_FOUND", "templateId", detailContract.operationId);
     return { status: 200, headers: { "cache-control": "no-cache", etag: '"' + createHash("sha256").update(JSON.stringify(item)).digest("hex") + '"' }, body: { code: 0, data: { schemaVersion: "1", revision: source.revision, template: item } } };

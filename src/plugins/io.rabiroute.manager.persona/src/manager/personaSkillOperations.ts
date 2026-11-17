@@ -4,7 +4,7 @@ import { createRoleSkillDownloadOwner, ROLE_SKILL_DOWNLOAD_FRAME_BYTES, type Rol
 import { roleSkillArchiveLimits } from './roleSkillArchive.js';
 import { ManagerReadWorkerError } from '@rabiroute/host-api/manager/managerReadWorkerPool';
 import { errorResponsePresentation } from '@rabiroute/host-api/shared/errorPresentation';
-import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, ApiOperationResult, ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
+import { apiDigest, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
 
 export type PersonaSkillContext=RoleSkillReadContext&RoleSkillDownloadContext&RoleSkillWriteContext;
 const str={type:'string'},none={kind:'none' as const,allowIgnoredBody:true};
@@ -22,9 +22,22 @@ function failed(error:unknown,download:boolean):ApiOperationResult {
       ...(error.requestId?{requestId:error.requestId,uncertain:true,mutationOutcome:'unknown'}:{})}:{}),...(worker&&error.code==='timeout'?{errorCode:'SEARCH_DEADLINE_EXCEEDED'}:unavailable?{errorCode:'SEARCH_BUSY'}:{})};
   return {status,headers:{'cache-control':'no-store'},body:errorResponsePresentation(body,status)};
 }
+
+const skillPurposes: Record<string, string> = {
+  "list": "查询角色技能目录",
+  "detail": "读取角色技能正文",
+  "download": "下载完整角色技能包",
+  "source.read": "读取技能文件与版本",
+  "operation.read": "查询原技能修改回执",
+  "create": "创建角色技能",
+  "update": "修改角色技能",
+  "delete": "删除角色技能"
+};
+
 function define<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperationInput,'body'>)=>T,execute:(owner:T,input:ApiOperationInput)=>Promise<ApiOperationResult>,download=false):ApiOperationDefinition {
   const bind=(input:Omit<ApiOperationInput,'body'>)=>{try{const owner=prepare(input);return async(parsed:ApiOperationInput)=>{try{return await execute(owner,parsed);}catch(error){parsed.signal?.throwIfAborted();return failed(error,download);}};}catch(error){input.signal?.throwIfAborted();return failed(error,download);}};
-  return {contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
+  const id=contract.operationId.slice('manager.personas.skills.'.length).replace(/\.alias$/,''),title=skillPurposes[id]||contract.description;
+  return {contract,discovery:{title,summary:title+'。读取目录取得skillId；修改前读取source快照，保留原请求键与文件revision。',category:{id:'knowledge',title:'记忆与计划'},keywords:[title,'技能','skill',id.replace(/[.-]/g,' ')],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'},...(contract.pathTemplate.includes(':skillId')?[{field:'path.skillId',operationId:'manager.personas.skills.list',resultPath:'/data',valuePath:'/id',parameters:{'path.roleId':{from:'path.roleId'}}}]:[])]},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
 }
 /** List, detail and ZIP use their native interactive reader/archive owner, including the static aliases. */
 export function createPersonaSkillOperations(context:PersonaSkillContext):readonly ApiOperationDefinition[] {
@@ -32,6 +45,7 @@ export function createPersonaSkillOperations(context:PersonaSkillContext):readon
   for(const prefix of ['/api/roles','/roles'])for(const action of ['list','detail','download'] as const) {
     const suffix=action==='list'?'skills':'skills/:skillId'+(action==='download'?'/download':'');
     const contract:ApiOperationContract={operationId:'manager.personas.skills.'+action+(prefix==='/roles'?'.alias':''),aliases:[(prefix==='/roles'?'knowledge-alias':'knowledge')+':GET:'+prefix+'/:roleId/'+suffix],contractVersion:'1.0.0',method:'GET',pathTemplate:prefix+'/:roleId/'+suffix,exposure:'public',transport:'http',description:'Read the selected persona’s native Skill catalog/detail or download its complete ZIP; never execute Skill scripts.',
+      ...(action==='list'&&prefix==='/api/roles'?{searchable:{scope:'skills',legend:'角色技能目录与真实读取入口 / role Skill catalog',kinds:['skill']}}:{}),
       request:{path:{type:'object',required:action==='list'?['roleId']:['roleId','skillId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1},...(action==='list'?{}:{skillId:{type:'string',minLength:1}})}},query:{type:'object'},headers:{type:'object'},body:none},
       responses:{'200':action==='download'?{mediaType:'application/zip',headers:{type:'object',required:['content-type','content-length','content-disposition','x-rabiroute-content-sha256','etag','cache-control','x-content-type-options'],properties:{'content-type':{const:'application/zip'},'content-length':{type:'string',pattern:'^[0-9]+$'},'content-disposition':str,'x-rabiroute-content-sha256':{type:'string',pattern:'^[a-f0-9]{64}$'},etag:str,'cache-control':{const:'private, no-store'},'x-content-type-options':{const:'nosniff'}}},stream:{framing:'bytes',maxFrameBytes:ROLE_SKILL_DOWNLOAD_FRAME_BYTES,maxBytes:roleSkillArchiveLimits.maxArchiveBytes,completion:'Original archive file reaches EOF, closes and its private lease is removed before admission releases.',cancellation:'Abort original generation/transfer, close and join the original file stream and remove the private lease. A quarantined worker retains its directory/admission until late confirmed release.'}}
         :json(action==='list'?{type:'array',items:item}:{...item,required:[...item.required,'content'],properties:{...item.properties,content:str}}),...errors},
@@ -40,7 +54,30 @@ export function createPersonaSkillOperations(context:PersonaSkillContext):readon
       validators:[{id:'original-skill-owner',description:'Capture the original persona directory, authenticated connection and Manager generation before work; recheck after awaited worker/file operations and between output frames. Authenticated enabled remote connections require no persona or feature grant.'},{id:'native-skill-resources',description:'Use the original archive limits, private temporary root, O_NOFOLLOW, regular-file/nlink/size validation, SHA-256/ETag headers and late worker-release callback. Cancellation joins original file closure, including an unstarted iterator.'}]
     };
     if(action==='download')operations.push(define(contract,input=>download.prepare(input.request,input.path.roleId,input.path.skillId,input.signal),async(owner,input)=>{const result=await owner.archive(Boolean(input.url.search));return {status:200,headers:result.headers,stream:result.stream};},true));
-    else operations.push(define(contract,input=>read.prepare(input.request,input.path.roleId,input.signal),async(owner,input)=>({status:200,headers:{'cache-control':'no-store'},body:{code:0,data:await owner.read(input.path.skillId)}})));
+    else {
+      const operation=define(contract,input=>read.prepare(input.request,input.path.roleId,input.signal),async(owner,input)=>({status:200,headers:{'cache-control':'no-store'},body:{code:0,data:await owner.read(input.path.skillId)}}));
+      operations.push({...operation,...(contract.searchable?{searchLanes:({request,roles})=>roles.map(({roleId})=>({
+        key:roleId,source:'skills',agent:roleId,async read({signal}) {
+          const catalog=await read.prepare(request,roleId,signal).read();
+          if(!Array.isArray(catalog))throw new Error('SKILL_CATALOG_UNAVAILABLE');
+          const gaps:{code:string;message:string}[]=[];
+          const items=catalog.flatMap(skill=>{
+            if(!skill || typeof skill.id!=='string' || !skill.id || typeof skill.title!=='string' || !skill.title) {
+              gaps.push({code:'SEARCH_ITEM_UNAVAILABLE',message:'A Skill lacks its stable id or title.'});return [];
+            }
+            const detailUrl='/api/roles/'+encodeURIComponent(roleId)+'/skills/'+encodeURIComponent(skill.id);
+            const excerpt=typeof skill.summary==='string'?skill.summary:'';
+            const keywords=Array.isArray(skill.keywords)?skill.keywords.filter((value:unknown)=>typeof value==='string'):[];
+            return [{source:'skills',kind:'skill',agent:roleId,label:skill.title,excerpt,detailUrl,
+              origin:{agent:roleId,skillId:skill.id},handle:{detailUrl,operationId:'manager.personas.skills.detail',
+                contractUrl:'/api/agent/operations/manager.personas.skills.detail?view=input',path:{roleId,skillId:skill.id}},
+              ...(typeof skill.updatedAt==='string'?{updatedAt:skill.updatedAt}:{}),status:skill.status,archived:skill.status==='archived',
+              searchText:[skill.id,skill.title,excerpt,...keywords].join(' '),evidence:{state:'unknown' as const}}];
+          });
+          return {items,gaps,version:apiDigest(items),complete:gaps.length===0};
+        }
+      }))} : {})});
+    }
   }
   for(const kind of ['source','operation'] as const) {
     const source=kind==='source';
@@ -74,9 +111,9 @@ export function createPersonaSkillOperations(context:PersonaSkillContext):readon
       const revision=(data as {revision?:string})?.revision;
       return {status:creating?201:200,headers:{'cache-control':'no-store',...(revision?{etag:revision}:{})},body:{code:0,data}};
     });
-    operations.push({...definition,discovery:{title:'角色 Skill '+action,category:{id:'knowledge',title:'记忆、计划与任务'},tags:['Skill','技能','知识','记忆'],
+    operations.push({...definition,discovery:{...definition.discovery,title:'角色 Skill '+action,category:{id:'knowledge',title:'记忆、计划与任务'},tags:['Skill','技能','知识','记忆'],
       relatedOperations:['manager.personas.skills.source.read','manager.personas.skills.operation.read'],
-      ...(!creating?{inputSources:[{field:'headers.if-match',operationId:'manager.personas.skills.source.read',resultPath:'/data',valuePath:'/revision',parameters:{'path.roleId':{from:'path.roleId'},'path.skillId':{from:'path.skillId'}}}]}:{})}});
+      ...(!creating?{inputSources:[...(definition.discovery?.inputSources??[]),{field:'headers.if-match',operationId:'manager.personas.skills.source.read',resultPath:'/data',valuePath:'/revision',parameters:{'path.roleId':{from:'path.roleId'},'path.skillId':{from:'path.skillId'}}}]}:{})}});
   }
   return operations;
 }

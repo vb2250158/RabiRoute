@@ -127,6 +127,15 @@ function failure(error: unknown, bound?: Bound): ApiOperationResult {
 }
 
 /** Item commands share the role owner's lock, CAS and original request receipts. */
+
+const automationPurposes: Record<string, string> = {
+  "list": "查询角色自动化规则",
+  "read": "读取自动化规则",
+  "create": "创建角色自动化规则",
+  "update": "修改角色自动化规则",
+  "delete": "删除角色自动化规则"
+};
+
 export function createRoleAutomationOperations(context: RoleConfigurationContext): readonly ApiOperationDefinition[] {
   const owner = createRoleConfigurationOwner(context);
   const entries: readonly [Action, "GET" | "POST" | "PATCH" | "DELETE", string][] = [
@@ -214,6 +223,6 @@ export function createRoleAutomationOperations(context: RoleConfigurationContext
       effects: { mode: mutation ? "native-role-lifecycle-mutation" : "read", description: mutation ? "Persist a single rule change using the role lock, configuration revision, atomic write and operation receipt; preserve other rules and all unrelated configuration. Saving a rule does not itself invoke its action." : "Read the role owner's current configuration without sending messages or running actions." },
       recovery: { strategy: mutation ? "native-role-receipt" : "read-current-role", ...(mutation ? { idempotencyHeader: "Idempotency-Key" } : {}), description: "Writes require the configuration revision from GET /api/roles/:roleId/configuration or the automation response. Retain the same key, role, rule and original body after an unknown result. A repeated committed request returns its original receipt; never reconstruct it from newer configuration." },
       validators: [{ id: "original-role-owner", description: "Reuse original connection/generation admission, archived-role admission, locked CAS, normalization, explicit Agent target and operation receipt. Rule IDs remain stable across edits and retries." }]
-    }, prepare, handler: async input => { const bound = prepare(input); return typeof bound === "function" ? bound(input) : bound; } } satisfies ApiOperationDefinition;
+    }, discovery:{title:automationPurposes[action],summary:automationPurposes[action]+"。先读角色配置revision与现有规则，保持原ruleId和Idempotency-Key；保存规则和执行规则分别确认。",category:{id:'automation',title:'自动化规则与事件'},keywords:[automationPurposes[action],'定时任务','自动化','automation rules',action],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'},...(mutation?[{field:'body.expectedRevision',operationId:'manager.roles.detail',resultPath:'/data',valuePath:'/revision',parameters:{'path.roleId':{from:'path.roleId'}}}]:[])],relatedOperations:['manager.roles.detail','manager.personas.automation.templates.list']}, prepare, handler: async input => { const bound = prepare(input); return typeof bound === "function" ? bound(input) : bound; } } satisfies ApiOperationDefinition;
   });
 }

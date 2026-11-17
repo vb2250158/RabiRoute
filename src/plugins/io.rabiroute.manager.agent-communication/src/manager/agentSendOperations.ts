@@ -91,8 +91,12 @@ export function agentSendCapabilities(): ApiOperationResult {
 
 export function createAgentSendOperations(context: SendContext): readonly ApiOperationDefinition[] {
   return [
-    { contract: agentSendOperationContract, handler: input => runAgentSend(input.request, input.body as AgentSendRequest, context) },
-    { contract: {
+    { contract: agentSendOperationContract, discovery: {
+      title: '发送渠道消息与附件', summary: '通过 QQ、企业微信等已配置渠道发送文字或附件。先读取发送能力与联系人，使用原 deliveryId 查询真实回执。',
+      category: { id: 'messages', title: '消息' }, keywords: ['发送 QQ 消息', '发消息', '发送附件', 'send message', 'QQ', 'napcat'],
+      relatedOperations: ['agent.send.capabilities', 'agent.qq.contacts.read', 'agent.send.receipt.read']
+    }, handler: input => runAgentSend(input.request, input.body as AgentSendRequest, context) },
+    { discovery: { title: '查询渠道发送能力与参数', summary: '读取可用渠道、请求字段、校验规则和回执查询方式。', category: { id: 'messages', title: '消息' }, keywords: ['发送能力', '发送配置', 'send capabilities', 'message schema'], relatedOperations: ['agent.send'] }, contract: {
       operationId: "agent.send.capabilities", contractVersion: "2.0.0", method: "GET", pathTemplate: "/api/agent/send/capabilities",
       aliases: ["agent:GET:/api/agent/send/capabilities"],
       description: "Read the same channel definitions, wire schema and named business validators used by the send operation.",
@@ -106,7 +110,7 @@ export function createAgentSendOperations(context: SendContext): readonly ApiOpe
       } }) }, effects: { mode: "read", description: "Reads immutable send definitions; does not send or reserve a delivery." },
       recovery: { strategy: "repeatable-read", description: "Refresh after the API catalog identity changes; discovery does not grant additional permissions." }, validators: []
     }, handler: () => agentSendCapabilities() },
-    { contract: {
+    { discovery: { title: '读取原消息发送回执', summary: '使用原 deliveryId 查询渠道实际发送结果和待确认状态。', category: { id: 'messages', title: '消息' }, keywords: ['消息回执', '投递结果', 'send receipt', 'delivery status'], relatedOperations: ['agent.send.capabilities'] }, contract: {
       operationId: "agent.send.receipt.read", contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/agent/send/receipts/:deliveryId",
       aliases: ["agent:GET:/api/agent/send/receipts/:deliveryId"],
       description: "Read the original durable send receipt without creating or retrying a delivery.", exposure: "public", transport: "http",

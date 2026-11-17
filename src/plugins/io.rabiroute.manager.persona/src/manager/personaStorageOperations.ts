@@ -386,6 +386,40 @@ export class PersonaStorageOwner {
   }
 }
 
+
+const storagePurposes: Record<string, string> = {
+  "counts.read": "查询角色计划与记忆数量",
+  "counts.legacy-item": "查询角色知识数量",
+  "plans.query": "按工作区筛选计划",
+  "plans.list": "查询角色计划列表",
+  "plans.read": "读取计划详情",
+  "plans.create": "创建计划",
+  "plans.update": "更新计划内容与状态",
+  "plans.mutations.reconcile": "核对原计划修改回执",
+  "plans.history": "查询计划变更历史",
+  "feedback.read": "读取计划反馈",
+  "feedback.submit": "提交计划反馈",
+  "memory.overview": "查询角色记忆摘要",
+  "memory.recent.list": "查询近期记忆列表",
+  "memory.recent.read": "读取近期记忆",
+  "memory.recent.create": "新增近期记忆",
+  "memory.recent.update": "修改近期记忆",
+  "memory.consolidated.list": "查询整理后的记忆",
+  "memory.consolidated.read": "读取整理后的记忆",
+  "consolidation.runs.list": "查询记忆整理任务",
+  "consolidation.runs.read": "读取记忆整理任务",
+  "consolidation.request": "请求整理角色记忆",
+  "consolidation.result": "提交记忆整理结果",
+  "plan-statuses.read": "查询计划激活状态",
+  "plan-statuses.create": "创建计划激活状态",
+  "plan-statuses.update": "修改计划激活状态",
+  "plan-statuses.delete": "删除计划激活状态",
+  "plan-marker-statuses.read": "查询计划流程标记",
+  "plan-marker-statuses.create": "创建计划流程标记",
+  "plan-marker-statuses.update": "修改计划流程标记",
+  "plan-marker-statuses.delete": "删除计划流程标记"
+};
+
 const ignored = { type: "object" };
 function querySchema(spec: Spec): Record<string, unknown> {
   const fields = spec.action === "plan-list" ? ["limit", "cursor", "view", "query", "sort", "status", "tag", "facets", "detail"] : spec.action === "plan-read" ? ["detail"] : spec.action === "memory-overview" ? ["counts", "limit", "kind", "cursor", "query"] : [];
@@ -417,6 +451,15 @@ export function createPersonaStorageOperations(owner: PersonaStorageOwner): read
         };
       } catch (error) { return owner.error(spec, error, input); }
     };
-    return { contract, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === "function" ? bound(input) : bound; } };
+    return { contract, discovery: {
+      title: storagePurposes[spec.id], summary: storagePurposes[spec.id] + (spec.id === "plans.list" ? "。传 limit 使用有界分页，继续使用原 nextCursor；激活状态和流程标记由各自目录定义。" : "。"),
+      category: { id: "knowledge", title: "记忆与计划" }, keywords: [storagePurposes[spec.id], spec.id.replace(/[.-]/g, " "), "persona knowledge"],
+      inputSources: [{ field: "path.roleId", operationId: "manager.roles.list", resultPath: "/data/roles", valuePath: "/roleId" },
+        ...(spec.suffix.includes(":planId") ? [{ field: "path.planId", operationId: "manager.personas.storage.plans.list", resultPath: "/data/items", valuePath: "/id", parameters: { "path.roleId": { from: "path.roleId" }, "query.limit": { value: "20" } } }] : [])],
+      ...(spec.action.startsWith("plan-") || spec.action.startsWith("feedback-") ? { relatedOperations: ["manager.personas.storage.plans.list", "manager.personas.storage.plan-statuses.read", "manager.personas.storage.plan-marker-statuses.read"] }
+        : spec.action.startsWith("recent-") ? { relatedOperations: ["manager.personas.storage.memory.recent.list"] }
+        : spec.action.startsWith("consolidation-") ? { relatedOperations: ["manager.personas.storage.consolidation.runs.list"] } : {}),
+      ...(spec.id === "plans.list" ? { examples: [{ title: "读取最近修改的20个计划", input: { query: { limit: "20", sort: "updated" } } }] } : {})
+    }, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === "function" ? bound(input) : bound; } };
   }));
 }

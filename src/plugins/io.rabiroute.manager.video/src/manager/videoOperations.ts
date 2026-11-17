@@ -84,6 +84,78 @@ function assetMetadata(value: unknown): unknown {
   throw new Error("Native asset owner returned invalid metadata.");
 }
 
+
+const videoPurposes: Record<string, string> = {
+  "projects.list": "查询视频项目列表",
+  "projects.create": "创建视频项目",
+  "project.read": "读取视频项目",
+  "project.save": "保存视频项目",
+  "workbench.definition": "查询视频工作台能力与画布格式",
+  "workbench.projects-create": "创建工作台项目",
+  "workbench.project-read": "读取工作台项目",
+  "workbench.project-save": "保存工作台项目",
+  "workbench.project-migrate": "迁移工作台项目格式",
+  "workbench.canvases-list": "查询项目画布列表",
+  "workbench.canvas-create": "创建项目画布",
+  "workbench.canvas-copy": "复制项目画布",
+  "workbench.canvas-import": "导入项目画布",
+  "workbench.canvas-read": "读取项目画布",
+  "workbench.canvas-export": "导出项目画布",
+  "workbench.canvas-save": "保存项目画布",
+  "workbench.media-read": "读取画布媒体编辑信息",
+  "workbench.media-save": "保存画布媒体编辑信息",
+  "workbench.index-rebuild": "重建项目画布索引",
+  "workbench.run-create": "开始执行画布生成任务",
+  "workbench.runs-list": "查询画布生成任务",
+  "workbench.run-read": "读取画布任务状态",
+  "workbench.run-refresh": "刷新画布任务状态",
+  "workbench.run-logs": "查询画布任务日志",
+  "workbench.run-cancel": "取消画布任务",
+  "workbench.run-human": "提交画布人工步骤结果",
+  "workbench.artifact-content": "读取画布任务产物",
+  "compute.status": "查询视频计算节点状态",
+  "compute.runtime-start": "启动视频计算环境",
+  "compute.runtime-stop": "停止视频计算环境",
+  "compute.assets-upload": "上传视频计算素材",
+  "compute.asset-remove": "删除视频计算素材",
+  "compute.job-submit": "提交视频计算任务",
+  "compute.job-read": "查询视频计算任务",
+  "compute.job-remove": "删除视频计算任务",
+  "compute.events": "订阅视频计算节点事件",
+  "compute.job-events": "订阅视频计算任务事件",
+  "compute.job-image": "读取视频计算任务图片",
+  "compute.job-video": "读取视频计算任务视频",
+  "models.read": "查询可用视频模型",
+  "models.initialization": "查询视频模型安装计划",
+  "models.initialize": "安装视频模型与依赖",
+  "models.settings-read": "查询视频模型存储目录",
+  "models.settings-save": "配置视频模型存储目录",
+  "models.runtime-install": "安装视频生成运行环境",
+  "model.download": "下载指定视频模型",
+  "models.remote-exchange": "访问选定视频计算节点的模型服务",
+  "status": "查询视频工作站状态",
+  "runtime.start": "启动视频生成服务",
+  "runtime.stop": "停止视频生成服务",
+  "jobs.submit": "提交视频生成任务",
+  "jobs.list": "查询视频生成任务列表",
+  "job.read": "查询视频生成任务状态",
+  "job.cancel": "取消视频生成任务",
+  "job-image": "读取生成任务图片",
+  "job-video": "读取生成任务视频",
+  "assets.upload": "上传图片视频音频素材",
+  "asset.content": "读取已上传媒体素材"
+};
+function videoDiscovery(name: string): ApiOperationDefinition["discovery"] {
+  const title = videoPurposes[name];
+  if (!title) return undefined;
+  return { title, summary: title + (name === "jobs.submit" || name === "compute.job-submit" ? "。先读取模型与素材目录，提交后保留任务 ID 和原 Idempotency-Key，通过任务状态确认结果。" : "。"),
+    category: { id: "video", title: "视频生成与媒体工作台", parentId: "runtime" }, keywords: [title, name.replace(/[.-]/g, " "), "video"],
+    ...(name === "jobs.submit" || name === "compute.job-submit" ? { inputSources: [{ field: "body.model", operationId: "manager.video.models.read", resultPath: "/models", valuePath: "/id" }], relatedOperations: ["manager.video.models.read", "manager.video.assets.upload", "manager.video.jobs.list"] }
+      : name === "job.read" || name === "job.cancel" || name === "job-image" || name === "job-video" ? { inputSources: [{ field: "path.mediaId", operationId: "manager.video.jobs.list", resultPath: "/jobs", valuePath: "/id" }] }
+      : name.startsWith("workbench.") && name !== "workbench.definition" ? { relatedOperations: ["manager.video.workbench.definition", "manager.video.projects.list"] }
+      : name.startsWith("models.") && name !== "models.read" ? { relatedOperations: ["manager.video.models.read", "manager.video.models.initialization"] } : {}) };
+}
+
 /** Fixed Video APIs, derived once for execution and discovery. No boolean HTTP dispatcher. */
 export function createVideoOperations(context: VideoOperationsContext) {
   const { owner, service, models, assets, computeAssets, projects, runs, events, contracts } = context, presentVideoError = owner.error;
@@ -102,7 +174,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
   });
   const add = (name: string, method: ApiMethod, suffix: string, invoke: (input: ApiOperationInput, saved: Admission) => unknown, options: Options = {}) => {
     const run = (input: ApiOperationInput, saved: Admission) => owner.result(saved, method, async () => { if (options.compute) await service.reapCompute(saved.access); return invoke(input, saved); }, options.status ?? 200, options.noStore || options.model ? { "cache-control": "no-store" } : undefined);
-    const definition: ApiOperationDefinition = { contract: contract(name, method, suffix, options),
+    const definition: ApiOperationDefinition = { contract: contract(name, method, suffix, options), discovery: videoDiscovery(name),
       prepare(input) { try { const saved = owner.prepare(input.request, input.url, options.model); return full => run(full, saved); } catch (cause) { return presentVideoError(cause, undefined, method); } },
       handler(input) { try { return run(input, owner.prepare(input.request, input.url, options.model)); } catch (cause) { return presentVideoError(cause, undefined, method); } }
     }; operations.push(definition); return definition;
@@ -165,7 +237,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
         saved.access.assert(); return { status: 200, headers: { "cache-control": "no-store" }, stream };
       } catch (cause) { await stream?.cancel(cause); return presentVideoError(cause, saved.access, "GET"); }
     };
-    operations.push({ contract: streamContract,
+    operations.push({ contract: streamContract, discovery: videoDiscovery(name),
       prepare(input) { try { const saved: Admission = owner.prepare(input.request, input.url); return full => run(full, saved); } catch (cause) { return presentVideoError(cause, undefined, "GET"); } },
       handler(input) { try { return run(input, owner.prepare(input.request, input.url)); } catch (cause) { return presentVideoError(cause, undefined, "GET"); } }
     });
@@ -173,7 +245,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
   sse("compute.events", "/compute/events", false); sse("compute.job-events", "/compute/jobs/:mediaId/events", true);
   const proxy = (name: string, method: ApiMethod, suffix: string, action: (input: Parameters<ApiHttpProxyDefinition["handler"]>[0], saved: Admission) => Promise<unknown>, options: Options = {}) => {
     const base = contract(name, method, suffix, options);
-    proxies.push({ contract: { ...base, request: { ...base.request, body: { kind: "passthrough" } }, responses: { default: { mediaType: "*/*", passthrough: true } }, httpProxy: { wire: { dataFrameBytes: 65536, streamWindowBytes: 1048576, maxConcurrentStreams: 8 }, completion: "Native binary upload publication, file EOF or original selected-peer JSON result.", cancellation: "Abort the original request reader/native file and join service cleanup; no replay or alternate compute target." } }, async handler(input) {
+    proxies.push({ discovery: videoDiscovery(name), contract: { ...base, request: { ...base.request, body: { kind: "passthrough" } }, responses: { default: { mediaType: "*/*", passthrough: true } }, httpProxy: { wire: { dataFrameBytes: 65536, streamWindowBytes: 1048576, maxConcurrentStreams: 8 }, completion: "Native binary upload publication, file EOF or original selected-peer JSON result.", cancellation: "Abort the original request reader/native file and join service cleanup; no replay or alternate compute target." } }, async handler(input) {
       let saved: Admission | undefined, content: VideoMediaContent | undefined;
       const aborted = () => { if (content) void content.cancel().catch(() => undefined); if (!input.request.complete) input.request.destroy(); };
       input.signal.addEventListener("abort", aborted, { once: true });

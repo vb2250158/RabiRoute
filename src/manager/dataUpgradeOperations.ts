@@ -197,6 +197,12 @@ export function createDataUpgradeOperations(owner: Readonly<{ service: DataUpgra
     effects: { mode: method === "GET" ? "read" : "data-write", description: "Metadata discovery is background-only; accepted upgrades persist consent before the formal Host lifecycle." },
     recovery: { strategy: "read-before-retry", description: "Read the persisted operation by its original operationId after uncertain transport; do not create a replacement request." },
     validators: [{ id: "manager.data-upgrades.owner", description: "Connection management authorization, cached revision CAS and stable operation receipts are checked by their owners." }]
+  }, discovery: {
+    title: method === 'GET' ? '查看数据升级状态' : '执行已确认的数据升级',
+    summary: method === 'GET' ? '读取可用升级、当前版本和原操作结果。' : '使用当前 revision 和稳定 operationId 请求升级，按原回执确认完成状态。',
+    category: { id: 'runtime', title: '插件与运行' }, keywords: ['数据升级', '迁移', 'data upgrades', 'migration status'],
+    relatedOperations: ['manager.data-upgrades.status'],
+    ...(method === 'POST' ? { inputSources: [{ field: 'body.expectedRevision', operationId: 'manager.data-upgrades.status', resultPath: '/revision' }] } : {})
   }, handler: input => {
     const headers = { "cache-control": "private, no-store" };
     if (method === "GET") return { status: 200, headers, body: owner.service.snapshot() };

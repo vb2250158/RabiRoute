@@ -21,6 +21,14 @@ const directorySchema = { type: 'object', required: ['devices', 'sourceDeviceId'
       roleId: { type: 'string', pattern: PROFILE_ID_PATTERN }, sourceDeviceId: { type: 'string', pattern: PROFILE_ID_PATTERN }, name: { type: 'string' } } } } }
 } } } };
 
+const profilePurposes: Record<string,string> = {
+  "agent-devices.list": "查询设备 Agent 配置目录",
+  "agent-devices.profile.read": "读取设备 Agent 配置与版本",
+  "agent-devices.profile.save": "保存设备 Agent 配置",
+  "agent-devices.profile.receipt.record": "确认设备 Agent 配置已应用",
+  "agent-devices.profile.operation.read": "查询原设备配置操作回执",
+  "persona-template.read": "从角色与技能生成设备 Agent 配置模板"
+};
 /** Definitions install HTTP paths and discovery records together, including persona-template. */
 export function createRabiLinkAgentDeviceOperations(currentOwner: () => RabiLinkAgentDevices): readonly ApiOperationDefinition[] {
   const define = (suffix: string, method: ApiOperationContract['method'], pathname: string, path: ApiSchema, body: ApiSchema | undefined,
@@ -44,7 +52,7 @@ export function createRabiLinkAgentDeviceOperations(currentOwner: () => RabiLink
         description: 'Preserve deviceId and body idempotencyKey. Read the original operation receipt before retrying an uncertain write; absent receipt is returned as receipt=null and does not prove the request never ran. Same key/intent replays the native receipt; different intent conflicts. Ordinary reads may be repeated.' },
       validators: [{ id: 'original-profile-owner', description: 'Capture original connection scope, source device, application generation and PC assignment before body parsing; revalidate after awaited reads and before writes/disclosure. Any authenticated enabled connection may manage profiles; only the signed originating device may acknowledge its own application. This is receipt provenance, not a feature grant.' },
         { id: 'native-profile-state', description: `Shared schema and original validator own UTF-16 limits, unique Skill/MCP IDs, total Skill content, CAS sequence, idempotency conflicts, ${PROFILE_LIMITS.operations}-receipt capacity, persona existence and monotonic application status. JSON retains the native absence of an application byte cap. Unknown query/header fields are ignored.` }]
-    }, prepare: bind, handler: async input => { const prepared = bind(input); return typeof prepared === 'function' ? prepared(input) : prepared; } };
+    }, discovery:{title:profilePurposes[suffix],summary:profilePurposes[suffix]+"。PC保存配置与设备确认应用分别记录，写入后按原operationId读取回执。",category:{id:'agents.devices',title:'设备宿主 Agent',parentId:'agents'},keywords:[profilePurposes[suffix],suffix.replace(/[.-]/g,' '),'device profile'],...(suffix.startsWith('agent-devices.profile.')?{inputSources:[{field:'path.deviceId',operationId:'manager.rabilink.agent-devices.list',resultPath:'/data/devices',valuePath:'/id'}],relatedOperations:['manager.rabilink.agent-devices.profile.read','manager.rabilink.agent-devices.profile.operation.read']}:suffix==='persona-template.read'?{inputSources:[{field:'body.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'}]}:{})}, prepare: bind, handler: async input => { const prepared = bind(input); return typeof prepared === 'function' ? prepared(input) : prepared; } };
   };
   const base = '/api/rabilink/agent-devices/:deviceId/profile';
   return [

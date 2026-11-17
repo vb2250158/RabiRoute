@@ -14,6 +14,16 @@ const statusSchema = { type: "object", required: ["deviceId", "name", "online", 
 const directorySchema = { type: "object", required: ["selectedDeviceId", "peers"], properties: { selectedDeviceId: { type: "string" }, peers: { type: "array", items: statusSchema } }, additionalProperties: false } as const;
 const errorSchema = { type: "object", required: ["error"], properties: { error: { type: "string" } }, additionalProperties: false } as const;
 
+
+const peerPurposes: Record<string, [string, string[]]> = {
+  "servers.read": ["电脑列表与远程主机连接", ["电脑列表", "电脑连接", "远程电脑", "computer list", "remote computers"]],
+  "selection.read": ["查询当前选择的远程主机", ["当前电脑", "远程主机选择", "selected remote computer"]],
+  "selection.update": ["选择连接的远程主机", ["切换电脑", "选择主机", "select remote computer"]],
+  "identity.read": ["查询本机 Rabi 主机身份", ["设备ID", "主机身份", "peer device identity"]],
+  "probe": ["检查远程主机连接与延迟", ["网络诊断", "连接测试", "主机延迟", "probe remote computers"]],
+  "events": ["订阅远程主机连接状态", ["连接状态通知", "主机状态", "peer status events"]]
+};
+
 export function createPeerControlOperations(owner: Pick<PeerTunnelRuntime, "assertControl" | "selected" | "select" | "directory" | "probe" | "identity" | "events">): ApiOperationDefinition[] {
   type Description = { id: string; description: string; method: "GET" | "POST" | "PUT"; path: string; schema?: ApiSchema; body?: ApiSchema; mutation?: boolean;
     run(input: ApiOperationInput, assertCurrent: () => void): ApiOperationResult | Promise<ApiOperationResult> };
@@ -54,6 +64,13 @@ export function createPeerControlOperations(owner: Pick<PeerTunnelRuntime, "asse
     recovery: { strategy: "inspect-original-connection-before-retry", description: "Re-read original selection and connection status after an uncertain change. Reconnect events by refreshing current state; do not replay business writes or silently select local execution." },
     validators: [{ id: "peer.original-control-admission", description: "Original Manager/WebGUI admission and read-only behavior remain. Selection persistence and awaited results revalidate the original caller." },
       { id: "peer.events.bounds", description: "At most ten device IDs; original 15-second live-channel RTT heartbeat and 64 KiB queued-event budget. Slow consumers close instead of buffering without bound." }]
+  }, discovery: {
+    title: peerPurposes[item.id][0], summary: item.id === "servers.read"
+      ? "查询 Rabi 主机目录及连接状态，使用 deviceId 定位主机。一台主机可有多个当前 Manager 执行实例；执行实例和登记 SDK 节点目录分别查询，不合并计作电脑数。"
+      : item.description,
+    category: { id: "devices", title: "电脑与设备" }, keywords: peerPurposes[item.id][1],
+    ...(item.id === "servers.read" ? { relatedOperations: ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list"] }
+      : item.id === "selection.update" ? { inputSources: [{ field: "body.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }], relatedOperations: ["manager.rabilink.peer.selection.read"] } : {})
   }, handler: async input => {
     const assertCurrent = () => { input.signal?.throwIfAborted(); hasAuthenticatedConnectionRequest(input.request); owner.assertControl(input.request, input.url, item.mutation === true); };
     let result: ApiOperationResult | undefined;

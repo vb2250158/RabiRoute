@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { createApiDiscoveryOperations } from "./apiDiscoveryRoutes.js";
 import { fixtureApiContract } from "../../../../manager/apiOperationContractFixtures.js";
+import type { ApiOperationDefinition } from "../../../../manager/apiOperationContract.js";
 
 test("discovery, OpenAPI, conditional reads and revision-bound pagination use the active registered snapshot", async t => {
   const registry = new ManagerPluginRouteRegistry();
@@ -87,10 +88,73 @@ test("lightweight discovery HTTP routes expose categories, search and exact desc
   assert.ok(result.data.operation.responses); assert.equal(Object.hasOwn(result.data.operation, "request"), false);
   assert.equal((await fetch(root + "/api/agent/operations/" + encodeURIComponent("legacy:group:history"))).status, 200);
   assert.equal((await fetch(root + "/api/agent/operations/unknown")).status, 404);
-  for (const query of ["limit=0", "unknown=value", "method=GET&method=POST"]) assert.equal((await fetch(root + "/api/agent/operations?" + query)).status, 400);
+  for (const query of ["limit=0", "unknown=value", "method=GET&method=POST", "match=invalid"]) assert.equal((await fetch(root + "/api/agent/operations?" + query)).status, 400);
   assert.equal((await fetch(root + page.data.items[0].describe.path + "?view=unsupported")).status, 400);
   const initial = await (await fetch(root + "/api/agent/operations?limit=1")).json();
   assert.equal(initial.data.total, 7); assert.ok(initial.data.nextCursor);
   await operation.dispose();
   assert.equal((await fetch(root + "/api/agent/operations?limit=1&cursor=" + encodeURIComponent(initial.data.nextCursor))).status, 409);
+});
+
+test("a new plugin declaration reaches search, describe, Help and capabilities and disappears on unload", async t => {
+  const registry = new ManagerPluginRouteRegistry();
+  const discovery = registry.registerOperations("discovery", createApiDiscoveryOperations(registry));
+  const contract = fixtureApiContract({ operationId: "io.example.coral.inventory.read", method: "GET", pathTemplate: "/api/example/coral/inventory",
+    request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" }, body: { kind: "none" } },
+    effects: { mode: "read", description: "Reads the plugin inventory." } });
+  const declared: ApiOperationDefinition = { contract,
+    discovery: { title: "查询珊瑚库存", summary: "Read coral inventory quantities.", keywords: ["珊瑚库存", "coral inventory"],
+      category: { id: "io.example.coral", title: "珊瑚仓库" } },
+    handler: () => ({ status: 200, body: { ok: true, value: 3 } }) };
+  const registration = registry.registerOperations("io.example.coral", [declared]);
+  const server = http.createServer((request, response) => {
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const root = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { await registration.dispose(); await discovery.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  for (const query of ["珊瑚库存", "coral inventory"]) {
+    const page = await (await fetch(root + "/api/agent/operations?query=" + encodeURIComponent(query) + "&match=all")).json();
+    assert.deepEqual(page.data.items.map((row: { operationId: string }) => row.operationId), [contract.operationId]);
+    assert.equal(Object.hasOwn(page.data.items[0], "discoveryQuality"), false);
+  }
+  const detail = await (await fetch(root + "/api/agent/operations/" + contract.operationId)).json();
+  assert.equal(detail.data.operation.discovery.title, "查询珊瑚库存");
+  assert.equal(detail.data.operation.discoveryQuality.state, "complete");
+  const help = await (await fetch(root + "/api/agent/help?operationId=" + contract.operationId)).json();
+  assert.equal(help.data.operations[0].discovery.title, detail.data.operation.discovery.title);
+  assert.deepEqual(help.data.operations[0].discovery.keywords, detail.data.operation.discovery.keywords);
+  assert.equal(help.data.operations[0].discovery.category.id, detail.data.operation.discovery.category.id);
+  assert.equal(help.data.operations[0].discoveryQuality.state, "complete");
+  const capabilities = await (await fetch(root + "/api/lan-agent/capabilities")).json();
+  assert.equal(capabilities.operations.find((row: { id: string }) => row.id === contract.operationId).discovery.title, "查询珊瑚库存");
+  assert.deepEqual(await (await fetch(root + contract.pathTemplate)).json(), { ok: true, value: 3 });
+  await registration.dispose();
+  const unloaded = await (await fetch(root + "/api/agent/operations?query=" + encodeURIComponent("珊瑚库存"))).json();
+  assert.equal(unloaded.data.total, 0);
+  assert.equal((await fetch(root + "/api/agent/operations/" + contract.operationId)).status, 404);
+  assert.equal((await fetch(root + "/api/agent/help?operationId=" + contract.operationId)).status, 404);
+});
+
+test("missing discovery metadata remains visible as a quality issue while the handler stays usable", async t => {
+  const registry = new ManagerPluginRouteRegistry();
+  const discovery = registry.registerOperations("discovery", createApiDiscoveryOperations(registry));
+  const contract = fixtureApiContract({ operationId: "io.example.opaque.read", method: "GET", pathTemplate: "/api/example/opaque",
+    request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" }, body: { kind: "none" } },
+    effects: { mode: "read", description: "Reads one value." } });
+  const registration = registry.registerOperations("io.example.opaque", [{ contract, handler: () => ({ status: 200, body: { ok: true, value: 1 } }) }]);
+  const server = http.createServer((request, response) => {
+    if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const root = `http://127.0.0.1:${address.port}`;
+  t.after(async () => { await registration.dispose(); await discovery.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const detail = await (await fetch(root + "/api/agent/operations/" + contract.operationId)).json();
+  const quality = detail.data.operation.discoveryQuality;
+  assert.equal(quality.state, "needs_attention"); assert.ok(quality.issues.length > 0);
+  const help = await (await fetch(root + "/api/agent/help?operationId=" + contract.operationId)).json();
+  assert.deepEqual(help.data.operations[0].discoveryQuality, quality);
+  assert.deepEqual(await (await fetch(root + contract.pathTemplate)).json(), { ok: true, value: 1 });
 });

@@ -51,6 +51,12 @@ export function createWebguiAccessOperations(owner: WebguiAccessOwner): readonly
       recovery: { strategy: read ? "repeatable-read" : "read-before-retry", description: read ? "Rediscover the Manager address after identity changes."
         : "Read current settings after an uncertain write. Do not automatically replay token rotation. restartRequired reports existing Host/listener semantics; this operation does not restart Manager." },
       validators: [{ id: "manager.webgui-access.original-owner", description: "Authenticated connections retain management access without a separate Agent/persona grant. The existing local-machine predicate remains available. Only boolean enabled and literal regenerateToken=true change settings; unknown fields and other non-null JSON values retain their no-op behavior. Empty input decodes to an empty object. Bodies are bounded to 64 KiB." }]
+    }, discovery: {
+      title: read ? '读取局域网 WebGUI 访问设置' : '修改局域网 WebGUI 访问设置',
+      summary: read ? '查询浏览器连接配置与启用状态。' : '修改已配置 WebGUI 访问设置，按需生成访问凭据后回读。',
+      category: { id: 'settings', title: '角色与 Rabi 配置' }, keywords: ['WebGUI', '局域网访问', '浏览器配置', 'web access settings'],
+      relatedOperations: ['manager.webgui-access.read'],
+      ...(!read ? { examples: [{ title: '启用局域网浏览器访问', input: { body: { enabled: true } } }] } : {})
     }, handler: input => {
       if (!read && !owner.canManage(input.request)) return { status: 403, headers, body: { code: -1, message: "局域网 WebGUI 设置需要有效的连接身份。" } };
       try {

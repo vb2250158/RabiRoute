@@ -132,6 +132,7 @@ test("a current text-only platform message plus its exact sent Route record is a
   fs.rmSync(path.join(routeDataDir, "group-messages.jsonl"));
   appendManagedOutbound(routeDataDir);
   const platformSource: PlatformReplySourceEvidence = {
+    assertCurrent() {},
     routeId: "route-main",
     sourceMessageId: "source-1",
     groupId: "456",
@@ -147,6 +148,7 @@ test("an exact managed outbound record takes precedence over a duplicate legacy 
   const { routeDataDir, replyOptions } = fixture(t, { imageCount: 1 });
   appendManagedOutbound(routeDataDir);
   const platformSource: PlatformReplySourceEvidence = {
+    assertCurrent() {},
     routeId: "route-main",
     sourceMessageId: "source-1",
     groupId: "456",

@@ -15,6 +15,79 @@ type Options = { configuration?: boolean; lifecycle?: boolean; key?: boolean; qu
 type Invocation = (input: ApiOperationInput, authority: XiaomiHomeRequestAuthority, key: string) => unknown | Promise<unknown>;
 const root = "/api/agent/xiaomi-home";
 
+
+const homePurposes: Record<string, string> = {
+  "health.read": "检查家庭设备连接健康",
+  "deployment.read": "查询家庭设备服务部署状态",
+  "deployment.save": "保存家庭设备服务部署设置",
+  "deployment.start": "启动家庭设备服务",
+  "deployment.install": "安装家庭设备服务",
+  "auth.read": "查询家庭设备连接授权",
+  "auth.connect": "连接并授权 Home Assistant",
+  "auth.refresh": "刷新家庭设备连接授权",
+  "auth.disconnect": "断开家庭设备授权连接",
+  "settings.read": "查询家庭设备配置",
+  "settings.save": "保存家庭设备配置",
+  "recordings.latest": "读取最新设备录音",
+  "resources.list": "查询家庭设备实体列表",
+  "devices.list": "查询家庭设备目录",
+  "device.read": "读取家庭设备详情",
+  "entity-actions.read": "查询指定实体的可用动作与参数",
+  "capabilities.read": "查询家庭设备动作能力与参数格式",
+  "resource.read": "读取设备实体状态与版本",
+  "action.request": "执行家庭设备动作",
+  "action-receipt.read": "查询原设备动作回执",
+  "event.deliver": "投递家庭设备事件",
+  "artifacts.list": "查询家庭设备事件产物",
+  "artifact-lifecycle.read": "查询设备产物保留规则",
+  "artifact.read": "读取家庭设备产物元数据",
+  "artifact.register": "登记家庭设备事件产物",
+  "artifact.content": "下载家庭设备产物内容",
+  "vacuum-remote.capabilities": "查询扫地机器人遥控能力",
+  "vacuum-remote.status": "查询扫地机器人遥控会话",
+  "vacuum-remote.start": "开始扫地机器人遥控",
+  "vacuum-remote.pulse": "发送扫地机器人方向控制",
+  "vacuum-remote.stop": "停止扫地机器人移动",
+  "vacuum-remote.exit": "退出扫地机器人遥控",
+  "vacuum-cloud.status": "查询扫地机器人云端连接",
+  "vacuum-cloud.login": "登录扫地机器人云端账号",
+  "vacuum-cloud.login-poll": "查询扫地机器人登录进度",
+  "vacuum-cloud.devices": "查询云端扫地机器人",
+  "vacuum-cloud.plugin-package": "查询扫地机器人插件包",
+  "vacuum-cloud.plugin-information": "查询扫地机器人插件信息",
+  "vacuum-cloud.map": "读取扫地机器人地图",
+  "vacuum-cloud.path": "计算扫地机器人路径",
+  "vacuum-cloud.trajectory": "读取扫地机器人移动轨迹",
+  "vacuum-cloud.feedback": "提交扫地机器人路径反馈",
+  "vacuum-cloud.position": "读取扫地机器人位置",
+  "vacuum-cloud.telemetry": "读取扫地机器人遥测状态",
+  "vacuum-cloud.connect": "打开扫地机器人云端连接页",
+  "deployment.events": "订阅家庭设备部署事件",
+  "vacuum-cloud.video-status": "查询扫地机器人视频状态",
+  "vacuum-cloud.video-password": "设置扫地机器人视频密码",
+  "vacuum-cloud.video-start": "启动扫地机器人视频连接",
+  "vacuum-cloud.video-stop": "停止扫地机器人视频连接",
+  "vacuum-cloud.video-forget": "清除扫地机器人视频连接",
+  "vacuum-cloud.video-network": "查询扫地机器人视频网络",
+  "vacuum-cloud.video-stream": "读取扫地机器人视频流",
+  "vacuum-cloud.video-frame": "读取扫地机器人视频画面"
+};
+function homeDiscovery(name: string): ApiOperationDefinition["discovery"] {
+  const title = homePurposes[name];
+  if (!title) return undefined;
+  return { title, summary: title + (name === "action.request" ? "。从实体目录取得 resourceId，读取该实体的动作与 stateVersion，按 capabilities 的 argumentsSchema 填参数；保留原动作键并查询回执。" : "。"),
+    category: { id: "devices.home", title: "家庭设备与扫地机器人", parentId: "devices" }, provider: "xiaomi-home", keywords: [title, name.replace(/[.-]/g, " "), "home assistant", "xiaomi home"],
+    ...(name === "resource.read" ? { inputSources: [{ field: "path.resourceId", operationId: "manager.xiaomi-home.resources.list", resultPath: "/data/items", valuePath: "/resourceId" }] }
+      : name === "entity-actions.read" ? { inputSources: [{ field: "query.resourceId", operationId: "manager.xiaomi-home.resources.list", resultPath: "/data/items", valuePath: "/resourceId" }] }
+      : name === "action.request" ? { inputSources: [
+        { field: "body.resourceId", operationId: "manager.xiaomi-home.resources.list", resultPath: "/data/items", valuePath: "/resourceId" },
+        { field: "body.expectedStateVersion", operationId: "manager.xiaomi-home.entity-actions.read", resultPath: "/data", valuePath: "/stateVersion", parameters: { "query.resourceId": { from: "body.resourceId" } } },
+        { field: "body.capability", operationId: "manager.xiaomi-home.capabilities.read", resultPath: "/data/actions", valuePath: "/capability" }
+      ], relatedOperations: ["manager.xiaomi-home.entity-actions.read", "manager.xiaomi-home.capabilities.read", "manager.xiaomi-home.action-receipt.read"] }
+      : name === "settings.save" ? { relatedOperations: ["manager.xiaomi-home.settings.read", "manager.xiaomi-home.health.read"] }
+      : name.startsWith("deployment.") && name !== "deployment.read" ? { relatedOperations: ["manager.xiaomi-home.deployment.read"] } : {}) };
+}
+
 /** Exact routes only: the integration's native services retain state, validation and receipts. */
 export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRoutesContext) {
   const owner = createXiaomiHomeOperationsOwner(context), runtime = owner.runtime;
@@ -47,7 +120,7 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
       if (name === "artifacts.list" && result.status === 200) return { ...result, body: { ...(result.body as Record<string, unknown>), coverage: runtime.artifacts.coverage() } };
       return result;
     };
-    definitions.push({ contract: nativeContract, prepare(input) { try { const saved = check(input.request, input.url, options); return full => run(full, saved); } catch (cause) { return rejection(cause); } }, handler: input => { try { return run(input, check(input.request, input.url, options)); } catch (cause) { return rejection(cause); } } });
+    definitions.push({ contract: nativeContract, discovery: homeDiscovery(name), prepare(input) { try { const saved = check(input.request, input.url, options); return full => run(full, saved); } catch (cause) { return rejection(cause); } }, handler: input => { try { return run(input, check(input.request, input.url, options)); } catch (cause) { return rejection(cause); } } });
   };
   const q = (input: ApiOperationInput, name: string, fallback = "") => input.url.searchParams.get(name) || fallback;
   add("health.read", "GET", "/health", (_, authority) => runtime.health(authority), { configuration: true });
@@ -96,9 +169,9 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
 
   // HTML and SSE are independent exact operations, never hidden inside a prefix dispatcher.
   const html = contract("vacuum-cloud.connect", "GET", cloud + "/connect", empty, cloudOptions(["deviceId", "view"]));
-  definitions.push({ contract: { ...html, responses: { "200": { mediaType: "text/html", schema: { type: "string" } }, default: { mediaType: "application/json", schema: failure } } }, handler(input) { try { check(input.request, input.url, cloudOptions(["deviceId", "view"])); return owner.connect(input.url); } catch (cause) { return rejection(cause); } } });
+  definitions.push({ discovery: homeDiscovery("vacuum-cloud.connect"), contract: { ...html, responses: { "200": { mediaType: "text/html", schema: { type: "string" } }, default: { mediaType: "application/json", schema: failure } } }, handler(input) { try { check(input.request, input.url, cloudOptions(["deviceId", "view"])); return owner.connect(input.url); } catch (cause) { return rejection(cause); } } });
   const sse = contract("deployment.events", "GET", "/deployment/events", empty, {});
-  definitions.push({ contract: { ...sse, transport: "sse", responses: { "200": { mediaType: "text/event-stream", stream: { framing: "sse-json", maxFrameBytes: 1024 * 1024, frameSchema: { type: "object", required: ["event", "data"], properties: { event: { const: "deployment" }, data: { type: "object" } }, additionalProperties: false }, completion: "Original deployment snapshots until client close, authority loss or plugin retirement.", cancellation: "Unsubscribe the original native deployment listener and join its pending observation." } }, default: { mediaType: "application/json", schema: failure } } }, handler(input) {
+  definitions.push({ discovery: homeDiscovery("deployment.events"), contract: { ...sse, transport: "sse", responses: { "200": { mediaType: "text/event-stream", stream: { framing: "sse-json", maxFrameBytes: 1024 * 1024, frameSchema: { type: "object", required: ["event", "data"], properties: { event: { const: "deployment" }, data: { type: "object" } }, additionalProperties: false }, completion: "Original deployment snapshots until client close, authority loss or plugin retirement.", cancellation: "Unsubscribe the original native deployment listener and join its pending observation." } }, default: { mediaType: "application/json", schema: failure } } }, handler(input) {
     try { const saved = check(input.request, input.url, {}); let wake: (() => void) | undefined, stopped = false; const queue: unknown[] = []; const controller = new AbortController();
       const unsubscribe = runtime.deployment.subscribe(snapshot => { if (stopped) return; try { saved.authority.assert(); if (queue.length >= 16) throw new Error("Deployment snapshot consumer stalled."); queue.push({ event: "deployment", data: snapshot }); wake?.(); } catch (cause) { controller.abort(cause); wake?.(); } }, cause => { controller.abort(cause); wake?.(); });
       let cancellation: Promise<void> | undefined; const cancel = () => cancellation ??= (async () => { stopped = true; wake?.(); await unsubscribe(); })();
@@ -109,7 +182,7 @@ export function createXiaomiHomeManagerOperations(context: XiaomiHomeManagerRout
   const proxies: ApiHttpProxyDefinition[] = [];
   const proxy = (name: string, suffix: string, pathSchema: ApiSchema, open: (input: Parameters<ApiHttpProxyDefinition["handler"]>[0]) => ReturnType<typeof runtime.artifactAccess.open> | ReturnType<typeof runtime.vacuumCloud.video.openStream>, options: Options = {}) => {
     const base = contract(name, "GET", suffix, pathSchema, options);
-    proxies.push({ contract: { ...base, request: { ...base.request, body: { kind: "passthrough" } }, responses: { default: { mediaType: "*/*", passthrough: true } }, httpProxy: { wire: { dataFrameBytes: 65536, streamWindowBytes: 1048576, maxConcurrentStreams: 8 }, completion: "Native file EOF or original MP4 upstream completion; Range/status/media headers remain native.", cancellation: "Abort and join the original file/read stream or native sidecar upstream before releasing the operation lease." } }, async handler(input) {
+    proxies.push({ discovery: homeDiscovery(name), contract: { ...base, request: { ...base.request, body: { kind: "passthrough" } }, responses: { default: { mediaType: "*/*", passthrough: true } }, httpProxy: { wire: { dataFrameBytes: 65536, streamWindowBytes: 1048576, maxConcurrentStreams: 8 }, completion: "Native file EOF or original MP4 upstream completion; Range/status/media headers remain native.", cancellation: "Abort and join the original file/read stream or native sidecar upstream before releasing the operation lease." } }, async handler(input) {
       let content: Awaited<ReturnType<typeof open>> | undefined;
       const aborted = () => { void content?.cancel().catch(() => undefined); };
       input.signal.addEventListener("abort", aborted, { once: true });

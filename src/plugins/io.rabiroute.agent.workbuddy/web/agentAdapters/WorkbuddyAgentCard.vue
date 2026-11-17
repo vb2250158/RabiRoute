@@ -91,7 +91,7 @@ function selectWorkbuddySession(value: unknown): void {
 <v-alert type="info" variant="tonal" density="compact" class="mb-2">
                     RabiRoute 通过会话网关投递到本机 WorkBuddy 的<b>已有任务</b>：任务 ID 就是路由键，同一任务续投不会新建任务，消息由该任务的 WorkBuddy owner 执行。
                   </v-alert><v-alert type="warning" variant="tonal" density="compact" class="mb-2">
-                    需要一次性录入本机网关凭据（<code>data/workbuddy-auth.json</code>）。凭据缺失、任务所属进程已退出或任务 ID 已归档时会明确失败，不会改投其它 Agent。
+                    自动发现并连接本机任务网关。角色绑定用于默认路由，查询和按任务 ID 投递可直接使用。连接失败时请查看上方环境诊断。
                   </v-alert><div class="catalog-param-grid">
                     <v-combobox
                       :model-value="gateway.workbuddySessionId || gateway.workbuddySessionName"

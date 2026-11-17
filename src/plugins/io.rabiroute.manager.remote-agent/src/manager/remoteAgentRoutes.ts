@@ -15,8 +15,17 @@ export type RemoteAgentOperationsContext = {
   applyTaskDefaults(request: RemoteAgentTaskRequest): RemoteAgentTaskRequest;
 };
 
+const remotePurposes: Record<string,string> = {
+  "devices.list": "查询远端 Agent 设备",
+  "scan": "发现局域网远端 Agent",
+  "connect": "连接远端 Agent 设备",
+  "disconnect": "断开远端 Agent 设备",
+  "tasks.list": "查询远端 Agent 任务",
+  "tasks.create": "创建远端 Agent 任务",
+  "task-events.receive": "接收远端 Agent 任务事件"
+};
 export function createRemoteAgentOperations(context: RemoteAgentOperationsContext): readonly ApiOperationDefinition[] {
-  return REMOTE_AGENT_ROUTES.map(route => ({ contract: remoteAgentContract(route), handler: input => run(context, route, input) }));
+  return REMOTE_AGENT_ROUTES.map(route => ({ contract: remoteAgentContract(route), discovery:{title:remotePurposes[route.key],summary:remotePurposes[route.key]+"。保持选定设备、原任务和投递回执。",category:{id:"agents.remote",title:"远端 Agent",parentId:"agents"},keywords:[remotePurposes[route.key],route.key.replace(/[.-]/g," "),"remote agent"],...(route.key==="tasks.create"||route.key==="disconnect"?{relatedOperations:["manager.remote-agent.devices.list","manager.remote-agent.tasks.list"]}:{})}, handler: input => run(context, route, input) }));
 }
 async function run(context: RemoteAgentOperationsContext, route: RemoteAgentRoute, input: ApiOperationInput): Promise<ApiOperationResult> {
   const principal = assertTrustedLanAgentPrincipal(input.request);

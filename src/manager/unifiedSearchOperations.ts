@@ -60,10 +60,11 @@ export function createUnifiedSearchOperation(registry: ManagerPluginRouteRegistr
                 const directories=new Map(roles.map(role=>[role.roleId,context.roleDirectory(role.roleId)]));
                 const knowledge=context.knowledge;
                 const scopedContext={...context,roles:()=>roles,knowledge,roleDirectory:(roleId:string)=>directories.get(roleId)!};
-                const result = await runUnifiedSearch({ query, snapshot, lanes: createSearchLanes(scopedContext, snapshot, input.request, query.agent), signal: input.signal,
+                const nativeLanes = registry.searchLanes({ request: input.request, roles: roles.map(role => ({ roleId: role.roleId, directory: directories.get(role.roleId)! })) }, snapshot);
+                const result = await runUnifiedSearch({ query, snapshot, lanes: [...createSearchLanes(scopedContext, snapshot, input.request, query.agent), ...nativeLanes], signal: input.signal,
                     identity: { agentType: requestIdHeader('x-rabiroute-agent-type'), id: requestIdHeader('x-rabiroute-session-id') } });
                 assertCurrent();
-                const roleSources=result.body.data.coverage.sources.some(source=>source.source==='knowledge' || source.source==='messages');
+                const roleSources=result.body.data.coverage.sources.some(source=>source.source==='knowledge' || source.source==='messages' || source.source==='skills');
                 const currentRoles=context.roles().filter(role=>!query.agent || role.roleId===query.agent);
                 if(roleSources && (knowledge!==context.knowledge || roles.length!==currentRoles.length
                     || roles.some(role=>!currentRoles.some(current=>current.roleId===role.roleId)

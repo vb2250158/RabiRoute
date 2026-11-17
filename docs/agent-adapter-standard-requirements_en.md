@@ -58,11 +58,15 @@ Record the following in the design or task description before implementation:
 
 CLI and MCP share the operation SDK. Standard MCP exposes six shared tools. A host with generic HTTP, CLI or MCP tools forwards the same public contracts without registering six native tools mechanically or rebuilding business interfaces. The DSH HTTP bridge can read `/api/agent/categories`, `/api/agent/operations` and a single-operation description, then invoke the described business endpoint. Short host hints come from that same catalog and follow its updates.
 
+Public capabilities declare business titles, summaries, Chinese and English keywords, parameter sources (`inputSources`), related operations (`relatedOperations`) and optional `examples` in the original `ApiOperationDefinition.discovery`. Registration with the original handler publishes the active catalog. New plugins use this declaration to reach each host automatically. See [Plugin declarations and host integration](unified-agent-api_en.md#plugin-declarations-and-host-integration). Host hints provide the stable discovery workflow; actual capabilities and inputs come from the current catalog.
+
 Configured, authenticated connections expose all public functions by default. Explicit user restrictions are explained by their visible, editable configuration. Platform session adaptation and public business calls preserve their original target owner, request ID and receipt.
 
 The catalog lists API capabilities, not computers, messages or plans; `total` counts operations. Discover and call the actual resource directory before reporting computer counts or online status. An empty search or terminal-session list describes only that query result.
 
 Acceptance records the current host tools, loaded hints and adapter version. Scenario queries such as “computer list” and “group history” must find real APIs and read their business resources. A Host version, HTTP 200, tool registration or source build alone does not establish that scenario. See [Unified CLI and MCP API](unified-agent-api_en.md) for discovery and input rules.
+
+Representative task acceptance starts with the user’s wording and covers unified search, describe, parameter acquisition, the actual business call and readback. Record the host’s actual tools, loaded hints and current Manager identity. Verify automatic registration using a new plugin capability whose name and keywords are absent from the core. Continue through other available entries when one source or operation fails. If discovery, connectivity or the retrieval tool is unavailable, record the failure once and continue the original task. Record the actual capability gap when choosing host-specific tools under current authorization.
 
 ## One-sentence standard
 

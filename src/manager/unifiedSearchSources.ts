@@ -6,7 +6,7 @@ import type { MessageEndpointHistoryContext } from '../plugins/io.rabiroute.mana
 import type { HomeDeviceDirectory } from '../shared/homeDeviceDirectoryContract.js';
 import type { XiaomiHomeResource } from '../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerApi.js';
 import type { SearchBatch, SearchItem, SearchLane } from './unifiedSearch.js';
-import { operationSearchText, searchTerms } from './searchText.js';
+import { operationSearchDocument, scoreOperationSearch, searchTerms } from './searchText.js';
 import { normalizeSearchEvidence, type SearchConflict } from '../shared/searchEvidence.js';
 export type UnifiedSearchSourceContext = {
     roles(): readonly {
@@ -36,12 +36,12 @@ export function createSearchLanes(context: UnifiedSearchSourceContext, snapshot:
                         searchText: item.searchText, evidence: item.searchEvidence
                     })) };
             } },
-        { key: 'messages:' + roleId, source: 'messages', agent: roleId, async read({ query, signal, deadlineAt, position }) {
+        { key: 'messages:' + roleId, source: 'messages', agent: roleId, async read({ query, signal, deadlineAt, position, snapshot }) {
                 signal.throwIfAborted();
                 const result = await context.queryHistory(context.roleDirectory(roleId), {
                     limit: query.limit + 1, maxChars: 200000, query: query.q ? searchTerms(query.q).join(' ') : undefined, queryMatch: query.match, adapter: query.adapter,
                     from: query.from, to: query.to, includeArchives: query.includeArchives,
-                    unified: { sort: query.sort, offset: position, kinds: query.kinds }
+                    unified: { sort: query.sort, offset: position, kinds: query.kinds, snapshot }
                 }, { signal, deadlineAt });
                 if (Array.isArray(result) || !result.page)
                     throw new Error('MESSAGE_HISTORY_TIMELINE_UNAVAILABLE');
@@ -59,19 +59,27 @@ export function createSearchLanes(context: UnifiedSearchSourceContext, snapshot:
                         origin: { agent: roleId, adapter: record.adapter, conversationKey: record.conversationKey, recordId, messageTime: observation.toISOString() },
                         detailUrl, handle: { detailUrl }, searchText: record.text, evidence: { state: 'unknown', observedAt: observation.toISOString() } });
                 }
-                return { items, gaps, version: apiDigest({ index: result.coverage.indexVersion, source: result.coverage.sourceVersion }),
+                return { items, gaps, version: result.page.sourceSnapshot ? apiDigest(result.page.sourceSnapshot) : apiDigest({ index: result.coverage.indexVersion, source: result.coverage.sourceVersion }),
+                    ...(result.page.sourceSnapshot ? { snapshot: result.page.sourceSnapshot } : {}),
                     complete: result.coverage.indexCoverage === 'complete' && !result.coverage.legacyCoverageUnknown,
                     windowStart: position, hasMore: Boolean(result.page.nextCursor), recordsRead: result.entries.length };
             } }
     ]);
-    lanes.push({ key: 'operations', source: 'operations', agent: null, async read({ signal }) {
+    lanes.push({ key: 'operations', source: 'operations', agent: null, async read({ signal, query }) {
             signal.throwIfAborted();
-            return { version: snapshot.catalogDigest, complete: snapshot.coverage.complete, items: snapshot.operations.map(({ contract, discovery }) => {
+            return { version: snapshot.catalogDigest, complete: snapshot.coverage.complete, items: snapshot.operations.flatMap(({ contract, discovery, discoveryIssues }) => {
+                    const document = operationSearchDocument(contract, discovery);
+                    const score = scoreOperationSearch(document, query.q, query.match);
+                    if (score === undefined) return [];
                     const detailUrl = '/api/agent/help?operationId=' + encodeURIComponent(contract.operationId);
-                    return { source: 'operations', kind: 'operation', agent: null, label: contract.operationId, excerpt: contract.description,
+                    return [{ source: 'operations', kind: 'operation', agent: null,
+                        label: discovery?.title || contract.operationId, excerpt: discovery?.summary || contract.description,
                         origin: { operationId: contract.operationId, catalogSource: 'active-api-catalog', method: contract.method, pathTemplate: contract.pathTemplate }, detailUrl,
-                        handle: { detailUrl, operationId: contract.operationId, contractUrl: detailUrl }, searchText: operationSearchText(contract, discovery),
-                        evidence: { state: 'confirmed', evidenceRefs: [detailUrl], observedAt: null } };
+                        handle: { detailUrl, operationId: contract.operationId, contractUrl: detailUrl,
+                            inputSources: discovery?.inputSources ?? [], relatedOperations: discovery?.relatedOperations ?? [],
+                            examples: discovery?.examples ?? [], discoveryQuality: { state: discoveryIssues?.length ? 'needs_attention' : 'complete', issues: discoveryIssues ?? [] } },
+                        searchText: document.text, searchScore: score,
+                        evidence: { state: 'confirmed' as const, evidenceRefs: [detailUrl], observedAt: null } }];
                 }) };
         } });
     lanes.push({ key: 'entities', source: 'entities', agent: null, async read({ signal }) {

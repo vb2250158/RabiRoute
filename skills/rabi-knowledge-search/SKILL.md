@@ -24,7 +24,7 @@ description: Rabi 可用时任务检索先查询统一入口；发现、连接�
 
 命中内容足够时按来源继续任务。需要精确旧规范时读取命中的原文或样例；命中较宽时按对象调整 `q`，需要全部词命中时使用 `match=all`。未命中或覆盖不足时，结合来源、时间和对象继续查详情、目录或精确文件。消息端记录与本地 Agent 会话的覆盖分别以实际结果核对。
 
-接口发现使用 `scope=operations` 或活动目录，先核对返回的真实 operation 合同，再用已配置 MCP、CLI `--operation manager.search` 或 HTTP 调用。源码辅助入口 `scripts/lib/query-rabi-search.mjs` 的总预算覆盖发现、身份核对、查询及读取正文。旧版本无统一入口时使用按角色的兼容入口；某来源故障时保留其他来源结果并说明覆盖缺口。
+接口发现使用 `scope=operations` 或活动目录。选定 operation 后读取 `/api/agent/operations/{operationId}?view=input`，沿 `inputSources`、`relatedOperations` 和可选 `examples` 取得实际参数；按原任务授权调用对应业务接口，再核对结果、原回执和适用的写后回读。MCP 的 `rabi_search` 与 CLI 的 `search` 检索接口目录，统一内容搜索由 `manager.search` 提供；通过已配置 MCP、CLI 或 HTTP 进入同一活动合同。某个扫描或业务操作失败时保留该项错误，继续可用的关联操作；需要宿主专有动作时按明确能力缺口与当前授权选择工具。源码辅助入口 `scripts/lib/query-rabi-search.mjs` 的总预算覆盖发现、身份核对、查询及读取正文。旧版本无统一入口时使用按角色的兼容入口。
 
 ## 连接与兼容
 

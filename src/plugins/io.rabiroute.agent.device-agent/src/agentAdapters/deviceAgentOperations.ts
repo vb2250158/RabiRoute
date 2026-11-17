@@ -33,6 +33,21 @@ function failed(cause: unknown): ApiOperationResult {
   return { status: error?.statusCode || 500, headers, body: { code, message: code, ...(error?.uncertain ? { uncertain: true } : {}) } };
 }
 
+const devicePurposes: Record<string,string> = {
+  "list": "查询设备宿主 Agent 目录",
+  "session.read": "查询设备 Agent 当前会话",
+  "session.publish": "上报设备 Agent 已加载会话",
+  "pending.read": "查询设备 Agent 待处理工作",
+  "deliveries.enqueue": "投递任务到设备 Agent 信箱",
+  "deliveries.claim": "由原设备会话领取任务",
+  "deliveries.response.record": "提交设备任务结果",
+  "deliveries.receipt.read": "查询设备任务投递回执",
+  "prepared-deliveries.enqueue": "执行已准备的设备任务投递",
+  "prepared-deliveries.reconcile": "核对已准备的设备投递结果",
+  "wake-requests.list": "查询设备 Agent 唤醒请求",
+  "wake-requests.claim": "领取设备 Agent 唤醒请求",
+  "wake-requests.receipt.record": "记录设备 Agent 唤醒结果"
+};
 type Definition = { action: DeviceAgentAction; id: string; method: 'GET' | 'PUT' | 'POST'; suffix: string; response: ApiSchema; body?: ApiSchema; accepted?: boolean };
 /** Owns HTTP paths, discovery and structural validation; the native device owner executes business actions. */
 export function createDeviceAgentOperations(currentOwner: () => DeviceAgentOwner): readonly ApiOperationDefinition[] {
@@ -65,7 +80,7 @@ export function createDeviceAgentOperations(currentOwner: () => DeviceAgentOwner
       } catch (cause) { return failed(cause); }
     };
     const success = { mediaType: 'application/json', schema: object({ code: { const: 0 }, data: definition.response }) };
-    return { contract: { operationId: 'manager.device-agents.' + definition.id, aliases: ['device-agent:' + definition.method + ':' + pathTemplate], contractVersion: '1.0.0', exposure: 'public', transport: 'http', method: definition.method, pathTemplate,
+    return { discovery:{title:devicePurposes[definition.id],summary:devicePurposes[definition.id]+"。保留原agentId、sessionId、ownerEpoch及deliveryId，领取和结果由原设备会话确认。",category:{id:'agents.devices',title:'设备宿主 Agent',parentId:'agents'},keywords:[devicePurposes[definition.id],definition.id.replace(/[.-]/g,' '),'device agent'],...(definition.id!=='list'?{inputSources:[{field:'path.agentId',operationId:'manager.device-agents.list',resultPath:'/data/agents',valuePath:'/agentId'}],relatedOperations:['manager.device-agents.session.read','manager.device-agents.deliveries.receipt.read']}:{})}, contract: { operationId: 'manager.device-agents.'  + definition.id, aliases: ['device-agent:' + definition.method + ':' + pathTemplate], contractVersion: '1.0.0', exposure: 'public', transport: 'http', method: definition.method, pathTemplate,
       description: 'Discover the original PC-owned device mailbox, publish the native loaded session, or reconcile a stable delivery. Only that device host executes prompts; HTTP acceptance does not prove an answer.',
       request: { path: Object.keys(properties).length ? object(properties) : empty, query: ignored, headers: ignored, body: write ? { kind: 'json', schema: definition.body!, maxBytes: 0, allowAnyContentType: true,
         ...(definition.body === true ? { emptyValue: {} } : {}) } : { kind: 'none', allowIgnoredBody: true } },

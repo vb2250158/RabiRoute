@@ -3,6 +3,9 @@ import type { ApiOperationDefinition, ApiOperationInput } from "@rabiroute/host-
 import { readCodexDesktopThread, listCodexNativeSessionPage } from "../codexDesktopBridge.js";
 import { readCodexRolloutLines, statCodexRollout, type CodexRolloutSource } from "../codexRolloutReader.js";
 
+import { codexVisibleMessage } from '../../../../shared/agentSessionMessages.js';
+import { CodexSessionPreviewReader } from '../codexSessionPreview.js';
+
 type ThreadSource = {
   id: string;
   title?: string;
@@ -68,9 +71,10 @@ export class CodexNativeHistoryReader {
     const entries: Array<{ sequence: number; record: unknown }> = [];
     const warnings: Array<{ sequence: number; errorCode: string }> = [];
     const firstSequence = sequence + 1;
+    const atPageLimit = () => (options.includeRecord ? entries.length + warnings.length : scanned) >= limit;
     const accept = (line: string, nextOffset: number, terminated: boolean): boolean => {
       if (!terminated) { pendingTail = true; hasMore = true; return false; }
-      if (scanned >= limit) { hasMore = true; return false; }
+      if (atPageLimit()) { hasMore = true; return false; }
       let record: unknown;
       try { record = JSON.parse(line.replace(/^\uFEFF/, "")); }
       catch {
@@ -88,7 +92,7 @@ export class CodexNativeHistoryReader {
       }
       const size = Buffer.byteLength(line);
       if (bytes + size > maxBytes) {
-        if (!scanned) throw new CodexNativeReadError(413, "CODEX_HISTORY_EVENT_TOO_LARGE", `The next complete native event requires ${size} bytes. Set maxBytes to at least that value to read it without truncation.`);
+        if (!(options.includeRecord ? entries.length : scanned)) throw new CodexNativeReadError(413, "CODEX_HISTORY_EVENT_TOO_LARGE", `The next complete native event requires ${size} bytes. Set maxBytes to at least that value to read it without truncation.`);
         hasMore = true;
         return false;
       }
@@ -122,7 +126,7 @@ export class CodexNativeHistoryReader {
       options.signal?.throwIfAborted();
       for (let index = offset; index < rows.length; index++) {
         if (!accept(rows[index]!, index + 1, true)) break;
-        if (scanned >= limit) { hasMore = offset < rows.length; break; }
+        if (atPageLimit()) { hasMore = offset < rows.length; break; }
       }
     } else {
       let position = { startOffset: offset, nextOffset: offset, terminated: true };
@@ -136,7 +140,7 @@ export class CodexNativeHistoryReader {
         onLine: (_line, value) => { position = value; }
       })) {
         if (!accept(line, position.nextOffset, position.terminated)) break;
-        if (scanned >= limit) { hasMore = offset < source.stat.size; break; }
+        if (atPageLimit()) { hasMore = offset < source.stat.size; break; }
       }
     }
     const resumeCursor = encode({
@@ -229,19 +233,27 @@ const historySchema = {
 };
 
 export type CodexNativeOperationDependencies = {
-  listSessions?: (options: { limit: number; offset: number; query?: string }) => { items: unknown[]; nextOffset: number | null } | Promise<{ items: unknown[]; nextOffset: number | null }>;
+  listSessions?: (options: { limit: number; offset: number; query?: string; rootsOnly?:boolean; parentSessionId?:string; previews?:boolean; signal?:AbortSignal }) => { items: unknown[]; nextOffset: number | null } | Promise<{ items: unknown[]; nextOffset: number | null }>;
   readSession?: (id: string) => unknown | Promise<unknown>;
   history?: CodexNativeHistoryReader;
 };
 const queryNumber = (input: ApiOperationInput, key: string): number | undefined => input.url.searchParams.has(key) ? Number(input.url.searchParams.get(key)) : undefined;
 export function createCodexNativeOperations(dependencies: CodexNativeOperationDependencies = {}): ApiOperationDefinition[] {
   const history = dependencies.history ?? new CodexNativeHistoryReader();
-  const list = dependencies.listSessions ?? (options => {
-    const page = listCodexNativeSessionPage(options);
-    return {
-      ...page,
-      items: page.items.map(row => ({ id: row.id, title: row.title, cwd: row.cwd, updatedAt: row.updatedAt, archived: row.archived }))
-    };
+  const previews = new CodexSessionPreviewReader();
+  const list = dependencies.listSessions ?? (async options => {
+    const page = listCodexNativeSessionPage(options), items = [];
+    for (let offset=0;offset<page.items.length;offset+=4) {
+      const batch = await Promise.all(page.items.slice(offset,offset+4).map(async row => ({
+        id:row.id,title:row.title,cwd:row.cwd,updatedAt:row.updatedAt,archived:row.archived,
+        ...(row.parentThreadId ? {parentThreadId:row.parentThreadId} : {}),
+        ...(row.agentNickname ? {agentNickname:row.agentNickname} : {}),
+        ...(row.agentRole ? {agentRole:row.agentRole} : {}),
+        ...(options.previews ? await previews.read(row,options.signal) : {})
+      })));
+      items.push(...batch);
+    }
+    return {items,nextOffset:page.nextOffset};
   });
   const read = dependencies.readSession ?? (id => {
     const row = readCodexDesktopThread(id);
@@ -256,15 +268,25 @@ export function createCodexNativeOperations(dependencies: CodexNativeOperationDe
       query: {
         limit: { type: "string", pattern: "^[1-9][0-9]*$" },
         offset: { type: "string", pattern: "^[0-9]+$" },
-        query: { type: "string" }
+        query: { type: "string" },
+        view: { type: "string", enum: ["all","roots"] },
+        parentSessionId: { type: "string", minLength: 1, maxLength: 256 },
+        previews: { type: "string", enum: ["0","1"] }
       },
       run: async (input: ApiOperationInput) => {
         const limit = positive(queryNumber(input, "limit"), 50), offset = queryNumber(input, "offset") ?? 0;
         if (!Number.isSafeInteger(offset) || offset < 0) throw new CodexNativeReadError(400, "CODEX_SESSION_OFFSET_INVALID", "offset must be a non-negative safe integer.");
+        const rootsOnly = input.url.searchParams.get('view') === 'roots';
+        const parentSessionId = input.url.searchParams.get('parentSessionId') || undefined;
+        if (rootsOnly && parentSessionId) throw new CodexNativeReadError(400,'CODEX_SESSION_SCOPE_INVALID','Choose root sessions or one parent session.');
         const rows = await list({
           limit,
           offset,
-          query: input.url.searchParams.get("query") ?? undefined
+          query: input.url.searchParams.get("query") ?? undefined,
+          ...(rootsOnly ? {rootsOnly:true} : {}),
+          ...(parentSessionId ? {parentSessionId} : {}),
+          ...(input.url.searchParams.get('previews') === '1' ? {previews:true} : {}),
+          signal:input.signal
         });
         return { provider: "codex", ...rows };
       }
@@ -283,12 +305,14 @@ export function createCodexNativeOperations(dependencies: CodexNativeOperationDe
       query: {
         limit: { type: "string", pattern: "^[1-9][0-9]*$" },
         maxBytes: { type: "string", pattern: "^[1-9][0-9]*$" },
+        view: { type: "string", enum: ["all","messages"] },
         cursor: { type: "string" }
       },
       run: (input: ApiOperationInput) => history.read(input.path.sessionId!, {
         cursor: input.url.searchParams.get("cursor") ?? undefined,
         limit: queryNumber(input, "limit"),
         maxBytes: queryNumber(input, "maxBytes"),
+        ...(input.url.searchParams.get("view") === "messages" ? {includeRecord:(record:unknown)=>Boolean(codexVisibleMessage(record)?.text.trim())} : {}),
         signal: input.signal
       })
     }

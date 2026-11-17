@@ -4,10 +4,11 @@ import { personaHistoryTaskKey } from '@shared/personaChatHistory';
 export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string; group?:{key:string;title:string;path:string} };
 export type HistoryConversationRow =
   | { kind:'group'; key:string; title:string; path:string }
+  | { kind:'more'; key:string; groupKey:string; title:string }
   | { kind:'conversation'; key:string; conversation:HistoryConversationItem };
 
 /** Loaded projects follow their newest session, preserving source order within each project. */
-export function historyConversationRows(items:readonly HistoryConversationItem[], grouped:boolean, collapsed?:ReadonlySet<string>):HistoryConversationRow[] {
+export function historyConversationRows(items:readonly HistoryConversationItem[], grouped:boolean, collapsed?:ReadonlySet<string>, options?:{limit:number;expanded:ReadonlySet<string>}):HistoryConversationRow[] {
   const conversation = (item:HistoryConversationItem):HistoryConversationRow => ({kind:'conversation',key:item.key,conversation:item});
   if (!grouped) return items.map(conversation);
   const groups = new Map<string,HistoryConversationItem[]>();
@@ -21,7 +22,11 @@ export function historyConversationRows(items:readonly HistoryConversationItem[]
     if (!heading) return group.map(conversation);
     const key = 'project:'+heading.key;
     const header:HistoryConversationRow = {kind:'group',key,title:heading.title,path:heading.path};
-    return collapsed?.has(key) ? [header] : [header,...group.map(conversation)];
+    if (collapsed?.has(key)) return [header];
+    const limit = options && !options.expanded.has(key) ? options.limit : group.length;
+    const rows:HistoryConversationRow[] = [header,...group.slice(0,limit).map(conversation)];
+    if (limit < group.length) rows.push({kind:'more',key:'more:'+heading.key,groupKey:key,title:heading.title});
+    return rows;
   });
 }
 

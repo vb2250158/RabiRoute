@@ -6,6 +6,16 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.27 - 2026-11-17
+
+- New elevated Host tasks explicitly use Windows task priority `4`, avoiding the default low I/O and memory priorities intended for background work. Existing tasks are repaired through their Windows permission boundary and verified at startup.
+- `io.rabiroute.endpoint.napcat 0.1.12` validates quoted file messages through the current exact platform source, retains image-description review, and rechecks source bindings at every send boundary after asynchronous preparation.
+- `io.rabiroute.agent.codex 0.1.10` separates root chats and working child agents using native relationships, reads latest visible-message previews and retains exact child-session queries.
+- `io.rabiroute.agent.workbuddy 0.1.5` discovers and authenticates existing native gateways, paginates native history without persona binding and delivers to original tasks without classifying uncertain outcomes as safe retries.
+- `io.rabiroute.manager.persona 0.1.25` renders task lists before DSH and WorkBuddy previews, fills previews progressively with four bounded workers, cancels stale requests and continues preview reads when loading more fails.
+- Unify plugin operation/data-source discovery, expose role Skills and real handles, retain message continuations across appends, and bind catalog subscriptions before publication. Independently versioned plugins: `io.rabiroute.agent.device-agent 0.1.4`、`io.rabiroute.manager.agent-adapter-catalog 0.1.4`、`io.rabiroute.manager.agent-communication 0.1.7`、`io.rabiroute.manager.agent-state-control 0.1.4`、`io.rabiroute.manager.agent-thread-control 0.1.7`、`io.rabiroute.manager.core 0.1.10`、`io.rabiroute.manager.gateway-runtime 0.1.4`、`io.rabiroute.manager.performance 0.1.7`、`io.rabiroute.manager.rabilink-relay 0.1.4`、`io.rabiroute.manager.remote-agent 0.1.4`、`io.rabiroute.manager.speech 0.1.7`、`io.rabiroute.manager.video 0.2.4`、`io.rabiroute.manager.xiaomi-home 0.1.8`.
+
+
 ## 0.15.26 - 2026-11-17
 
 - Remove the push-tag trigger from the Windows release workflow; publication now requires an explicit dispatch. GitHub still emits a push event for the tag created by `gh release create --target`, so a duplicate build started after the release was published and would have overwritten the verified uploaded assets with CI output once its test gate passed.

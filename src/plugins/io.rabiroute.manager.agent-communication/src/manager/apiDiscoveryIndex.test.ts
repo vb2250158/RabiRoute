@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compileApiContract, compileApiOperation, type ApiOperationDefinition, type ApiOperationDiscovery } from "../../../../manager/apiOperationContract.js";
+import { operationSearchDocument, scoreOperationSearch } from "../../../../manager/searchText.js";
 import { createApiCatalogSnapshot, type ApiPublishedOperation } from "../../../../manager/apiOperationCatalog.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "../../../../manager/apiOperationContractFixtures.js";
 import { createPeerControlOperations } from "../../../../peerTunnel/apiControlOperations.js";
 import { createPeerProxyHttpOperations } from "../../../../peerTunnel/apiProxyHttpOperations.js";
 import { createLanAgentManagementOperations } from "../../../io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
-import { LAN_AGENT_INTERACTIVE_ROUTES, interactiveApiContract } from "../../../io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
+import { LAN_AGENT_INTERACTIVE_ROUTES, interactiveOperation } from "../../../io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
 import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage } from "./apiDiscoveryIndex.js";
 
 function operation(id: string, pathTemplate: string, discovery?: ApiOperationDiscovery): ApiPublishedOperation {
@@ -144,6 +145,7 @@ test("a large active catalog reuses one in-memory index and compact default page
   }
   const bytes = Buffer.byteLength(JSON.stringify(first));
   assert.equal(first.count, 20); assert.equal(first.total, 1200); assert.ok(bytes < 8192);
+  assert.deepEqual(first.discoveryQuality, { state: "needs_attention", countScope: "page", operationCount: 20, needsAttention: 20 });
   t.diagnostic(JSON.stringify({ operations: 1200, preparedMs, repeatedReads: 100, summaryPageBytes: bytes }));
 });
 
@@ -231,17 +233,17 @@ function nativeComputerOperations(): ApiPublishedOperation[] {
     ...createPeerControlOperations({} as Parameters<typeof createPeerControlOperations>[0]),
     ...createPeerProxyHttpOperations({} as Parameters<typeof createPeerProxyHttpOperations>[0]),
     ...createLanAgentManagementOperations({ registry: {} } as Parameters<typeof createLanAgentManagementOperations>[0]),
-    ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => ({ contract: interactiveApiContract(route) }))
+    ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => interactiveOperation(route, {} as Parameters<typeof interactiveOperation>[1], () => ({ status: 200 })))
   ];
   const ids = new Set(["manager.rabilink.peer.servers.read", "manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"]);
   return definitions.filter(definition => ids.has(definition.contract.operationId)).map(definition => {
     const compiled = compileApiContract(definition);
-    assert.equal(compiled.discovery, undefined);
-    return { contract: compiled.contract, contractDigest: compiled.digest, owner: { instanceId: "manager:native" } };
+    return { contract: compiled.contract, contractDigest: compiled.digest, discovery: compiled.discovery,
+      discoveryIssues: compiled.discoveryIssues, owner: { instanceId: "manager:native" } };
   });
 }
 
-test("native computer factories gain precise shared navigation without registering or changing operations", () => {
+test("native computer factories publish their own precise navigation with the same executable contracts", () => {
   const native = nativeComputerOperations();
   const value = snapshot([...native, operation("manager.desktop-pet.binding.read", "/api/desktop-pet/roles/:roleId/binding", { title: "桌宠绑定" })]);
   assert.equal(native.length, 5);
@@ -270,7 +272,7 @@ test("native computer factories gain precise shared navigation without registeri
   assert.throws(() => apiOperationDescription(snapshot([]), "manager.rabilink.peer.servers.read"), /API_OPERATION_NOT_FOUND/);
 });
 
-test("native navigation defaults yield to explicit plugin discovery and never fill unknown IDs", () => {
+test("explicit owner discovery defines navigation without host-specific operation rules", () => {
   const original = nativeComputerOperations().find(row => row.contract.operationId === "manager.rabilink.peer.servers.read")!;
   const explicit: ApiPublishedOperation = { ...original, discovery: { title: "自定义主机目录", category: { id: "io.fixture.custom", title: "自定义" }, keywords: ["自定义关键词"], inputSources: [], relatedOperations: [] } };
   const value = snapshot([explicit, operation("fixture.unknown", "/api/fixture/unknown")]);
@@ -284,6 +286,35 @@ test("native navigation defaults yield to explicit plugin discovery and never fi
   assert.equal(apiOperationPage(value, { query: "自定义关键词" }).items[0]!.operationId, explicit.contract.operationId);
   assert.equal(apiOperationDescription(value, "fixture.unknown").discovery.title, "fixture.unknown");
   assert.equal(apiOperationPage(value, {}).total, 2);
+});
+
+test("unknown plugin operations use shared task semantics and matching mode", () => {
+  const operations = [
+    operation("io.example.coral.inventory.read", "/api/example/coral/inventory", {
+      title: "查询珊瑚库存", summary: "Read the coral inventory and available quantities.",
+      keywords: ["珊瑚库存", "库存数量", "coral inventory"], category: { id: "io.example.coral", title: "珊瑚仓库" }
+    }),
+    operation("io.example.coral.inventory.settings", "/api/example/coral/settings", {
+      title: "配置珊瑚库存", summary: "Configure coral inventory alerts.",
+      keywords: ["珊瑚库存", "库存告警", "coral inventory settings"], category: { id: "io.example.coral", title: "珊瑚仓库" }
+    }),
+    operation("io.example.coral.lighting.read", "/api/example/coral/lighting", {
+      title: "查询照明", summary: "Read lighting levels.", category: { id: "io.example.coral", title: "珊瑚仓库" }
+    })
+  ];
+  const value = snapshot(operations);
+  for (const query of ["珊瑚库存", "coral inventory", "配置 库存", "coral missing"]) {
+    for (const match of ["all", "any"] as const) {
+      const expected = operations.map(row => ({ id: row.contract.operationId,
+        score: scoreOperationSearch(operationSearchDocument(row.contract, row.discovery), query, match) }))
+        .filter((row): row is { id: string; score: number } => row.score !== undefined)
+        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).map(row => row.id);
+      assert.deepEqual(apiOperationPage(value, { query, match }).items.map(row => row.operationId), expected, query + " " + match);
+    }
+  }
+  assert.equal(apiOperationPage(value, { query: "珊瑚库存" }).total, 2);
+  assert.equal(apiOperationPage(value, { query: "coral inventory" }).total, 2);
+  assert.equal(apiOperationPage(value, { query: "珊瑚仓库" }).total, 0);
 });
 
 

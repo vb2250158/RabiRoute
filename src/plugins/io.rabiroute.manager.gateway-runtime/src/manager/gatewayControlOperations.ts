@@ -15,6 +15,144 @@ const mutationHeaders = { type: "object", additionalProperties: true, properties
   "if-match": { ...rawField, description: "Exact 64-hex strong Route catalog content hash, bare or quoted. Required and checked before the body." }
 } };
 const nativeJson = (properties: Record<string, ApiSchema>) => ({ kind: "json" as const, maxBytes: 0, allowAnyContentType: true, emptyValue: {}, schema: { description: "Native owner validation remains authoritative, including coercion, unknown fields and native failures on incompatible values; no new application byte limit.", anyOf: [{ type: "object", properties, additionalProperties: true }, ...["array", "string", "number", "boolean", "null"].map(type => ({ type }))] } });
+
+const gatewayPurposes: Record<string, [string, string[]]> = {
+  "list": [
+    "查询消息路由、Agent配置与运行状态",
+    [
+      "路由列表",
+      "Agent配置",
+      "会话绑定",
+      "gateway route configuration"
+    ]
+  ],
+  "replace": [
+    "替换消息路由配置",
+    [
+      "路由配置",
+      "批量配置",
+      "replace gateway routes"
+    ]
+  ],
+  "config.save": [
+    "保存消息路由与 Agent 绑定配置",
+    [
+      "配置Agent",
+      "接入Agent",
+      "绑定任务",
+      "会话绑定",
+      "保存路由",
+      "configure adapter",
+      "bind agent session",
+      "save route configuration"
+    ]
+  ],
+  "mutation.read": [
+    "查询路由配置保存回执",
+    [
+      "保存结果",
+      "配置回执",
+      "route mutation receipt"
+    ]
+  ],
+  "start": [
+    "启动消息路由",
+    [
+      "启动路由",
+      "start gateway"
+    ]
+  ],
+  "stop": [
+    "停止消息路由",
+    [
+      "停止路由",
+      "stop gateway"
+    ]
+  ],
+  "restart": [
+    "重启消息路由",
+    [
+      "重启路由",
+      "restart gateway"
+    ]
+  ],
+  "delete": [
+    "删除消息路由",
+    [
+      "删除路由",
+      "remove gateway"
+    ]
+  ],
+  "weixin-login.request": [
+    "发起微信消息端登录",
+    [
+      "微信登录",
+      "weixin login"
+    ]
+  ],
+  "manual-trigger.request": [
+    "手动触发路由自动化规则",
+    [
+      "手动触发",
+      "执行规则",
+      "manual automation trigger"
+    ]
+  ],
+  "agent-delivery-test.request": [
+    "测试路由绑定 Agent 的真实投递",
+    [
+      "投递测试",
+      "验证Agent接入",
+      "agent delivery test"
+    ]
+  ],
+  "delivery-replay.list": [
+    "查询可重放的路由投递记录",
+    [
+      "投递历史",
+      "失败投递",
+      "delivery replay records"
+    ]
+  ],
+  "delivery-replay.request": [
+    "重放指定的路由投递记录",
+    [
+      "重放投递",
+      "补发消息",
+      "replay delivery"
+    ]
+  ],
+  "network-options.read": [
+    "查询可用网络绑定地址",
+    [
+      "网络地址",
+      "监听网卡",
+      "network bind options"
+    ]
+  ],
+  "reload": [
+    "重新加载路由运行配置",
+    [
+      "重载配置",
+      "reload routes"
+    ]
+  ]
+};
+
+function gatewayDiscovery(name: string, mutation: boolean): ApiOperationDefinition["discovery"] {
+  const purpose = gatewayPurposes[name];
+  return { title: purpose[0], summary: purpose[0] + (name === "config.save"
+    ? "。先读取现有路由配置和适配器合同，提交局部字段；使用当前 routeCatalog.contentHash 及原操作 ID，分别核对保存回执和运行状态。" : "。"),
+    category: { id: "settings.routes", title: "消息路由与 Agent 配置", parentId: "settings" }, keywords: purpose[1],
+    ...(name !== "list" && name !== "replace" && name !== "mutation.read" && name !== "network-options.read" && name !== "reload"
+      ? { inputSources: [{ field: "path.id", operationId: "manager.gateway-runtime.list", resultPath: "/data/config/gateways", valuePath: "/id", parameters: { "query.summary": { value: "1" }, "query.includeConfig": { value: "1" } } },
+        ...(mutation ? [{ field: "headers.if-match", operationId: "manager.gateway-runtime.list", resultPath: "/routeCatalog", valuePath: "/contentHash" }] : [])] }
+      : mutation ? { inputSources: [{ field: "headers.if-match", operationId: "manager.gateway-runtime.list", resultPath: "/routeCatalog", valuePath: "/contentHash" }] } : {}),
+    ...(name === "config.save" || name === "replace" || name === "delete" ? { relatedOperations: ["manager.gateway-runtime.list", "manager.gateway-runtime.mutation.read", "agent.adapters.catalog.get"] }
+      : name === "agent-delivery-test.request" ? { relatedOperations: ["manager.gateway-runtime.list", "manager.gateway-runtime.delivery-replay.list"] } : {}),
+    ...(name === "config.save" ? { examples: [{ title: "修改已读取路由的启用状态", input: { body: { enabled: true } } }] } : {}) };
+}
+
 type Invoke = (input: ApiOperationInput, mutation?: GatewayMutation) => ApiOperationResult | Promise<ApiOperationResult>;
 
 /** The same definitions install native gateway routes and publish their executable contracts. */
@@ -36,7 +174,7 @@ export function createGatewayControlOperations(context: GatewayControlRoutesCont
         ...(options.mutation ? { idempotencyHeader: "Idempotency-Key", receiptPath: "/gateways/mutations/:operationId" } : {}),
         description: options.recovery ?? (options.mutation ? "Retain the same native key and strong hash. Read /gateways/mutations/:operationId; its original queue barrier resolves earlier writes before returning committed or not_committed. Activation failure does not erase a committed scoped save." : method === "GET" ? "Repeat the read against the active native owner." : "HTTP acceptance or uncertain response is not completion. Inspect the original runtime, process or delivery receipt before deciding whether to repeat; this operation has no generic replay guarantee.") },
       validators: [{ id: "native-gateway-owner", description: "Authenticated remote connections use all public operations without an additional feature grant. Original read-only mode, object lookup, Route CAS/idempotency, native launch and platform validators remain authoritative. Registry JSON decode failures are HTTP 400; business failures preserve their native status." }]
-    }, prepare(input) {
+    }, discovery: gatewayDiscovery(name, options.mutation === true), prepare(input) {
       if (readOnly && method !== "GET" && method !== "HEAD") return { status: 403, body: errorResponsePresentation({ code: -1, message: "Manager is running in read-only acceptance mode." }, 403) };
       try { const mutation = options.mutation ? prepareGatewayMutation(input.request, context) : undefined; return prepared => run(prepared, mutation); }
       catch (cause) { const failure = publicRouteMutationError(cause); return { status: failure.statusCode, body: errorResponsePresentation({ code: -1, errorCode: failure.errorCode, message: failure.message }, failure.statusCode) }; }

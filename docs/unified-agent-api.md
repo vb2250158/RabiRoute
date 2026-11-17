@@ -12,6 +12,8 @@ CLI 与 MCP 共用 operation SDK，通过现有 HTTP、SSE 或 WebSocket 调用 
 
 ## 先找到功能
 
+任务检索先调用统一搜索 `GET /api/search?q=<关键词>`，读取内容、覆盖与真实入口。需要执行功能时，可限定 `scope=operations`，或使用下方 operation 目录。MCP 的 `rabi_search` 与 CLI 的 `search` 检索接口目录；统一内容搜索由 `manager.search` 提供。两者都沿当前 Manager 的活动合同调用。
+
 独立客户端产物目录使用 `node rabi-cli.mjs <命令>`；完整源码根使用下面的路径。入口通过 Host 发现当前 Manager，命令结果以 JSON 写入 stdout。独立 CLI/MCP 客户端更新不需要重启 Manager。
 
 ```sh
@@ -53,9 +55,27 @@ node apps/rabi-agent/rabi-cli.mjs search "聊天历史" --config /private/rabi-a
 | `automation` | 规则、定时事件、Hook 与执行记录 |
 | `runtime` | Rabi 插件安装卸载、版本、启停、状态与诊断 |
 
-插件在 operation definition 的 `discovery` 中登记分类、标题、关键词和 provider，显式声明优先。既有 API 缺少中文导航字段时，在公共发现插件的基础导航数据补齐，保留原执行合同、schema、owner 和权限，不为搜索虚构接口。自定义分类保留稳定 ID、可选父类和插件归属，随活动快照更新。缺少分类的公开接口仍能通过全局搜索找到。跨类标签和相关操作引用同一个 operation。
+插件在原 `ApiOperationDefinition.discovery` 中登记业务标题、摘要、分类、中英文关键词、provider、参数来源和相关操作；显式声明随原 handler 一起注册，宿主从活动快照自动提取。新增插件沿同一声明接入目录、统一搜索、describe、CLI 与 MCP，核心保持通用注册和查询逻辑。能力演进时更新原 owner 的声明。自定义分类保留稳定 ID、可选父类和插件归属，随活动快照更新。缺少分类的公开接口仍可全局发现。
 
 `category` 用于筛选范围，搜索按真实标题、关键词和短语相关性匹配；中英文同义组在 query 侧展开，不把整类词注入该分类的每个 operation。目录 `provider` 表示能力提供方；模型厂商在文档中称为 ModelProvider，原 wire 字段保持不变。
+
+## 插件声明与宿主接入协议
+
+能力由原业务 owner 实现并注册，`discovery` 描述用户能完成的任务。宿主通过同一活动声明读取能力与输入，协议转接继续使用原 handler、schema、权限和状态。
+
+| 声明字段 | 内容与使用 |
+| --- | --- |
+| `title`、`summary` | 用用户目的说明能力、可见结果和边界，包含可识别的业务对象 |
+| `keywords`、`tags`、`provider`、`category` | 中英文意图词、所属能力与分类。按真实支持范围声明 |
+| `inputSources` | 需要目录 ID、版本或配置字段时，引用原查询 operation、参数映射与结果字段 |
+| `relatedOperations` | 引用本任务实际需要的前置查询、配置、执行或回读 operation |
+| `examples` | 可选 `{ title, input }` 列表，input 使用 `path`、`query`、`headers` 和 `body`，采用公开占位数据并保留 schema 校验 |
+
+参数来源声明 `field`、`operationId` 和 `resultPath`，可选 `valuePath` 与 `parameters` 映射。无需外部参数的操作可省略参数来源。宽松的原生 schema 保持原兼容语义，由参数来源、示例和业务说明补足可调用信息。元数据质量问题进入目录诊断，原业务入口继续按已有合同处理请求。完整 describe、Help 和 OpenAPI 提供 `discoveryQuality: { state, issues }`。列表页头返回 `discoveryQuality: { state, countScope: "page", needsAttention, operationCount }` 聚合，具体问题按需 describe，保持短列表的响应预算。
+
+宿主的精简提示提供稳定的发现流程与当前角色。能力列表、参数与恢复步骤从活动目录按需读取，专题文档用于补充业务背景。新能力通过自身声明出现，复用当前宿主的 HTTP、CLI 或 MCP 工具。
+
+调用流程依次取得任务搜索结果、选定 operation 的 input、参数来源与关联操作，再提交真实业务请求并核对结果。某个来源、扫描或操作失败时，保留其错误与原回执，继续其它可用入口。Rabi 发现、连接或检索工具不可用时记录一次实际错误，使用现有工具继续原任务。不确定写入先按原请求 ID 查询执行阶段。明确需要宿主内部动作时，按实际能力缺口和当前授权选择工具。
 
 ## HTTP 发现合同
 
@@ -65,7 +85,7 @@ node apps/rabi-agent/rabi-cli.mjs search "聊天历史" --config /private/rabi-a
 | `GET /api/agent/operations` | `data.items` 短摘要、`count`、`total` 和 `nextCursor` |
 | `GET /api/agent/operations/:operationId?view=input` | `data.operation` 的输入合同、参数来源和相关操作 |
 
-列表接受 `category`、`query`、`provider`、`owner`、`method`、`pathPrefix`、`limit` 和 `cursor`。默认每页 20 条，`limit` 支持 1–200。关键词覆盖 ID、alias、标题、摘要、路径及声明的词，分类字段负责范围筛选。游标绑定原快照和筛选条件，409 后重新发现当前页。
+列表接受 `category`、`query`、`match`、`provider`、`owner`、`method`、`pathPrefix`、`limit` 和 `cursor`。接口目录多词搜索默认 `match=all`，需要任意词命中时使用 `match=any`。默认每页 20 条，`limit` 支持 1–200。关键词覆盖 ID、alias、标题、摘要、路径及声明的词，分类字段负责范围筛选。游标绑定原快照和筛选条件，409 后重新发现当前页。
 
 响应携带 `schemaVersion`、Manager 身份、`pluginGenerationId`、`catalogRevision` 与 `catalogDigest`。完整兼容帮助 `/api/agent/help` 和 OpenAPI 导出仍可使用。日常发现使用短摘要和单项 describe。
 
@@ -89,7 +109,7 @@ CLI 的 `--input-file`、`--input-json` 或 `--input-stdin` 与 MCP `input` 使�
 | 字段 | 含义 |
 | --- | --- |
 | `operation` | 稳定业务接口 ID，CLI 的 call 位置参数与它对应 |
-| `input.pathParams` | 路径参数，SDK 按当前 pathTemplate 编码 |
+| `input.pathParams` | 路径参数，SDK 按当前 pathTemplate 编码。`input.path` 为同义输入，`examples` 采用该名称 |
 | `input.query` | 查询参数，标量或标量数组按合同传输 |
 | `input.body` | JSON 正文，字符串也按 JSON 字符串传输 |
 | `input.bodyBase64` | 原二进制正文的 base64 表示 |
@@ -136,6 +156,10 @@ Codex 历史保留原事件、工具 ID、物理序号和返回游标，普通 J
 发现元数据随活动 registry snapshot 发布。分类和关键词更新目录 revision，执行合同变化更新 `contractDigest`。SDK 缓存单项合同，并在目录事件、重连或身份变化后刷新。
 
 界面、CLI 和 MCP 使用同源查询验证列表、全文、关联记录、群成员、图片和合并转发的 ID、字段与分页覆盖。单项异常在所属项报告，健康数据继续可查询。实际安装版本与外部宿主工具加载以对应发布和运行验收为准。验收同时记录实际宿主 tools、加载提示和 adapter 版本，用“电脑列表”“群历史”等关键词发现真实 API 并读取业务资源；HTTP 200、Host 版本和 source build 分别只证明各自范围。
+
+任务验收从用户原话开始，记录 Manager 身份、查询条件、命中 operation、describe、参数来源请求、真实业务调用及写后回读。覆盖中文与英文表达、参数缺失、单项故障、空结果和结果不确定时的原 ID 恢复。需要改用宿主专有工具时，记录触发该选择的实际能力缺口。
+
+新增插件验收使用当前核心未预置名称或关键词的测试能力，仅通过其原 `discovery` 声明完成搜索、参数取得、调用与结果核对。原有能力按改动影响选择代表任务回归，同时验证 CLI、MCP 与通用 HTTP 的输入和结果一致。
 
 ## 旧数据升级
 

@@ -1,6 +1,7 @@
 {
   "name": "io.rabiroute.manager.agent-communication",
-  "version": "0.1.6",  "type": "module",
+  "version": "0.1.7",
+  "type": "module",
   "license": "MIT",
   "files": [
     "rabi.plugin.json",

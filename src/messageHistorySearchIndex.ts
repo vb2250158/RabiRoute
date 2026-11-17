@@ -20,7 +20,7 @@ const SCHEMA_VERSION = "7";
 const ANALYZER_VERSION = `utf16-grams-v1:${process.versions.unicode}:${Intl.DateTimeFormat().resolvedOptions().locale}`;
 export type MessageHistorySearchResult = {
   entries: MessageContextRecord[];
-  page?: { nextCursor: string | null; adapters?: string[]; conversations?: QqConversation[]; nextConversationCursor?: string | null };
+  page?: { nextCursor: string | null; adapters?: string[]; conversations?: QqConversation[]; nextConversationCursor?: string | null; sourceSnapshot?: string };
   coverage: { indexVersion: string; sourceVersion: string; indexedAt: string; sourceSnapshotIndexed: boolean;
     indexCoverage?: "complete" | "partial"; sourceRecordsSkipped?: number; pendingRecordBytes?: number; maxIndexedRecordBytes?: number;
     legacyCoverageUnknown?: boolean;
@@ -380,7 +380,23 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
     const pendingRecordBytes = Number(issues.pending);
     const legacyCoverageUnknown = meta.get("legacyCoverageUnknown") === "1";
     const partial = sourceRecordsSkipped > 0 || pendingRecordBytes > 0 || legacyCoverageUnknown;
-    const stableSources = query.page ? JSON.stringify(db.prepare('SELECT file,fingerprint FROM sources WHERE current=0 ORDER BY ordinal').all()) : '';
+    const stableSources = query.page || query.unified ? JSON.stringify(db.prepare('SELECT file,fingerprint FROM sources WHERE current=0 ORDER BY ordinal').all()) : '';
+    let unifiedSnapshot: string | undefined;
+    if (query.unified) {
+      // Freeze the original append prefix. New messages, including backdated ones,
+      // become visible on refresh, while this query keeps stable offset ordering.
+      const scope = historyPageScope(query, reader.generation, (meta.get('layout') ?? '') + stableSources, epoch ?? '');
+      const visible = currentRecordLimit ?? (cursorText ? (JSON.parse(String(cursorText)) as MessageHistoryCursor).records : 0);
+      let prefix = { scope, records: visible };
+      if (query.unified.snapshot) {
+        try { prefix = JSON.parse(query.unified.snapshot); } catch { prefix = { scope: '', records: -1 }; }
+        if (!prefix || prefix.scope !== scope || !Number.isSafeInteger(prefix.records) || prefix.records < 0 || prefix.records > visible) {
+          throw Object.assign(new Error('The original message prefix changed. Refresh the search.'), { statusCode: 409, code: 'MESSAGE_HISTORY_CURSOR_EXPIRED' });
+        }
+      }
+      currentRecordLimit = prefix.records;
+      unifiedSnapshot = JSON.stringify(prefix);
+    }
     const pageScope = query.page ? historyPageScope(query, reader.generation, (meta.get('layout') ?? '') + stableSources, epoch ?? '') : '';
     const before = query.page?.cursor ? readHistoryPageCursor(query.page.cursor, pageScope) : undefined;
     let nextPageCursor: string | null = null;
@@ -521,7 +537,7 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
         if (result.length>=query.limit || (result.length && chars+row.chars>maxChars)) {more=true;break;}
         collect(row);
       }
-      return {...finish(result),page:{nextCursor:more?String(query.unified.offset+result.length):null}};
+      return {...finish(result),page:{nextCursor:more?String(query.unified.offset+result.length):null,sourceSnapshot:unifiedSnapshot}};
     }
     // The source catalog and physical record positions define one stable write
     // order, including legacy rows without a sequence. Duplicate identity belongs

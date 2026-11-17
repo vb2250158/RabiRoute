@@ -5,10 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
+import { readWorkbuddyHistory } from "./workbuddyHistory.js";
+import { createManager } from "./agentAdapters/workbuddyManagerProvider.js";
+import type { AgentManagerImplementationOptions } from "../../../manager/agentManagerHostPorts.js";
 import { handleAgentThreadRequest } from "../../../agentThreads.js";
 import { nativeOperations } from "../../../agentAdapters/managerNativeOperations.js";
 import type { AgentManagerOperationInvoker } from "../../../agentAdapters/managerInvocation.js";
 import {
+  agentAdapterManifest,
   agentThreadCapableAgentTypes,
   isAgentThreadCapableAdapter
 } from "../../../shared/agentAdapterCapabilities.js";
@@ -19,6 +23,58 @@ import {
 } from "./workbuddyThreads.js";
 
 const PASSWORD = randomBytes(32).toString("hex");
+
+test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete native records", async t => {
+  const root = createHome([{ id: "11111111-1111-4111-8111-111111111111", cwd: "C:/work/one", title: "原任务" }]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, "projects", "c-work-one");
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, "11111111-1111-4111-8111-111111111111.jsonl");
+  const user = { type: "message", role: "user", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "input_text", text: "中文问题" }] };
+  const answer = { type: "message", role: "assistant", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "output_text", text: "原任务回答" }] };
+  const rows = [JSON.stringify(user), "broken row", JSON.stringify(answer)];
+  fs.writeFileSync(file, rows.join("\r\n") + "\r\n" + '{"type":');
+  await withHome(root, async () => {
+    const first = await readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { limit: 2 });
+    assert.deepEqual(first.entries, [{ sequence: 1, record: user }]);
+    assert.equal(first.warnings[0]?.errorCode, "WORKBUDDY_HISTORY_ROW_INVALID");
+    assert.ok(first.nextCursor);
+    const manager = createManager({} as AgentManagerImplementationOptions, {
+      type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
+      sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
+    }, new AbortController().signal);
+    const response = await handleAgentThreadRequest({ action: "read", agentAdapter: "workbuddy", threadId: "11111111-1111-4111-8111-111111111111", history: { limit: 2 } }, {
+      allowedWorkspaces: [],
+      invokeAgentOperation: async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+        assert.equal(type, "workbuddy");
+        return await manager.operations[operation]!(payload, invocation) as T;
+      }
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual((response.data.history as typeof first).entries, first.entries);
+    const budget = await readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { maxBytes: Buffer.byteLength(rows[0]! + "\r\n") });
+    assert.ok(budget.nextCursor);
+    assert.equal(budget.coverage.pendingTail, false);
+    const second = await readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { cursor: first.nextCursor!, limit: 2 });
+    assert.deepEqual(second.entries, [{ sequence: 3, record: answer }]);
+    assert.equal(second.coverage.pendingTail, true);
+    assert.equal(second.nextCursor, null);
+    fs.appendFileSync(file, '"message","role":"user","content":[]}\n');
+    const appended = await readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { cursor: second.resumeCursor });
+    assert.equal(appended.entries.length, 1);
+    assert.equal(appended.coverage.pendingTail, false);
+    assert.equal(appended.nextCursor, null);
+    await assert.rejects(readWorkbuddyHistory("missing"), /was not found/);
+    await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { cursor: "bad" }), /游标/);
+    await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { limit: 0 }), /分页参数/);
+    await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { maxBytes: 5 }), /预算/);
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { signal: aborted.signal }), /abort/i);
+    fs.writeFileSync(file, "{}\n");
+    await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { cursor: first.nextCursor! }), /来源已变化/);
+  });
+});
 
 type TaskRow = {
   id: string;

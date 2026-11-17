@@ -47,7 +47,6 @@ export function createApiCatalogSnapshot(identity: ApiCatalogIdentity, revision:
     .sort((a, b) => a.binding.listenerId.localeCompare(b.binding.listenerId));
   const catalogDigest = apiDigest({ operations: ordered.map(value => ({ contract: value.contract, contractDigest: value.contractDigest,
     ...(value.discovery ? { discovery: value.discovery } : {}), ...(value.discoveryIssues ? { discoveryIssues: value.discoveryIssues } : {}),
-    ...(value.discovery ? { discovery: value.discovery } : {}), ...(value.discoveryIssues ? { discoveryIssues: value.discoveryIssues } : {}),
     ...(value.binding ? { binding: value.binding } : {}), ...(value.access ? { access: value.access } : {}) })), listeners: activeListeners, gaps });
   const etag = `"${apiDigest({ ...identity, catalogDigest, catalogRevision: revision }).slice(7)}"`;
   return freezeApiData({ ...identity, schemaVersion: "2", catalogRevision: revision, catalogDigest, etag,
@@ -66,7 +65,7 @@ function parameters(schema: ApiSchema, location: "path" | "query" | "header") {
 function* projectOpenApi(snapshot: ApiCatalogSnapshot): Generator<void, Readonly<Record<string, unknown>>> {
   const paths: Record<string, Record<string, unknown>> = Object.create(null);
   const externalPaths = new Map<string, Record<string, Record<string, unknown>>>();
-  for (const { contract, contractDigest, owner, binding, access } of snapshot.operations) {
+  for (const { contract, contractDigest, owner, binding, access, discovery, discoveryIssues } of snapshot.operations) {
     const template = parseApiPathTemplate(contract.pathTemplate, contract.request.pathTails, contract.request.pathRemainder, contract.request.pathCaseInsensitiveLiterals);
     const path = template.openApiTemplate;
     const body = contract.request.body;
@@ -105,7 +104,11 @@ function* projectOpenApi(snapshot: ApiCatalogSnapshot): Generator<void, Readonly
     const item = pathSpace[path] ??= Object.create(null) as Record<string, unknown>;
     // OpenAPI has no wildcard HTTP verb. Preserve it as an explicit native-proxy extension.
     const method = contract.method === "*" ? "x-rabiroute-any-method" : contract.method.toLowerCase();
-    const projected = { operationId: contract.operationId, description: contract.description,
+    const projected = { operationId: contract.operationId, summary: discovery?.title ?? contract.operationId,
+      description: discovery?.summary ?? contract.description,
+      ...(discovery?.tags?.length ? { tags: discovery.tags } : {}),
+      ...(discovery ? { "x-rabiroute-discovery": discovery } : {}),
+      "x-rabiroute-discovery-quality": { state: discoveryIssues?.length ? "needs_attention" : "complete", issues: discoveryIssues ?? [] },
       parameters: [...parameters(contract.request.path, "path"), ...parameters(contract.request.query, "query"), ...parameters(contract.request.headers, "header")],
       ...(requestBody ? { requestBody } : {}), responses,
       ...(body.kind === "none" && body.allowIgnoredBody ? { "x-rabiroute-ignored-request-body": true } : {}),

@@ -13,7 +13,8 @@
     "src/agentAdapters/stateReporter.ts"
   ],
   "ownedSources": [
-    "src/plugins/io.rabiroute.agent.codex/src/manager/completionImages.ts"
+    "src/plugins/io.rabiroute.agent.codex/src/manager/completionImages.ts",
+    "src/shared/agentSessionMessages.ts"
   ],
   "workers": [
     {

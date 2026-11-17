@@ -36,6 +36,7 @@ export type WorkbuddySessionDescriptor = {
   startedAt?: number;
   lastHeartbeat?: number;
   updatedAt?: number;
+  processStartFileTime?: string;
   /** Named-pipe address published by prewarm workers; metadata operations only. */
   socketPath?: string;
   stale: boolean;
@@ -170,6 +171,7 @@ export function parseWorkbuddySessionDescriptor(
   const stale = !lastHeartbeat || now - lastHeartbeat > WORKBUDDY_SESSION_STALE_MS;
   const endpoint = nonEmptyString(record.endpoint) || nonEmptyString(record.url);
   const meta = record.meta && typeof record.meta === "object" ? record.meta as Record<string, unknown> : {};
+  const identity = record.processIdentity && typeof record.processIdentity === "object" ? record.processIdentity as Record<string, unknown> : {};
   return {
     pid,
     sessionId,
@@ -182,6 +184,7 @@ export function parseWorkbuddySessionDescriptor(
     ...(finiteNumber(record.startedAt) ? { startedAt: finiteNumber(record.startedAt) } : {}),
     ...(lastHeartbeat ? { lastHeartbeat } : {}),
     ...(finiteNumber(record.updatedAt) ? { updatedAt: finiteNumber(record.updatedAt) } : {}),
+    ...(nonEmptyString(identity.procStartFt) ? { processStartFileTime: nonEmptyString(identity.procStartFt) } : {}),
     ...(nonEmptyString(meta.socketPath) ? { socketPath: nonEmptyString(meta.socketPath) } : {}),
     stale,
     processAlive: alive,

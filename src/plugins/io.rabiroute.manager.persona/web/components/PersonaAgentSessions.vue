@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import { usePersonaService } from '../persona/personaServiceClient';
-import { createAgentSessionClient, agentSessionProject, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
+import { createAgentSessionClient, agentSessionProject, agentSessionMembersAvailable, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, type AgentHistoryEvent, type AgentSessionMessage } from '../persona/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
@@ -19,26 +19,33 @@ const agents = ref<PersonaSessionAgent[]>([]), agentKey = ref('');
 const agent = computed(() => agents.value.find(item => item.key === agentKey.value));
 const tasks = ref<PersonaAgentTask[]>([]), selectedId = ref(''), query = ref('');
 const selected = computed(() => tasks.value.find(task => task.id === selectedId.value));
+const members = ref<PersonaAgentTask[]>([]), selectedMember = ref<PersonaAgentTask>();
+const membersAvailable = computed(() => agentSessionMembersAvailable(agent.value));
+const currentSession = computed(() => selectedMember.value || selected.value);
+const currentSessionId = computed(() => currentSession.value?.id || '');
+const memberOffset = ref<number|null>(null), loadingMembers = ref(false), memberError = ref(''), membersOpen = ref(false);
+const sessionTitle = (task:PersonaAgentTask) => task.agentNickname || task.title || task.id;
 const offset = ref<number | null>(null), cursor = ref<string | null>(null);
 const events = ref<AgentHistoryEvent[]>([]), expanded = ref(new Set<string>());
 const listElement = ref<HTMLElement>(), virtualList = ref<{scrollToIndex(index:number):void}>();
 const messages = computed(() => agentHistoryMessages(agent.value?.provider || '', events.value));
 const loadingAgents = ref(false), loadingTasks = ref(false), loadingHistory = ref(false);
 const agentError = ref(''), taskError = ref(''), historyError = ref(''), partialHistory = ref(false);
-let directoryRequest: AbortController | undefined, taskRequest: AbortController | undefined, historyRequest: AbortController | undefined;
+let directoryRequest: AbortController | undefined, taskRequest: AbortController | undefined, historyRequest: AbortController | undefined, memberRequest: AbortController | undefined;
+let previewRequest: AbortController | undefined;
 let loadedRole = '';
 const label = (provider: string) => pluginCatalogStore.agentAdapters.value.find(item => item.type === provider)?.title || provider;
 const owner = (item: PersonaSessionAgent) => item.binding
   ? [item.binding.ownerDeviceId, item.binding.instanceId, item.binding.agentId].filter(Boolean).join(' / ')
   : item.dshBaseUrl || t('本机');
-const grouped = ref(true);
+const grouped = ref(false);
 const groupingStorageKey = 'rabiroute.history.agent-sessions.grouping';
-try { grouped.value = localStorage.getItem(groupingStorageKey) !== 'flat'; } catch { /* Use project groups when storage is unavailable. */ }
+try { grouped.value = localStorage.getItem(groupingStorageKey) === 'project'; } catch { /* Use the flat list when storage is unavailable. */ }
 watch(grouped, value => { try { localStorage.setItem(groupingStorageKey, value ? 'project' : 'flat'); } catch { /* Keep this view preference for the current page. */ } });
 const items = computed(() => tasks.value.map(task => {
   const project = agentSessionProject(task.cwd);
-  return { key: task.id, title: task.title || task.id, preview: project.path || task.id,
-    time: task.updatedAt || '', agentProvider: agent.value?.provider,
+  return { key: task.id, title: task.title || task.id, preview: task.preview || (task.previewUnavailable ? t('消息摘要暂不可用') : ''),
+    time: task.lastMessageTime || task.updatedAt || '', agentProvider: agent.value?.provider,
     group: { ...project, title: project.title || t('未指定项目') } };
 }));
 
@@ -55,6 +62,7 @@ async function loadAgents() {
 }
 async function loadTasks(more = false) {
   if (!agent.value) return;
+  if (!more) previewRequest?.abort();
   taskRequest?.abort(); const request = new AbortController(); taskRequest = request;
   loadingTasks.value = true; taskError.value = '';
   try {
@@ -63,16 +71,42 @@ async function loadTasks(more = false) {
     tasks.value = [...new Map([...(more ? tasks.value : []), ...page.items].map(task => [task.id, task])).values()];
     offset.value = page.nextOffset;
     if (!tasks.value.some(task => task.id === selectedId.value)) selectedId.value = '';
+    loadPreviews(agent.value,tasks.value.filter(task=>!task.preview&&!task.previewUnavailable));
   } catch (error) { if (!request.signal.aborted) taskError.value = userFacingError(error); }
   finally { if (taskRequest === request) loadingTasks.value = false; }
 }
+function loadPreviews(owner:PersonaSessionAgent,items:PersonaAgentTask[]) {
+  if (!['dsh','workbuddy'].includes(owner.provider) || !items.length) return;
+  previewRequest?.abort();const request=new AbortController();previewRequest=request;
+  void client.previews(owner,items,task=>{
+    if (request.signal.aborted || previewRequest!==request || agent.value?.key!==owner.key) return;
+    const index=tasks.value.findIndex(item=>item.id===task.id);
+    if(index>=0) tasks.value[index]={...tasks.value[index],...task};
+  },request.signal).catch(error=>{if(!request.signal.aborted) taskError.value=userFacingError(error);});
+}
+async function loadMembers(more=false) {
+  if (!agent.value || !selectedId.value || !membersAvailable.value) return;
+  memberRequest?.abort(); const request = new AbortController(); memberRequest = request;
+  loadingMembers.value = true; memberError.value = '';
+  try {
+    const page = await client.members(agent.value,selectedId.value,more ? memberOffset.value ?? 0 : 0,request.signal);
+    if (request.signal.aborted) return;
+    members.value = [...new Map([...(more ? members.value : []),...page.items].map(item=>[item.id,item])).values()];
+    memberOffset.value = page.nextOffset;
+    if (selectedMember.value) selectedMember.value = members.value.find(item=>item.id===selectedMember.value!.id) || selectedMember.value;
+  } catch (error) { if (!request.signal.aborted) memberError.value = userFacingError(error); }
+  finally { if (memberRequest === request) loadingMembers.value = false; }
+}
+function chooseRoot(id:string) { selectedMember.value = undefined; selectedId.value = id; membersOpen.value = false; }
+function chooseMember(task:PersonaAgentTask) { selectedMember.value = task; membersOpen.value = false; }
+function back() { if (selectedMember.value) selectedMember.value = undefined; else selectedId.value = ''; }
 async function loadHistory(more = false) {
-  if (!agent.value || !selectedId.value) return;
+  if (!agent.value || !currentSessionId.value) return;
   historyRequest?.abort(); const request = new AbortController(); historyRequest = request;
   loadingHistory.value = true; historyError.value = '';
   try {
     const previousCursor = more ? cursor.value ?? undefined : undefined;
-    const page = await client.history(agent.value, selectedId.value, previousCursor, request.signal);
+    const page = await client.history(agent.value, currentSessionId.value, previousCursor, request.signal);
     if (request.signal.aborted) return;
     const nextCursor = agentHistoryNextCursor(agent.value.provider, page);
     if (nextCursor !== null && nextCursor === previousCursor) throw new Error(t('历史分页位置未前进，请刷新后重试。'));
@@ -118,26 +152,32 @@ function toggle(id: string) {
   expanded.value = next;
 }
 watch(() => [props.roleId, props.active], () => {
-  if (!props.active) { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); }
+  if (!props.active) { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); previewRequest?.abort(); }
   if (loadedRole !== props.roleId) {
-    directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort();
+    directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); previewRequest?.abort();
     agents.value = []; agentKey.value = ''; tasks.value = []; selectedId.value = ''; events.value = [];
     if (props.active) void loadAgents();
   } else if (props.active && agent.value) {
     if (!tasks.value.length) void loadTasks();
-    if (selectedId.value && !events.value.length) void loadHistory();
+    else if(agent.value) loadPreviews(agent.value,tasks.value.filter(task=>!task.preview&&!task.previewUnavailable));
+    if (currentSessionId.value && !events.value.length) void loadHistory();
+    if (selectedId.value && membersAvailable.value && !members.value.length) void loadMembers();
   }
 }, { immediate: true });
 watch(agentKey, () => {
-  taskRequest?.abort(); historyRequest?.abort();
+  taskRequest?.abort(); historyRequest?.abort(); previewRequest?.abort();
   tasks.value = []; selectedId.value = ''; query.value = ''; offset.value = null;
   if (agent.value) void loadTasks();
 });
 watch(selectedId, () => {
-  historyRequest?.abort(); events.value = []; cursor.value = null; historyError.value = ''; partialHistory.value = false; expanded.value = new Set();
-  if (selectedId.value) void loadHistory();
+  memberRequest?.abort(); selectedMember.value = undefined; members.value = []; memberOffset.value = null; memberError.value = ''; membersOpen.value = false;
+  if (selectedId.value) void loadMembers();
 });
-onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); });
+watch(currentSessionId, () => {
+  historyRequest?.abort(); events.value = []; cursor.value = null; historyError.value = ''; partialHistory.value = false; expanded.value = new Set();
+  if (currentSessionId.value) void loadHistory();
+});
+onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); previewRequest?.abort(); });
 </script>
 
 <template>
@@ -153,17 +193,18 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
     </div>
     <v-alert v-if="agentError" type="error" variant="tonal" class="mb-3">{{ agentError }}</v-alert>
     <v-alert v-if="!agents.length && !loadingAgents && !agentError" type="info" variant="tonal">{{ t('当前角色尚未配置 Agent 端。') }}</v-alert>
-    <HistoryConversationLayout v-if="agent" :items="items" :grouped="grouped" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" @select="selectedId = $event" @back="selectedId = ''" @search="loadTasks()">
+    <HistoryConversationLayout v-if="agent" :items="items" :grouped="grouped" :project-preview-limit="5" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" :has-details="membersAvailable&&Boolean(selected)" details-title="子 Agent" v-model:info-open="membersOpen" @select="chooseRoot" @back="back" @search="loadTasks()">
       <template #list-actions>
-        <v-btn :icon="grouped ? 'mdi-format-list-bulleted' : 'mdi-folder-outline'" variant="text" size="small" :aria-label="t(grouped ? '平铺会话' : '按项目分组')" :title="t(grouped ? '平铺会话' : '按项目分组')" @click="grouped = !grouped" />
+        <v-btn :icon="grouped ? 'mdi-format-list-bulleted' : 'mdi-folder-outline'" variant="text" size="small" :aria-label="t(grouped ? '平铺会话' : '按项目分组')" :title="t(grouped ? '平铺会话' : '按项目分组')" :aria-pressed="grouped" @click="grouped = !grouped" />
         <v-btn icon="mdi-magnify" variant="text" size="small" :disabled="loadingTasks" :aria-label="t('搜索会话')" @click="loadTasks()" />
         <v-btn icon="mdi-refresh" variant="text" size="small" :disabled="loadingTasks" :aria-label="t('刷新会话列表')" @click="loadTasks()" />
       </template>
       <template #list-notice><v-alert v-if="taskError" type="error" variant="tonal" density="compact">{{ taskError }}</v-alert></template>
       <template #list-footer><v-btn v-if="offset !== null" block variant="text" :loading="loadingTasks" @click="loadTasks(true)">{{ t('加载更多会话') }}</v-btn></template>
-      <template v-if="selected">
+      <template v-if="currentSession">
+        <v-btn v-if="selectedMember" variant="text" prepend-icon="mdi-arrow-left" class="session-parent-link" :title="selected ? sessionTitle(selected) : ''" @click="selectedMember=undefined">{{t('返回主会话')}}</v-btn>
         <header class="session-heading">
-          <div><h3 data-no-i18n>{{ selected.title || selected.id }}</h3><div class="text-caption text-medium-emphasis" data-no-i18n>{{ selected.cwd }}</div></div>
+          <div><h3 data-no-i18n>{{ sessionTitle(currentSession) }}</h3><div class="text-caption text-medium-emphasis" data-no-i18n>{{ currentSession.cwd }}</div></div>
           <v-btn icon="mdi-refresh" variant="text" :loading="loadingHistory" :aria-label="t('刷新会话历史')" @click="loadHistory()" />
         </header>
         <v-alert v-if="historyError" type="error" variant="tonal" class="mb-3">{{ historyError }}</v-alert>
@@ -185,6 +226,25 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
         <v-btn v-if="cursor !== null && agent.provider !== 'dsh'" class="mt-3" variant="tonal" :loading="loadingHistory" @click="loadHistory(true)">{{ t(agent.provider === 'dsh' ? '加载更早的消息' : '继续加载消息') }}</v-btn>
       </template>
       <div v-else class="pa-6 text-medium-emphasis">{{ t('选择会话查看用户输入和最终回复。') }}</div>
+      <template #details>
+        <div v-if="selected" class="session-members">
+          <header class="session-members-heading"><strong>{{t('子 Agent')}}</strong><v-btn icon="mdi-refresh" variant="text" size="small" :loading="loadingMembers" :aria-label="t('刷新子 Agent')" @click="loadMembers()" /></header>
+          <v-alert v-if="memberError" type="warning" variant="tonal" density="compact">{{memberError}}</v-alert>
+          <v-list bg-color="transparent" class="session-member-list">
+            <v-list-item :active="!selectedMember" @click="chooseRoot(selected.id)">
+              <template #prepend><AgentAvatar :provider="agent.provider" :size="32" /></template>
+              <v-list-item-title data-no-i18n>{{sessionTitle(selected)}}</v-list-item-title><v-list-item-subtitle>{{t('主会话')}}</v-list-item-subtitle>
+            </v-list-item>
+            <v-virtual-scroll :items="members" :item-height="64" renderless><template #default="{item,itemRef}:{item:PersonaAgentTask;itemRef?:VNodeRef}">
+              <v-list-item data-no-i18n :ref="itemRef" :key="item.id" :active="selectedMember?.id===item.id" :title="sessionTitle(item)" :subtitle="item.preview||item.agentRole||''" @click="chooseMember(item)">
+                <template #prepend><AgentAvatar :provider="agent.provider" :size="32" /></template>
+              </v-list-item>
+            </template></v-virtual-scroll>
+          </v-list>
+          <p v-if="!members.length&&!loadingMembers&&!memberError" class="pa-3 text-caption text-medium-emphasis">{{t('此会话暂无子 Agent。')}}</p>
+          <v-btn v-if="memberOffset!==null" block variant="text" :loading="loadingMembers" @click="loadMembers(true)">{{t('加载更多子 Agent')}}</v-btn>
+        </div>
+      </template>
     </HistoryConversationLayout>
   </section>
 </template>
@@ -197,6 +257,11 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
 .agent-session-tab{text-transform:none;max-width:340px;letter-spacing:normal;}
 .agent-tab-copy{display:grid;gap:2px;min-width:0;margin-left:10px;text-align:left;}
 .agent-tab-copy small{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;opacity:.65;}
+.session-members-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 6px;font-size:13px;}
+.session-member-list :deep(.v-list-item){min-height:64px;padding-inline:6px;}
+.session-member-list :deep(.agent-avatar){margin-right:8px;}
+.session-member-list :deep(.v-list-item-title),.session-member-list :deep(.v-list-item-subtitle){font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.session-parent-link{align-self:flex-start;margin-bottom:4px;}
 .session-heading{position:sticky;top:0;z-index:3;background:rgb(var(--v-theme-background));display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px 18px;border-bottom:1px solid var(--rr-border-faint);margin-bottom:20px;}
 .session-heading h3{font-size:17px;font-weight:600;overflow-wrap:anywhere;}
 .session-messages{padding:0 16px;min-width:0;}

@@ -118,6 +118,7 @@ internal sealed class WindowsHostElevationDriver : IHostElevationDriver, IDispos
             definition.Settings.Enabled = true;
             definition.Settings.Hidden = true;
             definition.Settings.AllowDemandStart = true;
+            definition.Settings.Priority = 4;
             definition.Settings.MultipleInstances = 2;
             definition.Settings.ExecutionTimeLimit = "PT0S";
             definition.Settings.DisallowStartIfOnBatteries = false;

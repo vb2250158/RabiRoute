@@ -165,6 +165,7 @@ import { inspectOriginalPlanFeedbackReceipt } from "./planFeedbackReceipt.js";
 import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import { resolvePlanHistoryRequestActor } from "./planHistoryRequestActor.js";
 import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
+import { readPlatformReplySource } from "../replyPlatformSource.js";
 import {
   handleAgentSend,
   inspectAgentSendDelivery,
@@ -4908,8 +4909,26 @@ async function performConversationAgentSend(
       };
     })
   };
+  const sourceRuntime = runtimeForAgentSendRoute(prepared.routeId);
+  const sourceDefinition = sourceRuntime?.definition;
+  const sourceInstance = replyOptions.runtimes.find(runtime => runtime.id === sourceDefinition?.id)?.napcatInstances
+    ?.find(instance => instance.id === prepared.target.instanceId);
+  const platformReplySource = !receiptBeforeValidation && !reviewedReplySource
+    ? await readPlatformReplySource(prepared, replyOptions, () => {
+        options.requestAuthority?.();
+        const currentRuntime = runtimeForAgentSendRoute(prepared.routeId);
+        const currentInstance = currentRuntime && sharedNormalizeNapCatInstances(currentRuntime.definition)
+          .find(instance => instance.id === prepared.target.instanceId);
+        if (!sourceRuntime || currentRuntime !== sourceRuntime || currentRuntime.definition !== sourceDefinition
+          || currentRuntime.definition.enabled === false || !sourceInstance || !currentInstance
+          || currentRuntime.definition.routeProfiles?.some(profile => profile.id === prepared.routeId && profile.enabled === false)
+          || currentInstance.enabled === false || currentInstance.httpUrl !== sourceInstance.httpUrl
+          || (currentInstance.accessToken ?? "") !== sourceInstance.accessToken) {
+          throw new Error("Quoted QQ source Route or instance changed before sending.");
+        }
+      }) : undefined;
   if (!receiptBeforeValidation) {
-    validateAgentSendReplyImageDescriptions(request, replyOptions, reviewedReplySource);
+    validateAgentSendReplyImageDescriptions(request, replyOptions, reviewedReplySource, platformReplySource);
   }
 
   const existingReceipt = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
@@ -4963,7 +4982,7 @@ async function performConversationAgentSend(
     options.requestAuthority?.();
     assertReviewedAgentSendMayDeliver(gate);
     return {
-      ...await handleAgentSend(request, replyOptions, reviewedReplySource),
+      ...await handleAgentSend(request, replyOptions, reviewedReplySource, platformReplySource),
       ...(messageLengthValidation ? { messageLengthValidation } : {}),
       ...(languageStyleValidation ? { languageStyleValidation } : {})
     };
@@ -7864,7 +7883,9 @@ get roleDirForApi() { return roleDirForApi; },
 get languageStyleValidator() { return languageStyleValidator; },
 get handleAgentThreadRequest() { return handleAgentThreadRequest; },
 get agentThreadRequestOptions() { return agentThreadRequestOptions; },
-get subscribeRoleCatalogChanges() { return (listener: () => void) => requireRouteCatalogLifecycle().onReady(() => listener()); },
+// Plugins subscribe while this generation is being prepared, before publication.
+// Bind the already acquired owner; publication is required only for business mutations.
+get subscribeRoleCatalogChanges() { return (listener: () => void) => routeCatalogStartupLifecycle.onReady(() => listener()); },
 get routeCatalogConfig() { return routeCatalogConfig; },
 set routeCatalogConfig(value) { routeCatalogConfig = value; },
 get sharedGatewayAdapterTypes() { return sharedGatewayAdapterTypes; },

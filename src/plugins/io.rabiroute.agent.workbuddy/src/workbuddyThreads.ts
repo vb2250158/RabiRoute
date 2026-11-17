@@ -13,7 +13,7 @@
  */
 import {
   deliverWorkbuddyMessage,
-  ensureWorkbuddyDeliverable,
+  ensureWorkbuddyOwnerConnected,
   type WorkbuddyPrimaryBinding
 } from "./workbuddySessionBridge.js";
 import {
@@ -112,7 +112,7 @@ export async function sendWorkbuddyThreadMessage(params: {
     cwd: task.workspace,
     endpoint: ""
   };
-  const { task: resolved, endpoint } = ensureWorkbuddyDeliverable(binding);
+  const { task: resolved, endpoint } = await ensureWorkbuddyOwnerConnected(binding);
   await deliverWorkbuddyMessage({
     assertAuthorized: params.assertAuthorized,
     sessionId: resolved.id,

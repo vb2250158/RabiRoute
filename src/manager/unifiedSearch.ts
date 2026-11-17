@@ -21,6 +21,8 @@ export type SearchItem = {
     archived?:boolean;
     status?:string;
     searchText: string;
+    /** Operation matches and scores come from the same document as the API directory. */
+    searchScore?: number;
     sourcePosition?: number;
 };
 export type SearchBatch = {
@@ -35,6 +37,8 @@ export type SearchBatch = {
     windowStart?: number;
     hasMore?: boolean;
     recordsRead?: number;
+    /** Owner-issued stable continuation, carried opaquely in the search cursor. */
+    snapshot?: string;
 };
 export type SearchLane = {
     key: string;
@@ -45,6 +49,7 @@ export type SearchLane = {
         deadlineAt: number;
         query: SearchQuery;
         position: number;
+        snapshot?: string;
     }): Promise<SearchBatch>;
 };
 export type SearchQuery = {
@@ -117,6 +122,7 @@ type Cursor = {
     inventories: Record<string, string>;
     positions: Record<string, number>;
     rotation: number;
+    snapshots?: Record<string, string>;
 };
 type RankedItem = Omit<SearchItem, 'evidence' | 'searchText'> & Required<Omit<SearchEvidence, 'sourceKinds' | 'conflicts'>> & {
     sourceKinds: string[];
@@ -152,7 +158,7 @@ function rank(item: SearchItem, terms: string[], query: SearchQuery, retrievedAt
         return undefined;
     if (query.kinds.length && !query.kinds.includes(item.kind))
         return undefined;
-    if (!textMatches(item.searchText, terms, query.match))
+    if (item.searchScore === undefined && !textMatches(item.searchText, terms, query.match))
         return undefined;
     const evidence = normalizeSearchEvidence(item.evidence) ?? {};
     const observedAt = evidence.observedAt ?? null;
@@ -163,9 +169,9 @@ function rank(item: SearchItem, terms: string[], query: SearchQuery, retrievedAt
     const matched = terms.filter(term => normalizeSearchText(item.searchText).includes(term)).length;
     const titleMatches = terms.filter(term => normalizeSearchText(item.label).includes(term)).length;
     const key = apiDigest({ source: item.source, origin: item.origin });
-    const { searchText: _text, evidence: _evidence, ...publicItem } = item;
+    const { searchText: _text, searchScore: _searchScore, evidence: _evidence, ...publicItem } = item;
     const references = [...new Set([item.detailUrl, ...(evidence.evidenceRefs ?? [])])];
-    return { ...publicItem, key, score: matched * Math.max(1000,terms.length+1) + titleMatches + (query.agent && item.agent === query.agent ? 0.1 : 0),
+    return { ...publicItem, key, score: item.searchScore ?? matched * Math.max(1000,terms.length+1) + titleMatches + (query.agent && item.agent === query.agent ? 0.1 : 0),
         state: evidence.state === 'confirmed' && !evidence.evidenceRefs?.length ? 'unknown' : evidence.state ?? 'unknown',
         confidence: evidence.confidence ?? null, userConfirmed: evidence.userConfirmed ?? false, observedAt, expiresAt: evidence.expiresAt ?? null,
         retrievedAt, evidenceRefs: references, sourceKinds: [...new Set([item.source, ...(evidence.sourceKinds ?? [])])],
@@ -206,7 +212,7 @@ export async function runUnifiedSearch(options: {
         degraded.push({ source, errorCode: 'SEARCH_SOURCE_ADAPTER_UNAVAILABLE', message: 'The registered source has no active reader.', retryable: true });
         notQueried.push({ source, reason: 'degraded', errorCode: 'SEARCH_SOURCE_ADAPTER_UNAVAILABLE' });
     }
-    const versions: Record<string, string> = {}, inventories: Record<string, string> = {}, positions: Record<string, number> = {};
+    const versions: Record<string, string> = {}, inventories: Record<string, string> = {}, positions: Record<string, number> = {}, snapshots: Record<string, string> = {};
     const outcomes = await Promise.all(lanes.map(async (lane) => {
         const controller = new AbortController();
         const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -214,7 +220,7 @@ export async function runUnifiedSearch(options: {
         try {
             const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { const error = new SearchError(503, 'DEADLINE_EXCEEDED', 'The shared search budget expired.'); controller.abort(error); reject(error); }, Math.max(1, deadlineAt - performance.now())); });
             await yieldToEventLoop(undefined, { signal: requestSignal });
-            const batch = await Promise.race([lane.read({ signal: requestSignal, deadlineAt, query, position: cursor?.positions[lane.key] ?? 0 }), timeout]);
+            const batch = await Promise.race([lane.read({ signal: requestSignal, deadlineAt, query, position: cursor?.positions[lane.key] ?? 0, snapshot: cursor?.snapshots?.[lane.key] }), timeout]);
             signal?.throwIfAborted();
             const retrievedAt = new Date().toISOString();
             const items: RankedItem[] = [], gaps = [...(batch.gaps ?? [])];
@@ -262,6 +268,7 @@ export async function runUnifiedSearch(options: {
     for (const outcome of successful) {
         const { lane, batch, items } = outcome;
         versions[lane.key] = batch.version;
+        if (batch.snapshot !== undefined) snapshots[lane.key] = batch.snapshot;
         inventories[lane.key] = batch.windowStart === undefined ? apiDigest(items.map(item => item.key)) : batch.version;
         if (cursor && (cursor.versions[lane.key] !== batch.version || cursor.inventories[lane.key] !== inventories[lane.key])) {
             const code = lane.source === 'knowledge' ? 'KNOWLEDGE_CURSOR_EXPIRED' : lane.source === 'messages' ? 'MESSAGE_HISTORY_CURSOR_EXPIRED' : 'SEARCH_CURSOR_EXPIRED';
@@ -316,7 +323,7 @@ export async function runUnifiedSearch(options: {
                 : position + (outcome.batch.windowStart ?? 0);
         return [outcome.lane.key, next];
     }));
-    const next: Cursor = { version: 1, manager: snapshot.managerInstanceId, generation: snapshot.applicationGenerationId, filters, queryTime, versions, inventories, positions: nextPositions, rotation };
+    const next: Cursor = { version: 1, manager: snapshot.managerInstanceId, generation: snapshot.applicationGenerationId, filters, queryTime, versions, inventories, positions: nextPositions, rotation, snapshots };
     const coverageSources = [...new Set(lanes.map(lane => lane.source))].sort().map(source => {
         const results = successful.filter(outcome => outcome.lane.source === source), failed = outcomes.filter(outcome => outcome.lane.source === source && 'error' in outcome);
         const partial = failed.length > 0 || results.some(outcome => !outcome.batch.complete || outcome.gaps.length > 0);

@@ -26,9 +26,19 @@ function failed(error:unknown,contract:ApiOperationContract,input:Pick<ApiOperat
       help:{method:'GET',path:'/api/agent/help?operationId='+encodeURIComponent(contract.operationId)},
       repair:`Read GET ${role}/${warming?'knowledge/cache/status':'knowledge-validation'} for this same dependency and GET /meta for the original Manager identity. This is availability, not invalid query parameters or evidence that the role is absent. Keep the original role/query; do not create another index, switch roles or automatically POST a reload.`}:{} )},code)};
 }
+
+const knowledgePurposes: Record<string, string> = {
+  "search": "搜索角色计划与记忆",
+  "cache.status": "查询知识搜索索引状态",
+  "cache.reload": "刷新知识搜索索引",
+  "validation": "检查发布知识目录",
+  "validation.alias": "检查发布知识目录"
+};
+
 function define<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperationInput,'body'>)=>T,execute:(owner:T,input:ApiOperationInput)=>ApiOperationResult|Promise<ApiOperationResult>):ApiOperationDefinition {
   const bind=(input:Omit<ApiOperationInput,'body'>)=>{try{const owner=prepare(input);return async(parsed:ApiOperationInput)=>{try{return await execute(owner,parsed);}catch(error){parsed.signal?.throwIfAborted();return failed(error,contract,parsed);}};}catch(error){input.signal?.throwIfAborted();return failed(error,contract,input);}};
-  return {contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
+  const id=contract.operationId.slice('manager.personas.knowledge.'.length);
+  return {contract,discovery:{title:knowledgePurposes[id],summary:knowledgePurposes[id]+"。按角色目录选择知识源，保留分页游标和索引版本。",category:{id:'knowledge',title:'记忆与计划'},keywords:[knowledgePurposes[id],id.replace(/[.-]/g,' '),'knowledge search'],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'}],...(id==='search'?{relatedOperations:['manager.personas.knowledge.cache.status'],examples:[{title:'搜索角色资料',input:{query:{query:'项目资料',limit:'10'}}}]}:{})},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
 }
 /** Search/cache/validation reuse the original Manager service and published catalog, without rescanning storage. */
 export function createPersonaKnowledgeOperations(context:PersonaKnowledgeContext):readonly ApiOperationDefinition[] {

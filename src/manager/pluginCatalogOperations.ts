@@ -69,7 +69,17 @@ export function createPluginCatalogOperations(context: PluginCatalogApiContext, 
       return (parsed: ApiOperationInput) => bound.execute({ host: parsed.url.searchParams.get("host"), webRelease: parsed.url.searchParams.get("webRelease"),
         id: parsed.path.id, rev: parsed.path.rev, relativePath: parsed.path.relativePath });
     };
-    return { contract, prepare, handler: input => prepare(input)(input) };
+    const titles: Partial<Record<PluginCatalogAction, string>> = { 'catalog.read': '查看可用插件目录', 'reconciliation.read': '查看插件应用进度', 'reconciliation.run': '应用插件配置', 'modules.list': '查询插件前端模块', 'modules.read': '读取插件模块资源' };
+    return { contract, discovery: {
+      title: titles[action], summary: titles[action] + '。目录与运行状态由当前插件 owner 返回。',
+      category: { id: 'runtime', title: '插件与运行' }, keywords: ['插件', titles[action]!, action.replaceAll('.', ' '), 'plugin catalog'],
+      relatedOperations: ['manager.plugins.instances.read', 'manager.plugins.packages.list'],
+      ...(action === 'modules.read' ? { inputSources: [
+        { field: 'path.id', operationId: 'manager.plugins.modules.list', resultPath: '/data/modules', valuePath: '/id' },
+        { field: 'path.rev', operationId: 'manager.plugins.modules.list', resultPath: '/data/modules', valuePath: '/rev' },
+        { field: 'path.relativePath', operationId: 'manager.plugins.modules.list', resultPath: '/data/modules', valuePath: '/entryPath' }
+      ] } : {})
+    }, prepare, handler: input => prepare(input)(input) };
   };
   return [
     define("catalog.read", "GET", "/api/plugins/catalog", catalog),

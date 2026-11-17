@@ -7,6 +7,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+test('persona search subscribers bind their generation before publication in read-write and read-only cold starts', { timeout: 360_000 }, async t => {
+  for (const readOnly of [false, true]) {
+    const instance = await startBuiltManager(t, readOnly, undefined, undefined, { capabilities: ['manager.persona@1'], startupTimeoutMs: 150_000 });
+    const response = await instance.get('/api/agent/operations/manager.personas.skills.list');
+    assert.equal(response.status, 200, `Skill discovery is active after a cold start (readOnly=${readOnly}).`);
+    const meta = await (await instance.get('/meta')).json();
+    assert.ok(!meta.pluginGeneration.readiness.missingCapabilities.includes('manager.persona@1'));
+  }
+});
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createManagerClient } from "../apps/rabi-agent/lib/manager-client.mjs";
 import { WebSocket, WebSocketServer } from "ws";
@@ -227,7 +236,7 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
     await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
   ready = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Isolated Manager startup deadline exceeded: ${errors}`)), 45_000);
+    const timer = setTimeout(() => reject(new Error(`Isolated Manager startup deadline exceeded: ${errors}`)), contractFixture?.startupTimeoutMs ?? 45_000);
     const data = bytes => {
       output = (output + bytes.toString()).slice(-65_536);
       const line = output.split(/\r?\n/).find(line => line.startsWith("RABIROUTE_MANAGER_READY:"));

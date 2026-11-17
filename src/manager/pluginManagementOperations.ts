@@ -47,7 +47,15 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
         return bound.execute({ id: parsed.path.id, expectedRevision: body?.expectedRevision, enabled: body?.enabled });
       };
     };
-    return { contract, prepare, handler: input => prepare(input)(input) };
+    return { contract, discovery: {
+      title: update ? '修改插件实例启用状态' : '查看插件实例运行状态',
+      summary: update ? '使用当前 revision 保存实例启用设置，并读取实际 runningVersion 与状态确认结果。' : '读取插件实例、保存设置、实际运行版本及当前 revision。',
+      category: { id: 'runtime', title: '插件与运行' }, keywords: ['插件', '查看插件', 'plugin instances', update ? '启用插件' : 'plugin status'],
+      ...(update ? { inputSources: [
+        { field: 'path.id', operationId: 'manager.plugins.instances.read', resultPath: '/data/instances', valuePath: '/instanceId' },
+        { field: 'body.expectedRevision', operationId: 'manager.plugins.instances.read', resultPath: '/data/revision' }
+      ] } : {}), relatedOperations: ['manager.plugins.packages.list', 'manager.plugins.instances.read']
+    }, prepare, handler: input => prepare(input)(input) };
   });
   const revision = { type: "string", pattern: "^[a-f0-9]{64}$" };
   const symbol = { type: "string", minLength: 1 };
@@ -87,7 +95,19 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
       const bound = owner.prepare(input.request, item.action, input.signal);
       return (parsed: ApiOperationInput) => bound.execute({ ...(parsed.body as Record<string, string> ?? {}), id: parsed.path.id });
     };
-    return { contract, prepare, handler: input => prepare(input)(input) };
+    const titles: Partial<Record<PluginCatalogAction, string>> = { 'packages.list': '查看已安装插件包与版本', 'packages.import': '导入本地插件包', 'instances.install': '安装插件实例', 'instances.remove': '卸载插件实例' };
+    return { contract, discovery: {
+      title: titles[item.action], summary: titles[item.action] + '。' + item.description,
+      category: { id: 'runtime', title: '插件与运行' }, keywords: ['插件', titles[item.action]!, item.action.replaceAll('.', ' '), 'plugin packages'],
+      relatedOperations: ['manager.plugins.packages.list', 'manager.plugins.instances.read'],
+      ...(mutation && item.action !== 'packages.import' ? { inputSources: [
+        { field: 'body.expectedRevision', operationId: 'manager.plugins.instances.read', resultPath: '/data/revision' },
+        ...(item.action === 'instances.install' ? [
+          { field: 'body.pluginId', operationId: 'manager.plugins.packages.list', resultPath: '/data/packages', valuePath: '/id' },
+          { field: 'body.version', operationId: 'manager.plugins.packages.list', resultPath: '/data/packages', valuePath: '/version' }
+        ] : [{ field: 'path.id', operationId: 'manager.plugins.instances.read', resultPath: '/data/instances', valuePath: '/instanceId' }])
+      ] } : {})
+    }, prepare, handler: input => prepare(input)(input) };
   });
   return [...instanceOperations, ...packageOperations];
 }

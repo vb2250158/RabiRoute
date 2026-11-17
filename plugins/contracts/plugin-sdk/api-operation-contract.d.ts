@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { ApiExternalListenerDefinition, ApiExternalListenerRegistration } from "@rabiroute/host-api/manager/apiExternalListenerBinding";
+import type { SearchLane } from "@rabiroute/host-api/manager/apiOperationContract";
 
 export type ApiMethod = "GET" | "HEAD" | "OPTIONS" | "POST" | "PUT" | "PATCH" | "DELETE" | "*";
 
@@ -38,6 +39,10 @@ export type ApiOperationContract = Readonly<{
   method: ApiMethod;
   pathTemplate: string;
   description: string;
+  searchKeywords?: readonly string[];
+  discovery?: Readonly<{ title?: string; categoryId?: string; tags?: readonly string[]; provider?: string }>;
+  /** Search-source metadata follows its active operation contract. */
+  searchable?: Readonly<{ scope: string; legend: string; kinds: readonly string[] }>;
   exposure: "public" | "internal";
   transport: "http" | "sse" | "websocket";
   httpProxy?: Readonly<{ wire: Readonly<{ dataFrameBytes: number; streamWindowBytes: number; maxConcurrentStreams: number }>;
@@ -109,10 +114,17 @@ export type ApiDiscoveryInputSource = Readonly<{
   parameters?: Readonly<Record<string, Readonly<{ from: string }> | Readonly<{ value: unknown }>>>;
 }>;
 
+export type ApiDiscoveryExample = Readonly<{
+  title: string;
+  input: Readonly<{ path?: Readonly<Record<string, unknown>>; query?: Readonly<Record<string, unknown>>;
+    headers?: Readonly<Record<string, unknown>>; body?: unknown }>;
+}>;
+
 export type ApiOperationDiscovery = Readonly<{
   title?: string; summary?: string; category?: ApiDiscoveryCategory;
   tags?: readonly string[]; keywords?: readonly string[]; provider?: string;
   inputSources?: readonly ApiDiscoveryInputSource[]; relatedOperations?: readonly string[];
+  examples?: readonly ApiDiscoveryExample[];
   automationTemplates?: readonly Readonly<{
     id: string; version: string; title: string; description?: string; triggerType?: "message" | "schedule";
     message?: string; template?: string; [key: string]: unknown;
@@ -122,6 +134,9 @@ export type ApiOperationDiscovery = Readonly<{
 export type ApiOperationDefinition = Readonly<{
   discovery?: ApiOperationDiscovery;
   contract: ApiOperationContract;
+  /** Optional native source reader, retired and drained with this operation's activation.
+   * The matching contract.searchable declares its scope and kinds in the public catalog. */
+  searchLanes?(input: { request: IncomingMessage; roles: readonly { roleId: string; directory: string }[] }): readonly SearchLane[];
   handler(input: ApiOperationInput): ApiOperationResult | Promise<ApiOperationResult>;
   /** Capture the original owner admission before body consumption. Preparation performs no business action.
    * Return an early rejection or a request-bound handler retaining that original admission. */

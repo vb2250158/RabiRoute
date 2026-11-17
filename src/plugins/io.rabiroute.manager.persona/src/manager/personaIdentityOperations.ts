@@ -31,6 +31,15 @@ function failed(error:unknown,outcome?:ReturnType<Owner['mutationOutcome']>):Api
   return {status,...(outcome?{mutationOutcome:outcome}:{}),headers:{'cache-control':'no-store'},body:errorResponsePresentation({code:-1,message:error instanceof Error?error.message:String(error),...(cause?.uncertain?{uncertain:true}:{})},status)};
 }
 /** Ten exact relation/observation/voice routes share the original native ledgers. */
+
+const identityPurposes: Record<string, string> = {
+  "relations.read": "查询角色身份与人物关系",
+  "relations.patch": "更新人物身份与关系",
+  "observations.append": "记录人物身份观察",
+  "voice.read": "查询声音身份映射",
+  "voice.patch": "修改声音身份关联"
+};
+
 export function createPersonaIdentityOperations(context:PersonaIdentityContext):readonly ApiOperationDefinition[] {
   const owner=createPersonaIdentityOwner(context),operations:ApiOperationDefinition[]=[];
   for(const prefix of ['/api/roles','/roles'])for(const [id,method,suffix,response,inputBody] of [
@@ -53,7 +62,7 @@ export function createPersonaIdentityOperations(context:PersonaIdentityContext):
         return {status:method==='GET'?200:(data as {appended:boolean}).appended?201:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':'no-store'},body:{code:0,data}} as ApiOperationResult;
       }catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}
     };}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
-    operations.push({contract,prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}});
+    operations.push({contract,discovery:{title:identityPurposes[id],summary:identityPurposes[id]+"。",category:{id:"knowledge.identity",title:"人物身份与关系",parentId:"knowledge"},keywords:[identityPurposes[id],id.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}});
   }
   return operations;
 }

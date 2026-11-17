@@ -5,7 +5,7 @@ import { apiContractPrecision } from "@rabiroute/host-api/manager/apiContractPre
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runPluginSynchronousWork } from "@rabiroute/host-api/plugin-kernel/synchronousExecution";
 import { prepareApiJsonBody } from "@rabiroute/host-api/manager/apiPreparedJson";
-import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage, type ApiOperationFilters } from "./apiDiscoveryIndex.js";
+import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage, apiDiscoveryQuality, type ApiOperationFilters } from "./apiDiscoveryIndex.js";
 
 const discoveryUsageHint = "This is an API catalog, not a business resource list. Totals count matching APIs. Read the discovered contract and parameter sources, then invoke that business operation to query its actual resources.";
 const empty = { type: "object", properties: {}, additionalProperties: false } as const;
@@ -24,11 +24,12 @@ function identity(snapshot: ApiCatalogSnapshot) {
     catalogRevision: snapshot.catalogRevision, catalogDigest: snapshot.catalogDigest };
 }
 
-export function projectApiHelp({ contract, contractDigest, owner, binding, access }: ApiPublishedOperation) {
+export function projectApiHelp({ contract, contractDigest, owner, binding, access, discovery, discoveryIssues }: ApiPublishedOperation) {
   const fields = typeof contract.request.query === "object" ? contract.request.query.properties as Record<string, { type?: string }> ?? {} : {};
   return {
     id: contract.operationId, method: contract.method, pathTemplate: contract.pathTemplate, description: contract.description,
     contractVersion: contract.contractVersion, contractDigest, owner, contract, ...(binding ? { binding } : {}), ...(access ? { access } : {}),
+    ...(discovery ? { discovery } : {}), discoveryQuality: apiDiscoveryQuality(discoveryIssues),
     queryParameters: Object.keys(fields), repeatableQueryParameters: Object.entries(fields).filter(([, schema]) => schema.type === "array").map(([name]) => name),
     limitations: contract.validators.map(rule => rule.description),
     help: { operationId: contract.operationId, method: contract.method, pathTemplate: contract.pathTemplate,
@@ -120,6 +121,7 @@ const operationListQuerySchema = { type: "object", additionalProperties: false, 
   category: { type: "string", maxLength: 512 }, query: { type: "string", maxLength: 4096 },
   provider: { type: "string", maxLength: 512 }, owner: { type: "string", maxLength: 512 },
   method: querySchema.properties.method, pathPrefix: { type: "string", maxLength: 4096 },
+  match: { enum: ["any", "all"] },
   cursor: querySchema.properties.cursor, limit: querySchema.properties.limit
 } } as const;
 const describeQuerySchema = { type: "object", additionalProperties: false, properties: {
@@ -154,7 +156,7 @@ export function createApiDiscoveryOperations(registry: ManagerPluginRouteRegistr
       if (conditional.status === 304) return conditional;
       await prepareApiDiscoveryIndex(snapshot, input.signal);
       const filters: Record<string, string> = {};
-      for (const key of ["category", "query", "provider", "owner", "method", "pathPrefix"] as const) {
+      for (const key of ["category", "query", "provider", "owner", "method", "pathPrefix", "match"] as const) {
         const value = queryValue(input, key);
         if (value) filters[key] = key === "method" ? value.toUpperCase() : value;
       }

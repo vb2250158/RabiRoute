@@ -13,6 +13,22 @@ const failure:ApiResponseContract={mediaType:'application/json; charset=utf-8',s
 const binary:ApiResponseContract={mediaType:'*/*',binary:{maxBytes:Number.MAX_SAFE_INTEGER}};
 function failed(error:unknown,outcome:'not_started'|'unknown'):ApiOperationResult{const status=(error as {statusCode?:number}).statusCode??400;return {status,mutationOutcome:outcome,headers:{'cache-control':'no-store'},body:errorResponsePresentation({code:-1,message:error instanceof Error?error.message:String(error),...(outcome==='unknown'?{uncertain:true}:{})},status)};}
 /** Twenty-four concrete routes; the original Host service and bounded worker pools retain execution ownership. */
+
+const recordingPurposes: Record<string, string> = {
+  "snapshot": "查询全天记录状态",
+  "recent": "查询近期全天记录",
+  "catalog": "查询全天记录目录",
+  "page": "分页查询全天记录",
+  "transcripts": "查询全天录音转写",
+  "events": "查询全天记录事件",
+  "settings": "配置全天记录",
+  "start": "启动全天记录",
+  "stop": "停止全天记录",
+  "repair": "修复全天记录索引",
+  "media": "读取全天记录媒体",
+  "audio": "读取全天记录音频"
+};
+
 export function createPersonaRecordingOperations(context:PersonaRecordingContext):readonly ApiOperationDefinition[]{
   const owner=createPersonaRecordingOwner(context),definitions:ApiOperationDefinition[]=[];
   for(const prefix of ['/api/roles','/roles'])for(const [action,method,suffix,response] of [
@@ -27,7 +43,7 @@ export function createPersonaRecordingOperations(context:PersonaRecordingContext
       validators:[{id:'original-recording-owner',description:'Capture original connection lease, Manager identity, role directory and service/store/read model before body consumption. Preserve local origin/readOnly checks and authenticated remote default public access without feature grants. Native controls revalidate inside their original queue, storage and Host calls.'},{id:'native-history-media',description:'Keep original 26-hour bounds, full stable event cursor, source/type filters, page size 100, cold/loading metadata, bounded worker ownership and media cancellation. Phone owner/chunks come only from an event visible in the role’s selected-source timeline. No arbitrary file paths or source identities are accepted.'}]
     };
     const prepare=(input:Omit<ApiOperationInput,'body'>)=>{try{const bound=owner.prepare(input.request,input.path.roleId,action as PersonaRecordingAction,input.signal);return async(parsed:ApiOperationInput)=>{try{const data=await bound.execute(parsed.body,parsed.url.searchParams,parsed.path);bound.assertCurrent();if(media){const reply=data as {status:number;contentType:string;bytes:Buffer};return {status:reply.status,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':'private, no-store','content-type':reply.contentType},body:reply.bytes};}return {status:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':'no-store'},body:{code:0,data}} as ApiOperationResult;}catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}};}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
-    definitions.push({contract,prepare,handler:async input=>{const handler=prepare(input);return typeof handler==='function'?handler(input):handler;}});
+    definitions.push({contract,discovery:{title:recordingPurposes[action],summary:recordingPurposes[action]+"。",category:{id:"knowledge.recording",title:"全天记录",parentId:"knowledge"},keywords:[recordingPurposes[action],action.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare,handler:async input=>{const handler=prepare(input);return typeof handler==='function'?handler(input):handler;}});
   }
   return definitions;
 }

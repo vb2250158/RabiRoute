@@ -58,7 +58,7 @@ export function createAgentStateReportOperations(report: ReturnType<typeof creat
     catch (error) { return { status: 400, body: { code: -1, message: error instanceof Error ? error.message : String(error),
       ...((error as { uncertain?: boolean })?.uncertain ? { uncertain: true } : {}) } }; }
   };
-  return [{ contract: {
+  return [{ discovery:{title:'上报 Agent 执行状态与会话绑定',summary:'由原Agent进程按generation与sequence上报状态；读取路由运行状态核对是否采用绑定。',category:{id:'agents',title:'Agent 协作'},keywords:['Agent状态','会话绑定状态','agent state report'],relatedOperations:['manager.gateway-runtime.list']}, contract: {
     operationId: "manager.agent-state.report", aliases: ["agent:POST:/api/agent-state"], contractVersion: "1.0.0", method: "POST",
     pathTemplate: "/api/agent-state", exposure: "public", transport: "http",
     description: "Merge a native Agent business-state report for an existing gateway and process generation. A report does not run an Agent prompt.",

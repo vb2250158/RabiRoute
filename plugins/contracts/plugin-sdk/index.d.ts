@@ -2,7 +2,7 @@ export type PluginHost = "manager" | "gateway" | "web" | "desktop";
 import type { PluginPublicationRegistrar } from "./publication.js";
 export { PublicationScope } from "./publication.js";
 export type { PluginPublication, PluginPublicationContext, PluginPublicationRegistrar } from "./publication.js";
-export type { ApiMethod, ApiSchema, ApiBodyContract, ApiResponseContract, ApiOperationContract, ApiOperationInput, ApiOperationResult, ApiOperationStream, ApiOperationDefinition, ApiOperationRegistration, ApiUpgradeSession, ApiUpgradeInput, ApiUpgradeDefinition, ApiUpgradeRegistration, ApiHttpProxyInput, ApiHttpProxyDefinition, ManagerApiOperationsService } from "./api-operation-contract.js";
+export type { ApiMethod, ApiSchema, ApiBodyContract, ApiResponseContract, ApiOperationContract, ApiOperationDiscovery, ApiDiscoveryCategory, ApiDiscoveryInputSource, ApiDiscoveryExample, ApiOperationInput, ApiOperationResult, ApiOperationStream, ApiOperationDefinition, ApiOperationRegistration, ApiUpgradeSession, ApiUpgradeInput, ApiUpgradeDefinition, ApiUpgradeRegistration, ApiHttpProxyInput, ApiHttpProxyDefinition, ManagerApiOperationsService } from "./api-operation-contract.js";
 export type PluginIdentity = Readonly<{ applicationGenerationId: string; managerInstanceId: string; activationId: string; instanceId: string; pluginId: string; version: string; revision: string; host: PluginHost }>;
 export type PluginContribution = Readonly<{ kind: string; id: string; value: unknown }>;
 export type PluginDisposer = () => void | Promise<void>;

@@ -1,4 +1,5 @@
 import { operationIsReadOnly } from "../../apps/rabi-agent/lib/api-operation-effects.mjs";
+import type { SearchLane } from './unifiedSearch.js';
 
 const observedOperations = new WeakMap<IncomingMessage, string>();
 export function operationForObservedRequest(request: IncomingMessage): string | undefined {
@@ -185,6 +186,27 @@ function rejectApiUpgrade(socket: Duplex, status: number, body: unknown, headers
 }
 
 export class ManagerPluginRouteRegistry {
+  // Existing registries can acquire new source readers after a code update.
+  private nativeSearchReaders?: WeakMap<CompiledApiContract, NonNullable<ApiOperationDefinition['searchLanes']>>;
+
+  /** Only readers of the same active operation snapshot participate; no plugin-name table. */
+  searchLanes(input: Parameters<NonNullable<ApiOperationDefinition['searchLanes']>>[0], snapshot: ApiCatalogSnapshot): SearchLane[] {
+    const published = new Set(snapshot.operations.map(operation => operation.contract));
+    return this.activeBatches().flatMap(batch => batch.routes.flatMap(route => {
+      const operation = route.operation;
+      const reader = operation && published.has(operation.contract) ? this.nativeSearchReaders?.get(operation) : undefined;
+      if (!reader) return [];
+      try {
+        const lanes = reader(input).map(lane => ({ ...lane, key: operation!.contract.operationId + ':' + lane.key }));
+        return lanes.length ? lanes : [{ key: operation!.contract.operationId, source: operation!.contract.searchable!.scope, agent: null,
+          read: async () => ({ items: [], version: operation!.digest, complete: true }) }];
+      }
+      catch (error) {
+        return [{ key: operation!.contract.operationId, source: operation!.contract.searchable!.scope, agent: null,
+          read: async () => { throw error; } }];
+      }
+    }));
+  }
   readonly #applicationOwnerKey?: object;
   readonly #applicationRegistration = new AsyncLocalStorage<string>();
   readonly #applicationInstances = new Set<string>();
@@ -351,6 +373,17 @@ export class ManagerPluginRouteRegistry {
     const tracker = new ManagerPluginRequestTracker();
     const streams = new Map<AbortController, ServerResponse>();
     let closing = false;
+    for (const operation of compiled) if (operation.searchLanes) {
+      (this.nativeSearchReaders ??= new WeakMap()).set(operation, input => operation.searchLanes!(input).map(lane => {
+        if (lane.source !== operation.contract.searchable!.scope) throw new Error('Native search reader scope differs from its operation contract.');
+        return { ...lane, read: options => tracker.trackOperation(Promise.resolve().then(async () => {
+          if (closing || !this.activeBatches().some(batch => batch.routes.some(route => route.operation === operation))) {
+            throw Object.assign(new Error('The original search source activation retired.'), { statusCode: 409, code: 'SEARCH_CURSOR_EXPIRED' });
+          }
+          return lane.read(options);
+        })) };
+      }));
+    }
     const declarations = compiled.map(operation => ({
       routeId: operation.contract.operationId,
       operation,

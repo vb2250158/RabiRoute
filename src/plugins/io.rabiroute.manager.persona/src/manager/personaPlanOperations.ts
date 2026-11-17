@@ -40,6 +40,18 @@ function failed(error: unknown, attachment: boolean, input?: Pick<ApiOperationIn
       repair: `Read GET /api/roles/${encodeURIComponent(input?.path.roleId ?? ':roleId')}/plan-statuses to observe the existing workflow after readiness. This is service availability, not invalid plan parameters. Preserve the original request and receipt; do not create a replacement workflow or replay an unknown dispatch.` } : {}),
     ...(attachment ? { reason: cause?.code || 'attachment_read_failed' } : {}), ...(cause?.uncertain ? { uncertain: true } : {}) }, status) };
 }
+
+const planPurposes: Record<string, string> = {
+  "agents.status": "查询计划绑定 Agent 与运行状态",
+  "agents.open": "打开计划绑定的 Agent 会话",
+  "advance.settings.read": "读取计划自动推进策略",
+  "advance.settings.save": "保存计划自动推进策略",
+  "advance.check": "检查可推进计划",
+  "advance.run": "推进满足条件的计划",
+  "attachment.read": "读取计划附件",
+  "attachment.head": "查询计划附件信息"
+};
+
 function define<T>(contract: ApiOperationContract, prepare: (input: Omit<ApiOperationInput,'body'>) => T,
   execute: (owner: T, input: ApiOperationInput) => ApiOperationResult | Promise<ApiOperationResult>, attachment = false): ApiOperationDefinition {
   const bind = (input: Omit<ApiOperationInput,'body'>) => {
@@ -51,7 +63,8 @@ function define<T>(contract: ApiOperationContract, prepare: (input: Omit<ApiOper
       };
     } catch (error) { input.signal?.throwIfAborted(); return failed(error, attachment, input); }
   };
-  return { contract, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === 'function' ? bound(input) : bound; } };
+  const id=contract.operationId.slice('manager.personas.plans.'.length);
+  return { contract, discovery:{title:planPurposes[id],summary:planPurposes[id]+"。复用计划原绑定与运行回执。",category:{id:'knowledge',title:'记忆与计划'},keywords:[planPurposes[id],id.replace(/[.-]/g,' '),'plan'],inputSources:[{field:'path.roleId',operationId:'manager.roles.list',resultPath:'/data/roles',valuePath:'/roleId'},...(contract.pathTemplate.includes(':planId')?[{field:'path.planId',operationId:'manager.personas.storage.plans.list',resultPath:'/data/items',valuePath:'/id',parameters:{'path.roleId':{from:'path.roleId'},'query.limit':{value:'20'}}}]:[])],...(id==='advance.settings.save'||id==='advance.run'?{relatedOperations:['manager.personas.plans.advance.settings.read','manager.personas.plans.advance.check']}:{})}, prepare: bind, handler: async input => { const bound = bind(input); return typeof bound === 'function' ? bound(input) : bound; } };
 }
 
 /** Eight exact operations; plan persistence, adapter access and reservation lifetime stay with native owners. */

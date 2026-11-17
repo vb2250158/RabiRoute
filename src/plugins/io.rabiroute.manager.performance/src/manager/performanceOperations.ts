@@ -85,6 +85,73 @@ const result = (body: unknown): ApiOperationResult => ({ status: 200, headers: {
 const failure = (status: number, reason: unknown): ApiOperationResult => ({ status, body: errorResponsePresentation({ code: -1, message: reason instanceof Error ? reason.message : String(reason) }, status) });
 
 /** These declarations install every performance route and power discovery from the same owner. */
+
+const performancePurposes: Record<string, [string, string[]]> = {
+  "cpu-profile.capture": [
+    "采集 Manager CPU 性能剖析文件",
+    [
+      "CPU分析",
+      "性能剖析",
+      "CPU profile"
+    ]
+  ],
+  "config.read": [
+    "查询性能记录设置",
+    [
+      "性能设置",
+      "performance configuration"
+    ]
+  ],
+  "config.save": [
+    "修改性能记录与保留设置",
+    [
+      "性能设置",
+      "记录间隔",
+      "保留时间",
+      "performance recording settings"
+    ]
+  ],
+  "batches.append": [
+    "提交性能采样批次",
+    [
+      "性能采样",
+      "sample metrics batch"
+    ]
+  ],
+  "summary.read": [
+    "查询性能趋势与慢操作摘要",
+    [
+      "性能监控",
+      "CPU",
+      "内存",
+      "慢接口",
+      "performance summary"
+    ]
+  ],
+  "logs.read": [
+    "查询原始性能采样记录",
+    [
+      "性能日志",
+      "raw performance samples"
+    ]
+  ],
+  "status.read": [
+    "查询性能记录运行与存储状态",
+    [
+      "记录状态",
+      "日志容量",
+      "performance recorder status"
+    ]
+  ],
+  "events.subscribe": [
+    "订阅性能记录通知",
+    [
+      "性能事件",
+      "performance events"
+    ]
+  ]
+};
+
 export function createPerformanceOperations(owner: PerformanceApi): readonly ApiOperationDefinition[] {
   const define = (operationId: string, method: ApiOperationContract["method"], suffix: string, description: string,
     responses: ApiOperationContract["responses"], handler: ApiOperationDefinition["handler"], options: {
@@ -105,6 +172,12 @@ export function createPerformanceOperations(owner: PerformanceApi): readonly Api
       effects: { mode: options.effects ? "write" : "read", description: options.effects ?? "Read the original performance service's bounded in-memory state without flushing or starting read workers." },
       recovery: { strategy: options.effects ? "inspect-before-retry" : "repeatable-read", description: options.recovery ?? "Read the same current state again. Samples are bounded and may expire; this is not a historical archive query." },
       validators: [{ id: "native-performance-owner", description: "The original service owns normalization, sample validation/deduplication, retained memory and storage. Ordinary authenticated remote connections require no per-feature grant. Query conversion preserves native first-value Number conversion and defaults." }]
+    }, discovery: {
+      title: performancePurposes[operationId][0], summary: description,
+      category: { id: "diagnostics.performance", title: "性能监控", parentId: "runtime" }, keywords: performancePurposes[operationId][1],
+      ...(operationId === "config.save" ? { relatedOperations: ["manager.performance.config.read", "manager.performance.status.read"], examples: [{ title: "调整记录间隔", input: { body: { sampleIntervalMs: 5000 } } }] } : {}),
+      ...(operationId === "summary.read" ? { examples: [{ title: "查看最近一小时", input: { query: { rangeMs: "3600000" } } }] } : {}),
+      ...(operationId === "logs.read" ? { examples: [{ title: "查看最近100条采样", input: { query: { limit: "100" } } }] } : {})
     }, prepare: () => { owner.assertActive(); return run; }, handler: run };
   };
   const batch = object({ code: { enum: [0, -1] }, accepted: integer, rejected: integer });

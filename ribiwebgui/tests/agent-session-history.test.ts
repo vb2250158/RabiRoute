@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
-import { createAgentSessionClient, personaSessionAgents, agentSessionProject } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
+import { createAgentSessionClient, personaSessionAgents, agentSessionProject, agentSessionMembersAvailable } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
 
@@ -81,7 +81,7 @@ test('task and history reads keep the original remote owner and cursor, and prop
   const agent = { key: 'target', id: remoteAgentTargetKey(binding), provider: 'codex', binding, routes: [] };
   const request = (async (url: string, init?: RequestInit) => {
     calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined, signal: init?.signal });
-    if (!init?.body) return Response.json({ code: 0, data: { entries: [], nextCursor: 'following' } });
+    if (!init?.body) return Response.json({ code: 0, data: url.includes('/sessions?') ? {items:[{id:'opaque-task',title:'Task'}],nextOffset:50} : { entries: [], nextCursor: 'following' } });
     return Response.json({ code: 0, threads: [{ id: 'opaque-task', title: 'Task' }], nextOffset: 50,
       history: { entries: [], nextCursor: 'following' } });
   }) as typeof fetch;
@@ -89,7 +89,11 @@ test('task and history reads keep the original remote owner and cursor, and prop
   assert.equal((await client.tasks(agent, 'query', 0, signal)).nextOffset, 50);
   await client.history(agent, 'opaque-task', 'original-cursor', signal);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].body.instanceBinding, binding);
+  assert.equal(calls[0].body, undefined);
+  const listUrl = new URL(calls[0].url, 'http://localhost');
+  assert.equal(listUrl.pathname, '/api/rabilink/peer/http/owner-pc/manager/api/agent/providers/codex/sessions');
+  assert.equal(listUrl.searchParams.get('view'), 'roots');
+  assert.equal(listUrl.searchParams.get('previews'), '1');
   const historyUrl = new URL(calls[1].url, 'http://localhost');
   assert.equal(historyUrl.pathname, '/api/rabilink/peer/http/owner-pc/manager/api/agent/providers/codex/sessions/opaque-task/history');
   assert.equal(historyUrl.searchParams.get('cursor'), 'original-cursor');
@@ -146,16 +150,17 @@ test('returning to an Agent tab resumes the original cancelled first task/histor
   const emitted = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const props = reactive({ roleId: 'role', active: true });
   const agent = { id: 'local:codex', provider: 'codex', key: 'codex', routes: [] };
-  let taskReads = 0, historyReads = 0;
+  let taskReads = 0, historyReads = 0, expectedHistoryTask = 'original-task';
   const cancelled = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
   const client = {
     agents: async () => [agent],
+    members: async () => ({items:[{id:'worker',title:'Worker',parentThreadId:'original-task'}],nextOffset:null}),
     tasks: async (_agent: unknown, _query: string, _offset: number, signal: AbortSignal) => {
       if (++taskReads === 1) return cancelled(signal);
       return { items: [{ id: 'original-task', title: 'Original task' }], nextOffset: null };
     },
     history: async (_agent: unknown, task: string, _cursor: unknown, signal: AbortSignal) => {
-      assert.equal(task, 'original-task');
+      assert.equal(task, expectedHistoryTask);
       if (++historyReads === 1) return cancelled(signal);
       return { entries: [native(1, 'event_msg', { type: 'user_message', message: 'User input' })], nextCursor: null };
     }
@@ -165,10 +170,10 @@ test('returning to an Agent tab resumes the original cancelled first task/histor
   const bindings = { computed, nextTick, ref, watch, onBeforeUnmount: (callback: () => void) => cleanups.push(callback),
     defineProps: () => props, usePersonaService: () => ({ fetch, deviceId: '' }), createAgentSessionClient: () => client,
     useI18n: () => ({ t: (text: string) => text, locale: ref('en') }), pluginCatalogStore: { agentAdapters: ref([]) },
-    userFacingError: String, agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor,
+    userFacingError: String, agentSessionMembersAvailable, agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor,
     chatHistoryScroller: () => pane, chatHistoryViewport: () => ({ top: 0, bottom: 100 }), waitForChatHistoryFrame: async () => false };
   const scope = effectScope();
-  const state = scope.run(() => new Function(...Object.keys(bindings), emitted + ';return {tasks,selectedId,messages};')(...Object.values(bindings)))!;
+  const state = scope.run(() => new Function(...Object.keys(bindings), emitted + ';return {tasks,selectedId,messages,members,chooseMember,chooseRoot,currentSession};')(...Object.values(bindings)))!;
   const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick(); };
   try {
     await flush(); assert.equal(taskReads, 1);
@@ -177,6 +182,10 @@ test('returning to an Agent tab resumes the original cancelled first task/histor
     state.selectedId.value = 'original-task'; await flush(); assert.equal(historyReads, 1);
     props.active = false; await flush(); props.active = true; await flush();
     assert.equal(historyReads, 2); assert.equal(state.messages.value[0].text, 'User input');
+    expectedHistoryTask='worker';state.chooseMember(state.members.value[0]);await flush();
+    assert.equal(state.selectedId.value,'original-task');assert.equal(state.currentSession.value.id,'worker');assert.equal(historyReads,3);
+    expectedHistoryTask='original-task';state.chooseRoot('original-task');await flush();
+    assert.equal(state.currentSession.value.id,'original-task');assert.equal(historyReads,4);
   } finally { cleanups.forEach(cleanup => cleanup()); scope.stop(); }
 });
 
@@ -197,5 +206,107 @@ test('Agent sessions offer a persistent project/flat view toggle without changin
   assert.match(source, /:grouped="grouped"/);
   assert.match(source, /@click="grouped = !grouped"/);
   assert.match(source, /localStorage.setItem\(groupingStorageKey/);
-  assert.match(source, /@select="selectedId = \$event"/);
+  assert.match(source, /@select="chooseRoot"/);
+});
+
+
+test('Codex member pages use the exact owner and parent, preserve pagination and cancellation',async()=>{
+  const calls:{url:string;signal?:AbortSignal|null}[]=[];
+  const client=createAgentSessionClient((async(url:string,init?:RequestInit)=>{
+    calls.push({url,signal:init?.signal});return Response.json({code:0,data:{items:[{id:'child',parentThreadId:'root',agentNickname:'Worker'}],nextOffset:50}});
+  }) as typeof fetch);
+  const agent={id:'remote',key:'remote',provider:'codex',routes:[],binding:{instanceId:'pc',agentId:'codex',ownerDeviceId:'owner'}};
+  const signal=new AbortController().signal;
+  assert.equal((await client.members(agent,'root',50,signal)).items[0].agentNickname,'Worker');
+  const url=new URL(calls[0].url,'http://local');
+  assert.equal(url.pathname,'/api/rabilink/peer/http/owner/manager/api/agent/providers/codex/sessions');
+  assert.equal(url.searchParams.get('parentSessionId'),'root');assert.equal(url.searchParams.get('offset'),'50');assert.equal(calls[0].signal,signal);
+});
+
+test('DSH list descriptions use its latest completed visible message and retain rows with unavailable history',async()=>{
+  const client=createAgentSessionClient((async(url:string,init?:RequestInit)=>{
+    if(init?.body)return Response.json({code:0,threads:[{id:'available',title:'Available',updatedAt:'now'},{id:'missing',title:'Missing'}],nextOffset:null});
+    if(url.includes('missing'))return Response.json({code:-1,message:'unavailable'},{status:503});
+    return Response.json({code:0,data:{records:[dsh(1,'user/message',{source:{kind:'user'},content:'Question'}),dsh(2,'assistant/message',{turn:1,message:{content:'Latest reply'}}),dsh(3,'turn/end',{turn:1,reason:{kind:'completed'}})],hasMore:false}});
+  }) as typeof fetch);
+  const agent={id:'local:dsh',key:'dsh',provider:'dsh',routes:[]};
+  const tasks=await client.tasks(agent,'');
+  assert.equal(tasks.items[0].preview,undefined);
+  const summaries=new Map<string,any>();await client.previews(agent,tasks.items,task=>summaries.set(task.id,task));
+  assert.equal(summaries.get('available').preview,'Latest reply');assert.equal(summaries.get('missing').previewUnavailable,true);
+});
+
+
+test('WorkBuddy native messages preserve page order and skip tools, reasoning, malformed rows and empty messages',()=>{
+  const record=(sequence:number,role:string,text:string)=>({sequence,record:{type:'message',role,content:[{type:role==='user'?'input_text':'output_text',text}],timestamp:'2026-11-17T08:00:00Z'}});
+  const first=agentHistoryEvents('workbuddy',{entries:[record(1,'user','Question'),null,{sequence:2,record:{type:'reasoning',text:'private'}},{sequence:3,record:{type:'function_call',arguments:'hidden'}},record(4,'assistant','First reply')]});
+  const next=agentHistoryEvents('workbuddy',{entries:[record(4,'assistant','First reply'),{sequence:5,record:{type:'function_call_output',text:'hidden'}},record(6,'user','Next question'),record(7,'assistant','Final reply'),record(8,'assistant','')]});
+  const merged=[...new Map([...first,...next].map(event=>[event.id,event])).values()];
+  assert.deepEqual(agentHistoryMessages('workbuddy',merged).map(item=>[item.role,item.text]),[['user','Question'],['assistant','First reply'],['user','Next question'],['assistant','Final reply']]);
+  assert.equal(agentHistoryNextCursor('workbuddy',{nextCursor:'native-workbuddy-cursor'}),'native-workbuddy-cursor');
+});
+
+
+test('WorkBuddy summaries advance its forward cursor to the latest reply and retain cancellation',async()=>{
+  const calls:{body:any;signal?:AbortSignal|null}[]=[];
+  const request=(async(_url:string,init?:RequestInit)=>{
+    const body=JSON.parse(String(init?.body));calls.push({body,signal:init?.signal});
+    if(body.action==='list')return Response.json({code:0,threads:[{id:'task',title:'WorkBuddy',updatedAt:'2026-11-17T08:00:00Z'}],nextOffset:null});
+    return Response.json({code:0,history:{entries:[{sequence:body.history.cursor?2:1,record:{type:'message',role:'assistant',content:[{type:'output_text',text:body.history.cursor?'Latest reply':'Older reply'}]}}],nextCursor:body.history.cursor?null:'next'}});
+  }) as typeof fetch;
+  const signal=new AbortController().signal,client=createAgentSessionClient(request);
+  const agent={id:'local:workbuddy',key:'workbuddy',provider:'workbuddy',routes:[]};
+  const page=await client.tasks(agent,'',0,signal);
+  assert.equal(page.items[0].preview,undefined);assert.equal(calls.length,1);
+  let preview='';await client.previews(agent,page.items,task=>preview=task.preview||'',signal);
+  assert.equal(preview,'Latest reply');assert.equal(calls[2].body.history.cursor,'next');assert(calls.every(call=>call.signal===signal));
+});
+
+test('task rows return before history, previews use four workers and a slow task does not block other rows',async()=>{
+  const pending=new Map<string,(reply:string)=>void>(),started:string[]=[],updates:string[]=[];
+  const request=(async(_url:string,init?:RequestInit)=>{
+    const body=JSON.parse(String(init?.body));
+    if(body.action==='list')return Response.json({code:0,threads:Array.from({length:6},(_,i)=>({id:String(i),title:'Task '+i})),nextOffset:null});
+    started.push(body.threadId);
+    return await new Promise<Response>((resolve,reject)=>{
+      pending.set(body.threadId,text=>resolve(Response.json({code:0,history:{entries:[{sequence:1,record:{type:'message',role:'assistant',content:text}}],nextCursor:null}})));
+      init?.signal?.addEventListener('abort',()=>reject(init.signal?.reason),{once:true});
+    });
+  }) as typeof fetch;
+  const client=createAgentSessionClient(request),agent={id:'local:workbuddy',key:'workbuddy',provider:'workbuddy',routes:[]};
+  const page=await client.tasks(agent,'');assert.equal(page.items.length,6);assert.equal(started.length,0);
+  const controller=new AbortController(),running=client.previews(agent,page.items,task=>updates.push(task.id+':'+task.preview),controller.signal);
+  const cancelled=assert.rejects(running);assert.deepEqual(started,['0','1','2','3']);
+  pending.get('2')!('Fast reply');await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(updates,['2:Fast reply']);assert.deepEqual(started,['0','1','2','3','4']);
+  controller.abort();await cancelled;pending.get('0')!('Late reply');await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(updates,['2:Fast reply']);assert(!started.includes('5'));
+});
+
+test('actual session page preserves previews after a failed more-page read and rejects late updates after search, Agent and visibility changes',async()=>{
+  const parsed=parse(fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue',import.meta.url),'utf8'));
+  const source=ts.createSourceFile('history.ts',parsed.descriptor.scriptSetup!.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+  const body=source.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(source)).join('\n');
+  const emitted=ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const props=reactive({roleId:'role',active:true}),jobs:{signal:AbortSignal;update:(task:any)=>void}[]=[],cleanups:(()=>void)[]=[];
+  const agents=['workbuddy','dsh'].map(provider=>({id:'local:'+provider,key:provider,provider,routes:[]}));
+  let failNextPage=false;
+  const client={agents:async()=>agents,tasks:async()=>{if(failNextPage)throw new Error('More page unavailable');return{items:[{id:'same-task',title:'Task'}],nextOffset:50};},
+    previews:async(_agent:unknown,_items:unknown,update:(task:any)=>void,signal:AbortSignal)=>{jobs.push({signal,update});return new Promise<void>((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}};
+  const bindings={computed,nextTick,ref,watch,onBeforeUnmount:(fn:()=>void)=>cleanups.push(fn),defineProps:()=>props,
+    usePersonaService:()=>({fetch,deviceId:''}),createAgentSessionClient:()=>client,useI18n:()=>({t:(text:string)=>text,locale:ref('zh-CN')}),
+    pluginCatalogStore:{agentAdapters:ref([])},userFacingError:String,agentSessionMembersAvailable,agentSessionProject};
+  const scope=effectScope(),state=scope.run(()=>new Function(...Object.keys(bindings),emitted+';return {tasks,agentKey,query,loadTasks,loadingTasks};')(...Object.values(bindings)))!;
+  const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await nextTick();};
+  try{
+    await flush();assert.equal(state.tasks.value.length,1);assert.equal(state.loadingTasks.value,false);assert.equal(jobs.length,1);
+    failNextPage=true;await state.loadTasks(true);assert.equal(state.tasks.value.length,1);assert.equal(jobs[0].signal.aborted,false);assert.equal(jobs.length,1);
+    jobs[0].update({id:'same-task',preview:'Still reading'});assert.equal(state.tasks.value[0].preview,'Still reading');failNextPage=false;
+    state.query.value='new search';await state.loadTasks();assert(jobs[0].signal.aborted);
+    jobs[0].update({id:'same-task',preview:'Old search'});assert.equal(state.tasks.value[0].preview,undefined);
+    jobs[1].update({id:'same-task',preview:'Current reply'});assert.equal(state.tasks.value[0].preview,'Current reply');
+    state.agentKey.value='dsh';await flush();assert(jobs[1].signal.aborted);jobs[1].update({id:'same-task',preview:'Wrong Agent'});assert.equal(state.tasks.value[0].preview,undefined);
+    props.active=false;await flush();assert(jobs[2].signal.aborted);jobs[2].update({id:'same-task',preview:'Hidden update'});assert.equal(state.tasks.value[0].preview,undefined);
+    props.active=true;await flush();assert.equal(jobs.length,4);jobs[3].update({id:'same-task',preview:'Resumed reply'});assert.equal(state.tasks.value[0].preview,'Resumed reply');
+  }finally{cleanups.forEach(fn=>fn());scope.stop();}
 });

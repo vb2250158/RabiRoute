@@ -1,5 +1,6 @@
 import * as endpointOwner from "./workbuddyOwnerExecution.js";
 import * as threads from '../workbuddyThreads.js';
+import { readWorkbuddyHistory } from '../workbuddyHistory.js';
 import { updateHooks } from './workbuddyHookInstallation.js';
 import { commonManagerOperations, nativeOperations, createAgentScanOperations, type AgentOwnedManager } from '@rabiroute/host-api/agentAdapters/managerNativeOperations';
 import type { AgentManagerImplementationOptions } from '@rabiroute/host-api/manager/agentManagerHostPorts';
@@ -7,6 +8,10 @@ import type { AgentManagerDescriptor } from '@rabiroute/host-api/manager/agentMa
 export function createManager(options: AgentManagerImplementationOptions, descriptor: AgentManagerDescriptor, signal: AbortSignal): AgentOwnedManager {
   return {
     operations: {
+      "threads.history": (payload, invocation) => readWorkbuddyHistory(payload.sessionId, {
+        cursor: payload.cursor, limit: payload.limit, signal: invocation?.signal,
+        assertAuthorized: invocation?.assertCurrent
+      }),
       "endpoint.execute": (_payload, invocation) => {
         const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.executeEndpointOnOwner> | undefined;
         if (!args) throw new Error("Original native endpoint arguments are required.");

@@ -84,10 +84,14 @@ AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选�
 Agent 适配器不得把 API、渠道或参数写死为长期真源。每次启动、Manager generation 变化、接口返回未知字段/错误，按以下顺序刷新：
 
 1. 从 Host status 或结构化 READY 取得当前 Manager 地址，并用 `/meta` 核对 generation、instance 和健康边界。
-2. 使用共享 operation SDK 的分类、短列表与关键词搜索。HTTP 入口为 `GET /api/agent/categories` 和 `GET /api/agent/operations`，按 `category/query/provider/limit/cursor` 缩小当前结果。选定 ID 后读取 `GET /api/agent/operations/:operationId?view=input`，按需读取 result/full。发送渠道另读取 `GET /api/agent/send/capabilities`。完整合同、CLI 与 MCP 同参规则见 [统一接口](../../docs/unified-agent-api.md)。
-3. 按当前 description 的 request、inputSources、relatedOperations 和原业务错误取得参数并执行。旧客户端保留 `/api/agent/help` 精确查询和完整导出兼容。目录缺项只说明发现范围，继续核原业务 owner 和当前合同。接口的 `operation` 与本次 `requestId/idempotencyKey` 分别传递。
+2. 任务检索先用 `GET /api/search?q=<关键词>` 读取内容、覆盖与真实入口；执行功能时按 `scope=operations` 或共享 operation SDK 的分类、短列表与关键词搜索定位。目录 HTTP 入口为 `GET /api/agent/categories` 和 `GET /api/agent/operations`，按 `category/query/provider/limit/cursor` 缩小当前结果。选定 ID 后读取 `GET /api/agent/operations/:operationId?view=input`，按需读取 result/full。发送渠道另读取 `GET /api/agent/send/capabilities`。完整合同、CLI 与 MCP 同参规则见 [统一接口](../../docs/unified-agent-api.md)。
+3. 按当前 description 的 request、inputSources、relatedOperations、可选 examples 和原业务错误取得实际参数并执行，再按真实结果、原回执与写后回读确认完成。旧客户端保留 `/api/agent/help` 精确查询和完整导出兼容。目录缺项时继续核原业务 owner 和当前合同。接口的 `operation` 与本次 `requestId/idempotencyKey` 分别传递。
 4. 成功与失败都保存 HTTP 状态、JSON `code`、`errorCode`、`help`、`repair` 和 receipt/resource 标识。写请求超时、5xx、412 或 generation 变化时，保留原 body 和 delivery/idempotency key，由原投递拥有者查询原 ID 和执行阶段，再按已有幂等合同恢复；同一 ID 的可靠恢复不是新投递，不因结果未知停止其它独立工作。
-5. 新增接口或渠道时，先更新统一能力目录、help、真实路由声明、契约 fixture 和中英文导航；不得只改长文或 Agent skill。
+5. 新增或修改接口时，在原 `ApiOperationDefinition.discovery` 声明业务 title/summary、中英文 keywords、适用 inputSources/relatedOperations 和可选 examples，随原 handler 注册自动进入统一目录、搜索、describe、CLI/MCP。保持核心的通用提取逻辑，按同一协议接入新插件；同步契约 fixture 与中英文说明。
+
+某个来源、扫描或操作失败时，保留实际错误及原回执，继续其它可用入口。发现、连接或承载检索的工具不可用时记录一次错误并继续原任务。需要宿主内部动作时，按已确认的能力缺口与当前授权选择工具。
+
+接入验收从用户原话开始，验证统一搜索、describe、参数来源、真实业务调用和回读，并记录实际宿主工具、提示及 Manager 身份。新插件使用核心未预置名称或关键词的能力验证同一声明自动接入；覆盖中英意图、缺参数、局部失败和不确定结果恢复。元数据质量问题进入诊断，原 handler 继续遵守已有业务合同。
 
 `/api/lan-agent/capabilities` 应返回同一 operation help 摘要。Help 只描述当前 Manager 版本，不能缓存成永久合同；适配器应记录读取时的 generation 和 contract/schema 版本（若返回）。
 

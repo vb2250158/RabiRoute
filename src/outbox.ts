@@ -162,6 +162,8 @@ export type AgentPlanFeedbackSubmitPort = (
 ) => Promise<AgentPlanFeedbackSubmitResult>;
 
 export type AgentReplyOptions = {
+  /** Trusted quoted-source guard; recheck immediately before each QQ provider call. */
+  assertReplySourceCurrent?: () => void;
   /** Published HTML feature owner; ordinary replies have no dependency on it. */
   publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<string>;
   /** Trusted native service owner; never accepted from request JSON. */
@@ -1704,6 +1706,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const captured = structuredClone(request);
   const snapshotOptions = { ...options, runtimes: structuredClone(options.runtimes) };
   const bind = <T extends (...args: any[]) => any>(type: string, operation: string): T => ((...args: unknown[]) => {
+    if (type === "napcat") options.assertReplySourceCurrent?.();
     let lease = leases.get(type);
     if (!lease) {
       const provider = options.endpointEgress?.(`endpoint.${type}.egress@1`);

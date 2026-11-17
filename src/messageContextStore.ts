@@ -169,7 +169,7 @@ export type RecentMessageContextQuery = {
   /** UI browsing is separate from bounded Agent-context excerpts. */
   page?: { cursor?: string; includeAdapters?: boolean; catalogOnly?: boolean; conversations?: boolean; conversationCursor?: string };
   /** Internal unified-search window over the existing history index. */
-  unified?: { sort: "relevance" | "recent"; offset: number; kinds: string[] };
+  unified?: { sort: "relevance" | "recent"; offset: number; kinds: string[]; snapshot?: string };
 };
 
 type RecentMessageContextOptions = Omit<RecentMessageContextQuery, "limit">;
