@@ -29,8 +29,12 @@ RabiRoute 是一个**可自托管的 AI Agent 消息网关与策略路由器**�
 [连接总览](#连接总览) · [开始使用](#开始使用) · [运行架构](#运行架构) · [文档入口](#文档入口) · [交流群](#交流与反馈)
 
 <p align="center">
-  <img src="assets/screenshots/webgui-overview-zh.png" alt="RabiRoute 控制台：消息包裹正在排队分诊" width="49%">
+  <img src="assets/screenshots/webgui-overview-zh.png" alt="RabiRoute 控制台：消息包裹正在排队分诊">
+</p>
+
+<p align="center">
   <img src="assets/screenshots/webgui-adapters-zh.png" alt="消息适配器配置页面" width="49%">
+  <img src="assets/screenshots/webgui-persona-rules-zh.png" alt="角色规则配置页面" width="49%">
 </p>
 
 ## 这套东西适合你吗？
