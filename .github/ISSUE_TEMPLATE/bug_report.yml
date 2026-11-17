@@ -14,7 +14,7 @@ body:
     id: version
     attributes:
       label: 版本
-      description: `/meta` 返回的 version，或界面「关于」里显示的版本
+      description: '`/meta` 返回的 version，或界面「关于」里显示的版本'
       placeholder: "0.15.24"
     validations:
       required: true
