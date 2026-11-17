@@ -159,6 +159,21 @@ The repository version is `0.15.25`.
 
 [Full capability matrix](docs/current-capabilities_en.md) · [Changes and migrations](版本更新日志_en.md)
 
+### Common combinations
+
+Each combination is the chat input on the left and the agent backend on the right. Status follows the table above, not a separate promise.
+
+| Chat input | Agent backend | Status |
+| --- | --- | --- |
+| QQ via NapCat / OneBot | Codex Desktop | Verified |
+| WeChat / WeCom | Codex Desktop | Experimental |
+| Feishu | Codex Desktop | Experimental |
+| QQ via NapCat / OneBot | DSH · WorkBuddy | Experimental |
+| WeChat / WeCom / Feishu | Antigravity · Copilot CLI · AstrBot | Experimental |
+| Schedules · Webhook · MCP tools | Any configured backend | Verified for delivery |
+
+[apps/rabi-mcp](apps/rabi-mcp) exposes the Manager's public operations — including sending and delivery records — over MCP stdio or Streamable HTTP, so an agent that already speaks MCP does not need a separate integration.
+
 ## Architecture
 
 The Windows package uses **one Host** to own Manager and the desktop surface. Manager owns routing and business state; plugins provide adapters and services. Agent tasks and optional speech/device services keep their own lifecycles.

@@ -159,6 +159,21 @@ npm run status:linux -- --json
 
 [完整能力矩阵](docs/current-capabilities.md) · [版本变化与迁移](版本更新日志.md)
 
+### 常见组合
+
+左边是消息入口，右边是 Agent 处理端。状态以上一张表为准，这里不另作承诺。
+
+| 消息入口 | Agent 处理端 | 状态 |
+| --- | --- | --- |
+| QQ（NapCat / OneBot） | Codex Desktop | 已验证 |
+| 微信 / 企业微信 | Codex Desktop | 实验支持 |
+| 飞书 | Codex Desktop | 实验支持 |
+| QQ（NapCat / OneBot） | DSH · WorkBuddy | 实验支持 |
+| 微信 / 企业微信 / 飞书 | Antigravity · Copilot CLI · AstrBot | 实验支持 |
+| 定时任务 · Webhook · MCP 工具 | 任意已配置处理端 | 投递路径已验证 |
+
+[apps/rabi-mcp](apps/rabi-mcp) 通过 MCP stdio 或 Streamable HTTP 暴露 Manager 的公开 operation（含发送与投递记录），已经会讲 MCP 的 Agent 不需要另做集成。
+
 ## 运行架构
 
 Windows 安装包由**一个 Host** 管理 Manager 和桌面界面。Manager 拥有路由与业务状态，插件提供适配器和服务；外部 Agent 任务及可选语音、设备服务保留各自的生命周期。
