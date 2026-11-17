@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.26 - 2026-11-17
+
+- Remove the push-tag trigger from the Windows release workflow; publication now requires an explicit dispatch. GitHub still emits a push event for the tag created by `gh release create --target`, so a duplicate build started after the release was published and would have overwritten the verified uploaded assets with CI output once its test gate passed.
+
 ## 0.15.25 - 2026-11-17
 
 - Read Host control requests before collecting caller metadata for mutations. Timeouts, access failures and invalid protocol responses report an unknown state while mutation authorization and auditing stay intact.

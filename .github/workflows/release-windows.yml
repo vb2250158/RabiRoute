@@ -1,9 +1,11 @@
 name: Release Windows package
 
+# Release tags are created by the publishing flow with `gh release create --target`.
+# GitHub still emits a push event for those tags, which re-ran this workflow after
+# the release was already published: the duplicate build wasted 22 minutes and, once
+# the test gate passed, its last step would have clobbered the verified assets.
+# Publication is therefore explicit-only; keep the tag trigger off.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       publish_release:
