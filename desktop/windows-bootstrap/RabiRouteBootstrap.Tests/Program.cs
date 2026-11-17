@@ -7,6 +7,7 @@ var checks = 0;
 void Check(bool condition, string message) { checks++; if (!condition) failures.Add(message); }
 HostElevationTests.Run(Check);
 await StartupPresentationTests.RunAsync(Check);
+await ReadOnlyHostStatusProbeTests.RunAsync(Check);
 Check(RabiRoute.WindowsBootstrap.Program.EffectiveArguments(new[] { "--command", "status" }, "1").Contains("--acceptance"),
     "acceptance child status commands retain the isolated Host namespace");
 Check(!RabiRoute.WindowsBootstrap.Program.EffectiveArguments(new[] { "--command", "status" }, null).Contains("--acceptance"),

@@ -11,7 +11,7 @@ onBeforeUnmount(()=>{dispose?.()});
 <style scoped>
 .rabi-voice-assistant {
   box-sizing: border-box;
-  height: calc(100dvh - var(--v-layout-top, 64px) - var(--v-layout-bottom, 0px));
+  height: var(--rr-content-height, calc(100dvh - var(--v-layout-top, 64px) - var(--v-layout-bottom, 0px)));
   min-height: 0;
   min-width: 0;
   display: flex;

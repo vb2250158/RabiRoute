@@ -68,7 +68,7 @@ test("route-control is built and synchronized as an independent Web entry", () =
   assert.match(sync, /buildPluginWebPackages/);
   assert.match(sync, /allWeb: true/);
   assert.doesNotMatch(sync, /export \{ activate \} from/);
-  assert.match(app, /topbarCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
+  assert.match(app, /pageCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
   assert.match(app, /command.handlerId !== "web.add-route" \|\| route.path.startsWith\("\/routes"\)/);
-  assert.match(app, /v-for="command in topbarCommands"/);
+  assert.match(app, /v-for="command in pageCommands"/);
 });

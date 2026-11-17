@@ -990,6 +990,9 @@ export const englishCatalog: Record<string, string> = {
   "添加消息端": "Add message input",
 
   "已验证": "Verified",
+  "导航": "Navigation",
+  "本机服务": "Local services",
+  "正在保存": "Saving",
   "已发现": "Detected",
 
   "配置版本": "Configured version",

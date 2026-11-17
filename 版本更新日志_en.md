@@ -6,6 +6,20 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.25 - 2026-11-17
+
+- Read Host control requests before collecting caller metadata for mutations. Timeouts, access failures and invalid protocol responses report an unknown state while mutation authorization and auditing stay intact.
+- `io.rabiroute.agent.codex 0.1.9` filters internal Guardian approval children before pagination while retaining exact-ID reads.
+- `io.rabiroute.manager.persona 0.1.22` aligns channel actions with the tabs and adds collapsible project groups with a persistent flat-view preference.
+- `io.rabiroute.manager.persona 0.1.23` adds a fixed search form with results, source-status and request/response tabs, caller and scope selection, advanced JSON, detail and copy actions, cursor pagination, expandable text and retained results after failed searches.
+- `io.rabiroute.manager.performance 0.1.6`, `io.rabiroute.manager.video 0.2.3` and `io.rabiroute.manager.voice-assistant 1.1.12` share theme colors and measured page-header layout.
+
+
+- Unify the WebGUI sidebar and in-content page header: move role/computer selection to the sidebar, group navigation and remove the fixed top bar while preserving plugin actions and page controls.
+- Share typography, weights, geometry and interaction motion; add local save feedback, loading skeletons and reduced-motion support. Message history and the voice assistant use the measured page-header height.
+- Make the media workbench and performance pages follow light, dark and custom semantic palettes, removing forced dark mode and unrelated decorative headings.
+- Pass configuration snapshots to Agent scan workers, fixing structured-clone failures caused by live process handles and callbacks.
+
 ## 0.15.24 - 2026-11-17
 
 - Add a shared 16:9 assistant canvas for charts, text and diagrams, with temporary and persistent lifecycles.

@@ -46,7 +46,7 @@ export function commonManagerOperations(
         entry: options.scannerEntry,
         exportName: options.scannerExport,
         rootDir: options.host.rootDir,
-        runtimes: [...options.host.getRuntimes()],
+        runtimes: [...options.host.getRuntimes()].map(runtime => ({ definition: runtime.definition })),
         manifest: descriptor.manifest,
         runtimeLayout: options.runtimeLayout ?? { packageRoot: options.host.packageRoot, stateRoot: options.host.rootDir },
         options: payload ?? {}

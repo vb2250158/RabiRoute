@@ -1,6 +1,8 @@
+@import "./themes/foundation.css";
 @import "./themes/light/tokens.css";
 @import "./themes/dark/tokens.css";
 @import "./scrollbars.css";
+@import "./shell.css";
 
 * {
   box-sizing: border-box;
@@ -124,7 +126,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   min-width: 0;
   padding: 9px 4px 9px 10px;
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
   text-align: left;
 }
 
@@ -156,7 +158,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   padding: 0 10px;
   color: var(--rr-muted-faint);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -178,7 +180,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
 
 .docs-page-button span {
   font-size: 13px;
-  font-weight: 760;
+  font-weight: 600;
 }
 
 .docs-page .docs-main {
@@ -199,7 +201,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   margin-bottom: 32px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .docs-breadcrumb span:last-child {
@@ -221,7 +223,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   margin: 14px 0 12px;
   color: var(--rr-heading);
   font-size: 42px;
-  font-weight: 900;
+  font-weight: 600;
   line-height: 1.12;
   letter-spacing: 0;
 }
@@ -230,7 +232,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   margin: 0 0 10px;
   color: var(--rr-heading);
   font-size: 23px;
-  font-weight: 900;
+  font-weight: 600;
   line-height: 1.25;
 }
 
@@ -238,14 +240,14 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   margin: 0 0 18px;
   color: var(--rr-muted);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.75;
 }
 
 .docs-article .docs-lead {
   color: var(--rr-muted);
   font-size: 18px;
-  font-weight: 780;
+  font-weight: 600;
   line-height: 1.55;
 }
 
@@ -268,7 +270,7 @@ html[data-rabiroute-theme] .text-grey { color: var(--rr-muted) !important; }
   padding: 7px 10px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 720;
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -390,27 +392,18 @@ body {
   min-height: 100vh;
   max-width: 100%;
   overflow-x: clip;
-  background:
-    linear-gradient(90deg, var(--rr-grid-line) 1px, transparent 1px),
-    linear-gradient(0deg, var(--rr-grid-line-soft) 1px, transparent 1px),
-    linear-gradient(180deg, var(--rr-input) 0%, var(--rr-canvas) 52%, var(--rr-subtle) 100%);
-  background-size: 40px 40px, 40px 40px, auto;
+  background: var(--rr-canvas);
   color: var(--rr-text);
-  font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-family: var(--rr-font-sans);
+  font-size: var(--rr-text-md);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  right: clamp(-140px, -7vw, -52px);
-  bottom: clamp(-140px, -9vw, -54px);
-  width: min(58vw, 620px);
-  aspect-ratio: 1;
-  background: url("/assets/rabiroute-icon.png") center / contain no-repeat;
-  filter: saturate(1.02) drop-shadow(0 28px 64px rgba(25, 191, 193, .18));
-  opacity: .055;
-  pointer-events: none;
-  z-index: 0;
+.v-application {
+  font-family: var(--rr-font-sans) !important;
+  background: var(--rr-canvas) !important;
 }
 
 #app {
@@ -423,13 +416,13 @@ body::before {
 
 .app-card {
   border: 1px solid var(--rr-border-soft) !important;
-  border-radius: var(--rr-card-radius, 8px) !important;
+  border-radius: var(--rr-radius-l) !important;
   box-shadow: var(--rr-shadow-card) !important;
+  transition: border-color var(--rr-duration-base) var(--rr-ease-out), box-shadow var(--rr-duration-base) var(--rr-ease-out);
 }
 
 .glass-card {
-  background: var(--rr-surface-glass) !important;
-  backdrop-filter: blur(14px);
+  background: var(--rr-surface) !important;
 }
 
 .v-switch.v-input--density-compact {
@@ -480,7 +473,7 @@ body::before {
 
 .v-switch .v-label {
   color: var(--rr-heading);
-  font-weight: 800;
+  font-weight: 600;
   opacity: 1;
 }
 
@@ -510,141 +503,11 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   }
 }
 
-.left-sidebar {
-  border-right: 1px solid var(--rr-border-soft) !important;
-  box-shadow: none !important;
-  background: var(--rr-surface-sidebar) !important;
-}
-
-.top-app-bar {
-  border-bottom: 1px solid var(--rr-border-soft) !important;
-  box-shadow: none !important;
-  background: var(--rr-surface-chrome) !important;
-  backdrop-filter: blur(16px);
-}
-
-.topbar-context {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-  margin-inline-start: 16px;
-}
-.topbar-context .topbar-title { margin: 0; }
-.topbar-page-controls:empty { display: none; }
-.topbar-page-controls {
-  flex: 0 1 auto;
-  width: clamp(160px, 22vw, 340px);
-  min-width: 0;
-}
 .speech-server-picker .v-field { font-size: 14px; }
-.topbar-route-picker {
-  flex: 0 1 220px;
-  width: clamp(160px, 16vw, 240px);
-  min-width: 120px;
-}
-.topbar-route-picker .v-field { font-size: 14px; }
-
-.topbar-title {
-  min-width: 0;
-  flex: 0 1 auto !important;
-  overflow: hidden;
-}
-
-.topbar-title .font-weight-bold {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--rr-heading);
-  font-size: 15px;
-  line-height: 1.1;
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-shrink: 0;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.locale-switcher {
-  min-width: 66px !important;
-  height: 34px !important;
-  padding-inline: 10px !important;
-  border: 1px solid rgba(25, 191, 193, .2) !important;
-  font-size: 12px !important;
-  font-weight: 900 !important;
-  letter-spacing: .06em;
-}
 
 .locale-menu {
   border: 1px solid var(--rr-border-soft) !important;
   box-shadow: var(--rr-shadow-menu) !important;
-}
-
-.mobile-action {
-  display: none !important;
-}
-
-.manager-chip {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-weight: 800 !important;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 14px;
-}
-
-.sidebar-body {
-  padding: 12px;
-}
-
-
-
-.sidebar-list .v-list-item {
-  min-height: 40px;
-  margin-bottom: 4px;
-  border-radius: 8px !important;
-}
-
-.sidebar-list .v-list-item--active {
-  background: rgba(25, 191, 193, .12) !important;
-  color: var(--rr-heading) !important;
-}
-
-.sidebar-list .v-list-item-title {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.sidebar-nav-divider {
-  margin: 10px 4px 8px;
-  opacity: .55;
-}
-
-.sidebar-footer {
-  display: grid;
-  gap: 8px;
-  padding: 16px;
-}
-
-.sidebar-footer-btn.v-btn {
-  justify-content: flex-start !important;
-  text-transform: none;
-}
-
-.dirty-hint {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--rr-warning-text);
-  white-space: nowrap;
 }
 
 .v-main {
@@ -689,7 +552,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin: 0;
   color: var(--rr-heading);
   font-size: 21px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0;
   overflow-wrap: anywhere;
 }
@@ -698,13 +561,13 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 4px;
   color: var(--rr-muted-soft);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .eyebrow {
   color: var(--rr-accent-text);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -728,7 +591,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   display: block;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .workflow-step span {
@@ -736,7 +599,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 4px;
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -764,7 +627,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   display: block;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .summary-tile b {
@@ -790,7 +653,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
 .empty-state strong {
   color: var(--rr-heading);
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .empty-state span {
@@ -798,7 +661,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 6px;
   color: var(--rr-muted-soft);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .danger-zone {
@@ -867,7 +730,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
 .route-card-title {
   color: var(--rr-heading);
   font-size: 16px;
-  font-weight: 850;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -875,7 +738,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 3px;
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
@@ -902,14 +765,14 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
 .stat-label {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .stat-value {
   margin-top: 8px;
   color: var(--rr-heading);
   font-size: clamp(21px, 2.1vw, 27px);
-  font-weight: 850;
+  font-weight: 600;
   line-height: 1.08;
   overflow-wrap: anywhere;
 }
@@ -918,7 +781,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 8px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -973,14 +836,14 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
 .section-title {
   color: var(--rr-heading);
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .section-note {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -1032,7 +895,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   display: block;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -1042,7 +905,7 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-top: 3px;
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -1102,14 +965,14 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   min-height: 34px;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .channel-topology-heading small {
   margin-left: auto;
   color: var(--rr-muted-soft);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .channel-topology-heading-center {
@@ -1209,7 +1072,7 @@ button.channel-topology-node:focus-visible {
 .channel-topology-node-main strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .channel-topology-node-main small,
@@ -1219,7 +1082,7 @@ button.channel-topology-node:focus-visible {
   overflow: hidden;
   color: var(--rr-muted-soft);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -1238,7 +1101,7 @@ button.channel-topology-node:focus-visible {
   justify-self: end;
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .channel-topology-node-actions {
@@ -1258,7 +1121,7 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-accent-text);
   font: inherit;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1290,7 +1153,7 @@ button.channel-topology-node:focus-visible {
 .channel-topology-manager-node strong {
   color: var(--rr-heading);
   font-size: 17px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .channel-topology-manager-icon {
@@ -1313,7 +1176,7 @@ button.channel-topology-node:focus-visible {
 .channel-topology-empty strong {
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 @media (max-width: 960px) {
@@ -1360,7 +1223,7 @@ button.channel-topology-node:focus-visible {
 .status-row span {
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .status-row b {
@@ -1529,7 +1392,7 @@ button.channel-topology-node:focus-visible {
   display: block;
   color: var(--rr-heading);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .napcat-setup-main span,
@@ -1537,7 +1400,7 @@ button.channel-topology-node:focus-visible {
   display: block;
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -1568,7 +1431,7 @@ button.channel-topology-node:focus-visible {
 .napcat-setup-stats span {
   color: var(--rr-muted-soft);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .napcat-account-card {
@@ -1603,7 +1466,7 @@ button.channel-topology-node:focus-visible {
 .napcat-account-title {
   color: var(--rr-heading);
   font-size: 18px;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1627,13 +1490,13 @@ button.channel-topology-node:focus-visible {
 .napcat-card-summary span {
   color: var(--rr-muted-soft);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .napcat-card-summary b {
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1657,13 +1520,13 @@ button.channel-topology-node:focus-visible {
 .napcat-auto-summary span {
   color: var(--rr-muted-soft);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .napcat-auto-summary b {
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1711,7 +1574,7 @@ button.channel-topology-node:focus-visible {
 .napcat-detail-panel .v-expansion-panel-title {
   min-height: 38px !important;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .health-diagnostics {
@@ -1787,7 +1650,7 @@ button.channel-topology-node:focus-visible {
 .catalog-section-title {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1833,13 +1696,13 @@ button.channel-topology-node:focus-visible {
 .catalog-row-main strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .catalog-row-main small {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -1927,7 +1790,7 @@ button.channel-topology-node:focus-visible {
 .route-kind-group-head span {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .route-kind-chip-grid {
@@ -1970,7 +1833,7 @@ button.channel-topology-node:focus-visible {
 
 .route-kind-chip span {
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .route-kind-chip code {
@@ -2042,7 +1905,7 @@ button.channel-topology-node:focus-visible {
 
 .quick-step-button span {
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -2146,13 +2009,13 @@ button.channel-topology-node:focus-visible {
 
 .fold-section-head strong {
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .fold-section-head small {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -2190,7 +2053,7 @@ button.channel-topology-node:focus-visible {
 
 .automation-tabs .v-tab {
   min-height: 54px;
-  font-weight: 850;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -2237,14 +2100,14 @@ button.channel-topology-node:focus-visible {
 .automation-section-heading strong {
   color: var(--rr-heading);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .automation-toolbar span,
 .automation-section-heading span {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 620;
+  font-weight: 500;
   line-height: 1.45;
 }
 
@@ -2303,7 +2166,7 @@ button.channel-topology-node:focus-visible {
   overflow: hidden;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2382,7 +2245,7 @@ button.channel-topology-node:focus-visible {
   display: inline-flex;
   align-items: center;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--rr-heading);
   white-space: nowrap;
   overflow: hidden;
@@ -2478,7 +2341,7 @@ button.channel-topology-node:focus-visible {
 .xiaomi-cascader-device-item.active {
   border-left: 3px solid #2d7d96;
   padding-left: 9px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .cascader-device-name {
@@ -2646,7 +2509,7 @@ button.channel-topology-node:focus-visible {
 
 .template-var code {
   color: var(--rr-heading);
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .template-var span {
@@ -2675,7 +2538,7 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-heading);
   font-size: 30px;
   line-height: 1.12;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -2684,7 +2547,7 @@ button.channel-topology-node:focus-visible {
   margin-top: 10px;
   color: var(--rr-text);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.7;
 }
 
@@ -2697,7 +2560,7 @@ button.channel-topology-node:focus-visible {
 .docs-count {
   color: var(--rr-accent-text);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
   text-align: right;
 }
 
@@ -2715,7 +2578,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-surface);
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .docs-layout {
@@ -2751,7 +2614,7 @@ button.channel-topology-node:focus-visible {
   padding: 0 4px;
   color: var(--rr-accent-text);
   font-size: 11px;
-  font-weight: 950;
+  font-weight: 600;
 }
 
 .docs-page-button {
@@ -2776,14 +2639,14 @@ button.channel-topology-node:focus-visible {
 .docs-page-button span {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .docs-page-button small {
   color: var(--rr-muted-soft);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -2808,7 +2671,7 @@ button.channel-topology-node:focus-visible {
 .docs-rule-card span {
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.5;
 }
 
@@ -2836,7 +2699,7 @@ button.channel-topology-node:focus-visible {
 .docs-feature-title {
   color: var(--rr-heading);
   font-size: 16px;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -2850,7 +2713,7 @@ button.channel-topology-node:focus-visible {
 .docs-page-copy {
   color: var(--rr-muted);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.7;
 }
 
@@ -2873,7 +2736,7 @@ button.channel-topology-node:focus-visible {
   display: block;
   color: var(--rr-muted);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .docs-fact-grid b {
@@ -2881,7 +2744,7 @@ button.channel-topology-node:focus-visible {
   margin-top: 4px;
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -2933,14 +2796,14 @@ button.channel-topology-node:focus-visible {
 .docs-table-card strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .docs-table-card span {
   color: var(--rr-muted-soft);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -3067,7 +2930,7 @@ button.channel-topology-node:focus-visible {
   background: linear-gradient(145deg, rgba(25, 191, 193, .19), rgba(68, 137, 235, .13));
   color: var(--rr-accent-text);
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-person-title strong {
@@ -3076,7 +2939,7 @@ button.channel-topology-node:focus-visible {
   overflow: hidden;
   color: var(--rr-heading);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3087,7 +2950,7 @@ button.channel-topology-node:focus-visible {
   overflow: hidden;
   color: var(--rr-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3100,7 +2963,7 @@ button.channel-topology-node:focus-visible {
   margin-top: 4px;
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.4;
 }
 
@@ -3130,7 +2993,7 @@ button.channel-topology-node:focus-visible {
   min-height: 26px;
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .identity-channel-values {
@@ -3156,7 +3019,7 @@ button.channel-topology-node:focus-visible {
   overflow: hidden;
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3171,14 +3034,14 @@ button.channel-topology-node:focus-visible {
   border-top: 1px solid rgba(17, 32, 51, .07);
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .identity-card-footer strong {
   flex: 0 0 auto;
   color: var(--rr-accent-text);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .identity-relation-summary {
@@ -3194,7 +3057,7 @@ button.channel-topology-node:focus-visible {
 .identity-relation-summary > span {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .identity-relation-summary .v-chip {
@@ -3213,7 +3076,7 @@ button.channel-topology-node:focus-visible {
   background: transparent;
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -3268,7 +3131,7 @@ button.channel-topology-node:focus-visible {
 .identity-endpoint-card-main strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-candidate-links {
@@ -3283,7 +3146,7 @@ button.channel-topology-node:focus-visible {
 .identity-candidate-links > span {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .identity-channel-panel-head {
@@ -3303,7 +3166,7 @@ button.channel-topology-node:focus-visible {
 .identity-channel-panel-head strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-channel-panel-head span {
@@ -3338,7 +3201,7 @@ button.channel-topology-node:focus-visible {
 .identity-dialog-title strong {
   color: var(--rr-heading);
   font-size: 17px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-dialog-title span {
@@ -3390,7 +3253,7 @@ button.channel-topology-node:focus-visible {
 .identity-workspace-hero strong {
   color: var(--rr-heading);
   font-size: 19px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-workspace-hero span {
@@ -3445,7 +3308,7 @@ button.channel-topology-node:focus-visible {
 .identity-inline-subsection-head strong {
   color: var(--rr-heading);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .identity-workspace-section-head span,
@@ -3474,7 +3337,7 @@ button.channel-topology-node:focus-visible {
   width: fit-content;
   color: var(--rr-accent-text);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -3503,7 +3366,7 @@ button.channel-topology-node:focus-visible {
 .identity-technical-grid span {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .identity-technical-grid code {
@@ -3519,7 +3382,7 @@ button.channel-topology-node:focus-visible {
   border-radius: 10px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.5;
 }
 
@@ -3566,7 +3429,7 @@ button.channel-topology-node:focus-visible {
 .identity-workspace-record strong {
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .identity-workspace-record .min-w-0 > span {
@@ -3575,7 +3438,7 @@ button.channel-topology-node:focus-visible {
   margin-top: 3px;
   color: var(--rr-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.45;
 }
 
@@ -3846,19 +3709,19 @@ button.channel-topology-node:focus-visible {
 
 .docs-comparison-table thead strong {
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .docs-comparison-table thead span {
   margin-top: 3px;
   color: var(--rr-text);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .docs-comparison-table tbody th {
   background: var(--rr-subtle);
   color: var(--rr-heading);
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-page {
@@ -3899,7 +3762,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-metric span {
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-metric b {
@@ -3909,13 +3772,13 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-heading);
   font-size: 24px;
   line-height: 1;
-  font-weight: 950;
+  font-weight: 600;
 }
 
 .knowledge-metric small {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .v-card.knowledge-browser {
@@ -3948,7 +3811,7 @@ button.channel-topology-node:focus-visible {
   gap: 10px;
   color: var(--rr-text);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-toolbar {
@@ -3990,7 +3853,7 @@ button.channel-topology-node:focus-visible {
   gap: 8px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-progressive-status {
@@ -4068,7 +3931,7 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-text);
   background: var(--rr-subtle);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 @keyframes knowledge-loading-shimmer {
@@ -4093,7 +3956,7 @@ button.channel-topology-node:focus-visible {
   gap: 8px;
   color: var(--rr-muted);
   font-size: 13px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-memory-heading {
@@ -4213,7 +4076,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-border);
   color: var(--rr-muted);
   font-size: 9px;
-  font-weight: 900;
+  font-weight: 600;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -4223,7 +4086,7 @@ button.channel-topology-node:focus-visible {
   min-width: 94px;
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -4243,7 +4106,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-accent-strong);
   color: var(--rr-on-accent-strong);
   font-size: 9px;
-  font-weight: 900;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4301,7 +4164,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-plan-list-dialog-heading small {
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.4;
 }
 
@@ -4338,7 +4201,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-plan-list-summary > div:first-child > span {
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-list-summary > div:first-child > b {
@@ -4366,7 +4229,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-accent-surface);
   color: var(--rr-accent-text);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-plan-list-filter-summary {
@@ -4376,7 +4239,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-surface);
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
   box-shadow: inset 0 0 0 1px rgba(17, 50, 70, .1);
   white-space: nowrap;
 }
@@ -4409,7 +4272,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-plan-list-dialog-loading small {
   color: var(--rr-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .knowledge-plan-list-control-layout {
@@ -4434,7 +4297,7 @@ button.channel-topology-node:focus-visible {
   padding-top: 10px;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .knowledge-plan-list-sort-options,
@@ -4613,7 +4476,7 @@ button.channel-topology-node:focus-visible {
   padding: 18px 10px;
   color: var(--rr-muted-faint);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
   text-align: center;
 }
 
@@ -4695,7 +4558,7 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-muted);
   font-size: 9px;
   font-style: normal;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4793,7 +4656,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-kicker {
   color: var(--rr-accent-text);
   font-size: 9px;
-  font-weight: 950;
+  font-weight: 600;
   letter-spacing: .09em;
   text-transform: uppercase;
 }
@@ -4804,7 +4667,7 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-heading);
   font-size: 15px;
   line-height: 1.35;
-  font-weight: 900;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -4828,7 +4691,7 @@ button.channel-topology-node:focus-visible {
   min-height: 32px;
   color: var(--rr-accent-text) !important;
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-plan-agent-inline-notice {
@@ -4838,7 +4701,7 @@ button.channel-topology-node:focus-visible {
   background: var(--rr-success-surface);
   color: var(--rr-success-text);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-agent-inline-notice[data-tone="error"] {
@@ -4864,7 +4727,7 @@ button.channel-topology-node:focus-visible {
 .knowledge-plan-focus span {
   color: var(--rr-muted-faint);
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-plan-focus p {
@@ -4872,7 +4735,7 @@ button.channel-topology-node:focus-visible {
   margin: 0;
   color: var(--rr-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -4894,7 +4757,7 @@ button.channel-topology-node:focus-visible {
   gap: 8px;
   color: var(--rr-muted);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-plan-attachments-head > span {
@@ -4982,7 +4845,7 @@ button.knowledge-plan-attachment.media {
 
 .knowledge-plan-attachment-loading small {
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-attachment-visual[data-load-state="loaded"] .knowledge-plan-attachment-loading {
@@ -5069,7 +4932,7 @@ button.knowledge-plan-attachment.media {
   gap: 4px;
   color: var(--rr-accent-text);
   font-size: 8px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .12em;
   line-height: 1;
 }
@@ -5080,7 +4943,7 @@ button.knowledge-plan-attachment.media {
   overflow: hidden;
   color: var(--rr-text);
   font-size: 9px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.42;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -5089,7 +4952,7 @@ button.knowledge-plan-attachment.media {
 
 .knowledge-plan-markdown-teaser.loading {
   color: var(--rr-muted);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .knowledge-plan-attachment-overlay {
@@ -5102,7 +4965,7 @@ button.knowledge-plan-attachment.media {
   gap: 6px;
   color: #fff;
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
   opacity: 0;
   background: rgba(13, 37, 52, 0.88);
   transition: opacity .2s ease;
@@ -5148,7 +5011,7 @@ button.knowledge-plan-attachment.media {
   background: rgba(5, 18, 27, .82);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 16px;
   text-align: center;
   text-shadow: 0 1px 2px rgba(0, 0, 0, .32);
@@ -5268,7 +5131,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-media-preview-head span {
   color: #82d4d4;
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .12em;
 }
 
@@ -5335,7 +5198,7 @@ button.knowledge-plan-attachment.file {
   gap: 12px;
   color: var(--rr-text);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-markdown-error {
@@ -5423,7 +5286,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-plan-markdown-document a {
   color: var(--rr-accent-text);
-  font-weight: 700;
+  font-weight: 500;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
@@ -5505,7 +5368,7 @@ button.knowledge-plan-attachment.file {
   color: var(--rr-accent-text);
   background: var(--rr-accent-surface);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-plan-summary {
@@ -5607,7 +5470,7 @@ button.knowledge-plan-attachment.file {
   flex: 0 0 auto;
   color: var(--rr-muted-faint);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -5646,7 +5509,7 @@ button.knowledge-plan-attachment.file {
   display: block;
   color: var(--rr-muted-faint);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-plan-summary b {
@@ -5654,7 +5517,7 @@ button.knowledge-plan-attachment.file {
   margin-top: 3px;
   color: var(--rr-text);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -5696,13 +5559,13 @@ button.knowledge-plan-attachment.file {
 .knowledge-progress-copy span {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-progress-copy b {
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 950;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -5762,7 +5625,7 @@ button.knowledge-plan-attachment.file {
   gap: 6px;
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-plan-agent-query {
@@ -5774,7 +5637,7 @@ button.knowledge-plan-attachment.file {
   background: var(--rr-surface);
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-agent-list {
@@ -5845,7 +5708,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-agent-copy small {
   color: var(--rr-muted);
   font-size: 9px;
-  font-weight: 800;
+  font-weight: 600;
   flex-shrink: 0;
 }
 
@@ -5866,7 +5729,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-agent-copy b {
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-plan-agent-copy em {
@@ -5894,7 +5757,7 @@ button.knowledge-plan-attachment.file {
   border-radius: 999px;
   padding: 3px 7px;
   font-size: 9px;
-  font-weight: 850;
+  font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -5927,7 +5790,7 @@ button.knowledge-plan-attachment.file {
   margin: -2px 2px 0;
   color: var(--rr-success-text);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-plan-agent-notice[data-tone="error"] {
@@ -5963,13 +5826,13 @@ button.knowledge-plan-attachment.file {
 .knowledge-steps-head small {
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-steps-head b {
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-step {
@@ -6014,7 +5877,7 @@ button.knowledge-plan-attachment.file {
   background: var(--rr-accent-surface);
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 950;
+  font-weight: 600;
 }
 
 .knowledge-step b {
@@ -6033,7 +5896,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-step small {
   color: var(--rr-error-text);
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-step .knowledge-step-time {
@@ -6042,7 +5905,7 @@ button.knowledge-plan-attachment.file {
   align-items: baseline;
   gap: 5px;
   color: var(--rr-text);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .knowledge-step-time b {
@@ -6186,7 +6049,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-resource-change {
   flex: 0 0 auto;
   color: var(--rr-muted);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .knowledge-step-resources code {
@@ -6235,7 +6098,7 @@ button.knowledge-plan-attachment.file {
   margin: 0;
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -6293,7 +6156,7 @@ button.knowledge-plan-attachment.file {
   margin: 0;
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .04em;
 }
 
@@ -6416,7 +6279,7 @@ button.knowledge-plan-attachment.file {
   display: block;
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-approval-head b {
@@ -6431,7 +6294,7 @@ button.knowledge-plan-attachment.file {
   margin: 0;
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.55;
 }
 
@@ -6465,7 +6328,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-approval-record b {
   color: var(--rr-text);
   font-size: 12px;
-  font-weight: 750;
+  font-weight: 500;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -6576,7 +6439,7 @@ button.knowledge-plan-attachment.file {
   color: var(--rr-heading);
   cursor: pointer;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-history-actor,
@@ -6728,14 +6591,14 @@ button.knowledge-plan-attachment.file {
   gap: 6px;
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-approval-mention-head > small {
   margin: 0;
   color: var(--rr-text);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .knowledge-approval-mention-option {
@@ -6822,7 +6685,7 @@ button.knowledge-plan-attachment.file {
   margin: 0;
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .knowledge-approval-mention-empty {
@@ -6834,7 +6697,7 @@ button.knowledge-plan-attachment.file {
   padding: 12px;
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-approval-attachment-tools {
@@ -6885,19 +6748,19 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-approval-compose-status-copy b {
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-approval-compose-status-copy > span {
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.5;
 }
 
 .knowledge-approval-attachment-tools > span {
   color: var(--rr-text);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-approval-attachment-tools > small {
@@ -6975,7 +6838,7 @@ button.knowledge-plan-attachment.file {
   max-width: 720px;
   color: var(--rr-muted);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.5;
 }
 
@@ -7055,7 +6918,7 @@ button.knowledge-plan-attachment.file {
   min-height: 30px;
   color: var(--rr-accent-text);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-memory-times {
@@ -7075,14 +6938,14 @@ button.knowledge-plan-attachment.file {
 .knowledge-memory-times small {
   color: var(--rr-muted);
   font-size: 9px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-memory-times time,
 .knowledge-memory-times b {
   color: var(--rr-text);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
   text-align: right;
 }
 
@@ -7119,21 +6982,21 @@ button.knowledge-plan-attachment.file {
 .knowledge-memory-consolidation-panel small {
   color: var(--rr-warning-text);
   font-size: 9px;
-  font-weight: 850;
+  font-weight: 600;
   letter-spacing: .05em;
 }
 
 .knowledge-memory-consolidation-panel b {
   color: var(--rr-warning-text);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .knowledge-memory-consolidation-panel em {
   color: var(--rr-warning-text);
   font-size: 9px;
   font-style: normal;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-memory-consolidation-panel strong {
@@ -7141,7 +7004,7 @@ button.knowledge-plan-attachment.file {
   overflow: hidden;
   color: var(--rr-warning-text);
   font-size: 10px;
-  font-weight: 850;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -7157,7 +7020,7 @@ button.knowledge-plan-attachment.file {
   color: var(--rr-warning-text);
   background: var(--rr-surface-glass);
   font-size: 9px;
-  font-weight: 800;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -7179,7 +7042,7 @@ button.knowledge-plan-attachment.file {
   color: var(--rr-warning-text);
   background: rgba(232, 162, 58, .14);
   font-size: 8px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 @media (max-width: 720px) {
@@ -7208,7 +7071,7 @@ button.knowledge-plan-attachment.file {
   padding-left: 9px;
   color: var(--rr-warning-text);
   font-size: 10px;
-  font-weight: 750;
+  font-weight: 500;
 }
 
 .knowledge-empty {
@@ -7277,7 +7140,7 @@ button.knowledge-plan-attachment.file {
   margin: 10px 0 0;
   color: var(--rr-heading);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -7341,7 +7204,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-memory-detail-head span {
   color: var(--rr-accent-text);
   font-size: 9px;
-  font-weight: 900;
+  font-weight: 600;
   letter-spacing: .1em;
 }
 
@@ -7370,14 +7233,14 @@ button.knowledge-plan-attachment.file {
 .knowledge-memory-detail-times small {
   color: var(--rr-muted);
   font-size: 9px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .knowledge-memory-detail-times time,
 .knowledge-memory-detail-times b {
   color: var(--rr-heading);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 600;
 }
 
 .knowledge-memory-detail-body {
@@ -7390,7 +7253,7 @@ button.knowledge-plan-attachment.file {
   margin: 0;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 620;
+  font-weight: 500;
   line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -7469,64 +7332,6 @@ button.knowledge-plan-attachment.file {
 }
 
 @media (max-width: 720px) {
-  .topbar-context.has-route-switcher,
-  .topbar-context:has(.topbar-page-controls:not(:empty)) {
-    flex: 1 1 auto;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 3px;
-    margin-inline: 0 6px;
-  }
-  .has-route-switcher .topbar-title .font-weight-bold,
-  .topbar-context:has(.topbar-page-controls:not(:empty)) .topbar-title .font-weight-bold { font-size: 12px; }
-  .topbar-route-picker,
-  .topbar-page-controls {
-    flex: 0 0 auto;
-    width: 100%;
-    min-width: 0;
-  }
-  .topbar-route-picker .v-field,
-  .speech-server-picker .v-field {
-    --v-input-control-height: 32px;
-    --v-field-padding-bottom: 4px;
-    --v-field-padding-top: 4px;
-    font-size: 12px;
-  }
-  .topbar-route-picker .v-field__input,
-  .speech-server-picker .v-field__input { min-height: 32px; padding-block: 4px; }
-  .top-app-bar {
-    padding-inline: 0 !important;
-  }
-
-  .topbar-actions {
-    gap: 4px;
-  }
-
-  .desktop-action,
-  .manager-chip-text {
-    display: none !important;
-  }
-
-  .mobile-action {
-    display: inline-grid !important;
-  }
-
-  .manager-chip {
-    width: 34px;
-    padding-inline: 0 !important;
-    justify-content: center;
-  }
-
-  .locale-switcher {
-    min-width: 42px !important;
-    width: 42px !important;
-    padding-inline: 0 !important;
-  }
-
-  .locale-switcher .v-btn__prepend {
-    display: none;
-  }
-
   .page-shell {
     padding: 14px 16px;
     gap: 12px;
@@ -7639,10 +7444,6 @@ button.knowledge-plan-attachment.file {
 
   .quick-setup-card .v-card-actions .v-spacer,
   .editor-dialog-card .v-card-actions .v-spacer {
-    display: none;
-  }
-
-  .dirty-hint {
     display: none;
   }
 
@@ -8082,7 +7883,7 @@ html[data-rabiroute-theme] :is(
   padding: 13px 4px;
   color: var(--rr-heading);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.5;
 }
 .knowledge-approval-disclosure > summary:focus-visible {

@@ -5,6 +5,7 @@ import { transformSync } from 'esbuild';
 import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
+import { historyConversationRows, type HistoryConversationItem } from '../src/historyConversationPresentation';
 import { qqConfiguredRoute, qqConversationIdentity } from '../src/qqMessagePresentation';
 import { conversationListWidth, conversationPaneWidths, HISTORY_DEFAULT_WIDTH, HISTORY_DETAILS_WIDTH_KEY } from '../src/historyConversationLayout';
 
@@ -194,4 +195,19 @@ test('details disappearing while captured stops the actual right resizer before 
     f.window.innerWidth=1440;f.listeners.get('resize')!();f.state.details.start({button:0,pointerId:33,clientX:900,currentTarget:element,preventDefault(){}});
     f.deactivate();assert.equal(capture.size,0);assert.equal(f.state.details.dragging.value,false);
   }finally{f.unmount();scope.stop();}
+});
+
+
+test('project rows retain first-seen project order, task identity and within-project recency across loaded pages', () => {
+  const item = (key:string, project:string):HistoryConversationItem => ({key,title:key,preview:'',time:'',group:{key:project,title:project,path:'/projects/'+project}});
+  const items = [item('latest-a','a'),item('latest-b','b'),item('older-a','a'),item('older-b','b')];
+  const grouped = historyConversationRows(items,true);
+  assert.deepEqual(grouped.map(row => row.key), ['project:a','latest-a','older-a','project:b','latest-b','older-b']);
+  assert.deepEqual(historyConversationRows(items,false).map(row => row.key), items.map(item => item.key));
+  assert.deepEqual(historyConversationRows(items,true,new Set(['project:a'])).map(row=>row.key), ['project:a','project:b','latest-b','older-b']);
+  assert.deepEqual(historyConversationRows(items,false,new Set(['project:a'])).map(row=>row.key), items.map(item=>item.key));
+  assert.equal(grouped[1].kind === 'conversation' && grouped[1].conversation, items[0]);
+  assert.deepEqual(historyConversationRows([],true), []);
+  const ungrouped = {key:'no-project',title:'Untitled',preview:'',time:''};
+  assert.deepEqual(historyConversationRows([ungrouped],true),[{kind:'conversation',key:'no-project',conversation:ungrouped}]);
 });

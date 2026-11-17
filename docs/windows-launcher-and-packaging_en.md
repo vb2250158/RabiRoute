@@ -187,6 +187,12 @@ If the Host log reports `An item with the same key has already been added. Key: 
 
 Install the fixed Host Core through Setup or the local Developer Channel, preserving existing data and a version rollback point. Retrying the same old Host does not fix this failure. After recovery, obtain the URL dynamically from Host `status`, match the generation, instance and PID against `/meta`, and verify the WebGUI document and its module entries. Do not scan ports, start Manager independently or replace DLLs inside the active version.
 
+## Host status query receives no response
+
+`RabiRouteHost.exe --command status --json` reads the Host control pipe directly. Host answers valid `status` requests before inspecting the peer. Lifecycle commands retain actor verification and durable auditing. A timeout, disconnected pipe, denied access or damaged response returns `ok:false`, `state:"unknown"` and exit code 2. Without a response, Host presence remains unconfirmed. An existing Host reports its actual `faulted` state through its response.
+
+On first launch, a preflight probe that cannot connect still proceeds through the existing startup path. The startup window continues waiting for an actual response. Preserve the query error and inspect Host logs, then use the formal startup or recovery entry.
+
 ## Dynamic Manager endpoint
 
 Developer Channel stages Qt dependencies at the short local `%TEMP%/rabi-qt-<unique-id>` path to avoid Windows PowerShell path limits during dependency pruning. The complete tray is still rebuilt and included in the candidate; installation and business data locations stay unchanged.

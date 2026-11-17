@@ -82,9 +82,9 @@ onBeforeUnmount(() => { ++epoch; remotePersona.invalidate(); });
 </script>
 
 <template>
-  <v-menu :model-value="open" :close-on-content-click="false" location="bottom start" :offset="8" @update:model-value="toggle">
+  <v-menu :model-value="open" :close-on-content-click="false" location="end top" :offset="10" transition="scale-transition" @update:model-value="toggle">
     <template #activator="{ props }">
-      <v-btn v-bind="props" class="topbar-route-picker role-source-trigger" variant="tonal" :title="label" :aria-label="`${t('选择角色')} · ${label}`">
+      <v-btn v-bind="props" class="context-switcher role-source-trigger" variant="flat" :title="label" :aria-label="`${t('选择角色')} · ${label}`">
         <PersonaAvatar :role-id="store.selectedRoleId" :avatar-url="selectedRole?.avatarUrl" :size="30" />
         <span class="role-source-selection" data-no-i18n>
           <span class="role-source-selection__title">{{ selectedTitle }}</span>
@@ -126,19 +126,19 @@ onBeforeUnmount(() => { ++epoch; remotePersona.invalidate(); });
 </template>
 
 <style scoped>
-.role-source-trigger { height: 44px; padding-inline: 10px; text-transform: none; }
+.role-source-trigger { height: 52px; padding-inline: 8px 10px; text-transform: none; letter-spacing: 0; }
 .role-source-trigger :deep(.v-btn__content) { min-width: 0; width: 100%; gap: 10px; }
 .role-source-selection { display: grid; min-width: 0; text-align: start; line-height: 1.35; }
-.role-source-selection__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; }
-.role-source-selection__pc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .68; }
-.role-source-chevron { flex: 0 0 auto; margin-inline-start: auto; transition: transform .16s ease; }
+.role-source-selection__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--rr-heading); }
+.role-source-selection__pc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--rr-muted); }
+.role-source-chevron { flex: 0 0 auto; margin-inline-start: auto; color: var(--rr-muted-faint); transition: transform var(--rr-duration-base) var(--rr-ease-out); }
 .role-source-chevron--open { transform: rotate(180deg); }
 .role-source-menu { width: 700px; max-width: calc(100vw - 24px); border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
 .role-source-columns { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
 .role-source-pane { display: flex; flex-direction: column; min-width: 0; }
 .role-source-pane--computers { background: rgba(var(--v-theme-on-surface), .025); }
 .role-source-pane--roles { border-inline-start: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
-.role-source-heading { display: flex; align-items: center; gap: 12px; padding: 16px 16px 8px; font-size: 12px; font-weight: 700; opacity: .75; }
+.role-source-heading { display: flex; align-items: center; gap: 12px; padding: 16px 16px 8px; font-size: 12px; font-weight: 500; color: var(--rr-muted); }
 .role-source-heading__source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-inline-start: auto; font-size: 11px; font-weight: 400; }
 .role-source-level { min-width: 0; max-height: min(440px, 60vh); overflow-y: auto; padding: 4px 8px 8px; }
 .role-source-level :deep(.v-list-item) { min-height: 62px; padding: 10px 12px; margin-block: 2px; }
@@ -148,6 +148,9 @@ onBeforeUnmount(() => { ++epoch; remotePersona.invalidate(); });
 .role-source-level :deep(.v-list-item-subtitle) { font-size: 11px; margin-block-start: 3px; line-height: 1.4; }
 .role-source-refresh { align-self: flex-start; margin: 4px 8px 8px; font-size: 12px; }
 .role-source-empty { opacity: .65; }
+@media (max-width: 960px) {
+  .role-source-menu { width: min(560px, calc(100vw - 24px)); }
+}
 @media (max-width: 560px) {
   .role-source-columns { grid-template-columns: 1fr; }
   .role-source-pane--roles { border-inline-start: 0; border-block-start: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }

@@ -9,13 +9,12 @@ const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 </script>
 
 <template>
-  <div class="page-shell" aria-busy="true">
-    <v-card class="section-card" variant="flat">
-      <v-progress-linear indeterminate color="primary" />
-      <v-card-text class="pa-6">
-        <div class="section-note mb-2">{{ pageTitle }}</div>
-        <div class="text-h6 font-weight-bold">{{ t("页面已切换，正在加载内容") }}</div>
-      </v-card-text>
-    </v-card>
+  <div class="page-shell route-skeleton" aria-busy="true" :aria-label="`${pageTitle} · ${t('页面已切换，正在加载内容')}`">
+    <div class="route-skeleton-block" style="height: 44px; max-width: 420px" />
+    <div class="route-skeleton-row">
+      <div class="route-skeleton-block" style="height: 220px" />
+      <div class="route-skeleton-block" style="height: 220px" />
+    </div>
+    <div class="route-skeleton-block" style="height: 140px" />
   </div>
 </template>

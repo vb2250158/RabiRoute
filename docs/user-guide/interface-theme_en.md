@@ -19,6 +19,14 @@ Choose one option on the WebGUI **Settings** page:
 
 Built-in choices are persisted by the page save action. A custom theme is persisted directly by **Save and apply**. The current WebGUI changes immediately. The tray changes on its next settings refresh, usually within ten seconds, and also reads the saved choice on restart.
 
+## Page layout and motion
+
+The role and computer switcher sits at the top of the sidebar. Navigation groups separate the current role, local services and system settings. Page titles, refresh and save actions belong to the content area and scroll with it; there is no fixed application top bar. On narrow screens, use the navigation button beside the title to open the sidebar.
+
+Save appears on editable pages or while drafts remain. Unsaved changes, saving, an unconfirmed result and a confirmed save have distinct feedback. Failed saves retain drafts; an unknown result is never shown as success. Page entrances, navigation selection, pressed buttons and loading skeletons share motion tokens. The system reduced-motion preference removes movement, breathing and looping animation without changing functionality or adding a delay.
+
+The media workbench and performance pages use the selected theme's text, surfaces, borders and status colors rather than forcing a dark palette. Media files retain their original colors. Custom themes inherit their light/dark base's control state-layer defaults so tonal button labels remain readable.
+
 ## Scrollbars
 
 Internal WebGUI sidebars, chat lists, documents, plans and memory, popup menus, and remote terminals share transparent tracks and thin, borderless thumbs. Desktop Chromium uses a 6px style, with stronger hover/focus visibility. Colors follow light, dark, and custom themes. Remote terminal canvas, cursor, and selection colors update with the theme too. The outer browser page scrollbar retains browser settings. The native tray task window and dialogue bubble also use 6px transparent tracks without arrow buttons. Native colors follow the selected theme; a bubble keeps its configured text color, skin, and opacity.

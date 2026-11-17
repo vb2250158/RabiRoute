@@ -45,11 +45,20 @@ onBeforeUnmount(() => { request?.abort(); });
 
 <template>
   <div class="persona-message-history">
-    <div class="history-channel-toolbar d-flex justify-end flex-wrap ga-2"><v-btn variant="text" prepend-icon="mdi-magnify" @click="searchTestOpen = true">{{ t('搜索接口测试') }}</v-btn><v-btn variant="text" prepend-icon="mdi-refresh" @click="refreshCatalog">{{ t('刷新渠道') }}</v-btn></div>
+    <div class="history-channel-header">
+      <v-tabs v-model="selected" color="secondary" show-arrows class="history-channel-tabs" :aria-label="t('消息渠道')">
+        <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
+      </v-tabs>
+      <div class="history-channel-toolbar">
+        <v-btn variant="text" prepend-icon="mdi-magnify" :aria-label="t('搜索接口测试')" :title="t('搜索接口测试')" @click="searchTestOpen = true">
+          <span class="history-channel-action-label">{{ t('搜索接口测试') }}</span>
+        </v-btn>
+        <v-btn variant="text" prepend-icon="mdi-refresh" :aria-label="t('刷新渠道')" :title="t('刷新渠道')" @click="refreshCatalog">
+          <span class="history-channel-action-label">{{ t('刷新渠道') }}</span>
+        </v-btn>
+      </div>
+    </div>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
-    <v-tabs v-model="selected" color="secondary" show-arrows class="history-channel-tabs mb-4" :aria-label="t('消息渠道')">
-      <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
-    </v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }} <v-btn variant="text" @click="refreshCatalog">{{ t('重试') }}</v-btn></v-alert>
     <v-alert v-if="!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
     <v-alert v-for="warning in warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
@@ -66,8 +75,15 @@ onBeforeUnmount(() => { request?.abort(); });
 
 <style scoped>
 .persona-message-history{display:flex;flex-direction:column;min-height:0;min-width:0;height:100%;}
-.history-channel-toolbar,.history-channel-tabs{flex:none;}
+.history-channel-header{display:flex;align-items:center;gap:8px;flex:none;min-width:0;margin-bottom:16px;position:sticky;top:var(--v-layout-top, 0px);z-index:5;background:rgb(var(--v-theme-background));}
+.history-channel-tabs{flex:1;min-width:0;}
+.history-channel-toolbar{display:flex;align-items:center;gap:8px;flex:none;}
 .history-channel-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;}
-.history-channel-tabs { position:sticky; top:64px; z-index:5; background:rgb(var(--v-theme-background)); }
 .history-channel-tabs :deep(.v-tab) {text-transform:none;letter-spacing:normal;}
+@media(max-width:760px){
+  .history-channel-header,.history-channel-toolbar{gap:4px;}
+  .history-channel-action-label{display:none;}
+  .history-channel-toolbar :deep(.v-btn){min-width:36px;width:36px;padding:6px;}
+  .history-channel-toolbar :deep(.v-btn__prepend){margin-inline:0;}
+}
 </style>

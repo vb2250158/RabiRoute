@@ -1,7 +1,30 @@
 import type { PersonaChatReply } from '@shared/personaChatHistory';
 import { personaHistoryTaskKey } from '@shared/personaChatHistory';
 
-export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string };
+export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string; group?:{key:string;title:string;path:string} };
+export type HistoryConversationRow =
+  | { kind:'group'; key:string; title:string; path:string }
+  | { kind:'conversation'; key:string; conversation:HistoryConversationItem };
+
+/** Loaded projects follow their newest session, preserving source order within each project. */
+export function historyConversationRows(items:readonly HistoryConversationItem[], grouped:boolean, collapsed?:ReadonlySet<string>):HistoryConversationRow[] {
+  const conversation = (item:HistoryConversationItem):HistoryConversationRow => ({kind:'conversation',key:item.key,conversation:item});
+  if (!grouped) return items.map(conversation);
+  const groups = new Map<string,HistoryConversationItem[]>();
+  for (const item of items) {
+    const key = item.group?.key || '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(item);
+  }
+  return [...groups.values()].flatMap(group => {
+    const heading = group[0]!.group;
+    if (!heading) return group.map(conversation);
+    const key = 'project:'+heading.key;
+    const header:HistoryConversationRow = {kind:'group',key,title:heading.title,path:heading.path};
+    return collapsed?.has(key) ? [header] : [header,...group.map(conversation)];
+  });
+}
+
 export function taskHistoryOutgoing(record:PersonaChatReply,taskKey?:string):boolean {
   return taskKey?record.kind!=='user_delivery'&&(record.sourceTaskKey||personaHistoryTaskKey(record.sessionId,record.sourceTaskOwner))===taskKey:record.kind==='user_delivery';
 }

@@ -43,7 +43,7 @@ test("sidebar brand shows only the version and route picker has no count or expl
   const versionElement = appSource.match(/<div\b([^>]*)>\s*v\{\{\s*store\.meta\.version\s*\}\}\s*<\/div>/);
   assert.ok(versionElement, "The sidebar displays the version supplied by the running Manager.");
   assert.match(versionElement[1], /\bv-if="store\.meta\.version"/, "Unknown versions are not rendered as placeholder releases.");
-  assert.match(appSource, /<RoleSourcePicker v-if="showRoleSwitcher"/);
+  assert.match(appSource, /<RoleSourcePicker @select="selectRole" \/>/);
   const picker = fs.readFileSync(new URL("../src/components/RoleSourcePicker.vue", import.meta.url), "utf8");
   assert.match(picker, /:aria-label="t\('选择角色'\)"/);
   assert.match(appSource, /aria-label="选择路由"/);

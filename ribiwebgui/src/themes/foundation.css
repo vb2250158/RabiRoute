@@ -1,0 +1,37 @@
+/* Theme-independent foundation: type scale, geometry and motion.
+   Colors stay in themes/<base>/tokens.css or the custom theme writer. */
+:root {
+  --rr-font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", system-ui, sans-serif;
+  --rr-font-mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+
+  --rr-text-xs: 12px;
+  --rr-text-sm: 13px;
+  --rr-text-md: 14px;
+  --rr-text-lg: 16px;
+  --rr-text-xl: 18px;
+
+  --rr-weight-regular: 400;
+  --rr-weight-medium: 500;
+  --rr-weight-strong: 600;
+
+  --rr-radius-s: 6px;
+  --rr-radius-m: 8px;
+  --rr-radius-l: var(--rr-card-radius, 12px);
+
+  --rr-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --rr-ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --rr-duration-fast: 120ms;
+  --rr-duration-base: 200ms;
+  --rr-duration-slow: 320ms;
+
+  --rr-sidebar-width: 264px;
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --rr-duration-fast: 0ms;
+    --rr-duration-base: 0ms;
+    --rr-duration-slow: 0ms;
+  }
+}

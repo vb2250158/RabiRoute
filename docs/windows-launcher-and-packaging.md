@@ -187,6 +187,12 @@ Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute
 
 通过 Setup 或本机 Developer Channel 安装包含修复的 Host Core，保留既有数据与版本回滚点；只重试同一个旧 Host 不会修复此问题。恢复后从 Host `status` 动态取得 URL，核对 `/meta` 的 generation、实例和 PID，再检查 WebGUI 文档及其模块入口。不要扫描端口、单独启动 Manager 或原地替换活动版本 DLL。
 
+## Host 状态查询未取得响应
+
+`RabiRouteHost.exe --command status --json` 直接读取 Host 控制管道。Host 对有效 `status` 请求先返回当前状态，生命周期命令继续执行调用方身份核验和持久审计。查询超时、管道中断、权限拒绝或损坏响应会返回 `ok:false`、`state:"unknown"` 和退出码 2。未取得响应时无法确认 Host 是否存在，已有 Host 的 `faulted` 状态以实际响应为准。
+
+首次启动时，未连接到 Host 的预检仍继续已有启动流程。启动窗口继续等待真实响应。排障时保留查询错误并查看 Host 日志，再使用正式启动或恢复入口。
+
 ## 动态 Manager 端点
 
 Developer Channel 将 Qt 依赖的临时构建放在本机 `%TEMP%/rabi-qt-<唯一标识>` 短路径中，避免依赖裁剪时触发 Windows PowerShell 长路径限制；完整托盘仍重建并进入候选版本，安装地址和业务数据位置不变。

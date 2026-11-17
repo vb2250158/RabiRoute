@@ -39,9 +39,13 @@ export function applyVuetifyInterfaceTheme(
 ): "RabiLight" | "RabiDark" | "RabiCustom" {
   const themeName = customTheme ? "RabiCustom" : effectiveTheme === "dark" ? "RabiDark" : "RabiLight";
   if (customTheme) {
+    // Replacing a normalized Vuetify theme must retain its state-layer defaults.
+    // Empty variables make tonal underlays fully opaque and hide their labels.
+    const base = vuetifyTheme.themes.value[customTheme.baseTheme === "dark" ? "RabiDark" : "RabiLight"] as { variables?: Record<string, unknown> };
+    const custom = customVuetifyTheme(customTheme);
     vuetifyTheme.themes.value = {
       ...vuetifyTheme.themes.value,
-      RabiCustom: customVuetifyTheme(customTheme)
+      RabiCustom: { ...custom, variables: { ...base?.variables, ...custom.variables } }
     };
   }
   vuetifyTheme.change(themeName);

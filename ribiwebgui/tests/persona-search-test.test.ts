@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import type { WebRendererContribution } from '../src/pluginRenderers';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
-import { searchTestIdentities, runSearchTest } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/searchTestClient';
+import { searchTestIdentities, runSearchTest, parseSearchTestParameters, searchTestResultGroups, searchTestHighlights } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/searchTestClient';
 
 const route = { id: 'route', name: 'Route', agentRoleId: 'Role', agentAdapters: ['dsh'], primaryAgentAdapter: 'dsh' } as GatewayDefinition;
 const renderers = [{ agentType: 'dsh', agentRoute: { session: () => ({ sessionId: 'real-session-id', sessionName: 'Session', workspace: 'workspace' }) } }] as WebRendererContribution[];
@@ -47,4 +47,24 @@ test('invalid JSON never sends a request and message history places the test bef
   await assert.rejects(runSearchTest(async () => assert.fail('Unexpected request'), '[]', { agentType: 'role', sessionId: 'Role' }, new AbortController().signal), /JSON/);
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaMessageHistory.vue', import.meta.url), 'utf8');
   assert.ok(source.indexOf("t('搜索接口测试')") < source.indexOf("t('刷新渠道')"));
+});
+
+test('JSON editing preserves additional query fields and rejects non-object parameters', () => {
+  const input = { q: '角色', agent: 'Role', limit: 20, from: 123, adapter: 'napcat', includeArchives: 1 };
+  assert.deepEqual(parseSearchTestParameters(JSON.stringify(input)), input);
+  for (const value of ['null', '[]', '"text"', '{']) assert.throws(() => parseSearchTestParameters(value));
+});
+
+test('repeated message presentation preserves every record and separates conversation or type changes', () => {
+  const item = { source: 'messages', kind: 'message', label: 'Repeated title', excerpt: 'Content', agent: 'Role', origin: { conversationKey: 'chat1' } };
+  const records = [item, { ...item, excerpt: 'Different original content' }, { ...item, origin: { conversationKey: 'chat2' } }, { ...item, source: 'knowledge' }, item];
+  const groups = searchTestResultGroups(records);
+  assert.deepEqual(groups.map(group => group.indexes), [[0, 1], [2], [3], [4]]);
+  assert.deepEqual(groups.flatMap(group => group.indexes), records.map((_, index) => index));
+});
+
+test('search highlighting treats metacharacters and markup as literal text', () => {
+  assert.deepEqual(searchTestHighlights('角色 A+B <img>', '角色 A+B <img>').filter(part => part.matched).map(part => part.text), ['角色', 'A+B', '<img>']);
+  assert.deepEqual(searchTestHighlights('Same same', 'same').filter(part => part.matched).map(part => part.text), ['Same', 'same']);
+  assert.deepEqual(searchTestHighlights('Anything', ''), [{ text: 'Anything', matched: false }]);
 });

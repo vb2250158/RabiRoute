@@ -10,6 +10,26 @@ const descriptor: AgentManagerDescriptor = {
   sessionBinding: { sessionId: "fixtureSessionId", sessionName: "fixtureSessionName", workspace: "fixtureCwd", defaultName: "Existing task" }
 };
 
+test("scan sends configuration snapshots without live runtime handles to the worker", async () => {
+  const definition = { id: "route", workbuddyCwd: "C:/work/project" };
+  const runtime = { definition, process: { send() {} }, onExit() {} };
+  const options = {
+    scannerEntry: "C:/packages/fixture/scan.mjs",
+    host: {
+      rootDir: "C:/state", packageRoot: "C:/packages",
+      getRuntimes: () => [runtime],
+      async runScan(task: unknown) {
+        const snapshot = structuredClone(task) as { runtimes: unknown[] };
+        assert.deepEqual(snapshot.runtimes, [{ definition }]);
+        return { agents: {}, cwdOptions: [] };
+      }
+    }
+  } as unknown as AgentManagerImplementationOptions;
+  const scan = commonManagerOperations(options, descriptor, new AbortController().signal).scan!;
+  assert.deepEqual(await scan({}), { agents: {}, cwdOptions: [] });
+  assert.equal(typeof runtime.process.send, "function");
+});
+
 test("native binding changes preserve committed input, unrelated identities and strict boolean enabled semantics", async () => {
   const options = { host: { readOnly: () => false } } as AgentManagerImplementationOptions;
   const configure = commonManagerOperations(options, descriptor, new AbortController().signal)["binding.configure"]!;

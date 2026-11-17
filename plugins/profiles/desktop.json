@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.21",
+      "version": "0.1.23",
       "enabled": true,
       "config": {},
       "grants": []
@@ -46,7 +46,7 @@
     {
       "id": "manager:performance",
       "package": "io.rabiroute.manager.performance",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -305,7 +305,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []
@@ -377,7 +377,7 @@
     {
       "id": "manager:voice-assistant",
       "package": "io.rabiroute.manager.voice-assistant",
-      "version": "1.1.11",
+      "version": "1.1.12",
       "enabled": true,
       "config": {},
       "grants": []

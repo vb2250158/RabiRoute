@@ -150,6 +150,16 @@ function ensurePageDiagnostics(force = false): Promise<void> {
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
+const pageHeader = ref<HTMLElement | null>(null);
+const pageHeaderHeight = ref(88);
+const pageHeaderObserver = new ResizeObserver(entries => {
+  pageHeaderHeight.value = entries[0]?.borderBoxSize[0]?.blockSize ?? pageHeader.value?.offsetHeight ?? 0;
+});
+watch(pageHeader, element => {
+  pageHeaderObserver.disconnect();
+  pageHeaderHeight.value = element?.offsetHeight ?? 0;
+  if (element) pageHeaderObserver.observe(element);
+}, { flush: "post" });
 const showRouteSwitcher = computed(() => showsRouteSwitcher(route.path));
 const selectedRouteKey = computed(() => store.requestedRouteKey || (store.selectedGateway ? configNameFor(store.selectedGateway) : ""));
 watch(() => route.fullPath, path => store.syncRouteSelection(`#${path}`), { immediate: true, flush: "sync" });
@@ -165,14 +175,42 @@ const utilityNavItems = computed(() => navigationGroups.value.utility.map(item =
 const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
 const sidebarPrimaryCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer-primary"));
 const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer"));
-const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command =>
-  (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))
-  && (!isPluginManagementPage.value || command.handlerId !== "web.save-page")));
 const managerConnected = computed(() => isPluginManagementPage.value ? bootstrapManagerConnected.value : !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
 const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
+// Save appears where a page owns savable state; any dirty or unconfirmed draft keeps it visible.
+const pageCanSave = computed(() => activePageSaveAction.value != null
+  || hasUnsavedChanges.value
+  || store.saveState === "confirming");
+const pageCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command =>
+  (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))
+  && (!isPluginManagementPage.value || command.handlerId !== "web.save-page")
+  && (command.handlerId !== "web.save-page" || pageCanSave.value)));
 const pageTitle = computed(() => t(route.name === PLUGIN_RECOVERY_ROUTE_NAME && webPluginPageLoading(pluginCatalogStore.status.value)
   ? "页面已切换，正在加载内容" : String(route.meta.title || "RibiWebGUI")));
+const pageContext = computed(() => {
+  if (showRoleSwitcher.value) return roles.catalog.find(role => role.roleId === roles.selectedRoleId)?.title || roles.selectedRoleId;
+  const gateway = showRouteSwitcher.value ? store.selectedGateway : undefined;
+  return gateway ? String(gateway.routeName || gateway.name || gateway.id) : "";
+});
+// Utility pages at or after this order are host maintenance pages and share the "系统" group.
+// Served by the Manager at runtime; a bound URL keeps the bundler from importing it.
+const brandIconUrl = "/assets/rabiroute-icon.png";
+const SYSTEM_NAVIGATION_ORDER = 70;
+const firstSystemNavKey = computed(() => utilityNavItems.value.find(item => item.order >= SYSTEM_NAVIGATION_ORDER)?.key ?? "");
+const justSaved = ref(false);
+let justSavedTimer: ReturnType<typeof setTimeout> | undefined;
+function flashSaved(): void {
+  justSaved.value = true;
+  if (justSavedTimer) clearTimeout(justSavedTimer);
+  justSavedTimer = setTimeout(() => { justSaved.value = false; }, 2400);
+}
+const saveStatus = computed(() => {
+  if (store.saveState === "confirming") return { state: "confirming", label: "保存结果待确认" };
+  if (pageSaveState().loading) return { state: "saving", label: "正在保存" };
+  if (hasUnsavedChanges.value) return { state: "dirty", label: "有未保存的修改" };
+  return justSaved.value ? { state: "saved", label: "已保存" } : null;
+});
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
   const title = String(gateway.routeName || gateway.name || gateway.id);
@@ -181,8 +219,10 @@ const routeOptions = computed(() => store.gateways.map(gateway => {
 
 function pageSaveState(): WebCommandState {
   return {
-    enabled: activePageSaveAction.value == null || activePageSaveAction.value.ready.value,
-    loading: store.saving || activePageSaveAction.value?.saving.value === true,
+    enabled: activePageSaveAction.value
+      ? activePageSaveAction.value.ready.value
+      : (!roles.dirty || roles.ready) && (roles.dirty || store.dirty),
+    loading: store.saving || roles.saving || activePageSaveAction.value?.saving.value === true,
     dirty: hasUnsavedChanges.value
   };
 }
@@ -193,8 +233,9 @@ async function savePage(): Promise<void> {
     await activePageSaveAction.value.save();
     return;
   }
-  if (showRoleSwitcher.value) { await roles.save(); return; }
-  await store.save();
+  // Drafts can outlive their original page; save through their actual owners.
+  if (store.dirty) await store.saveChangedRoutes();
+  if (roles.dirty) await roles.save();
 }
 
 function commandContext(): WebCommandContext {
@@ -203,7 +244,12 @@ function commandContext(): WebCommandContext {
     openQuickSetup: () => store.openQuickSetup(),
     addRoute: () => store.addGatewayAndOpenQuickSetup(),
     openManagerConfig: () => store.openConfigFile("manager"),
-    savePage,
+    savePage: async () => {
+      if (!pageSaveState().enabled || pageSaveState().loading) throw new Error(t("请先完成当前配置再保存。"));
+      const origin = route.fullPath;
+      await savePage();
+      if (origin === route.fullPath && store.saveState !== "confirming") flashSaved();
+    },
     pageSaveState,
     notify: message => { snackbar.value = message; }
   };
@@ -337,6 +383,8 @@ onMounted(() => {
   void loadInterfaceTheme();
   if (isPluginManagementPage.value) void refreshManagementMetadata();
   else void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
+  // The sidebar role switcher is visible on every page; role pages load their own catalog and selection.
+  if (!showRoleSwitcher.value) void restoreSidebarRole();
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
@@ -368,6 +416,8 @@ watch(
 watch(
   () => route.path,
   path => {
+    justSaved.value = false;
+    if (justSavedTimer) clearTimeout(justSavedTimer);
     if (path === "/docs") {
       drawer.value = false;
       return;
@@ -383,8 +433,10 @@ watch(drawer, value => {
 });
 
 onBeforeUnmount(() => {
+  pageHeaderObserver.disconnect();
   dataUpgradeController.dispose();
   releaseRoleGuard();
+  if (justSavedTimer) clearTimeout(justSavedTimer);
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
@@ -392,6 +444,20 @@ onBeforeUnmount(() => {
   managerEvents = null;
   void disposeWebPluginModules();
 });
+
+/** Show the last chosen role on non-role pages without loading its editable configuration. */
+async function restoreSidebarRole(): Promise<void> {
+  try {
+    const saved = roles.selectedRoleId ? null : (await desktopSettingsClient.read()).lastRoleSelection;
+    if (saved?.roleId && !roles.selectedRoleId && !showRoleSwitcher.value) {
+      roles.sourceDeviceId = saved.sourceDeviceId || "";
+      roles.selectedRoleId = saved.roleId;
+    }
+    await roles.loadCatalog();
+  } catch {
+    // The switcher keeps its neutral label; role pages report their own read failures.
+  }
+}
 
 async function refresh(): Promise<void> {
   if (isPluginManagementPage.value) await Promise.all([refreshManagementMetadata(), pluginCatalogStore.refresh()]);
@@ -432,109 +498,24 @@ function selectGateway(id: string): void {
 
 <template>
   <v-app>
-    <v-navigation-drawer v-if="!embeddedPlanView" v-model="drawer" width="276" class="left-sidebar">
+    <v-navigation-drawer v-if="!embeddedPlanView" v-model="drawer" width="264" class="app-sidebar">
       <div class="sidebar-brand">
-        <v-avatar rounded="lg" size="46">
-          <v-img src="/assets/rabiroute-icon.png" alt="RabiRoute" />
-        </v-avatar>
-        <div class="min-w-0">
-          <div class="font-weight-black text-primary text-h6 lh-1">RabiRoute</div>
-          <div v-if="store.meta.version" class="section-note">v{{ store.meta.version }}</div>
-        </div>
+        <img :src="brandIconUrl" alt="" />
+        <span class="sidebar-brand-name">RabiRoute</span>
+        <div v-if="store.meta.version" class="sidebar-brand-version" data-no-i18n>v{{ store.meta.version }}</div>
       </div>
 
-      <v-divider />
-
-      <div class="sidebar-body">
-        <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
-          <v-list-item
-            v-for="item in navItems"
-            :key="item.key"
-            :to="item.to"
-            :prepend-icon="item.icon"
-            :title="item.title"
-            rounded="lg"
-          />
-        </v-list>
-        <v-divider class="sidebar-nav-divider" />
-        <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
-          <v-list-item
-            v-for="item in utilityNavItems"
-            :key="item.key"
-            :to="item.to"
-            :prepend-icon="item.icon"
-            :title="item.title"
-            rounded="lg"
-          />
-        </v-list>
-      </div>
-
-      <template #append>
-        <div class="sidebar-footer">
-          <v-btn
-            v-for="command in sidebarPrimaryCommands"
-            :key="command.key"
-            block
-            class="sidebar-footer-btn"
-            variant="tonal"
-            :color="command.appearance === 'primary' ? 'primary' : undefined"
-            :prepend-icon="command.icon"
-            :loading="commandState(command).loading"
-            :disabled="commandState(command).enabled === false"
-            @click="executeCommand(command)"
-          >
-            {{ t(command.label) }}
-          </v-btn>
-          <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-puzzle-outline" to="/plugins">
-            {{ t("插件") }}
-          </v-btn>
-          <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-github" :href="store.meta.githubUrl" target="_blank">
-            GitHub
-          </v-btn>
-          <v-btn
-            v-for="item in footerNavItems"
-            :key="item.key"
-            block
-            class="sidebar-footer-btn"
-            variant="text"
-            :prepend-icon="item.icon"
-            :to="item.to"
-          >
-            {{ item.title }}
-          </v-btn>
-          <v-btn
-            v-for="command in sidebarCommands"
-            :key="command.key"
-            block
-            class="sidebar-footer-btn"
-            variant="text"
-            :prepend-icon="command.icon"
-            :loading="commandState(command).loading"
-            :disabled="commandState(command).enabled === false"
-            @click="executeCommand(command)"
-          >
-            {{ t(command.label) }}
-          </v-btn>
-        </div>
-      </template>
-    </v-navigation-drawer>
-
-    <v-app-bar v-if="!embeddedPlanView" flat class="top-app-bar px-2">
-      <v-app-bar-nav-icon @click="drawer = !drawer" />
-      <div class="topbar-context" :class="{ 'has-route-switcher': showRouteSwitcher }">
-        <v-toolbar-title class="topbar-title">
-          <div class="font-weight-bold">{{ pageTitle }}</div>
-        </v-toolbar-title>
-        <div id="page-topbar-controls" class="topbar-page-controls" />
-        <RoleSourcePicker v-if="showRoleSwitcher" @select="selectRole" />
+      <div class="sidebar-context">
+        <RoleSourcePicker @select="selectRole" />
         <v-select
           v-if="showRouteSwitcher && !showRoleSwitcher"
-          class="topbar-route-picker"
+          class="context-route-picker mt-2"
           :model-value="store.selectedGatewayId"
           :items="routeOptions"
           aria-label="选择路由"
           density="compact"
           hide-details
+          prepend-inner-icon="mdi-source-branch"
           @update:model-value="value => selectGateway(String(value || ''))"
         >
           <template #item="{ props: itemProps }">
@@ -545,20 +526,102 @@ function selectGateway(id: string): void {
           </template>
         </v-select>
       </div>
-      <v-spacer />
-      <div class="topbar-actions">
-        <span v-if="store.saveState === 'confirming'" class="dirty-hint">{{ t("保存结果待确认") }}</span>
-        <span v-else-if="hasUnsavedChanges" class="dirty-hint">{{ t("有未保存的修改") }}</span>
-        <LocaleSwitcher />
-        <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
-          <v-icon start size="14">mdi-circle</v-icon>
-          <span class="manager-chip-text">{{ t(managerConnected ? "服务已连接" : "服务未连接") }}</span>
-        </v-chip>
-        <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
-        <template v-for="command in topbarCommands" :key="command.key">
+
+      <nav class="sidebar-scroll" :aria-label="t('导航')">
+        <div v-if="navItems.length" class="sidebar-group">
+          <div class="sidebar-group-label">{{ t("当前角色") }}</div>
+          <router-link v-for="item in navItems" :key="item.key" :to="item.to" class="sidebar-link" active-class="is-active">
+            <v-icon :icon="item.icon" />
+            <span class="sidebar-link-label">{{ item.title }}</span>
+          </router-link>
+        </div>
+        <div class="sidebar-group">
+          <template v-for="item in utilityNavItems" :key="item.key">
+            <div v-if="item.key === utilityNavItems[0]?.key && item.order < SYSTEM_NAVIGATION_ORDER" class="sidebar-group-label">{{ t("本机服务") }}</div>
+            <div v-if="item.key === firstSystemNavKey" class="sidebar-group-label" :class="{ 'mt-3': item.key !== utilityNavItems[0]?.key }">{{ t("系统") }}</div>
+            <router-link :to="item.to" class="sidebar-link" active-class="is-active">
+              <v-icon :icon="item.icon" />
+              <span class="sidebar-link-label">{{ item.title }}</span>
+            </router-link>
+          </template>
+          <router-link to="/plugins" class="sidebar-link" active-class="is-active">
+            <v-icon icon="mdi-puzzle-outline" />
+            <span class="sidebar-link-label">{{ t("插件") }}</span>
+          </router-link>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <v-btn
+          v-for="command in sidebarPrimaryCommands"
+          :key="command.key"
+          block
+          class="sidebar-footer-btn"
+          variant="tonal"
+          :color="command.appearance === 'primary' ? 'secondary' : undefined"
+          :prepend-icon="command.icon"
+          :loading="commandState(command).loading"
+          :disabled="commandState(command).enabled === false"
+          @click="executeCommand(command)"
+        >
+          {{ t(command.label) }}
+        </v-btn>
+        <div class="sidebar-status" role="status">
+          <span class="connection-dot" :class="{ 'is-online': managerConnected }" aria-hidden="true" />
+          <span class="sidebar-status-text">{{ t(managerConnected ? "服务已连接" : "服务未连接") }}</span>
+          <div class="sidebar-tools">
+            <LocaleSwitcher />
+            <v-btn
+              v-for="item in footerNavItems"
+              :key="item.key"
+              :to="item.to"
+              :icon="item.icon"
+              :aria-label="item.title"
+              :title="item.title"
+              size="small"
+              variant="text"
+            />
+            <v-btn
+              v-for="command in sidebarCommands"
+              :key="command.key"
+              :icon="command.icon"
+              :aria-label="t(command.label)"
+              :title="t(command.label)"
+              :loading="commandState(command).loading"
+              :disabled="commandState(command).enabled === false"
+              size="small"
+              variant="text"
+              @click="executeCommand(command)"
+            />
+            <v-btn icon="mdi-github" aria-label="GitHub" title="GitHub" :href="store.meta.githubUrl" target="_blank" size="small" variant="text" />
+          </div>
+        </div>
+      </div>
+    </v-navigation-drawer>
+
+    <v-main class="shell-main" :style="{ '--rr-content-height': `calc(100dvh - ${embeddedPlanView ? 0 : pageHeaderHeight}px)` }" :class="{ 'navigation-collapsed': !drawer, 'is-embedded': embeddedPlanView }">
+    <header v-if="!embeddedPlanView" ref="pageHeader" class="page-bar">
+      <v-btn icon="mdi-menu" variant="text" :aria-label="t('导航')" :aria-expanded="drawer" @click="drawer = !drawer" />
+      <div class="page-bar-heading">
+        <div v-if="pageContext" class="page-bar-context" data-no-i18n>{{ pageContext }}</div>
+        <Transition name="page-bar-title" mode="out-in">
+          <h1 :key="pageTitle" class="page-bar-title">{{ pageTitle }}</h1>
+        </Transition>
+      </div>
+      <div id="page-topbar-controls" class="topbar-page-controls" />
+      <div class="page-bar-actions">
+        <Transition name="save-status">
+          <span v-if="saveStatus" :key="saveStatus.state" class="save-status" :data-state="saveStatus.state" role="status" :title="t(saveStatus.label)">
+            <span class="save-status-dot" aria-hidden="true" />
+            <span class="save-status-label">{{ t(saveStatus.label) }}</span>
+          </span>
+        </Transition>
+        <v-btn icon="mdi-refresh" variant="text" :loading="store.loading" aria-label="刷新状态" :title="t('刷新状态')" @click="refresh" />
+        <template v-for="command in pageCommands" :key="command.key">
           <v-btn
             class="desktop-action"
-            :color="command.appearance === 'primary' ? 'primary' : undefined"
+            :class="{ 'save-command': command.handlerId === 'web.save-page', 'is-dirty': command.handlerId === 'web.save-page' && hasUnsavedChanges }"
+            :color="command.appearance === 'primary' ? 'secondary' : undefined"
             :prepend-icon="command.icon"
             :variant="command.appearance === 'primary' ? 'flat' : 'tonal'"
             :loading="commandState(command).loading"
@@ -569,7 +632,7 @@ function selectGateway(id: string): void {
           </v-btn>
           <v-btn
             class="mobile-action"
-            :color="command.appearance === 'primary' ? 'primary' : undefined"
+            :color="command.appearance === 'primary' ? 'secondary' : undefined"
             :icon="command.icon"
             :variant="command.appearance === 'primary' ? 'flat' : 'tonal'"
             :loading="commandState(command).loading"
@@ -579,9 +642,7 @@ function selectGateway(id: string): void {
           />
         </template>
       </div>
-    </v-app-bar>
-
-    <v-main :class="{ 'navigation-collapsed': !drawer }">
+    </header>
       <v-alert v-if="pluginCatalogStore.lastRefreshError.value || pluginCatalogStore.partial.value" type="warning" variant="tonal" class="ma-4" role="status">
         <div v-if="pluginCatalogStore.lastRefreshError.value">{{ t(pluginCatalogStore.lastRefreshError.value) }}</div>
         <div v-if="pluginCatalogStore.partial.value">{{ t("部分插件目录项暂不可用，其余功能可继续使用。") }}</div>
@@ -613,8 +674,8 @@ function selectGateway(id: string): void {
     <v-alert v-if="dataUpgradeView.error && !dataUpgradeView.open" type="warning" variant="tonal" class="ma-4" closable @click:close="dataUpgradeView.error = ''">{{ t(dataUpgradeView.error) }}</v-alert>
     <DataUpgradeDialog :view="dataUpgradeView" @close="dataUpgradeController.close" @confirm="dataUpgradeController.confirm" />
     <RoleManagementActions ref="roleCreation" create-only />
-    <v-snackbar :model-value="!!snackbar" timeout="1800" @update:model-value="value => { if (!value) snackbar = '' }">
-      {{ snackbar }}
+    <v-snackbar class="app-toast" :model-value="!!snackbar" timeout="2200" location="bottom" @update:model-value="value => { if (!value) snackbar = '' }">
+      <v-icon icon="mdi-check-circle-outline" size="18" />{{ t(snackbar) }}
     </v-snackbar>
   </v-app>
 </template>

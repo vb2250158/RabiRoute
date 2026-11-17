@@ -102,17 +102,17 @@ function displayValue(value: number): string {
 </template>
 
 <style scoped>
-.perf-chart { min-width: 0; border: 1px solid rgba(136, 218, 218, .15); border-radius: 22px; padding: 18px; background: linear-gradient(160deg, #102b35, #081b24 72%); box-shadow: 0 18px 40px rgba(7, 26, 35, .2); color: #e9ffff; }
+.perf-chart { min-width: 0; border: 1px solid var(--rr-border); border-radius: var(--rr-radius-l, 12px); padding: 18px; background: var(--rr-surface); box-shadow: var(--rr-shadow-card); color: var(--rr-text); }
 .perf-chart header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
-.perf-chart header span { color: #6ec6c8; font-size: 10px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; }
-.perf-chart h3 { margin: 3px 0 0; font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 700; }
-.perf-chart header strong { color: #ffcc66; font-size: 12px; font-variant-numeric: tabular-nums; }
-.perf-chart-canvas { overflow: hidden; border-radius: 14px; background: rgba(3, 16, 23, .58); }
+.perf-chart header span { color: var(--rr-accent-text); font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+.perf-chart h3 { margin: 3px 0 0; font-family: var(--rr-font-sans); font-size: 18px; font-weight: 600; }
+.perf-chart header strong { color: var(--rr-warning-text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.perf-chart-canvas { overflow: hidden; border-radius: 14px; background: var(--rr-subtle); }
 .perf-chart svg { display: block; width: 100%; height: 220px; }
-.axis { stroke: rgba(203, 249, 249, .18); stroke-width: 1; }
-.data-point { stroke: #0a2029; stroke-width: 2; }
-.perf-chart-empty { display: grid; height: 220px; place-items: center; border-radius: 14px; background: rgba(3, 16, 23, .58); color: #78969e; font-size: 12px; }
-.perf-chart footer { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: #b5d0d3; font-size: 11px; }
+.axis { stroke: var(--rr-border); stroke-width: 1; }
+.data-point { stroke: var(--rr-surface); stroke-width: 2; }
+.perf-chart-empty { display: grid; height: 220px; place-items: center; border-radius: 14px; background: var(--rr-subtle); color: var(--rr-muted); font-size: 12px; }
+.perf-chart footer { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--rr-muted); font-size: 11px; }
 .perf-chart footer span { display: inline-flex; align-items: center; gap: 6px; }
 .perf-chart footer i { width: 14px; height: 3px; border-radius: 999px; }
 </style>

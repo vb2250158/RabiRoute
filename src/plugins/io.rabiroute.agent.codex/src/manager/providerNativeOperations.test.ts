@@ -6,7 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import * as zlib from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
-import { listCodexNativeSessionPage } from "../codexDesktopBridge.js";
+import { listCodexNativeSessionPage, listCodexDesktopThreads, readCodexDesktopThread } from "../codexDesktopBridge.js";
 import { CodexNativeHistoryReader, createCodexNativeOperations } from "./providerNativeOperations.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "../../../../manager/connectionRequestAccess.js";
@@ -161,4 +161,31 @@ test("Codex native session pages reach rows beyond the legacy ten-thousand scan 
   assert.equal(page.nextOffset, 10002);
   const last = listCodexNativeSessionPage({ databasePath, sessionIndexPath: path.join(f.root, "no-sidebar-index"), offset: page.nextOffset!, limit: 2 });
   assert.deepEqual(last.items.map(row => row.id), ["native-session-10002"]); assert.equal(last.nextOffset, null);
+});
+
+
+test("conversation pages exclude Guardian origins before pagination and preserve direct history reads", t => {
+  const f = temporary(t, metadata + "\n");
+  const databasePath = path.join(f.root, "approval-state.sqlite");
+  const sessionIndexPath = path.join(f.root, "session_index.jsonl");
+  const db = new DatabaseSync(databasePath);
+  db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, rollout_path TEXT,
+    updated_at INTEGER, updated_at_ms INTEGER, recency_at INTEGER, recency_at_ms INTEGER,
+    archived INTEGER, first_user_message TEXT, source TEXT)`);
+  const insert = db.prepare("INSERT INTO threads VALUES (?, ?, 'fixture', '', 1, ?, 1, ?, 0, '', ?)");
+  for (let index = 0; index < 60; index++) insert.run('approval-'+index,'Renamed approval',1000-index,1000-index,JSON.stringify({subagent:{other:'guardian'}}));
+  insert.run('user-a','Guardian review',100,100,'vscode');
+  insert.run('worker','Worker',90,90,JSON.stringify({subagent:{thread_spawn:{parent_thread_id:'user-a'}}}));
+  insert.run('user-b','Another task',80,80,'cli');
+  db.close();
+  fs.writeFileSync(sessionIndexPath, ['user-a','worker','user-b'].map(id => JSON.stringify({id,thread_name:id==='user-a'?'Guardian review':id,updated_at:'1970-01-01T00:00:00Z'})).join('\n'));
+  const first = listCodexNativeSessionPage({databasePath,sessionIndexPath,limit:2});
+  assert.deepEqual(first.items.map(row=>row.id), ['user-a','worker']);
+  assert.equal(first.nextOffset,2);
+  const second = listCodexNativeSessionPage({databasePath,sessionIndexPath,limit:2,offset:first.nextOffset!});
+  assert.deepEqual(second.items.map(row=>row.id), ['user-b']);
+  assert.equal(second.nextOffset,null);
+  assert.deepEqual(listCodexDesktopThreads({databasePath,sessionIndexPath,limit:10}).map(row=>row.id), ['user-a','worker','user-b']);
+  assert.deepEqual(listCodexDesktopThreads({databasePath,sessionIndexPath,query:'Guardian review'}).map(row=>row.id), ['user-a']);
+  assert.equal(readCodexDesktopThread('approval-0',databasePath,sessionIndexPath)?.id,'approval-0');
 });

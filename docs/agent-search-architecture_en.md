@@ -22,9 +22,13 @@ Keep filters and page size unchanged across pages. A change in Manager identity,
 
 ## Test from the page
 
-On a persona's Message history page, select Search API test beside Refresh channels. Choose the persona or a Route's configured primary Agent, inspect or edit caller type, full session ID and JSON query parameters, then call `/api/search` directly.
+On a persona’s Message history page, select Search API test beside Refresh channels. Choose a caller identity and persona scope, enter keywords and select a source, then search. Leave the keywords blank to browse. Advanced settings contains matching, sorting, page size, search budget, caller overrides and full JSON editing. Reopening the dialog retains the current persona’s conditions and results. Switching personas initializes a new context.
 
-Caller fields are recorded, while `agent` controls persona search scope. The dialog uses the page owner's authenticated Manager connection and shows HTTP status, duration, request ID, results, call handles, coverage gaps and the full response. An incomplete primary Agent identity is shown explicitly. Enter a session ID to test it, or inspect the server's missing-identity warning.
+Caller identity comes from the current persona or a Route’s configured primary Agent and is recorded as request metadata. Persona scope controls the separate `agent` parameter. Enter a missing primary Agent session ID in Advanced settings. Requests use the page owner’s authenticated Manager connection.
+
+Results show highlighted terms, source, type, persona and available timestamps. Expand text, read actual details, or copy API URLs and call handles. Adjacent messages with identical titles can expand into all original records. Load more retains the submitted parameters and identity. After changing conditions, run a new search. Waiting, failed and cancelled queries keep the previous successful results visible with their submitted conditions.
+
+Source status shows completion and failure reasons. Requests and responses retains each page’s actual parameters, caller headers, HTTP status, duration, request ID and full response, including the latest failed receipt.
 
 ## Interpret results
 

@@ -303,5 +303,9 @@ test("dark identity cards and disabled controls keep readable theme colors", () 
   );
   assert.match(styles, /\.knowledge-plan-list-filter-options label\.disabled\s*\{[^}]*color:\s*var\(--rr-muted\)[^}]*opacity:\s*1/s);
   assert.match(styles, /:is\([\s\S]*\.v-field-label,[\s\S]*\.v-messages,[\s\S]*\.v-messages__message[\s\S]*\)\s*\{[^}]*color:\s*var\(--rr-muted\)[^}]*opacity:\s*1/s);
-  assert.match(performance, /\.performance-kicker\s*\{\s*color:\s*#b8f5f3/);
+  assert.match(performance, /\.performance-kicker\s*\{\s*color:\s*var\(--rr-accent-text\)/);
+  const video = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.video/web/pages/VideoPage.vue"), "utf8");
+  assert.doesNotMatch(video, /<v-theme-provider\b[^>]*theme="dark"/);
+  assert.doesNotMatch(video, /--rr-(?:text|muted|border):\s*#/);
+  assert.match(video, /background:var\(--rr-canvas\)/);
 });

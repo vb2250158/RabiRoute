@@ -1796,15 +1796,9 @@ internal sealed class HostRuntime
             bool requestedAuditAppended = false;
             bool terminalAuditAppended = false;
             bool queuedAckWritten = false;
+            var acceptedAt = DateTimeOffset.UtcNow;
             try
             {
-                var acceptedAt = DateTimeOffset.UtcNow;
-                var peer = HostControlPeerInspector.CaptureConnection(server);
-                operation = new HostOperationContext(
-                    Guid.NewGuid().ToString("N"),
-                    acceptedAt,
-                    peer,
-                    ResolveActorKind(peer));
                 using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 readCancellation.CancelAfter(HostTimeouts.Get("host.control.read", TimeSpan.FromSeconds(5)));
                 var request = await HostProtocol.ReadAsync<HostRequest>(server, readCancellation.Token);
@@ -1812,6 +1806,12 @@ internal sealed class HostRuntime
                 requestedCommand = string.IsNullOrWhiteSpace(request.Command)
                     ? "empty"
                     : request.Command.Trim().ToLowerInvariant();
+                if (!RequiresDurableAudit(requestedCommand) && request.IdentityReset is null)
+                {
+                    await HostProtocol.WriteAsync(server, CurrentResponse(true), cancellationToken);
+                    return;
+                }
+                operation = CaptureOperation();
                 IdentityResetRequest? identityReset = null;
                 if (requestedCommand == IdentityResetLifecycle.Command)
                 {
@@ -1823,11 +1823,6 @@ internal sealed class HostRuntime
                 else if (request.IdentityReset is not null)
                 {
                     throw new InvalidDataException("Identity reset payload requires its own command.");
-                }
-                if (!RequiresDurableAudit(requestedCommand))
-                {
-                    await HostProtocol.WriteAsync(server, CurrentResponse(true), cancellationToken);
-                    return;
                 }
                 requestedAuditPersisted = AppendAudit(
                     operation,
@@ -1916,6 +1911,7 @@ internal sealed class HostRuntime
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 _log.Write($"host control request timed out: {exception.Message}");
+                operation ??= CaptureOperation();
                 if (operation is not null && RequiresDurableAudit(requestedCommand) && !terminalAuditAppended)
                 {
                     if (!requestedAuditAppended)
@@ -1930,6 +1926,7 @@ internal sealed class HostRuntime
             catch (Exception exception)
             {
                 _log.Write($"host control request failed: {exception.Message}");
+                operation ??= CaptureOperation();
                 if (operation is not null && RequiresDurableAudit(requestedCommand) && !terminalAuditAppended)
                 {
                     if (!requestedAuditAppended)
@@ -1949,6 +1946,12 @@ internal sealed class HostRuntime
                     _acceptedMutations.TryRemove(queuedCommand.Operation.OperationId, out _);
                 }
                 slots.Release();
+            }
+
+            HostOperationContext CaptureOperation()
+            {
+                var peer = HostControlPeerInspector.CaptureConnection(server);
+                return new HostOperationContext(Guid.NewGuid().ToString("N"), acceptedAt, peer, ResolveActorKind(peer));
             }
         }
     }

@@ -7,6 +7,16 @@ import { peerManagerPath } from '../../../../../ribiwebgui/src/peerManagerTarget
 export type PersonaSessionAgent = RouteAgentTarget & { key: string; dshBaseUrl?: string; routes: string[] };
 export type PersonaAgentTask = { id: string; title: string; cwd?: string; updatedAt?: string; archived?: boolean };
 
+/** Project identity follows the owner's working directory, including Windows extended paths. */
+export function agentSessionProject(cwd = ''): { key: string; title: string; path: string } {
+  let path = cwd.trim().replaceAll('\\', '/');
+  if (path.toLowerCase().startsWith('//?/unc/')) path = '//' + path.slice(8);
+  else if (path.startsWith('//?/')) path = path.slice(4);
+  if (path !== '/' && !/^[a-z]:\/$/i.test(path)) path = path.replace(/\/+$/, '');
+  const windowsPath = /^[a-z]:\//i.test(path) || path.startsWith('//');
+  return { key: windowsPath ? path.toLowerCase() : path, title: path.split('/').filter(Boolean).at(-1) || path, path };
+}
+
 /** Use the selected persona owner's configured Routes, including disconnected saved targets. */
 export function personaSessionAgents(routes: readonly GatewayDefinition[], roleId: string): PersonaSessionAgent[] {
   const agents = new Map<string, PersonaSessionAgent>();

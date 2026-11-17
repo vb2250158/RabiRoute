@@ -12,6 +12,8 @@ Messages run from oldest to newest, with new messages at the bottom. A thin scro
 
 Open a persona's **Message History** and select **Agent sessions**. Switch between configured Agents using the second-level tabs, then choose a session or task. Search, refresh and load more sessions from the list. The conversation shows user inputs and final replies.
 
+The session list groups by project working directory by default, retaining recent-activity order within each project. Click a project heading to collapse or expand its sessions. Use **Flat session list** above the list to change views. The browser remembers the preference. Codex Guardian approval children are excluded from the conversation list.
+
 The directory combines the persona's configured Routes and keeps each remote computer and Agent identity. Separate DSH service origins remain separate choices. Codex and DSH read paged history from their native owners. Other adapters supply their own history capability, and missing interfaces or connection failures show an error for that target. Switching Agents selects that Agent's tasks. Failed refreshes retain loaded content.
 
 The message adapter decides where an event enters. The Agent adapter decides which handler receives it. The handler owns answers, code, tools, and private task state.

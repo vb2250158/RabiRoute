@@ -27,6 +27,11 @@ test("installed Vuetify switches built-in and newly registered custom themes wit
     assert.equal(vuetify.theme.name.value, "RabiCustom");
     assert.equal(vuetify.theme.current.value.colors.background, custom.colors.canvas);
     assert.equal(vuetify.theme.current.value.colors.secondary, custom.colors.accent);
+    assert.equal(vuetify.theme.current.value.variables["activated-opacity"], 0.12);
+    assert.equal(vuetify.theme.current.value.variables["hover-opacity"], 0.04);
+    const light = { ...custom, ...cloneBuiltinInterfaceTheme("light") };
+    applyVuetifyInterfaceTheme(vuetify.theme, "light", light);
+    assert.deepEqual(vuetify.theme.current.value.variables, vuetify.theme.themes.value.RabiLight.variables);
     assert.deepEqual(warnings, []);
   } finally { console.warn = warn; }
 });

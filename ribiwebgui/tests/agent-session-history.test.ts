@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
-import { createAgentSessionClient, personaSessionAgents } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
+import { createAgentSessionClient, personaSessionAgents, agentSessionProject } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
 
@@ -178,4 +178,24 @@ test('returning to an Agent tab resumes the original cancelled first task/histor
     props.active = false; await flush(); props.active = true; await flush();
     assert.equal(historyReads, 2); assert.equal(state.messages.value[0].text, 'User input');
   } finally { cleanups.forEach(cleanup => cleanup()); scope.stop(); }
+});
+
+
+test('session projects normalize Windows prefixes and case while preserving distinct paths and POSIX case', () => {
+  assert.equal(agentSessionProject('C:/Work/Project/').key, 'c:/work/project');
+  assert.equal(agentSessionProject(String.raw`\\?\C:\Work\Project`).key, 'c:/work/project');
+  assert.equal(agentSessionProject(String.raw`\\?\UNC\Server\Share\Project`).key, '//server/share/project');
+  assert.equal(agentSessionProject('c:/work/project').title, 'project');
+  assert.notEqual(agentSessionProject('/Work/Project').key, agentSessionProject('/work/Project').key);
+  assert.notEqual(agentSessionProject('C:/One/Project').key, agentSessionProject('C:/Two/Project').key);
+  assert.equal(agentSessionProject('C:/').path, 'C:/');
+  assert.deepEqual(agentSessionProject(), {key:'',title:'',path:''});
+});
+
+test('Agent sessions offer a persistent project/flat view toggle without changing selected session identity', () => {
+  const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url), 'utf8');
+  assert.match(source, /:grouped="grouped"/);
+  assert.match(source, /@click="grouped = !grouped"/);
+  assert.match(source, /localStorage.setItem\(groupingStorageKey/);
+  assert.match(source, /@select="selectedId = \$event"/);
 });

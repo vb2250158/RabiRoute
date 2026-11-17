@@ -33,26 +33,29 @@ internal static class ReadOnlyHostStatusProbe
         return statusSeen;
     }
 
-    internal static async Task<ReadOnlyHostStatusResult> QueryAsync(CancellationToken cancellationToken = default)
+    internal static Task<ReadOnlyHostStatusResult> QueryAsync(CancellationToken cancellationToken = default) =>
+        QueryAsync(PipeName(), RabiRoute.WindowsHost.HostTimeouts.Get("host.status.probe", TimeSpan.FromSeconds(2)), cancellationToken);
+
+    internal static async Task<ReadOnlyHostStatusResult> QueryAsync(string pipeName, TimeSpan deadline, CancellationToken cancellationToken = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(RabiRoute.WindowsHost.HostTimeouts.Get("host.status.probe", TimeSpan.FromSeconds(2)));
-        await using var client = new NamedPipeClientStream(".", PipeName(), PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
+        timeout.CancelAfter(deadline);
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
         try
         {
             await client.ConnectAsync(timeout.Token);
             await WriteAsync(client, new ReadOnlyHostStatusRequest("status", null), timeout.Token);
             return new ReadOnlyHostStatusResult(true, NormalizeResponseJson(await ReadJsonAsync(client, timeout.Token)));
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return Stopped(); }
-        catch (IOException) { return Stopped(); }
-        catch (UnauthorizedAccessException) { return Stopped(); }
-        catch (JsonException) { return Stopped(); }
-        catch (InvalidDataException) { return Stopped(); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return Unknown("Host status query timed out."); }
+        catch (IOException) { return Unknown("Host status transport is unavailable."); }
+        catch (UnauthorizedAccessException) { return Unknown("Host status access was denied."); }
+        catch (JsonException) { return Unknown("Host status response contains invalid JSON."); }
+        catch (InvalidDataException) { return Unknown("Host status response is invalid."); }
     }
 
-    private static ReadOnlyHostStatusResult Stopped() => new(true,
-        JsonSerializer.Serialize(new { ok = true, state = "stopped", message = "No Host instance is running." }), ReceivedResponse: false);
+    private static ReadOnlyHostStatusResult Unknown(string message) => new(false,
+        JsonSerializer.Serialize(new { ok = false, state = "unknown", message }), ReceivedResponse: false);
 
     private static string PipeName()
     {
@@ -91,6 +94,8 @@ internal static class ReadOnlyHostStatusProbe
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("Host control response must be a JSON object.");
         var buffer = new ArrayBufferWriter<byte>();
+        var hasStatus = false;
+        var hasOutcome = false;
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
@@ -99,11 +104,14 @@ internal static class ReadOnlyHostStatusProbe
                 var name = property.Name.Length == 0
                     ? property.Name
                     : char.ToLowerInvariant(property.Name[0]) + property.Name[1..];
+                if (name == "ok") hasOutcome = property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False;
+                if (name == "state") hasStatus = property.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(property.Value.GetString());
                 writer.WritePropertyName(name);
                 property.Value.WriteTo(writer);
             }
             writer.WriteEndObject();
         }
+        if (!hasOutcome || !hasStatus) throw new InvalidDataException("Host control response must contain an outcome and state.");
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 }

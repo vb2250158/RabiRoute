@@ -353,10 +353,16 @@ export function findCodexDesktopStateDatabase(): string | null {
 function readDesktopThreadRows(databasePath: string, limit = 10_000, offset = 0): CodexDesktopThreadRow[] {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
+    const hasSource = database.prepare("PRAGMA table_info(threads)").all().some(column => column.name === "source");
+    // Approval children remain readable by exact ID, and do not occupy conversation pages.
+    const conversationFilter = hasSource
+      ? "WHERE CASE WHEN json_valid(source) THEN json_extract(source, '$.subagent.other') IS NOT 'guardian' ELSE 1 END"
+      : "";
     return database.prepare(`
       SELECT id, title, cwd, rollout_path, updated_at, updated_at_ms,
              recency_at, recency_at_ms, archived, first_user_message
       FROM threads
+      ${conversationFilter}
       ORDER BY COALESCE(NULLIF(recency_at_ms, 0), NULLIF(updated_at_ms, 0), recency_at * 1000, updated_at * 1000) DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as CodexDesktopThreadRow[];

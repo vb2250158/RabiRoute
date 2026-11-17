@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import { usePersonaService } from '../persona/personaServiceClient';
-import { createAgentSessionClient, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
+import { createAgentSessionClient, agentSessionProject, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, type AgentHistoryEvent, type AgentSessionMessage } from '../persona/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
@@ -31,8 +31,16 @@ const label = (provider: string) => pluginCatalogStore.agentAdapters.value.find(
 const owner = (item: PersonaSessionAgent) => item.binding
   ? [item.binding.ownerDeviceId, item.binding.instanceId, item.binding.agentId].filter(Boolean).join(' / ')
   : item.dshBaseUrl || t('本机');
-const items = computed(() => tasks.value.map(task => ({ key: task.id, title: task.title || task.id,
-  preview: task.cwd || task.id, time: task.updatedAt || '', agentProvider: agent.value?.provider })));
+const grouped = ref(true);
+const groupingStorageKey = 'rabiroute.history.agent-sessions.grouping';
+try { grouped.value = localStorage.getItem(groupingStorageKey) !== 'flat'; } catch { /* Use project groups when storage is unavailable. */ }
+watch(grouped, value => { try { localStorage.setItem(groupingStorageKey, value ? 'project' : 'flat'); } catch { /* Keep this view preference for the current page. */ } });
+const items = computed(() => tasks.value.map(task => {
+  const project = agentSessionProject(task.cwd);
+  return { key: task.id, title: task.title || task.id, preview: project.path || task.id,
+    time: task.updatedAt || '', agentProvider: agent.value?.provider,
+    group: { ...project, title: project.title || t('未指定项目') } };
+}));
 
 async function loadAgents() {
   directoryRequest?.abort(); const request = new AbortController(); directoryRequest = request;
@@ -145,8 +153,9 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
     </div>
     <v-alert v-if="agentError" type="error" variant="tonal" class="mb-3">{{ agentError }}</v-alert>
     <v-alert v-if="!agents.length && !loadingAgents && !agentError" type="info" variant="tonal">{{ t('当前角色尚未配置 Agent 端。') }}</v-alert>
-    <HistoryConversationLayout v-if="agent" :items="items" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" @select="selectedId = $event" @back="selectedId = ''" @search="loadTasks()">
+    <HistoryConversationLayout v-if="agent" :items="items" :grouped="grouped" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" @select="selectedId = $event" @back="selectedId = ''" @search="loadTasks()">
       <template #list-actions>
+        <v-btn :icon="grouped ? 'mdi-format-list-bulleted' : 'mdi-folder-outline'" variant="text" size="small" :aria-label="t(grouped ? '平铺会话' : '按项目分组')" :title="t(grouped ? '平铺会话' : '按项目分组')" @click="grouped = !grouped" />
         <v-btn icon="mdi-magnify" variant="text" size="small" :disabled="loadingTasks" :aria-label="t('搜索会话')" @click="loadTasks()" />
         <v-btn icon="mdi-refresh" variant="text" size="small" :disabled="loadingTasks" :aria-label="t('刷新会话列表')" @click="loadTasks()" />
       </template>

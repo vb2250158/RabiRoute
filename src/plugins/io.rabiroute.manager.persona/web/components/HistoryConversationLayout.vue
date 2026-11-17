@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
-import type { HistoryConversationItem } from '../../../../../ribiwebgui/src/historyConversationPresentation';
+import { historyConversationRows, type HistoryConversationItem, type HistoryConversationRow } from '../../../../../ribiwebgui/src/historyConversationPresentation';
 import { useHistoryConversationLayout } from '../../../../../ribiwebgui/src/historyConversationLayout';
 import { bindChatHistoryScroll } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import { qqConversationTime } from '../../../../../ribiwebgui/src/qqChatLayout';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
-const props = defineProps<{items:HistoryConversationItem[];selected:string;search:string;loading?:boolean;detailsTitle?:string;hasDetails?:boolean;detailOpen?:boolean;infoOpen?:boolean}>();
+const props = defineProps<{items:HistoryConversationItem[];grouped?:boolean;selected:string;search:string;loading?:boolean;detailsTitle?:string;hasDetails?:boolean;detailOpen?:boolean;infoOpen?:boolean}>();
 const emit = defineEmits<{select:[string];search:[];'update:search':[string];'update:detailOpen':[boolean];'update:infoOpen':[boolean];back:[]}>();
 const {t,locale} = useI18n();
+const collapsedGroups = ref(new Set<string>());
+const rows = computed(() => historyConversationRows(props.items, Boolean(props.grouped), collapsedGroups.value));
+function toggleGroup(key:string) {
+  const next = new Set(collapsedGroups.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  collapsedGroups.value = next;
+}
 const localDetail = ref(false), localInfo = ref(false), root = ref<HTMLElement>(), scrollElement = ref<HTMLElement>(), scrollContent = ref<HTMLElement>();
 let scrollBinding: ReturnType<typeof bindChatHistoryScroll> | undefined;
 onMounted(() => { if (scrollElement.value && scrollContent.value) scrollBinding = bindChatHistoryScroll(scrollElement.value, scrollContent.value); });
@@ -34,12 +41,13 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
       <slot name="list-notice" />
       <v-list class="history-session-scroll" bg-color="transparent">
         <slot name="list">
-        <v-virtual-scroll :items="items" :item-height="72" :renderless="true"><template #default="{item,itemRef}: {item:HistoryConversationItem;itemRef?:VNodeRef}">
-        <v-list-item :ref="itemRef" :key="item.key" :active="item.key===selected" @click="choose(item.key)">
-          <template #prepend><AgentAvatar v-if="item.agentProvider" :provider="item.agentProvider" :size="44" /><span v-else class="history-avatar" aria-hidden="true">{{ item.title.slice(0,1) }}</span></template>
-          <v-list-item-title class="history-row-title"><span :title="[item.title,item.subtitle].filter(Boolean).join(' · ')" data-no-i18n>{{item.title}}</span><time :datetime="item.time" :title="fullDate(item.time)">{{date(item.time)}}</time></v-list-item-title>
+        <v-virtual-scroll :items="rows" :item-height="72" :renderless="true"><template #default="{item:row,itemRef}: {item:HistoryConversationRow;itemRef?:VNodeRef}">
+        <v-list-subheader v-if="row.kind==='group'" :ref="itemRef" :key="row.key" class="history-project-heading"><button type="button" class="history-project-toggle" :aria-expanded="!collapsedGroups.has(row.key)" :title="row.path" @click="toggleGroup(row.key)"><v-icon :icon="collapsedGroups.has(row.key) ? 'mdi-chevron-right' : 'mdi-chevron-down'" size="16" /><v-icon icon="mdi-folder-outline" size="18" /><span data-no-i18n>{{row.title}}</span></button></v-list-subheader>
+        <v-list-item v-else :ref="itemRef" :key="row.conversation.key" :active="row.conversation.key===selected" @click="choose(row.conversation.key)">
+          <template #prepend><AgentAvatar v-if="row.conversation.agentProvider" :provider="row.conversation.agentProvider" :size="44" /><span v-else class="history-avatar" aria-hidden="true">{{ row.conversation.title.slice(0,1) }}</span></template>
+          <v-list-item-title class="history-row-title"><span :title="[row.conversation.title,row.conversation.subtitle].filter(Boolean).join(' · ')" data-no-i18n>{{row.conversation.title}}</span><time :datetime="row.conversation.time" :title="fullDate(row.conversation.time)">{{date(row.conversation.time)}}</time></v-list-item-title>
 
-          <v-list-item-subtitle data-no-i18n>{{item.preview}}</v-list-item-subtitle>
+          <v-list-item-subtitle data-no-i18n>{{row.conversation.preview}}</v-list-item-subtitle>
         </v-list-item>
         </template></v-virtual-scroll>
         <div v-if="!items.length&&!loading" class="pa-3 text-body-2 text-medium-emphasis">{{t('暂无匹配会话。')}}</div>
@@ -67,6 +75,10 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
 .history-session-scroll :deep(.v-list-item){min-height:72px;padding:8px 10px;border-radius:5px;margin:2px 4px;}
 .history-session-scroll :deep(.v-list-item__content){min-width:0;}
 .history-session-scroll :deep(.v-list-item-subtitle){font-size:12px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;line-height:20px;}
+.history-project-heading{min-height:40px;gap:8px;padding:8px 14px;font-weight:600;}
+.history-project-heading :deep(.v-list-subheader__text){width:100%;min-width:0;}
+.history-project-toggle{display:flex;align-items:center;gap:6px;width:100%;text-align:left;color:inherit;font:inherit;border:0;background:transparent;cursor:pointer;}
+.history-project-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .history-row-title{display:flex;align-items:baseline;gap:6px;font-size:14px;}
 .history-row-title>span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .history-row-title>time{font-size:10px;opacity:.6;flex-shrink:0;max-width:64px;overflow:hidden;text-overflow:ellipsis;}

@@ -35,6 +35,24 @@ const speechServiceInstaller = read("../src/plugins/rabi-speech/scripts/install-
 const speechPluginDocs = read("../docs/rabispeech-plugin.md");
 const speechPluginDocsEn = read("../docs/rabispeech-plugin_en.md");
 
+test("read-only Host status returns before peer inspection while mutations retain authorization and audit", () => {
+  const method = hostRuntimeMethod("HandleControlConnectionAsync");
+  const readRequest = method.indexOf("HostProtocol.ReadAsync<HostRequest>");
+  const statusBranch = method.indexOf("if (!RequiresDurableAudit(requestedCommand) && request.IdentityReset is null)");
+  const statusReturn = method.indexOf("return;", statusBranch);
+  const capture = method.indexOf("operation = CaptureOperation()");
+  const audit = method.indexOf("requestedAuditPersisted = AppendAudit(");
+  const authorization = method.indexOf("!IsAuthorizedMutationActor(operation.ActorKind)");
+  const dispatch = method.indexOf("var completion = new TaskCompletionSource<HostResponse>");
+  assert.ok(readRequest >= 0 && readRequest < statusBranch && statusBranch < statusReturn);
+  assert.ok(statusReturn < capture && capture < audit && audit < authorization && authorization < dispatch);
+  assert.ok(capture < method.indexOf("IdentityResetLifecycle.ParseRequest(resetPayload)"));
+  assert.equal(method.match(/operation \?\?= CaptureOperation\(\)/g)?.length, 2,
+    "unreadable and timed-out requests retain peer capture for their rejection audit");
+  assert.match(method, /HostControlPeerInspector\.CaptureConnection\(server\)/);
+  assert.match(hostRuntimeMethod("RequiresDurableAudit"), /!string\.Equals\(command, "status", StringComparison\.Ordinal\)/);
+});
+
 function hostRuntimeMethod(name) {
   const signature = new RegExp(`^    (?:private|internal|public) [^\\r\\n]*\\b${name}\\(`, "m").exec(hostRuntime);
   assert.ok(signature, `Host runtime method ${name} must exist`);
