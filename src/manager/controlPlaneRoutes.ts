@@ -105,6 +105,7 @@ import { installAgentAdapterManifestReader, normalizePlanBindingAgentType, type 
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRemoteSource, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { createAgentEndpointDelivery, type AgentServiceSourcePrincipal } from "./agentEndpointDelivery.js";
 import { createOwnedServiceAgentSender } from "./ownedServiceAgentSender.js";
+import { createVoiceAssistantHostAccess } from "./voiceAssistantHostAccess.js";
 import { createCorePublicOperations } from "./corePublicOperations.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
@@ -7631,15 +7632,19 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   });
   const nativePluginHostPorts = await createMessageEndpointHostPorts();
   const managerFeatureHostPorts = createAgentAdapterHostPorts();
+  const voiceAssistantAccess = createVoiceAssistantHostAccess({
+    readOnly: () => managerReadOnly,
+    deliveryAuthorityId: () => lanAgentRegistry.localInstanceId,
+    assertActive() {
+      if (shuttingDown || managerRuntimeOwner.isTearingDown()) throw new Error("Agent sender admission is unavailable.");
+    }
+  });
   const voiceAssistantHostPort = Object.freeze({
-    deliveryAuthorityId() {
-      if (managerReadOnly || shuttingDown || managerRuntimeOwner.isTearingDown()) throw new Error("Agent sender admission is unavailable.");
-      return lanAgentRegistry.localInstanceId;
-    },
+    deliveryAuthorityId: voiceAssistantAccess.deliveryAuthorityId,
     bindAgentSender: createOwnedServiceAgentSender({
       providers: () => resolvePublishedAgentManagerProviders(publishedPluginGeneration()),
       deliveryAuthorityId: () => lanAgentRegistry.localInstanceId,
-      assertCurrent() { if (managerReadOnly || shuttingDown || managerRuntimeOwner.isTearingDown()) throw new Error("Agent sender admission is unavailable."); },
+      assertCurrent: voiceAssistantAccess.assertSendAllowed,
       dispatch: (request, source, guard) => handleAgentThreadRequest(request, agentThreadRequestOptions(request, { requestAuthority: guard }), undefined, source)
     }).bind,
     endpoint() {

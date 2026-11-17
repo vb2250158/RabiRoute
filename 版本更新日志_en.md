@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.29 - 2026-11-17
+
+- Allow voice-assistant initialization in isolated read-only environments while still blocking business writes, deliveries and audio device startup; preserve normal-mode authorization and invocation contracts.
+- Update the voice-assistant plugin to 1.1.13 while preserving existing instance settings and grants.
+- Use browser-safe temporary ports for identity-reset and role-management tests without changing their assertions.
+
+
 ## 0.15.28 - 2026-11-17
 
 - Migrate saved voice-assistant instances to 1.1.12 while preserving identity, enabled state, configuration and grants.
@@ -39,7 +46,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Unify the WebGUI sidebar and in-content page header: move role/computer selection to the sidebar, group navigation and remove the fixed top bar while preserving plugin actions and page controls.
 - Share typography, weights, geometry and interaction motion; add local save feedback, loading skeletons and reduced-motion support. Message history and the voice assistant use the measured page-header height.
 - Make the media workbench and performance pages follow light, dark and custom semantic palettes, removing forced dark mode and unrelated decorative headings.
-- Pass configuration snapshots to Agent scan workers, fixing structured-clone failures caused by live process handles and callbacks.
+
+- Pass configuration snapshots to Agent scan workers, fixing structured-clone failures caused by live process handles and callbacks.
 
 ## 0.15.24 - 2026-11-17
 

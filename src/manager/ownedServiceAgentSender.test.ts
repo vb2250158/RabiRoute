@@ -26,3 +26,17 @@ test('native sender binds the published provider reference, injects its current 
   providers=[];await assert.rejects(send(request,sessionId),/OWNER_RETIRED/);providers=[provider];
   retired=true;await assert.rejects(send(request,sessionId),/host retired/);assert.equal(calls,1);
 });
+
+
+test('read-only native sender blocks both actions and revocation during binding lookup before dispatch',async()=>{
+  let readOnly=true,invokes=0,dispatches=0,revokeDuringLookup=false;
+  const provider={type:'voice-assistant',inspect:()=>({accepting:true}),runAcceptedWork:async(operation:()=>unknown)=>operation(),
+    async invoke(name:string){invokes++;if(revokeDuringLookup)readOnly=true;if(name==='binding.read')return {sessionId:'current'};return {endpoint:{kind:'service',provider:'voice-assistant',managerInstanceId:'authority',agentId:'native',sessionId:'current',authorizationIncarnation:'activation'}}}
+  } as unknown as AgentAdapterProvider;
+  const sender=createOwnedServiceAgentSender({providers:()=>[provider],deliveryAuthorityId:()=>'authority',assertCurrent(){if(readOnly)throw Error('readonly')},async dispatch(){dispatches++;return {statusCode:200,data:{}}}}).bind(provider);
+  for(const action of ['send','reconcile_delivery'] as const)await assert.rejects(sender({action,agentAdapter:'voice-assistant',threadId:'target',prompt:'fixture'},'current'),error=>{assert.match((error as Error).message,/readonly/);assert.equal((error as Error & {dispatched?:boolean}).dispatched,false);return true});
+  assert.equal(invokes,0);assert.equal(dispatches,0);
+  readOnly=false;revokeDuringLookup=true;
+  await assert.rejects(sender({action:'send',agentAdapter:'voice-assistant',threadId:'target',prompt:'fixture'},'current'),/readonly/);
+  assert.equal(invokes,1);assert.equal(dispatches,0);
+});

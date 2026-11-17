@@ -658,13 +658,13 @@ test("voice assistant migration advances old pinned packages without changing in
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
-  for (const version of ["1.1.8", "1.1.9", "1.1.10", "1.1.11"]) {
+  for (const version of ["1.1.8", "1.1.9", "1.1.10", "1.1.11", "1.1.12"]) {
     const instance = { id: "manager:voice-assistant", package: "io.rabiroute.manager.voice-assistant", version, enabled: false, config: { selected: "fixture", nested: { retained: true } }, grants: ["network.local"] };
     const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
     await fs.writeFile(profilePath, raw);
     const result = await readPluginProfile(profilePath, { migrationsPath });
     assert.equal(result.instances.length, 1);
-    assert.equal(result.instances[0]?.version, "1.1.12");
+    assert.equal(result.instances[0]?.version, "1.1.13");
     assert.equal(result.instances[0]?.id, instance.id);
     assert.equal(result.instances[0]?.enabled, instance.enabled);
     assert.deepEqual(result.instances[0]?.config, instance.config);

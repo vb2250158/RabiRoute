@@ -14,7 +14,7 @@ import {createRabiOperationTools} from './operation-tools.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.message||'RABI_OPERATION_FAILED'),{receipt:result});return result.data?.data??result.data};
 const validSource=value=>['host','custom'].includes(value);
-export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,recognitionSampleUrl,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent}){
+export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,recognitionSampleUrl,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent,readOnly=()=>false}){
   const directory=join(stateRoot,'data','voice-assistant');await mkdir(directory,{recursive:true});
   let profile={personaId:'',asrSource:'host',ttsSource:'host'},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
   const profilePath=join(directory,'host-profile.json');
@@ -27,6 +27,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     try{await copyFile(source,join(connectionDirectory,'settings.json'),1);break}catch(error){if(error.code==='EEXIST')break;if(error.code!=='ENOENT')throw error}
   }
   const assertCurrent=()=>{if(closed)throw Error('ASSISTANT_CLOSED');signal.throwIfAborted()};
+  const assertWritable=()=>{assertCurrent();if(readOnly())throw Error('ASSISTANT_READ_ONLY')};
   async function manager(){
     assertCurrent();if(client)return client;if(clientOpening)return clientOpening;
     clientOpening=(async()=>{
@@ -118,7 +119,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(models.find(item=>item.id===ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
         onSubmitted:(message,config)=>{if(config.petEnabled&&bound.personaId&&message.source==='speech')record({kind:'asr',source:'voice-assistant',id:message.id,text:message.text,time:Date.now()})},
-        deviceFactory:deviceFactory||((options)=>openDesktopDevice({...options,runtimeEntry})),capabilities:{host:'rabi',modelConfiguration:true},
+        deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true},
         discoverTools:async()=>{const connection=await manager();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');return createRabiOperationTools({sdk:connection.operations,sendAgent:sendAgent?request=>sendAgent(request,runtime.conversation.getSessionId()):undefined,assertCurrent:()=>{assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED')}})} });
       if(closed||epoch!==profileRevision){await next.dispose();throw Error('ASSISTANT_CONTEXT_CHANGED')}
       runtime=next;runtime.hostSources={...bound,personaLabel,asrModel:asrModel||'',ttsModel:ttsModel||'',asrIssue,ttsIssue,voiceReady:Boolean(local?.voiceReady),models:models.map(hostSpeechModelSummary),modelsError,identitySource:role?'Rabi 人格正文全文；声线由宿主管理':'自定义人设'};
@@ -129,7 +130,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     async state(){const current=await open(),state=await current.state();return {...state,hostSettings:{...current.hostSources,lastError:lastHostError,personas:await personas()},capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true}}},
     async messages(){return (await open()).messages()},
     async command(request){
-      const current=await open();
+      assertWritable();const current=await open();assertWritable();
       if(request.action==='start'&&(current.hostSources.asrIssue||current.hostSources.ttsIssue))throw Error(current.hostSources.asrIssue?'HOST_ASR_CONFIGURATION_REQUIRED':'HOST_TTS_CONFIGURATION_REQUIRED');
       if(request.action==='host-settings'){
         if(current.conversation.activity().pending)throw Error('ASSISTANT_CONTEXT_BUSY');
@@ -143,8 +144,8 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       return current.command(request);
     },
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},
-    async submit(text,requestId,expectedSession){const current=await open();if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
-    async recover(requestId,text){return (await open()).conversation.acceptedRequest(requestId,text)},
+    async submit(text,requestId,expectedSession){assertWritable();const current=await open();assertWritable();if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
+    async recover(requestId,text){assertWritable();const current=await open();assertWritable();return current.conversation.acceptedRequest(requestId,text)},
     async dispose(){if(closed)return;closed=true;await opening?.catch(()=>{});await runtime?.dispose();await clientOpening?.catch(()=>{});await client?.close();runtime=undefined}
   };
 }

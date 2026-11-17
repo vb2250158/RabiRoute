@@ -2,6 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import os from "node:os";
 import path from "node:path";
 import { HostInstanceIdentityReset, IdentityResetAuthorizationError } from "./identityResetRoutes.js";
@@ -88,7 +89,7 @@ async function fixture(t: TestContext) {
     // Do not alter the transport's address for the next keep-alive request.
     if (access.kind === "agent") Reflect.deleteProperty(request.socket, "remoteAddress");
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   t.after(async () => {
     server.closeAllConnections();
     await registration.dispose();

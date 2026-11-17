@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { listenManagerEndpoint } from "../../../../managerEndpointPolicy.js";
 import { Socket } from "node:net";
 import { fork } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -53,7 +54,7 @@ async function fixture(t: test.TestContext, customize?: (context: PersonaStorage
     registerLanAgentBodyGuard(request, () => {});
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   t.after(async () => {
     server.closeAllConnections(); await registration.dispose(); await owner.stop(); await application.stop(); await reads.stop();
     await new Promise<void>(resolve => server.close(() => resolve()));

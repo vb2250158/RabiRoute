@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { listenManagerEndpoint } from "../../../../managerEndpointPolicy.js";
 import { createPersonaSkillOperations, type PersonaSkillContext } from "./personaSkillOperations.js";
 import { listRoleSkills, getRoleSkill } from "../../../../roleKnowledge.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
@@ -26,7 +27,7 @@ async function fixture(t: any, options: { onSkillsChanged?: PersonaSkillContext[
   };
   const registry = new ManagerPluginRouteRegistry(), registration = registry.registerOperations("persona", createPersonaSkillOperations(context));
   const server = http.createServer((request, response) => { markAuthenticatedConnectionRequest(request); if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end(); });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenManagerEndpoint({ server, host: "127.0.0.1", policy: { mode: "auto" } });
   t.after(async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); assert.equal(path.dirname(directory), path.resolve(os.tmpdir())); await fs.rm(directory, { recursive: true, force: true }); });
   const base = "http://127.0.0.1:" + (server.address() as { port: number }).port;
   const call = async (suffix: string, method = "GET", body?: unknown, key?: string, revision?: string) => {
