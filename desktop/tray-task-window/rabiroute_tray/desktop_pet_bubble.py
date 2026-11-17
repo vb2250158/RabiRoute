@@ -13,7 +13,7 @@ from .theme import rabi_scrollbar_stylesheet
 
 DEFAULT_BUBBLE_STYLE = dict(skin="cat-paw", fontFamily="", fontSize=14, textColor="#504650",
                            backgroundColor="#fffaf3", borderColor="#a58b98", maxWidth=320,
-                           opacity=1.0, displaySeconds=8)
+                           opacity=1.0, displaySeconds=12, maxVisible=3)
 
 
 def normalize_bubble_style(value: object) -> dict:
@@ -25,13 +25,14 @@ def normalize_bubble_style(value: object) -> dict:
         color = str(row.get(key) or "")
         if len(color) == 7 and color.startswith("#") and all(c in "0123456789abcdefABCDEF" for c in color[1:]):
             result[key] = color.lower()
-    for key, low, high in (("fontSize", 12, 24), ("maxWidth", 220, 480), ("opacity", .5, 1), ("displaySeconds", 2, 30)):
+    for key, low, high in (("fontSize", 12, 24), ("maxWidth", 220, 480), ("opacity", .5, 1), ("displaySeconds", 2, 30), ("maxVisible", 1, 6)):
         try:
             number = float(row.get(key, result[key]))
             if math.isfinite(number):
                 result[key] = max(low, min(high, number))
         except (TypeError, ValueError):
             pass
+    result["maxVisible"] = int(result["maxVisible"])
     return result
 
 

@@ -34,6 +34,7 @@ class DesktopPetBubbleSettings(QDialog):
             ("maxWidth", "宽度", 220, 480, 1, " px"),
             ("opacity", "不透明度", 50, 100, 100, " %"),
             ("displaySeconds", "停留时间", 2, 30, 1, " 秒"),
+            ("maxVisible", "最多同时显示", 1, 6, 1, " 个气泡"),
         ):
             control = QSpinBox()
             control.setRange(low, high)

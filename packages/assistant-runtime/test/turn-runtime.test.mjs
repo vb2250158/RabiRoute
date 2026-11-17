@@ -55,6 +55,19 @@ const policy = {
   })
 };
 
+test('a turn reports actual tool dispatch and receipts, then uses its last request for a natural closing',async()=>{
+  let calls=0;const events=[],inputs=[];
+  const turn=createAgentTurnRuntime({protocol,tools:['read'],maxToolCalls:1,onState:value=>events.push(structuredClone(value)),toolPolicy:policy,
+    model:{prompt:async input=>{inputs.push(message(input));return inputs.length===1?action(input,'read',{target:'fixture'}):'这次还没有找到目标。你记得它的名字吗？'}},
+    executeTool:async()=>{calls++;return{status:'ok',found:false}}});
+  const result=await turn.run('查找目标');
+  assert.equal(result.state,'completed');assert.equal(calls,1);
+  assert.equal(inputs[1].toolsAllowed,false);assert.match(inputs[1].instruction,/persona/);
+  assert.equal(events.find(e=>e.state==='executing-tool').tool.arguments.target,'fixture');
+  assert.equal(events.find(e=>e.state==='tool-completed').tool.outcome.found,false);
+  assert.match(result.text,/名字/);assert.ok(!result.text.includes('TURN_TOOL_LIMIT'));
+});
+
 test('profiles isolate protocol and instructions without introducing a second execution path', () => {
   const first = createAgentProtocol({ id: 'fixture-a/v1', introduction: '人格甲', toolInstructions: '先核对甲工具。' });
   const second = createAgentProtocol({ id: 'fixture-b/v1', introduction: '人格乙', toolInstructions: '使用乙任务工具。' });

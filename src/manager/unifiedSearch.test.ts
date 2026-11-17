@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { once } from 'node:events';
 import { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
+import { nativeHttpTestFetch } from './nativeHttpTestClient.js';
 import { createApiDiscoveryOperations } from '../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js';
 import { createUnifiedSearchOperation } from './unifiedSearchOperations.js';
 import { KnowledgeSearchService } from './knowledgeSearchService.js';
@@ -78,7 +79,7 @@ async function fixture(t: test.TestContext, messageCount = 3) {
         assert.ok(path.basename(directory).startsWith('rabi-unified-search-'));
         fs.rmSync(directory, { recursive: true, force: true });
     });
-    const read = async (query: string, headers?: Record<string, string>) => { const response = await fetch(base + '/api/search?' + query, { headers }); return { status: response.status, ...await response.json() }; };
+    const read = async (query: string, headers?: Record<string, string>) => { const response = await nativeHttpTestFetch(base + '/api/search?' + query, { headers }); return { status: response.status, ...await response.json() }; };
     return { context, registry, base, read, service, roleDirectory, resources, setEntityError: (error: Error) => entityError = error, setEntityDelay: (delay: number) => entityDelay = delay };
 }
 function assertCounts(data: any) {
@@ -162,8 +163,8 @@ test('scenario 6 — two air conditioners retain separate real resources and rea
     for (const item of response.data.items) {
         assert.equal(item.origin.resourceId, item.handle.resourceId);
         assert.ok(item.handle.stateVersion);
-        assert.equal((await fetch(f.base + item.handle.stateUrl)).status, 200);
-        assert.equal((await fetch(f.base + item.handle.actionsUrl)).status, 200);
+        assert.equal((await nativeHttpTestFetch(f.base + item.handle.stateUrl)).status, 200);
+        assert.equal((await nativeHttpTestFetch(f.base + item.handle.actionsUrl)).status, 200);
     }
     assert.deepEqual(response.data.conflicts, []);
 });
@@ -180,9 +181,9 @@ test('scenario 7 — explicit owner conflict reports retain comparable candidate
 test('scenario 8 — zero keyword hits still disclose the complete catalog and real contract entry', async (t) => {
     const f = await fixture(t), response = await f.read('q=deliberately-no-match');
     assert.deepEqual(response.data.items, []);
-    const catalog = await (await fetch(f.base + response.data.capabilities.operationsUrl + '?query=manager.search')).json();
+    const catalog = await (await nativeHttpTestFetch(f.base + response.data.capabilities.operationsUrl + '?query=manager.search')).json();
     assert.ok(catalog.data.items.some((item: any) => item.operationId === 'manager.search'));
-    assert.equal((await fetch(f.base + response.data.capabilities.contractUrl)).status, 200);
+    assert.equal((await nativeHttpTestFetch(f.base + response.data.capabilities.contractUrl)).status, 200);
 });
 test('scenario 9 — strict scope, kinds and all-keyword filters constrain every returned candidate', async (t) => {
     const f = await fixture(t), strict = await f.read('scope=operations&strict=1&q=' + encodeURIComponent('卧室 空调') + '&match=all');
@@ -275,9 +276,9 @@ test('one registered search operation is visible and callable through HTTP, Open
     const cli = await runManagerCommand(['--operation', 'manager.search', '--query', JSON.stringify({ q: '空调', scope: 'operations' })], config);
     assert.equal(cli.ok, true);
     const { readApiReference } = await import(new URL('../../ribiwebgui/src/docs/apiReferenceClient.ts', import.meta.url).href);
-    const catalog = await readApiReference(new AbortController().signal, (url: string, options: any) => fetch(f.base + url, options));
+    const catalog = await readApiReference(new AbortController().signal, (url: string, options: any) => nativeHttpTestFetch(f.base + url, options));
     assert.ok(catalog.operations.some((item: any) => item.contract.operationId === 'manager.search'));
-    const openapi = await (await fetch(f.base + '/api/agent/openapi')).json();
+    const openapi = await (await nativeHttpTestFetch(f.base + '/api/agent/openapi')).json();
     assert.equal(openapi.paths['/api/search'].get.operationId, 'manager.search');
     const scopes = [...new Set(f.registry.catalogSnapshot().searchSources.map(source => source.scope))];
     assert.deepEqual(new Set(scopes), new Set(['knowledge', 'messages', 'entities', 'operations']));

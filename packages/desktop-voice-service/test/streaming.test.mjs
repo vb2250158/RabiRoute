@@ -69,6 +69,29 @@ test('streaming ASR sends microphone PCM before silence and deduplicates final u
   await asr.stop(round);capture(Buffer.alloc(4096));await flush();assert.equal(frames.length,3);assert.equal(disposed,1);assert.equal(closed,1);
 });
 
+test('ASR drains a batched microphone delivery without mistaking it for a blocked network',async()=>{
+  let capture;const frames=[],errors=[];
+  const asr=createVolcanoAsr({settings:()=>({sampleMs:50,silenceThreshold:.01,silenceDurationMs:700}),connection:async()=>({}),
+    createRecording:()=>({start:async(_fail,options)=>{capture=options.onPcm},amplitude:()=>0,dispose:async()=>{}}),
+    connect:async()=>({send:async bytes=>frames.push(decodeFrame(bytes)),close:async()=>{}})});
+  const round=asr.createRound({onError:error=>errors.push(error.message)});await asr.start(round);
+  const pcm=Buffer.concat(Array.from({length:24},(_,index)=>Buffer.alloc(4096,index)));
+  capture(pcm);await asr.finish(round);
+  assert.deepEqual(errors,[]);assert.equal(frames.at(-1).last,true);
+  assert.deepEqual(Buffer.concat(frames.filter(frame=>frame.type===2).map(frame=>frame.payload)),pcm);
+  await asr.stop(round);
+});
+
+test('ASR still closes a genuinely blocked audio send queue',async()=>{
+  let capture,release;const gate=new Promise(resolve=>release=resolve),errors=[];let sent=0,disposed=0;
+  const asr=createVolcanoAsr({settings:()=>({sampleMs:50,silenceThreshold:.01,silenceDurationMs:700}),connection:async()=>({}),
+    createRecording:()=>({start:async(_fail,options)=>{capture=options.onPcm},amplitude:()=>0,dispose:async()=>{disposed++}}),
+    connect:async()=>({send:async()=>{if(sent++>0)await gate},close:async()=>{release()}})});
+  const round=asr.createRound({onError:error=>errors.push(error.message)});await asr.start(round);
+  capture(Buffer.alloc(4096));await flush();capture(Buffer.alloc(16000*2*6));
+  await asr.stop(round);assert.deepEqual(errors,['SPEECH_SEND_BACKLOG']);assert.equal(disposed,1);
+});
+
 test('shared voice streams immediately and barge-in preserves text while releasing all audio',async()=>{
   let handlers,audioCallback,played=0,stopped=0,destroyed=0,deviceClosed=0,providerClosed=0,appends=0;
   const signals=[],events=new EventTarget();let resolveFinished;

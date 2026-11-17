@@ -10,6 +10,12 @@ const policy = { classify: value => ({ mutation: value.name === 'api.call' && va
   inspectOutcome: result => ({ uncertain: !result || result.status === 'unknown', failed: result?.status === 'failed', terminal: false }) };
 const backend = (options = {}) => ({ tools: [], executeTool: async () => ({ status: 'ok' }), toolPolicy: policy, ...options });
 
+test('host environment instructions reach the model alongside the original persona',async()=>{
+  let captured;
+  const client=createAssistantSession({profile:{systemPrompt:'persona fixture'},discoverTools:()=>backend({instructions:'host tools fixture'}),createModel:options=>{captured=options;return{prompt:async()=> 'ok',destroy(){}}}});
+  try{await client.run('hello');const prompt=captured.initialPrompts[0].content;assert.ok(prompt.includes('persona fixture'));assert.ok(prompt.includes('host tools fixture'));}finally{client.dispose()}
+});
+
 test('binding checks fence model creation after discovery and prompting after model initialization', async () => {
   for (const delayed of ['discovery', 'model']) {
     const pending = deferred();

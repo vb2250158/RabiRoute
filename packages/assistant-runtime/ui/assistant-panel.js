@@ -43,7 +43,7 @@ export function assistantServiceRows(state) {
 export function assistantLiveState(state,disconnected=false) {
   const phase=state?.voice?.phase,capture=state?.voice?.capture;
   const listening=phase==='running'&&capture==='listening';
-  const working=['thinking','responding','searching'].includes(state?.activity?.status);
+  const working=['thinking','responding','searching','executing-tool','finishing'].includes(state?.activity?.status);
   const playing=Boolean(state?.interaction?.outputActive);
   let title='正在连接',detail='',action='start',actionLabel='开启语音';
   if(state){title='语音已停止';detail='可以发送文字消息，或开启语音。'}
@@ -56,12 +56,14 @@ export function assistantLiveState(state,disconnected=false) {
   if(state?.interaction?.inputPending){title=state?.asrFeedback==='streaming'?'正在听你说话':'正在识别语音';detail=listening?'识别完成后自动发送；麦克风继续开启。':'识别完成后自动发送。'}
   if(working){title=state.activity.status==='thinking'?'正在思考':'正在生成回复';detail=listening?'麦克风开启，可以继续说话。':phase==='running'?'麦克风已暂停，文字回复会继续生成。':'文字回复会继续生成。'}
   if(state?.activity?.status==='searching'){title='正在联网搜索';detail=state.activity.query||'正在查找来源，搜索完成后继续回答。'}
-  if(playing){title='正在播报';detail=listening?'麦克风开启，直接说话可打断声音。':'可停止本次播报，文字回复会继续。'}
+  if(state?.activity?.status==='executing-tool'){title='正在使用工具';detail=listening?'麦克风开启，可以继续说话。':'工具正在执行，播报会同时继续。'}
+  if(state?.activity?.status==='finishing'){title='正在整理回复';detail='正在根据已取得的结果回答。'}
+  if(playing&&!working){title='正在播报';detail=listening?'麦克风开启，直接说话可打断声音。':'可停止本次播报，文字回复会继续。'}
   if(phase==='failed'){title='语音出现故障';detail='检查错误提示后重试，文字聊天仍可用。'}
   if(disconnected){title='与助手的连接已断开';detail='重新连接后可查看当前状态。'}
   return {title,detail,listening,working,playing,action,actionLabel,
     captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':'收音关闭',
-    generationLabel:working?(state.activity.status==='searching'?'正在联网搜索':state.activity.status==='thinking'?'正在思考':'正在生成文字'):'等待下一句话',
+    generationLabel:working?(state.activity.status==='executing-tool'?'工具执行中':state.activity.status==='finishing'?'整理回复':state.activity.status==='searching'?'正在联网搜索':state.activity.status==='thinking'?'正在思考':'正在生成文字'):'当前无任务',
     playbackLabel:state?.voice?.outputEnabled===false?'播报静音':playing?'正在播报':state?.interaction?.responseSuppressed?'本次声音已打断':'当前无播报'};
 }
 export function distinctModelLabels(values) {
@@ -87,6 +89,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
   const row = { display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }
   const label = { display:'flex', flexDirection:'column', gap:6, marginBottom:12 }
   const errors = {
+    SPEECH_SEND_BACKLOG:'识别音频发送积压，收音已停止。请检查网络后重新开启语音。',
     ASSISTANT_PERSONA_READ_FAILED:'无法读取所选人格，请查看人格设置中的错误详情。',
     ASSISTANT_HOST_OPERATION_FAILED:'Rabi 宿主操作未完成，请查看服务设置中的错误详情。',
     'Failed to fetch':'与本机助手的连接已断开，请确认后台服务正在运行后重试。',
@@ -183,7 +186,9 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       catch(failure){if(valid())setDetailError(failure.message)}finally{if(valid())setDetailLoading(false)}
     }
     const openDetails=item=>{detailReturn.current={top:chat.current?.scrollTop||0,follow:follow.current};setDetailData(null);setDetailError('');setDetailId(item.id)}
-    React.useEffect(()=>{if(!detailId)return;void readDetails(detailId);const timer=setInterval(()=>void readDetails(detailId,true),1000);return()=>clearInterval(timer)},[adapter,detailId])
+    const detailActivity=state?.activity?.responseId===detailId?state.activity:null
+    const detailSpeech=state?.speechProgress?.find(item=>item.responseId===detailId)
+    React.useEffect(()=>{if(detailId)void readDetails(detailId,Boolean(detailData))},[adapter,detailId,detailActivity?.status,detailActivity?.tool?.callId,detailSpeech?.playbackId,detailSpeech?.speechStatus])
     React.useLayoutEffect(()=>{if(!detailId&&detailReturn.current&&chat.current){chat.current.scrollTop=detailReturn.current.top;follow.current=detailReturn.current.follow;detailReturn.current=null}},[detailId])
     React.useEffect(() => {
       mounted.current=true; let timer, cancelled=false
@@ -425,8 +430,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       const progress=item.role==='assistant'&&!item.notice?state?.speechProgress?.find(value=>value.responseId===item.id):null
       if(!progress?.timingMode)return h('p',null,item.notice?(errors[item.text]||item.text):item.text)
       const end=Math.min(item.text.length,Math.max(0,progress.spokenEnd||0))
-      return h('div',{className:'va-timed-message'},h('p',null,h('span',{className:'va-sr-only'},item.text),h('span',{className:'va-spoken','aria-hidden':true},item.text.slice(0,end)),h('span',{className:'va-unspoken','aria-hidden':true},item.text.slice(end))),
-        h('small',{className:'va-follow-label'},(progress.timingMode==='word'?'逐字跟随':'按句跟随')+(progress.speechStatus==='cancelled'?' · 已打断':progress.speechStatus==='ended'?' · 播放结束':'')))
+      return h('div',{className:'va-timed-message'},h('p',null,h('span',{className:'va-sr-only'},item.text),h('span',{className:'va-spoken','aria-hidden':true},item.text.slice(0,end)),h('span',{className:'va-unspoken','aria-hidden':true},item.text.slice(end))))
     }
     const avatar=(person,kind)=>h(MessageAvatar,{...person,kind,resolveUrl:adapter.resolveAvatarUrl})
     const renderMessage=(item,index)=>{
@@ -436,8 +440,10 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
         h('article',{className:'va-message','data-role':item.role,'data-notice':item.notice||undefined,role:item.notice?'alert':undefined},
           avatar(person,kind),h('div',{className:'va-message-main'},
             h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',{title:person.name},person.name),item.source==='speech'&&h('span',{className:'va-message-source'},'语音')),
-              item.hasDetails&&h(Button,{className:'va-message-details',title:'查看语音详情','aria-label':item.role==='user'?'查看语音识别详情':'查看语音播报详情',onClick:()=>openDetails(item)},'⋯')),
-            h('div',{className:'va-message-bubble'},messageBody(item),item.search&&h('small',{role:'status'},item.search.status==='searching'?'正在搜索：'+item.search.query:item.search.status==='failed'?'搜索未完成：'+(errors[item.search.error]||item.search.error):'已搜索 · '+item.search.provider),sourceLinks(item.sources),item.status==='interrupted'&&h('small',{className:'va-note'},'上次未完成 · 没有自动重发')))))
+              item.hasDetails&&h(Button,{className:'va-message-details',title:'查看消息详情','aria-label':item.role==='user'?'查看语音识别详情':'查看执行与语音详情',onClick:()=>openDetails(item)},'⋯')),
+            h('div',{className:'va-message-bubble'},messageBody(item),
+              state?.activity?.responseId===item.id&&state.activity.tool&&h('div',{className:'va-current-tool',role:'status','aria-busy':true},h('span',{className:'va-tool-spinner','aria-hidden':true}),h('span',null,'正在调用 · '+(state.activity.tool.operation||({web_search:'联网搜索',rabi_search:'查找接口',rabi_describe:'读取接口说明'}[state.activity.tool.name]||state.activity.tool.name)))),
+              sourceLinks(item.sources),item.status==='interrupted'&&h('small',{className:'va-note'},'上次未完成 · 没有自动重发')))))
     }
     const setupGaps=assistantSetupGaps(state)
     const serviceTests=state?.capabilities?.serviceTests&&h('section',{className:'va-checks','aria-label':'连接与测试状态'},
@@ -512,7 +518,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       state&&h('div',{className:'va-duplex-status','aria-label':'并行语音状态',role:'status'},h('span',{'data-active':live.listening},live.captureLabel),h('span',{'data-active':live.working},live.generationLabel),h('span',{'data-active':live.playing},live.playbackLabel)),
       h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':live.detail),
       state?.capabilities?.host==='standalone'&&h('small',{className:'va-host-note'},'独立版 · 文字与语音对话'),
-      message&&!editing&&h('p',{role:'status'},message),state?.error&&h('p',{role:'alert'},errors[state.error]||state.error),
+      message&&!editing&&h('p',{role:'status'},message),(state?.error||state?.voice?.error)&&h('p',{role:'alert'},errors[state.error||state.voice.error]||state.error||state.voice.error),
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
       state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
       state?.context?.interruptedCount>0&&h('p',{className:'va-note'},'上次有 '+state.context.interruptedCount+' 条消息未完成，已保留记录，没有自动重发。'),

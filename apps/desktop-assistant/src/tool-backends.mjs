@@ -8,7 +8,7 @@ export async function combineToolBackends(backends) {
     }
   } catch(error){const results=await Promise.allSettled(backends.map(backend=>Promise.resolve().then(()=>backend?.dispose?.())));const failures=results.filter(value=>value.status==='rejected').map(value=>value.reason);if(failures.length)throw new AggregateError([error,...failures],'ASSISTANT_TOOL_COMPENSATION_FAILED');throw error}
   const owner=decision=>{const backend=owners.get(decision.name||decision.functionName);if(!backend)throw Error('ASSISTANT_TOOLS_UNAVAILABLE');return backend};
-  return {tools:backends.flatMap(backend=>backend.tools),executeTool:event=>owner(event).executeTool(event),
+  return {instructions:backends.map(backend=>backend.instructions).filter(value=>typeof value==='string'&&value).join('\n\n'),tools:backends.flatMap(backend=>backend.tools),executeTool:event=>owner(event).executeTool(event),
     toolPolicy:{classify:decision=>owner(decision).toolPolicy.classify(decision),inspectOutcome:(result,decision)=>owner(decision).toolPolicy.inspectOutcome(result,decision)},
     async dispose(){const outcomes=await Promise.allSettled(backends.map(backend=>Promise.resolve().then(()=>backend.dispose?.())));const errors=outcomes.filter(value=>value.status==='rejected').map(value=>value.reason);if(errors.length)throw new AggregateError(errors,'ASSISTANT_TOOL_CLEANUP_FAILED')}
   };

@@ -36,12 +36,13 @@ export type DesktopPetBubbleStyle = {
   maxWidth: number;
   opacity: number;
   displaySeconds: number;
+  maxVisible?: number;
 };
 
-export const DEFAULT_DESKTOP_PET_BUBBLE_STYLE: DesktopPetBubbleStyle = {
+export const DEFAULT_DESKTOP_PET_BUBBLE_STYLE: Required<DesktopPetBubbleStyle> = {
   skin: "cat-paw", fontFamily: "", fontSize: 14, textColor: "#504650",
   backgroundColor: "#fffaf3", borderColor: "#a58b98", maxWidth: 320,
-  opacity: 1, displaySeconds: 8
+  opacity: 1, displaySeconds: 12, maxVisible: 3
 };
 
 export function normalizeDesktopPetBubbleStyle(value: unknown): DesktopPetBubbleStyle {
@@ -56,7 +57,8 @@ export function normalizeDesktopPetBubbleStyle(value: unknown): DesktopPetBubble
     textColor: color("textColor"), backgroundColor: color("backgroundColor"), borderColor: color("borderColor"),
     maxWidth: Math.round(boundedNumber(row.maxWidth, defaults.maxWidth, 220, 480)),
     opacity: boundedNumber(row.opacity, defaults.opacity, 0.5, 1),
-    displaySeconds: boundedNumber(row.displaySeconds, defaults.displaySeconds, 2, 30)
+    displaySeconds: boundedNumber(row.displaySeconds, defaults.displaySeconds, 2, 30),
+    maxVisible: Math.round(boundedNumber(row.maxVisible, defaults.maxVisible, 1, 6))
   };
 }
 

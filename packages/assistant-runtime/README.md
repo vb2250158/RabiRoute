@@ -2,6 +2,12 @@
 
 # 共用助手执行循环
 
+## 并行播报与执行详情
+
+播报片段的提交不等待播放器结束；连续工具调用、模型请求和收音仍由各自拥有者推进。`executing-tool` 与 `tool-completed` 状态提供 `tool.callId/name/arguments` 及真实 `outcome/outcomeStatus`；宿主在自己的消息存储中保存脱敏后的执行明细，不能把原始凭据或内部推理放进展示数据。`ToolAdapter.instructions` 可追加当前宿主的接口使用说明，不替换人格。
+
+共享界面通过 `activity.responseId` 和 `activity.tool.{name,operation}` 在对应回复下展示当前工具；历史步骤只在消息详情 `execution.steps` 中展开。播报高亮保留，不再附加“逐字跟随/播放结束”行。工具预算耗尽或即将用完步骤时，循环预留一次禁止新工具调用的总结请求，由同一人格根据真实结果自然收尾；这不是自动重放或放宽写入限制。
+
 `@rabilink/assistant-runtime` 是本地开发包。RabiLink 页面使用这里的统一会话；DSH 已用开发快照与自己的工具适配器完成夹具集成，真实 Host 和眼镜链路仍待验证。它与 `@rabilink/rokid-voice` 分工：本包管理模型决策、工具观察与前台监听生命周期，语音包提供 Rokid ASR/TTS 适配。没有 API Key、网络请求、存储、UI 或后端 SDK 依赖。
 
 ## 接口与归属

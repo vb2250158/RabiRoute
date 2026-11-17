@@ -77,7 +77,7 @@ export function createAssistantSession({ profile, createModel, discoverTools, pr
         const options = { ...(profileSnapshot.modelOptions || {}) };
         // One global prompt, before any optional conversation seed messages.
         options.initialPrompts = [
-          { role: 'system', content: profileSnapshot.systemPrompt },
+          { role: 'system', content: [profileSnapshot.systemPrompt, typeof backend.instructions === 'string' ? backend.instructions : ''].filter(Boolean).join('\n\n') },
           ...(options.initialPrompts || [])
         ];
         const framing = protocol.modelOptions(options, JSON.parse(JSON.stringify(backend.tools)));

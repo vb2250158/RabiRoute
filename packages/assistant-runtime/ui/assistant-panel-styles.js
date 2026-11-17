@@ -90,6 +90,10 @@ export const assistantPanelStyles = `
 .va-check-note{font-size:12px;color:var(--va-muted);margin:14px 0 0}
 .va-checks progress{width:100%;height:6px;margin:0 0 16px;accent-color:var(--va-accent)}
 .va-turn-status{color:var(--va-accent);font-size:13px}
+.va-current-tool{display:flex;align-items:center;gap:8px;color:var(--va-muted);font-size:13px;margin-top:12px;overflow-wrap:anywhere}
+.va-tool-spinner{width:12px;height:12px;flex:none;border:2px solid var(--va-line);border-top-color:var(--va-accent);border-radius:50%}
+@media(prefers-reduced-motion:no-preference){.va-tool-spinner{animation:va-tool-spin .9s linear infinite}@keyframes va-tool-spin{to{transform:rotate(360deg)}}}
+.va-execution-list{list-style:none;margin:0;padding:0;display:grid;gap:12px}.va-execution-step{border:1px solid var(--va-line);border-radius:8px;padding:12px}.va-execution-step>div{display:flex;justify-content:space-between;gap:12px}.va-execution-step time,.va-execution-step small{color:var(--va-muted);font-size:12px}.va-execution-step pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;font-size:12px}
 @media(max-width:620px){.va-checks{padding:14px}.va-check-heading{flex-direction:column;gap:12px}.va-check-heading button{width:100%}.va-check-grid{grid-template-columns:1fr}.va-check-card:last-child{grid-column:auto}}
 .va-status{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--va-muted)}
 .va-status:before{content:'';width:7px;height:7px;border-radius:50%;background:#778e98}
@@ -196,6 +200,6 @@ export const assistantPanelStyles = `
 @media(max-width:1100px){.va-tts-layout,.va-asr-layout{grid-template-columns:1fr;grid-template-areas:none}.va-tts-layout>.va-tts-preferences{grid-template-columns:1fr}.va-tts-capabilities .va-expression-toolbar>label{flex:1}}
 @media(max-width:620px){.va-tts-layout>.va-tts-selection,.va-tts-layout>.va-tts-capabilities{padding:16px}.va-cap-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.va-tts-card-heading{flex-wrap:wrap}.va-tts-capabilities .va-expression-toolbar{flex-wrap:wrap}.va-tts-capabilities .va-expression-toolbar>label{flex-basis:100%}.va-cap-dialog-content{padding:20px}.va-cap-dialog{max-height:calc(100dvh - 32px)}}
 
-.va-timed-message p{margin:0;white-space:pre-wrap}.va-spoken{color:#a7f1d9}.va-unspoken{color:var(--va-muted)}.va-follow-label{display:block;margin-top:8px;color:var(--va-muted);font-size:12px}.va-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.va-timed-message p{margin:0;white-space:pre-wrap}.va-spoken{color:#a7f1d9}.va-unspoken{color:var(--va-muted)}.va-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .va-asr-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.va-asr-heading h3{margin:0}.va-asr-capabilities h4{margin:16px 0 10px;font-size:14px;color:var(--va-muted)}.va-asr-capabilities .va-cap-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.va-asr-feature{display:flex;align-items:center;gap:7px;min-width:0}.va-asr-feature>input{flex:none;width:18px;height:18px;accent-color:var(--va-accent)}.va-asr-feature>.va-cap-trigger{flex:1;min-width:0}.va-asr-capabilities .va-cap-trigger{padding:9px;min-height:58px}.va-asr-capabilities .va-cap-trigger strong{font-size:14px}.va-asr-system,.va-asr-preferences{border-top:1px solid var(--va-line);margin-top:16px;padding-top:10px}.va-asr-capabilities .va-note{margin:12px 0;font-size:13px}
 `;

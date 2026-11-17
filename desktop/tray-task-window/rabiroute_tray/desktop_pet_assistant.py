@@ -1,5 +1,15 @@
 """Project plugin-owned audio onto the existing pet; never open an audio device."""
 from __future__ import annotations
+import re
+
+
+def speech_bubble_segment(text: str, spoken_end: int) -> tuple[int, str]:
+    """Project the sentence currently spoken; never accumulate the entire task."""
+    cursor = max(0, min(len(text) - 1, spoken_end - 1))
+    for match in re.finditer(r"[^。！？!?\n]{1,240}[。！？!?\n]*|[。！？!?\n]+", text):
+        if cursor < match.end():
+            return match.start(), match.group().strip()
+    return 0, text[:240]
 
 
 class AssistantPresentation:
@@ -30,6 +40,10 @@ class AssistantPresentation:
             return None
         self.response = response
         status = payload.get("speechStatus")
+        text = str(payload.get("speechText") if payload.get("speechText") is not None else payload.get("text") or "")
+        spoken_end = payload.get("spokenEnd", 0)
+        offset = payload.get("textOffset", 0)
+        start, segment = speech_bubble_segment(text, max(0, spoken_end - offset) if isinstance(spoken_end, int) and isinstance(offset, int) else 0)
         return {"id": response, "assistantOwner": owner, "playbackId": payload.get("playbackId"),
-                "text": str(payload.get("text") or ""), "spokenEnd": payload.get("spokenEnd", 0),
+                "text": segment, "bubbleKey": f"{owner}:{response}:{payload.get('playbackId')}:{start}", "spokenEnd": spoken_end,
                 "status": "playing" if status == "playing" and payload.get("outputEnabled", True) else "stopped"}

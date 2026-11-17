@@ -505,7 +505,7 @@ class DesktopPetController(QObject):
                 self._resume_context()
             self._arm_wander()
         if job.get("text"):
-            self.window.show_speech_bubble(str(job["text"]), playing=playing)
+            self.window.show_speech_bubble(str(job["text"]), playing=playing, **({"key": job["bubbleKey"]} if job.get("bubbleKey") else {}))
         elif was_playing:
             self.window.finish_speech_bubble()
         if not playing:

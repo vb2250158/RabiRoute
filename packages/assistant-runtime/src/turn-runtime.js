@@ -25,7 +25,7 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
   let waitingForTool = false, observationTurn = false;
   const interjections = new Map(), interjectionQueue = [];
   const cancellation = new Promise((_, reject) => { rejectCancellation = reject; }); cancellation.catch(() => {});
-  function publish(next) { state = next; onState({ state, toolCount: calls, settledToolCount: results.length, steps }); }
+  function publish(next, details = {}) { state = next; onState({ state, toolCount: calls, settledToolCount: results.length, steps, ...details }); }
   async function bounded(action, timeoutMs) {
     let timer;
     try { return await Promise.race([action, cancellation, new Promise((_, reject) => { timer = setTimeout(() => reject(failure('TURN_TIMEOUT')), timeoutMs); })]); }
@@ -192,7 +192,7 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
     const event = { callId: turnId + ':call-' + (++calls), functionName: decision.name, arguments: decision.arguments, isComplete: true, ...(canonicalCall ? { writeReconciliationRequired: writesUncertain } : {}) };
     if (decision.say) emit((text ? '\n' : '') + decision.say + '\n');
     if (cancelled) return { cancelled: true };
-    publish('executing-tool'); let result, executionFailed = false;
+    publish('executing-tool', { tool: { callId: event.callId, name: event.functionName, arguments: decision.arguments } }); let result, executionFailed = false;
     if (cancelled) return { cancelled: true };
     // A stale target is rejected before dispatch, outside the uncertain-outcome catch.
     checkCurrent(assertCurrent);
@@ -208,6 +208,7 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
     if (outcome.failed) uncertain = true;
     results.push(result);
     const observation = { callId: event.callId, name: event.functionName, outcome: result, outcomeStatus: outcome };
+    publish('tool-completed', { tool: { ...observation, arguments: decision.arguments } });
     if (actualMutation) writes.set(fingerprint, observation);
     return observation;
   }
@@ -217,13 +218,16 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
       checkCurrent(assertCurrent);
       if (steps >= maxSteps) throw failure('TURN_STEP_LIMIT');
       const earlyGuidance = guidance(); if (earlyGuidance.length) next = { ...next, steering: earlyGuidance };
-      const requestId = turnId + ':step-' + (++steps); publish('thinking');
+      const closing = calls >= maxToolCalls || steps === maxSteps - 1;
+      if (closing) next = { ...next, toolsAllowed: false, instruction: [next.instruction, 'This is the final response for this turn. No further tool calls are available. Naturally summarize only verified results and any unresolved gap, using the persona and voice-assistant instructions. If useful, ask one specific question that would help the user supply missing information. Do not mention internal budgets, limits or a continue-task button. Do not claim unsuccessful work is complete.'].filter(Boolean).join('\n') };
+      const requestId = turnId + ':step-' + (++steps); publish(closing ? 'finishing' : 'thinking');
       const reply = await request(protocol.input(requestId, next)); if (cancelled) return;
       checkCurrent(assertCurrent);
       const lateGuidance = guidance();
       if (lateGuidance.length) { next = { kind: 'steering', text: lateGuidance, superseded: requestId, actionExecuted: false }; continue; }
       const decision = protocol.parseDecision(reply.raw, requestId);
       if (decision.kind === 'final') { acceptingGuidance = false; emit(reply.plain ? decision.text.slice(reply.emitted) : decision.text); return; }
+      if (closing) throw failure(calls >= maxToolCalls ? 'TURN_TOOL_LIMIT' : 'TURN_STEP_LIMIT');
       const observation = await execute(decision); if (cancelled) return;
       if (observation.outcomeStatus?.terminal === true) { acceptingGuidance = false; return; }
       next = { kind: 'tool-observation', untrusted: true, observation };

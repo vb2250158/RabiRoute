@@ -2,6 +2,12 @@ English | [简体中文](README.md)
 
 # Shared assistant execution loop
 
+## Concurrent speech and execution details
+
+Submitting a speech segment does not await playback completion. Model requests, consecutive tools and capture retain separate owners. `executing-tool` and `tool-completed` statuses expose `tool.callId/name/arguments` and actual `outcome/outcomeStatus`; hosts retain sanitized receipts in their existing message storage, excluding credentials and internal reasoning. Optional `ToolAdapter.instructions` appends host usage guidance without replacing the persona.
+
+The presenter uses `activity.responseId` and `activity.tool.{name,operation}` to show only the current tool below its reply. Historical execution steps belong in message details under `execution.steps`. Speech highlighting remains, without the redundant playback-follow footer. At the tool budget or the final available step, the same model receives one tools-disabled closing request to summarize verified findings naturally. This does not replay work or relax mutation guards.
+
 0.10.1 explicitly calls the native player's optional `stop()` before `destroy()` during interruption. Releasing an object is not assumed to stop playback. Development packages and installed hosts are verified separately.
 
 Version 0.10.0 adds `@rabilink/assistant-runtime/voice`: one injected capture, interruption and streamed playback owner shared by glasses, web, DSH and Rabi. Persona/tools remain in the assistant layer; remote connectivity remains an adapter. GUI and optional pet subscribe to the same owner. Interruptions stop TTS while preserving text and dispatched work. See the [host contract](VOICE_HOST_CONTRACT.md). Injected-host tests do not establish product or hardware acceptance.

@@ -24,7 +24,7 @@ export function createSpeechPlayback({ tts, releaseSpeech, clock = defaultClock,
   const attempt = action => { try { const result = action(); if (result?.then) Promise.resolve(result).catch(report); } catch (error) { report(error); } };
   const emit = event => { try { onEvent(event); } catch (error) { report(error); } };
   const current = item => !closed && owner === item && !item.finished;
-  const event = (type, item, extra = {}) => emit({ type, id: item?.id, text: item?.text || '', ...(item?.options?.responseId?{responseId:item.options.responseId}:{}),...extra });
+  const event = (type, item, extra = {}) => emit({ type, id: item?.id, text: item?.text || '', textOffset:item?.options?.textOffset||0, ...(item?.options?.responseId?{responseId:item.options.responseId}:{}),...extra });
   function clearTimer(item, key) {
     if (item[key] !== null) clock.clearTimeout(item[key]);
     item[key] = null;

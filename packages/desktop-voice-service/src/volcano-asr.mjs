@@ -15,7 +15,7 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
   };
   return {
     createRound(handlers) {
-      const round = {}, state = { handlers, recording: createRecording(), closed: false, abort: new AbortController(), chain: Promise.resolve(), pending: 0, pcm: Buffer.alloc(0), speaking: false, committedEnd: -1, interim: '' };
+      const round = {}, state = { handlers, recording: createRecording(), closed: false, abort: new AbortController(), chain: Promise.resolve(), pendingBytes: 0, pcm: Buffer.alloc(0), speaking: false, committedEnd: -1, interim: '' };
       rounds.set(round, state); return round;
     },
     async start(round) {
@@ -54,8 +54,12 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
           // Two 64ms capture chunks form one 128ms protocol frame.
           while (state.pcm.length >= 4096) {
             const chunk = state.pcm.subarray(0, 4096); state.pcm = state.pcm.subarray(4096);
-            if (++state.pending > 12) { fail(Error('SPEECH_SEND_BACKLOG')); return; }
-            state.chain = state.chain.then(() => { if (!state.closed) return state.socket.send(encodeAsr(chunk, { audio: true })); }).catch(fail).finally(() => { state.pending--; });
+            // IPC may deliver several seconds of captured PCM in one tick after
+            // startup or a scheduling delay. Bound queued audio duration, not
+            // callback count; ordinary batches must drain without losing words.
+            state.pendingBytes += chunk.length;
+            if (state.pendingBytes > 16000 * 2 * 5) { fail(Error('SPEECH_SEND_BACKLOG')); return; }
+            state.chain = state.chain.then(() => { if (!state.closed) return state.socket.send(encodeAsr(chunk, { audio: true })); }).catch(fail).finally(() => { state.pendingBytes -= chunk.length; });
           }
         } });
         if (state.closed) return;

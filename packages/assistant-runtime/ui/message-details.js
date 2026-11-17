@@ -44,7 +44,7 @@ export function createMessageDetailsView(React){
  return function MessageDetails({data,loading,error,onBack,onRetry,catalogs}){
   const [selected,setSelected]=React.useState('');
   const isAsr=data?.kind==='asr',requests=data?.requests||[],request=requests.find(r=>r.requestId===selected)||requests.at(-1),catalog=catalogs?.[request?.provider]?.tts;
-  const title=isAsr?'语音识别详情':'语音播报详情',status=isAsr?'识别已完成':playback[data?.playback?.status]||stages[request?.stage]||'尚未发送播报请求';
+  const title=isAsr?'语音识别详情':data?.execution?'执行与语音详情':'语音播报详情',status=isAsr?'识别已完成':data?.execution?({completed:'本轮已结束',uncertain:'结果未确认',failed:'本轮未完成',cancelled:'已停止'}[data.execution.status]||'执行中'):playback[data?.playback?.status]||stages[request?.stage]||'尚未发送播报请求';
   const rows=isAsr?recognitionRows(data):[],expression=data?.expression||{};
   return h('section',{className:'va-detail-page','aria-label':'消息语音详情'},
    h('header',{className:'va-detail-heading'},h('div',null,h('h2',null,title),data&&h('span',{className:'va-cap-badge'},status)),h('div',null,h('button',{onClick:onRetry,disabled:loading},loading?'正在读取…':'刷新详情'),h('button',{onClick:onBack},'返回对话'))),
@@ -53,6 +53,13 @@ export function createMessageDetailsView(React){
     !data&&loading&&h('p',{role:'status'},'正在读取本次语音信息…'),
     data&&h(React.Fragment,null,
      h('section',{className:'va-detail-text'},h('h3',null,isAsr?'识别出的文字':'助手回复'),h('p',null,data.message?.text||'文字仍在生成…')),
+     data.execution&&h('section',{className:'va-detail-card','aria-label':'执行过程'},h('h3',null,'执行过程'),
+      h('ol',{className:'va-execution-list'},(data.execution.steps||[]).map((step,index)=>h('li',{key:step.id,className:'va-execution-step'},
+       h('div',null,h('strong',null,(index+1)+'. '+(step.kind==='tool'?(step.arguments?.operation||step.name):'生成回复')),h('span',null,({running:'进行中',completed:'已完成',unconfirmed:'结果未确认',failed:'未完成',cancelled:'已停止'}[step.status]||step.status))),
+       step.startedAt&&h('time',{dateTime:step.startedAt},new Date(step.startedAt).toLocaleTimeString()+(step.endedAt?' · '+Math.max(0,new Date(step.endedAt)-new Date(step.startedAt))+' ms':'')),
+       step.kind==='tool'&&h('details',null,h('summary',null,'查看调用参数与返回结果'),h('h4',null,'工具 · '+step.name),h('pre',null,JSON.stringify({arguments:step.arguments,...(step.outcome!==undefined?{result:step.outcome}:{})},null,2))),
+       step.kind==='model'&&h('details',null,h('summary',null,'查看已记录的模型请求'),step.request!==undefined||step.requestConfig!==undefined?h('pre',null,JSON.stringify(step.request??step.requestConfig,null,2)):h('p',null,'宿主未记录可展示的模型请求。'))))),
+      data.execution.error&&h('details',null,h('summary',null,'执行诊断'),h('code',null,data.execution.error))),
      h('div',{className:'va-detail-grid'+(isAsr?'':' va-detail-tts')},
       isAsr?h('section',{className:'va-detail-card'},h('h3',null,'本句识别结果'),rows.length?pairs(rows):h('p',null,'本句未返回情绪、性别等附加结果。'),h('p',{className:'va-note'},'这些标签是模型估计，供你核对；接口评分不代表实际准确率。'),
        Number.isFinite(data.result?.start_time)&&Number.isFinite(data.result?.end_time)&&h('p',{className:'va-note'},'分句时间：'+(data.result.start_time/1000).toFixed(2)+'–'+(data.result.end_time/1000).toFixed(2)+' 秒')):

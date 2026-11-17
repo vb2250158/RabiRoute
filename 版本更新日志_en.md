@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.23 - 2026-11-17
+
+- Run speech playback alongside tool execution, show tool steps and results, and explain unresolved work naturally when a turn reaches its limits.
+- Display configurable desktop-pet bubbles for spoken sentences and prevent normal recognition batches from being mistaken for a backlog.
+- Fix standalone desktop assistant builds for import-only voice packages and UNC paths.
+- Align speech authority coverage with the separate computer-control and connection-revocation contracts, retaining in-flight fencing for global closure and re-enrollment.
+- Use the unpooled local test client for unified-search HTTP fixtures while retaining the original behavior assertions.
+
 ## 0.15.22 - 2026-11-17
 
 - Advance the plugin SDK to `1.4.2`. Native packages retain the public workbench definition required at runtime, restoring workbench activation in complete releases and adding a packaged import regression outside the source tree.

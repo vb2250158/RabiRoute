@@ -32,6 +32,15 @@ test('post-tool audio resumes the same message and late events from the opening 
  p=projectCaptionPlayback(p,{type:'synthesizing',responseId:'reply',id:2});p=projectCaptionPlayback(p,{type:'cue',responseId:'reply',id:2,cue:{charIndex:3,charLength:1,mode:'word'}});assert.equal(p.spokenEnd,4);
  const current=p;assert.equal(projectCaptionPlayback(p,{type:'ended',responseId:'reply',id:1}),current);assert.equal(projectCaptionPlayback(p,{type:'cue',responseId:'reply',id:1,cue:{charIndex:5,charLength:1,mode:'word'}}),current);
 });
+
+test('pet speech projection follows the actual playback segment rather than future generated text',()=>{
+ let p=projectCaptionText({},{responseId:'r',text:'先查。查到后的第二句话。'});
+ p=projectCaptionPlayback(p,{type:'synthesizing',responseId:'r',id:1,text:'先查。',textOffset:0});
+ p=projectCaptionText(p,{responseId:'r',text:'先查。查到后的第二句话。后续正文仍在生成。'});
+ assert.equal(p.speechText,'先查。');assert.equal(p.textOffset,0);
+ p=projectCaptionPlayback(p,{type:'synthesizing',responseId:'r',id:2,text:'查到后的第二句话。',textOffset:3});
+ assert.equal(p.textOffset,3);assert.equal(p.speechText,'查到后的第二句话。');
+});
 const integer=value=>{const b=Buffer.alloc(4);b.writeInt32BE(value);return b};
 const response=(event,id,data)=>{const bytes=Buffer.from(JSON.stringify(data));return Buffer.concat([Buffer.from([0x11,0x94,0x10,0]),integer(event),integer(Buffer.byteLength(id)),Buffer.from(id),integer(bytes.length),bytes])};
 test('Volcano subtitle event is timing metadata and never itself a played cue',async()=>{

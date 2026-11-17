@@ -7,6 +7,7 @@ import {speechExpressionPolicy} from '@rabilink/desktop-voice-service/expression
 import {createSpeechExpressionDecoder,speechExpressionInstruction} from '@rabilink/assistant-runtime/voice';
 import {asrAgentContext,safeSpeechDetails} from '@rabilink/desktop-voice-service/speech-details';
 import {createSearchAgentProtocol,createSearchTextFilter} from './search-protocol.mjs';
+import {recordExecution} from './execution-details.mjs';
 
 /** Standalone binding for the shared session/queue. No DSH tools or accounts are impersonated. */
 export function createStandaloneConversation({ settings, credentials, onError, onCompleted = () => {}, createModel = createChatModel,store,webSearch,discoverTools,onSubmitted=()=>{},expressionPolicy=speechExpressionPolicy }) {
@@ -22,7 +23,7 @@ export function createStandaloneConversation({ settings, credentials, onError, o
   const mark=message=>{dirty.set(message.id,message);if(!checkpoint&&!closed)checkpoint=setTimeout(()=>{checkpoint=undefined;try{flush()}catch{}},500)};
   const flush=()=>{clearTimeout(checkpoint);checkpoint=undefined;if(!dirty.size&&!contextDirty&&!saveError)return;try{store?.commit({id,messages:[...dirty.values()],...(contextDirty?{context:committedContext}:{})});dirty.clear();contextDirty=false;saveError=null;savedAt=new Date().toISOString()}catch(error){saveError='ASSISTANT_CONTEXT_SAVE_FAILED';try{onError(Error(saveError))}catch{}throw error}};
   const publish = () => { for (const listener of listeners) listener(summaries()); };
-  const profile = () => { const value = settings(); return { systemPrompt: value.persona+speechExpressionInstruction({enabled:true})+(webSearch?.available()?'\n联网搜索通过应用协议调用 web_search。需要搜索时，本次完整响应必须只包含一个 tool JSON 对象，say 字段可说明正在搜索，不输出任何对象外文字、voice 控制头、XML、DSML 或原生函数调用格式。搜索后收到 tool-observation，再用普通自然语言回答。':''),searchConfiguration:[value.webSearchEnabled,value.webSearchProvider,value.webSearchMaxResults], modelOptions: { endpoint: value.llmEndpoint, model: value.llmModel,provider:value.llmProvider||'compatible' } }; };
+  const profile = () => { const value = settings(); return { systemPrompt: value.persona+'\n你正在语音助手中与用户交流，同时可以使用宿主声明的工具完成任务。文字生成、语音播放与工具执行独立推进，播报不要求你等待。按人格自然交流，必要时简短告知进度；不要把参数调试、分页重试和内部错误码逐条说给用户。执行详情由界面展示。根据实际结果回答；长期没有进展时自然说明缺口，必要时问一个具体问题，不编造已经完成。'+speechExpressionInstruction({enabled:true})+(webSearch?.available()?'\n联网搜索通过应用协议调用 web_search。需要搜索时，本次完整响应必须只包含一个 tool JSON 对象，say 字段可说明正在搜索，不输出任何对象外文字、voice 控制头、XML、DSML 或原生函数调用格式。搜索后收到 tool-observation，再用普通自然语言回答。':''),searchConfiguration:[value.webSearchEnabled,value.webSearchProvider,value.webSearchMaxResults], modelOptions: { endpoint: value.llmEndpoint, model: value.llmModel,provider:value.llmProvider||'compatible' } }; };
   let configuredProfile = profile();
   let session,conversation;
   function bindSession(){
@@ -71,7 +72,8 @@ export function createStandaloneConversation({ settings, credentials, onError, o
     messageDetails(messageId){
       const message=messages.find(item=>item.id===messageId)||store?.find(messageId);
       if(!message?.details)throw Error('ASSISTANT_MESSAGE_DETAILS_UNAVAILABLE');
-      return {message:{id:message.id,role:message.role,text:message.text,source:message.source},...safeSpeechDetails(message.details)};
+      const {execution,...speech}=message.details;
+      return {message:{id:message.id,role:message.role,text:message.text,source:message.source},...safeSpeechDetails(speech),...(execution?{execution:structuredClone(execution)}:{})};
     },
     recordSpeechDetails(responseId,event){
       const message=messages.find(item=>item.id===responseId&&item.role==='assistant');
@@ -132,7 +134,17 @@ export function createStandaloneConversation({ settings, credentials, onError, o
       const work = conversation.run(text, {
         speechCapabilities:policy,speechObservation,
         assertCurrent() { if (closed) throw Error('ASSISTANT_CLOSED'); },
-        onState(value) { activity={status:'thinking',requestId,startedAt:new Date().toISOString()};if(value.state==='thinking'&&started){project(decoder.push(textFilter.finish()));project(decoder.finish());prosePrefix=response.text;decoder=createSpeechExpressionDecoder(policy);textFilter=createSearchTextFilter(config.llmProvider==='workbuddy-cli');}begin();if(value.state==='executing-tool')token?.finishSpeechSegment?.();if(activeSearchOwner?.requestId!==requestId)activeSearchOwner={requestId,response}; },
+        onState(value) {
+          if(closed)return;
+          if(value.state==='responding'&&started)return;
+          if(['thinking','finishing'].includes(value.state)&&started){project(decoder.push(textFilter.finish()));project(decoder.finish());prosePrefix=response.text;decoder=createSpeechExpressionDecoder(policy);textFilter=createSearchTextFilter(config.llmProvider==='workbuddy-cli');}
+          begin();recordExecution(response.details,value);mark(response);
+          const runningTool=['executing-tool','waiting-tool'].includes(value.state)?(value.tool||activity.tool):null;
+          activity={...activity,status:runningTool?'executing-tool':value.state==='finishing'?'finishing':value.state==='responding'?'responding':'thinking',requestId,responseId:response.id,tool:runningTool?{callId:runningTool.callId,name:runningTool.name,operation:runningTool.arguments?.operation}:null};
+          if(value.state==='executing-tool')token?.finishSpeechSegment?.();
+          if(activeSearchOwner?.requestId!==requestId)activeSearchOwner={requestId,response};
+          publish();
+        },
         onText(value) {
           if (closed) return;
           activity={...activity,status:'responding'};
@@ -149,13 +161,20 @@ export function createStandaloneConversation({ settings, credentials, onError, o
         if(outcomeError)onError(Error(outcomeError));
         if(result.state==='completed')return onCompleted(config);
       }).catch(error=>{
-        token?.finish({ speak: false });
         if (closed) return;
         const cause = error.cause || error;
         const code = /^[A-Z][A-Z0-9_]{1,100}$/.test(cause.message) ? cause.message : 'ASSISTANT_MODEL_FAILED';
+        const limited=['TURN_TOOL_LIMIT','TURN_STEP_LIMIT'].includes(code);
+        if(limited&&response){
+          const closing='这次还没有得到足够的信息，我还不能确定结果。';
+          project(decoder.push(textFilter.finish()));project(decoder.finish());
+          prosePrefix=response.text+'\n\n';decoder=createSpeechExpressionDecoder(policy);textFilter=createSearchTextFilter(false);project(decoder.push(closing));project(decoder.finish());
+        }
+        token?.finish({ speak: limited });
         activity={...activity,status:'failed',error:code,completedAt:new Date().toISOString()};
         userMessage.status='failed';mark(userMessage);if(response){response.status='failed';mark(response)}
-        const notice={id:'error-'+requestId,role:'assistant',text:code,notice:true,status:'failed'};messages.push(notice);mark(notice);try{flush()}catch{}
+        if(response){recordExecution(response.details,{state:'failed'});response.details.execution.error=code;mark(response)}
+        if(!limited){const notice={id:'error-'+requestId,role:'assistant',text:code,notice:true,status:'failed'};messages.push(notice);mark(notice)}try{flush()}catch{}
         messages = messages.slice(-100); publish(); onError(Error(code));
       }).finally(() => {if(activeSearchOwner?.requestId===requestId)activeSearchOwner=undefined;pending.delete(work);});
       pending.add(work);void work.catch(()=>{});

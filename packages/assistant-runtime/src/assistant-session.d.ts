@@ -5,6 +5,8 @@ export interface AssistantProfile { systemPrompt: string; modelOptions?: ModelOp
 export interface AssistantRunError extends Error { code: string; cause: unknown; pendingGuidance: string[] }
 export interface InitializationContext { profile: AssistantProfile; signal: AbortSignal }
 export interface ToolAdapter {
+  /** Host/tool usage instructions appended to, without replacing, the persona. */
+  instructions?: string;
   tools: ToolDeclaration[];
   executeTool(event: ToolEvent): MaybePromise<unknown>;
   toolPolicy: ToolPolicy;

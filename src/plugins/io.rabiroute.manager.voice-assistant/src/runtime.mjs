@@ -112,7 +112,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const pet={state:()=>({available:Boolean(bound.personaId),pets:bound.personaId?[{id:bound.personaId,name:bound.personaId}]:[]}),
         present(config,presentation){if(!config.petEnabled||!bound.personaId)return;publish('voice_assistant_presentation',{personaId:bound.personaId,ownerId:identity.activationId,ownerStartedAt,revision:++presentationRevision,...presentation});
           const key=presentation.responseId+':'+presentation.playbackId;
-          if(presentation.responseId&&presentation.speechStatus==='ended'&&!seen.has(key)){seen.add(key);record({voice:bound.personaId,kind:'tts',id:key,text:presentation.text,time:Date.now()})}},
+          if(presentation.responseId&&presentation.speechStatus==='ended'&&!seen.has(key)){seen.add(key);record({voice:bound.personaId,kind:'tts',id:key,text:presentation.speechText||presentation.text,time:Date.now()})}},
         async dispose(){if(bound.personaId)publish('voice_assistant_presentation',{personaId:bound.personaId,ownerId:identity.activationId,ownerStartedAt,revision:++presentationRevision,clear:true});await Promise.allSettled([...petPending]);seen.clear()}};
       const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(models.find(item=>item.id===ttsModel),config)}:{}),

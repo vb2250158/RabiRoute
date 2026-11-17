@@ -55,7 +55,7 @@ async function fixture(t: TestContext, handler: http.RequestListener) {
         authority.setNodeEnabled("fixture-node", false);
         if (mode === "instance-aba") {
           authority.setNodeEnabled("fixture-node", true);
-          assert.ok(authority.authenticate(credential.token), "Restored instance admits fresh authentication while the original request remains revoked.");
+          assert.ok(authority.authenticate(credential.token), "Restored computer retains its existing authenticated connection.");
         }
       }
     }
@@ -76,7 +76,9 @@ test("speech authority retains its first denial across policy recovery and catch
   await assert.rejects(awaitSpeechAuthority(guard, async () => "sensitive"), error => error === first);
 });
 
-for (const mode of modes) {
+// Computer control switches do not revoke the authenticated speech connection.
+// Actual global admission and credential replacement still fence in-flight work.
+for (const mode of ["global-aba", "reenroll"] as const) {
   for (const fails of [false, true]) test(`authenticated speech binary ${fails ? "failure" : "success"} is fenced after ${mode}`, { timeout: 10000 }, async t => {
     const entered = deferred(); const gate = deferred(); t.after(gate.resolve);
     const c = control(async () => ({ status: 200, data: {} }), async () => {
@@ -145,6 +147,46 @@ for (const mode of modes) {
     const reader = response.body!.getReader(); assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
     f.revoke(mode); stream.enqueue(new TextEncoder().encode("data: private-stale-event\n\n"));
     await assert.rejects(reader.read()); assert.equal(aborted, true);
+  });
+}
+
+// A computer-control switch must not interrupt unrelated authenticated speech.
+// Computer work itself is gated separately by computerSourceConnectionLifecycle.test.ts.
+for (const mode of ["disable", "instance-aba"] as const) {
+  test(`computer ${mode} preserves an in-flight authenticated speech response`, { timeout: 10000 }, async t => {
+    const entered = deferred(); const gate = deferred(); t.after(gate.resolve);
+    const c = control(async () => ({ status: 200, data: {} }), async () => {
+      entered.resolve(); await gate.promise;
+      return { status: 200, contentType: "audio/wav", headers: {}, body: Buffer.from("fixture-wave") };
+    });
+    const f = await fixture(t, (request, response) => {
+      const guard = stickySpeechAuthority(() => { assertTrustedLanAgentPrincipal(request); });
+      void c.synthesize({ input: "fixture", model: "fixture", voice: "fixture", responseFormat: "wav", speed: 1, language: null, instructions: null, play: false, sessionId: null, routeId: null }, guard).then(result => {
+        guard(); response.writeHead(200); response.end(result.body);
+      }).catch(() => { response.writeHead(403); response.end("denied"); });
+    });
+    const pending = nativeHttpTestFetch(f.url, { headers: f.headers });
+    await entered.promise; f.revoke(mode); gate.resolve();
+    const response = await pending;
+    assert.equal(response.status, 200); assert.equal(await response.text(), "fixture-wave");
+  });
+  test(`computer ${mode} preserves an authenticated speech event stream`, { timeout: 10000 }, async t => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const owner = new SpeechApiOwner({
+      speechControl: { eventStream: async () => new Response(new ReadableStream({ start(controller) {
+        stream = controller; controller.enqueue(new TextEncoder().encode("data: allowed\n\n"));
+      } }), { headers: { "content-type": "text/event-stream" } }) },
+      capture: (request: http.IncomingMessage) => ({ guard: stickySpeechAuthority(() => { assertTrustedLanAgentPrincipal(request); }), run: <T>(action: () => T) => action(), targetLocal: false })
+    } as unknown as SpeechApiContext);
+    const registry = new ManagerPluginRouteRegistry(); const registration = registry.registerOperations("speech-authority-fixture", createSpeechApiOperations(owner).operations.filter(value => value.contract.operationId === "manager.speech.events"));
+    t.after(async () => { await Promise.all([registration.dispose(), owner.events.stop()]); });
+    const f = await fixture(t, (request, response) => { if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end(); });
+    const response = await nativeHttpTestStreamFetch(f.url.replace("/status", "/events"), { headers: f.headers });
+    assert.equal(response.status, 200); const reader = response.body!.getReader();
+    assert.match(new TextDecoder().decode((await reader.read()).value), /allowed/);
+    f.revoke(mode); stream.enqueue(new TextEncoder().encode("data: still-allowed\n\n"));
+    assert.match(new TextDecoder().decode((await reader.read()).value), /still-allowed/);
+    await reader.cancel();
   });
 }
 

@@ -4,6 +4,24 @@ import { createStandaloneConversation } from '../src/conversation.mjs';
 import { createChatModel } from '@rabilink/desktop-voice-service/chat-model';
 import {initialAssistantSettings} from '@rabilink/desktop-voice-service/settings';
 
+test('tools run while speech remains pending, and details retain sanitized execution receipts',async()=>{
+  let receiveTool,releaseTool;const entered=new Promise(resolve=>receiveTool=resolve),gate=new Promise(resolve=>releaseTool=resolve),spoken=[];let step=0,segmentFinished=0,prompts;
+  const native=createStandaloneConversation({settings:()=>({...initialAssistantSettings(),persona:'persona fixture',llmModel:'fixture'}),credentials:{resolve:async()=>undefined},onError:error=>{throw error},
+    discoverTools:async()=>({instructions:'host discovery fixture',tools:[{type:'function',function:{name:'lookup',parameters:{type:'object'}}}],executeTool:async()=>{receiveTool();await gate;return{ok:true,result:'found',headers:{authorization:'private-receipt'}}},toolPolicy:{classify:()=>({mutation:false}),inspectOutcome:()=>({uncertain:false,failed:false,terminal:false})}}),
+    createModel:options=>{prompts=options.initialPrompts;return{prompt:async input=>{const value=JSON.parse(input[0].content);return step++===0?JSON.stringify({protocol:value.protocol,requestId:value.requestId,kind:'tool',name:'lookup',arguments:{query:'target',apiKey:'private-key',url:'https://example.test/?token=private-url'},say:'我来查一下。'}):'找到了。'},destroy(){}}}});
+  native.observe({voice:{getState:()=>({phase:'running'}),beginResponse:()=>({append:text=>spoken.push(text),finishSpeechSegment:()=>{segmentFinished++;return new Promise(()=>{})},finish(){}})},onText(){}});
+  try{
+    await native.submit('查找','tool-progress');await entered;
+    assert.equal(segmentFinished,1);assert.ok(spoken.join('').includes('查一下'));
+    assert.equal(native.activity().tool.name,'lookup');assert.equal(native.activity().status,'executing-tool');
+    releaseTool();await native.drain();assert.equal(native.activity().tool,null);
+    const detail=native.messageDetails('reply-tool-progress'),trace=detail.execution.steps.filter(step=>step.kind==='tool');
+    assert.equal(trace.length,1);assert.equal(trace[0].status,'completed');assert.equal(trace[0].arguments.query,'target');
+    assert.doesNotMatch(JSON.stringify(detail),/private-key|private-receipt|private-url/);
+    assert.ok(prompts[0].content.includes('persona fixture'));assert.ok(prompts[0].content.includes('host discovery fixture'));
+  }finally{releaseTool();native.close();await native.drain()}
+});
+
 test('an uncertain native tool receipt remains visible as an unresolved operation after the model finishes',async()=>{
  const errors=[];let step=0;
  const native=createStandaloneConversation({settings:()=>({...initialAssistantSettings(),llmModel:'fixture'}),credentials:{resolve:async()=>undefined},onError:error=>errors.push(error.message),discoverTools:async()=>({tools:[{type:'function',function:{name:'native_write',description:'fixture',parameters:{type:'object'}}}],executeTool:async()=>({ok:false,mutation:true,uncertain:true,error:'ORIGINAL_UNKNOWN'}),toolPolicy:{classify:()=>({mutation:true}),inspectOutcome:()=>({uncertain:true,failed:true,terminal:false})},dispose:async()=>{}}),createModel:options=>createChatModel({...options,fetcher:async(_url,request)=>{

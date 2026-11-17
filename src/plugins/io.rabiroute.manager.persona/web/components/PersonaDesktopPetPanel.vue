@@ -280,6 +280,7 @@ onBeforeUnmount(() => {
           <v-number-input v-model="binding.bubbleStyle.fontSize" label="字号（px）" :min="12" :max="24" :disabled="!binding.enabled" />
           <v-number-input v-model="binding.bubbleStyle.maxWidth" label="宽度（px）" :min="220" :max="480" :step="10" :disabled="!binding.enabled" />
           <v-number-input v-model="binding.bubbleStyle.displaySeconds" label="停留时间（秒）" :min="2" :max="30" :disabled="!binding.enabled" />
+          <v-number-input v-model="binding.bubbleStyle.maxVisible" label="最多同时显示气泡" :min="1" :max="6" :disabled="!binding.enabled" />
           <div>
             <div class="virtual-avatar-field-label">气泡不透明度：{{ Math.round(binding.bubbleStyle.opacity * 100) }}%</div>
             <v-slider v-model="binding.bubbleStyle.opacity" :min="0.5" :max="1" :step="0.05" hide-details :disabled="!binding.enabled" />

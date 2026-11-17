@@ -13,8 +13,8 @@ export interface ToolPolicy {
   classify(decision: ToolDecision): { mutation: boolean };
   inspectOutcome(result: unknown, decision: ToolDecision): OutcomeStatus;
 }
-export type TurnState = 'idle' | 'thinking' | 'responding' | 'executing-tool' | 'interjecting' | 'waiting-tool' | 'completed' | 'uncertain' | 'cancelled' | 'failed';
-export interface TurnStatus { state: TurnState; toolCount: number; settledToolCount: number; steps: number }
+export type TurnState = 'idle' | 'thinking' | 'finishing' | 'responding' | 'executing-tool' | 'tool-completed' | 'interjecting' | 'waiting-tool' | 'completed' | 'uncertain' | 'cancelled' | 'failed';
+export interface TurnStatus { state: TurnState; toolCount: number; settledToolCount: number; steps: number; tool?: {callId:string;name:string;arguments:Record<string,unknown>;outcome?:unknown;outcomeStatus?:OutcomeStatus} }
 export interface TurnResult {
   state: TurnState; text: string; toolResults: unknown[]; steps?: number;
   /** Session guidance not yet handed to the loop at terminal/cancelled settlement. Caller owns retention; do not auto-replay. */

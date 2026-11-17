@@ -11,7 +11,7 @@ from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
 from .desktop_pet_drag import DragFollow, NativeDrag, preserve_dpi_size
 from .desktop_pet_physics import DisplayArea, PetFlight, ReleaseTrail
-from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble
+from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble, normalize_bubble_style
 
 class _TravelHalo(QWidget):
     def __init__(self, parent: QWidget) -> None:
@@ -140,8 +140,13 @@ class DesktopPetWindow(QWidget):
         self._png_timer.timeout.connect(self._advance_png_frame)
         self._bubble_timer = QTimer(self)
         self._bubble_timer.setSingleShot(True)
-        self._bubble_timer.timeout.connect(self.hide_bubble)
+        self._bubble_timer.timeout.connect(self._expire_bubbles)
         self._bubble = DesktopPetBubble(self.windowFlags())
+        self._bubble_style = normalize_bubble_style({})
+        self._previous_bubbles: list[tuple[DesktopPetBubble, float]] = []
+        self._bubble_key: str | None = None
+        self._bubble_deadline: float | None = None
+        self._bubble_displayed = False
         self._placed = False
         self._active_pack: DesktopPetPack | None = None
         self._active_animation: LoadedDesktopPetAnimation | None = None
@@ -450,31 +455,84 @@ class DesktopPetWindow(QWidget):
         if not normalized:
             return
         self._bubble.set_content(normalized)
+        self._bubble_displayed = True
         self._place_bubble()
         self._bubble.show()
         self._bubble.raise_()
-        self._bubble_timer.start(self._bubble.display_ms if duration_ms is None else max(1500, min(30000, int(duration_ms))))
+        self._bubble_deadline = time.monotonic() + (self._bubble.display_ms if duration_ms is None else max(1500, min(30000, int(duration_ms)))) / 1000
+        self._arm_bubble_expiry()
 
-    def show_speech_bubble(self, text: str, *, playing: bool) -> None:
+    def show_speech_bubble(self, text: str, *, playing: bool, key: str | None = None) -> None:
         self._speech_active = playing
         if not self._bubble_enabled or not self.isVisible() or not text:
             return
+        if key is not None and key != self._bubble_key and self._bubble_displayed:
+            self._previous_bubbles.append((self._bubble, self._bubble_deadline or time.monotonic() + self._bubble.display_ms / 1000))
+            self._bubble = DesktopPetBubble(self._bubble.windowFlags())
+            self._bubble.apply_style(self._bubble_style)
+            self._bubble_deadline = None
+        self._bubble_key = key
+        self._bubble_displayed = True
+        self._trim_bubbles()
         self._bubble.set_content(text)
         self._place_bubble()
         self._bubble.show()
         self._bubble.raise_()
+        if playing:
+            self._bubble_deadline = None
+        elif self._bubble_deadline is None:
+            self._bubble_deadline = time.monotonic() + self._bubble.display_ms / 1000
+        self._arm_bubble_expiry()
+
+    def _trim_bubbles(self) -> None:
+        while len(self._previous_bubbles) >= self._bubble_style["maxVisible"]:
+            bubble, _ = self._previous_bubbles.pop(0)
+            bubble.close()
+            bubble.deleteLater()
+
+    def _arm_bubble_expiry(self) -> None:
+        deadlines = [deadline for _, deadline in self._previous_bubbles]
+        if self._bubble_displayed and self._bubble_deadline is not None:
+            deadlines.append(self._bubble_deadline)
         self._bubble_timer.stop()
-        if not playing:
-            self._bubble_timer.start(self._bubble.display_ms)
+        if deadlines:
+            self._bubble_timer.start(max(1, math.ceil((min(deadlines) - time.monotonic()) * 1000)))
+
+    def _expire_bubbles(self) -> None:
+        now = time.monotonic()
+        retained = []
+        for bubble, deadline in self._previous_bubbles:
+            if deadline <= now:
+                bubble.close()
+                bubble.deleteLater()
+            else:
+                retained.append((bubble, deadline))
+        self._previous_bubbles = retained
+        if self._bubble_deadline is not None and self._bubble_deadline <= now:
+            self._bubble.hide()
+            self._bubble_displayed = False
+        self._place_bubble()
+        self._arm_bubble_expiry()
 
     def set_bubble_style(self, style: object) -> None:
-        self._bubble.apply_style(style)
+        self._bubble_style = normalize_bubble_style(style)
+        self._bubble.apply_style(self._bubble_style)
+        for bubble, _ in self._previous_bubbles:
+            bubble.apply_style(self._bubble_style)
+        self._trim_bubbles()
         if self._bubble.isVisible():
             self._place_bubble()
 
     def hide_bubble(self) -> None:
         self._bubble_timer.stop()
         self._bubble.hide()
+        self._bubble_displayed = False
+        self._bubble_deadline = None
+        self._bubble_key = None
+        for bubble, _ in self._previous_bubbles:
+            bubble.close()
+            bubble.deleteLater()
+        self._previous_bubbles.clear()
 
     def finish_speech_bubble(self) -> None:
         self._speech_active = False
@@ -484,9 +542,24 @@ class DesktopPetWindow(QWidget):
         screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
         if screen is None:
             return
-        position, tip_x, upward = place_dialogue_bubble(self._visible_sprite_rect(), self._bubble.size(), screen.availableGeometry())
-        self._bubble.set_tail_anchor(tip_x, upward)
-        self._bubble.move(position)
+        bubbles = [bubble for bubble, _ in self._previous_bubbles] + ([self._bubble] if self._bubble_displayed else [])
+        if not bubbles:
+            return
+        area = screen.availableGeometry()
+        while len(bubbles) > 1 and sum(b.height() + 8 for b in bubbles) > area.height() - 24:
+            bubble, _ = self._previous_bubbles.pop(0)
+            bubble.close()
+            bubble.deleteLater()
+            bubbles.pop(0)
+        size = QSize(max(b.width() for b in bubbles), sum(b.height() for b in bubbles) + 8 * (len(bubbles) - 1))
+        anchor = self._visible_sprite_rect()
+        position, _, upward = place_dialogue_bubble(anchor, size, area)
+        y = position.y()
+        for bubble in (list(reversed(bubbles)) if upward else bubbles):
+            x = max(area.left(), min(anchor.center().x() - bubble.width() // 2, area.right() - bubble.width() + 1))
+            bubble.set_tail_anchor(anchor.center().x() - x, upward)
+            bubble.move(x, y)
+            y += bubble.height() + 8
 
 
     def _visible_sprite_rect(self) -> QRect:
@@ -513,6 +586,11 @@ class DesktopPetWindow(QWidget):
         bubble_visible = self._bubble.isVisible()
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
         self._bubble.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
+        for bubble, _ in self._previous_bubbles:
+            visible = bubble.isVisible()
+            bubble.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
+            if visible:
+                bubble.show()
         if was_visible:
             self.show_on_desktop()
         if bubble_visible:
@@ -565,6 +643,11 @@ class DesktopPetWindow(QWidget):
         bubble_visible = self._bubble.isVisible()
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
         self._bubble.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
+        for bubble, _ in self._previous_bubbles:
+            visible = bubble.isVisible()
+            bubble.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
+            if visible:
+                bubble.show()
         if was_visible:
             self.show_on_desktop()
         if bubble_visible:
