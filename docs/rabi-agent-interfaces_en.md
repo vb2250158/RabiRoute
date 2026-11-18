@@ -152,6 +152,8 @@ For `POST /api/agent/threads` with `action=send`, an explicit request `model` ta
 
 To check a WorkBuddy delivery, pass `action=read`, `agentAdapter=workbuddy`, the full `threadId`, and the original `deliveryId`. `delivery.state=accepted` reports that the target's native transcript contains a user message with that ID and returns its `sequence`. `not_observed` means the current page has no match. Pass `nextCursor` as `history.cursor` to check the next page and retain the original delivery ID. HTTP `202` reports gateway admission. Check the native transcript for the assistant's reply.
 
+To guide a local WorkBuddy desktop chat, pass `workbuddyDeliveryMode="steer"` with `action=send`, the full `threadId`, a `prompt`, and a stable `deliveryId`. The connector checks that the conversation is active at dispatch. WorkBuddy controls whether it inserts the message or keeps it queued. A queue acknowledgement confirms admission. A native user record attached to an active turn confirms insertion. If the acknowledgement is missing, use `action=reconcile_delivery` and the original delivery ID. Resubmitting a prepared steer with its original ID returns `WORKBUDDY_STEER_INTENT_EXPIRED`. Guidance for a current conversation requires an explicit new intent.
+
 
 
 

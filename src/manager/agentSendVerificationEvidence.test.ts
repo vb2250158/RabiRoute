@@ -133,3 +133,29 @@ test("owner binding identity remains fenced and diagnostic metadata is whitelist
   }) })(f.request, f.receipt);
   assert.equal((conflict.evidence as { reason: string }).reason, "binding_conflict"); assert.equal(f.reads(), 0);
 });
+
+
+test("outbox projection ignores only later outer message-length annotation and preserves original receipt", async () => {
+  const f = fixture();
+  const original = { ...f.result, messageLengthValidation: { characterCount: 0, threshold: 200, confirmed: false } };
+  f.receipt.result = original;
+  const outcome = await createAgentSendVerificationEvidenceVerifier(f.dependencies)(f.request, f.receipt);
+  assert.equal(outcome.platformVerification, "present");
+  assert.deepEqual(outcome.originalResult, original);
+  assert.deepEqual(f.receipt.result, original);
+});
+
+test("real historical field or digest differences still reject before platform verification", async () => {
+  for (const changed of [{ sentFileId: "other-file" }, { status: "failed" as const }, { instanceId: "other-instance" },
+    { messageLengthValidation: { characterCount: 1, threshold: 200, confirmed: false } }]) {
+    const f = fixture();
+    f.receipt.result = { ...f.result, messageLengthValidation: { characterCount: 0, threshold: 200, confirmed: false }, ...changed };
+    if (Object.hasOwn(changed, "messageLengthValidation")) f.result.messageLengthValidation = { characterCount: 0, threshold: 200, confirmed: false };
+    const outcome = await createAgentSendVerificationEvidenceVerifier(f.dependencies)(f.request, f.receipt);
+    assert.equal((outcome.evidence as { reason: string }).reason, "history_conflict");
+    assert.equal(f.reads(), 0);
+  }
+  const f = fixture(); f.receipt.requestDigest = "different";
+  const outcome = await createAgentSendVerificationEvidenceVerifier(f.dependencies)(f.request, f.receipt);
+  assert.equal((outcome.evidence as { reason: string }).reason, "receipt_conflict"); assert.equal(f.reads(), 0);
+});

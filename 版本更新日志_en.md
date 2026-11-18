@@ -10,6 +10,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
+## 0.15.36 - 2026-11-18
+
+- WorkBuddy 0.1.9 supports guidance for the ordinary conversation active at dispatch, with frozen execution options and original-ID recovery boundaries; thread-control 0.1.8 exposes the matching contract. File-delivery verification now aligns the later message-length annotation with its original historical result. Host updates retain independently installed package bytes, while imports validate same-version conflicts across every source root.
+
 ## 0.15.35 - 2026-11-18
 
 - NapCat 0.1.17 reads files from exact messages or native group-file references, repairs native UUID resolution in the existing attachment entry, and adds cancellable, bounded streaming SHA-256 verification. Source-bound byte views retain their distinct contract and original send receipts remain intact.

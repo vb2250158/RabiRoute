@@ -16,8 +16,8 @@ export function resolvePluginPackageRoots(
     .filter(Boolean)
     .map(value => path.resolve(value));
   return Object.freeze([...new Set([
-    path.join(layout.packageRoot, "dist", "plugins", "packages"),
     path.join(layout.stateRoot, "data", "plugins", "packages"),
+    path.join(layout.packageRoot, "dist", "plugins", "packages"),
     ...additional
   ])]);
 }

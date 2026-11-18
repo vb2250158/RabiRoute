@@ -171,11 +171,16 @@ export const installedAgentAdapterManifests = [
       "required": true
     },
     "capabilities": {
+      "sessionOperations": {
+        "create": "with-initial-message",
+        "observeDelivery": true
+      },
       "managedTasks": {
         "messageProcessingAgent": true,
         "hooks": true,
         "agentThreads": true,
-        "imageAttachments": true
+        "imageAttachments": true,
+        "deliveryReceiptRecovery": true
       }
     }
   }

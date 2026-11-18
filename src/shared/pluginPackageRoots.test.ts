@@ -54,15 +54,15 @@ test("a Gateway activates the selected version available only in the native inst
 
 test("additional roots retain built-in and installed packages without changing their precedence", async t => {
   const f = await fixture(t), extra = path.join(f.root, "additional");
-  const builtin = await f.writePackage(f.builtin, "io.test.shared", "1.0.0");
-  await f.writePackage(f.managed, "io.test.shared", "1.0.0");
+  await f.writePackage(f.builtin, "io.test.shared", "1.0.0");
+  const sharedManaged = await f.writePackage(f.managed, "io.test.shared", "1.0.0");
   const managed = await f.writePackage(f.managed, "io.test.installed", "1.0.0");
   const custom = await f.writePackage(extra, "io.test.custom", "1.0.0");
   const roots = resolvePluginPackageRoots(f.layout, {
     RABIROUTE_PLUGIN_PACKAGE_ROOTS: ` ${extra} ${path.delimiter}${f.builtin}${path.delimiter}${extra}`
   });
   const catalog = f.catalog(roots);
-  assert.equal((await catalog.resolve("io.test.shared", "1.0.0")).sourceRoot, await fs.realpath(builtin));
+  assert.equal((await catalog.resolve("io.test.shared", "1.0.0")).sourceRoot, await fs.realpath(sharedManaged));
   assert.equal((await catalog.resolve("io.test.installed", "1.0.0")).sourceRoot, await fs.realpath(managed));
   assert.equal((await catalog.resolve("io.test.custom", "1.0.0")).sourceRoot, await fs.realpath(custom));
   assert.equal(roots.length, 3);
@@ -97,3 +97,22 @@ for (const kind of ["endpoint-plugins", "agent-command-plugins"] as const) {
     assert.notEqual(runtimeRoot, other);
   });
 }
+
+
+test("same version preserves managed immutable bytes; bundled fallback and extra ordering remain", async t => {
+  const f = await fixture(t), id = "io.test.immutable", extra = path.join(f.root, "extra");
+  const builtin = await f.writePackage(f.builtin, id, "1.0.0");
+  const managed = await f.writePackage(f.managed, id, "1.0.0");
+  await fs.writeFile(path.join(builtin, "gateway.mjs"), "export function activate(ctx) { ctx.services.provide('endpoint.fixture@1', { owner: 'bundle' }); }\n");
+  await fs.writeFile(path.join(managed, "gateway.mjs"), "export function activate(ctx) { ctx.services.provide('endpoint.fixture@1', { owner: 'managed' }); }\n");
+  const roots = resolvePluginPackageRoots(f.layout, { RABIROUTE_PLUGIN_PACKAGE_ROOTS: extra });
+  const catalog = f.catalog(roots);
+  assert.equal((await catalog.resolve(id, "1.0.0")).sourceRoot, await fs.realpath(managed));
+  const profile = parsePluginProfile({ schemaVersion: 2, readyRequires: ["endpoint.fixture@1"], instances: [{ id: "endpoint:fixture", package: id, version: "1.0.0", enabled: true, config: {}, grants: [] }] });
+  const loaded = await loadPluginProfile({ profilePath: path.join(f.root, "profile.json"), profile, packageCatalog: catalog, runtimeRoot: path.join(f.root, "runtime"), host: "gateway" });
+  assert.deepEqual(loaded.loadFailures, []); assert.equal(loaded.packages[0]?.package.sourceRoot, await fs.realpath(managed));
+  const switched = await f.runtime().switch(loaded.candidates, { readyRequires: profile.readyRequires });
+  assert.equal((switched.generation.services.services.get("endpoint.fixture@1")?.value as { owner?: string } | undefined)?.owner, "managed");
+  const onlyBundle = await f.writePackage(f.builtin, "io.test.bundle-only", "1.0.0");
+  assert.equal((await catalog.resolve("io.test.bundle-only", "1.0.0")).sourceRoot, await fs.realpath(onlyBundle));
+});

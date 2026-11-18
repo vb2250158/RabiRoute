@@ -152,6 +152,8 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 查询 WorkBuddy 投递时，使用 `action=read`、`agentAdapter=workbuddy`、完整 `threadId` 和原 `deliveryId`。`delivery.state=accepted` 表示该编号已出现在目标聊天的原生用户消息中，并附 `sequence`。`not_observed` 表示本页暂未发现，返回的 `nextCursor` 可放入 `history.cursor` 查下一页。保留原投递 ID。发送返回 `202` 表示网关受理，助理是否回复可查原生历史。
 
+向本机 WorkBuddy 普通聊天发送引导消息时，在 `action=send` 中传入 `workbuddyDeliveryMode="steer"`、完整 `threadId`、`prompt` 和稳定 `deliveryId`。连接器检查派发时的活跃会话，由 WorkBuddy 决定消息何时插入或继续排队。确认排队表示原生接收，原生历史中的同轮用户记录才确认已插入。缺少回执时使用 `action=reconcile_delivery` 和原投递编号核对。原编号若处于 `prepared`，再次提交返回 `WORKBUDDY_STEER_INTENT_EXPIRED`。引导当前会话需显式发起新意图。
+
 
 
 

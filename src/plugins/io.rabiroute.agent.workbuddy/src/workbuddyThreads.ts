@@ -4,12 +4,8 @@
  * The bridge addresses one session by id, so this module projects WorkBuddy's
  * per-task surface into the shapes the bridge expects: listing and reading come
  * from the task database plus the live session descriptors, and delivery stays
- * on the single real message path in `workbuddySessionBridge.ts`. No second
- * transport is introduced here — the gateway remains the only writer.
- *
- * Creation and rename are not implemented by this Rabi adapter. WorkBuddy's
- * desktop owns those operations; internal desktop handlers are not an external
- * transport contract. Their absence here does not describe the host's abilities.
+ * on the original task path in `workbuddySessionBridge.ts`. Initial-message
+ * creation is owned by the desktop connector and registered by the provider.
  */
 import {
   deliverWorkbuddyMessage,

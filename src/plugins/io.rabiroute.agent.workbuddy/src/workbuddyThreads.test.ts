@@ -4,13 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { normalizeWorkbuddyWorkspace, workbuddyProjectId } from "./workbuddySessionStore.js";
 import { readWorkbuddyHistory } from "./workbuddyHistory.js";
-import { serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
+import { requestWorkbuddyDesktopCreation, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
+import { legacyWorkbuddyDesktopLayout, type WorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
 import { createManager } from "./agentAdapters/workbuddyManagerProvider.js";
 import type { AgentManagerImplementationOptions } from "../../../manager/agentManagerHostPorts.js";
 import { handleAgentThreadRequest } from "../../../agentThreads.js";
-import { nativeOperations } from "../../../agentAdapters/managerNativeOperations.js";
 import type { AgentManagerOperationInvoker } from "../../../agentAdapters/managerInvocation.js";
 import {
   agentAdapterManifest,
@@ -91,6 +92,45 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
   });
 });
 
+
+test("the provider recovers steer only from the exact native injection record", async t => {
+  const threadId = "11111111-1111-4111-8111-111111111111";
+  const cwd = "C:/work/one";
+  const root = createHome([{ id: threadId, cwd, title: "Task" }]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, "projects", workbuddyProjectId(cwd));
+  fs.mkdirSync(directory, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(new URL("../agent-adapter.json", import.meta.url), "utf8")).manifest;
+  const delivery = {
+    deliveryId: "original-guide", generation: "original-generation",
+    target: { provider: "workbuddy", sessionId: threadId },
+    promptHash: "original-prompt-hash", executionOptionsHash: "original-options-hash",
+    executionOptions: { workbuddyDeliveryMode: "steer" }
+  };
+  const user = {
+    type: "message", role: "user", sessionId: threadId,
+    content: "## 消息源\n- 投递 ID：original-guide\n\n## 消息内容\n原引导",
+    providerData: { startsNewUserRequest: true, rootRequestId: "turn-A", conversationRequestId: "turn-A" }
+  };
+  const file = path.join(directory, threadId + ".jsonl");
+  fs.writeFileSync(file, JSON.stringify(user) + "\n");
+  await withHome(root, async () => {
+    const manager = createManager({} as AgentManagerImplementationOptions, {
+      type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest, sessionBinding: {}
+    }, new AbortController().signal);
+    const probe = () => manager.operations["endpoint.recover"]!({}, { nativeArgs: [delivery, () => undefined] });
+    assert.equal(await probe(), undefined);
+    fs.appendFileSync(file, JSON.stringify({
+      ...user, providerData: { ...user.providerData, startsNewUserRequest: false }
+    }) + "\n");
+    assert.deepEqual(await probe(), {
+      deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target,
+      promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
+      accepted: true, transport: "workbuddy_desktop", action: "steered"
+    });
+  });
+});
+
 type TaskRow = {
   id: string;
   cwd: string;
@@ -124,6 +164,7 @@ function createHome(rows: TaskRow[], descriptors: Array<Record<string, unknown>>
       deleted_at INTEGER,
       is_playground INTEGER,
       source_mode TEXT,
+      transport TEXT,
       is_background_automation INTEGER,
       mode TEXT,
       model TEXT
@@ -239,7 +280,9 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
   ]);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   await withHome(root, async () => {
-    const operations = nativeOperations({ listWorkbuddyThreads, readWorkbuddyThread, sendWorkbuddyThreadMessage });
+    const { operations } = createManager({} as AgentManagerImplementationOptions, {
+      type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
+    }, new AbortController().signal);
     const invokeAgentOperation: AgentManagerOperationInvoker = async <T>(
       type: string, operation: string, payload: unknown,
       invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation
@@ -259,7 +302,9 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
     assert.deepEqual((second.data.threads as Array<{ id: string }>).map(thread => thread.id), ["allowed-old"]);
     assert.equal(second.data.nextOffset, null);
     await assert.rejects(handleAgentThreadRequest({ action: "create", agentAdapter: "workbuddy", title: "not-created" }, options), /requires an explicit first message/);
-    await assert.rejects(handleAgentThreadRequest({ action: "rename", agentAdapter: "workbuddy", threadId: "allowed-old", title: "not-renamed" }, options), /titles are owned by the WorkBuddy app/);
+    await assert.rejects(handleAgentThreadRequest({ action: "rename", agentAdapter: "workbuddy", threadId: "allowed-old", title: "not-renamed" }, options), /WorkBuddy task titles are owned by the WorkBuddy app/);
+    await assert.rejects(handleAgentThreadRequest({ action: "resolve", agentAdapter: "workbuddy", title: "not-created" }, options), /complete workbuddy task ID/);
+    await assert.rejects(handleAgentThreadRequest({ action: "open", agentAdapter: "workbuddy", threadId: "allowed-old" }, options), /Open this task in the WorkBuddy application/);
   });
 });
 
@@ -301,6 +346,68 @@ test("WorkBuddy public create dispatches an exact workspace and stable intent th
       assert.equal(calls.length, 2);
       assert.equal(calls[0], calls[1]);
     } finally { await stop(); }
+  });
+});
+
+test("the same WorkBuddy relay accepts revised layouts while a legacy descriptor only admits the default", { skip: process.platform !== "win32" }, async t => {
+  const root = createHome([]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const descriptor = path.join(root, "rabiroute-desktop-relay.json");
+  const original = { intentId: "original", title: "A title", workspace: root, workspaceLabel: "Project", prompt: "First prompt" };
+  const revised = { ...legacyWorkbuddyDesktopLayout, sendButtonClass: "new-send-button" };
+  const calls: Array<{ intentId: string; layout?: WorkbuddyDesktopLayout }> = [];
+  const stop = await serveWorkbuddyDesktopRelay(async ({ intentId, layout }) => {
+    calls.push({ intentId, layout });
+    return { state: "pending", intentId };
+  }, descriptor);
+  try {
+    await requestWorkbuddyDesktopCreation({ ...original, layout: legacyWorkbuddyDesktopLayout }, undefined, descriptor);
+    await requestWorkbuddyDesktopCreation({ ...original, intentId: "revised", layout: revised }, undefined, descriptor);
+    await assert.rejects(requestWorkbuddyDesktopCreation({ ...original, layout: { ...revised, sendButtonClass: "button.other" } }, undefined, descriptor), /布局无效/);
+    assert.deepEqual(calls, [{ intentId: "original", layout: legacyWorkbuddyDesktopLayout }, { intentId: "revised", layout: revised }]);
+
+    const { pipe, token } = JSON.parse(fs.readFileSync(descriptor, "utf8"));
+    fs.writeFileSync(descriptor, JSON.stringify({ pipe, token }));
+    await assert.rejects(requestWorkbuddyDesktopCreation({ ...original, intentId: "legacy-revised", layout: revised }, undefined, descriptor), /不支持所选布局/);
+    await requestWorkbuddyDesktopCreation({ ...original, intentId: "legacy-default", layout: legacyWorkbuddyDesktopLayout }, undefined, descriptor);
+    assert.deepEqual(calls.at(-1), { intentId: "legacy-default", layout: undefined });
+    assert.equal(calls.length, 3);
+  } finally { await stop(); }
+});
+
+test("WorkBuddy reconciles an original creation while its desktop relay is offline", async t => {
+  const root = createHome([]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "Project");
+  const normalized = normalizeWorkbuddyWorkspace(workspace);
+  const payload = { intentId: "original-desktop-create", workspace, title: "Requested title", prompt: "First prompt" };
+  const id = "11111111-1111-4111-8111-111111111111";
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const marker = `RABI_WB_CREATE_${hash(payload.intentId)}`;
+  const journal = path.join(root, "rabiroute-desktop-intents");
+  fs.mkdirSync(journal);
+  fs.writeFileSync(path.join(journal, `${hash(payload.intentId)}.json`), JSON.stringify({
+    workspace: normalized, marker, existingIds: [],
+    digest: hash(JSON.stringify([normalized, "Project", payload.title, payload.prompt]))
+  }));
+  await withHome(root, async () => {
+    const retiring = new AbortController();
+    const manager = createManager({ host: { readOnly: () => false } } as AgentManagerImplementationOptions, {
+      type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
+    }, retiring.signal);
+    const create = manager.operations["threads.create"]!;
+    assert.deepEqual(await create(payload), { state: "pending", intentId: payload.intentId });
+    assert.deepEqual(await create({ ...payload, prompt: "Different" }), { state: "conflict", intentId: payload.intentId });
+    const database = new DatabaseSync(path.join(root, "workbuddy.db"));
+    database.prepare("INSERT INTO sessions (id, cwd, title, source_mode, transport) VALUES (?, ?, ?, 'craft', 'local')").run(id, workspace, "Native title");
+    database.close();
+    const projects = path.join(root, "projects", workbuddyProjectId(workspace));
+    fs.mkdirSync(projects, { recursive: true });
+    fs.writeFileSync(path.join(projects, `${id}.jsonl`), JSON.stringify({ type: "message", role: "user", content: `First prompt\n\n[WorkBuddy 创建编号] ${marker}` }) + "\n");
+    const admitted = create(payload);
+    retiring.abort();
+    assert.deepEqual(await admitted, { state: "created", intentId: payload.intentId, sequence: 1, thread: { id, title: "Native title", cwd: workspace } });
+    await assert.rejects(async () => create({ ...payload, intentId: "first-time-create" }), /桌面创建尚未连接/);
   });
 });
 

@@ -69,13 +69,16 @@ export class PluginPackageStore {
         throw Object.assign(new Error("The selected plugin package changed while it was being imported."), { status: 409, code: "PLUGIN_PACKAGE_IDENTITY_CHANGED" });
       }
       const target = path.join(this.options.managedRoot, prepared.manifest.id, prepared.manifest.version);
+      let managedAlreadyPresent = false;
       for (const root of this.options.roots) {
         const existing = path.join(root, prepared.manifest.id, prepared.manifest.version);
         try {
           if (await hashPluginPackage(existing) !== prepared.revision) throw Object.assign(new Error("This plugin version already exists with different bytes. Publish a new plugin version."), { status: 409, code: "PLUGIN_PACKAGE_VERSION_CONFLICT" });
-          if (path.resolve(root) === path.resolve(this.options.managedRoot)) return imported;
+          if (path.resolve(root) === path.resolve(this.options.managedRoot)) managedAlreadyPresent = true;
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       }
+      assertCurrent();
+      if (managedAlreadyPresent) return imported;
       await fs.mkdir(path.dirname(target), { recursive: true });
       assertCurrent();
       try {

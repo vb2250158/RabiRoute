@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createWorkbuddyDesktopCreator } from "./workbuddyDesktopCreation.js";
 import { serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
+import { steerWorkbuddyDesktopExpression, type WorkbuddyDesktopSteerResult } from "./workbuddyDesktopSteer.js";
 import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 
 const execute = promisify(execFile);
@@ -57,11 +58,11 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
     } catch { disconnect(); }
   });
 
-  async function call<T>(method: string, params: object = {}, sessionId?: string): Promise<T> {
+  async function call<T>(method: string, params: object = {}, sessionId?: string, timeoutMs = 4000): Promise<T> {
     if (closed) throw new Error("WorkBuddy renderer pipe is unavailable.");
     const id = ++serial;
     const reply = await new Promise<Reply>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`WorkBuddy renderer rejected or timed out: ${method}.`)), 4000);
+      const timer = setTimeout(() => reject(new Error(`WorkBuddy renderer rejected or timed out: ${method}.`)), timeoutMs);
       pending.set(id, result => { clearTimeout(timer); resolve(result); });
       input.write(`${JSON.stringify({ id, method, params, sessionId })}\0`);
     }).finally(() => pending.delete(id));
@@ -88,9 +89,9 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
     }
     if (!targetId) throw new Error("WorkBuddy main renderer is unavailable.");
     const { sessionId } = await call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
-    const run = async (expression: string, returnByValue: boolean) => {
+    const run = async (expression: string, returnByValue: boolean, awaitPromise = false) => {
       const reply = await call<{ exceptionDetails?: unknown; result: { value?: unknown; objectId?: string } }>(
-        "Runtime.evaluate", { expression, returnByValue }, sessionId);
+        "Runtime.evaluate", { expression, returnByValue, awaitPromise }, sessionId, awaitPromise ? 20_000 : undefined);
       if (reply.exceptionDetails) throw new Error("WorkBuddy renderer did not apply the desktop action.");
       return reply.result;
     };
@@ -108,7 +109,10 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
       insertText: async text => { await call("Input.insertText", { text }, sessionId); },
       observeWindow: () => observe(),
     }, path.join(workbuddyHomeDir(), "rabiroute-desktop-intents"));
-    const stopRelay = await serveWorkbuddyDesktopRelay(create);
+    const stopRelay = await serveWorkbuddyDesktopRelay(create, undefined, async (input, signal) => {
+      signal.throwIfAborted();
+      return (await run(steerWorkbuddyDesktopExpression(input), true, true)).value as WorkbuddyDesktopSteerResult;
+    });
     let stopping: Promise<void> | undefined;
     const stop = () => stopping ??= stopRelay().finally(disconnect);
     child.once("exit", () => { void stop().catch(() => undefined); });

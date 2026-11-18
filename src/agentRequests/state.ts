@@ -497,7 +497,7 @@ export class AgentRequestState {
     delivery.dispatchAttemptId = randomUUID();
     delivery.updatedAt = delivery.lastAttemptAt = this.now().toISOString();
     delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
-    delete delivery.blockedReason;
+    if (delivery.executionOptions.workbuddyDeliveryMode !== "steer") delete delivery.blockedReason;
     delete delivery.lastError;
     try { this.persist(); } catch (error) { this.deliveries.set(deliveryId, before); throw error; }
     return delivery.dispatchAttemptId;

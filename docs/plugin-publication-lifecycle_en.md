@@ -81,3 +81,9 @@ context.publication.add({
 Here `bridge` is an existing stable host bridge, while `service` and `ownedWorker` belong to the current activation. If `startWorker` partially succeeds before throwing, the plugin must retain acquired resources for `retire` or `effects.adopt`. Async callbacks must terminate, respond to cancellation, and await background work; unobserved tasks outside the scope are unsupported.
 
 `createPluginTestHarness()` covers single-plugin publication ordering and cleanup. Use `GenerationRuntime` fixtures for cross-revision atomicity, retaining the old graph on failure, and actual request/stream drain. Arbitrary third-party code can observe intermediate state if explicitly called inside synchronous callbacks, so callbacks must not invoke external observers or re-enter business logic. This contract is not a JavaScript sandbox.
+
+## Package sources for the same version
+
+A selected version is located in managed, bundled, then additional roots, followed by package, execution-policy and authorized-root validation. Independently installed packages retain their original content digest across Host updates.
+
+Import checks the same version in every root before reusing an existing package. A differing digest returns `PLUGIN_PACKAGE_VERSION_CONFLICT`; subsequent changes require an incremented plugin version.

@@ -16,7 +16,7 @@ const threadRequest = { type: 'object', properties: {
   query: text, limit: true, offset: true, threadId: text, deliveryId: text, title: text, prompt: text, cwd: text,
   history: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 200 } } },
   createIfMissing: true, lookupMode: true, sandbox: true, model: text, reasoningEffort: true, imagePaths: strings,
-  dshBaseUrl: text, dshAgentPreset: text, dshDeliveryMode: true, grokBotDelivery: { anyOf: [{ type: 'object', properties: { deliveryType: text, sendMode: text, senderAgentId: text } }, { type: 'null' }] },
+  dshBaseUrl: text, dshAgentPreset: text, dshDeliveryMode: true, workbuddyDeliveryMode: { const: 'steer' }, grokBotDelivery: { anyOf: [{ type: 'object', properties: { deliveryType: text, sendMode: text, senderAgentId: text } }, { type: 'null' }] },
   messageSource: { anyOf: [source, { type: 'null' }] }, contextBlocks: strings, controlBlocks: strings, sourceThreadId: text, sourceAgentType: text, responsePolicy: text, responseInstruction: text,
   inReplyToRequestId: text, result: text, nextAction: text, messageProcessing: { anyOf: [{ type: 'object', properties: { requirementId: text, outcome: text, targetAgentType: text, planId: text, planTitle: text } }, { type: 'null' }] }
 } };

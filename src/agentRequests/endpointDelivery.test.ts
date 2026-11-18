@@ -1004,6 +1004,45 @@ test("target authorization failure before send reports target_verification", asy
   assert.equal((await f.store.listEndpointDeliveries())[0].state, "prepared");
 });
 
+test("a proven unsent WorkBuddy steer does not retry automatically against a later turn", async () => {
+  const f = fixture();
+  f.options.resolveExecutionOptions = () => ({ cwd: "C:/plan", workbuddyDeliveryMode: "steer" });
+  f.options.dispatch = async delivery => {
+    assert.ok(f.store.getEndpointDelivery(delivery.deliveryId)?.blockedReason);
+    throw new EndpointDeliveryNotSentError("WorkBuddy has no active turn");
+  };
+  const request = { ...f.request, deliveryId: "workbuddy-steer-inactive", workbuddyDeliveryMode: "steer" } as const;
+  const outcome = await executeEndpointAgentDelivery(request, f.options);
+  assert.equal(outcome.statusCode, 503);
+  const [original] = await f.store.listEndpointDeliveries();
+  assert.equal(original.state, "prepared");
+  assert.equal(original.blockedReason, "WorkBuddy has no active turn");
+  assert.equal((outcome.data.delivery as { retryable: boolean }).retryable, false);
+  const newerTurn = await executeEndpointAgentDelivery(request, { ...f.options, dispatch: async () => assert.fail("must not steer a later turn") });
+  assert.equal(newerTurn.statusCode, 409);
+  assert.equal(newerTurn.data.errorCode, "WORKBUDDY_STEER_INTENT_EXPIRED");
+  assert.equal((newerTurn.data.delivery as { deliveryId: string }).deliveryId, original.deliveryId);
+});
+
+test("a WorkBuddy steer reserved before a crash cannot dispatch on recovery or submit with the original key", async () => {
+  const f = fixture();
+  const request = { ...f.request, deliveryId: "workbuddy-steer-pre-entry", workbuddyDeliveryMode: "steer" } as const;
+  f.options.resolveExecutionOptions = () => ({ cwd: "C:/plan", workbuddyDeliveryMode: "steer" });
+  f.store.markEndpointDispatching = async () => { throw new Error("Fixture stopped before the transport attempt"); };
+  await assert.rejects(executeEndpointAgentDelivery(request, f.options), /before the transport attempt/);
+  const store = new AgentRequestStore(f.persistence);
+  const [original] = await store.listEndpointDeliveries();
+  assert.equal(original.state, "prepared");
+  const current = { ...f.options, store, dispatch: async () => assert.fail("must not steer a later turn after restart") };
+  const recovery = new EndpointDeliveryRecovery(current);
+  try { await recovery.onEvent(original.target); } finally { await recovery.stop(); }
+  const retry = await executeEndpointAgentDelivery(request, current);
+  assert.equal(retry.statusCode, 409);
+  assert.equal(retry.data.errorCode, "WORKBUDDY_STEER_INTENT_EXPIRED");
+  assert.equal((retry.data.delivery as { deliveryId: string }).deliveryId, original.deliveryId);
+  assert.equal((await store.listEndpointDeliveries()).length, 1);
+});
+
 test("an unmodified generated remote reply template resolves the original provider through the real Manager resolver", async () => {
   for (const provider of ["codex", "dsh"] as const) {
     const source = { ...party("a"), agentAdapter: provider, endpoint: { ...endpoint("a"), provider, instanceId: "node-a" } };

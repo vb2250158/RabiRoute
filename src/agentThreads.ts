@@ -113,6 +113,7 @@ export type AgentThreadRequest = {
   dshBaseUrl?: string;
   dshAgentPreset?: string;
   dshDeliveryMode?: "queue" | "steer";
+  workbuddyDeliveryMode?: "steer";
   messageSource?: RabiMessageSource;
   contextBlocks?: string[];
   controlBlocks?: string[];
@@ -982,6 +983,9 @@ async function executeAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const action = request.action;
+  if (request.workbuddyDeliveryMode !== undefined && (action !== "send" || !options.endpointDelivery)) {
+    throw agentThreadUnsupported("action", "WorkBuddy 引导使用受跟踪的 Agent 会话发送入口。");
+  }
   if (action === "ds_bot_catalog" || action === "ds_bot_deliver" || action === "ds_bot_reconcile") {
     if (request.agentAdapter !== "dsh") throw new Error("DSBot operations require the selected DSH provider.");
     if (request.imagePaths?.length || request.threadId || request.createIfMissing || request.grokBotDelivery) throw new Error("DSBot operations cannot use ordinary session or group delivery options.");
@@ -1087,6 +1091,7 @@ async function executeAgentThreadRequest(
 
   if (action === "open") {
     const agentAdapter = threadAgentAdapter(request);
+    if (agentAdapter === "workbuddy") throw agentThreadUnsupported("action", "Open this task in the WorkBuddy application.");
     const threadId = normalizeThreadId(request.threadId);
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const exact = await readAgentThreadForAdapter(agentAdapter, threadId, options, driver);
@@ -1122,6 +1127,7 @@ async function executeAgentThreadRequest(
 
   if (action === "resolve") {
     const agentAdapter = threadAgentAdapter(request);
+    if (agentAdapter === "workbuddy") throw agentThreadUnsupported("action", "Find the task with list and use the complete workbuddy task ID.");
     const rawThreadId = optionalText(request.threadId, "threadId", maxThreadIdLength);
     const fallbackTitle = agentAdapter === "dsh"
       ? rawThreadId

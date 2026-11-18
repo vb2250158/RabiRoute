@@ -76,7 +76,7 @@ async function handleAgentThreadBody(
   // Capture only caller-selected execution fields before Route defaults are applied.
   // The request body cannot supply this internal snapshot itself.
   const callerExecutionOptions = Object.freeze(Object.fromEntries(
-    (["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode"] as const)
+    (["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode"] as const)
       .filter(field => Object.prototype.hasOwnProperty.call(body, field))
       .map(field => [field, body[field]])
   )) as NonNullable<AgentThreadRequestOptions["callerExecutionOptions"]>;
@@ -239,7 +239,8 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
           fence();
           return { status: 200, body: { code: 0, creation, repair: creationRepair, data: { deliveryId: delivery.deliveryId, state: delivery.state,
             detailPath: `/api/agent/deliveries/${encodeURIComponent(delivery.deliveryId)}`,
-            canSubmitSameIntent: delivery.state === "prepared", ...(delivery.receipt ? { receipt: delivery.receipt } : {}) } } };
+            canSubmitSameIntent: delivery.state === "prepared" && delivery.executionOptions.workbuddyDeliveryMode !== "steer",
+            ...(delivery.receipt ? { receipt: delivery.receipt } : {}) } } };
         },
         async execute(body: AgentThreadRequest): Promise<AgentThreadControlResult> {
           const sourceEvent = body.action === "send" || (body.action === "create" && Boolean(body.prompt));

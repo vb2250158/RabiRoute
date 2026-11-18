@@ -2,6 +2,31 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readWorkbuddyTask, workbuddyHomeDir, workbuddyProjectId } from "./workbuddySessionStore.js";
+import { promptConfirmsDelivery } from "@rabiroute/host-api/shared/deliveryIdentity";
+import { RABI_MESSAGE_CONTENT_HEADER, RABI_MESSAGE_SOURCE_HEADER } from "@rabiroute/host-api/shared/rabiMessage";
+
+/** Only original native user records can confirm the reserved delivery. */
+export function workbuddyRecordConfirmsDelivery(record: unknown, threadId: string, deliveryId: string, guidance = false): boolean {
+  const message = record as {
+    type?: string; role?: string; sessionId?: string;
+    content?: string | Array<{ type?: string; text?: string }>;
+    providerData?: { startsNewUserRequest?: boolean; conversationRequestId?: string; rootRequestId?: string };
+  };
+  if (message?.type !== "message" || message.role !== "user" || (message.sessionId && message.sessionId !== threadId)) return false;
+  if (guidance) {
+    const data = message.providerData;
+    if (data?.startsNewUserRequest !== false || !data.rootRequestId || data.rootRequestId !== data.conversationRequestId) return false;
+  }
+  const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
+    ? message.content.filter(part => part?.type === "input_text" || part?.type === "text").map(part => part.text ?? "").join("\n")
+    : "";
+  if (promptConfirmsDelivery(text, deliveryId)) return true;
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const contentStart = lines.indexOf(RABI_MESSAGE_CONTENT_HEADER);
+  if (lines[0] !== RABI_MESSAGE_SOURCE_HEADER || contentStart < 0) return false;
+  const headers = lines.slice(1, contentStart).filter(line => line.startsWith("- 投递 ID："));
+  return headers.length === 1 && headers[0] === `- 投递 ID：${deliveryId}`;
+}
 
 type HistoryCursor = {
   version: 1;

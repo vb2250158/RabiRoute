@@ -170,7 +170,7 @@
     {
       "id": "manager:agent-thread-control",
       "package": "io.rabiroute.manager.agent-thread-control",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []
@@ -345,7 +345,7 @@
     {
       "id": "agent:workbuddy",
       "package": "io.rabiroute.agent.workbuddy",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []

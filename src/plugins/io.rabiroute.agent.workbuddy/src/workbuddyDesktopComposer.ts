@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { isWorkbuddyDesktopLayout, legacyWorkbuddyDesktopLayout, type WorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
 
 /** Commands used only on the installed WorkBuddy main renderer's private pipe. */
 export interface WorkbuddyDesktopComposerPort {
@@ -11,10 +12,10 @@ export interface WorkbuddyDesktopComposerPort {
 }
 
 const composer = `function findComposer() {
-  const pages = document.querySelectorAll('.wb-home-page');
+  const pages = document.querySelectorAll(selectors.page);
   if (pages.length !== 1) return null;
-  const editor = pages[0].querySelectorAll('.cr-input-container [contenteditable="true"]');
-  const send = pages[0].querySelectorAll('button.cr-send-button');
+  const editor = pages[0].querySelectorAll(selectors.editor);
+  const send = pages[0].querySelectorAll(selectors.send);
   if (editor.length !== 1 || send.length !== 1) return null;
   return { editor: editor[0], send: send[0] };
 }
@@ -56,12 +57,12 @@ function workspacePath(value) {
   return (path.length === 3 ? path : path.replace(/\\+$/, '')).toLowerCase();
 }
 function readWorkspace() {
-  const controls = document.querySelectorAll('.wb-home-page button.cr-workspace-picker');
+  const controls = document.querySelectorAll(selectors.workspace);
   if (controls.length !== 1) return null;
   const picker = controls[0];
   const ancestors = committedAncestors(picker);
-  const component = ancestors.find(fiber => fiber.type?.name === 'WorkspacePicker');
-  const scope = ancestors.find(fiber => fiber.type?.name === 'InputBoxScope')?.memoizedProps;
+  const component = ancestors.find(fiber => fiber.type?.name === selectors.workspacePickerComponent);
+  const scope = ancestors.find(fiber => fiber.type?.name === selectors.inputScopeComponent)?.memoizedProps;
   const provider = scope?.providers?.workspace;
   if (!component || !provider || provider.selectionPending || !Array.isArray(provider.options)
     || (provider.selectionMode !== 'space' && provider.selectionMode !== 'cwd')
@@ -81,7 +82,7 @@ function readWorkspace() {
   return { picker, component, selected, options, optionPath };
 }
 function findWorkspaceChoice(state, keys) {
-  const rows = [...document.querySelectorAll('.cr-workspace-picker-dropdown .cr-workspace-picker-popover__item[role="menuitemradio"]')];
+  const rows = [...document.querySelectorAll(selectors.workspaceRows)];
   return rows.filter(row => {
     if (!row.getClientRects().length || row.getAttribute('aria-disabled') === 'true') return false;
     const ancestors = committedAncestors(row);
@@ -108,25 +109,40 @@ export async function submitWorkbuddyDesktopComposer(
     prompt: string;
     beforeSubmit: () => void | Promise<void>;
     signal?: AbortSignal;
+    layout?: WorkbuddyDesktopLayout;
   }
 ): Promise<void> {
   const workspace = input.workspace.trim();
   const prompt = input.prompt.replace(/\r\n/g, "\n");
   if (!workspace || !prompt.trim()) throw new Error("WorkBuddy 创建会话需要已登记的工作区和首条消息。");
+  const layout = input.layout ?? legacyWorkbuddyDesktopLayout;
+  if (!isWorkbuddyDesktopLayout(layout)) throw new Error("WorkBuddy 桌面布局无效。");
+  const selectors = JSON.stringify({
+    page: `.${layout.pageClass}`,
+    editor: `.${layout.editorContainerClass} [contenteditable="true"]`,
+    send: `button.${layout.sendButtonClass}`,
+    newTaskTab: `.${layout.newTaskTabClass}[role="tab"]`,
+    workspace: `.${layout.pageClass} button.${layout.workspaceButtonClass}`,
+    workspaceRows: `.${layout.workspaceMenuClass} .${layout.workspaceOptionClass}[role="menuitemradio"]`,
+    workspacePickerComponent: layout.workspacePickerComponent,
+    inputScopeComponent: layout.inputScopeComponent
+  });
+  const expression = (body: string) => `(() => { const selectors = ${selectors}; ${body} })()`;
+  const evaluate = <T>(body: string) => port.evaluate<T>(expression(body));
   input.signal?.throwIfAborted();
   const start = await port.observeWindow();
   if (!start.minimized || start.isForeground) throw new Error("WorkBuddy 主窗口需要处于最小化状态。");
   await port.enableRendererFocus();
 
-  await port.evaluate(`(() => {
-    if (document.querySelector('.wb-home-page')) return;
-    const tabs = [...document.querySelectorAll('.conversation-list-tab-button[role="tab"]')].filter(tab =>
+  await evaluate(`
+    if (document.querySelector(selectors.page)) return;
+    const tabs = [...document.querySelectorAll(selectors.newTaskTab)].filter(tab =>
       [tab.getAttribute('aria-label'), tab.getAttribute('title'), tab.textContent.trim()]
         .some(label => label === '新建任务' || label === 'New Task'));
     if (tabs.length === 1) tabs[0].click();
-  })()`);
+  `);
   const expectedPath = `const expectedPath = workspacePath(${JSON.stringify(workspace)});`;
-  const choice = await waitFor(() => port.evaluate<string>(`(() => { ${workspacePicker} ${expectedPath}
+  const choice = await waitFor(() => evaluate<string>(`${workspacePicker} ${expectedPath}
     if (!expectedPath) return 'invalid';
     const state = readWorkspace();
     if (!state) return 'unavailable';
@@ -141,16 +157,16 @@ export async function submitWorkbuddyDesktopComposer(
     if (choices.length !== 1) return 'waiting';
     choices[0].click();
     return 'selected';
-  })()`), result => !["unavailable", "opening", "waiting"].includes(result), input.signal);
+  `), result => !["unavailable", "opening", "waiting"].includes(result), input.signal);
   if (choice !== "selected") throw new Error("WorkBuddy 无法验证目标工作区的完整路径，首条消息尚未填写。");
 
   const selected = `${workspacePicker} ${expectedPath}
     if (!expectedPath || readWorkspace()?.selected !== expectedPath) return false;`;
-  const isSelected = await waitFor(() => port.evaluate<boolean>(`(() => { ${selected} return true; })()`), Boolean, input.signal);
+  const isSelected = await waitFor(() => evaluate<boolean>(`${selected} return true;`), Boolean, input.signal);
   if (!isSelected) throw new Error("WorkBuddy 原生输入框未确认目标工作区的完整路径，首条消息尚未填写。");
-  const editable = `(() => { ${composer} const c = findComposer(); return empty(c) ? c.editor : null; })()`;
+  const editable = expression(`${composer} const c = findComposer(); return empty(c) ? c.editor : null;`);
   await port.focusComposer(editable);
-  const ready = await port.evaluate<boolean>(`(() => { ${composer} ${selected}
+  const ready = await evaluate<boolean>(`${composer} ${selected}
     const c = findComposer();
     if (!empty(c) || (document.activeElement !== c.editor && !c.editor.contains(document.activeElement))) return false;
     if (c.editor.textContent.trim()) {
@@ -158,22 +174,22 @@ export async function submitWorkbuddyDesktopComposer(
       const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
     }
     return true;
-  })()`);
+  `);
   if (!ready) throw new Error("WorkBuddy 无法同时确认目标工作区和可用的空输入框，首条消息尚未填写。");
 
   input.signal?.throwIfAborted();
   await port.insertText(prompt);
   const readyToSend = `${composer} ${selected} const c = findComposer(); const expected = ${JSON.stringify(prompt)};
     if (!c || (c.editor.innerText !== expected && c.editor.textContent !== expected) || !enabled(c.send)) return false;`;
-  const populated = await waitFor(() => port.evaluate<boolean>(`(() => { ${readyToSend} return true; })()`), Boolean, input.signal);
+  const populated = await waitFor(() => evaluate<boolean>(`${readyToSend} return true;`), Boolean, input.signal);
   if (!populated) throw new Error("WorkBuddy 无法确认目标工作区或首条消息，尚未提交。");
   const current = await port.observeWindow();
   if (current.window !== start.window || !current.minimized || current.isForeground) throw new Error("WorkBuddy 主窗口状态已变化，未提交。");
   input.signal?.throwIfAborted();
-  const confirmed = await port.evaluate<boolean>(`(() => { ${readyToSend} return true; })()`);
+  const confirmed = await evaluate<boolean>(`${readyToSend} return true;`);
   if (!confirmed) throw new Error("WorkBuddy 提交前无法确认目标工作区或首条消息，尚未提交。");
   await input.beforeSubmit();
-  const sent = await port.evaluate<boolean>(`(() => { ${readyToSend} c.send.click(); return true; })()`);
+  const sent = await evaluate<boolean>(`${readyToSend} c.send.click(); return true;`);
   if (!sent) throw new WorkbuddyDesktopSubmissionDeclined();
   const after = await port.observeWindow();
   if (after.window !== start.window || !after.minimized || after.isForeground) {

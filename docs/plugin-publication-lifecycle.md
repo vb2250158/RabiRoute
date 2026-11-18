@@ -81,3 +81,9 @@ context.publication.add({
 示例中的 `bridge` 是宿主已有稳定桥接对象，`service` 与 `ownedWorker` 属于当前 activation。若 `startWorker` 部分成功后抛错，插件仍须保存已取得的资源供 `retire` 或 `effects.adopt` 清理。异步回调必须自行结束、响应取消并等待后台工作；不允许脱离 scope 的未观察任务。
 
 `createPluginTestHarness()` 覆盖单个插件的 publication 顺序和清理；跨 revision 原子性、失败保留旧图、真实请求/stream drain 使用 `GenerationRuntime` fixture 验证。同步回调中的第三方代码可主动观察中间状态，所以不得在其中调用外部观察器或重入业务；此合同不是 JavaScript 沙箱。
+
+## 同版本包的来源
+
+指定版本的目录按 managed、bundled、additional 顺序定位，随后完成包合法性、执行策略与授权目录校验。独立安装的原包跨 Host 更新继续采用其原内容摘要。
+
+导入会核对所有根中的同版本内容摘要，确认相同后复用已有包。任一来源存在同版本内容冲突时返回 `PLUGIN_PACKAGE_VERSION_CONFLICT`，后续差量使用递增插件版本发布。

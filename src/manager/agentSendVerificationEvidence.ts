@@ -90,7 +90,14 @@ export function createAgentSendVerificationEvidenceVerifier(
       if (!result || result.deliveryId !== deliveryId || result.channel !== prepared.channel || result.routeId !== prepared.routeId
         || !equal(result.sender, prepared.sender) || !equal(result.target, prepared.target)
         || result.status !== "sent" || result.ok !== true) return observation("terminal_unproven");
-      if (receipt.result && !equal(receipt.result, result)) return observation("history_conflict");
+      if (receipt.result) {
+        // The outer Manager attaches this guard metadata after the Outbox writes
+        // its terminal history. Compare the common owner projection; retain every
+        // other field and compare this field too if history ever carries it.
+        const receiptProjection = { ...receipt.result };
+        if (!Object.hasOwn(result, "messageLengthValidation")) delete receiptProjection.messageLengthValidation;
+        if (!equal(receiptProjection, result)) return observation("history_conflict");
+      }
       const payload = request.payload as Record<string, unknown>;
       if (prepared.channel !== "napcat" || payload.type !== "file" || prepared.target.target !== "group") return observation("unsupported_channel");
       const hasId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
@@ -127,7 +134,7 @@ export function createAgentSendVerificationEvidenceVerifier(
       // Never synthesize a result or caption from platform presence.
       if (historicalTerminalProven) {
         verified.originalTerminalProven = true;
-        verified.originalResult = structuredClone(result);
+        verified.originalResult = structuredClone(receipt.result ?? result);
       }
       return verified;
     } catch {

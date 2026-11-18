@@ -56,7 +56,7 @@ export type EndpointDeliveryOptions = {
   resolveTarget: (request: AgentThreadRequest) => Promise<AgentRequestParty> | AgentRequestParty;
   resolveExecutionOptions: (request: AgentThreadRequest, target: AgentRequestParty) => EndpointExecutionOptions;
   /** Captured from the original HTTP body before Manager defaults; never read as a body authority object. */
-  callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode">;
+  callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode" | "workbuddyDeliveryMode">;
   /** Original request-lifetime fence; background recovery has no HTTP request. */
   assertRequestCurrent?: () => void;
   authorize: (endpoint: AgentRequestEndpoint, role?: "source" | "target") => void;
@@ -107,13 +107,14 @@ function guard(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOpti
 /** Nothing crossed the execution boundary: the delivery stays prepared and the same deliveryId may safely retry. */
 function notSentResult(delivery: PreparedEndpointDelivery, error: unknown): AgentThreadRequestResult {
   const stage = "target_verification";
+  const retryable = delivery.executionOptions.workbuddyDeliveryMode !== "steer";
   return { statusCode: 503, data: {
     action: "send", ok: false, status: "failed", threadId: delivery.target.sessionId,
     delivery: { deliveryId: delivery.deliveryId, generation: delivery.generation,
-      status: "prepared", targetThreadId: delivery.target.sessionId, retryable: true },
+      status: "prepared", targetThreadId: delivery.target.sessionId, retryable },
     communication: { deliveryId: delivery.deliveryId, requestId: delivery.preparation.requestId,
       inReplyToRequestId: delivery.preparation.inReplyToRequestId, responsePolicy: delivery.preparation.responsePolicy },
-    error: { stage, message: error instanceof Error ? error.message : String(error), retryable: true }
+    error: { stage, message: error instanceof Error ? error.message : String(error), retryable }
   } };
 }
 
@@ -154,6 +155,7 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
       targetAgentType: request.messageProcessing.targetAgentType, planId: request.messageProcessing.planId, planTitle: request.messageProcessing.planTitle } : undefined,
     // Unspecified defaults belong to the original frozen delivery, not the retry's current Route configuration.
     execution: { cwd: explicit.cwd, model: explicit.model, reasoningEffort: explicit.reasoningEffort, sandbox: explicit.sandbox, dshDeliveryMode: explicit.dshDeliveryMode,
+      workbuddyDeliveryMode: explicit.workbuddyDeliveryMode,
       ...(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery }) }
   })).digest("hex");
 }
@@ -182,6 +184,10 @@ async function resumeCallerDelivery(request: AgentThreadRequest, source: AgentRe
 
 function resumeReservedDelivery(original: PreparedEndpointDelivery, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
   guard(original, options)();
+  if (original.state === "prepared" && original.executionOptions.workbuddyDeliveryMode === "steer") {
+    const failure = notSentResult(original, new Error("原 WorkBuddy 引导已停止派发，请保留原编号。需要引导当前会话时，请显式发送一条新消息。"));
+    return Promise.resolve({ statusCode: 409, data: { ...failure.data, errorCode: "WORKBUDDY_STEER_INTENT_EXPIRED" } });
+  }
   if (original.state === "prepared") return dispatchPreparedDelivery(original, options);
   if (original.state === "dispatching") return reconcileEndpointDelivery(original.deliveryId, options).then(() => {
     const current = options.store.getEndpointDelivery(original.deliveryId)!;
@@ -230,7 +236,7 @@ function matchesLegacyReply(request: AgentThreadRequest, delivery: PreparedEndpo
     || request.messageProcessing?.requirementId !== preparation.messageProcessingRequirementId || request.messageProcessing?.planId !== preparation.planId) return false;
   const explicit = options.callerExecutionOptions ?? request;
   const execution = { ...delivery.executionOptions };
-  for (const key of ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "grokBotDelivery"] as const) {
+  for (const key of ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode", "grokBotDelivery"] as const) {
     const value = key === "grokBotDelivery" ? request.grokBotDelivery : explicit[key];
     if (value !== undefined) Object.assign(execution, { [key]: value });
   }
@@ -306,6 +312,10 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
   if (request.action !== "send") throw new Error("Endpoint delivery only supports send and reconcile_delivery.");
   const originalConnectionRequest = request.inReplyToRequestId ? options.store.get(request.inReplyToRequestId) : undefined;
   if (originalConnectionRequest?.source.connection) {
+    if (request.workbuddyDeliveryMode !== undefined) {
+      throw new AgentThreadContractError("只记录回传结果时无法向 WorkBuddy 引导。", "workbuddyDeliveryMode", "validation",
+        "向具体 WorkBuddy 会话发起一条新的引导投递。");
+    }
     if (request.responsePolicy !== undefined && request.responsePolicy !== "none" && request.responsePolicy !== "required") throw new AgentThreadContractError("Record-only responsePolicy must be none.",
       "responsePolicy", "validation", "Use none when recording the original request result.");
     if (request.responsePolicy === "required") throw new AgentThreadContractError("A record-only response needs an actual target for a new required follow-up.",
@@ -330,6 +340,10 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
   request = { ...request, threadId: completeAgentSessionId(request.threadId, "threadId"),
     sourceAgentType: normalizeAgentThreadSourceType(request.sourceAgentType), responsePolicy: request.responsePolicy === undefined ? "none" : request.responsePolicy };
   const callerDeliveryId = callerAgentDeliveryId(request.deliveryId);
+  if (request.workbuddyDeliveryMode === "steer" && !callerDeliveryId) {
+    throw new AgentThreadContractError("WorkBuddy 引导需要稳定的 deliveryId。", "deliveryId", "validation",
+      "每条新引导使用独立的 deliveryId。出现未确认结果时，用原编号查询投递回执。");
+  }
   if (request.imagePaths !== undefined && !Array.isArray(request.imagePaths)) throw new Error("imagePaths must be an array.");
   const source = await options.resolveSource(request);
   const resolvedTarget = await options.resolveTarget(request);
@@ -386,6 +400,7 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
       const prompt = renderEndpointPrompt(request, source, preparation, executionOptions);
       delivery = { deliveryId: preparation.deliveryId, generation: randomUUID(), source: sourceEndpoint,
         target: targetEndpoint, prompt, promptHash: agentDeliveryPromptHash(prompt), executionOptions, executionOptionsHash, preparation, state: "prepared",
+        ...(executionOptions.workbuddyDeliveryMode === "steer" ? { blockedReason: "WorkBuddy guidance requires a fresh explicit request." } : {}),
         requestHash, ...(callerDeliveryId === undefined ? {} : { callerDeliveryId }) };
       options.assertRequestCurrent?.();
       await options.store.bindEndpointDelivery(delivery);
@@ -413,13 +428,15 @@ function dispatchPreparedDelivery(delivery: PreparedEndpointDelivery, options: E
 
 async function verifyThenDispatch(delivery: PreparedEndpointDelivery, options: EndpointDeliveryOptions): Promise<AgentThreadRequestResult> {
   const assertAuthorized = guard(delivery, options);
+  // A later WorkBuddy turn is a different target for an explicit guidance request.
+  const blockAutomaticRetry = delivery.executionOptions.workbuddyDeliveryMode === "steer";
   // Verify fresh owner proofs before anything is persisted as dispatching. A failure here sent nothing,
   // so the delivery stays prepared and a retry with the same deliveryId really sends.
   try {
     await refreshEndpointIdentities(delivery, options, "dispatch");
     assertAuthorized();
   } catch (error) {
-    await options.store.noteEndpointDeliveryFailure(delivery.deliveryId, error);
+    await options.store.noteEndpointDeliveryFailure(delivery.deliveryId, error, { blocked: blockAutomaticRetry });
     return notSentResult(delivery, error);
   }
   // Persist before crossing the execution boundary. A crash here stays unknown, never resend.
@@ -437,7 +454,7 @@ async function verifyThenDispatch(delivery: PreparedEndpointDelivery, options: E
     if (error instanceof EndpointDeliveryNotSentError) {
       try {
         await options.store.markEndpointNotSent(delivery.deliveryId, error.proof);
-        await options.store.noteEndpointDeliveryFailure(delivery.deliveryId, error);
+        await options.store.noteEndpointDeliveryFailure(delivery.deliveryId, error, { blocked: blockAutomaticRetry });
         delivery.state = "prepared";
         return notSentResult(delivery, error);
       } catch (trackingError) {
@@ -565,6 +582,7 @@ export class EndpointDeliveryRecovery {
           try {
             const delivery = await this.options.store.readEndpointDelivery(deliveryId);
             if (this.stopped) return false;
+            if (delivery?.state === "prepared" && delivery.blockedReason) return false;
             recovered = delivery?.state === "prepared"
               ? await dispatchPreparedDelivery(delivery, this.options).then(value => value.statusCode === 200)
               : await reconcileEndpointDelivery(deliveryId, this.options, { receiptOnly: true });

@@ -62,3 +62,37 @@ test('import identity drift has its original conflict status and does not publis
   });
   assert.deepEqual(await owner.list(), []); assert.deepEqual(await fs.readdir(path.join(root, 'imports')), []);
 });
+
+
+test("all package roots are checked before an existing managed package is accepted", async t => {
+  for (const mode of ["bundle-conflict", "additional-conflict", "all-equal", "managed-absent"] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-root-conflict-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const managed = path.join(root, "managed"), bundle = path.join(root, "bundle"), additional = path.join(root, "additional"), source = path.join(root, "source");
+    const id = "io.test.immutable", version = "1.0.0";
+    const writePackage = async (directory: string, content: string) => {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "rabi.plugin.json"), JSON.stringify({ schemaVersion: 2, id, version,
+        entries: { manager: { execution: "in_process", module: "./manager.mjs" } }, provides: [], requires: [], optional: [], permissions: [] }));
+      await fs.writeFile(path.join(directory, "manager.mjs"), content);
+    };
+    const same = "export function activate() {}\n", different = "export function activate() { return 1; }\n";
+    await writePackage(source, same);
+    if (mode !== "managed-absent") await writePackage(path.join(managed, id, version), same);
+    await writePackage(path.join(bundle, id, version), mode === "bundle-conflict" ? different : same);
+    await writePackage(path.join(additional, id, version), mode === "additional-conflict" ? different : same);
+    const store = new PluginPackageStore({ roots: [managed, bundle, additional], managedRoot: managed, bundledRoot: bundle, importRuntimeRoot: path.join(root, "imports") });
+    let checks = 0; const run = () => store.importDirectory(source, () => { checks++; });
+    if (mode.endsWith("conflict")) {
+      await assert.rejects(run(), error => (error as { status?: number; code?: string }).status === 409 && (error as { code?: string }).code === "PLUGIN_PACKAGE_VERSION_CONFLICT");
+    } else {
+      const result = await run(); assert.equal(result.id, id); assert.ok(checks >= 2);
+      if (mode === "all-equal") {
+        let calls = 0;
+        await assert.rejects(store.importDirectory(source, () => { if (++calls === 2) throw new Error("fixture authority revoked"); }), /fixture authority revoked/);
+      }
+    }
+    assert.equal(await fs.readFile(path.join(managed, id, version, "manager.mjs"), "utf8"), same);
+    assert.deepEqual(await fs.readdir(path.join(root, "imports")), []);
+  }
+});
