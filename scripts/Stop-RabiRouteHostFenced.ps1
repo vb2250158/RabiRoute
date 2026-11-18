@@ -30,6 +30,50 @@ function Resolve-HostQuitFence([object]$Status) {
     throw "Unsupported Host state '$state'; refusing fenced quit."
 }
 
+function Get-GenerationProcessHandles([object]$Status) {
+    $managerId = [int]$Status.managerPid
+    $trayId = [int]$Status.trayPid
+    if ($managerId -le 0 -or $trayId -le 0) { throw "Healthy Host status omitted Manager or Tray identity." }
+    $manager = Get-CimInstance Win32_Process -Filter "ProcessId=$managerId" -ErrorAction Stop
+    $tray = Get-CimInstance Win32_Process -Filter "ProcessId=$trayId" -ErrorAction Stop
+    if ($null -eq $manager -or $null -eq $tray -or $manager.ParentProcessId -le 0 -or $manager.ParentProcessId -ne $tray.ParentProcessId) {
+        throw "Manager and Tray do not share a provable Host parent."
+    }
+    $hostId = [int]$manager.ParentProcessId
+    $hostInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$hostId" -ErrorAction Stop
+    if ($null -eq $hostInfo -or $hostInfo.Name -ine "RabiRouteHost.exe") { throw "Generation Host process identity is unavailable." }
+    $members = @($Status.jobMemberPids | ForEach-Object { [int]$_ })
+    if ($managerId -notin $members -or $trayId -notin $members) { throw "Host job does not contain its READY Manager and Tray." }
+    $result = [Collections.Generic.List[object]]::new()
+    try {
+        foreach ($id in @(@($hostId) + $members | Select-Object -Unique)) {
+            $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($null -eq $process) {
+                if ($id -in @($hostId, $managerId, $trayId)) { throw "A required generation process exited before its handle was captured." }
+                continue
+            }
+            $handle = $process.Handle
+            if ($handle -eq [IntPtr]::Zero) { throw "Could not retain an exact generation process handle." }
+            $result.Add($process)
+        }
+        return ,$result.ToArray()
+    } catch {
+        foreach ($process in $result) { $process.Dispose() }
+        throw
+    }
+}
+
+function Wait-GenerationProcessExit([object[]]$Processes, [int]$TimeoutMs = 30000) {
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($process in $Processes) {
+        if ($process.HasExited) { continue }
+        $remaining = $TimeoutMs - [int]$elapsed.ElapsedMilliseconds
+        if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
+            throw "The original Host generation did not fully exit before the deadline."
+        }
+    }
+}
+
 function Repair-ChildProcessEnvironment {
     # .NET Framework enumerates case-sensitive names, but Start-Process copies
     # them into a case-insensitive dictionary when redirecting output. Validate
@@ -98,8 +142,28 @@ if ([string]$status.state -eq "stopped") {
 }
 $fence = Resolve-HostQuitFence $status
 $generation = [string]$fence.generationId
-$quit = Invoke-HostJson $hostPath @("--command", "quit", "--application-generation-id", $generation, "--json") $WorkingRoot
-if ([string]$quit.state -ne "stopped") { throw "Fenced quit did not reach state=stopped." }
-$after = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
-if ([string]$after.state -ne "stopped") { throw "Host remained active after fenced quit." }
+$handles = @()
+try {
+    if ([string]$status.state -in @("healthy", "degraded")) {
+        $handles = @(Get-GenerationProcessHandles $status)
+        $confirmed = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
+        if ([string]$confirmed.applicationGenerationId -ne $generation -or
+            [int]$confirmed.managerPid -ne [int]$status.managerPid -or [int]$confirmed.trayPid -ne [int]$status.trayPid) {
+            throw "Host generation changed while capturing process handles."
+        }
+    }
+    $quit = Invoke-HostJson $hostPath @("--command", "quit", "--application-generation-id", $generation, "--json") $WorkingRoot
+    if ([string]$quit.state -ne "stopped") { throw "Fenced quit did not reach state=stopped." }
+    if ($handles.Count -gt 0) {
+        # The bootstrap read-only status probe reports unknown after its pipe closes.
+        # Retained OS handles establish exit of the original processes without a PID-reuse race.
+        Wait-GenerationProcessExit $handles
+    } else {
+        # Keep the previous fail-closed behavior for faulted generations without READY children.
+        $after = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
+        if ([string]$after.state -ne "stopped") { throw "Host remained active after fenced quit." }
+    }
+} finally {
+    foreach ($process in $handles) { $process.Dispose() }
+}
 [pscustomobject]@{ ok = $true; state = "stopped"; applicationGenerationId = $generation; fenceSource = [string]$fence.source } | ConvertTo-Json -Compress

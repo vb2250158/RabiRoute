@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -93,4 +93,41 @@ test('transaction creates evidence root before first checked process without mov
   assert.ok(body.indexOf('Assert-RecoveryOwnership $previous') < body.indexOf('$transactionRoot = Join-Path'));
   assert.ok(body.indexOf('[IO.Directory]::CreateDirectory($candidate)') < body.indexOf('Invoke-BootstrapSelfTest $release.bootstrap'));
   assert.ok(body.indexOf('Invoke-BootstrapSelfTest $release.bootstrap') < body.indexOf('"Fenced Host stop"'));
+});
+
+
+test('generation exit verification accepts exited processes and refuses live ones', { skip: process.platform !== 'win32' }, () => {
+  const finished = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { windowsHide: true, stdio: 'ignore' });
+  const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { windowsHide: true, stdio: 'ignore' });
+  try {
+    const result = run(`${extract(stop, ['Wait-GenerationProcessExit'])}
+$completed = Get-Process -Id ${finished.pid} -ErrorAction Stop
+$stillRunning = Get-Process -Id ${live.pid} -ErrorAction Stop
+$null = $completed.Handle; $null = $stillRunning.Handle
+Wait-GenerationProcessExit @($completed) 8000
+$blocked = $false
+try { Wait-GenerationProcessExit @($stillRunning) 100 } catch { $blocked = $_.Exception.Message -match 'did not fully exit' }
+@{ completed=$completed.HasExited; rejectedLive=$blocked; stillRunning=(-not $stillRunning.HasExited) } | ConvertTo-Json -Compress`);
+    assert.deepEqual(result, { completed: true, rejectedLive: true, stillRunning: true });
+  } finally { if (finished.exitCode === null) finished.kill(); if (live.exitCode === null) live.kill(); }
+});
+
+test('recovery skips identical verified files but still restores changed files', { skip: process.platform !== 'win32' }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'rabi equal recovery '));
+  try {
+    const result = run(`${extract(transaction, ['Get-Sha256File', 'Test-RecoveryFileEqual', 'Restore-Previous'])}
+function Write-Durable([string]$Path, [byte[]]$Bytes) { throw 'CONTROLLED_WRITE_REQUIRED' }
+$root = ${ps(root)}
+$backup = Join-Path $root 'backup'; [IO.Directory]::CreateDirectory($backup) | Out-Null
+foreach ($name in @('current.json', 'RabiRouteHost.exe')) {
+  [IO.File]::WriteAllText((Join-Path $root $name), 'same'); [IO.File]::WriteAllText((Join-Path $backup $name), 'same')
+}
+$pointer = Join-Path $backup 'current.json'; $hostBackup = Join-Path $backup 'RabiRouteHost.exe'
+Restore-Previous $root $pointer $hostBackup $true $true
+[IO.File]::WriteAllText((Join-Path $root 'current.json'), 'changed')
+$requiresWrite = $false
+try { Restore-Previous $root $pointer $hostBackup $true $true } catch { $requiresWrite = $_.Exception.Message -match 'CONTROLLED_WRITE_REQUIRED' }
+@{ identicalSkipped=$true; changedRequiresWrite=$requiresWrite } | ConvertTo-Json -Compress`);
+    assert.deepEqual(result, { identicalSkipped: true, changedRequiresWrite: true });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

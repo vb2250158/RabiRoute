@@ -360,6 +360,8 @@ function Restore-Previous([string]$Install, [string]$PointerBackup, [string]$Boo
     )) {
         if (-not $item.Had) { Remove-Item -LiteralPath $item.Destination -Force -ErrorAction SilentlyContinue; continue }
         if (-not (Test-Path -LiteralPath $item.Backup -PathType Leaf)) { throw "Rollback $($item.Name) backup is missing." }
+        # An identical verified destination is already restored, including when disk space is exhausted.
+        if ((Test-Path -LiteralPath $item.Destination -PathType Leaf) -and (Test-RecoveryFileEqual $item.Destination $item.Backup)) { continue }
         $temporary = "$($item.Destination).restore.$PID.tmp"
         Write-Durable $temporary ([IO.File]::ReadAllBytes($item.Backup))
         if (Test-Path -LiteralPath $item.Destination -PathType Leaf) {
