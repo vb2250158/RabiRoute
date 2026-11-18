@@ -3,7 +3,7 @@ import {checkedFs} from './requestAccess.mjs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {VideoError} from './service.mjs';
-import {WorkbenchProjects} from './workbenchProjects.mjs';
+import {WorkbenchProjects, previewFromItems} from './workbenchProjects.mjs';
 import definition from './workbench-definition.json' with {type:'json'};
 
 export class VideoProjects extends WorkbenchProjects {
@@ -31,9 +31,23 @@ export class VideoProjects extends WorkbenchProjects {
       catch { access?.assert(); issues.push({id:name.slice(0,-5),scope:'projects',code:'unreadable_record'}); }
     }
     access?.assert(); this.recordIssues=issues;
-    const summaries=projects.map(({id,title,updatedAt,revision,value})=>({id,title,updatedAt,revision,version:1,cardCount:Array.isArray(value?.items)?value.items.length:0}));
+    const summaries=projects.map(({id,title,updatedAt,revision,value})=>({id,title,updatedAt,revision,version:1,cardCount:Array.isArray(value?.items)?value.items.length:0, preview: previewFromItems(value?.items)}));
     for(const name of modernNames.filter(name=>/^[a-f0-9-]{36}$/.test(name))) {
-      try {const record=await this.readProject(name,access,true);summaries.push({...record,cardCount:0,...(record.migration?.phase==='prepared'?{migrationPending:true,migrationSourceRevision:record.migration.sourceRevision}:{})});}
+      try {
+        const record = await this.readProject(name, access, true);
+        const indexFile = path.join(this.projectDirectory(name), '.canvas-index', this.id(record.defaultCanvasId) + '.json');
+        // Read only the default canvas summary. Project cards never load all of a project's canvases.
+        const canvas = await this.json(indexFile, access).catch(error => {
+          if (error.code === 'ENOENT') return undefined;
+          throw error;
+        });
+        summaries.push({
+          ...record, title: canvas?.mediaEditor ? canvas.name : record.title,
+          updatedAt: canvas?.updatedAt > record.updatedAt ? canvas.updatedAt : record.updatedAt,
+          cardCount: canvas?.nodeCount ?? 0, preview: canvas?.preview, mediaEditor: Boolean(canvas?.mediaEditor),
+          ...(record.migration?.phase === 'prepared' ? { migrationPending: true, migrationSourceRevision: record.migration.sourceRevision } : {})
+        });
+      }
       catch {access?.assert();issues.push({id:name,scope:'projects',code:'unreadable_record'});}
     }
     return summaries.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));

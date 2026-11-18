@@ -386,3 +386,42 @@ test("environment references redact multiline values and longer overlapping secr
   const logs = await f.owner.logs(result.id);
   assert.equal(logs.entries.filter(row => row.stream === "stdout").map(row => row.text).join("\n"), "[redacted]\n[redacted]\n[redacted]");
 });
+
+
+test("creative node receives both canvas texts and returns a reusable result without running media cards", async t => {
+  const f = await fixture(t);
+  const { id: projectId } = f.project, { id: canvasId } = f.canvas;
+  const target = { agentAdapter: "test", threadId: "creative-test" };
+  const source = { sourceAgentType: "test", sourceThreadId: "creative-source" };
+  const generated = "大肥鱼穿红雨衣。";
+  let observed;
+  f.owner.runtime.agentTasks = {
+    send: async request => { observed = request; return {}; },
+    inspect: async () => ({ request: { id: "receipt", status: "responded", response: {
+      by: target, result: JSON.stringify({ status: "succeeded", text: generated })
+    } } })
+  };
+  await f.projects.saveMediaEditor(projectId, canvasId, { revision: 0, value: {
+    version: 1, active: "", drafts: [], items: [
+      { id: "subject", kind: "text", text: "大肥鱼" },
+      { id: "costume", kind: "text", text: "红雨衣" }
+    ]
+  } });
+  const current = await f.projects.readCanvas(projectId, canvasId);
+  const node = { id: "creative", kind: "agent", config: { target, source, textOutput: true, textPrompt: "写成一句 {{literal}}。" } };
+  const saved = await f.projects.saveCanvas(projectId, canvasId, {
+    ...current, workspaceBindingKey: "test",
+    variables: [{ name: "literal", type: "string", value: "should not replace a free prompt" }],
+    graph: { ...current.graph, nodes: [...current.graph.nodes, node] },
+    mediaLinks: [{ from: "subject", to: node.id }, { from: "costume", to: node.id }]
+  });
+  const run = await f.owner.start(projectId, canvasId, { id: randomUUID(), revision: saved.revision, nodeId: node.id });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.deepEqual(Object.keys(done.attempts), ["creative"]);
+  assert.equal(done.attempts.creative.outputText, generated);
+  assert.ok(observed.prompt.includes("写成一句 {{literal}}。"));
+  assert.match(observed.prompt, /大肥鱼\n\n红雨衣/u);
+  assert.match(observed.responseInstruction, /"text"/u);
+});

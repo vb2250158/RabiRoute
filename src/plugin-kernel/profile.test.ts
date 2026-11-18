@@ -658,13 +658,13 @@ test("voice assistant migration advances old pinned packages without changing in
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
-  for (const version of ["1.1.8", "1.1.9", "1.1.10", "1.1.11", "1.1.12"]) {
+  for (const version of ["1.1.8", "1.1.9", "1.1.10", "1.1.11", "1.1.12", "1.1.13"]) {
     const instance = { id: "manager:voice-assistant", package: "io.rabiroute.manager.voice-assistant", version, enabled: false, config: { selected: "fixture", nested: { retained: true } }, grants: ["network.local"] };
     const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [instance] });
     await fs.writeFile(profilePath, raw);
     const result = await readPluginProfile(profilePath, { migrationsPath });
     assert.equal(result.instances.length, 1);
-    assert.equal(result.instances[0]?.version, "1.1.13");
+    assert.equal(result.instances[0]?.version, "1.1.14");
     assert.equal(result.instances[0]?.id, instance.id);
     assert.equal(result.instances[0]?.enabled, instance.enabled);
     assert.deepEqual(result.instances[0]?.config, instance.config);
@@ -695,12 +695,12 @@ test("NapCat package migration preserves the existing instance settings", async 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-napcat-migration-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
-  const instances = ["0.1.4", "0.1.9", "0.1.10", "0.1.11", "0.1.12"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const instances = ["0.1.4", "0.1.9", "0.1.10", "0.1.11", "0.1.12", "0.1.17"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
   const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
   await fs.writeFile(profilePath, raw);
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
   const result = await readPluginProfile(profilePath, { migrationsPath });
-  assert.deepEqual(result.instances.map(item => item.version), ["0.1.13", "0.1.13", "0.1.13", "0.1.13", "0.1.13"]);
+  assert.deepEqual(result.instances.map(item => item.version), instances.map(() => "0.1.18"));
   assert.deepEqual(result.instances.map(item => item.config), instances.map(item => item.config));
   assert.equal(await fs.readFile(profilePath, "utf8"), raw);
 });
@@ -710,7 +710,7 @@ test("workbench migration preserves saved settings and leaves unknown versions u
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
-  for (const version of ["1.0.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.2", "0.2.3", "0.2.4", "0.2.99"]) {
+  for (const version of ["1.0.0", "0.1.1", "0.1.2", "0.1.3", "0.1.4", "0.2.0", "0.2.2", "0.2.3", "0.2.4", "0.2.5", "0.2.99"]) {
     const instance = { id: "manager:video", package: "io.rabiroute.manager.video", version, enabled: false,
       config: { selected: "fixture", nested: { retained: true } }, grants: ["network.local"],
       policy: { resources: { maxChildProcesses: 2, shutdownTimeoutMs: 5000 } } };
@@ -718,7 +718,7 @@ test("workbench migration preserves saved settings and leaves unknown versions u
     await fs.writeFile(profilePath, raw);
     const result = await readPluginProfile(profilePath, { migrationsPath });
     assert.equal(result.instances.length, 1);
-    assert.equal(result.instances[0]?.version, version === "0.2.99" ? version : "0.2.5");
+    assert.equal(result.instances[0]?.version, version === "0.2.99" ? version : "0.2.7");
     assert.equal(result.instances[0]?.id, instance.id);
     assert.equal(result.instances[0]?.enabled, false);
     assert.deepEqual(result.instances[0]?.config, instance.config);

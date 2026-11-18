@@ -8,6 +8,25 @@ import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRou
 import { apiCatalogOpenApi } from "../../../../manager/apiOperationCatalog.js";
 import { QQ_STICKER_LIMITS } from "../napcatStickers.js";
 
+async function listenForFetch(server: http.Server): Promise<void> {
+  for (let attempt = 0; attempt < 16; attempt++) {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => { server.off("error", reject); resolve(); });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    try {
+      await fetch(`http://127.0.0.1:${address.port}/__fixture_ready`, { method: "HEAD", signal: AbortSignal.timeout(1000) });
+      return;
+    } catch (error) {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      if (!(error instanceof TypeError && error.cause instanceof Error && error.cause.message === "bad port")) throw error;
+    }
+  }
+  throw new Error("No Fetch-compatible test listener was assigned after 16 attempts");
+}
+
 test("authenticated remote connections read favorites, hide native credentials and pin account", async () => {
   const id = "0123456789abcdef0123456789abcdef";
   const definition = { id: "route-test", enabled: true, messageAdapters: ["napcat"], napcatInstances: [
@@ -15,6 +34,7 @@ test("authenticated remote connections read favorites, hide native credentials a
   ] } as GatewayDefinition;
   let changed = false;
   const server = http.createServer((request, response) => {
+    if (request.method === "HEAD" && request.url === "/__fixture_ready") { response.writeHead(204).end(); return; }
     markAuthenticatedConnectionRequest(request);
     handleQqStickerRoutes(request, new URL(request.url!, "http://localhost"), response, {
       local: () => false, route: () => changed ? { ...definition, enabled: false } : definition,
@@ -26,7 +46,7 @@ test("authenticated remote connections read favorites, hide native credentials a
       }) as typeof fetch
     }, operation => operation);
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(server);
   const address = server.address() as { port: number };
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/api/agent/qq/stickers?routeId=route-test`);
@@ -67,10 +87,11 @@ test("executable favorite contracts serve each declared finite image type and wi
     }) as typeof fetch
   }));
   const server = http.createServer((request, response) => {
+    if (request.method === "HEAD" && request.url === "/__fixture_ready") { response.writeHead(204).end(); return; }
     markAuthenticatedConnectionRequest(request);
     if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) { response.statusCode = 404; response.end(); }
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(server);
   t.after(async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); });
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const list = await fetch(`${base}/api/agent/qq/stickers?routeId=route-test`);

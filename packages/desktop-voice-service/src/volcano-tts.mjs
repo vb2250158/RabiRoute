@@ -23,6 +23,9 @@ export async function openVolcanoTts({ endpoint, headers, voice, requestParams, 
   const exchange = async (event, expected, payload, timeout) => {
     if (closed && event !== 101 && event !== 2) throw Error('SPEECH_STREAM_CLOSED');
     const response = wait(expected, timeout);
+    // Cancellation may reject the acknowledgement before socket.send settles.
+    // Observe it immediately; awaiting it below still propagates the same error.
+    void response.catch(() => {});
     try {
       await socket.send(encodeTts(event, sessionId, payload));
       if(event===100)notifySpeechObserver(onRequest,{requestId:1,protocol:'volcano-bidirectional',stage:'sent',parameters:payload.req_params});

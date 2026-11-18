@@ -4,6 +4,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
 from rabiroute_tray.desktop_pet_assistant import speech_bubble_segment, AssistantPresentation
 
@@ -52,3 +53,31 @@ class BubbleStackTest(unittest.TestCase):
         self.assertEqual(job["text"], "第二句。")
         self.assertTrue(job["bubbleKey"].endswith(":4"))
         self.assertIsNone(state.accept(dict(value, personaId="other", revision=2), job))
+
+    def test_old_tail_retracts_and_repeated_updates_do_not_restart_motion_or_erase_text(self):
+        window = DesktopPetWindow()
+        window.move(300, 500)
+        window.show()
+        try:
+            window.show_speech_bubble("第一句。", playing=True, key="first")
+            QTest.qWait(300)
+            first = window._bubble
+            window.show_speech_bubble("第二句。", playing=True, key="second")
+            target = first._motion_target
+            for _ in range(8):
+                window.set_bubble_style({})
+                window.show_speech_bubble("第二句。", playing=True, key="second")
+            QTest.qWait(320)
+            self.assertAlmostEqual(first._tail_progress, 0)
+            self.assertAlmostEqual(window._bubble._tail_progress, 1)
+            self.assertEqual(first.pos(), target)
+            self.assertEqual(first._text.text(), "第一句。")
+            window.finish_speech_bubble()
+            self.assertTrue(window._bubble.isVisible())
+            self.assertEqual(len(window._previous_bubbles), 1)
+            deadline = window._bubble_deadline
+            window.finish_speech_bubble()
+            self.assertEqual(window._bubble_deadline, deadline)
+        finally:
+            window.hide_bubble()
+            window.close()

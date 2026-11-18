@@ -148,9 +148,24 @@ test("all seven native business operations publish from actual listener owners a
     if (url.pathname === "/meta") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ...identity, health: { live: true, requiredReady: true, state: "healthy" } })); return; }
     if (!manager.handle(req, url, res)) res.writeHead(404).end();
   });
-  await new Promise<void>(resolve => managerServer!.listen(0, "127.0.0.1", resolve));
-  const address = managerServer.address(); if (!address || typeof address === "string") throw new Error("No discovery listener.");
-  const origin = `http://127.0.0.1:${address.port}`;
+  let origin = "";
+  for (let attempt = 0; attempt < 16; attempt++) {
+    await new Promise<void>((resolve, reject) => {
+      managerServer!.once("error", reject);
+      managerServer!.listen(0, "127.0.0.1", () => { managerServer!.off("error", reject); resolve(); });
+    });
+    const address = managerServer.address(); if (!address || typeof address === "string") throw new Error("No discovery listener.");
+    const candidate = `http://127.0.0.1:${address.port}`;
+    try {
+      const probe = await fetch(candidate + "/meta", { headers: { authorization: "Bearer fixture-node" }, signal: AbortSignal.timeout(1000) });
+      if (!probe.ok) throw new Error("Discovery listener readiness probe failed.");
+      origin = candidate; break;
+    } catch (error) {
+      await new Promise<void>(resolve => managerServer!.close(() => resolve()));
+      if (!(error instanceof TypeError && error.cause instanceof Error && error.cause.message === "bad port")) throw error;
+    }
+  }
+  if (!origin) throw new Error("No Fetch-compatible discovery listener was assigned after 16 attempts.");
   const client = createManagerClient({ managerUrl: origin, credential: "fixture-node", fetchImpl: (url, options) => {
     const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     assert.equal(new URL(target).origin, origin); return fetch(url, options);

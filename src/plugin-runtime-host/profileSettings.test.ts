@@ -221,10 +221,10 @@ test("voice assistant saved definitions migrate after overlay without rewriting 
   const f = await fixture(t);
   const id = "manager:voice-assistant", packageId = "io.rabiroute.manager.voice-assistant";
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
-  const base = { schemaVersion: 2, readyRequires: [], instances: [{ id, package: packageId, version: "1.1.13", enabled: true, config: {}, grants: [] }] };
+  const base = { schemaVersion: 2, readyRequires: [], instances: [{ id, package: packageId, version: "1.1.14", enabled: true, config: {}, grants: [] }] };
   const baseRaw = JSON.stringify(base); await fs.writeFile(f.profilePath, baseRaw); await fs.mkdir(f.settingsRoot);
   const settingsPath = path.join(f.settingsRoot, createHash("sha256").update(id).digest("hex") + ".json");
-  for (const version of ["1.1.8", "1.1.11", "1.1.12"]) {
+  for (const version of ["1.1.8", "1.1.11", "1.1.12", "1.1.13"]) {
     for (const enabled of [true, false]) {
       const definition = { id, package: packageId, version, enabled: true, config: { selected: "fixture" }, grants: ["network.local"] };
       const saved = { schemaVersion: 1, instanceId: id, definition, installed: true, enabled, config: { selected: "preserved" } };
@@ -232,10 +232,10 @@ test("voice assistant saved definitions migrate after overlay without rewriting 
       const snapshot = await new PluginProfileSettings({ profilePath: f.profilePath, settingsRoot: f.settingsRoot, migrationsPath }).snapshot();
       assert.equal(snapshot.diagnostics.length, 0); assert.equal(snapshot.profile.instances.length, 1);
       const actual = snapshot.profile.instances[0]!;
-      assert.equal(actual.id, id); assert.equal(actual.package, packageId); assert.equal(actual.version, "1.1.13");
+      assert.equal(actual.id, id); assert.equal(actual.package, packageId); assert.equal(actual.version, "1.1.14");
       assert.equal(actual.enabled, enabled); assert.deepEqual(actual.config, { selected: "preserved" });
       assert.deepEqual(actual.grants, definition.grants);
-      assert.deepEqual(snapshot.profile.migrations, [{ instanceId: id, packageId, fromVersion: version, toVersion: "1.1.13" }]);
+      assert.deepEqual(snapshot.profile.migrations, [{ instanceId: id, packageId, fromVersion: version, toVersion: "1.1.14" }]);
       assert.equal(await fs.readFile(settingsPath, "utf8"), raw); assert.equal(await fs.readFile(f.profilePath, "utf8"), baseRaw);
     }
   }
@@ -260,4 +260,24 @@ test("snapshot diagnostic follows the pending settings readdir without exposing 
   assert.equal(JSON.stringify(rows).includes(f.root), false);
   release([]); const snapshot = await result; assert.equal(snapshot.profile.instances.length, 2);
   assert.equal(rows.length, 1);
+});
+
+
+test("Codex 0.1.10 migrates without changing saved settings or grants", async t => {
+  const f = await fixture(t);
+  const id = "agent:codex", packageId = "io.rabiroute.agent.codex";
+  const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));
+  const base = { schemaVersion: 2, readyRequires: [], instances: [{ id, package: packageId, version: "0.1.11", enabled: true, config: {}, grants: [] }] };
+  const baseRaw = JSON.stringify(base); await fs.writeFile(f.profilePath, baseRaw); await fs.mkdir(f.settingsRoot);
+  const settingsPath = path.join(f.settingsRoot, createHash("sha256").update(id).digest("hex") + ".json");
+  const definition = { id, package: packageId, version: "0.1.10", enabled: true, config: { selected: "fixture" }, grants: ["network.local"] };
+  const saved = { schemaVersion: 1, instanceId: id, definition, installed: true, enabled: false, config: { selected: "preserved" } };
+  const raw = JSON.stringify(saved); await fs.writeFile(settingsPath, raw);
+  const snapshot = await new PluginProfileSettings({ profilePath: f.profilePath, settingsRoot: f.settingsRoot, migrationsPath }).snapshot();
+  assert.equal(snapshot.diagnostics.length, 0); assert.equal(snapshot.profile.instances.length, 1);
+  const actual = snapshot.profile.instances[0]!;
+  assert.equal(actual.version, "0.1.11"); assert.equal(actual.enabled, false);
+  assert.deepEqual(actual.config, { selected: "preserved" }); assert.deepEqual(actual.grants, definition.grants);
+  assert.deepEqual(snapshot.profile.migrations, [{ instanceId: id, packageId, fromVersion: "0.1.10", toVersion: "0.1.11" }]);
+  assert.equal(await fs.readFile(settingsPath, "utf8"), raw); assert.equal(await fs.readFile(f.profilePath, "utf8"), baseRaw);
 });

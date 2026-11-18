@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { VideoError } from "./service.mjs";
-import { validateCanvas, expandVariables,resolveTemplates } from "./workbenchGraph.mjs";
+import { validateCanvas, expandVariables,resolveTemplates,resolveLinkedText } from "./workbenchGraph.mjs";
 import { fingerprint, inspectRequirements, validateArtifacts, ownedFile } from "./workbenchArtifacts.mjs";
 import definition from "./workbench-definition.json" with {type:"json"};
 import {openMedia} from "./media.mjs";
@@ -15,6 +15,13 @@ const hash = value => createHash("sha256").update(JSON.stringify(value)).digest(
 const terminalRuns = new Set(Object.entries(definition.runStates).filter(([,row])=>row.terminal).map(([state])=>state));
 const timestamp = () => new Date().toISOString();
 const missing = error => { if (error.code === "ENOENT") return undefined; throw error; };
+
+function agentEndpoint(node, binding, key, requiredField) {
+  const configured = node?.config[key];
+  return configured?.[requiredField] ? configured : binding.agents?.[node?.config.agentBindingKey]?.[key];
+}
+const agentTarget = (node, binding) => agentEndpoint(node, binding, "target", "threadId");
+const agentSource = (node, binding) => agentEndpoint(node, binding, "source", "sourceThreadId");
 
 /** One published plugin activation owns graph execution. Process/Agent/media owners retain their receipts. */
 export class WorkbenchRuns {
@@ -112,24 +119,51 @@ export class WorkbenchRuns {
       if (body.revision !== canvas.revision) throw new VideoError("画布已更新，请重读后运行。", 409);
       const graph = validateCanvas(canvas, this.projects.definition), binding = await this.bindings(canvas);
       binding.roots={...binding.roots,canvas:this.projects.canvasDirectory(projectId,canvasId)};
-      if(canvas.graph.nodes.some(node=>node.config.unresolved)) throw new VideoError("导入流程仍有未解析的命令、目标或检查项，请先补齐转换报告中的缺项。",409);
       const resolved=resolveTemplates(canvas,this.projects.definition);
-      resolved.graph.nodes=resolved.graph.nodes.map(resolveNodeParameters);
+      const prompts = new Map();
+      resolved.graph.nodes = resolved.graph.nodes.map(resolveNodeParameters).map(node => {
+        const { textPreview, ...structure } = node;
+        const { textPrompt, linkedMediaContext, ...config } = node.config;
+        if (node.kind === "agent" && typeof textPrompt === "string") prompts.set(node.id, textPrompt);
+        return { ...structure, config };
+      });
       const snapshot = expandVariables(resolved, canvas.variables);
+      for (const node of snapshot.graph.nodes) if (prompts.has(node.id)) node.config.textPrompt = prompts.get(node.id);
       const concurrency=body.concurrency??1;
       if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>16)throw new VideoError("并发数量须为 1–16。",400);
-      const selected = new Set(snapshot.graph.nodes.map(node => node.id));
+      const selected = new Set(snapshot.graph.nodes.filter(node => !node.config.legacyCardId).map(node => node.id));
       if (body.nodeId) {
-        if (!graph.nodes.has(body.nodeId)) throw new VideoError("所选节点不存在。", 404);
+        if (!selected.has(body.nodeId)) throw new VideoError("所选节点不存在。", 404);
         selected.clear(); selected.add(body.nodeId);
         if (body.mode === "from") for (const id of selected) for (const edge of graph.outgoing.get(id)) selected.add(edge.to);
         // Do not bypass dependencies outside the selected closure.
         for (const node of snapshot.graph.nodes.filter(node => selected.has(node.id))) if (graph.incoming.get(node.id).some(edge => !selected.has(edge.from)) || (node.inputs || []).some(input => input.producerNodeId && !selected.has(input.producerNodeId))) throw new VideoError("所选范围缺少前置完成证据，请先运行完整流程。", 409);
       }
       if(body.untilNodeId) {
-        if(body.nodeId||!graph.nodes.has(body.untilNodeId))throw new VideoError('运行边界节点无效。',400);
+        if(body.nodeId||!selected.has(body.untilNodeId))throw new VideoError('运行边界节点无效。',400);
         selected.clear();selected.add(body.untilNodeId);
         for(const id of selected){for(const edge of graph.incoming.get(id))selected.add(edge.from);for(const input of graph.nodes.get(id).inputs||[])if(input.producerNodeId)selected.add(input.producerNodeId);}
+      }
+      if (snapshot.graph.nodes.some(node => selected.has(node.id) && node.config.unresolved)) throw new VideoError("导入流程仍有未解析的命令、目标或检查项，请先补齐转换报告中的缺项。",409);
+      const agents = snapshot.graph.nodes.filter(node => selected.has(node.id) && node.enabled !== false && node.kind === "agent");
+      const contentLinks = canvas.mediaLinks ?? [];
+      const receivesContent = new Set(contentLinks.map(link => link.to));
+      if (agents.some(node => receivesContent.has(node.id))) {
+        const { value } = await this.projects.readMediaEditor(projectId, canvasId, access, canvas.revision);
+        const results = canvas.graph.nodes.filter(node => node.kind === "agent" && node.config.textOutput === true)
+          .map(node => ({ id: node.id, kind: "text", text: node.textPreview?.text, generated: true }));
+        const sources = [...(value?.items ?? []), ...results];
+        for (const node of agents) {
+          const context = resolveLinkedText(sources, contentLinks, node.id);
+          if (context.length > 24000) throw new VideoError("连入的文本超过 24,000 字符，请缩短后运行。", 400);
+          if (context) node.config.linkedMediaContext = context;
+        }
+      }
+      for (const node of agents.filter(node => typeof node.config.textPrompt === "string")) {
+        const target = agentTarget(node, binding), source = agentSource(node, binding);
+        if (!this.runtime.agentTasks || !target?.threadId || !target.agentAdapter || !source?.sourceThreadId || !source.sourceAgentType) throw new VideoError("请先为此节点配置 Agent 目标和发起对话。", 409);
+        if (node.config.textPrompt.length > 10000) throw new VideoError("提示词最多 10,000 字符。", 400);
+        if (!node.config.textPrompt.trim() && !node.config.linkedMediaContext) throw new VideoError("请输入提示词或连接有内容的文本。", 400);
       }
       const previous = body.resumeRunId ? await this.read(body.resumeRunId) : undefined;
       if (body.resumeRunId && (!previous || previous.projectId !== projectId || previous.canvasId !== canvasId || !terminalRuns.has(previous.state))) throw new VideoError("原运行仍未结束或不属于此画布。", 409);
@@ -138,7 +172,7 @@ export class WorkbenchRuns {
         binding: structuredClone(binding), selected: [...selected], concurrency, attempts: {}, sequence: 0, ...(previous ? { resumedFromRunId: previous.id } : {}) };
       run.frozenInputs={};
       for(const node of snapshot.graph.nodes.filter(node=>selected.has(node.id))) {
-        const refs=[...(node.inputs||[]).filter(input=>input.ref).map(input=>input.ref),...(node.kind==="agent"&&node.config.briefRef?[node.config.briefRef]:[])];
+        const refs=[...(node.inputs||[]).filter(input=>input.ref).map(input=>input.ref),...(node.kind==="agent"&&typeof node.config.textPrompt!=="string"&&node.config.briefRef?[node.config.briefRef]:[])];
         run.frozenInputs[node.id]=await Promise.all(refs.map(async ref=>({ref,...await fingerprint(binding.roots[ref.root],ref.path)})));
       }
       for (const id of graph.order.filter(id => selected.has(id))) run.attempts[id] = { id: randomUUID(), nodeId: id, state: "pending" };
@@ -207,7 +241,7 @@ export class WorkbenchRuns {
           inputEvidence.push({ ref: input.ref, ...await fingerprint(run.binding.roots[input.ref.root], input.ref.path) });
         }
       }
-      if(node.kind==="agent" && node.config.briefRef) {
+      if(node.kind==="agent" && typeof node.config.textPrompt!=="string" && node.config.briefRef) {
         const ref=node.config.briefRef;
         inputEvidence.push({ref,...await fingerprint(run.binding.roots[ref.root],ref.path)});
       }
@@ -346,22 +380,25 @@ export class WorkbenchRuns {
   async agent(run,node,attempt) {
     await this.applyCheckParameters(run,node,attempt);
     attempt.state="waiting_agent";
-    const agentBinding=run.binding.agents?.[node.config.agentBindingKey]||{};
-    const target=node.config.target||agentBinding.target;
-    const source=node.config.source||agentBinding.source;
+    const target = agentTarget(node, run.binding);
+    const source = agentSource(node, run.binding);
     if(!this.runtime.agentTasks || !target?.threadId || !target.agentAdapter || !source?.sourceThreadId || !source?.sourceAgentType) {attempt.reason="exact_agent_target_and_source_required";return;}
     if(node.config.independentFromNodeId) {
       const authorNode=run.snapshot.graph.nodes.find(row=>row.id===node.config.independentFromNodeId);
-      const author=authorNode?.config.target||run.binding.agents?.[authorNode?.config.agentBindingKey]?.target;
+      const author=agentTarget(authorNode,run.binding);
       if(!author || author.threadId===target.threadId && author.agentAdapter===target.agentAdapter) {attempt.state="failed";attempt.reason="independent_reviewer_required";return;}
     }
     if(!attempt.dispatchStarted) {
-      if(!node.config.briefRef) {attempt.reason="agent_brief_reference_required";return;}
-      const briefPath=await ownedFile(run.binding.roots[node.config.briefRef.root],node.config.briefRef.path);
-      const rawBrief=await fs.readFile(briefPath,"utf8");
+      let rawBrief = node.config.textPrompt;
+      if (typeof rawBrief !== "string") {
+        if(!node.config.briefRef) {attempt.reason="agent_brief_reference_required";return;}
+        const briefPath=await ownedFile(run.binding.roots[node.config.briefRef.root],node.config.briefRef.path);
+        rawBrief=expandRootReferences(expandVariables(await fs.readFile(briefPath,"utf8"),run.snapshot.variables),run.binding.roots);
+      }
       let contextText="";
       if(node.config.contextProjection){const projection=node.config.contextProjection,root=run.binding.roots[projection.ref?.root];if(!root)throw new Error("结构化上下文缺少绑定根。");const file=await ownedFile(root,projection.ref.path),stat=await fs.stat(file);if(stat.size>2*1024*1024)throw new Error("结构化上下文超过大小上限。");const data=JSON.parse(await fs.readFile(file,"utf8"));let list=data;for(const key of String(projection.list||"").split(".").filter(Boolean))list=list?.[key];if(!Array.isArray(list))throw new Error("结构化上下文列表不存在。");if(!Array.isArray(projection.fields)||projection.fields.some(key=>typeof key!=="string"))throw new Error("结构化上下文字段无效。");contextText="\n本期结构化输入（沿用上游结果）：\n"+JSON.stringify(list.map(row=>Object.fromEntries(projection.fields.map(key=>[key,row?.[key]??null]))));}
-      const brief=expandRootReferences(expandVariables(rawBrief,run.snapshot.variables),run.binding.roots)+contextText+"\n\n"+JSON.stringify({attemptId:attempt.id,variables:run.snapshot.variables,context:node.config.context||{},parameters:node.config.parameterValues||{},requirements:node.requirements||[],roots:run.binding.roots});
+      const linkedContext=node.config.linkedMediaContext ? "\n\n引用的画布文本：\n"+node.config.linkedMediaContext : "";
+      const brief=rawBrief+linkedContext+contextText+"\n\n"+JSON.stringify({attemptId:attempt.id,variables:run.snapshot.variables,context:node.config.context||{},parameters:node.config.parameterValues||{},requirements:node.requirements||[],roots:run.binding.roots});
       if (run.cancelRequested || this.closing) { attempt.state = "cancelled"; return; }
       attempt.briefHash=hash(brief);attempt.dispatchStarted=true;await this.persist(run);
       if (run.cancelRequested || this.closing) {
@@ -371,7 +408,7 @@ export class WorkbenchRuns {
         const {threadId,agentAdapter,instanceBinding,agentTargetId,cwd}=target,{sourceThreadId,sourceAgentType,messageSource}=source;
         attempt.acceptance=await this.runtime.agentTasks.send({threadId,agentAdapter,instanceBinding,agentTargetId,cwd,sourceThreadId,sourceAgentType,messageSource,action:"send",createIfMissing:false,deliveryId:attempt.id,responsePolicy:"required",
           model:node.config.parameterValues?.model || node.config.parameterSchema?.find(row=>row.name==="model")?.default,
-          responseInstruction:'Return a formal JSON result with status succeeded|failed and reason. For validated requirements include validated:[{path,sha256}]; for unchanged produced files provide writes:[{root,path,sha256,attemptId}] only when this attempt actually wrote them. All required artifacts are independently checked.',prompt:brief});
+          responseInstruction:'Return a formal JSON result with status succeeded|failed and reason. For validated requirements include validated:[{path,sha256}]; for unchanged produced files provide writes:[{root,path,sha256,attemptId}] only when this attempt actually wrote them. All required artifacts are independently checked.'+(node.config.textOutput === true ? ' Include the generated answer in a string field named "text" (up to 24,000 characters).' : ""),prompt:brief});
       } catch {attempt.reason="delivery_outcome_unknown_query_original_request";}
     }
     const original=await this.runtime.agentTasks.inspect(attempt.id,target.threadId,target.agentAdapter);
@@ -383,7 +420,12 @@ export class WorkbenchRuns {
     let completion;try{completion=JSON.parse(original.request.response.result);}catch{attempt.reason="structured_completion_receipt_required";return;}
     if(completion.status==="failed") {attempt.state="failed";attempt.reason=String(completion.reason||"Agent 执行失败。");return;}
     if(completion.status!=="succeeded") {attempt.reason="structured_completion_receipt_required";return;}
-    try {Object.assign(attempt,await validateArtifacts(node,run.binding.roots,attempt.baseline,completion,attempt.id,run.machineId));attempt.state="succeeded";attempt.receipt={requestId:original.request.id,deliveryId:original.deliveryId,response:original.request.response};}
+    try {
+      if (node.config.textOutput === true && (typeof completion.text !== "string" || !completion.text.trim() || completion.text.length > 24000)) throw new Error("Agent 没有返回有效的生成文本。");
+      Object.assign(attempt,await validateArtifacts(node,run.binding.roots,attempt.baseline,completion,attempt.id,run.machineId));
+      if (node.config.textOutput === true) attempt.outputText = completion.text;
+      attempt.state="succeeded";attempt.receipt={requestId:original.request.id,deliveryId:original.deliveryId,response:original.request.response};
+    }
     catch(error){attempt.state="failed";attempt.reason=error.message;}
   }
   async refresh(id,access) {
@@ -392,7 +434,7 @@ export class WorkbenchRuns {
     if(run.cancelRequested) {
       for(const attempt of Object.values(run.attempts).filter(attempt=>attempt.uncertain)) {
         const node=run.snapshot.graph.nodes.find(node=>node.id===attempt.nodeId);
-        const exited=node.kind==="agent"? (await this.runtime.agentTasks?.inspect(attempt.id,(node.config.target||run.binding.agents?.[node.config.agentBindingKey]?.target)?.threadId,(node.config.target||run.binding.agents?.[node.config.agentBindingKey]?.target)?.agentAdapter))?.request?.status==="responded"
+        const exited=node.kind==="agent"? (await this.runtime.agentTasks?.inspect(attempt.id,agentTarget(node,run.binding)?.threadId,agentTarget(node,run.binding)?.agentAdapter))?.request?.status==="responded"
           :node.kind==="generate"? this.media.catalog?.states[this.media.jobs.get(attempt.jobId)?.status]?.terminal
           :this.runtime.queryWorkbenchProcess?.(attempt.id)?.state==="exited";
         if(exited){attempt.state="cancelled";delete attempt.uncertain;}

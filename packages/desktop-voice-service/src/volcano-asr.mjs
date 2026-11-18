@@ -9,7 +9,7 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
   const stop = state => {
     if (!state) return Promise.resolve();
     if (state.disposal) return state.disposal;
-    state.closed = true; state.abort.abort(); clearInterval(state.monitor);
+    state.closed = true; state.abort.abort(); clearInterval(state.monitor); clearTimeout(state.backlogTimer);
     state.disposal = (async () => { await Promise.all([state.recording.dispose(), state.socket?.close()]); await state.chain; })();
     return state.disposal;
   };
@@ -22,6 +22,19 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
       const state = rounds.get(round);
       if (!state || state.closed) throw Error('DESKTOP_ASR_ROUND_INVALID');
       const fail = error => { if (!state.closed) { state.handlers.onError?.(error); void stop(state).catch(() => {}); } };
+      const pendingLimit = 16000 * 2 * 5;
+      const checkBacklog = () => {
+        if (state.closed || state.pendingBytes <= pendingLimit) {
+          clearTimeout(state.backlogTimer); state.backlogTimer = undefined;
+        } else if (state.backlogTimer === undefined) {
+          // A single IPC burst is queued synchronously. Give actual send callbacks
+          // time to drain it before classifying sustained pressure as a failure.
+          state.backlogTimer = setTimeout(() => {
+            state.backlogTimer = undefined;
+            if (!state.closed && state.pendingBytes > pendingLimit) fail(Error('SPEECH_SEND_BACKLOG'));
+          }, 500);
+        }
+      };
       try {
         const config = settings(), options = await connection();
         state.abort.signal.throwIfAborted();
@@ -58,8 +71,8 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
             // startup or a scheduling delay. Bound queued audio duration, not
             // callback count; ordinary batches must drain without losing words.
             state.pendingBytes += chunk.length;
-            if (state.pendingBytes > 16000 * 2 * 5) { fail(Error('SPEECH_SEND_BACKLOG')); return; }
-            state.chain = state.chain.then(() => { if (!state.closed) return state.socket.send(encodeAsr(chunk, { audio: true })); }).catch(fail).finally(() => { state.pendingBytes -= chunk.length; });
+            checkBacklog();
+            state.chain = state.chain.then(() => { if (!state.closed) return state.socket.send(encodeAsr(chunk, { audio: true })); }).catch(fail).finally(() => { state.pendingBytes -= chunk.length; checkBacklog(); });
           }
         } });
         if (state.closed) return;

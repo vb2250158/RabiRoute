@@ -52,6 +52,25 @@ test("factory accepts a source without cwd, freezes trusted device identity and 
   assert.throws(() => fromDevice.authorize(device), /revoked/);
 });
 
+test("an exact local Codex task can use its configured workspace when the saved directory is stale", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "endpoint-codex-cwd-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const stale = path.join(directory, "retired-share");
+  const context = {
+    store: new AgentRequestStore({ read: () => undefined, write: () => {} }),
+    registry: { localInstanceId: "manager" }, authority: {}, config: {}, receiptDirectory: directory,
+    readLocal: async (_provider: unknown, id: string) => ({ id, title: "Existing task", cwd: stale, updatedAt: "", archived: false }),
+    localOptions: () => ({ allowedWorkspaces: [] })
+  } as unknown as AgentEndpointDeliveryContext;
+  const options = createAgentEndpointDelivery(context).options();
+  const request: AgentThreadRequest = { action: "send", agentAdapter: "codex", agentTargetId: "local:codex", threadId: "exact-task", cwd: directory };
+  const target = await options.resolveTarget(request);
+  assert.equal(target.endpoint?.sessionId, request.threadId);
+  assert.equal(target.workspace, stale);
+  assert.equal(options.resolveExecutionOptions(request, target).cwd, directory);
+  await assert.rejects(async () => options.resolveTarget({ ...request, agentAdapter: "dsh", agentTargetId: "local:dsh" }), /existing absolute/);
+});
+
 test("source descriptions do not read a local task or require a registered role", async () => {
   let reads = 0;
   const context = { store: new AgentRequestStore({ read: () => undefined, write: () => {} }),

@@ -16,6 +16,10 @@ export function recordExecution(details, event, now = new Date().toISOString()) 
     const id='model-'+event.steps;
     if(!execution.steps.some(step=>step.id===id))execution.steps.push({id,kind:'model',status:'running',startedAt:now});
   }
+  if(event.state==='decision-rejected'){
+    const step=execution.steps.findLast(step=>step.kind==='model'&&step.status==='running');
+    if(step)Object.assign(step,{status:'failed',error:'TURN_DECISION_INVALID',...(event.protocolFailureReason?{protocolFailureReason:event.protocolFailureReason}:{}),endedAt:now});
+  }
   if(event.tool){
     const tool=event.tool;
     for(const step of execution.steps)if(step.kind==='model'&&step.status==='running'){step.status='completed';step.endedAt=now;}

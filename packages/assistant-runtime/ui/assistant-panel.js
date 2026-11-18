@@ -91,6 +91,8 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
   const row = { display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }
   const label = { display:'flex', flexDirection:'column', gap:6, marginBottom:12 }
   const errors = {
+    TURN_DECISION_INVALID:'助手返回的动作格式有误，本轮未能完成。可以继续说话或重新发送。',
+    TURN_INTERJECTION_RESPONSE_INVALID:'助手未能处理这次插话，可以再说一次。',
     SPEECH_SEND_BACKLOG:'识别音频发送积压，收音已停止。请检查网络后重新开启语音。',
     ASSISTANT_PERSONA_READ_FAILED:'无法读取所选人格，请查看人格设置中的错误详情。',
     ASSISTANT_HOST_OPERATION_FAILED:'Rabi 宿主操作未完成，请查看服务设置中的错误详情。',
@@ -170,6 +172,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const live=assistantLiveState(state,connectionError)
     const participants=assistantParticipants(state)
     const chat=React.useRef(null),composer=React.useRef(null),follow=React.useRef(true),onboardingOpened=React.useRef(false)
+    const motionMessages=React.useRef(new Set()),motionSession=React.useRef(null)
     const [unseen,setUnseen]=React.useState(false)
     const [detailId,setDetailId]=React.useState(null),[detailData,setDetailData]=React.useState(null),[detailError,setDetailError]=React.useState(''),[detailLoading,setDetailLoading]=React.useState(false)
     const [clearPrompt,setClearPrompt]=React.useState(false),[historyBusy,setHistoryBusy]=React.useState(false),[moreHistory,setMoreHistory]=React.useState(null)
@@ -219,6 +222,14 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     }
     React.useEffect(()=>{if(state?.settings?.onboardingComplete===false&&!onboardingOpened.current){onboardingOpened.current=true;openSettings('setup')}},[state?.settings?.onboardingComplete])
     const messageRevision=messages.map(item=>item.id+':'+(item.text?.length||0)).join('|')
+    React.useLayoutEffect(()=>{
+      const node=chat.current,elements=node?[...node.querySelectorAll('[data-message-id]')]:[],ids=new Set(elements.map(item=>item.dataset.messageId)),prior=motionMessages.current
+      const sameSession=motionSession.current===state?.sessionId
+      if(node&&sameSession&&prior.size&&typeof matchMedia==='function'&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+        for(const item of elements)if(!prior.has(item.dataset.messageId))item.animate?.([{opacity:0,transform:'translateY(10px)'},{opacity:1,transform:'translateY(0)'}],{duration:220,easing:'cubic-bezier(.2,.75,.25,1)'})
+      }
+      motionMessages.current=ids;motionSession.current=state?.sessionId
+    },[messageRevision,state?.sessionId,state?.activity?.responseId,state?.activity?.status])
     React.useLayoutEffect(()=>{const node=chat.current;if(!node)return;if(historyRestore.current){const previous=historyRestore.current;historyRestore.current=null;node.scrollTop=previous.top+node.scrollHeight-previous.height;return}if(follow.current){node.scrollTop=node.scrollHeight;setUnseen(false)}else setUnseen(true)},[messageRevision,state?.inputPreview?.text])
     React.useEffect(()=>{
       const node=chat.current;if(!node||typeof ResizeObserver==='undefined')return
@@ -436,14 +447,16 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     }
     const avatar=(person,kind)=>h(MessageAvatar,{...person,kind,resolveUrl:adapter.resolveAvatarUrl})
     const renderMessage=(item,index)=>{
+      const generating=state?.activity?.responseId===item.id&&live.working
+      if(item.role==='assistant'&&!item.notice&&!item.text?.trim()&&!generating&&!item.canvas?.document)return null
       const kind=item.notice?'system':item.role==='user'?'user':'assistant',person=participants[kind]
       const time=messageTimeLabel(item,messages[index-1])
       return h(React.Fragment,{key:item.id},time&&h('div',{className:'va-message-time'},h('time',{dateTime:item.createdAt},time)),
-        h('article',{className:'va-message','data-role':item.role,'data-notice':item.notice||undefined,role:item.notice?'alert':undefined},
+        h('article',{className:'va-message','data-message-id':item.id,'data-role':item.role,'data-notice':item.notice||undefined,role:item.notice?'alert':undefined},
           avatar(person,kind),h('div',{className:'va-message-main'},
             h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',{title:person.name},person.name),item.source==='speech'&&h('span',{className:'va-message-source'},'语音')),
               item.hasDetails&&h(Button,{className:'va-message-details',title:'查看消息详情','aria-label':item.role==='user'?'查看语音识别详情':'查看执行与语音详情',onClick:()=>openDetails(item)},'⋯')),
-            h('div',{className:'va-message-bubble'},messageBody(item),
+            h('div',{className:'va-message-bubble'},!item.text?.trim()&&generating?h('span',{className:'va-typing',role:'status','aria-label':'正在回复'},h('i'),h('i'),h('i')):messageBody(item),
               state?.activity?.responseId===item.id&&state.activity.tool&&h('div',{className:'va-current-tool',role:'status','aria-busy':true},h('span',{className:'va-tool-spinner','aria-hidden':true}),h('span',null,'正在调用 · '+(state.activity.tool.operation||({web_search:'联网搜索',rabi_search:'查找接口',rabi_describe:'读取接口说明'}[state.activity.tool.name]||state.activity.tool.name)))),
               item.canvas?.document&&!(state?.canvas?.visible&&state.canvas.persistent&&state.canvas.responseId===item.id)&&h(VisualCanvas,{value:item.canvas}),
               sourceLinks(item.sources),item.status==='interrupted'&&h('small',{className:'va-note'},'上次未完成 · 没有自动重发')))))
@@ -520,7 +533,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       connectionError&&h(Button,{disabled:busy,onClick:()=>void refresh().catch(report)},'重新连接'),
       state&&h('div',{className:'va-duplex-status','aria-label':'并行语音状态',role:'status'},h('span',{'data-active':live.listening},live.captureLabel),h('span',{'data-active':live.working},live.generationLabel),h('span',{'data-active':live.playing},live.playbackLabel)),
       h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':live.detail),
-      message&&!editing&&h('p',{role:'status'},message),(state?.error||state?.voice?.error)&&h('p',{role:'alert'},errors[state.error||state.voice.error]||state.error||state.voice.error),
+      message&&!editing&&h('p',{role:'status'},message),[...new Set([state?.voice?.error,state?.error].filter(Boolean))].map(code=>h('p',{key:code,role:'alert'},errors[code]||code)),
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
       state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
       state?.context?.interruptedCount>0&&h('p',{className:'va-note'},'上次有 '+state.context.interruptedCount+' 条消息未完成，已保留记录，没有自动重发。'),

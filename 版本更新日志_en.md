@@ -10,6 +10,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
+## 0.15.37 - 2026-11-18
+
+- Fix a possible unhandled error when a Volcano speech stream closes and avoid mistaking a brief audio burst for sustained backlog; allow one model decision-format correction while retaining completed tool receipts.
+- Improve desktop-pet bubbles and assistant message motion, and fix random-port compatibility in message endpoint and HTTP regression tests.
+- Update Workbench to 0.2.7 with draggable node bodies and let local Windows Codex tasks resolve the selected workspace through Desktop in its original sign-in context.
+- Resolve host API aliases from frozen source inputs when building Agent workers in an independent directory.
+
 ## 0.15.36 - 2026-11-18
 
 - NapCat plugin `io.rabiroute.endpoint.napcat` 0.1.18 sets or clears the complete mirror prefix through a fixed contract, retaining selected-instance/account checks and original-ID receipts. Sensitive path, query and user information stays in configuration request memory; audit and results retain digests and limited metadata. The preference affects native process memory only.

@@ -55,6 +55,18 @@ const policy = {
   })
 };
 
+test('one malformed decision after a tool receipt is corrected without replaying the tool',async()=>{
+  let executed=0;const inputs=[];
+  const turn=createAgentTurnRuntime({protocol,tools:['tasks.send'],toolPolicy:policy,
+    model:{async prompt(input){inputs.push(message(input));if(inputs.length===1)return action(input,'tasks.send');if(inputs.length===2)return '{"protocol":';return '已经收到工具回执。';}},
+    executeTool:async()=>{executed++;return {status:'completed',receipt:'confirmed'};}});
+  const result=await turn.run('执行一次任务');
+  assert.equal(result.state,'completed');assert.equal(executed,1);
+  assert.equal(inputs[2].kind,'decision-correction');assert.equal(inputs[2].actionExecuted,false);
+  assert.equal(inputs[2].originalInput.kind,'tool-observation');
+  assert.equal(result.toolResults.length,1);
+});
+
 test('a turn reports actual tool dispatch and receipts, then uses its last request for a natural closing',async()=>{
   let calls=0;const events=[],inputs=[];
   const turn=createAgentTurnRuntime({protocol,tools:['read'],maxToolCalls:1,onState:value=>events.push(structuredClone(value)),toolPolicy:policy,

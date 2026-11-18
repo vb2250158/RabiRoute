@@ -11,6 +11,23 @@ const integer = n => { const b=Buffer.alloc(4);b.writeInt32BE(n);return b; };
 const response = (event,id,payload=Buffer.from('{}'),type=9) => Buffer.concat([Buffer.from([0x11,type*16+4,type===11?0:16,0]),integer(event),integer(Buffer.byteLength(id)),Buffer.from(id),integer(payload.length),payload]);
 const asrResponse = result => { const b=Buffer.from(JSON.stringify({result}));return Buffer.concat([Buffer.from([0x11,0x90,0x10,0]),integer(b.length),b]); };
 
+test('TTS cleanup observes a rejected acknowledgement while its send is still pending',async()=>{
+  let receive,closed=0;
+  const stream=await openVolcanoTts({endpoint:'wss://example.com',voice:'fixture',onAudio:()=>assert.fail('symbol-only response has no audio'),
+    connect:async({onMessage})=>{receive=onMessage;return {close:async()=>{closed++},send:async bytes=>{
+      const msg=decodeFrame(bytes,{tts:true});
+      if(msg.event===2){await new Promise(resolve=>setTimeout(resolve,25));return;}
+      const expected=({1:50,100:150,102:152})[msg.event];
+      if(expected)queueMicrotask(()=>void receive(response(expected,msg.id||'connection')));
+    }}}});
+  await stream.append('***');await stream.finish();
+  assert.equal((await stream.finished).duration,0);
+  await stream.close();
+  // Let the pending send settle; node:test also checks for unhandled rejections.
+  await new Promise(resolve=>setTimeout(resolve,40));
+  assert.equal(closed,1);
+});
+
 test('TTS abort while awaiting connection acknowledgement never opens a late session',async()=>{
   const controller=new AbortController(),sent=[];let receive,closed=0;
   const opening=openVolcanoTts({endpoint:'wss://example.com',voice:'fixture',signal:controller.signal,onAudio:()=>assert.fail('late audio'),
@@ -75,7 +92,7 @@ test('ASR drains a batched microphone delivery without mistaking it for a blocke
     createRecording:()=>({start:async(_fail,options)=>{capture=options.onPcm},amplitude:()=>0,dispose:async()=>{}}),
     connect:async()=>({send:async bytes=>frames.push(decodeFrame(bytes)),close:async()=>{}})});
   const round=asr.createRound({onError:error=>errors.push(error.message)});await asr.start(round);
-  const pcm=Buffer.concat(Array.from({length:24},(_,index)=>Buffer.alloc(4096,index)));
+  const pcm=Buffer.concat(Array.from({length:64},(_,index)=>Buffer.alloc(4096,index)));
   capture(pcm);await asr.finish(round);
   assert.deepEqual(errors,[]);assert.equal(frames.at(-1).last,true);
   assert.deepEqual(Buffer.concat(frames.filter(frame=>frame.type===2).map(frame=>frame.payload)),pcm);
@@ -89,6 +106,7 @@ test('ASR still closes a genuinely blocked audio send queue',async()=>{
     connect:async()=>({send:async()=>{if(sent++>0)await gate},close:async()=>{release()}})});
   const round=asr.createRound({onError:error=>errors.push(error.message)});await asr.start(round);
   capture(Buffer.alloc(4096));await flush();capture(Buffer.alloc(16000*2*6));
+  await until(()=>errors.length===1);
   await asr.stop(round);assert.deepEqual(errors,['SPEECH_SEND_BACKLOG']);assert.equal(disposed,1);
 });
 

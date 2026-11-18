@@ -138,6 +138,7 @@ export async function bundleMessageEndpointWorker(root, specification, outputFil
   }
   const result = await build({ absWorkingDir: root, entryPoints: [path.join(root, specification.source)], bundle: true, write: false,
     platform: "node", format: "esm", target: "node22", metafile: true, nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
+    alias: { "@rabiroute/host-api": path.join(root, "src") },
     external: ["bufferutil", "utf-8-validate"], banner: { js: 'import { createRequire as __endpointWorkerRequire } from "node:module"; const require = __endpointWorkerRequire(import.meta.url);' } });
   const inputs = Object.keys(result.metafile.inputs).map(input => path.resolve(root, input)).filter(input => !input.includes(`${path.sep}node_modules${path.sep}`));
   const contents = result.outputFiles[0].text;

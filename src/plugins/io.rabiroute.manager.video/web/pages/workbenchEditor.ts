@@ -1,14 +1,26 @@
 // Presentation geometry and form metadata. Persistence and DAG rules stay with the original owner.
 // @ts-ignore Shared pure graph contract, also used by the storage/run owners.
-import { validateGraph } from "../../workbenchGraph.mjs";
+import { validateGraph, resolveLinkedText } from "../../workbenchGraph.mjs";
 export type Point = { x:number; y:number };
-export type FlowNode = { id:string; kind:string; title?:string; enabled?:boolean; gate?:boolean; optional?:boolean; config:Record<string,any>; layout?:Point; inputs?:any[]; requirements?:any[]; [key:string]:unknown };
+export type TextPreview = { attemptId:string; text:string };
+export type FlowNode = { id:string; kind:string; title?:string; enabled?:boolean; gate?:boolean; optional?:boolean; config:Record<string,any>; textPreview?:TextPreview; layout?:Point; inputs?:any[]; requirements?:any[]; [key:string]:unknown };
 export type FlowEdge = { id:string; from:string; to:string; fromPort:string; toPort:string; condition:string; allowSkip?:boolean };
 export type FlowGroup = { id:string; name?:string; nodeIds:string[]; kind?:string; [key:string]:unknown };
 export type FlowGraph = { nodes:FlowNode[]; edges:FlowEdge[]; groups:FlowGroup[] };
-export type WorkbenchCanvas = { version:number; id:string; name:string; revision:number; workspaceBindingKey:string; variables:unknown[]; graph:FlowGraph; [key:string]:unknown };
+export type MediaLink = { from: string; to: string };
+export type WorkbenchCanvas = { mediaLinks?: MediaLink[]; version:number; id:string; name:string; revision:number; workspaceBindingKey:string; variables:unknown[]; graph:FlowGraph; [key:string]:unknown };
 export type WorkbenchDefinition = { capabilities:Record<string,{label:string;ports:{in:string[];out:string[]}}>; edgeConditions:string[]; nodeStates:Record<string,{label:string}>; runStates?:Record<string,{label:string}>; [key:string]:unknown };
+export function initialFlowNodeConfig(kind: string): Record<string, unknown> {
+  switch (kind) {
+    case "command": return { toolKey: "", argv: [] };
+    case "agent": return { textPrompt: "", textOutput: true };
+    case "generate": return { command: {} };
+    case "asset": return { mediaKind: "text", ref: { root: "canvas", path: "" } };
+    default: return {};
+  }
+}
 export const NODE_WIDTH=320, NODE_HEIGHT=144, LIST_LIMIT=300;
+export const linkedText: (cards: readonly { id:string; kind:string; text:string; generated?:boolean }[], links: readonly MediaLink[], target:string) => string = resolveLinkedText;
 export function connectGraph(graph:FlowGraph,definition:WorkbenchDefinition,edge:FlowEdge) {
   if(graph.edges.some(row=>row.from===edge.from&&row.to===edge.to&&row.fromPort===edge.fromPort&&row.toPort===edge.toPort))throw new Error("这两个端口已经连接。");
   validateGraph({...graph,edges:[...graph.edges,edge]},definition);

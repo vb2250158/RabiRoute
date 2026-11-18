@@ -7,9 +7,15 @@ import { once } from "node:events";
 import type { NapcatManagerResources } from "../plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.js";
 import { NapcatLifecycleOwner, type NapcatBinding } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatLifecycleOwner.js";
 import { readNapcatApiManifest } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiManifest.js";
+import { napcatWebuiManagementDescriptors } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.js";
 import { napcatEndpointFixture } from "./napcatEndpointPlugin.fixture.js";
 
-const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + 17 + 20 + 1 + 1;
+const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + 17 + 21 + 1 + 1;
+
+test("NapCat management publishes the new mirror operation alongside its existing operations", () => {
+  assert.equal(napcatWebuiManagementDescriptors.length, 21);
+  assert.equal(napcatWebuiManagementDescriptors.filter(item => item.id === "mirror-custom.set" && item.nativePath === "/api/Mirror/SetCustom" && item.method === "POST").length, 1);
+});
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 

@@ -87,7 +87,16 @@ test("HTTP abort is reported once and normal completion is left to the finish li
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
-  assert.equal(await (await fetch(base + "/ok")).text(), "ok");
+  const ok = await new Promise<string>((resolve, reject) => {
+    http.get(base + "/ok", response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve(body));
+      response.on("error", reject);
+    }).on("error", reject);
+  });
+  assert.equal(ok, "ok");
   const request = http.get(base + "/pending");
   request.on("error", () => { /* The client intentionally aborts its pending request. */ });
   await arrival;

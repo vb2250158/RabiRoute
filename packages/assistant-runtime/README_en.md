@@ -363,3 +363,9 @@ UI previews explicitly state that conversation is unavailable, including inside 
 ### Text-confirmed voice interruption
 
 Raw onset/VAD only reports capture activity. Empty or rejected transcripts keep current playback and future text chunks active. The first accepted nonempty interim result stops playback and queued audio; the final result is automatically submitted. Final-only recognizers wait for their nonempty final result. `inputPending` still holds scheduling priority, independently of audio suppression. The model/tool task and original response text continue; cancelled audio never replays. Recognition end/error/pause releases the pending-text gate.
+
+### Response-format recovery and message motion
+
+A malformed model decision permits at most one format-correction request within the same turn. Validation remains strict, dispatched tools are never replayed, and existing receipts are retained. A second failure ends that turn; later user inputs can still be submitted. Capture failures and model failures appear separately. Restart voice if capture has stopped.
+
+The shared Web UI animates newly appearing messages once. Streaming text and state refreshes do not restart entry motion. Existing history appears directly, and reduced-motion preferences disable entry animations. Failed empty replies leave no blank bubble.

@@ -487,8 +487,7 @@ class DesktopPetWindow(QWidget):
     def _trim_bubbles(self) -> None:
         while len(self._previous_bubbles) >= self._bubble_style["maxVisible"]:
             bubble, _ = self._previous_bubbles.pop(0)
-            bubble.close()
-            bubble.deleteLater()
+            bubble.dismiss(delete=True)
 
     def _arm_bubble_expiry(self) -> None:
         deadlines = [deadline for _, deadline in self._previous_bubbles]
@@ -503,19 +502,21 @@ class DesktopPetWindow(QWidget):
         retained = []
         for bubble, deadline in self._previous_bubbles:
             if deadline <= now:
-                bubble.close()
-                bubble.deleteLater()
+                bubble.dismiss(delete=True)
             else:
                 retained.append((bubble, deadline))
         self._previous_bubbles = retained
         if self._bubble_deadline is not None and self._bubble_deadline <= now:
-            self._bubble.hide()
+            self._bubble.dismiss()
             self._bubble_displayed = False
         self._place_bubble()
         self._arm_bubble_expiry()
 
     def set_bubble_style(self, style: object) -> None:
-        self._bubble_style = normalize_bubble_style(style)
+        normalized = normalize_bubble_style(style)
+        if normalized == self._bubble_style:
+            return
+        self._bubble_style = normalized
         self._bubble.apply_style(self._bubble_style)
         for bubble, _ in self._previous_bubbles:
             bubble.apply_style(self._bubble_style)
@@ -536,7 +537,10 @@ class DesktopPetWindow(QWidget):
 
     def finish_speech_bubble(self) -> None:
         self._speech_active = False
-        self.hide_bubble()
+        # Audio gaps and tool work do not erase the sentence the user is reading.
+        if self._bubble_displayed and self._bubble_deadline is None:
+            self._bubble_deadline = time.monotonic() + self._bubble.display_ms / 1000
+        self._arm_bubble_expiry()
 
     def _place_bubble(self) -> None:
         screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
@@ -558,7 +562,8 @@ class DesktopPetWindow(QWidget):
         for bubble in (list(reversed(bubbles)) if upward else bubbles):
             x = max(area.left(), min(anchor.center().x() - bubble.width() // 2, area.right() - bubble.width() + 1))
             bubble.set_tail_anchor(anchor.center().x() - x, upward)
-            bubble.move(x, y)
+            bubble.set_tail_visible(bubble is self._bubble)
+            bubble.transition_to(QPoint(x, y))
             y += bubble.height() + 8
 
 
@@ -580,6 +585,8 @@ class DesktopPetWindow(QWidget):
         return bounds.translated(origin)
 
     def set_click_through(self, enabled: bool) -> None:
+        if bool(self.windowFlags() & Qt.WindowType.WindowTransparentForInput) == bool(enabled):
+            return
         if enabled:
             self._finish_drag(cancelled=True)
         was_visible = self.isVisible()
@@ -641,18 +648,20 @@ class DesktopPetWindow(QWidget):
         self.setWindowOpacity(max(0.2, min(1.0, float(opacity))))
         was_visible = self.isVisible()
         bubble_visible = self._bubble.isVisible()
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
-        self._bubble.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
-        for bubble, _ in self._previous_bubbles:
-            visible = bubble.isVisible()
-            bubble.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(always_on_top))
-            if visible:
-                bubble.show()
-        if was_visible:
-            self.show_on_desktop()
-        if bubble_visible:
-            self._bubble.show()
-            self._place_bubble()
+        flag = Qt.WindowType.WindowStaysOnTopHint
+        if bool(self.windowFlags() & flag) != bool(always_on_top):
+            self.setWindowFlag(flag, bool(always_on_top))
+            self._bubble.setWindowFlag(flag, bool(always_on_top))
+            for bubble, _ in self._previous_bubbles:
+                visible = bubble.isVisible()
+                bubble.setWindowFlag(flag, bool(always_on_top))
+                if visible:
+                    bubble.show()
+            if was_visible:
+                self.show_on_desktop()
+            if bubble_visible:
+                self._bubble.show()
+                self._place_bubble()
         if (
             self._active_pack is not None
             and self._active_animation is not None

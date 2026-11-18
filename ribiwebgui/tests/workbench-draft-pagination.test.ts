@@ -25,7 +25,7 @@ function fixture(t: TestContext, name = "WorkbenchPanel", props: Record<string, 
     static revokeObjectURL() {}
   }
   vm.runInNewContext(transformSync(script.content, { loader: "ts", format: "cjs" }).code, {
-    module, exports: module.exports, structuredClone, URL: BrowserURL, URLSearchParams, Blob, AbortController, setTimeout, clearTimeout,
+    module, exports: module.exports, structuredClone, URL: BrowserURL, URLSearchParams, Blob, AbortController, AbortSignal, setTimeout, clearTimeout,
     location: { href: "http://fixture/?canvas=canvas" }, history: { replaceState() {} },
     window: { history: { replaceState() {} },addEventListener(){},removeEventListener(){} },
     document: { createElement: () => ({ click() {} }) },
@@ -47,6 +47,7 @@ function fixture(t: TestContext, name = "WorkbenchPanel", props: Record<string, 
   });
   const scope = vue.effectScope();
   const reactiveProps=vue.reactive(props),model = scope.run(() => module.exports.default.setup(reactiveProps, { expose() {}, emit(name:string,value:unknown) {emitted.push({name,value});} }));
+  if (model.positions) canvas.positions = model.positions;
   const dispose=()=>{cleanup.forEach(fn=>fn());scope.stop();};t.after(dispose);
   return { model, canvas, requests, blobs, descriptor,storage,emitted,props:reactiveProps,dispose,flush:()=>vue.nextTick(),respond(fn: typeof respond) { respond = fn; } };
 }
@@ -147,7 +148,7 @@ test("canvas and run-history pagination append unique rows and replace on a new 
   m.search.value = "new"; await m.list();
   assert.equal(m.rows.value.length, 2); assert.equal(f.requests.at(-1)!.url.searchParams.get("cursor"), null);
   f.respond(() => { throw new Error("list unavailable"); });
-  await m.action(() => m.list()); assert.equal(m.rows.value.length, 2); assert.match(m.error.value, /list unavailable/);
+  await m.action(() => m.list()); assert.equal(m.rows.value.length, 2); assert.match(m.listError.value, /list unavailable/);
   const r = fixture(t, "WorkbenchRunPanel", { projectId: "project", canvasId: "canvas", revision: 3, dirty: false });
   r.respond(url => url.searchParams.has("cursor") ? { runs: [{ id: "one" }, { id: "two" }], nextCursor: null } : { runs: [{ id: "zero" }, { id: "one" }], nextCursor: "next" });
   await r.model.loadHistory(); await r.model.loadHistory(true);
@@ -252,7 +253,7 @@ test("unbound check thresholds stay read-only and do not fabricate a CLI flag",t
 test("definition import preserves material bundles and accepts original linear definitions",async t=>{
   const f=fixture(t),m=f.model,materials=[{path:"materials/task.md",base64:"aGVsbG8=",sha256:"original-hash"}],source={nodes:[],name:"Bundle"};f.respond((_url,method)=>({...canvasRecord(),id:method==="POST"?"imported":"opened"}));
   await m.importFile({target:{value:"bundle.json",files:[{size:100,text:async()=>JSON.stringify({source,materials})}]}});assert.deepEqual(f.requests[0].body.source,source);assert.deepEqual(f.requests[0].body.materials,materials);
-  const original={nodes:[],source:"original provenance"};await m.importFile({target:{value:"source.json",files:[{size:100,text:async()=>JSON.stringify(original)}]}});assert.deepEqual(f.requests[2].body.source,original);assert.equal(f.requests[2].body.materials,undefined);
+  const original={nodes:[],source:"original provenance"};await m.importFile({target:{value:"source.json",files:[{size:100,text:async()=>JSON.stringify(original)}]}});const imports = f.requests.filter(request => request.method === "POST");assert.deepEqual(imports[1].body.source,original);assert.equal(imports[1].body.materials,undefined);assert.equal(f.emitted.filter(event => event.name === "media").length, 2);
 });
 test("edition trigger retries the exact original request after an unknown delivery result",async t=>{
   const f=fixture(t,"WorkbenchRunPanel",{projectId:"project",canvasId:"template",revision:3,dirty:false}),m=f.model;m.editionDate.value="2026-11-17";m.editionLabel.value="本期";
@@ -264,4 +265,38 @@ test("edition trigger retries the exact original request after an unknown delive
 test("mismatched edition receipts retain the original request and block an alternate run",async t=>{
   const f=fixture(t,"WorkbenchRunPanel",{projectId:"project",canvasId:"template",revision:3,dirty:false}),m=f.model;m.editionDate.value="2026-11-17";
   f.respond((_url,_method,body)=>({trigger:{...body,projectId:"wrong",templateId:"template",canvasId:"edition",runId:"run"},run:{id:"run",projectId:"wrong",canvasId:"edition",state:"running",attempts:{}}}));await m.action(m.triggerEdition);assert.ok(m.editionRequest.value);assert.equal(f.emitted.length,0);assert.match(m.error.value,/不一致/);await m.action(()=>m.start());assert.equal(f.requests.length,1);assert.match(m.error.value,/原期次/);
+});
+
+test("canvas list distinguishes waiting, failure and a successful empty response", async t => {
+  const f = fixture(t), m = f.model;
+  let rejectRead!: (reason: Error) => void;
+  f.respond(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+  const pending = m.list();
+  assert.equal(m.listLoading.value, true);
+  assert.equal(m.listLoaded.value, false);
+  rejectRead(new Error("offline"));
+  await pending;
+  assert.equal(m.listLoading.value, false);
+  assert.equal(m.listLoaded.value, false);
+  assert.match(m.listError.value, /offline/);
+  f.respond(() => ({ canvases: [], nextCursor: null }));
+  await m.list();
+  assert.equal(m.listLoaded.value, true);
+  assert.equal(m.listError.value, "");
+});
+
+test("return to projects preserves a draft when saving fails", async t => {
+  const f = fixture(t), m = f.model;
+  m.value.value = canvasRecord();
+  m.value.value.name = "Edited";
+  m.dirty.value = true;
+  f.respond(() => new Response(JSON.stringify({ message: "offline" }), { status: 503 }));
+  await m.action(m.backToProjects);
+  assert.equal(f.emitted.length, 0);
+  assert.equal(m.value.value.name, "Edited");
+  assert.equal(m.dirty.value, true);
+  f.respond((_url, _method, body) => ({ ...body, revision: 4 }));
+  await m.action(m.backToProjects);
+  assert.equal(m.dirty.value, false);
+  assert.deepEqual(f.emitted.map(event => event.name), ["back"]);
 });

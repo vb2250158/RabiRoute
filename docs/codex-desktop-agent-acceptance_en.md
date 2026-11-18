@@ -78,6 +78,7 @@ The primary persona can select `model` and `reasoningEffort` through the existin
 
 - The UI shows task name and last activity; users do not type UUIDs.
 - Internally, the complete task ID is the task identity. Workspace controls the current execution, while the task's saved default cwd is metadata. The visible name is display and no-ID lookup metadata.
+- On Windows, a local exact-task binding can use a mapped drive as its execution directory. Rabi keeps the drive letter and Codex Desktop uses the current mapping in its own logon session. Repoint the same drive letter after moving the NAS or update the rule if the drive letter changes.
 - For Codex, the user-visible name comes only from the Desktop left sidebar: full scans and exact-ID reads both use `thread_name` from the same sidebar session index, exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
