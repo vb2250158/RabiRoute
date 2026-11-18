@@ -10,6 +10,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
+## 0.15.35 - 2026-11-18
+
+- NapCat 0.1.17 reads files from exact messages or native group-file references, repairs native UUID resolution in the existing attachment entry, and adds cancellable, bounded streaming SHA-256 verification. Source-bound byte views retain their distinct contract and original send receipts remain intact.
+
 ## 0.15.34 - 2026-11-18
 
 - NapCat 0.1.16 adds four restricted Ark card read views with handler-based action classification, plus WebUI queries for native/current-account configuration, font availability and mirror metadata.

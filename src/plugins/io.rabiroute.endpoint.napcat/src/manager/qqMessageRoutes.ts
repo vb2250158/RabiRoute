@@ -118,6 +118,7 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
   if (!definition || definition.enabled !== true || !definitionUsesNapcat(definition)) return fail(409, "QQ_READ_ROUTE_UNAVAILABLE");
   if (!Array.isArray(definition.napcatInstances) || definition.napcatInstances.length !== 1 || definition.napcatInstances[0]?.enabled === false) return fail(409, "QQ_READ_INSTANCE_AMBIGUOUS");
   const instance = normalizeNapCatInstances(definition)[0]!;
+  const configuredBotUserId = String(definition.napcatInstances[0]?.botUserId ?? "");
   const endpoint = { httpUrl: instance.httpUrl, accessToken: instance.accessToken ?? "" };
   let concurrency: number, timeoutMs: number;
   const mediaRead = selected.kind === "attachment" || selected.kind === "forward-attachment";
@@ -138,7 +139,8 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
     if (!authorized()) throw new QqReadError(403, "QQ_READ_AUTHORIZATION_REVOKED");
     if (context.route(routeId) !== definition || definition.enabled !== true || !definitionUsesNapcat(definition)
       || definition.napcatInstances?.length !== 1 || now.length !== 1 || now[0]?.enabled === false
-      || now[0]?.id !== instance.id || now[0]?.httpUrl !== endpoint.httpUrl || (now[0]?.accessToken ?? "") !== endpoint.accessToken) throw new QqReadError(409, "QQ_READ_ROUTE_CHANGED");
+      || now[0]?.id !== instance.id || now[0]?.httpUrl !== endpoint.httpUrl || (now[0]?.accessToken ?? "") !== endpoint.accessToken
+      || String(definition.napcatInstances[0]?.botUserId ?? "") !== configuredBotUserId) throw new QqReadError(409, "QQ_READ_ROUTE_CHANGED");
   };
   const page = async (anchor: string | null, count: number) => {
     current();
@@ -242,7 +244,7 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
       if (selected.kind === "forward-node") return ok({ routeId, instanceId: instance.id, ...projectQqForwardNode(node, selection, messageId, selected.forwardPath, selected.nodeIndex) });
       attachmentOwner = node;
     }
-    const attachment = qqMessageMedia(attachmentOwner.message ?? attachmentOwner.raw_message)[selected.index];
+    let attachment = qqMessageMedia(attachmentOwner.message ?? attachmentOwner.raw_message)[selected.index];
     if (!attachment) throw new QqReadError(404, "QQ_ATTACHMENT_NOT_FOUND");
     const transport = selected.kind === "forward-attachment" ? async (...args: Parameters<typeof fetch>) => {
       controller.signal.throwIfAborted(); current();
@@ -250,12 +252,33 @@ async function readQqMessageResult(request: http.IncomingMessage, url: URL,
       current(); controller.signal.throwIfAborted();
       return result;
     } : context.transport;
-    const body = await readQqMedia(endpoint, attachment, controller.signal, transport);
+    const exactFile = selected.kind === "attachment" && attachment.kind === "file";
+    let observedBotUserId: string | undefined;
+    if (exactFile) {
+      const identity = await qqRead(endpoint, "get_login_info", {}, controller.signal, context.transport);
+      current();
+      observedBotUserId = String(identity.user_id ?? "");
+      if (!QQ_TARGET_ID_PATTERN.test(observedBotUserId) || (configuredBotUserId && configuredBotUserId !== observedBotUserId)) {
+        throw new QqReadError(409, "QQ_READ_ACCOUNT_MISMATCH");
+      }
+      // Pin the file's exact source after observing the account. Images/audio keep their existing flow.
+      const pinnedRow = await readExactQqMessage({ endpoint, kind: kind as "group" | "private", target, messageId,
+        signal: controller.signal, current, transport: context.transport });
+      attachment = qqMessageMedia(pinnedRow.message)[selected.index];
+      if (!attachment || attachment.kind !== "file") throw new QqReadError(409, "QQ_MEDIA_CHANGED");
+    }
+    const body = await readQqMedia(endpoint, attachment, controller.signal, transport, exactFile
+      ? { source: { kind: kind as "group" | "private", targetId: target }, mode: "url-only", allowEmptyFile: true } : {});
+    if (exactFile) {
+      const identity = await qqRead(endpoint, "get_login_info", {}, controller.signal, context.transport);
+      current();
+      if (String(identity.user_id ?? "") !== observedBotUserId) throw new QqReadError(409, "QQ_READ_ACCOUNT_MISMATCH");
+    }
     if (selected.kind === "forward-attachment") controller.signal.throwIfAborted();
     current();
     return { status: 200, body, headers: { ...headers, "content-length": String(body.length),
       "x-rabiroute-content-sha256": createHash("sha256").update(body).digest("hex"), "x-content-type-options": "nosniff",
-      "content-type": "application/octet-stream", "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(attachment.name)}` } };
+      "content-type": "application/octet-stream", "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(Buffer.from(attachment.name, "utf8").toString("utf8"))}` } };
   } catch (error) {
     if (error instanceof ReadSettingsError) return fail(503, error.code, error.message);
     if (timedOut) return fail(503, "QQ_READ_TIMEOUT", `QQ read exceeded ${timeoutSetting}=${timeoutMs} ms. Adjust this Manager environment setting if the source needs longer.`);

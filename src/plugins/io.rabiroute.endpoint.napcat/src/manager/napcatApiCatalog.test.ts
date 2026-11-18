@@ -1,3 +1,4 @@
+import { createSourceFileOperations } from "./napcatApiSourceFileOperations.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -127,4 +128,18 @@ test("reviewed metadata DTOs omit opaque message media, notice settings and requ
   const requests = projectNapcatApiResponse(ignored.response, { invited_requests: [{ request_id: 4, group_id: 789, checked: false, cookie: "private" }],
     InvitedRequest: [], join_requests: [] }, ignored.nativeResponse);
   assert.deepEqual(requests, { invited_requests: [{ request_id: 4, group_id: 789, checked: false }], InvitedRequest: [], join_requests: [] });
+});
+
+test("source-file owners replace two native slots and add one independent hash operation", async () => {
+  const context = { rootDir: ".", local: () => true, route: () => definition, readOnly: () => false };
+  const sources = createSourceFileOperations(context);
+  const ids = new Set(sources.map(value => value.contract.operationId));
+  const operations = [...createNapcatApiOperations(context, descriptors).filter(value => !ids.has(value.contract.operationId)), ...sources];
+  assert.equal(operations.length, 168);
+  assert.equal(new Set(operations.flatMap(value => [value.contract.operationId, ...(value.contract.aliases ?? [])])).size, 502);
+  const coverage = JSON.parse(await fs.readFile(new URL("../../contracts/rabi-coverage-4.18.4.json", import.meta.url), "utf8"));
+  const counts = coverage.counts;
+  assert.equal(counts.read + counts.mutation + counts.existingOwnerReference + counts.ownerDependency + counts.sourceBoundBinaryViews, 167);
+  assert.equal(coverage.actions.filter((row: { status: string }) => row.status === "source-bound-binary-view").length, 2);
+  assert.equal(coverage.rabiOnlyOperations[0].nativeCoverageContribution, 0);
 });

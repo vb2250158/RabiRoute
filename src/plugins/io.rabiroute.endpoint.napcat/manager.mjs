@@ -119,7 +119,7 @@ export const activate = definePlugin({ async activate(context) {
       rootDir: host.manager.rootDir,
       readOnly: () => host.manager.readOnly,
       local: host.manager.requestIsLoopback,
-      route: id => host.manager.routeRunning(id) ? host.manager.readRoute(id) : undefined,
+      route: host.manager.readRoute,
       assertCurrent: assertAccepting
     };
     const managementContext = {
@@ -128,8 +128,12 @@ export const activate = definePlugin({ async activate(context) {
       openManagementSession: (selection, signal) => implementation.openNapcatWebuiManagementSession(controlContext, selection, signal)
     };
     const manifest = implementation.readNapcatApiManifest();
+    const sourceFileOperations = implementation.createSourceFileOperations(apiContext);
+    const sourceOperationIds = new Set(sourceFileOperations.map(operation => operation.contract.operationId));
     const protocolOperations = [
-      ...implementation.createNapcatApiOperations(apiContext, implementation.createNapcatApiDescriptors(manifest)),
+      ...implementation.createNapcatApiOperations(apiContext, implementation.createNapcatApiDescriptors(manifest))
+        .filter(operation => !sourceOperationIds.has(operation.contract.operationId)),
+      ...sourceFileOperations,
       implementation.createNapcatApiReceiptOperation(apiContext),
       implementation.createNapcatApiEventCatalogOperation(manifest),
       ...implementation.createNapcatWebuiManagementOperations(managementContext),

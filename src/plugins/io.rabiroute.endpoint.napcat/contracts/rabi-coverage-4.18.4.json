@@ -10,10 +10,11 @@
     "read": 55,
     "mutation": 55,
     "existingOwnerReference": 20,
-    "ownerDependency": 37,
+    "ownerDependency": 35,
     "eventBaseClasses": 6,
     "eventInstantiatedClasses": 25,
-    "limitedReadViews": 23
+    "limitedReadViews": 23,
+    "sourceBoundBinaryViews": 2
   },
   "actions": [
     {
@@ -53,7 +54,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -126,7 +127,7 @@
         "$[].settings (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -184,7 +185,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -211,7 +212,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -319,7 +320,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "The notice's text and optional image require the original outbound and attachment owners.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -344,7 +345,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -2631,7 +2632,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "The original incoming event owner must retain and validate the request context and its reply actions.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -2714,7 +2715,7 @@
       ],
       "attachmentInput": "ocr-image",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -2793,7 +2794,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -2888,7 +2889,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -2921,7 +2922,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "An account-preserving process exit operation is required; removing the configured instance has different effects.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -2956,7 +2957,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -2991,7 +2992,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3040,7 +3041,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3088,7 +3089,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3129,7 +3130,7 @@
       ],
       "dependency": "Cancelling a file requires the original transfer lifecycle and receipt.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3172,7 +3173,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3198,7 +3199,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Host cache removal requires the original filesystem/resource lifecycle owner.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3224,7 +3225,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Native stream temporary files require their owning lifecycle before removal.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3283,7 +3284,7 @@
       ],
       "dependency": "An inline keyboard action requires its original message and application-owner evidence.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3331,7 +3332,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3371,7 +3372,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3425,7 +3426,7 @@
       ],
       "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3469,7 +3470,7 @@
         "$.groupItem (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3514,7 +3515,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3565,7 +3566,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3623,7 +3624,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3663,7 +3664,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3706,7 +3707,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3747,7 +3748,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -3798,7 +3799,7 @@
       ],
       "dependency": "Album comment text requires a managed outbound action adapter.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3862,7 +3863,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Host filesystem downloads require an owned destination and safe file/URL input handles.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3904,7 +3905,7 @@
       ],
       "dependency": "Native image streaming requires the original stream and owned destination lifecycle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3950,7 +3951,7 @@
       ],
       "dependency": "Native audio streaming requires the original stream and owned destination lifecycle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -3992,7 +3993,7 @@
       ],
       "dependency": "Native file streaming requires the original stream and owned destination lifecycle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4028,7 +4029,7 @@
       ],
       "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4078,7 +4079,7 @@
         "condition": "Current fetch_custom_face supported. Existing fetch_custom_face_detail fallback action is not registered by installed4.18.4."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4223,7 +4224,7 @@
       ],
       "dependency": "The provider cookie cursor requires an opaque pagination handle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4293,7 +4294,7 @@
       "protectedOrOpaqueNativeFields": [],
       "attachmentInput": "audio-message",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -4348,7 +4349,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4403,7 +4404,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4444,7 +4445,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -4524,7 +4525,7 @@
         "$[].characters[].preview_url (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4569,7 +4570,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Generated audio URLs require a managed resource handle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -4626,7 +4627,7 @@
         "$.clientkey (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -4786,7 +4787,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -4862,7 +4863,7 @@
         "$.cookies (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -4939,7 +4940,7 @@
         "$.token (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -5001,7 +5002,7 @@
         "$.token (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -5114,7 +5115,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -5199,7 +5200,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5274,7 +5275,7 @@
         "$[].content[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5340,7 +5341,7 @@
         "condition": "Native file/image/record ID alone does not prove original message ownership. Original media owner must resolve source and issue resource handle."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5383,7 +5384,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5444,7 +5445,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "diagnostic",
@@ -5510,7 +5511,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "diagnostic",
@@ -5559,7 +5560,7 @@
       ],
       "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5609,7 +5610,7 @@
         "condition": "Original forward source and safe media handles; one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5727,7 +5728,7 @@
         "condition": "Original contacts projection and actual bot identity, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5819,7 +5820,7 @@
         "condition": "Existing bounded history pagination; one enabled NapCat instance only."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -5948,7 +5949,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6031,7 +6032,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -6090,7 +6091,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6159,7 +6160,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6218,7 +6219,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6229,46 +6230,147 @@
         "get_group_file_url_rate_limited"
       ],
       "sourceLine": 111610,
-      "status": "owner-dependency",
+      "status": "source-bound-binary-view",
       "operationId": "agent.qq.onebot.get_group_file_url",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_group_file_url",
       "input": {
-        "type": "object",
-        "properties": {
-          "group_id": {
-            "type": "string",
-            "description": "群号"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "routeId",
+              "instanceId",
+              "source"
+            ],
+            "properties": {
+              "routeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "instanceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "targetId",
+                  "messageId",
+                  "attachmentIndex"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "group"
+                  },
+                  "targetId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,15}$"
+                  },
+                  "messageId": {
+                    "type": "string",
+                    "pattern": "^-?[0-9]{1,20}$"
+                  },
+                  "attachmentIndex": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
           },
-          "file_id": {
-            "type": "string",
-            "description": "文件ID"
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "routeId",
+              "instanceId",
+              "group"
+            ],
+            "properties": {
+              "routeId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "instanceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "group": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "groupId",
+                  "fileId"
+                ],
+                "properties": {
+                  "groupId": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,15}$"
+                  },
+                  "fileId": {
+                    "type": "string",
+                    "pattern": "^[a-fA-F0-9]{32}$"
+                  }
+                }
+              }
+            }
           }
-        },
-        "required": [
-          "group_id",
-          "file_id"
-        ],
-        "additionalProperties": false
+        ]
       },
       "publicResponse": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "description": "文件下载链接"
-          }
+        "mediaType": "application/octet-stream",
+        "binary": {
+          "minBytes": 0,
+          "maxBytes": 9007199254740991
         },
-        "description": "群文件URL信息",
-        "additionalProperties": false
+        "headers": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "content-length",
+            "content-disposition",
+            "x-rabiroute-content-sha256",
+            "x-content-type-options",
+            "x-rabiroute-native-contract-equivalent"
+          ],
+          "properties": {
+            "content-length": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "content-disposition": {
+              "type": "string",
+              "minLength": 1
+            },
+            "x-rabiroute-content-sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "x-content-type-options": {
+              "const": "nosniff"
+            },
+            "x-rabiroute-native-contract-equivalent": {
+              "const": "false"
+            }
+          }
+        }
       },
       "protectedOrOpaqueNativeFields": [
         "$.url (protected resource/credential)"
       ],
-      "dependency": "Signed group file URLs require a managed file resource handle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "receipt": null,
+      "nativeContractEquivalent": false,
+      "nativeResourceHandling": "Native resource URLs remain request-local. The response contains complete source-bound bytes under the existing materialization quota."
     },
     {
       "action": "get_group_files_by_folder",
@@ -6347,7 +6449,7 @@
         "condition": "Original group file metadata, safe download handles, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6583,7 +6685,7 @@
         "$.strong_newbie_list[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -6663,7 +6765,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6809,7 +6911,7 @@
         "$.join_requests[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6876,7 +6978,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -6947,7 +7049,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "diagnostic",
@@ -7032,7 +7134,7 @@
         "condition": "Original contacts projection and actual bot identity, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7166,7 +7268,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7219,7 +7321,7 @@
         "condition": "Original bounded member projection, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7311,7 +7413,7 @@
         "condition": "Existing bounded history pagination; one enabled NapCat instance only."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7383,7 +7485,7 @@
         "condition": "Original group file metadata, safe download handles, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7455,7 +7557,7 @@
         "$[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -7683,7 +7785,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7708,7 +7810,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7733,7 +7835,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7799,7 +7901,7 @@
         "condition": "Native file/image/record ID alone does not prove original message ownership. Original media owner must resolve source and issue resource handle."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -7896,7 +7998,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8106,7 +8208,7 @@
         "$.data (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -8237,7 +8339,7 @@
         "condition": "Existing exact-route stored message/native read contract; one enabled NapCat instance only."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8270,7 +8372,7 @@
         "$[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8339,7 +8441,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "diagnostic",
@@ -8355,41 +8457,104 @@
         "get_private_file_url_rate_limited"
       ],
       "sourceLine": 112319,
-      "status": "owner-dependency",
+      "status": "source-bound-binary-view",
       "operationId": "agent.qq.onebot.get_private_file_url",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_private_file_url",
       "input": {
         "type": "object",
-        "properties": {
-          "file_id": {
-            "type": "string",
-            "description": "文件ID"
-          }
-        },
+        "additionalProperties": false,
         "required": [
-          "file_id"
+          "routeId",
+          "instanceId",
+          "source"
         ],
-        "additionalProperties": false
+        "properties": {
+          "routeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "instanceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "targetId",
+              "messageId",
+              "attachmentIndex"
+            ],
+            "properties": {
+              "kind": {
+                "const": "private"
+              },
+              "targetId": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,15}$"
+              },
+              "messageId": {
+                "type": "string",
+                "pattern": "^-?[0-9]{1,20}$"
+              },
+              "attachmentIndex": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
       },
       "publicResponse": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "description": "文件下载链接"
-          }
+        "mediaType": "application/octet-stream",
+        "binary": {
+          "minBytes": 0,
+          "maxBytes": 9007199254740991
         },
-        "description": "私聊文件URL信息",
-        "additionalProperties": false
+        "headers": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "content-length",
+            "content-disposition",
+            "x-rabiroute-content-sha256",
+            "x-content-type-options",
+            "x-rabiroute-native-contract-equivalent"
+          ],
+          "properties": {
+            "content-length": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "content-disposition": {
+              "type": "string",
+              "minLength": 1
+            },
+            "x-rabiroute-content-sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "x-content-type-options": {
+              "const": "nosniff"
+            },
+            "x-rabiroute-native-contract-equivalent": {
+              "const": "false"
+            }
+          }
+        }
       },
       "protectedOrOpaqueNativeFields": [
         "$.url (protected resource/credential)"
       ],
-      "dependency": "Signed private file URLs require a managed file resource handle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "receipt": null,
+      "nativeContractEquivalent": false,
+      "nativeResourceHandling": "Native resource URLs remain request-local. The response contains complete source-bound bytes under the existing materialization quota."
     },
     {
       "action": "get_profile_like",
@@ -8508,7 +8673,7 @@
         "$.voteInfo.userInfos[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8602,7 +8767,7 @@
         "$.album_list[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -8708,7 +8873,7 @@
         "condition": "Original contacts projection and actual bot identity, one enabled instance."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8781,7 +8946,7 @@
         "condition": "Native file/image/record ID alone does not prove original message ownership. Original media owner must resolve source and issue resource handle."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -8853,7 +9018,7 @@
         "$[].rkey (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -8919,7 +9084,7 @@
         "$.group_rkey (protected resource/credential)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -8986,7 +9151,7 @@
         "$[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -9027,7 +9192,7 @@
       ],
       "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9067,7 +9232,7 @@
         "$.stat (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9194,7 +9359,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9253,7 +9418,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9299,7 +9464,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9340,7 +9505,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -9386,7 +9551,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -9432,7 +9597,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -9478,7 +9643,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -9537,7 +9702,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -9562,7 +9727,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9634,7 +9799,7 @@
         "$[] (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "credential-summary",
@@ -9688,7 +9853,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9771,7 +9936,7 @@
       ],
       "attachmentInput": "ocr-image",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9817,7 +9982,7 @@
       ],
       "dependency": "Receiving a file requires an owned destination and original transfer lifecycle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9863,7 +10028,7 @@
       ],
       "dependency": "Refusing a file requires the original transfer lifecycle and receipt.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -9922,7 +10087,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -10012,7 +10177,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -10066,7 +10231,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -12282,7 +12447,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -12342,7 +12507,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -12421,7 +12586,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null,
       "view": {
         "kind": "metadata",
@@ -14642,7 +14807,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -16857,7 +17022,7 @@
         "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -16892,7 +17057,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -16938,7 +17103,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -19153,7 +19318,7 @@
         "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -19203,7 +19368,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -19253,7 +19418,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -19314,7 +19479,7 @@
       ],
       "dependency": "Raw packet service, command and byte payload need the original protocol execution owner.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -19355,7 +19520,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -21571,7 +21736,7 @@
       },
       "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -23786,7 +23951,7 @@
         "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -23846,7 +24011,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -23887,7 +24052,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -23929,7 +24094,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -23977,7 +24142,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24015,7 +24180,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24062,7 +24227,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24124,7 +24289,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24174,7 +24339,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24223,7 +24388,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24275,7 +24440,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24318,7 +24483,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24368,7 +24533,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24421,7 +24586,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24466,7 +24631,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24505,7 +24670,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24570,7 +24735,7 @@
       "protectedOrOpaqueNativeFields": [],
       "attachmentInput": "image-file",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24609,7 +24774,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24651,7 +24816,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24693,7 +24858,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24728,7 +24893,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24774,7 +24939,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24822,7 +24987,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24867,7 +25032,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24907,7 +25072,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -24972,7 +25137,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25037,7 +25202,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25097,7 +25262,7 @@
       "protectedOrOpaqueNativeFields": [],
       "attachmentInput": "image-file",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25147,7 +25312,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25177,7 +25342,7 @@
         "condition": "Original native lifecycle owner and local permissions. It has no generic OneBot delivery receipt; never substitute for bot_exit."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25212,7 +25377,7 @@
         "$ (opaque)"
       ],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25239,7 +25404,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Upstream test interface; excluded from ordinary platform execution.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25266,7 +25431,7 @@
       "protectedOrOpaqueNativeFields": [],
       "dependency": "Upstream test interface; excluded from ordinary platform execution.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25300,7 +25465,7 @@
       ],
       "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25349,7 +25514,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": "Original durableDeliveryIdempotency owner, namespace napcat-onebot-actions, stable deliveryId + action/Route/instance/QQ/params digest; no automatic retry after uncertainty."
     },
     {
@@ -25399,7 +25564,7 @@
       },
       "protectedOrOpaqueNativeFields": [],
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25477,7 +25642,7 @@
       ],
       "dependency": "Native file streaming requires existing upload ownership and stream lifecycle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25556,7 +25721,7 @@
         "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25607,7 +25772,7 @@
       ],
       "dependency": "Album image upload requires an owned attachment handle.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     },
     {
@@ -25678,7 +25843,7 @@
         "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
       },
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
-      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
+      "access": "Original authenticated connection/trusted LAN principal or loopback, enabled stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
       "receipt": null
     }
   ],
@@ -26317,5 +26482,14 @@
     "Managed references are compatibility guidance and reject raw dispatch; missing dependencies are not upstream unsupported.",
     "No active group-join action exists in this installed action registry; request handling consumes existing flags.",
     "Twenty-three limited views include four Rabi-declared Ark projections. Native complete shapes remain unverified. The installed send_group_ark_share/send_ark_share handlers obtain cards without sending messages."
+  ],
+  "rabiOnlyOperations": [
+    {
+      "operationId": "agent.qq.file.verify-sha256",
+      "nativeCoverageContribution": 0,
+      "method": "POST",
+      "path": "/api/agent/qq/files/sha256",
+      "description": "Explicit bounded streaming SHA-256 verification with a separate read result."
+    }
   ]
 }

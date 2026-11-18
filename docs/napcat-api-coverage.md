@@ -10,9 +10,9 @@
 
 | 范围 | 本版状态 |
 | --- | --- |
-| OneBot 动作 | 55 个读取（含 23 个受限视图）、55 个使用原持久账本的副作用动作 |
+| OneBot 动作 | 55 个读取（含 23 个受限视图）、2 个源绑定文件字节视图、55 个使用原持久账本的副作用动作 |
 | 既有入口 | 20 项兼容形态，按原操作合同调用 |
-| 待实现或所属宿主限制 | 37 项，逐项保留具体原因 |
+| 待实现或所属宿主限制 | 35 项，逐项保留具体原因 |
 | WebUI | 17 个读取/摘要加 20 个管理入口（18 读、2 偏好写）；13 项旧入口，54 项依赖和 8 项宿主边界 |
 | 事件 | 类型化元数据存档实现已接入；Gateway 实际采用版本与哈希需独立核对 |
 
@@ -32,13 +32,15 @@
 
 副作用动作另需稳定 `deliveryId`。同号同参数只核对原持久记录，参数冲突返回 409。202 表示原结果仍不确定，按 `GET /api/agent/qq/onebot-receipts/<deliveryId>?routeId=example-route&instanceId=example-napcat` 查询，不重新发送正文。`_async` 和 `_rate_limited` 是同一 Rabi 合同的发现别名，本版统一使用其同步语义。
 
-每次实际调用绑定正在运行的 Route、明确实例及配置的 QQ 账号，并核对 `get_login_info`。已有连接权限、取消、超时、读取配额与作用域继续生效。已配置多实例时仍需明确 `instanceId`。
+每次实际调用绑定已启用的 Route、明确实例及配置的 QQ 账号，并核对 `get_login_info`。已有连接权限、取消、超时、读取配额与作用域继续生效。已配置多实例时仍需明确 `instanceId`。
 
 头像、群头像、OCR 和语音转文字通过原消息附件 owner 取输入。使用 `attachment={kind,targetId,messageId,attachmentIndex}`，按精确会话与消息选择附件。调用参数中的 URL、宿主路径或任意 base64 无法替代附件身份。
 
 WebUI 固定读取入口为 `POST /api/agent/qq/webui/<id>`，同样携带 `routeId`、`instanceId` 与 `params`。原 WebUI 会话 owner 保管凭据，独立核对 WebUI 登录 QQ 与 OneBot 目标账号相同。证书只返回安全状态摘要，日志、页面和图标只返回受限摘要，SSE 只读取有界样本。私钥、凭据、任意代理、宿主路径和插件代码不会通过该读取入口返回或执行。
 
 新增管理入口为 `POST /api/agent/qq/webui-management/<id>`，偏好写入另需稳定 `deliveryId`，原回执通过 `GET /api/agent/qq/webui-management-receipts/<deliveryId>` 查询。它复用原登录目标和凭据 owner。明确未登录时按初始化合同处理；观察到原生账号后必须与配置账号一致，未绑定实例可使用原登录面板完成绑定。主题更新保留未改字段，自动登录偏好不提交登录操作。原生接口缺少跨客户端原子 CAS，结果按实际读回和原回执判断。
+
+`get_group_file_url` 与 `get_private_file_url` 两个入口返回源绑定文件字节，标记 `nativeContractEquivalent=false`。参数使用精确消息来源或原生群文件缓存引用，签名 URL 仅在请求内存中使用。原生重启或缓存过期会令引用失效，失效时返回原生错误，由原来源取得新的有效引用。Rabi 独立操作 `agent.qq.file.verify-sha256` 按明确大小、预期摘要和可选超时增量核验文件，流式读取保持常量内存，核验结果独立留证。
 
 ## 加群能力
 

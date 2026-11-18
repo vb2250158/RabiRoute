@@ -10,9 +10,9 @@ The baseline is the NapCat 4.18.4 distribution with SHA-256 `66dfaa1b9e7530d4930
 
 | Area | This version |
 | --- | --- |
-| OneBot actions | 55 reads, including 23 limited views, and 55 mutations using the original durable ledger |
+| OneBot actions | 55 reads, including 23 limited views, 2 source-bound file byte views, and 55 mutations using the original durable ledger |
 | Existing operations | 20 supported shapes under their original contracts |
-| Outstanding implementation or native-host boundary | 37 individually documented items |
+| Outstanding implementation or native-host boundary | 35 individually documented items |
 | WebUI | 17 reads/summaries plus 20 management operations (18 reads, 2 preference writes), 13 legacy entries, 54 dependencies and 8 host boundaries |
 | Events | Typed metadata archiving is implemented; the Gateway adopted version and hash require independent runtime evidence |
 
@@ -32,13 +32,15 @@ Discover an operation through `/api/search`, then read its help contract. Fixed 
 
 Mutations also require a stable `deliveryId`. The same ID and parameters consult the original durable record. Conflicting parameters return 409. A 202 leaves the original result uncertain. Query `GET /api/agent/qq/onebot-receipts/<deliveryId>?routeId=example-route&instanceId=example-napcat` and retain the original payload. `_async` and `_rate_limited` are discovery aliases for the same synchronous Rabi contract.
 
-Actual calls bind a running Route, an explicit instance and the configured QQ account, verified with `get_login_info`. Existing connection authority, cancellation, deadlines, quotas and conversation scopes apply. Multiple configured instances still require an explicit `instanceId`.
+Actual calls bind a enabled Route, an explicit instance and the configured QQ account, verified with `get_login_info`. Existing connection authority, cancellation, deadlines, quotas and conversation scopes apply. Multiple configured instances still require an explicit `instanceId`.
 
 Avatar, group portrait, OCR and voice transcription inputs use the original message-attachment owner. Supply `attachment={kind,targetId,messageId,attachmentIndex}` to identify an exact conversation and message. Caller URLs, host paths and arbitrary base64 cannot replace attachment identity.
 
 Fixed WebUI reads use `POST /api/agent/qq/webui/<id>` with `routeId`, `instanceId` and `params`. The original WebUI session owner retains credentials and independently checks that its logged-in QQ matches the OneBot account. Certificates expose safe status summaries. Logs, pages and icons expose bounded summaries. SSE readers return bounded samples. This read interface excludes private keys, credentials, arbitrary proxies, host paths and plugin execution.
 
 Management calls use `POST /api/agent/qq/webui-management/<id>`. Preference writes also require a stable `deliveryId`, with original receipts at `GET /api/agent/qq/webui-management-receipts/<deliveryId>`. They reuse the original login target and credential owner. Explicit logged-out state permits initialization under its contract. An observed native account must match the configured account. Unbound instances can use the original login panel to establish that binding. Theme updates preserve untouched fields, and automatic-login preferences do not submit a login. The native API lacks atomic CAS across clients, so readback and the original receipt determine the reported result.
+
+The two `get_group_file_url` / `get_private_file_url` entries return source-bound bytes with `nativeContractEquivalent=false`. Their closed input uses an exact message source or an original group-file cache reference. Native signed URLs remain request-local. Cache references can expire or disappear after a native restart. An expired reference returns a native error and requires a fresh reference from its original source. The Rabi-only `agent.qq.file.verify-sha256` operation hashes the selected resource incrementally with an explicit size, expected digest and optional timeout. Streaming uses constant memory and retains a separate verification result.
 
 ## Joining groups
 

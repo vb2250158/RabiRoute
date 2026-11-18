@@ -22,28 +22,49 @@ export class QqReadError extends Error {
   constructor(public readonly status: number, public readonly code: string, detail?: string, public readonly upstreamRetcode?: number) { super(detail ? `${code}: ${detail}` : code); }
 }
 
-export async function boundedBytes(response: Response, max: number, limitSetting?: string): Promise<Buffer> {
-  if (!response.ok || !response.body) throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
-  const reader = response.body.getReader();
+export async function boundedBytes(response: Response, max: number, limitSetting?: string, completeResource = false): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  await consumeBoundedQqBytes(response, max, chunk => { chunks.push(Buffer.from(chunk)); }, undefined, limitSetting, completeResource);
+  return Buffer.concat(chunks);
+}
+
+/** Shared finite HTTP byte owner for materialized reads and explicit streaming verification. */
+export async function consumeBoundedQqBytes(response: Response, max: number, consume: (chunk: Uint8Array) => void,
+  signal?: AbortSignal, limitSetting?: string, completeResource = false): Promise<number> {
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
+  }
+  // Complete file views cannot prove a whole resource from a successful range response.
+  // Generic JSON and legacy media callers retain their existing successful-2xx semantics.
+  if (completeResource && response.status !== 200) {
+    await response.body.cancel().catch(() => undefined);
+    throw new QqReadError(503, "QQ_MEDIA_INCOMPLETE_RESPONSE");
+  }
+  if (!Number.isSafeInteger(max) || max < 0) throw new QqReadError(400, "QQ_STREAM_BOUND_INVALID");
+  const reader = response.body.getReader();
   let size = 0;
+  const aborted = () => { void reader.cancel(signal?.reason).catch(() => undefined); };
+  signal?.addEventListener("abort", aborted, { once: true });
   try {
     const tooLarge = () => new QqReadError(413, "QQ_RESPONSE_TOO_LARGE", limitSetting
       ? `QQ resource exceeds ${limitSetting}; effective limit is ${max} bytes. Set 0 to remove the application quota (runtime Buffer capacity still applies).` : undefined);
     if (Number(response.headers.get("content-length")) > max) throw tooLarge();
     for (;;) {
+      signal?.throwIfAborted();
       const item = await reader.read();
+      signal?.throwIfAborted();
       if (item.done) break;
+      if (item.value.length > max - size) throw tooLarge();
       size += item.value.length;
-      if (size > max) throw tooLarge();
-      chunks.push(Buffer.from(item.value));
+      consume(item.value);
     }
-    return Buffer.concat(chunks);
-  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    return size;
+  } finally { signal?.removeEventListener("abort", aborted); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
 }
 
 /** No arbitrary OneBot action, request URL or error body crosses the public API. */
-export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_forward_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_image" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
+export async function qqRead(endpoint: NapCatEndpoint, action: "get_msg" | "get_forward_msg" | "get_group_msg_history" | "get_friend_msg_history" | "get_file" | "get_group_file_url" | "get_private_file_url" | "get_image" | "get_group_list" | "get_friend_list" | "get_group_member_list" | "get_login_info" | "get_recent_contact", payload: unknown,
   signal: AbortSignal, transport: typeof fetch = fetch): Promise<Record<string, unknown>> {
   const MAX_JSON_BYTES = qqReadSettings.jsonBytes;
   const origin = new URL(endpoint.httpUrl);
@@ -120,11 +141,29 @@ export function qqMessageText(message: QqMessage): string {
   return String(message.raw_message ?? message.message ?? "").replace(/\[CQ:[^\]]*\]/g, "").slice(0, 100_000);
 }
 
-export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch): Promise<Buffer> {
+export type QqMediaSource = Readonly<{ kind: "group" | "private"; targetId: string }>;
+export type QqMediaReadOptions = Readonly<{ mode?: "native-local-or-url" | "url-only"; allowEmptyFile?: boolean; source?: QqMediaSource }>;
+
+/** Internal capability: the caller has already verified the original message or native GroupFS reference. */
+export async function resolveQqSourceFile(endpoint: NapCatEndpoint, media: QqMedia, source: QqMediaSource,
+  signal: AbortSignal, transport: typeof fetch = fetch): Promise<Record<string, unknown>> {
+  if (media.kind !== "file" || !media.file || media.file.length > 4096 || /[\x00-\x1f\x7f]/.test(media.file)) {
+    throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE");
+  }
+  return source.kind === "group"
+    ? qqRead(endpoint, "get_group_file_url", { group_id: source.targetId, file_id: media.file }, signal, transport)
+    : qqRead(endpoint, "get_private_file_url", { file_id: media.file }, signal, transport);
+}
+
+export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch, options: QqMediaReadOptions = {}): Promise<Buffer> {
   const QQ_MEDIA_MAX_BYTES = qqReadSettings.mediaBytes;
   // A native image URL was already returned inside this authorized message/forward tree.
   // Resolving it again through get_file/get_image may stall on uncached forwarded images.
   let result: Record<string, unknown>;
+  if (media.kind === "file" && options.source) {
+    result = await resolveQqSourceFile(endpoint, media, options.source, signal, transport);
+    return readResolvedQqMediaBytes(result, { ...media, url: undefined }, signal, transport, options);
+  }
   if (media.kind === "image" && media.url) result = { url: media.url };
   else {
     // Metadata APIs never receive caller URLs, paths or base64 in arbitrary-file mode.
@@ -136,13 +175,14 @@ export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, sign
   const tooLarge = () => new QqReadError(413, "QQ_MEDIA_TOO_LARGE",
     `QQ attachment exceeds RABIROUTE_QQ_MEDIA_MAX_BYTES; effective limit is ${QQ_MEDIA_MAX_BYTES} bytes. Set 0 to remove the application quota (runtime Buffer capacity still applies).`);
   if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw tooLarge();
-  const localFile = typeof result.file === "string" && path.isAbsolute(result.file) ? result.file : undefined;
+  const allowEmptyFile = media.kind === "file" && options.allowEmptyFile === true && !(Number(result.file_size) > 0);
+  const localFile = options.mode !== "url-only" && typeof result.file === "string" && path.isAbsolute(result.file) ? result.file : undefined;
   if (localFile) {
     // The trusted local NapCat resolved this path from the selected message's resource ID.
     const handle = await fs.open(localFile, "r");
     try {
       const stat = await handle.stat();
-      if (!stat.isFile() || stat.size === 0) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
+      if (!stat.isFile() || (stat.size === 0 && !allowEmptyFile)) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
       if (stat.size > QQ_MEDIA_MAX_BYTES) throw tooLarge();
       const bytes = Buffer.alloc(stat.size);
       let offset = 0;
@@ -156,12 +196,30 @@ export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, sign
       return bytes;
     } finally { await handle.close(); }
   }
+  return readResolvedQqMediaBytes(result, media, signal, transport, options);
+}
+
+/** Internal only: accepts metadata resolved by a fixed authorized native action. No public URL input. */
+export async function readResolvedQqMediaBytes(result: Record<string, unknown>, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch, options: QqMediaReadOptions = {}): Promise<Buffer> {
   // NapCat resolves the selected attachment; CDN host names and ports are not permissions.
+  const QQ_MEDIA_MAX_BYTES = qqReadSettings.mediaBytes;
+  if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw new QqReadError(413, "QQ_MEDIA_TOO_LARGE");
+  const allowEmptyFile = media.kind === "file" && options.allowEmptyFile === true && !(Number(result.file_size) > 0);
   const value = typeof result.url === "string" && result.url ? result.url : media.url;
-  let url: URL;
-  try { url = new URL(value ?? ""); } catch { throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE"); }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new QqReadError(422, "QQ_MEDIA_URL_UNSUPPORTED");
-  const bytes = await boundedBytes(await transport(url, { signal, redirect: "follow" }), QQ_MEDIA_MAX_BYTES, "RABIROUTE_QQ_MEDIA_MAX_BYTES");
-  if (!bytes.length) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
+  if (options.mode === "url-only" && !value && typeof result.file === "string" && path.isAbsolute(result.file)) {
+    throw new QqReadError(422, "QQ_MEDIA_NATIVE_LOCAL_FILE_UNSUPPORTED");
+  }
+  const url = resolvedQqMediaUrl(value);
+  const completeFile = media.kind === "file" && options.mode === "url-only";
+  const bytes = await boundedBytes(await transport(url, { signal, redirect: "follow" }), QQ_MEDIA_MAX_BYTES, "RABIROUTE_QQ_MEDIA_MAX_BYTES", completeFile);
+  if (!bytes.length && !allowEmptyFile) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
   return bytes;
+}
+
+/** Shared internal native-result URL validation; callers never supply a public URL argument. */
+export function resolvedQqMediaUrl(value: unknown): URL {
+  let url: URL;
+  try { url = new URL(typeof value === "string" ? value : ""); } catch { throw new QqReadError(422, "QQ_MEDIA_REFERENCE_UNAVAILABLE"); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new QqReadError(422, "QQ_MEDIA_URL_UNSUPPORTED");
+  return url;
 }
