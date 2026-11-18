@@ -21,7 +21,12 @@ function fixture(t: test.TestContext, override?: (pathname: string, body: Row) =
   const onebot = {network:Object.fromEntries(["httpServers","httpSseServers","httpClients","websocketServers","websocketClients","plugins"].map(key=>[key,[] as Row[]])),
     enableLocalFile2Url:false,parseMultMsg:true,musicSignUrl:"https://user:PRIVATE_FIXTURE@music.example/sign?key=PRIVATE_FIXTURE",timeout:{baseTimeout:10000}};
   onebot.network.httpServers!.push({name:"fixture",host:"127.0.0.1",port:3000,enable:true,token:"PRIVATE_FIXTURE"});
+  const config = { fileLog:false, consoleLog:true, fileLogLevel:"debug", consoleLogLevel:"info", packetBackend:"auto", packetServer:"PRIVATE_FIXTURE", o3HookMode:0, autoTimeSync:true };
   const replies = {
+    "/api/NapCatConfig/GetConfig": () => config,
+    "/api/NapCatConfig/GetUinConfig": () => config,
+    "/api/File/font/exists/webui": () => true,
+    "/api/Mirror/List": () => ({fileMirrors:["https://user:PRIVATE_FIXTURE@mirror.example/prefix?key=PRIVATE_FIXTURE"],rawMirrors:[""],customMirror:"",timeout:5000}),
     "/api/WebUIConfig/GetConfig": () => ({ host: "::", port: 6099, loginRate: 10, disableWebUI: false, accessControlMode: "none", ipWhitelist: [], ipBlacklist: [], enableXForwardedFor: false, token: "PRIVATE_FIXTURE" }),
     "/api/WebUIConfig/GetDisableWebUI": () => false,
     "/api/WebUIConfig/GetClientIP": () => ({ ip: "127.0.0.1" }),
@@ -65,8 +70,8 @@ function fixture(t: test.TestContext, override?: (pathname: string, body: Row) =
   return {root,state,instance,route,calls,context,input,run,operations};
 }
 
-test("sixteen fixed contracts and fourteen safe reads support explicit first-login bootstrap",async t=>{
-  const f=fixture(t);assert.equal(f.operations.length,16);
+test("twenty fixed contracts and eighteen safe reads support explicit first-login bootstrap",async t=>{
+  const f=fixture(t);assert.equal(f.operations.length,20);
   f.instance.botUserId="";
   for(const spec of napcatWebuiManagementDescriptors.filter(item=>item.effects!=="configuration-mutation")){
     f.state.loggedIn=spec.binding==="login-required";

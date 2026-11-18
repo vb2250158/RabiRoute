@@ -1051,5 +1051,524 @@ export const napcatWebuiManagementDescriptors: readonly NapcatWebuiManagementDes
         90479
       ]
     }
+  },
+  {
+    "id": "napcat-global-config",
+    "method": "GET",
+    "nativePath": "/api/NapCatConfig/GetConfig",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "enum": [
+            "global",
+            "native-current-qq"
+          ]
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fileLog": {
+              "type": "boolean"
+            },
+            "consoleLog": {
+              "type": "boolean"
+            },
+            "fileLogLevel": {
+              "type": "string"
+            },
+            "consoleLogLevel": {
+              "type": "string"
+            },
+            "packetBackend": {
+              "type": "string"
+            },
+            "o3HookMode": {
+              "type": "number"
+            },
+            "autoTimeSync": {
+              "type": "boolean"
+            },
+            "bypass": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "hook": {
+                  "type": "boolean"
+                },
+                "window": {
+                  "type": "boolean"
+                },
+                "module": {
+                  "type": "boolean"
+                },
+                "process": {
+                  "type": "boolean"
+                },
+                "container": {
+                  "type": "boolean"
+                },
+                "js": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "packetServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "valueType": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "null",
+                "undefined"
+              ]
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "present",
+            "valueType"
+          ]
+        },
+        "invalidFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omittedUnknownFieldCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "view": {
+          "const": "restricted-native-config-metadata"
+        },
+        "sourceProvenance": {
+          "const": "native-api-does-not-identify-file-or-default-fallback"
+        },
+        "runtimeApplied": {
+          "const": "not-proven"
+        }
+      },
+      "required": [
+        "scope",
+        "config",
+        "packetServer",
+        "invalidFields",
+        "omittedUnknownFieldCount",
+        "view",
+        "sourceProvenance",
+        "runtimeApplied"
+      ]
+    },
+    "binding": "management-bootstrap",
+    "effects": "read-metadata",
+    "description": "Restricted nine-field config metadata. Eight declared typed fields preserve native semantics; packetServer has only type/presence/length because value semantics are unverified, with no claim that the field is a credential. Native silent default/file fallback and runtime adoption are not inferred.",
+    "sourceLines": {
+      "route": 96535,
+      "handlers": [
+        96457,
+        96441,
+        60588
+      ]
+    }
+  },
+  {
+    "id": "napcat-account-config",
+    "method": "GET",
+    "nativePath": "/api/NapCatConfig/GetUinConfig",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "enum": [
+            "global",
+            "native-current-qq"
+          ]
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fileLog": {
+              "type": "boolean"
+            },
+            "consoleLog": {
+              "type": "boolean"
+            },
+            "fileLogLevel": {
+              "type": "string"
+            },
+            "consoleLogLevel": {
+              "type": "string"
+            },
+            "packetBackend": {
+              "type": "string"
+            },
+            "o3HookMode": {
+              "type": "number"
+            },
+            "autoTimeSync": {
+              "type": "boolean"
+            },
+            "bypass": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "hook": {
+                  "type": "boolean"
+                },
+                "window": {
+                  "type": "boolean"
+                },
+                "module": {
+                  "type": "boolean"
+                },
+                "process": {
+                  "type": "boolean"
+                },
+                "container": {
+                  "type": "boolean"
+                },
+                "js": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "packetServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "present": {
+              "type": "boolean"
+            },
+            "valueType": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "null",
+                "undefined"
+              ]
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "present",
+            "valueType"
+          ]
+        },
+        "invalidFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "omittedUnknownFieldCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "view": {
+          "const": "restricted-native-config-metadata"
+        },
+        "sourceProvenance": {
+          "const": "native-api-does-not-identify-file-or-default-fallback"
+        },
+        "runtimeApplied": {
+          "const": "not-proven"
+        }
+      },
+      "required": [
+        "scope",
+        "config",
+        "packetServer",
+        "invalidFields",
+        "omittedUnknownFieldCount",
+        "view",
+        "sourceProvenance",
+        "runtimeApplied"
+      ]
+    },
+    "binding": "login-required",
+    "effects": "read-metadata",
+    "description": "Same restricted config view for the observed native current QQ. Exact configured QQ and native login identity are verified before and after the native read. Native per-QQ/global/default fallback is not exposed by the native API and is not guessed.",
+    "sourceLines": {
+      "route": 96537,
+      "handlers": [
+        96506,
+        96488,
+        60588
+      ]
+    }
+  },
+  {
+    "id": "webui-font-exists",
+    "method": "GET",
+    "nativePath": "/api/File/font/exists/webui",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exists": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exists"
+      ]
+    },
+    "binding": "management-bootstrap",
+    "effects": "read-metadata",
+    "description": "Read the native fixed WebUI font existence result. No caller path, file content or actual filename is exposed. Only a successful native boolean false proves absence.",
+    "sourceLines": {
+      "route": 92005,
+      "handlers": [
+        91970,
+        63512,
+        63518
+      ]
+    }
+  },
+  {
+    "id": "mirror-list",
+    "method": "GET",
+    "nativePath": "/api/Mirror/List",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fileMirrors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "direct": {
+                "type": "boolean"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "hasUserinfo": {
+                "type": "boolean"
+              },
+              "hasQuery": {
+                "type": "boolean"
+              },
+              "hasFragment": {
+                "type": "boolean"
+              },
+              "limitedDisplay": {
+                "const": true
+              },
+              "executable": {
+                "const": false
+              },
+              "pathPresent": {
+                "type": "boolean"
+              },
+              "pathLength": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "index",
+              "direct",
+              "limitedDisplay",
+              "executable",
+              "pathPresent",
+              "pathLength"
+            ]
+          }
+        },
+        "rawMirrors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "direct": {
+                "type": "boolean"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "hasUserinfo": {
+                "type": "boolean"
+              },
+              "hasQuery": {
+                "type": "boolean"
+              },
+              "hasFragment": {
+                "type": "boolean"
+              },
+              "limitedDisplay": {
+                "const": true
+              },
+              "executable": {
+                "const": false
+              },
+              "pathPresent": {
+                "type": "boolean"
+              },
+              "pathLength": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "index",
+              "direct",
+              "limitedDisplay",
+              "executable",
+              "pathPresent",
+              "pathLength"
+            ]
+          }
+        },
+        "customMirror": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "direct": {
+                  "type": "boolean"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "hasUserinfo": {
+                  "type": "boolean"
+                },
+                "hasQuery": {
+                  "type": "boolean"
+                },
+                "hasFragment": {
+                  "type": "boolean"
+                },
+                "limitedDisplay": {
+                  "const": true
+                },
+                "executable": {
+                  "const": false
+                },
+                "pathPresent": {
+                  "type": "boolean"
+                },
+                "pathLength": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "index",
+                "direct",
+                "limitedDisplay",
+                "executable",
+                "pathPresent",
+                "pathLength"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invalidItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "timeoutValid": {
+          "type": "boolean"
+        },
+        "view": {
+          "const": "limited-native-mirror-display"
+        },
+        "executable": {
+          "const": false
+        }
+      },
+      "required": [
+        "fileMirrors",
+        "rawMirrors",
+        "customMirror",
+        "invalidItems",
+        "timeoutValid",
+        "view",
+        "executable"
+      ]
+    },
+    "binding": "management-bootstrap",
+    "effects": "read-metadata",
+    "description": "Return native mirror priority and origin with path presence/length metadata. Full prefix values, including potentially private path segments, remain held by the original native configuration owner. Userinfo/query/fragment are omitted. This metadata is not an executable mirror target; caller URL input is rejected.",
+    "sourceLines": {
+      "route": 96429,
+      "handlers": [
+        96318,
+        10597,
+        10603
+      ]
+    }
   }
 ];

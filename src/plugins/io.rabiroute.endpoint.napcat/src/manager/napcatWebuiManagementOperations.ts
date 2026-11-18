@@ -8,6 +8,8 @@ import { boundedBytes } from "./qqMessageMedia.js";
 import { assertNapcatApiRequestAuthority, NapcatApiError, napcatApiFailure, type NapcatApiTransportContext } from "./napcatApiTransport.js";
 import { napcatWebuiManagementDescriptors, type NapcatWebuiManagementDescriptor } from "./napcatWebuiManagementContracts.js";
 
+import { projectNapcatWebuiMetadata } from "./napcatWebuiMetadataViews.js";
+
 type Row = Record<string, unknown>;
 export type NapcatWebuiManagementSelection = Readonly<{ routeId: string; instanceId: string; expectedUserId: string; assertCurrent(): void }>;
 export type NapcatWebuiManagementSession = {
@@ -128,6 +130,8 @@ async function bootstrap(session: NapcatWebuiManagementSession, binding: NapcatW
   return { loggedIn: status.isLogin };
 }
 function project(id: string, value: unknown, params: Row): Row {
+  const metadata = projectNapcatWebuiMetadata(id, value);
+  if (metadata) return metadata;
   if (id === "webui-config") {
     const source = object(value);
     return Object.fromEntries(["host", "port", "loginRate", "disableWebUI", "accessControlMode", "ipWhitelist", "ipBlacklist", "enableXForwardedFor"].map(key => [key, source[key]]));
@@ -210,7 +214,12 @@ export function createNapcatWebuiManagementOperations(context: NapcatWebuiManage
             return data;
           };
           if (!mutation) {
-            const data = validateResult(project(spec.id, await call(session, binding, spec.method, spec.nativePath, body.params, signal), body.params));
+            const nativeValue = await call(session, binding, spec.method, spec.nativePath, body.params, signal);
+            if (spec.id === "napcat-account-config") {
+              const after = await bootstrap(session, binding, signal);
+              if (!after.loggedIn) throw new ManagementError("LOGIN_REQUIRED", 409);
+            }
+            const data = validateResult(project(spec.id, nativeValue, body.params));
             return { status: 200, headers: { "cache-control": "private, no-store" }, body: { code: 0, data } };
           }
           if (spec.id === "quick-login-preference.set" && body.params.userId && body.params.userId !== binding.expectedUserId) throw new ManagementError("ACCOUNT_MISMATCH", 409);

@@ -18,13 +18,13 @@ const references: Readonly<Record<string, string>> = {
   fetch_custom_face: "agent.qq.stickers.read", set_restart: "manager.napcat.restart",
   send_msg: "agent.send", send_group_msg: "agent.send", send_private_msg: "agent.send", send_forward_msg: "agent.send",
   send_private_forward_msg: "agent.send", send_group_forward_msg: "agent.send", forward_friend_single_msg: "agent.send", forward_group_single_msg: "agent.send",
-  send_group_ark_share: "agent.send", send_ark_share: "agent.send", upload_group_file: "agent.send", upload_private_file: "agent.send",
+  upload_group_file: "agent.send", upload_private_file: "agent.send",
   send_group_ai_record: "agent.send", send_flash_msg: "agent.send", send_online_file: "agent.send", send_online_folder: "agent.send"
 };
 
 const outboundProducerDependencies = new Set([
   "send_forward_msg", "send_private_forward_msg", "send_group_forward_msg", "forward_friend_single_msg", "forward_group_single_msg",
-  "send_group_ark_share", "send_ark_share", "send_group_ai_record", "send_flash_msg", "send_online_file", "send_online_folder"
+  "send_group_ai_record", "send_flash_msg", "send_online_file", "send_online_folder"
 ]);
 
 const reads = new Set([

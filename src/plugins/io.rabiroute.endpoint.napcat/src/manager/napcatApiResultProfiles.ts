@@ -4,7 +4,7 @@ import { NapcatApiError } from "./napcatApiTransport.js";
 type RecordValue = Record<string, unknown>;
 type ResultProfile = Readonly<{
   view: "metadata" | "diagnostic" | "credential-summary";
-  evidence: "installed-handler" | "installed-example";
+  evidence: "installed-handler" | "installed-example" | "declared-metadata-projection";
   description: string;
   schema: ApiSchema;
   project(value: unknown, parameters: RecordValue): unknown;
@@ -56,7 +56,27 @@ const rkeySummary = (value: unknown, native: boolean) => rows(value).map(item =>
     created_at: numeric(native ? row.time : row.created_at), ttl: numeric(row.ttl), available: present(row.rkey) };
 });
 
+// Installed handler obtains Ark content; card keys are a limited Rabi projection,
+// not an established native response contract. Never return nested Ark payload or resource URLs.
+const arkShareProfile: ResultProfile = {
+  view: "metadata", evidence: "declared-metadata-projection",
+  description: "Rabi declared metadata projection; actual native return shape is unverified. The upstream handler obtains a card and does not send it. Full Ark and resource links are not exposed.",
+  schema: object({ app: { type: "string", maxLength: 256, pattern: "^[A-Za-z0-9._-]+$" },
+    view: { type: "string", maxLength: 256, pattern: "^[A-Za-z0-9._-]+$" },
+    ver: { anyOf: [{ type: "string", maxLength: 64, pattern: "^[A-Za-z0-9._-]+$" }, { type: "number" }] } }, ["app", "view"]),
+  project(value) {
+    const raw = typeof value === "string" ? value : record(value).ark;
+    if (typeof raw !== "string") throw new NapcatApiError(503, "QQ_API_RESPONSE_CONTRACT_MISMATCH");
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { throw new NapcatApiError(503, "QQ_API_RESPONSE_CONTRACT_MISMATCH"); }
+    const card = record(parsed);
+    return pick(card, ["app", "view", "ver"]);
+  }
+};
+
 const profiles: Readonly<Record<string, ResultProfile>> = {
+  ArkShareGroup: arkShareProfile, ArkSharePeer: arkShareProfile,
+  send_group_ark_share: arkShareProfile, send_ark_share: arkShareProfile,
   get_doubt_friends_add_request: {
     view: "metadata", evidence: "installed-handler", description: "Handler-mapped request metadata; the native acceptance flag stays private.",
     schema: array(object({ uin: scalarId, nick: text, source: text, reason: text, msg: text, group_code: scalarId, time: scalarId, type: { const: "doubt" } }, ["uin", "type"])),

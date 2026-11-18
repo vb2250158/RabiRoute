@@ -88,7 +88,7 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       ...(descriptor.mode === "mutation" ? { deliveryId: `fixture-${descriptor.action}` } : {}) }));
     assert.equal(result.status, 200, `${descriptor.action}: ${JSON.stringify(result.body)}`);
   }
-  assert.equal(direct.length, 106);
+  assert.equal(direct.length, 110);
 });
 
 test("file, event-context and test actions retain explicit owners while credentials expose summary views", () => {
@@ -103,10 +103,10 @@ test("file, event-context and test actions retain explicit owners while credenti
   assert.equal(descriptors.find(row => row.action === "get_clientkey")!.resultProfile, "get_clientkey");
 });
 
-test("eleven absent outbound producers are explicit dependencies despite their shared owner reference", async () => {
+test("nine absent outbound producers are explicit dependencies despite their shared owner reference", async () => {
   let calls = 0;
   const rows = descriptors.filter(row => row.managedOwner === "agent.send" && row.unavailableReason);
-  assert.equal(rows.length, 11);
+  assert.equal(rows.length, 9);
   const operations = createNapcatApiOperations({ rootDir: ".", local: () => true, route: () => definition, readOnly: () => false,
     transport: async () => { calls++; throw Error("Provider must not be reached"); } }, rows);
   for (const [index, row] of rows.entries()) {

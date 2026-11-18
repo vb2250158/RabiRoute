@@ -16,10 +16,10 @@
   "counts": {
     "total": 112,
     "byState": {
-      "owner-dependency": 58,
+      "owner-dependency": 54,
       "typed-summary": 17,
       "host-owner-boundary": 8,
-      "typed-management": 16,
+      "typed-management": 20,
       "existing-native-owner": 13
     },
     "byInventoryGroup": {
@@ -28,14 +28,14 @@
       "existing-host-permission-boundary": 8,
       "existing-login-lifecycle-compatibility": 13
     },
-    "implementedSourceRows": 46,
-    "pendingProtectedOwnerRows": 58,
+    "implementedSourceRows": 50,
+    "pendingProtectedOwnerRows": 54,
     "hostOwnerBoundaryRows": 8,
     "duplicateMethodPaths": 0,
     "byInventoryGroupAndState": {
       "protected-typed-owner": {
-        "owner-dependency": 58,
-        "typed-management": 16,
+        "owner-dependency": 54,
+        "typed-management": 20,
         "typed-summary": 1
       },
       "typed-read-and-resource": {
@@ -1507,33 +1507,38 @@
         91970
       ],
       "inventoryGroup": "protected-typed-owner",
-      "state": "owner-dependency",
+      "state": "typed-management",
       "implementation": {
-        "owner": "ownedFiles",
-        "mode": "metadata-dependency"
+        "operationId": "agent.qq.webui.management.webui-font-exists",
+        "owner": "napcatWebuiManagementOperations",
+        "selectedCallMethod": "POST",
+        "mode": "restricted-metadata-read",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts",
+        "contractSource": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.ts",
+        "firstPublicationVersion": "0.1.16"
       },
       "runtimeAcceptance": "not-asserted-by-this-static-manifest",
       "nativeInputs": [],
       "nativeValidationLines": [],
       "knownNativeResultFields": [],
       "sensitiveNativeResultFields": [],
-      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "permission": "Original authenticated Route/instance and configured WebUI session owner. Current-account config requires the same observed configured QQ before and after the native read.",
       "callShape": {
-        "owner": "ownedFiles",
-        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
-        "result": "owner-defined typed/protected DTO or owned artifact"
+        "method": "POST",
+        "path": "/api/agent/qq/webui-management/webui-font-exists",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "paramsContractId": "webui-font-exists",
+        "conditions": "management-bootstrap",
+        "result": "Read the native fixed WebUI font existence result. No caller path, file content or actual filename is exposed. Only a successful native boolean false proves absence."
       },
-      "dependencies": [
-        {
-          "kind": "typed-owner-contract",
-          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
-        },
-        {
-          "kind": "request-response-schema",
-          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
-        }
-      ],
-      "notes": []
+      "dependencies": [],
+      "notes": [
+        "Source implementation only. This static matrix does not assert native runtime configuration adoption or production platform acceptance."
+      ]
     },
     {
       "method": "POST",
@@ -2189,10 +2194,15 @@
         96318
       ],
       "inventoryGroup": "protected-typed-owner",
-      "state": "owner-dependency",
+      "state": "typed-management",
       "implementation": {
-        "owner": "releaseMirrors",
-        "mode": "metadata-dependency"
+        "operationId": "agent.qq.webui.management.mirror-list",
+        "owner": "napcatWebuiManagementOperations",
+        "selectedCallMethod": "POST",
+        "mode": "restricted-metadata-read",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts",
+        "contractSource": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.ts",
+        "firstPublicationVersion": "0.1.16"
       },
       "runtimeAcceptance": "not-asserted-by-this-static-manifest",
       "nativeInputs": [],
@@ -2204,23 +2214,23 @@
         "timeout"
       ],
       "sensitiveNativeResultFields": [],
-      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "permission": "Original authenticated Route/instance and configured WebUI session owner. Current-account config requires the same observed configured QQ before and after the native read.",
       "callShape": {
-        "owner": "releaseMirrors",
-        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
-        "result": "owner-defined typed/protected DTO or owned artifact"
+        "method": "POST",
+        "path": "/api/agent/qq/webui-management/mirror-list",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "paramsContractId": "mirror-list",
+        "conditions": "management-bootstrap",
+        "result": "Preserve native list order and actual origin/path while omitting userinfo/query/fragment. Explicit limited display is not an executable mirror URL. Sources are only the fixed native list/config; caller URL input is rejected."
       },
-      "dependencies": [
-        {
-          "kind": "typed-owner-contract",
-          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
-        },
-        {
-          "kind": "request-response-schema",
-          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
-        }
-      ],
-      "notes": []
+      "dependencies": [],
+      "notes": [
+        "Source implementation only. This static matrix does not assert native runtime configuration adoption or production platform acceptance."
+      ]
     },
     {
       "method": "POST",
@@ -2368,10 +2378,15 @@
         96457
       ],
       "inventoryGroup": "protected-typed-owner",
-      "state": "owner-dependency",
+      "state": "typed-management",
       "implementation": {
-        "owner": "endpointConfig",
-        "mode": "metadata-dependency"
+        "operationId": "agent.qq.webui.management.napcat-global-config",
+        "owner": "napcatWebuiManagementOperations",
+        "selectedCallMethod": "POST",
+        "mode": "restricted-metadata-read",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts",
+        "contractSource": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.ts",
+        "firstPublicationVersion": "0.1.16"
       },
       "runtimeAcceptance": "not-asserted-by-this-static-manifest",
       "nativeInputs": [],
@@ -2380,23 +2395,23 @@
       "sensitiveNativeResultFields": [
         "configuration fields need versioned sensitive classification"
       ],
-      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "permission": "Original authenticated Route/instance and configured WebUI session owner. Current-account config requires the same observed configured QQ before and after the native read.",
       "callShape": {
-        "owner": "endpointConfig",
-        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
-        "result": "owner-defined typed/protected DTO or owned artifact"
+        "method": "POST",
+        "path": "/api/agent/qq/webui-management/napcat-global-config",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "paramsContractId": "napcat-global-config",
+        "conditions": "management-bootstrap",
+        "result": "Restricted nine-field config metadata. Eight declared typed fields preserve native semantics; packetServer has only type/presence/length because value semantics are unverified, with no claim that the field is a credential. Native silent default/file fallback and runtime adoption are not inferred."
       },
-      "dependencies": [
-        {
-          "kind": "typed-owner-contract",
-          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
-        },
-        {
-          "kind": "request-response-schema",
-          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
-        }
-      ],
-      "notes": []
+      "dependencies": [],
+      "notes": [
+        "Source implementation only. This static matrix does not assert native runtime configuration adoption or production platform acceptance."
+      ]
     },
     {
       "method": "GET",
@@ -2406,10 +2421,15 @@
         96506
       ],
       "inventoryGroup": "protected-typed-owner",
-      "state": "owner-dependency",
+      "state": "typed-management",
       "implementation": {
-        "owner": "endpointConfig",
-        "mode": "metadata-dependency"
+        "operationId": "agent.qq.webui.management.napcat-account-config",
+        "owner": "napcatWebuiManagementOperations",
+        "selectedCallMethod": "POST",
+        "mode": "restricted-metadata-read",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts",
+        "contractSource": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.ts",
+        "firstPublicationVersion": "0.1.16"
       },
       "runtimeAcceptance": "not-asserted-by-this-static-manifest",
       "nativeInputs": [],
@@ -2420,23 +2440,23 @@
       "sensitiveNativeResultFields": [
         "account configuration fields need sensitive classification"
       ],
-      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "permission": "Original authenticated Route/instance and configured WebUI session owner. Current-account config requires the same observed configured QQ before and after the native read.",
       "callShape": {
-        "owner": "endpointConfig",
-        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
-        "result": "owner-defined typed/protected DTO or owned artifact"
+        "method": "POST",
+        "path": "/api/agent/qq/webui-management/napcat-account-config",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "paramsContractId": "napcat-account-config",
+        "conditions": "login-required",
+        "result": "Same restricted config view for the observed native current QQ. Exact configured QQ and native login identity are verified before and after the native read. Native per-QQ/global/default fallback is not exposed by the native API and is not guessed."
       },
-      "dependencies": [
-        {
-          "kind": "typed-owner-contract",
-          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
-        },
-        {
-          "kind": "request-response-schema",
-          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
-        }
-      ],
-      "notes": []
+      "dependencies": [],
+      "notes": [
+        "Source implementation only. This static matrix does not assert native runtime configuration adoption or production platform acceptance."
+      ]
     },
     {
       "method": "POST",
@@ -5442,8 +5462,9 @@
   "implementationRelease": {
     "pluginId": "io.rabiroute.endpoint.napcat",
     "firstPublicationVersionForManagement": "0.1.15",
-    "status": "source-frozen-for-first-publication",
-    "note": "0.1.15 combines native result additions and sixteen WebUI management shapes in its first candidate. Earlier native-only candidates are diagnostic. Runtime acceptance belongs to the publisher receipt."
+    "status": "source-frozen-for-independent-plugin-publication",
+    "note": "0.1.15 combines native result additions and sixteen WebUI management shapes in its first candidate. Earlier native-only candidates are diagnostic. Runtime acceptance belongs to the publisher receipt.",
+    "additionalMetadataReadsVersion": "0.1.16"
   },
   "rabiOnlyOperations": [
     {

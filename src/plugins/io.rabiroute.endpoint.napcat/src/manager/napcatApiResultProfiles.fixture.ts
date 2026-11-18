@@ -1,5 +1,10 @@
 /** Installed-handler/example-shaped test data. These values never contact a platform. */
 export const napcatResultProfileFixtures: Readonly<Record<string, unknown>> = {
+  ArkShareGroup: JSON.stringify({app:"com.tencent.structmsg",view:"contact",ver:"1",meta:{url:"https://example.invalid/?token=example-secret"}}),
+  ArkSharePeer: JSON.stringify({app:"com.tencent.structmsg",view:"contact",ver:"1",meta:{url:"https://example.invalid/?token=example-secret"}}),
+  send_group_ark_share: JSON.stringify({app:"com.tencent.structmsg",view:"contact",ver:"1",meta:{url:"https://example.invalid/?token=example-secret"}}),
+  send_ark_share: JSON.stringify({app:"com.tencent.structmsg",view:"contact",ver:"1",meta:{url:"https://example.invalid/?token=example-secret"}}),
+
   get_doubt_friends_add_request: [{ flag: "example-acceptance-capability", uin: "12345", nick: "Example", source: "group", reason: "request", msg: "hello", group_code: "789", time: "123", type: "doubt" }],
   get_group_honor_info: { group_id: 789, current_talkative: { user_id: "12345", nickname: "Example", avatar: "https://example.invalid/?rkey=example-secret" },
     talkative_list: [{ user_id: "12345", nickname: "Example", description: "active", avatar: "https://example.invalid/private" }],

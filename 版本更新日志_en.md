@@ -10,6 +10,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
+## 0.15.34 - 2026-11-18
+
+- NapCat 0.1.16 adds four restricted Ark card read views with handler-based action classification, plus WebUI queries for native/current-account configuration, font availability and mirror metadata.
+
 ## 0.15.33 - 2026-11-18
 
 - Add 19 explicitly limited NapCat query views, separating handler metadata, example profiles, diagnostics and credential summaries while keeping secret values in request memory and declaring unverified full-result boundaries. Also add 16 protected WebUI management operations (14 reads and 2 preference writes) and original receipt queries, preserving initialization and native-account boundaries.

@@ -21,11 +21,12 @@ function input(params: unknown): ApiOperationInput {
     body: { routeId: "example", instanceId: "example-instance", params } } as ApiOperationInput;
 }
 
-test("19 explicit views distinguish metadata, installed examples, diagnostics and credential summaries", () => {
-  assert.equal(descriptors.length, 19);
+test("23 explicit views distinguish metadata, installed examples, diagnostics and credential summaries", () => {
+  assert.equal(descriptors.length, 23);
   assert.equal(descriptors.filter(row => (row.response as Record<string, any>).properties.view.const === "credential-summary").length, 7);
   assert.equal(descriptors.filter(row => (row.response as Record<string, any>).properties.view.const === "diagnostic").length, 4);
   assert.equal(descriptors.filter(row => (row.response as Record<string, any>).properties.evidence.const === "installed-example").length, 5);
+  assert.equal(descriptors.filter(row => (row.response as Record<string, any>).properties.evidence.const === "declared-metadata-projection").length, 4);
   assert.equal(descriptors.every(row => row.mode === "read"), true);
 });
 
@@ -54,7 +55,7 @@ test("all profile handlers expose reviewed fields and never persist native crede
 test("changed example shapes and unknown primitive native results fail without returning raw values", async t => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "napcat-result-shapes-"));
   t.after(() => fs.rm(rootDir, { recursive: true, force: true }));
-  const broken: Record<string, unknown> = { get_robot_uin_range: [{ minUin: 1, maxUin: 2 }], get_group_shut_list: [{ uid: "12345" }],
+  const broken: Record<string, unknown> = { ArkSharePeer: "not json", get_robot_uin_range: [{ minUin: 1, maxUin: 2 }], get_group_shut_list: [{ uid: "12345" }],
     get_collection_list: { result: 0 }, get_group_album_media_list: { media_list: [{ media_id: 1 }] }, get_online_file_msg: "example-secret", get_fileset_info: { fileset_id: "example" },
     get_credentials: { cookies: "example-cookie-material", token: "example-secret" }, nc_get_rkey: [{ type: 10, time: 123, ttl: "example-secret", rkey: "example-rkey-material" }] };
   for (const [action, data] of Object.entries(broken)) {

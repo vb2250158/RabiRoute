@@ -7,13 +7,13 @@
   "counts": {
     "baseActions": 167,
     "names": 501,
-    "read": 51,
+    "read": 55,
     "mutation": 55,
     "existingOwnerReference": 20,
-    "ownerDependency": 41,
+    "ownerDependency": 37,
     "eventBaseClasses": 6,
     "eventInstantiatedClasses": 25,
-    "limitedReadViews": 19
+    "limitedReadViews": 23
   },
   "actions": [
     {
@@ -2725,7 +2725,7 @@
         "ArkShareGroup_rate_limited"
       ],
       "sourceLine": 110599,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.ArkShareGroup",
       "method": "POST",
       "path": "/api/agent/qq/onebot/ArkShareGroup",
@@ -2743,14 +2743,63 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "string",
-        "description": "Ark Json内容"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "declared-metadata-projection"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "view": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "ver": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "app",
+              "view"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [],
-      "dependency": "An action-specific execution owner is required for this platform or resource operation.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "declared-metadata-projection"
+      },
+      "viewLimitation": "Rabi declared metadata projection; actual native return shape is unverified. The upstream handler obtains a card and does not send it. Full Ark and resource links are not exposed."
     },
     {
       "action": "ArkSharePeer",
@@ -2760,7 +2809,7 @@
         "ArkSharePeer_rate_limited"
       ],
       "sourceLine": 110581,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.ArkSharePeer",
       "method": "POST",
       "path": "/api/agent/qq/onebot/ArkSharePeer",
@@ -2787,15 +2836,65 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "分享结果"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "declared-metadata-projection"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "view": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "ver": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "app",
+              "view"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "declared-metadata-projection"
+      },
+      "viewLimitation": "Rabi declared metadata projection; actual native return shape is unverified. The upstream handler obtains a card and does not send it. Full Ark and resource links are not exposed."
     },
     {
       "action": "bot_exit",
@@ -9834,7 +9933,7 @@
         "send_ark_share_rate_limited"
       ],
       "sourceLine": 110605,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.send_ark_share",
       "method": "POST",
       "path": "/api/agent/qq/onebot/send_ark_share",
@@ -9861,20 +9960,65 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "分享结果"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "declared-metadata-projection"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "view": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "ver": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "app",
+              "view"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "existingOwner": "agent.send",
-      "compatibility": {
-        "mapping": "routeId + channel=napcat + instanceId + target + stable deliveryId; native text/media must be translated to original managed content",
-        "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
-      },
-      "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "declared-metadata-projection"
+      },
+      "viewLimitation": "Rabi declared metadata projection; actual native return shape is unverified. The upstream handler obtains a card and does not send it. Full Ark and resource links are not exposed."
     },
     {
       "action": "send_flash_msg",
@@ -12209,7 +12353,7 @@
         "send_group_ark_share_rate_limited"
       ],
       "sourceLine": 110602,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.send_group_ark_share",
       "method": "POST",
       "path": "/api/agent/qq/onebot/send_group_ark_share",
@@ -12227,19 +12371,63 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "string",
-        "description": "Ark Json内容"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "declared-metadata-projection"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "view": {
+                "type": "string",
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "ver": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z0-9._-]+$"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "app",
+              "view"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [],
-      "existingOwner": "agent.send",
-      "compatibility": {
-        "mapping": "routeId + channel=napcat + instanceId + target + stable deliveryId; native text/media must be translated to original managed content",
-        "condition": "Original identity, outbound rules, reviewed image/reply sources, file handle and delivery ledger remain authoritative. Forward-node/Ark/AI/flash/online-transfer specific shapes require their original managed producer adapter; the generic send reference does not implement arbitrary native JSON forwarding."
-      },
-      "dependency": "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "declared-metadata-projection"
+      },
+      "viewLimitation": "Rabi declared metadata projection; actual native return shape is unverified. The upstream handler obtains a card and does not send it. Full Ark and resource links are not exposed."
     },
     {
       "action": "send_group_forward_msg",
@@ -26128,6 +26316,6 @@
     "Schema AST resolved does not make Any/Unknown safe to disclose.",
     "Managed references are compatibility guidance and reject raw dispatch; missing dependencies are not upstream unsupported.",
     "No active group-join action exists in this installed action registry; request handling consumes existing flags.",
-    "Nineteen new read views declare handler/example metadata, diagnostics or credential summaries. These views do not expose complete native results."
+    "Twenty-three limited views include four Rabi-declared Ark projections. Native complete shapes remain unverified. The installed send_group_ark_share/send_ark_share handlers obtain cards without sending messages."
   ]
 }

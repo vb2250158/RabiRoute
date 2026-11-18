@@ -124,15 +124,15 @@ test("CLI combines an explicit Rabi snapshot deterministically and reports unkno
   }
 });
 
-test("versioned WebUI coverage reconciles 17 summaries, 13 compatible owners, 16 management shapes, 58 dependencies and 8 host boundaries", async () => {
+test("versioned WebUI coverage reconciles 17 summaries, 13 compatible owners, 20 management shapes, 54 dependencies and 8 host boundaries", async () => {
   const facts = JSON.parse(await fs.readFile(new URL("../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-4.18.4.json", import.meta.url), "utf8"));
   const declaration = JSON.parse(await fs.readFile(new URL("../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-webui-4.18.4-coverage.json", import.meta.url), "utf8"));
   const result = auditNapcatWebuiCoverage(facts, declaration);
-  assert.deepEqual(result.counts.byState, { "typed-summary": 17, "existing-native-owner": 13, "typed-management": 16, "owner-dependency": 58, "host-owner-boundary": 8 });
+  assert.deepEqual(result.counts.byState, { "typed-summary": 17, "existing-native-owner": 13, "typed-management": 20, "owner-dependency": 54, "host-owner-boundary": 8 });
   assert.equal(result.counts.total, 112);
-  assert.equal(result.counts.implementedSourceRows, 46);
+  assert.equal(result.counts.implementedSourceRows, 50);
   assert.equal(result.counts.rabiOnlyOperations, 1);
-  assert.equal(result.counts.byInventoryGroupAndState["protected-typed-owner"]["typed-management"], 16);
+  assert.equal(result.counts.byInventoryGroupAndState["protected-typed-owner"]["typed-management"], 20);
   assert.equal(result.rabiOnlyOperations[0].nativeCoverageContribution, 0);
   assert.equal(result.implementationRelease.firstPublicationVersionForManagement, "0.1.15");
   assert.equal(result.counts.byInventoryGroup["protected-typed-owner"], 75);

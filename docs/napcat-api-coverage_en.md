@@ -10,15 +10,17 @@ The baseline is the NapCat 4.18.4 distribution with SHA-256 `66dfaa1b9e7530d4930
 
 | Area | This version |
 | --- | --- |
-| OneBot actions | 51 reads, including 19 limited views, and 55 mutations using the original durable ledger |
+| OneBot actions | 55 reads, including 23 limited views, and 55 mutations using the original durable ledger |
 | Existing operations | 20 supported shapes under their original contracts |
-| Outstanding implementation or native-host boundary | 41 individually documented items |
-| WebUI | 17 reads/summaries plus 16 management operations (14 reads, 2 preference writes), 13 legacy entries, 58 dependencies and 8 host boundaries |
-| Events | Typed metadata enters the original NapCat archive, while existing group/private message triggers remain active |
+| Outstanding implementation or native-host boundary | 37 individually documented items |
+| WebUI | 17 reads/summaries plus 20 management operations (18 reads, 2 preference writes), 13 legacy entries, 54 dependencies and 8 host boundaries |
+| Events | Typed metadata archiving is implemented; the Gateway adopted version and hash require independent runtime evidence |
 
 All base actions are discoverable. Missing execution owners return `QQ_API_OWNER_DEPENDENCY_UNAVAILABLE`. Compatible operations return `QQ_API_USE_EXISTING_OWNER`, with the original operation named in their contract. Discovery and actual execution coverage are counted separately.
 
-The 19 added reads provide 3 handler-derived metadata views, 5 strict example profiles, 4 diagnostics and 7 credential summaries. `view` and `evidence` identify their scope. Example-shape mismatches return errors. Diagnostics exclude complete file, message and group data. Credential summaries expose presence, scope, type and expiry metadata.
+The 23 limited views provide 3 handler-derived metadata views, 5 strict example profiles, 4 diagnostics, 7 credential summaries and 4 Rabi-declared Ark projections. `view` and `evidence` identify their scope. Example-shape mismatches return errors. Diagnostics exclude complete file, message and group data. Credential summaries expose presence, scope, type and expiry metadata.
+
+Four Ark getters expose a Rabi-declared metadata projection of `app`, `view` and `ver`. Complete native return shapes remain unverified. The installed `send_group_ark_share` and `send_ark_share` handlers obtain cards. Additional WebUI reads cover global/current-account configuration, font availability and mirror metadata with explicit provenance and display limits.
 
 ## Calls
 
