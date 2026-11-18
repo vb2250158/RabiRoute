@@ -131,7 +131,12 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
   async function localTargetParty(provider: AgentAdapterType, sessionId: string, type: string, request: AgentThreadRequest): Promise<AgentRequestParty> {
     const summary = await context.readLocal(provider, sessionId, context.localOptions({ ...request, threadId: sessionId, agentAdapter: provider }));
     if (summary.id !== sessionId || summary.archived) throw new Error("Exact local task owner is unavailable.");
-    assertEndpointOwnerDirectory(summary.cwd);
+    // An exact local Codex ID identifies the Desktop owner. The configured execution
+    // directory can be a current drive mapping even if the saved cwd is stale.
+    if (provider !== "codex") assertEndpointOwnerDirectory(summary.cwd);
+    else if (!(typeof request.cwd === "string" && request.cwd.trim()) && !summary.cwd?.trim()) {
+      throw new Error("Endpoint execution requires an existing absolute owner directory.");
+    }
     const agentId = `local:${provider}`;
     return { agentAdapter: provider, agentType: type, threadId: sessionId, threadName: summary.title, workspace: summary.cwd,
       endpoint: { kind: "local", managerInstanceId, agentId, provider, sessionId,

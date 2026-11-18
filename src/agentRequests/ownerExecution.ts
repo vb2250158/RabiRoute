@@ -27,8 +27,11 @@ export async function executeEndpointOnOwner(
   transport?: { sendCodex: import("../agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"] }
 ): Promise<{ threadId: string; action: string; transport: string }> {
   await assertAuthorized();
-  try { assertEndpointOwnerDirectory(delivery.executionOptions.cwd); }
-  catch (error) { throw new EndpointDeliveryNotSentError(error); }
+  // The exact local Codex Desktop owner resolves its execution directory in its own context.
+  if (delivery.target.kind !== "local" || delivery.target.provider !== "codex") {
+    try { assertEndpointOwnerDirectory(delivery.executionOptions.cwd); }
+    catch (error) { throw new EndpointDeliveryNotSentError(error); }
+  }
   if (delivery.executionOptions.localImages) {
     try {
       if (delivery.target.kind !== "local") throw new Error("Local images cannot cross an instance boundary.");

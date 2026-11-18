@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { noteCodexDesktopLateStartForTest } from "../plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
+import { CodexDesktopPromptNotSentError, noteCodexDesktopLateStartForTest } from "../plugins/io.rabiroute.agent.codex/src/codexDesktopBridge.js";
 import { assertEndpointOwnerDirectory, executeEndpointOnOwner, recoverEndpointOwnerReceipt as recoverPublishedOwnerReceipt } from "./ownerExecution.js";
 import type { PreparedEndpointDelivery } from "./endpointDelivery.js";
 import { agentDeliveryPromptHash } from "./store.js";
@@ -13,7 +13,7 @@ import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import { endpointExecutionOptionsHash } from "./executionOptions.js";
 
-import { recoverEndpointOwnerReceipt as recoverCodexOwnerReceipt } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexOwnerExecution.js";
+import { executeEndpointOnOwner as executeCodexOwner, recoverEndpointOwnerReceipt as recoverCodexOwnerReceipt } from "../plugins/io.rabiroute.agent.codex/src/agentAdapters/codexOwnerExecution.js";
 import { withAgentManagerInvocation, type AgentManagerOperationInvoker } from "../agentAdapters/managerInvocation.js";
 const invokeCodexFixture: AgentManagerOperationInvoker = async <T>(type: string, operation: string, _payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
   assert.equal(type, "codex");
@@ -83,6 +83,29 @@ test("exact owner recovery accepts a historical suffix only with the original sc
     executionOptionsHash: "original-options-hash", state: "dispatching", preparation: { deliveryId, responsePolicy: "none",
       source: { threadId: source.sessionId, agentType: "agent", agentAdapter: "grokBot", endpoint: source },
       target: { threadId: target.sessionId, agentType: "agent", agentAdapter: "codex", endpoint: target } } };
+  // The Desktop task identity is stable even when its default path spelling differs.
+  const mappedDirectory = path.join(directory, "mapped-workspace");
+  fs.mkdirSync(mappedDirectory);
+  const outbound = { ...delivery, executionOptions: { cwd: mappedDirectory } };
+  const sent: Array<{ threadId: string; cwd: string }> = [];
+  const transport: Parameters<typeof executeCodexOwner>[3] = {
+    sendCodex: async request => {
+      if (request.cwd.endsWith("missing-drive")) throw new CodexDesktopPromptNotSentError(new Error("Desktop could not open the execution directory."));
+      sent.push(request);
+      return { threadId: request.threadId, action: "started", openedThread: false, transport: "desktop-ipc" };
+    }
+  };
+  await executeCodexOwner(outbound, {}, () => {}, transport);
+  assert.equal(sent[0]?.threadId, target.sessionId);
+  assert.equal(sent[0]?.cwd, mappedDirectory);
+  await assert.rejects(executeCodexOwner({ ...outbound, executionOptions: { cwd: path.join(directory, "missing-drive") } },
+    {}, () => {}, transport), { code: "DELIVERY_NOT_SENT" });
+  await assert.rejects(executeCodexOwner({ ...outbound, executionOptions: { cwd: "relative-path" } },
+    {}, () => {}, transport), { code: "DELIVERY_NOT_SENT" });
+  await assert.rejects(executeCodexOwner({ ...outbound, target: { ...target, kind: "instance" } }, {}, () => {}, transport),
+    { code: "AGENT_WORKSPACE_MISMATCH" });
+  assert.equal(sent.length, 1);
+
   const suffix = "\n\n[投递编号]\ndeliveryId: 12345678-1234-4567-8123-123456789abc";
   const identity = JSON.stringify({ type: "session_meta", payload: { id: target.sessionId } }) + "\n";
   const writeMessage = (text: string, role = "user") => fs.writeFileSync(rolloutPath,

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { readRolloutUserMessages } from "../agentRequests/rolloutReceipt.js";
 import { agentDeliveryPromptHash } from "@rabiroute/host-api/agentRequests/store";
 import { deliveryIdFromPrompt } from "@rabiroute/host-api/shared/deliveryIdentity";
@@ -46,19 +48,32 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, _opt
   const endpoint = delivery.target;
   const { cwd, model, reasoningEffort, sandbox } = delivery.executionOptions;
   await assertAuthorized();
-  try { assertEndpointOwnerDirectory(cwd); }
-  catch (error) { throw new EndpointDeliveryNotSentError(error); }
-
-    const thread = readCodexDesktopThread(endpoint.sessionId);
-    if (!thread || thread.archived || !thread.cwd) throw new Error("Exact Codex owner is unavailable.");
-    if (!sameCodexWorkspace(thread.cwd, cwd)) throw agentWorkspaceMismatch(endpoint);
-    try {
-      return await transport.sendCodex({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
-        imagePaths: delivery.executionOptions.localImages?.map(image => image.path),
-        sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
-    } catch (error) {
-      if (error instanceof CodexDesktopPromptNotSentError) throw new EndpointDeliveryNotSentError(error);
-      throw error;
+  const thread = readCodexDesktopThread(endpoint.sessionId);
+  if (!thread || thread.id !== endpoint.sessionId || thread.archived) {
+    throw new EndpointDeliveryNotSentError("Exact Codex owner is unavailable.");
+  }
+  try {
+    if (endpoint.kind === "local") {
+      if (!cwd || !path.isAbsolute(cwd)) throw new Error("Endpoint execution requires an absolute owner directory.");
+      // Windows drive mappings and SMB credentials are scoped to a logon token.
+      // Desktop receives the configured path and resolves it in its own session.
+      if (process.platform !== "win32" && !(await fs.stat(cwd)).isDirectory()) {
+        throw new Error("Endpoint execution requires an existing owner directory.");
+      }
+    } else {
+      assertEndpointOwnerDirectory(cwd);
     }
-
+  } catch (error) {
+    throw new EndpointDeliveryNotSentError(error);
+  }
+  if (endpoint.kind !== "local" && !sameCodexWorkspace(thread.cwd, cwd)) throw agentWorkspaceMismatch(endpoint);
+  try {
+    await assertAuthorized();
+    return await transport.sendCodex({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
+      imagePaths: delivery.executionOptions.localImages?.map(image => image.path),
+      sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
+  } catch (error) {
+    if (error instanceof CodexDesktopPromptNotSentError) throw new EndpointDeliveryNotSentError(error);
+    throw error;
+  }
 }

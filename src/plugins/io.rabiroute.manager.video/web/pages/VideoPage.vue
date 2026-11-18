@@ -10,6 +10,7 @@ import type { SpeechModel } from "@shared/speechControlContract";
 import { readDraft, writeDraft } from "./videoDraftStorage";
 import { useVideoCanvas } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
+import { NODE_HEIGHT, wirePath, connectGraph, linkedText, initialFlowNodeConfig, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition } from "./workbenchEditor";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
 import MediaVideoPlayer from "../components/MediaVideoPlayer.vue";
@@ -191,10 +192,16 @@ type CanvasItem = { id: string; kind: CanvasKind; title: string; jobId?: string;
 const canvasItems = ref<CanvasItem[]>([{ id: "draft-1", kind: "video", title: "视频 1", text: "" }]);
 const activeVideoId = ref("draft-1");
 const selectedCanvasId = ref("draft-1");
+const storedMediaSelection = ref(["draft-1"]);
+watch(selectedIds, ids => {
+  const visible = new Set(canvasItems.value.map(item => item.id));
+  const media = ids.filter(id => visible.has(id));
+  if (!ids.length || media.length) storedMediaSelection.value = media;
+});
 canvas.add("draft-1");
-const activeVideo = computed(() => canvasItems.value.find(item => item.id === activeVideoId.value)!);
+const activeVideo = computed(() => canvasItems.value.find(item => item.id === activeVideoId.value));
 const otherItems = computed(() => canvasItems.value.filter(item => item.id !== activeVideoId.value));
-const selected = computed(() => snapshot.value?.jobs.find(job => job.id === activeVideo.value.jobId));
+const selected = computed(() => snapshot.value?.jobs.find(job => job.id === activeVideo.value?.jobId));
 const openPopover = ref("");
 function updatePopover(key: string, opened: boolean) {
   if (opened) openPopover.value = key;
@@ -232,6 +239,12 @@ function selectCanvasVideo(item: CanvasItem) {
   generateAudio.value = !!draft?.generateAudio; referenceVideoSound.value = !!draft?.referenceVideoSound;
   error.value = "";
 }
+function appendCardText(item: CanvasItem) {
+  if (!activeVideo.value) return;
+  prompt.value += (prompt.value ? "\n" : "") + item.text;
+  selectCard(activeVideo.value);
+  canvas.center(activeVideoId.value);
+}
 function selectCard(item: CanvasItem) {
   if (item.kind === "audio" && !audioModels.value.length) void loadAudioModels();
   openPopover.value = "";
@@ -259,7 +272,7 @@ function openCanvasMenu(event: MouseEvent) {
   if (!element) return;
   const bounds = element.getBoundingClientRect();
   const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-  contextMenu.value = { x: Math.max(8, Math.min(point.x, element.clientWidth - 210)), y: Math.max(8, Math.min(point.y, element.clientHeight - 330)), world: (event.target as HTMLElement).closest(".workspace-tools") ? undefined : canvas.world(point) };
+  contextMenu.value = { x: Math.max(8, Math.min(point.x, element.clientWidth - 210)), y: Math.max(8, Math.min(point.y, element.clientHeight - 450)), world: (event.target as HTMLElement).closest(".workspace-tools") ? undefined : canvas.world(point) };
 }
 function openCardMenu(event: MouseEvent, item: CanvasItem) {
   if ((event.target as HTMLElement).closest("input,textarea,.composer")) return;
@@ -342,7 +355,7 @@ function imageJob(item: CanvasItem) { return snapshot.value?.jobs.find(row=>row.
 function imageSource(item: CanvasItem) { const url=imageJob(item)?.imageUrl; return url ? managerResourceUrl(url) : item.asset ? managerResourceUrl(`/api/video/assets/${item.asset.id}`) : undefined; }
 async function generateImage(item: CanvasItem) {
   const [w,h]=(item.imageSize || "1024x1024").split("x").map(Number);
-  const body=JSON.stringify({model:item.imageModel || imageModels.value[0]?.id,prompt:item.text,width:w,height:h,seed:1});
+  const body=JSON.stringify({model:item.imageModel || imageModels.value[0]?.id,prompt:mediaPrompt(item.id, item.text),width:w,height:h,seed:1});
   if(item.imageBody!==body) {item.imageKey=browserUuid();item.imageBody=body;}
   const job=await request<Job>("/jobs",{method:"POST",headers:{"content-type":"application/json","Idempotency-Key":item.imageKey!},body});
   item.jobId=job.id; item.imageKey=undefined; item.imageBody=undefined; await refresh();
@@ -354,7 +367,7 @@ async function useGeneratedImage(item: CanvasItem) {
     const blob=await response.blob(); if(blob.size>9*1024**2)throw new Error("图片超过参考素材 9 MB 上限。");
     item.asset=await request<Asset>("/assets?kind=image",{method:"POST",headers:{"content-type":"application/octet-stream"},body:blob});
   }
-  useCanvasReference(item); selectCard(activeVideo.value);
+  useCanvasReference(item); if (activeVideo.value) selectCard(activeVideo.value);
 }
 const audioModels = ref<SpeechModel[]>([]);
 const audioCatalogError = ref("");
@@ -377,13 +390,14 @@ function selectAudioModel(item:CanvasItem,model:SpeechModel){item.audioModel=mod
 function audioParameterValues(item:CanvasItem){return normalizeTtsParameters(selectedAudioModel(item),item.audioParameters || {voice:item.audioVoice,speed:item.audioSpeed});}
 function audioSource(item: CanvasItem) { return item.audioUrl || (item.asset ? managerResourceUrl(`/api/video/assets/${item.asset.id}`) : undefined); }
 async function generateAudioCard(item: CanvasItem) {
-  if (item.audioBusy || !item.text.trim()) return;
+  const text = mediaPrompt(item.id, item.text);
+  if (item.audioBusy || !text.trim()) return;
   const selectionRevision = mediaService.selectionRevision();
   item.audioBusy = true; item.audioError = "";
   try {
     const chosen=selectedAudioModel(item);if(!chosen?.available)throw new Error("所选 TTS 模型尚未就绪。");
     const settings=ttsCommandSettings(chosen,audioParameterValues(item));
-    const audio = await synthesizeWithPauses(item.text, async input=>{
+    const audio = await synthesizeWithPauses(text, async input=>{
       if (selectionRevision !== mediaService.selectionRevision()) throw new MediaServiceChangedError();
       const result=await speechControlClient.synthesize({...settings,input});
       if(!result.audio?.size)throw new Error("语音服务没有返回音频。");
@@ -401,7 +415,7 @@ async function useAudioReference(item: CanvasItem) {
     if (blob.size > 16*1024**2) throw new Error("参考音频最大 16 MB。");
     item.asset = await request<Asset>("/assets?kind=audio",{method:"POST",headers:{"content-type":"application/octet-stream"},body:blob});
   }
-  useCanvasReference(item); selectCard(activeVideo.value);
+  useCanvasReference(item); if (activeVideo.value) selectCard(activeVideo.value);
 }
 function canvasVideoUrl(item: CanvasItem) {
   const videoUrl = snapshot.value?.jobs.find(job => job.id === item.jobId)?.videoUrl;
@@ -437,6 +451,7 @@ function useCanvasReference(item: CanvasItem) {
 function resetCanvasView() { canvas.zoom(1); canvas.center(activeVideoId.value); }
 
 const inputProblem = computed(() => {
+  if (videoInputPrompt.value.length > 12000) return "当前提示词和连接的文本合计超过 12000 字。";
   if (!model.value) return "当前模式没有可用的生成方案。";
   if (workflowProblem.value) return workflowProblem.value;
   if (mode.value === "reference" && !references.value.length) return "请添加图片、视频或音频参考。";
@@ -538,17 +553,18 @@ async function loadImage(event: Event, first: boolean) {
     if (first) { firstFrame.value = encoded; firstName.value = file.name; } else { lastFrame.value = encoded; lastName.value = file.name; }
   } catch { error.value = "图片读取失败，请重新选择 PNG、JPEG、WebP 或 GIF。"; }
 }
+const videoInputPrompt = computed(() => mediaPrompt(activeVideoId.value, prompt.value));
 async function submit() {
   if (inputProblem.value) throw new Error(inputProblem.value);
   if (mode.value === "image") {
     if (firstFrame.value) firstFrame.value = await ensurePngBase64(firstFrame.value);
     if (lastFrame.value) lastFrame.value = await ensurePngBase64(lastFrame.value);
   }
-  const body = JSON.stringify({ model: model.value, prompt: prompt.value, width: width.value, height: height.value, frames: frames.value, seed: seed.value, quickGeneration: quickGeneration.value, generateAudio: generateAudio.value, ...(mode.value === "reference" ? { references: references.value.map(asset => asset.id), referenceVideoSound: referenceVideoSound.value } : {}), ...(mode.value === "image" && firstFrame.value ? { firstFrame: firstFrame.value } : {}), ...(mode.value === "image" && lastFrame.value ? { lastFrame: lastFrame.value } : {}) });
+  const body = JSON.stringify({ model: model.value, prompt: videoInputPrompt.value, width: width.value, height: height.value, frames: frames.value, seed: seed.value, quickGeneration: quickGeneration.value, generateAudio: generateAudio.value, ...(mode.value === "reference" ? { references: references.value.map(asset => asset.id), referenceVideoSound: referenceVideoSound.value } : {}), ...(mode.value === "image" && firstFrame.value ? { firstFrame: firstFrame.value } : {}), ...(mode.value === "image" && lastFrame.value ? { lastFrame: lastFrame.value } : {}) });
   if (pendingSubmission && pendingSubmission.deviceId !== serviceDeviceId.value) throw new Error("上次提交结果未确认，请切回原模型服务电脑核对任务记录。");
   if (!pendingSubmission || pendingSubmission.body !== body) pendingSubmission = { body, key: browserUuid(), deviceId:serviceDeviceId.value };
   const result = await request<Job>("/jobs", { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": pendingSubmission.key }, body });
-  activeVideo.value.jobId = result.id; selectedId.value = result.id; filter.value = "all"; search.value = ""; notice.value = "已加入生成队列。";
+  activeVideo.value!.jobId = result.id; selectedId.value = result.id; filter.value = "all"; search.value = ""; notice.value = "已加入生成队列。";
   pendingSubmission = undefined;
 }
 type SavedCanvas = { version: 1; serviceDeviceId?: string; items: CanvasItem[]; active: string; selected: string[]; positions: Record<string, {x:number;y:number}>; drafts: [string, ReturnType<typeof captureDraft>][]; audio: [string, Blob][] };
@@ -557,50 +573,339 @@ const draftStatus = ref("正在恢复草稿…");
 const draftFailure = ref("");
 let draftRevision = 0;
 let savingDraft = false;
+let draftSaveFlight: Promise<void> | undefined;
+let savingGraph = false;
 let pendingDraft: SavedCanvas | undefined;
 const projectId = ref(new URL(location.href).searchParams.get("project") || "");
 const projectTitle = ref("未命名项目");
 const projectHome = ref(!projectId.value);
-const workbenchMode = ref(false), mediaCanvasId = ref("");
-const projects = ref<{id:string;title:string;updatedAt:string;cardCount:number;migrationPending?:boolean;migrationSourceRevision?:number}[]>([]);
-async function loadProjects() { projects.value = (await request<{projects: typeof projects.value}>("/projects")).projects; }
+const mediaCanvasId = ref("");
+const workflowPanel = ref<"settings" | "run" | "list">();
+const selectedEdgeId = ref("");
+type PortKind = "step" | "content";
+const workflowWire = ref<{ from: string; kind: PortKind; point: Point; pointer?: number }>();
+const workspaceGraph = ref<WorkbenchCanvas>();
+const workspaceDefinition = ref<WorkbenchDefinition>();
+const flowNodes = computed(() => workspaceGraph.value?.graph.nodes.filter(node => !node.config.legacyCardId) ?? []);
+const selectedWorkflowNode = computed(() => selectedIds.value.length === 1 ? flowNodes.value.find(node => node.id === selectedIds.value[0]) : undefined);
+const flowPositions = computed(() => Object.fromEntries(flowNodes.value.map(node => [node.id, node.layout ?? { x: 0, y: 0 }])));
+const workflowCardKinds = [
+  { kind: "text-generation", label: "文本生成" }, { kind: "agent", label: "Agent" }, { kind: "command", label: "命令" },
+  { kind: "human", label: "人工检查" }, { kind: "generate", label: "生成" }
+];
+const flowIcons: Record<string, string> = { command: "mdi-console", agent: "mdi-robot-outline", human: "mdi-account-check-outline", asset: "mdi-file-outline", generate: "mdi-creation" };
+function portPosition(id: string, direction: "in" | "out", kind: PortKind) {
+  const point = canvas.positions.value[id];
+  return point && { x: point.x + (direction === "out" ? 510 : 130), y: point.y + (kind === "content" ? 140 : NODE_HEIGHT / 2) };
+}
+const flowWires = computed(() => {
+  const graph = workspaceGraph.value;
+  if (!graph) return [];
+  const links = [
+    ...graph.graph.edges.map(edge => ({ ...edge, kind: "step" as const })),
+    ...(graph.mediaLinks ?? []).map(link => ({ ...link, id: JSON.stringify([link.from, link.to]), kind: "content" as const, condition: "" }))
+  ];
+  return links.flatMap(link => {
+    const start = portPosition(link.from, "out", link.kind), end = portPosition(link.to, "in", link.kind);
+    return start && end ? [{ ...link, path: wirePath(start, end) }] : [];
+  });
+});
+const wirePreview = computed(() => {
+  const wire = workflowWire.value;
+  const start = wire && portPosition(wire.from, "out", wire.kind);
+  return start && wire ? wirePath(start, wire.point) : "";
+});
+const textSources = computed(() => [
+  ...canvasItems.value,
+  ...flowNodes.value.filter(node => node.kind === "agent" && node.config.textOutput === true).map(node => ({
+    id: node.id, kind: "text", title: node.title || "文本", text: node.textPreview?.text || "", generated: true
+  }))
+]);
+const contentRefs = computed(() => {
+  const byId = new Map(textSources.value.map(item => [item.id, item]));
+  const refs = new Map<string, typeof textSources.value>();
+  for (const link of workspaceGraph.value?.mediaLinks ?? []) {
+    const source = byId.get(link.from);
+    if (!source) continue;
+    const items = refs.get(link.to) ?? [];
+    items.push(source);
+    refs.set(link.to, items);
+  }
+  return refs;
+});
+function mediaPrompt(id: string, value: string) {
+  const upstream = linkedText(textSources.value, workspaceGraph.value?.mediaLinks ?? [], id);
+  return upstream ? [upstream, value.trim()].filter(Boolean).join("\n\n") : value;
+}
+type ProjectCard = {
+  id: string; title: string; updatedAt: string; cardCount: number;
+  version?: number; mediaEditor?: boolean;
+  preview?: { kind?: "image" | "video"; assetId?: string; jobId?: string };
+
+};
+const projects = ref<ProjectCard[]>([]);
+const jobsById = computed(() => new Map(snapshot.value?.jobs.map(job => [job.id, job])));
+const previewUnavailable = ref(new Set<string>());
+function projectPreview(project: ProjectCard) {
+  if (previewUnavailable.value.has(project.id)) return undefined;
+  const preview = project.preview;
+  if (preview?.assetId && preview.kind) {
+    return { kind: preview.kind, url: managerResourceUrl(`/api/video/assets/${encodeURIComponent(preview.assetId)}`) };
+  }
+  const job = preview?.jobId ? jobsById.value.get(preview.jobId) : undefined;
+  if (job?.imageUrl) return { kind: "image", url: managerResourceUrl(job.imageUrl) };
+  if (job?.videoUrl) return { kind: "video", url: managerResourceUrl(job.videoUrl) };
+}
+const projectPreviews = computed(() => new Map(projects.value.map(project => [project.id, projectPreview(project)])));
+function failProjectPreview(id: string) { previewUnavailable.value.add(id); }
+async function loadProjects() {
+  projects.value = (await request<{ projects: ProjectCard[] }>("/projects")).projects;
+  previewUnavailable.value.clear();
+}
 async function openProject(id: string) {
   if (savingDraft) return;
-  const changed=id!==projectId.value;
-  projectId.value = id; projectHome.value = false; draftLoaded.value = false;
-  const url=new URL(location.href);url.searchParams.set("project",id);if(changed){url.searchParams.delete("canvas");url.searchParams.delete("view");}history.replaceState(null,"",url);
-  const modern=await fetch(`/api/video/v2/projects/${encodeURIComponent(id)}`);
-  if(modern.ok) { workbenchMode.value=true;mediaCanvasId.value="";draftLoaded.value=true;return; }
-  if(modern.status!==409) throw new Error((await modern.json()).message||"项目读取失败。");
-  workbenchMode.value=false;mediaCanvasId.value="";
+  const url = new URL(location.href);
+  const sameProject = url.searchParams.get("project") === id;
+  const view = sameProject ? url.searchParams.get("view") : null;
+  const projectResponse = await fetch(`/api/video/v2/projects/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(15000) });
+  if (!projectResponse.ok && projectResponse.status !== 409) {
+    throw new Error((await projectResponse.json()).message || "项目读取失败。");
+  }
+  type ProjectIdentity = { defaultCanvasId: string; title: string };
+  const modern: ProjectIdentity = projectResponse.ok ? await projectResponse.json() : await request<ProjectIdentity>(`/v2/projects/${encodeURIComponent(id)}/migrate`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ automatic: true })
+  });
+  const canvasId = (sameProject && url.searchParams.get("canvas")) || modern.defaultCanvasId;
+  const savedCanvas = canvasId
+    ? await request<WorkbenchCanvas>(`/v2/projects/${encodeURIComponent(id)}/canvases/${encodeURIComponent(canvasId)}`, { signal: AbortSignal.timeout(15000) })
+    : undefined;
+  if (savedCanvas && !workspaceDefinition.value) workspaceDefinition.value = await request<WorkbenchDefinition>("/v2/definition");
+  projectId.value = id;
+  projectTitle.value = savedCanvas?.name || modern?.title || "未命名项目";
+  projectHome.value = false;
+  workflowPanel.value = undefined;
+  selectedEdgeId.value = "";
+  workflowWire.value = undefined;
+  workspaceGraph.value = savedCanvas;
+  mediaCanvasId.value = savedCanvas ? canvasId : "";
+  url.searchParams.set("project", id);
+  if (!sameProject) url.searchParams.delete("run");
+  const deepNode = sameProject && url.searchParams.get("node");
+  url.searchParams.set("canvas", canvasId);
+  url.searchParams.delete("view");
+  url.searchParams.delete("node");
+  history.replaceState(null, "", url);
+  draftLoaded.value = false;
   await restoreCanvasDraft();
+  if (deepNode && flowNodes.value.some(node => node.id === deepNode)) {
+    selectedIds.value = [deepNode];
+    canvas.center(deepNode);
+  } else if (view === "canvases") workflowPanel.value = "list";
+  else if (url.searchParams.has("run")) workflowPanel.value = "run";
+  else if (view === "flow") workflowPanel.value = "settings";
+}
+async function commitWorkflow(editCanvas: (current: WorkbenchCanvas) => WorkbenchCanvas) {
+  await saveCanvasDraft();
+  if (savingDraft || savingGraph || draftFailure.value) throw new Error("请先完成当前画布的保存。");
+  const id = workspaceGraph.value?.id;
+  if (!id) throw new Error("画布尚未打开。");
+  const endpoint = `/v2/projects/${encodeURIComponent(projectId.value)}/canvases/${id}`;
+  savingGraph = true;
+  try {
+    const current = await request<WorkbenchCanvas>(endpoint);
+    if (current.revision !== draftRevision) throw new Error("画布已在其他窗口更新。请重新打开再编辑。");
+    const edited = editCanvas(current);
+    const saved = await request<WorkbenchCanvas>(endpoint, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(edited)
+    });
+    workspaceGraph.value = saved;
+    draftRevision = saved.revision;
+    const ids = new Set(saved.graph.nodes.map(node => node.config.legacyCardId || node.id));
+    for (const id of Object.keys(canvas.positions.value)) if (!ids.has(id)) delete canvas.positions.value[id];
+    for (const node of saved.graph.nodes) if (!node.config.legacyCardId && node.layout) canvas.positions.value[node.id] = node.layout;
+    selectedIds.value = selectedIds.value.filter(id => ids.has(id));
+    return saved;
+  } finally {
+    savingGraph = false;
+    if (pendingDraft) void saveCanvasDraft();
+  }
+}
+function saveWorkflowNodes(editNodes: (nodes: FlowNode[]) => FlowNode[]) {
+  return commitWorkflow(current => ({ ...current, graph: { ...current.graph, nodes: editNodes(current.graph.nodes) } }));
+}
+function saveInspectorDraft(edited: WorkbenchCanvas, nodeId?: string) {
+  return commitWorkflow(current => {
+    if (edited.id !== current.id) throw new Error("当前画布已切换。");
+    if (!nodeId) {
+      if (edited.revision !== current.revision) throw new Error("画布已更新，请重新打开再编辑。");
+      return edited;
+    }
+    if (!current.graph.nodes.some(node => node.id === nodeId)) throw new Error("当前节点已移除。");
+    const changed = edited.graph.nodes.find(node => node.id === nodeId);
+    const stageId = edited.graph.groups.find(group => group.nodeIds.includes(nodeId))?.id;
+    const nodes = current.graph.nodes.flatMap(node => node.id !== nodeId ? [node] : changed ? [{ ...changed, layout: node.layout, textPreview: node.textPreview }] : []);
+    const groups = current.graph.groups.map(group => {
+      const belongs = !!changed && group.id === stageId;
+      if (group.nodeIds.includes(nodeId) === belongs) return group;
+      const nodeIds = belongs ? [...group.nodeIds, nodeId] : group.nodeIds.filter(id => id !== nodeId);
+      return { ...group, nodeIds };
+    });
+    const edges = changed ? current.graph.edges : current.graph.edges.filter(edge => edge.from !== nodeId && edge.to !== nodeId);
+    const mediaLinks = changed ? current.mediaLinks : current.mediaLinks?.filter(link => link.from !== nodeId && link.to !== nodeId);
+    return { ...current, mediaLinks, graph: { ...current.graph, nodes, groups, edges } };
+  });
+}
+async function prepareNodeRun() {
+  await saveCanvasDraft();
+  if (savingDraft || savingGraph || draftFailure.value || !workspaceGraph.value) throw new Error("请先完成当前画布的保存。");
+  return draftRevision;
+}
+async function saveNodeResult(nodeId: string, textPreview: TextPreview) {
+  const current = workspaceGraph.value;
+  if (!current || !current.graph.nodes.some(node => node.id === nodeId)) throw new Error("当前节点已移除。");
+  if (current.graph.nodes.some(node => node.id === nodeId && node.textPreview?.attemptId === textPreview.attemptId)) return current;
+  return saveWorkflowNodes(nodes => nodes.map(node => node.id === nodeId ? { ...node, textPreview } : node));
+}
+async function addWorkflowCard(entry: string) {
+  const kind = entry === "text-generation" ? "agent" : entry;
+  const position = contextMenu.value?.world;
+  contextMenu.value = undefined;
+  if (canvasItems.value.length) pendingDraft ??= canvasRecord();
+  const current = workspaceGraph.value;
+  const label = workflowCardKinds.find(row => row.kind === entry)?.label;
+  if (!current || !label) throw new Error("无法读取节点类型。");
+  const id = browserUuid();
+  canvas.add(id);
+  try {
+    const layout = position ?? canvas.positions.value[id];
+    const node = { id, kind, title: label, config: initialFlowNodeConfig(kind), layout, enabled: true };
+    await saveWorkflowNodes(nodes => [...nodes, node]);
+    if (layout) canvas.positions.value[id] = layout;
+    selectedIds.value = [id];
+    canvas.center(id);
+  } catch (failure) {
+    delete canvas.positions.value[id];
+    throw failure;
+  }
+}
+function workflowPointerDown(event: PointerEvent, node: FlowNode) {
+  if (busy.value || uploading.value) return;
+  if (event.button !== 0 && event.button !== 1) return;
+  event.stopPropagation();
+  if (handMode.value || event.button === 1) { canvas.begin(event); return; }
+  contextMenu.value = undefined;
+  if (!selectedIds.value.includes(node.id)) selectedIds.value = [node.id];
+  if (event.altKey && (event.target as Element).closest(".node-text-preview:not(.muted)")) return;
+  canvas.begin(event, node.id);
+}
+function beginPort(event: PointerEvent, id: string, kind: PortKind) {
+  if (event.button !== 0 || busy.value || uploading.value || handMode.value || !workspaceGraph.value) return;
+  const point = portPosition(id, "out", kind);
+  if (!point) return;
+  event.preventDefault();
+  workflowWire.value = { from: id, kind, point, pointer: event.pointerId };
+  viewport.value?.setPointerCapture(event.pointerId);
+}
+function cancelPort() {
+  const pointer = workflowWire.value?.pointer;
+  workflowWire.value = undefined;
+  if (pointer !== undefined && viewport.value?.hasPointerCapture(pointer)) viewport.value.releasePointerCapture(pointer);
+}
+function moveWorkspacePointer(event: PointerEvent) {
+  if (!workflowWire.value) { canvas.move(event); return; }
+  const bounds = viewport.value?.getBoundingClientRect();
+  if (bounds) workflowWire.value.point = canvas.world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+}
+async function connectPort(target: string, kind: PortKind) {
+  const wire = workflowWire.value;
+  if (!wire || wire.kind !== kind || wire.from === target) return;
+  cancelPort();
+  if (kind === "content") {
+    if (canvasItems.value.length) pendingDraft ??= canvasRecord();
+    await commitWorkflow(current => ({ ...current, mediaLinks: [...(current.mediaLinks ?? []), { from: wire.from, to: target }] }));
+    return;
+  }
+  const definition = workspaceDefinition.value;
+  if (!definition) return;
+  await commitWorkflow(current => {
+    const edge = connectGraph(current.graph, definition, { id: browserUuid(), from: wire.from, to: target, fromPort: "control", toPort: "control", condition: "success" });
+    return { ...current, graph: { ...current.graph, edges: [...current.graph.edges, edge] } };
+  });
+}
+async function removeContentLink(from: string, to: string) {
+  await commitWorkflow(current => ({ ...current, mediaLinks: current.mediaLinks?.filter(link => link.from !== from || link.to !== to) }));
+}
+function selectWire(wire: { id: string; kind: PortKind; from: string; to: string }) {
+  if (wire.kind === "step") void action(() => openWorkflowPanel("settings", wire.id));
+  else selectedIds.value = [wire.to];
+}
+function endWorkspaceGesture(event: PointerEvent) {
+  const wire = workflowWire.value;
+  if (wire?.pointer === event.pointerId) {
+    const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card-port]");
+    const target = hit?.dataset.cardId;
+    if (target && hit.dataset.cardPort === wire.kind) void action(() => connectPort(target, wire.kind));
+    else {
+      cancelPort();
+      if (hit?.dataset.cardOutput === wire.kind && target === wire.from) workflowWire.value = { ...wire, pointer: undefined };
+    }
+    return;
+  }
+  canvas.end(event);
+  if (!workspaceGraph.value || busy.value || savingGraph) return;
+  const changed = flowNodes.value.some(node => {
+    const position = canvas.positions.value[node.id];
+    return position && (position.x !== (node.layout?.x ?? 0) || position.y !== (node.layout?.y ?? 0));
+  });
+  if (changed) void action(() => saveWorkflowNodes(nodes => nodes.map(node => {
+    if (node.config.legacyCardId) return node;
+    return { ...node, layout: canvas.positions.value[node.id] ?? node.layout };
+  })));
 }
 async function createProject() {
-  const project=await request<{id:string}>("/v2/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:browserUuid()})});
+  const project = await request<{ id: string }>("/v2/projects", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: browserUuid() })
+  });
   await openProject(project.id);
 }
-async function openMediaCanvas(id:string) {mediaCanvasId.value=id;workbenchMode.value=false;draftLoaded.value=false;await restoreCanvasDraft();}
-async function returnToWorkbench() {await saveCanvasDraft();if(savingDraft||draftFailure.value)return;workbenchMode.value=true;}
-async function migrateProject() {
-  await saveCanvasDraft();if(savingDraft||draftFailure.value)return;
-  await request(`/v2/projects/${projectId.value}/migrate`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({revision:draftRevision})});
+async function openMediaCanvas(id: string, runId?: string) {
+  const url = new URL(location.href);
+  url.searchParams.set("canvas", id);
+  url.searchParams.delete("view");
+  url.searchParams.delete("node");
+  if (runId) url.searchParams.set("run", runId); else url.searchParams.delete("run");
+  history.replaceState(null, "", url);
   await openProject(projectId.value);
 }
-async function recoverProjectMigration(id:string,revision:number) {
-  await request(`/v2/projects/${id}/migrate`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({revision})});
-  await openProject(id);
+async function openWorkflowPanel(mode: "settings" | "run" | "list", edgeId = "") {
+  await saveCanvasDraft();
+  if (savingDraft || draftFailure.value) return;
+  selectedEdgeId.value = edgeId;
+  workflowPanel.value = mode;
 }
-async function workbenchHome() {projectHome.value=true;workbenchMode.value=false;const url=new URL(location.href);url.searchParams.delete("project");url.searchParams.delete("canvas");url.searchParams.delete("view");history.replaceState(null,"",url);await loadProjects();}
+function closeWorkflowPanel() {
+  workflowPanel.value = undefined;
+  selectedEdgeId.value = "";
+}
+async function workbenchHome() {
+  projectHome.value = true;
+  closeWorkflowPanel();
+  projectId.value = "";
+  mediaCanvasId.value = "";
+  workspaceGraph.value = undefined;
+  const url = new URL(location.href);
+  for (const key of ["project", "canvas", "view", "run", "node"]) url.searchParams.delete(key);
+  history.replaceState(null, "", url);
+  await loadProjects();
+}
 async function showProjects() {
   await saveCanvasDraft();
   if (savingDraft || draftFailure.value) return;
-  projectHome.value = true;
-  const url=new URL(location.href);url.searchParams.delete("project");url.searchParams.delete("canvas");url.searchParams.delete("view");history.replaceState(null,"",url);
-  await loadProjects();
+  await workbenchHome();
 }
 function canvasRecord(): SavedCanvas {
   const allDrafts = new Map(drafts);
-  allDrafts.set(activeVideoId.value, captureDraft());
+  if (activeVideoId.value) allDrafts.set(activeVideoId.value, captureDraft());
   const items = JSON.parse(JSON.stringify(canvasItems.value)) as CanvasItem[];
   const audio: [string, Blob][] = [];
   for (const item of items) {
@@ -611,24 +916,33 @@ function canvasRecord(): SavedCanvas {
       delete item.audioUrl;
     }
   }
-  return { version: 1, serviceDeviceId:serviceDeviceId.value, items, active: activeVideoId.value, selected: [...selectedIds.value], positions: JSON.parse(JSON.stringify(canvas.positions.value)), drafts: JSON.parse(JSON.stringify([...allDrafts])), audio };
+  const ids = new Set(items.map(item => item.id));
+  const positions = Object.fromEntries(Object.entries(canvas.positions.value).filter(([id]) => ids.has(id)));
+  return { version: 1, serviceDeviceId:serviceDeviceId.value, items, active: activeVideoId.value, selected: storedMediaSelection.value.filter(id => ids.has(id)), positions, drafts: JSON.parse(JSON.stringify([...allDrafts])), audio };
 }
 async function saveCanvasDraft() {
-  if (savingDraft || draftFailure.value) return;
+  if (draftSaveFlight) return draftSaveFlight;
+  if (savingGraph || draftFailure.value || !pendingDraft) return;
   savingDraft = true;
-  try {
-    while (pendingDraft) {
-      const value = pendingDraft; pendingDraft = undefined;
-      draftRevision = await writeDraft(projectId.value, value, draftRevision, projectTitle.value,mediaCanvasId.value||undefined);
+  const flight = (async () => {
+    try {
+      while (pendingDraft) {
+        const value = pendingDraft;
+        pendingDraft = undefined;
+        draftRevision = await writeDraft(projectId.value, value, draftRevision, projectTitle.value, mediaCanvasId.value || undefined);
+      }
+      draftStatus.value = "已保存";
+    } catch (failure) {
+      draftFailure.value = failure instanceof Error ? failure.message : "草稿保存失败。";
+      draftStatus.value = "保存失败";
     }
-    draftStatus.value = "已保存";
-  } catch (failure) {
-    draftFailure.value = failure instanceof Error ? failure.message : "草稿保存失败。";
-    draftStatus.value = "保存失败";
-  } finally { savingDraft = false; }
+  })();
+  draftSaveFlight = flight;
+  try { await flight; }
+  finally { draftSaveFlight = undefined; savingDraft = false; }
 }
-watch(() => [captureDraft(), canvasItems.value, canvas.positions.value, activeVideoId.value, selectedIds.value, projectTitle.value, serviceDeviceId.value], () => {
-  if (!draftLoaded.value || projectHome.value || workbenchMode.value || !projectId.value || draftFailure.value) return;
+watch(() => [captureDraft(), canvasItems.value, canvasItems.value.map(item => canvas.positions.value[item.id]), activeVideoId.value, storedMediaSelection.value, projectTitle.value, serviceDeviceId.value], () => {
+  if (!draftLoaded.value || projectHome.value || !projectId.value || !canvasItems.value.length || draftFailure.value) return;
   pendingDraft = canvasRecord(); draftStatus.value = "保存中…";
   void saveCanvasDraft();
 }, { deep: true, flush: "post" });
@@ -636,14 +950,15 @@ async function restoreCanvasDraft() {
   try {
     draftFailure.value = "";
     const record = await readDraft<SavedCanvas>(projectId.value,mediaCanvasId.value||undefined);
-    draftRevision = record.revision; projectTitle.value = record.title;
+    draftRevision = record.revision;
+    if (!workspaceGraph.value || record.value || !flowNodes.value.length) projectTitle.value = record.title;
     if (record.value) {
       const value = record.value;
       serviceDeviceId.value = typeof value.serviceDeviceId === "string" ? value.serviceDeviceId : "";
-      if (value.version !== 1 || !Array.isArray(value.items) || !value.items.some(item => item.id === value.active && item.kind === "video")) throw new Error("草稿格式无法识别，原草稿已保留。");
+      if (value.version !== 1 || !Array.isArray(value.items) || (value.active ? !value.items.some(item => item.id === value.active && item.kind === "video") : !mediaCanvasId.value || value.items.some(item => item.kind === "video"))) throw new Error("草稿格式无法识别，原草稿已保留。");
       draftRevision = record.revision;
       canvasItems.value = value.items;
-      canvas.positions.value = value.positions;
+      canvas.positions.value = { ...flowPositions.value, ...value.positions };
       drafts.clear(); for (const [id, draft] of value.drafts) drafts.set(id, draft);
       for (const [id, blob] of value.audio || []) {
         const item = canvasItems.value.find(row => row.id === id);
@@ -652,14 +967,28 @@ async function restoreCanvasDraft() {
       // Restore through the existing parameter owner without overwriting the saved active draft.
       activeVideoId.value = "";
       const wasBusy = busy.value; busy.value = false;
-      selectCanvasVideo(canvasItems.value.find(item => item.id === value.active)!);
+      const video = canvasItems.value.find(item => item.id === value.active);
+      if (video) selectCanvasVideo(video);
       busy.value = wasBusy;
       drafts.delete("");
       selectedIds.value = value.selected.filter(id => value.items.some(item => item.id === id));
       selectedCanvasId.value = selectedIds.value[0] || value.active;
-      canvas.center(value.active);
+      const focus = value.active || selectedCanvasId.value || value.items[0]?.id;
+      if (focus) canvas.center(focus);
     }
-    if (!record.value) {
+    if (!record.value && flowNodes.value.length) {
+      serviceDeviceId.value = "";
+      drafts.clear();
+      canvasItems.value = [];
+      activeVideoId.value = "";
+      selectedCanvasId.value = "";
+      selectedIds.value = [];
+      canvas.positions.value = flowPositions.value;
+      await nextTick();
+      canvas.zoom(.75);
+      canvas.center(flowNodes.value[0]!.id);
+    } else if (!record.value) {
+      if (mediaCanvasId.value && record.title === "新画布") projectTitle.value = "未命名项目";
       serviceDeviceId.value = "";
       drafts.clear(); canvasItems.value = [{id:"draft-1",kind:"video",title:"视频 1",text:""}];
       canvas.positions.value={};canvas.add("draft-1");
@@ -701,7 +1030,16 @@ async function connectModelService() {
   showModels.value = false; audioModels.value = []; audioCatalogError.value = "";
   void loadAudioModels(); await action(refresh);
 }
-onMounted(() => { if (projectId.value) { draftLoaded.value=false; void action(()=>openProject(projectId.value)); } else void action(loadProjects); window.addEventListener("beforeunload", protectUnsavedDraft); });
+onMounted(() => {
+  if (projectId.value) {
+    draftLoaded.value = false;
+    void action(async () => {
+      try { await openProject(projectId.value); }
+      finally { draftLoaded.value = true; }
+    });
+  } else void action(loadProjects);
+  window.addEventListener("beforeunload", protectUnsavedDraft);
+});
 onBeforeUnmount(() => window.removeEventListener("beforeunload", protectUnsavedDraft));
 onMounted(() => {
   if (!projectId.value) void connectModelService();
@@ -734,17 +1072,31 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <div class="project-grid">
         <button class="project-tile project-new" :disabled="busy" @click="action(createProject)"><v-icon icon="mdi-plus" size="30" /><span>新建项目</span></button>
-        <button v-for="project in projects" :key="project.id" class="project-tile" :disabled="busy" @click="action(()=>project.migrationPending ? recoverProjectMigration(project.id,project.migrationSourceRevision!) : openProject(project.id))"><div class="project-cover"><v-icon icon="mdi-movie-open-outline" size="44" /></div><strong>{{ project.title }}</strong><small>{{ project.migrationPending ? '恢复迁移' : `${project.cardCount} 张卡片` }} · {{ new Date(project.updatedAt).toLocaleString() }}</small></button>
+        <button v-for="project in projects" :key="project.id" class="project-tile" :disabled="busy"
+          @click="action(() => openProject(project.id))">
+          <div class="project-cover">
+            <img v-if="projectPreviews.get(project.id)?.kind === 'image'" :src="projectPreviews.get(project.id)?.url" alt="" loading="lazy" @error="failProjectPreview(project.id)"/>
+            <video v-else-if="projectPreviews.get(project.id)?.kind === 'video'" :src="projectPreviews.get(project.id)?.url" muted playsinline preload="metadata" aria-hidden="true" @error="failProjectPreview(project.id)"/>
+            <v-icon v-else :icon="project.version === 2 && !project.mediaEditor && project.cardCount ? 'mdi-sitemap-outline' : 'mdi-movie-open-outline'" size="44"/>
+          </div>
+          <strong>{{project.title}}</strong>
+          <small>{{ project.version === 2 && !project.mediaEditor && project.cardCount ? `${project.cardCount} 个节点` : `${project.cardCount} 张卡片` }} · {{ new Date(project.updatedAt).toLocaleString() }}</small>
+        </button>
       </div>
     </section>
-    <WorkbenchPanel v-if="workbenchMode && !projectHome" :project-id="projectId" @back="action(workbenchHome)" @media="id=>action(()=>openMediaCanvas(id))"/>
-    <div v-show="!projectHome && !workbenchMode">
+    <v-dialog v-if="workflowPanel && mediaCanvasId && !projectHome" :model-value="true" persistent max-width="760" scrollable>
+      <v-card><v-card-text class="workflow-dialog-content">
+        <WorkbenchPanel :key="workflowPanel + mediaCanvasId" :project-id="projectId" :canvas-id="mediaCanvasId" :mode="workflowPanel" :edge-id="selectedEdgeId" :commit="saveInspectorDraft" @back="closeWorkflowPanel" @media="(id,runId)=>action(()=>openMediaCanvas(id,runId))"/>
+      </v-card-text></v-card>
+    </v-dialog>
+    <div v-show="!projectHome">
     <div class="video-heading workspace-heading">
-      <v-btn icon="mdi-arrow-left" variant="text" aria-label="我的项目" @click="action(showProjects)" />
-      <input v-model="projectTitle" class="project-title" aria-label="项目名称" maxlength="100" />
+      <v-btn prepend-icon="mdi-arrow-left" variant="text" @click="action(showProjects)">我的项目</v-btn>
+      <strong v-if="flowNodes.length && !canvasItems.length">{{projectTitle}}</strong>
+      <input v-else v-model="projectTitle" class="project-title" aria-label="项目名称" maxlength="100" />
       <div><h1>工作台</h1><span>{{ snapshot ? (snapshot.online ? '服务已就绪' : '服务未启动') : '正在连接' }}</span></div>
-      <v-btn v-if="mediaCanvasId" variant="text" @click="action(returnToWorkbench)">流程画布</v-btn>
-      <v-btn v-else variant="text" @click="action(migrateProject)">迁移为多画布项目</v-btn>
+      <v-btn v-if="mediaCanvasId" variant="text" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
+      <v-btn v-if="flowNodes.length" variant="text" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
 
       <PeerServerSelect :model-value="serviceDeviceId" :disabled="serviceBusy" label="模型服务电脑" @changed="selectModelService" />
       <v-btn variant="text" size="small" prepend-icon="mdi-cube-outline" @click="action(openModels)">模型管理</v-btn>
@@ -783,17 +1135,27 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         <v-card-actions><v-btn @click="action(refreshModels)">刷新状态</v-btn><v-spacer /><v-btn @click="showModels = false">关闭</v-btn></v-card-actions>
       </v-card>
     </v-dialog>
-    <div ref="viewport" class="video-workspace" :class="{'canvas-dragging':dragging,'canvas-hand':handMode}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="canvas.backgroundDown($event); contextMenu=undefined" @pointermove="canvas.move" @pointerup="canvas.end" @pointercancel="canvas.end" @lostpointercapture="canvas.end" @wheel="canvas.wheel" @keydown.esc="showLibrary=false; contextMenu=undefined; openPopover=''">
+    <div ref="viewport" class="video-workspace" :class="{'canvas-dragging':dragging,'canvas-hand':handMode,'linking-content':workflowWire?.kind==='content','linking-step':workflowWire?.kind==='step'}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="cancelPort(); canvas.backgroundDown($event); contextMenu=undefined" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelPort(); canvas.end($event)" @lostpointercapture="canvas.end" @wheel="canvas.wheel" @keydown.esc="cancelPort(); showLibrary=false; contextMenu=undefined; openPopover=''">
       <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button><button aria-label="模型管理" @click="action(openModels)"><v-icon icon="mdi-cube-outline" size="23" /></button></nav>
       <div class="canvas-world" :style="canvasTransform">
+      <svg v-if="flowWires.length || wirePreview" class="workspace-flow-wires" aria-hidden="true">
+        <path v-for="wire in flowWires" :key="wire.id" :d="wire.path" :class="{ 'content-connection': wire.kind === 'content', 'completed-connection': wire.condition === 'completed', 'related-connection': selectedIds.includes(wire.from) || selectedIds.includes(wire.to) }" @pointerdown.stop @click.stop="selectWire(wire)"/>
+        <path v-if="wirePreview" :d="wirePreview" class="preview-connection"/>
+      </svg>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
       <article v-for="item in otherItems" :key="item.id" class="canvas-object canvas-card" :class="{'canvas-selected':selectedIds.includes(item.id)}" :style="canvas.position(item.id)" @pointerdown="cardPointerDown($event,item)" @contextmenu="openCardMenu($event,item)">
+        <template v-if="workspaceGraph">
+        <button class="workspace-port port-in content" :data-card-port="'content'" :data-card-id="item.id" aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(item.id, 'content'))">＋</button>
+          <template v-if="item.kind === 'text'">
+        <button class="workspace-port port-out content" :data-card-output="'content'" :data-card-id="item.id" aria-label="连接文本内容" title="连接文本内容" @pointerdown.stop="beginPort($event, item.id, 'content')" @click.stop>＋</button>
+          </template>
+        </template>
         <button class="canvas-drag-handle" :aria-label="`移动${item.title}`" @click="selectCard(item)" @keydown="canvas.nudge($event,item.id)"><v-icon :icon="canvasKinds.find(row=>row.kind===item.kind)?.icon" size="16" />{{ item.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div v-if="item.kind==='video'" class="canvas-video-card">
           <video v-if="canvasVideoUrl(item)" class="passive-video" :src="canvasVideoUrl(item)" preload="metadata" />
           <div v-else class="canvas-card-empty"><v-icon icon="mdi-video-outline" size="32" /><span>上传或生成视频</span><label class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" :aria-label="`上传${item.title}`" :disabled="busy || uploading" @change="uploadCanvasAsset($event,item)" /></label></div>
         </div>
-        <div v-else-if="item.kind==='text'" class="canvas-text-card"><p class="node-text-preview">{{ item.text || '添加文本内容…' }}</p></div>
+        <div v-else-if="item.kind==='text'" class="canvas-text-card"><p class="node-text-preview">{{ mediaPrompt(item.id, item.text) || '添加文本内容…' }}</p></div>
         <div v-else class="canvas-media-card">
           <img v-if="item.kind==='image' && imageSource(item)" draggable="false" :src="imageSource(item)" :alt="item.title" />
           <div v-else-if="item.kind==='audio' && audioSource(item)" class="canvas-card-empty"><v-icon icon="mdi-music-note-outline" size="32" /><audio :src="audioSource(item)" controls preload="metadata" :aria-label="`播放${item.title}`" @pointerdown.stop /></div>
@@ -801,9 +1163,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
           <label v-if="imageSource(item) || (item.kind==='audio' && audioSource(item))" class="card-replace-upload card-upload-button" @pointerdown.stop>替换<input type="file" :accept="item.kind==='audio' ? '.wav,audio/wav' : 'image/png'" :aria-label="`替换${item.title}`" :disabled="busy || uploading" @change="uploadCanvasAsset($event,item)" /></label>
         </div>
         <section v-if="item.kind!=='video' && selectedIds.length===1 && selectedIds.includes(item.id)" class="composer node-editor" :class="{'audio-node-editor':item.kind==='audio'}" :aria-label="`${item.title}编辑`" @pointerdown.stop @contextmenu.stop>
+          <div v-if="contentRefs.get(item.id)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
+            <button v-for="source in contentRefs.get(item.id)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, item.id))">{{source.title}} ×</button>
+          </div>
           <template v-if="item.kind==='text'">
             <textarea v-model="item.text" :aria-label="`${item.title}内容`" placeholder="写下镜头、台词或创作笔记…" />
-            <button class="canvas-card-action" :disabled="!item.text.trim()" @click="prompt += (prompt ? '\n' : '') + item.text; selectCard(activeVideo); canvas.center(activeVideoId)">加入视频提示词</button>
+            <button class="canvas-card-action" :disabled="!activeVideo || !item.text.trim()" @click="appendCardText(item)">加入视频提示词</button>
           </template>
           <template v-else>
             <template v-if="item.kind==='image'">
@@ -818,7 +1183,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
                   <div class="image-format-menu"><div class="format-label">比例</div><div class="image-ratio-segments"><button v-for="ratio in imageRatios" :key="ratio.label" :class="{active:imageRatio(item).label===ratio.label}" :aria-label="`图片比例 ${ratio.label}`" :aria-pressed="imageRatio(item).label===ratio.label" @click="setImageFormat(item,ratio)"><span :style="{width:(ratio.w>=ratio.h ? 17 : 17*ratio.w/ratio.h)+'px',height:(ratio.h>=ratio.w ? 17 : 17*ratio.h/ratio.w)+'px'}" />{{ ratio.label }}</button></div><div class="format-label">清晰度 <small>{{ (item.imageSize || '1024x1024').replace('x',' × ') }}</small></div><div class="image-quality-segments"><button v-for="quality in ['480P','720P','1K','2K']" :key="quality" :class="{active:imageQuality(item)===quality}" :aria-pressed="imageQuality(item)===quality" @click="setImageFormat(item,imageRatio(item),quality)">{{ quality }}</button></div></div>
                 </v-menu>
                 <span class="image-single-count">×1</span>
-                <v-btn class="image-generate-arrow" icon="mdi-arrow-up" size="x-small" color="white" aria-label="生成图片" :disabled="busy || uploading || !snapshot?.online || !item.text.trim() || !imageModels.length || (imageJob(item) && !snapshot?.states[imageJob(item)!.status]?.terminal)" @click="action(()=>generateImage(item))" />
+                <v-btn class="image-generate-arrow" icon="mdi-arrow-up" size="x-small" color="white" aria-label="生成图片" :disabled="busy || uploading || !snapshot?.online || !mediaPrompt(item.id, item.text).trim() || !imageModels.length || (imageJob(item) && !snapshot?.states[imageJob(item)!.status]?.terminal)" @click="action(()=>generateImage(item))" />
               </div>
               <p v-if="imageJob(item)" role="status">{{ snapshot?.states[imageJob(item)!.status]?.label }} {{ imageJob(item)?.error }}</p>
             </template>
@@ -831,17 +1196,50 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
                 <v-menu v-if="item.audioMode!=='reference'" :model-value="openPopover===`audio-model-${item.id}`" @update:model-value="updatePopover(`audio-model-${item.id}`,$event)" location="bottom start" offset="8"><template #activator="{props}"><button v-bind="props" class="media-picker audio-model-picker" aria-label="选择音频模型" :title="`选择 TTS 模型（${audioModels.length} 个）`">{{ audioModels.find(row=>row.id===(item.audioModel || audioModels.find(row=>row.available)?.id))?.name || '选择 TTS 模型' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template><div class="media-model-menu audio-model-menu" role="menu" aria-label="音频模型列表"><button v-for="option in audioModels" :key="option.id" role="menuitemradio" :aria-checked="(item.audioModel || audioModels.find(row=>row.available)?.id)===option.id" :disabled="item.audioBusy" @click="selectAudioModel(item,option)"><span><strong>{{ option.name }}</strong><small>{{ option.note || option.family }} · {{ option.available ? '可用' : '未就绪' }}</small></span><v-icon v-if="selectedAudioModel(item)?.id===option.id" icon="mdi-check" size="17" /></button><p v-if="!audioModels.length" class="audio-catalog-message">{{ audioCatalogError || '正在读取模型…' }}</p><button @click="loadAudioModels">刷新模型列表</button></div></v-menu>
                 <button v-if="item.audioMode!=='reference'" class="media-picker" :class="{active:item.audioSettingsOpen}" aria-label="音频参数设置" :aria-expanded="!!item.audioSettingsOpen" :aria-controls="`audio-settings-${item.id}`" @click="item.audioSettingsOpen=!item.audioSettingsOpen;openPopover='';if(item.audioSettingsOpen)loadAudioModels()">参数设置<v-icon :icon="item.audioSettingsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="16" /></button>
                 <a v-if="audioSource(item)" class="media-picker" :href="audioSource(item)" :download="`${item.title}.wav`" aria-label="下载音频"><v-icon icon="mdi-download" size="16" /></a>
-                <v-btn v-if="item.audioMode!=='reference'" class="generate-button" color="white" size="x-small" icon="mdi-arrow-up" aria-label="生成音频" :loading="item.audioBusy" :disabled="item.audioBusy || !item.text.trim() || !audioModels.some(row=>row.available && row.id===(item.audioModel || audioModels.find(row=>row.available)?.id))" @click="generateAudioCard(item)" />
+                <v-btn v-if="item.audioMode!=='reference'" class="generate-button" color="white" size="x-small" icon="mdi-arrow-up" aria-label="生成音频" :loading="item.audioBusy" :disabled="item.audioBusy || !mediaPrompt(item.id, item.text).trim() || !audioModels.some(row=>row.available && row.id===(item.audioModel || audioModels.find(row=>row.available)?.id))" @click="generateAudioCard(item)" />
               </div>
               <TtsModelParameters v-if="item.audioSettingsOpen && item.audioMode!=='reference'" :id="`audio-settings-${item.id}`" class="audio-settings-panel" :model="selectedAudioModel(item)" :model-value="audioParameterValues(item)" @update:model-value="item.audioParameters=$event" :disabled="item.audioBusy" />
               <p v-if="selectedAudioModel(item) && !selectedAudioModel(item)?.available" class="audio-catalog-message">所选模型尚未就绪，可先配置参数。</p>
               <p v-if="item.audioError || audioCatalogError" class="audio-catalog-message" role="status">{{ item.audioError || audioCatalogError }}</p>
-              <button v-if="audioSource(item)" class="canvas-card-action" :disabled="busy || uploading || item.audioBusy" @click="action(()=>useAudioReference(item))">用作视频参考</button>
+              <button v-if="audioSource(item)" class="canvas-card-action" :disabled="!activeVideo || busy || uploading || item.audioBusy" @click="action(()=>useAudioReference(item))">用作视频参考</button>
             </template>
           </template>
         </section>
       </article>
-      <div class="creation-stage canvas-object" :class="{'canvas-selected':selectedIds.includes(activeVideoId)}" :style="canvas.position(activeVideoId)" @pointerdown="cardPointerDown($event,activeVideo)" @contextmenu="openCardMenu($event,activeVideo)">
+      <article v-for="node in flowNodes" :key="node.id" class="canvas-object canvas-card workflow-card"
+        :class="{ 'canvas-selected': selectedIds.includes(node.id), 'workflow-card-disabled': node.enabled === false, 'creative-card': node.kind === 'agent' && node.config.textOutput === true }" :style="canvas.position(node.id)" @pointerdown="workflowPointerDown($event,node)">
+        <button v-if="node.kind==='agent'" class="workspace-port port-in content" data-card-port="content" :data-card-id="node.id"
+          aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'content'))">＋</button>
+        <button v-if="node.kind==='agent' && node.config.textOutput===true" class="workspace-port port-out content" data-card-output="content" :data-card-id="node.id"
+          aria-label="连接生成文本" title="连接生成文本" @pointerdown.stop="beginPort($event, node.id, 'content')" @click.stop>＋</button>
+        <template v-if="workspaceDefinition?.capabilities[node.kind]?.ports.in.includes('control')">
+        <button class="workspace-port port-in step" :data-card-port="'step'" :data-card-id="node.id" aria-label="接上一步" title="接上一步" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'step'))">＋</button>
+        </template>
+        <template v-if="workspaceDefinition?.capabilities[node.kind]?.ports.out.includes('control')">
+        <button class="workspace-port port-out step" :data-card-output="'step'" :data-card-id="node.id" aria-label="下一步" title="下一步" @pointerdown.stop="beginPort($event, node.id, 'step')" @click.stop>＋</button>
+        </template>
+        <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="selectedIds=[node.id]">
+          <v-icon :icon="flowIcons[node.kind] || 'mdi-sitemap-outline'" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<v-icon icon="mdi-drag" size="16"/>
+        </button>
+        <div class="workflow-card-body canvas-text-card">
+          <p v-if="node.config.textOutput===true" class="node-text-preview" :class="{muted:!node.textPreview?.text}" tabindex="0" @wheel.stop>{{ node.textPreview?.text || '等待生成' }}</p>
+          <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
+        </div>
+        <div v-if="selectedWorkflowNode?.id === node.id" class="composer workflow-node-parameters" @pointerdown.stop @contextmenu.stop @wheel.stop>
+          <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + node.id" mode="node" :project-id="projectId" :canvas-id="mediaCanvasId"
+            :node-id="node.id" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(node.id)?.length">
+            <template #references>
+              <div v-if="contentRefs.get(node.id)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
+                <button v-for="source in contentRefs.get(node.id)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, node.id))">{{ source.title }} ×</button>
+              </div>
+            </template>
+          </WorkbenchPanel>
+        </div>
+      </article>
+      <div v-if="activeVideo" class="creation-stage canvas-object" :class="{'canvas-selected':selectedIds.includes(activeVideoId)}" :style="canvas.position(activeVideoId)" @pointerdown="cardPointerDown($event,activeVideo)" @contextmenu="openCardMenu($event,activeVideo)">
+        <template v-if="workspaceGraph">
+        <button class="workspace-port port-in content" :data-card-port="'content'" :data-card-id="activeVideo.id" aria-label="视频提示词内容输入" title="视频提示词内容输入" @pointerdown.stop @click.stop="action(() => connectPort(activeVideoId, 'content'))">＋</button>
+        </template>
         <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="selectCard(activeVideo)" @keydown="canvas.nudge($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div class="preview-stage">
           <MediaVideoPlayer v-if="canvasVideoUrl(activeVideo)" :key="activeVideo.id" :src="canvasVideoUrl(activeVideo)!" />
@@ -884,6 +1282,9 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
             </div>
             <v-checkbox v-if="references.some(a=>a.kind==='video' && a.hasAudio)" :model-value="referenceVideoSound" label="使用参考视频的原声" hide-details density="compact" @update:model-value="setVideoSound" />
           </section>
+          <div v-if="contentRefs.get(activeVideo.id)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
+            <button v-for="source in contentRefs.get(activeVideo.id)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, activeVideoId))">{{source.title}} ×</button>
+          </div>
           <v-textarea v-model="prompt" label="描述你想生成的画面" :placeholder="mode==='text' ? '主体、动作、场景与镜头运动…' : '描述素材如何参与生成，以及想要的动作和镜头…'" rows="3" max-rows="5" auto-grow variant="plain" :maxlength="12000" hide-details />
 
         </div>
@@ -909,9 +1310,9 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
           </v-menu>
           <v-btn size="small" variant="text" :prepend-icon="generateAudio ? 'mdi-volume-high' : 'mdi-volume-off'" :aria-pressed="generateAudio" @click="generateAudio=!generateAudio">{{ generateAudio ? '生成声音' : '无声' }}</v-btn>
           <v-btn size="small" variant="text" :aria-pressed="quickGeneration" :disabled="!selectedWorkflow" prepend-icon="mdi-lightning-bolt" @click="quickGeneration=!quickGeneration">{{ quickGeneration ? '快速' : '标准' }}</v-btn>
-          <v-btn class="generate-button" size="small" color="white" icon="mdi-arrow-up" aria-label="生成视频" :disabled="busy || uploading || !snapshot?.online || !prompt.trim() || !!inputProblem" :loading="busy" @click="action(submit)" />
+          <v-btn class="generate-button" size="small" color="white" icon="mdi-arrow-up" aria-label="生成视频" :disabled="busy || uploading || !snapshot?.online || !videoInputPrompt.trim() || !!inputProblem" :loading="busy" @click="action(submit)" />
         </div>
-        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!snapshot?.online" class="video-hint">请先启动顶部的视频服务。</p><p v-else-if="!prompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
+        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!snapshot?.online" class="video-hint">请先启动顶部的视频服务。</p><p v-else-if="!videoInputPrompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
       </section>
       </div>
       </div>
@@ -930,14 +1331,18 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         </template>
         <template v-else>
         <button v-for="entry in canvasKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="addCanvasItem(entry.kind)"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}卡片</button>
+        <hr />
+        <button v-for="entry in workflowCardKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard(entry.kind))">
+          <v-icon :icon="flowIcons[entry.kind]" size="17"/>添加{{ workspaceDefinition?.capabilities[entry.kind]?.label || entry.label }}节点
+        </button>
         <hr /><button role="menuitem" @click="showLibrary=true; contextMenu=undefined"><v-icon icon="mdi-history" size="17" />从作品历史添加</button><button role="menuitem" @click="canvas.fit(); contextMenu=undefined"><v-icon icon="mdi-fit-to-screen-outline" size="17" />适应画布</button>
         </template>
       </div>
       <aside class="canvas-minimap" aria-label="画布小地图" @pointerdown.stop @contextmenu.stop @wheel.stop>
         <button class="minimap-toggle" :aria-expanded="minimapOpen" aria-controls="canvas-minimap-map" @click="minimapOpen=!minimapOpen"><span>小地图</span><span>{{ minimapOpen ? '−' : '+' }}</span></button>
         <svg v-if="minimapOpen" id="canvas-minimap-map" viewBox="0 0 180 110" role="img" aria-label="点击小地图移动视野" @click="navigateMinimap">
-          <rect v-for="card in minimap.cards" :key="card.id" v-bind="{x:card.x,y:card.y,width:card.width,height:card.height}" :class="['minimap-card',{'minimap-selected':selectedIds.includes(card.id)}]" />
           <rect v-bind="minimap.view" class="minimap-viewport" />
+          <rect v-for="card in minimap.cards" :key="card.id" v-bind="{x:card.x,y:card.y,width:card.width,height:card.height}" :class="['minimap-card',{'minimap-selected':selectedIds.includes(card.id)}]" />
         </svg>
       </aside>
       <nav class="canvas-tools" aria-label="画布视图"><button :class="{active:!handMode}" :aria-pressed="!handMode" aria-label="选择模式" @click="handMode=false"><v-icon icon="mdi-cursor-default-outline" size="20" /></button><button :class="{active:handMode}" :aria-pressed="handMode" aria-label="拖动画布模式" @click="handMode=true"><v-icon icon="mdi-hand-back-right-outline" size="20" /></button><span class="tool-divider" /><button aria-label="缩小画布" @click="canvas.zoom(scale/1.2)">−</button><button class="zoom-label" aria-label="复位画布视图" @click="resetCanvasView">{{ Math.round(scale*100) }}%</button><button aria-label="放大画布" @click="canvas.zoom(scale*1.2)">+</button><button aria-label="适应画布" @click="canvas.fit"><v-icon icon="mdi-fit-to-screen-outline" size="20" /></button></nav>
@@ -953,6 +1358,32 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
 .video-heading>div:first-child { margin-right:auto; }
 .video-heading h1 { font-size:24px; }
 .video-heading span,.video-hint,small,time { color:var(--rr-muted); }
+.workflow-dialog-content { padding:0 !important; }
+.workflow-node-parameters { margin-top:10px; }
+.workspace-flow-wires { position:absolute; width:1px; height:1px; overflow:visible; pointer-events:none; }
+.workspace-flow-wires path { fill:none; stroke:var(--rr-accent); stroke-width:2; opacity:.72; pointer-events:stroke; cursor:pointer; }
+.workspace-flow-wires .content-connection { stroke:var(--rr-muted); opacity:.48; }
+.workspace-flow-wires path.related-connection,.workspace-flow-wires path:hover { opacity:1; }
+.workspace-flow-wires .related-connection.content-connection { stroke:var(--rr-text); }
+.workspace-flow-wires .completed-connection { stroke-dasharray:6 4; }
+.workspace-flow-wires .preview-connection { opacity:1; pointer-events:none; }
+.workspace-port { position:absolute; top:72px; z-index:3; display:grid; place-items:center; width:22px; height:22px; transform:translateY(-50%); border:1px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
+.workspace-port { opacity:0; transition:opacity 120ms ease; }
+.canvas-object:hover > .workspace-port,.canvas-selected > .workspace-port,.workspace-port:focus-visible,
+.linking-content .workspace-port.content.port-in,.linking-step .workspace-port.step.port-in { opacity:1; }
+.workspace-port.content { top:140px; }
+.creative-card .workflow-card-body { display:block; padding:0; }
+.creative-card .node-text-preview { overflow:auto; user-select:text; }
+.creative-card .node-text-preview.muted { color:var(--rr-muted); }
+.workspace-port.port-in { left:-11px; }
+.workspace-port.port-out { right:-11px; }
+.creation-stage .workspace-port.port-in { left:119px; }
+.workspace-port:hover,.workspace-port:focus-visible { border-color:var(--rr-accent); color:var(--rr-accent); }
+.canvas-reference-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
+.canvas-reference-chips button { border:1px solid var(--rr-border); border-radius:20px; padding:3px 9px; color:var(--rr-muted); font-size:12px; }
+.workflow-card { width:380px; min-height:144px; }
+.workflow-card-body { display:flex; align-items:flex-start; min-height:76px; padding:16px; font-size:13px; color:var(--rr-muted); cursor:grab; }
+.workflow-card-disabled { opacity:.62; }
 .video-workspace { position:absolute; inset:64px 0 0; overflow:hidden; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
 .creation-stage { position:absolute; width:640px; display:flex; flex-direction:column; align-items:center; }
 .preview-stage { flex-shrink:0; width:min(380px,100%); height:214px; background:var(--rr-surface); border:1px solid var(--rr-border-strong); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--rr-text); box-shadow:var(--rr-shadow-card); }
@@ -1082,7 +1513,7 @@ summary { cursor:pointer; }
 .canvas-tools .zoom-label { min-width:58px; font-size:12px; }
 .tool-divider { height:18px; border-left:1px solid var(--rr-border); margin:0 4px; }
 .canvas-hand { cursor:grab; }
-.canvas-dragging,.canvas-dragging .canvas-card,.canvas-dragging .preview-stage,.canvas-dragging .canvas-drag-handle { cursor:grabbing; user-select:none; }
+.canvas-dragging,.canvas-dragging .canvas-card,.canvas-dragging .workflow-card-body,.canvas-dragging .preview-stage,.canvas-dragging .canvas-drag-handle { cursor:grabbing; user-select:none; }
 </style>
 
 <style scoped>
@@ -1187,6 +1618,7 @@ summary { cursor:pointer; }
 .project-tile { min-height:210px; border:1px solid var(--rr-border-strong); border-radius:18px; background:var(--rr-surface); padding:16px; text-align:left; display:flex; flex-direction:column; gap:10px; color:var(--rr-text); }
 .project-tile:hover { border-color:var(--rr-muted); }
 .project-new { border-style:dashed; align-items:center; justify-content:center; }
+.project-cover > img, .project-cover > video { display:block; width:100%; height:130px; object-fit:cover; border-radius:inherit; pointer-events:none; }
 .project-cover { background:var(--rr-subtle); height:130px; border-radius:12px; display:grid; place-items:center; color:var(--rr-muted); }
 .project-tile small { color:var(--rr-muted); font-size:12px; }
 .project-title { color:inherit; max-width:210px; padding:8px; outline:none; }

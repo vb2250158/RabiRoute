@@ -15,6 +15,17 @@ const pools = new Map();
 function pool(root) { if (!pools.has(root)) pools.set(root, { queues: new Map(), indexes: new Map() }); return pools.get(root); }
 
 /** v1 and v2 share this owner, authority checks and publication primitives. */
+// Keep only media IDs in the summary index, never draft text, URLs, or media bytes.
+export function previewFromItems(items) {
+  if (!Array.isArray(items)) return undefined;
+  for (const item of items) {
+    if (['image', 'video'].includes(item?.asset?.kind) && uuid.test(item.asset.id || '')) {
+      return { kind: item.asset.kind, assetId: item.asset.id, cardId: item.id };
+    }
+    if (typeof item?.jobId === 'string' && uuid.test(item.jobId)) return { jobId: item.jobId, cardId: item.id };
+  }
+}
+
 export class WorkbenchProjects {
   constructor(runtime, definition) {
     this.runtime = runtime; this.definition = definition; this.legacyRoot=path.join(runtime.stateRoot,"projects");this.root = runtime.workbenchProjectsRoot || this.legacyRoot;
@@ -79,7 +90,8 @@ export class WorkbenchProjects {
     try { validateCanvas(record, this.definition); } catch (error) { throw new VideoError(error.message, 409); }
     return {...record,externalDependencies:externalDependencies(record)};
   }
-  summary(record) { return { id: record.id, name: record.name, revision: record.revision, updatedAt: record.updatedAt, nodeCount: record.graph.nodes.length }; }
+  summary(record) { return { id: record.id, name: record.name, revision: record.revision, updatedAt: record.updatedAt, nodeCount: record.graph.nodes.length, mediaEditor: Boolean(record.mediaEditor),
+      preview: record.graph.nodes.some(node => node.config?.legacyCardId === record.preview?.cardId) ? record.preview : undefined }; }
   async indexEntry(projectId, canvas, access) {
     const file = path.join(this.projectDirectory(projectId), ".canvas-index", `${canvas.id}.json`);
     await this.atomic(file, this.summary(canvas), access);
@@ -130,6 +142,7 @@ export class WorkbenchProjects {
       const previous = await this.readCanvas(projectId, canvasId, access);
       if (body?.revision !== previous.revision) throw new VideoError("此画布已更新，请保留编辑并重读。", 409);
       const record = { ...body, id: canvasId, version: 2, revision: previous.revision + 1, updatedAt: now() };
+      record.preview = previous.preview;
       delete record.externalDependencies;
       try { validateCanvas(record, this.definition); } catch (error) { throw new VideoError(error.message); }
       await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), record, access);
@@ -262,20 +275,32 @@ export class WorkbenchProjects {
       const record = { ...original, id: body.id, name: String(body.name || `${original.name} 副本`).slice(0, 200), graph: cloned.graph,
         revision: 0, updatedAt: now(), copyRequest: body.requestId };
       if(record.importReport?.gaps)record.importReport={...record.importReport,gaps:record.importReport.gaps.map(gap=>({...gap,...(cloned.ids.has(gap.nodeId)?{nodeId:cloned.ids.get(gap.nodeId)}:{})}))};
+      if (record.mediaLinks) {
+        const cardIds = new Set(original.graph.nodes.map(node => node.config.legacyCardId).filter(Boolean));
+        const mapId = id => cardIds.has(id) ? id : cloned.ids.get(id) || id;
+        record.mediaLinks = record.mediaLinks.map(link => ({ from: mapId(link.from), to: mapId(link.to) }));
+      }
       delete record.runId; delete record.jobId;
       return this.publishCanvas(projectId, record, source, access);
     });
   }
   async migrateProject(projectId, body, access) {
     return this.locked(`project:${this.id(projectId)}`, access, async () => {
+      const automatic = body?.automatic === true;
       const existing = await this.modern(projectId, access);
-      if(existing){if(existing.migration?.phase==="prepared"){if(body?.revision!==existing.migration.sourceRevision)throw new VideoError("恢复迁移需要原来源 revision。",409);return this.finishMigration(existing,access);}return existing;}
+      if (existing) {
+        if (existing.migration?.phase !== "prepared") return existing;
+        if (!automatic && body?.revision !== existing.migration.sourceRevision) throw new VideoError("恢复迁移需要原来源 revision。", 409);
+        return this.finishMigration(existing, access);
+      }
       const legacy = await this.json(path.join(this.legacyRoot, `${projectId}.json`), access);
-      if (body?.revision !== legacy.revision) throw new VideoError("旧项目已更新，请重读后迁移。", 409);
+      if (!Number.isSafeInteger(legacy.revision) || legacy.revision < 0 || (!automatic && body?.revision !== legacy.revision)) {
+        throw new VideoError("旧项目已更新或存档不可读，请重新打开。", 409);
+      }
       const stage = path.join(this.root, ".pending", projectId);
       const receipt = await this.json(path.join(stage, "migration", "receipt.json"), access).catch(absent);
       if (receipt && (receipt.sourceRevision !== legacy.revision || receipt.sha256 !== digest(JSON.stringify(legacy)))) throw new VideoError("迁移准备后旧项目发生变化，请先恢复原迁移。", 409);
-      const canvas = { ...await this.newCanvas("原媒体画布"), ...(receipt ? { id: receipt.canvasId } : {}) };
+      const canvas = { ...await this.newCanvas(legacy.title), ...(receipt ? { id: receipt.canvasId } : {}) };
       if(!receipt)await this.atomic(path.join(stage,"migration","receipt.json"),{sourceRevision:legacy.revision,sha256:digest(JSON.stringify(legacy)),canvasId:canvas.id},access);
       const source = legacy.value;
       if (source && source.version !== 1) throw new VideoError("不支持的旧项目版本。", 400);
@@ -285,6 +310,7 @@ export class WorkbenchProjects {
       if (source) {
         // The complete original is recoverable; media editor projection stays in a material, not graph JSON.
         canvas.mediaEditor = { path: "materials/media-editor.json", version: 1 };
+        canvas.preview = previewFromItems(source.items);
         await this.atomic(path.join(directory, "media-editor.json"), source, access);
         canvas.graph.nodes = source.items.map(item => ({ id: item.id, kind: "asset", title: item.title || item.kind,
           config: { mediaKind: item.kind, ...(item.asset ? { assetId: item.asset.id } : {}), legacyCardId: item.id }, layout: source.positions?.[item.id] || { x: 0, y: 0 } }));
@@ -328,8 +354,9 @@ export class WorkbenchProjects {
       return { count };
     });
   }
-  async readMediaEditor(projectId, canvasId, access) {
+  async readMediaEditor(projectId, canvasId, access, revision) {
     const canvas = await this.readCanvas(projectId, canvasId, access);
+    if (revision !== undefined && revision !== canvas.revision) throw new VideoError("画布已更新，请重读后运行。", 409);
     let value = canvas.mediaEditor ? await this.json(await this.material(projectId, canvasId, canvas.mediaEditor.path, access), access) : null;
     if (value) {
       const cards = new Map(canvas.graph.nodes.filter(node => node.config.legacyCardId).map(node => [node.config.legacyCardId, node]));
@@ -337,7 +364,8 @@ export class WorkbenchProjects {
       value.selected=Array.isArray(value.selected)?value.selected.filter(id=>cards.has(id)):[];
       value.positions = Object.fromEntries([...cards].map(([id, node]) => [id, node.layout || { x: 0, y: 0 }]));
       if (!value.items.some(item => item.id === value.active && item.kind === "video")) value.active = value.items.find(item => item.kind === "video")?.id;
-      if (!value.active) value = null;
+      if (!value.items.length) value = null;
+      else value.active ||= "";
     }
     return { revision: canvas.revision, title: canvas.name, value };
   }
@@ -345,7 +373,9 @@ export class WorkbenchProjects {
     return this.locked(`canvas:${this.id(projectId)}:${this.id(canvasId)}`, access, async () => {
       const canvas = await this.readCanvas(projectId, canvasId, access), value = body?.value;
       if (body?.revision !== canvas.revision) throw new VideoError("此画布已更新，请保留编辑并重读。", 409);
-      if (value?.version !== 1 || !Array.isArray(value.items) || !Array.isArray(value.drafts) || !value.items.some(item => item.id === value.active && item.kind === "video")) throw new VideoError("媒体草稿无效。");
+      if (value?.version !== 1 || !Array.isArray(value.items) || !Array.isArray(value.drafts)) throw new VideoError("媒体草稿无效。");
+      const videos = value.items.filter(item => item?.kind === "video");
+      if (videos.length ? !videos.some(item => item.id === value.active) : value.active !== "") throw new VideoError("媒体草稿无效。");
       if(value.items.length>projectRules.maxItems||value.items.some(item=>!item||typeof item.id!=="string"||!projectRules.kinds.includes(item.kind))||new Set(value.items.map(item=>item.id)).size!==value.items.length)throw new VideoError("媒体卡片无效。");
       if(typeof body.title==="string"&&body.title.trim())canvas.name=body.title.trim().slice(0,200);
       const previous = new Map(canvas.graph.nodes.filter(node => node.config.legacyCardId).map(node => [node.config.legacyCardId, node]));
@@ -353,12 +383,17 @@ export class WorkbenchProjects {
       const media = value.items.map(item => ({ ...(previous.get(item.id) || {}), id: previous.get(item.id)?.id || item.id, kind: "asset", title: item.title || item.kind,
         config: { ...(previous.get(item.id)?.config || {}), mediaKind: item.kind, legacyCardId: item.id, ...(item.asset ? { assetId: item.asset.id } : {}) }, layout: value.positions?.[item.id] || { x: 0, y: 0 } }));
       canvas.graph.nodes = [...other, ...media];
+      if (canvas.mediaLinks) {
+        const ids = new Set(value.items.map(item => item.id));
+        for (const node of other) if (node.kind === "agent") ids.add(node.id);
+        canvas.mediaLinks = canvas.mediaLinks.filter(link => ids.has(link.from) && ids.has(link.to));
+      }
       // A media-only edit cannot silently remove workflow data dependencies.
       try { validateCanvas(canvas, this.definition); } catch (error) { throw new VideoError(error.message); }
       // Immutable material versions ensure a failed publication leaves the previous revision readable.
       const material = `materials/media-editor-${randomUUID()}.json`;
       await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), material), value, access);
-      canvas.mediaEditor = { path: material, version: 1 }; canvas.revision++; canvas.updatedAt = now();
+      canvas.mediaEditor = { path: material, version: 1 }; canvas.preview = previewFromItems(value.items); canvas.revision++; canvas.updatedAt = now();
       delete canvas.externalDependencies;
       await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), canvas, access);
       await this.indexEntry(projectId, canvas, access); return { revision: canvas.revision };

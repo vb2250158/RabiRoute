@@ -25,6 +25,8 @@ export function validateGraph(graph, definition) {
   for (const node of graph.nodes) {
     if (!definition.capabilities[node.kind]) fail(`不支持的节点能力：${node.kind}`);
     if (!object(node.config)) fail(`节点 ${node.id} 缺少配置。`);
+    if (node.textPreview !== undefined && (!object(node.textPreview) || typeof node.textPreview.attemptId !== "string"
+      || typeof node.textPreview.text !== "string" || node.textPreview.text.length > 24000)) fail("文本预览无效。");
     if(node.config.independentFromNodeId&&!ids.has(node.config.independentFromNodeId))fail("独立核验节点引用无效。");
     if (node.gate && node.enabled === false && !node.optional) fail(`必须门禁 ${node.id} 不能禁用。`);
     if (node.layout && (!Number.isFinite(node.layout.x) || !Number.isFinite(node.layout.y))) fail("节点坐标无效。");
@@ -63,6 +65,50 @@ export function validateGraph(graph, definition) {
   }
   return { order, nodes, incoming, outgoing, edgeIds };
 }
+export function resolveLinkedText(cards, links, target) {
+  const byId = new Map(cards.map(card => [card.id, card]));
+  const incoming = new Map();
+  for (const link of links) {
+    const sources = incoming.get(link.to) ?? [];
+    sources.push(link.from);
+    incoming.set(link.to, sources);
+  }
+  const seen = new Set([target]);
+  const text = [];
+  function visit(id) {
+    for (const source of incoming.get(id) ?? []) {
+      if (seen.has(source)) continue;
+      seen.add(source);
+      const card = byId.get(source);
+      if (card?.kind !== "text") continue;
+      if (!card.generated) visit(source);
+      if (typeof card.text === "string" && card.text.trim()) text.push(card.text.trim());
+    }
+  }
+  visit(target);
+  return text.join("\n\n");
+}
+function validateMediaLinks(value) {
+  if (value.mediaLinks === undefined) return;
+  if (!Array.isArray(value.mediaLinks) || value.mediaLinks.length > 2000) fail("内容连线列表无效。");
+  const cards = new Map(value.graph.nodes.filter(node => node.config.legacyCardId).map(node => [node.config.legacyCardId, node.config.mediaKind]));
+  for (const node of value.graph.nodes) {
+    if (node.kind === "agent" && !node.config.legacyCardId) cards.set(node.id, node.config.textOutput === true ? "text" : "agent");
+  }
+  const dependencies = new Map([...cards.keys()].map(id => [id, new Set()]));
+  for (const link of value.mediaLinks) {
+    if (!object(link) || cards.get(link.from) !== "text" || link.from === link.to || !cards.has(link.to)) fail("内容连线需要一个文本来源和另一张卡片。");
+    const inputs = dependencies.get(link.to);
+    if (inputs.has(link.from)) fail("已经连接了这份内容。");
+    inputs.add(link.from);
+  }
+  while (dependencies.size) {
+    const ready = [...dependencies].filter(([, inputs]) => inputs.size === 0).map(([id]) => id);
+    if (!ready.length) fail("内容连线不能形成循环。");
+    for (const id of ready) dependencies.delete(id);
+    for (const inputs of dependencies.values()) for (const id of ready) inputs.delete(id);
+  }
+}
 export function validateCanvas(value, definition) {
   if (!object(value) || value.version !== 2 || typeof value.name !== "string" || !value.name.trim() || value.name.length > 200) fail("画布名称或版本无效。");
   if (!Array.isArray(value.variables)) fail("画布变量无效。");
@@ -73,7 +119,9 @@ export function validateCanvas(value, definition) {
     if (row.type === "date" ? typeof row.value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(row.value) || !Number.isFinite(Date.parse(row.value)) || new Date(row.value).toISOString().slice(0, 10) !== row.value
       : typeof row.value !== row.type || row.type === "number" && !Number.isFinite(row.value)) fail(`变量 ${row.name} 的值无效。`);
   }
-  return validateGraph(value.graph, definition);
+  const validated = validateGraph(value.graph, definition);
+  validateMediaLinks(value);
+  return validated;
 }
 export function expandVariables(value, variables) {
   const values = Object.fromEntries(variables.map(row => [row.name, row.value]));

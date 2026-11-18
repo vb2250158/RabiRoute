@@ -2,7 +2,7 @@ English | [简体中文](workbench-canvas.md)
 
 # Workbench canvases
 
-Workbench plugin 0.2.2 separates project metadata from independently saved canvas folders. Existing media projects remain readable. Explicit migration creates a recoverable original and publishes the new directory; reads do not migrate data.
+Open a project to enter its canvas, with the original media cards, playback, prompts, and minimap. On first open, legacy projects retain their existing name and identifier, and their original content becomes the first canvas. Workbench saves a recoverable copy of the prior record. Flow node settings appear below the selected card. Drag from a Flow Next port to schedule the next node, or link text cards to pass text into other media cards.
 
 Migration backs up the complete original, fences the legacy file against old writers, then commits the new project. Interrupted commits appear as “恢复迁移” in the project list and resume on the original machine. A changed source or backup digest stops recovery and preserves both records.
 
@@ -21,7 +21,7 @@ Copying a canvas folder includes its definition and private materials. Copy/regi
 
 ## Editing and execution
 
-The graph supports command, agent, human, generate and asset nodes, control edges, variables and group contracts. The original media editor shares the canvas revision and stores its draft as a referenced material.
+The graph supports command, agent, human, generate and asset nodes, control edges, variables and group contracts. When a canvas contains media, the media editor shares its revision and stores its draft as a referenced material.
 
 Control edges use success or completed, with AND joins. Mandatory gate failures stop further dispatch; ordinary failures remain visible in the run result. Default concurrency is one. The unified API accepts explicit concurrency from 1 to 16 and serializes nodes with the same resourceKey.
 

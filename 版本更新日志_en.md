@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.38 - 2026-11-19
+
+- Desktop Assistant 0.2.3 includes the updated execution detail presentation.
+- Integrate remote voice, workbench, desktop and Codex updates with the frozen local features on the same main branch. Codex 0.1.12, Video 0.2.8 and Voice Assistant 1.1.15.
+
 ## 0.15.37 - 2026-11-19
 
 - New plan-history writes include shard size and digest verification. Resume incomplete feedback through its original transaction, isolate damaged plans, and retain legacy data and cache-refresh compatibility.
@@ -80,6 +85,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Message rules use editable lists for trigger scenarios and restrictions, including existing selections and saved restrictions.
 
 - Adding a message rule or scheduled task offers template or manual creation. Choose Create to add the previewed rule to the list. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
+
+## 0.15.37 - 2026-11-18
+
+- Fix a possible unhandled error when a Volcano speech stream closes and avoid mistaking a brief audio burst for sustained backlog; allow one model decision-format correction while retaining completed tool receipts.
+- Improve desktop-pet bubbles and assistant message motion, and fix random-port compatibility in message endpoint and HTTP regression tests.
+- Update Workbench to 0.2.7 with draggable node bodies and let local Windows Codex tasks resolve the selected workspace through Desktop in its original sign-in context.
+- Resolve host API aliases from frozen source inputs when building Agent workers in an independent directory.
 
 ## 0.15.36 - 2026-11-18
 

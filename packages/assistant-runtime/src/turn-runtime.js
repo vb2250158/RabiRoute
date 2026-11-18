@@ -19,7 +19,7 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
   if (inputScope !== undefined && (typeof inputScope !== 'string' || !inputScope.trim() || inputScope.length > 512)) throw failure('TURN_INPUT_SCOPE_INVALID');
   const allowed = new Set(tools.map(tool => typeof tool === 'string' ? tool : tool?.function?.name));
   let state = 'idle', started = false, cancelled = false, acceptingGuidance = true, stream = null, reader = null;
-  let text = '', calls = 0, steps = 0, uncertain = false, writesUncertain = false, rejectCancellation;
+  let text = '', calls = 0, steps = 0, protocolCorrections = 0, uncertain = false, writesUncertain = false, rejectCancellation;
   const results = [], writes = new Map();
   let guidancePending = false, wakeGuidance = null;
   let waitingForTool = false, observationTurn = false;
@@ -221,11 +221,22 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
       const closing = calls >= maxToolCalls || steps === maxSteps - 1;
       if (closing) next = { ...next, toolsAllowed: false, instruction: [next.instruction, 'This is the final response for this turn. No further tool calls are available. Naturally summarize only verified results and any unresolved gap, using the persona and voice-assistant instructions. If useful, ask one specific question that would help the user supply missing information. Do not mention internal budgets, limits or a continue-task button. Do not claim unsuccessful work is complete.'].filter(Boolean).join('\n') };
       const requestId = turnId + ':step-' + (++steps); publish(closing ? 'finishing' : 'thinking');
-      const reply = await request(protocol.input(requestId, next)); if (cancelled) return;
-      checkCurrent(assertCurrent);
-      const lateGuidance = guidance();
-      if (lateGuidance.length) { next = { kind: 'steering', text: lateGuidance, superseded: requestId, actionExecuted: false }; continue; }
-      const decision = protocol.parseDecision(reply.raw, requestId);
+      let reply, decision;
+      try {
+        reply = await request(protocol.input(requestId, next)); if (cancelled) return;
+        checkCurrent(assertCurrent);
+        const lateGuidance = guidance();
+        if (lateGuidance.length) { next = { kind: 'steering', text: lateGuidance, superseded: requestId, actionExecuted: false }; continue; }
+        decision = protocol.parseDecision(reply.raw, requestId);
+      } catch (error) {
+        // Correct framing once; never weaken validation or replay a dispatched tool.
+        if (error?.code !== 'TURN_DECISION_INVALID' || protocolCorrections >= 1 || steps >= maxSteps) throw error;
+        protocolCorrections++;
+        publish('decision-rejected', { error: 'TURN_DECISION_INVALID', protocolFailureReason: getAgentProtocolFailureReason(error) });
+        next = { kind: 'decision-correction', originalInput: next, superseded: requestId, actionExecuted: false,
+          instruction: 'Your last response did not match the application response format. No action proposed in that response was executed. Keep all previously confirmed tool receipts; do not repeat completed work. Continue the original input below. Use ordinary prose for a final answer, or one valid tool JSON object with the current requestId. Do not explain internal formatting to the user.' };
+        continue;
+      }
       if (decision.kind === 'final') { acceptingGuidance = false; emit(reply.plain ? decision.text.slice(reply.emitted) : decision.text); return; }
       if (closing) throw failure(calls >= maxToolCalls ? 'TURN_TOOL_LIMIT' : 'TURN_STEP_LIMIT');
       const observation = await execute(decision); if (cancelled) return;

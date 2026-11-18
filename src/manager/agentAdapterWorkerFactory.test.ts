@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:net";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { AgentAdapterCatalogWorkerPool } from "./agentAdapterCatalogWorkerPool.js";
 
 test("owned scanner factory receives child-local host ports and one shared scan for concurrent callers", { timeout: 90_000 }, async context => {
@@ -54,4 +54,25 @@ test("owned scanner factory receives child-local host ports and one shared scan 
   assert.equal(first.deadline, 1500);
   await pool.stop();
   assert.equal(pool.status().workers, 0);
+});
+
+test("standalone worker resolves host API from frozen input outside the repository", async context => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-worker-isolated-"));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+  await fs.mkdir(path.join(directory, "src/shared"), { recursive: true });
+  await fs.mkdir(path.join(directory, "plugins/contracts/host-api"), { recursive: true });
+  await fs.writeFile(path.join(directory, "plugins/contracts/host-api/package.json"), JSON.stringify({ exports: {
+    "./shared/fixture": { types: "./types/src/shared/fixture.d.ts" }
+  } }));
+  await fs.writeFile(path.join(directory, "src/shared/fixture.ts"), 'export const value = "frozen-input";');
+  const source = "src/plugins/io.test.worker/src/worker.ts";
+  await fs.mkdir(path.dirname(path.join(directory, source)), { recursive: true });
+  await fs.writeFile(path.join(directory, source), 'import { value } from "@rabiroute/host-api/shared/fixture"; export { value };');
+  const { bundleMessageEndpointWorker } = await import(new URL("../../scripts/build-message-endpoint-runtime.mjs", import.meta.url).href);
+  const entry = path.join(directory, "worker.mjs");
+  const built = await bundleMessageEndpointWorker(directory, { source }, entry, { dependencyRoot: packageRoot });
+  const inputPaths = await Promise.all(built.inputs.map(input => fs.realpath(input)));
+  assert.ok(inputPaths.includes(await fs.realpath(path.join(directory, "src/shared/fixture.ts"))));
+  assert.equal((await import(pathToFileURL(entry).href)).value, "frozen-input");
 });

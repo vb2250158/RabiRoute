@@ -27,6 +27,19 @@ test('fast TTS waits for playback capacity and resumes instead of failing a long
  await players.dispose('reply');
 });
 
+test('a symbol-only zero-audio session ends once and a following player still plays',async()=>{
+ const {players,sources,events,timers}=fixture();
+ await players.create({id:'symbols',sampleRate:8000});await players.play('symbols');
+ players.finish('symbols');players.finish('symbols');
+ assert.equal(events.filter(item=>item.id==='symbols'&&item.event==='player.ended').length,1);
+ assert.equal(timers.size,0);await players.dispose('symbols');
+ await players.create({id:'next',sampleRate:8000});await players.play('next');
+ await players.append('next',new Uint8Array(1600));players.finish('next');
+ sources[0].onended();
+ assert.equal(events.filter(item=>item.id==='next'&&item.event==='player.ended').length,1);
+ await players.dispose('next');assert.equal(timers.size,0);
+});
+
 test('PCM progress excludes queued time and underrun gaps, and stops on cancellation',async()=>{
  const f=fixture();await f.players.create({id:'timed',sampleRate:8000});await f.players.play('timed');await f.players.append('timed',new Uint8Array(8000));
  f.tick();assert.equal(f.events.length,0);

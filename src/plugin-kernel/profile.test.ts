@@ -708,7 +708,7 @@ test("NapCat package migration preserves the existing instance settings", async 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-napcat-migration-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const profilePath = path.join(root, "profile.json");
-  const instances = ["0.1.4", "0.1.9", "0.1.10", "0.1.11", "0.1.12", "0.1.18"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
+  const instances = ["0.1.4", "0.1.9", "0.1.10", "0.1.11", "0.1.12", "0.1.17", "0.1.18"].map((version, index) => ({ id: `napcat:fixture-${index}`, package: "io.rabiroute.endpoint.napcat", version, enabled: true, config: { fixture: index }, grants: [] }));
   const raw = JSON.stringify({ schemaVersion: 2, readyRequires: [], instances });
   await fs.writeFile(profilePath, raw);
   const migrationsPath = fileURLToPath(new URL("../../plugins/profiles/package-migrations.json", import.meta.url));

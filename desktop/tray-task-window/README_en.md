@@ -124,3 +124,7 @@ When Manager or Host remains unavailable, Manager identity changes, or Desktop i
 - `tray_app`: presentation-only composition root for menus, windows, cached DTO application, and user events.
 
 Future macOS and Linux launchers should reuse this Manager protocol and Qt presentation layer with one platform application Host rather than fork business behavior or add a second lifecycle owner.
+
+### Speech bubble motion
+
+New sentences fade in while older bubbles move up and retract their pointers. Only the current bubble nearest the pet retains its pointer. Repeated state updates do not restart entry motion or clear text. Playback gaps and tool work preserve bubbles until their configured display duration expires and they fade out. Explicitly hiding the pet dismisses them immediately.

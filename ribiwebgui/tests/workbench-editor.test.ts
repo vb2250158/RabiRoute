@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import {changeConfig,configFields,connectGraph,stageLayout,groupBounds,mergePage,visibleList,type FlowGraph,type WorkbenchDefinition} from "../../src/plugins/io.rabiroute.manager.video/web/pages/workbenchEditor";
+import {linkedText,changeConfig,configFields,connectGraph,stageLayout,groupBounds,mergePage,visibleList,type FlowGraph,type WorkbenchDefinition} from "../../src/plugins/io.rabiroute.manager.video/web/pages/workbenchEditor";
 const definition=JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.video/workbench-definition.json",import.meta.url),"utf8")) as WorkbenchDefinition;
 const graph=():FlowGraph=>({nodes:["a","b","c"].map(id=>({id,kind:"command",config:{},layout:{x:0,y:0}})),edges:[{id:"ab",from:"a",to:"b",fromPort:"control",toPort:"control",condition:"success"}],groups:[{id:"prepare",name:"准备",nodeIds:["a","b"]},{id:"publish",name:"制作",nodeIds:["c"]}]});
 test("port connections use the same DAG contract including data dependencies and reject duplicate wires",()=>{
@@ -34,4 +34,13 @@ test("large canvas lists retain a bounded summary window and render only visible
   assert.equal(current.length,300);assert.equal(removed,4700);assert.equal(current[0].id,"4700");assert.equal(current.at(-1)!.id,"4999");
   for(const scroll of [0,800,23000,100000]){const range=visibleList(current.length,scroll,480);assert.ok(range.end-range.start<=13);assert.equal(range.top+(range.end-range.start)*80+range.bottom,300*80);}
   assert.deepEqual(visibleList(1,100000,480),{start:0,end:1,top:0,bottom:0});
+});
+
+test("linked text contributes multiple live sources without overwriting the destination prompt", () => {
+  const cards = [{ id: "subject", kind: "text", text: "大肥鱼" }, { id: "costume", kind: "text", text: "雨衣" }, { id: "video", kind: "video", text: "原来的提示词" }];
+  const links = [{ from: "subject", to: "video" }, { from: "costume", to: "video" }];
+  assert.equal(linkedText(cards, links, "video"), "大肥鱼\n\n雨衣");
+  cards[1].text = "红色雨衣";
+  assert.equal(linkedText(cards, links, "video"), "大肥鱼\n\n红色雨衣");
+  assert.equal(cards[2].text, "原来的提示词");
 });

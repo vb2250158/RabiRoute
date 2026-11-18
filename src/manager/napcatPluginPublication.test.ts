@@ -30,6 +30,11 @@ function assertPublishedNapcatOperations(f: Awaited<ReturnType<typeof napcatEndp
   assert.equal(egress.sendVariants["napcat.group-forward"]?.operation, "sendGroupForwardVariant");
 }
 
+test("NapCat management publishes the new mirror operation alongside its existing operations", () => {
+  assert.equal(napcatWebuiManagementDescriptors.length, 21);
+  assert.equal(napcatWebuiManagementDescriptors.filter(item => item.id === "mirror-custom.set" && item.nativePath === "/api/Mirror/SetCustom" && item.method === "POST").length, 1);
+});
+
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test("the actual bundled NapCat manager owns its API, scan and process records; failed preparation preserves them", { timeout: 60000 }, async () => {

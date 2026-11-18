@@ -90,7 +90,20 @@ test("executable Peer discovery preserves first-value filters, provider extensio
     }
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  let fetchReady = false;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No Peer discovery listener.");
+    try {
+      await fetch(`http://127.0.0.1:${address.port}/__fixture_ready`, { method: "HEAD", signal: AbortSignal.timeout(1000) });
+      fetchReady = true; break;
+    } catch (error) {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      if (!(error instanceof TypeError && error.cause instanceof Error && error.cause.message === "bad port")) throw error;
+    }
+  }
+  if (!fetchReady) throw new Error("No Fetch-compatible Peer listener was assigned after 16 attempts.");
   t.after(async () => { release?.(); await registration.dispose(); await runtime.stop(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r()));
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
   const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/api/rabilink/peer/list`;

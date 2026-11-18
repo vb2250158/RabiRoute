@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 
@@ -90,7 +90,23 @@ class DesktopPetBubble(QWidget):
             self._skin_rect = QRectF(max(0, left - 2), max(0, top - 2), right - left + 5, bottom - top + 5)
             self._skin_fill = image.pixelColor(cx, max(cy, bottom - 20))
             self._skin_border = image.pixelColor(cx, max(cy, bottom - 5))
-        self._style = dict(DEFAULT_BUBBLE_STYLE)
+        self._style = {}
+        self._tail_progress = 1.0
+        self._tail_animation = QVariantAnimation(self)
+        self._tail_animation.setDuration(160)
+        self._tail_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._tail_animation.valueChanged.connect(self._set_tail_progress)
+        self._motion = QPropertyAnimation(self, b"pos", self)
+        self._motion.setDuration(260)
+        self._motion.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._motion_target = None
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.setDuration(180)
+        self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade.finished.connect(self._finish_exit)
+        self._exiting = False
+        self._delete_after_exit = False
+        self._content_text = None
         self._text = QLabel()
         self._text.setTextFormat(Qt.TextFormat.PlainText)
         self._text.setWordWrap(True)
@@ -109,7 +125,10 @@ class DesktopPetBubble(QWidget):
         return int(self._style["displaySeconds"] * 1000)
 
     def apply_style(self, value: object) -> None:
-        self._style = normalize_bubble_style(value)
+        style = normalize_bubble_style(value)
+        if style == self._style:
+            return
+        self._style = style
         self.setFixedWidth(int(self._style["maxWidth"]))
         font = QFont(self._style["fontFamily"]) if self._style["fontFamily"] else QFont()
         font.setPixelSize(int(self._style["fontSize"]))
@@ -125,8 +144,57 @@ class DesktopPetBubble(QWidget):
         self._scroll.viewport().setAutoFillBackground(False)
         self.setWindowOpacity(float(self._style["opacity"]))
         self._update_margins()
+        self._content_text = None
         self.set_content(self._text.text())
         self.update()
+
+    def _set_tail_progress(self, value: float) -> None:
+        self._tail_progress = float(value)
+        self.update()
+
+    def set_tail_visible(self, visible: bool) -> None:
+        target = 1.0 if visible else 0.0
+        if self._tail_animation.endValue() == target:
+            return
+        self._tail_animation.stop()
+        self._tail_animation.setStartValue(self._tail_progress)
+        self._tail_animation.setEndValue(target)
+        self._tail_animation.start()
+
+    def transition_to(self, position: QPoint) -> None:
+        entering = not self.isVisible() or self._exiting
+        if entering:
+            self._exiting = False
+            self._fade.stop()
+            if not self.isVisible():
+                self.move(position + QPoint(0, 10))
+                self.setWindowOpacity(0)
+                self.show()
+            self._fade.setStartValue(self.windowOpacity())
+            self._fade.setEndValue(float(self._style["opacity"]))
+            self._fade.start()
+        if position == self._motion_target and not entering:
+            return
+        self._motion_target = QPoint(position)
+        self._motion.stop()
+        self._motion.setStartValue(self.pos())
+        self._motion.setEndValue(position)
+        self._motion.start()
+
+    def dismiss(self, *, delete: bool = False) -> None:
+        if self._exiting:
+            return
+        self._exiting, self._delete_after_exit = True, delete
+        self._fade.stop()
+        self._fade.setStartValue(self.windowOpacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def _finish_exit(self) -> None:
+        if self._exiting:
+            self.hide()
+            if self._delete_after_exit:
+                self.deleteLater()
 
     def set_tail_anchor(self, x: float, upward: bool = False) -> None:
         direction_changed = self._tail_up != bool(upward)
@@ -142,7 +210,11 @@ class DesktopPetBubble(QWidget):
                                        20, bottom + (0 if self._tail_up else TAIL_HEIGHT))
 
     def set_content(self, text: str) -> None:
-        self._text.setText(str(text or "")[:4000])
+        value = str(text or "")[:4000]
+        if value == self._content_text:
+            return
+        self._content_text = value
+        self._text.setText(value)
         text_width = self.width() - 56
         self._text.setMinimumWidth(text_width)
         height = max(28, min(180, self._text.heightForWidth(text_width) + 6))
@@ -160,7 +232,7 @@ class DesktopPetBubble(QWidget):
         tip_y = 1 if self._tail_up else self.height() - 1
         tail = QPainterPath()
         tail.moveTo(base_x - 10, base_y)
-        tail.lineTo(self._tail_x, tip_y)
+        tail.lineTo(self._tail_x, base_y + (tip_y - base_y) * self._tail_progress)
         tail.lineTo(base_x + 10, base_y)
         if self._style["skin"] == "cat-paw" and not self._skin.isNull():
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -168,14 +240,17 @@ class DesktopPetBubble(QWidget):
                 destination.translate(0, body_y)
                 source.translate(self._skin_rect.topLeft())
                 painter.drawPixmap(destination, self._skin, source)
-            painter.fillPath(tail, self._skin_fill)
-            painter.setPen(QPen(self._skin_border, 1.2))
-            painter.drawPath(tail)
+            if self._tail_progress > .001:
+                painter.setOpacity(self._tail_progress)
+                painter.fillPath(tail, self._skin_fill)
+                painter.setPen(QPen(self._skin_border, 1.2))
+                painter.drawPath(tail)
             return
         path = QPainterPath()
         path.addRoundedRect(QRectF(1, body_y + 1, self.width() - 2, body_height - 2), 16, 16)
-        tail.closeSubpath()
-        path = path.united(tail)
+        if self._tail_progress > .001:
+            tail.closeSubpath()
+            path = path.united(tail)
         painter.setPen(QPen(QColor(self._style["borderColor"]), 1.2))
         painter.setBrush(QColor(self._style["backgroundColor"]))
         painter.drawPath(path)
