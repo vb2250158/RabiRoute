@@ -150,6 +150,8 @@ RabiRoute owns storage, policy checks, delayed plan archiving, explicit memory-c
 
 For `POST /api/agent/threads` with `action=send`, an explicit request `model` takes precedence. Otherwise use `agentModel` from the Route uniquely owning the target task; if unset, omit model fields and inherit the target Desktop Agent's native default. Missing task model metadata must not stop a handoff, and the current coding Agent's configuration must not substitute for the target's configuration. The primary persona can choose a different `model` and optional `reasoningEffort` on the original task delivery while retaining `taskBinding`. This selection applies to new turns; active turns continue through `steer`. Reconcile uncertain receipts before retrying; do not automatically reroute or resend.
 
+To check a WorkBuddy delivery, pass `action=read`, `agentAdapter=workbuddy`, the full `threadId`, and the original `deliveryId`. `delivery.state=accepted` reports that the target's native transcript contains a user message with that ID and returns its `sequence`. `not_observed` means the current page has no match. Pass `nextCursor` as `history.cursor` to check the next page and retain the original delivery ID. HTTP `202` reports gateway admission. Check the native transcript for the assistant's reply.
+
 
 
 

@@ -6,6 +6,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased
+
+- Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
+
+## 0.15.31 - 2026-11-18
+
+- Upgrade WorkBuddy to 0.1.8 and create ordinary desktop chats through the managed thread API, reconciling repeated requests with the original intent and native receipt.
+- Verify the complete workspace path before entering the first message and recheck selection at intent persistence and submission to prevent delivery to a same-named directory.
+
 ## 0.15.30 - 2026-11-18
 
 - Redact multiline environment references and match longer credentials first to prevent line and prefix fragments from leaking into logs.

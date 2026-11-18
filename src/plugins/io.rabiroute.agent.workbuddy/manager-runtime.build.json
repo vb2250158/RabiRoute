@@ -13,11 +13,21 @@
     "src/agentAdapters/stateReporter.ts"
   ],
   "ownedSources": [],
+  "resources": [
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/assets/desktop-window.ps1",
+      "target": "assets/desktop-window.ps1"
+    }
+  ],
   "workers": [
     {
       "source": "src/plugins/io.rabiroute.agent.workbuddy/src/agentAdapters/workbuddyManagerApi.ts",
       "target": "workers/scan.mjs",
       "mode": "host-factory"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyDesktopCompanion.ts",
+      "target": "workers/desktop-companion.mjs"
     }
   ],
   "packageId": "io.rabiroute.agent.workbuddy"

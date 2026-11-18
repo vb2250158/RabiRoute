@@ -150,6 +150,8 @@ Windows Host 在启动成功和生命周期变化时原子生成状态目录中�
 
 `POST /api/agent/threads` 的 `action=send` 优先使用调用方明确指定的 `model`；未指定时使用目标任务唯一所属 Route 的 `agentModel`，仍未配置则省略模型字段，沿用对应 Desktop Agent 的默认设置。不要因读取不到任务模型名而停止转投，也不要读取当前编码 Agent 的配置替代目标配置。主角色需要另选模型时，在原任务投递请求中传入 `model`，可同时指定 `reasoningEffort`；保留原 `taskBinding`。该设置用于新轮次，活跃轮次继续 `steer`。回执不确定时先核对原投递，不自动改投或重发。
 
+查询 WorkBuddy 投递时，使用 `action=read`、`agentAdapter=workbuddy`、完整 `threadId` 和原 `deliveryId`。`delivery.state=accepted` 表示该编号已出现在目标聊天的原生用户消息中，并附 `sequence`。`not_observed` 表示本页暂未发现，返回的 `nextCursor` 可放入 `history.cursor` 查下一页。保留原投递 ID。发送返回 `202` 表示网关受理，助理是否回复可查原生历史。
+
 
 
 

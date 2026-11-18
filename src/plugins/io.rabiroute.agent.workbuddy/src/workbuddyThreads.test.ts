@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import { readWorkbuddyHistory } from "./workbuddyHistory.js";
+import { serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
 import { createManager } from "./agentAdapters/workbuddyManagerProvider.js";
 import type { AgentManagerImplementationOptions } from "../../../manager/agentManagerHostPorts.js";
 import { handleAgentThreadRequest } from "../../../agentThreads.js";
@@ -30,8 +31,10 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
   const directory = path.join(root, "projects", "c-work-one");
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, "11111111-1111-4111-8111-111111111111.jsonl");
-  const user = { type: "message", role: "user", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "input_text", text: "中文问题" }] };
-  const answer = { type: "message", role: "assistant", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "output_text", text: "原任务回答" }] };
+  const deliveryId = "workbuddy-local-intent-1";
+  const envelope = `## 消息源\n- 投递 ID：${deliveryId}\n\n## 消息内容\n中文问题`;
+  const user = { type: "message", role: "user", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "input_text", text: envelope }] };
+  const answer = { type: "message", role: "assistant", sessionId: "11111111-1111-4111-8111-111111111111", content: [{ type: "output_text", text: envelope }] };
   const rows = [JSON.stringify(user), "broken row", JSON.stringify(answer)];
   fs.writeFileSync(file, rows.join("\r\n") + "\r\n" + '{"type":');
   await withHome(root, async () => {
@@ -43,15 +46,27 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
       sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
     }, new AbortController().signal);
-    const response = await handleAgentThreadRequest({ action: "read", agentAdapter: "workbuddy", threadId: "11111111-1111-4111-8111-111111111111", history: { limit: 2 } }, {
+    const options = {
       allowedWorkspaces: [],
       invokeAgentOperation: async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
         assert.equal(type, "workbuddy");
         return await manager.operations[operation]!(payload, invocation) as T;
       }
-    });
+    };
+    const request = { action: "read", agentAdapter: "workbuddy", threadId: user.sessionId, deliveryId } as const;
+    const response = await handleAgentThreadRequest({ ...request, history: { limit: 2 } }, options);
     assert.equal(response.statusCode, 200);
     assert.deepEqual((response.data.history as typeof first).entries, first.entries);
+    assert.deepEqual(response.data.delivery, {
+      deliveryId, state: "accepted", source: "workbuddy-native-transcript", retryable: false, sequence: 1
+    });
+    const quoted = await handleAgentThreadRequest({ ...request, history: { cursor: first.nextCursor!, limit: 2 } }, options);
+    assert.deepEqual(quoted.data.delivery, {
+      deliveryId, state: "not_observed", source: "workbuddy-native-transcript", retryable: false, nextCursor: null
+    });
+    const summary = await handleAgentThreadRequest(request, options);
+    assert.equal((summary.data.thread as { id: string }).id, user.sessionId);
+    assert.deepEqual(summary.data.delivery, response.data.delivery);
     const budget = await readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { maxBytes: Buffer.byteLength(rows[0]! + "\r\n") });
     assert.ok(budget.nextCursor);
     assert.equal(budget.coverage.pendingTail, false);
@@ -243,8 +258,49 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
     const second = await handleAgentThreadRequest({ ...request, offset: 1 }, options);
     assert.deepEqual((second.data.threads as Array<{ id: string }>).map(thread => thread.id), ["allowed-old"]);
     assert.equal(second.data.nextOffset, null);
-    await assert.rejects(handleAgentThreadRequest({ action: "create", agentAdapter: "workbuddy", title: "not-created" }, options), /created inside the WorkBuddy app/);
+    await assert.rejects(handleAgentThreadRequest({ action: "create", agentAdapter: "workbuddy", title: "not-created" }, options), /requires an explicit first message/);
     await assert.rejects(handleAgentThreadRequest({ action: "rename", agentAdapter: "workbuddy", threadId: "allowed-old", title: "not-renamed" }, options), /titles are owned by the WorkBuddy app/);
+  });
+});
+
+test("WorkBuddy public create dispatches an exact workspace and stable intent through its local desktop relay", { skip: process.platform !== "win32" }, async t => {
+  const root = createHome([]);
+  const workspace = path.join(root, "one");
+  fs.mkdirSync(workspace);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await withHome(root, async () => {
+    const calls: string[] = [];
+    const stop = await serveWorkbuddyDesktopRelay(async input => {
+      assert.equal(input.workspaceLabel, "one");
+      assert.equal(input.workspace, workspace);
+      assert.equal(input.title, "Requested title");
+      calls.push(input.prompt);
+      return { state: "created", intentId: input.intentId, sequence: 3, thread: { id: "native-id", title: "Actual title", cwd: input.workspace } };
+    }, path.join(root, "rabiroute-desktop-relay.json"));
+    try {
+      const manager = createManager({ host: { readOnly: () => false } } as AgentManagerImplementationOptions, {
+        type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
+        sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
+      }, new AbortController().signal);
+      const options = {
+        allowedWorkspaces: [workspace],
+        invokeAgentOperation: async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+          assert.equal(type, "workbuddy");
+          assert.equal(operation, "threads.create");
+          return await manager.operations[operation]!(payload, invocation) as T;
+        }
+      };
+      const request = { action: "create", agentAdapter: "workbuddy", title: "Requested title", cwd: workspace,
+        deliveryId: "ordinary-create-intent", prompt: "第一行\n第二行" } as const;
+      const first = await handleAgentThreadRequest(request, options);
+      const second = await handleAgentThreadRequest(request, options);
+      assert.equal(first.statusCode, 201);
+      assert.deepEqual(second.data, first.data);
+      assert.deepEqual(first.data.thread, { id: "native-id", title: "Actual title", cwd: request.cwd });
+      assert.equal(first.data.intentId, request.deliveryId);
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0], calls[1]);
+    } finally { await stop(); }
   });
 });
 

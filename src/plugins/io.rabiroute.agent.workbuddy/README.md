@@ -10,7 +10,9 @@
 
 本机截图沿用宿主原有的文本附件引用格式，向原任务列出供 Read 工具读取的绝对路径。发送前检查文件，正式投递保存并复核图片哈希；本地图片路径不跨电脑传输。路径引用不代表图片已被读取。
 
-任务创建、重命名及未加载任务的桌面初始化尚未实现。原生回复协议的静态审查和错目标 409 验证已通过；0.1.6 的正式采用、真实任务接收、审批和桌面实时显示尚待分别验收。0.1.5 仍只验过原进程主会话，其通用网关会优先使用主会话并临时选择 `BypassPermissions`。旧投递的不确定状态保持原 ID；网络中断、5xx 或缺失原生回执时不自动重发。
+本源码提供 Windows 桌面连接器。退出当前 WorkBuddy 客户端后，从仓库根目录运行 `node --import tsx src/plugins/io.rabiroute.agent.workbuddy/src/workbuddyDesktopCompanion.ts`。连接器启动同一桌面应用并保留本机私有管道。通过 `POST /api/agent/threads` 的 `action=create` 指定 `agentAdapter=workbuddy`、项目 `cwd`、`title`、首条 `prompt` 和稳定 `deliveryId`。保持客户端最小化。在 WorkBuddy 里先登记目标工作区。连接器在填写首条消息前和点击发送时校验原生选中项的完整路径。无法验证路径时，接口会报错。创建回执返回实际原生标题和完整 ID，标题由 WorkBuddy 生成。返回 `202` 时用原编号与原参数查询，已提交的意图只查原生记录。
+
+重命名与未加载任务的桌面初始化尚待接入。0.1.5 的通用网关会优先使用原进程主会话并临时选择 `BypassPermissions`。网络中断、5xx 或缺失原生回执时保留原投递 ID，按原会话核对。
 
 本包拥有此 Agent 的配置卡片、扫描、会话操作和投递实现。Manager 与 Gateway 使用同一原生插件 profile；停用后拒绝新工作，已受理操作沿原租约完成，保留原会话与外部执行 owner。能力及成熟度由包内 agent-adapter.json 声明。
 
