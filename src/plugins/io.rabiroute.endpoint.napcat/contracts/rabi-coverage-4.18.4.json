@@ -7,12 +7,13 @@
   "counts": {
     "baseActions": 167,
     "names": 501,
-    "read": 32,
+    "read": 51,
     "mutation": 55,
     "existingOwnerReference": 20,
-    "ownerDependency": 60,
+    "ownerDependency": 41,
     "eventBaseClasses": 6,
-    "eventInstantiatedClasses": 25
+    "eventInstantiatedClasses": 25,
+    "limitedReadViews": 19
   },
   "actions": [
     {
@@ -4480,7 +4481,7 @@
         "get_clientkey_rate_limited"
       ],
       "sourceLine": 112140,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_clientkey",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_clientkey",
@@ -4491,22 +4492,48 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "clientkey": {
-            "type": "string",
-            "description": "客户端Key"
+          "view": {
+            "const": "credential-summary"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "clientkey"
+              },
+              "available": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "available"
+            ]
           }
         },
-        "description": "获取ClientKey结果",
-        "additionalProperties": false
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.clientkey (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for clientkey.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Client-key presence only for the exact configured QQ account."
     },
     {
       "action": "get_collection_list",
@@ -4516,7 +4543,7 @@
         "get_collection_list_rate_limited"
       ],
       "sourceLine": 113141,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_collection_list",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_collection_list",
@@ -4540,15 +4567,133 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "收藏列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-example"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "errCode": {
+                "type": "number"
+              },
+              "collectionSearchList": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "bottomTimeStamp": {
+                    "type": "string"
+                  },
+                  "collectionItemList": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "cid": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "number"
+                        },
+                        "status": {
+                          "type": "number"
+                        },
+                        "bid": {
+                          "type": "number"
+                        },
+                        "category": {
+                          "type": "number"
+                        },
+                        "createTime": {
+                          "type": "string"
+                        },
+                        "collectTime": {
+                          "type": "string"
+                        },
+                        "modifyTime": {
+                          "type": "string"
+                        },
+                        "sequence": {
+                          "type": "string"
+                        },
+                        "customGroupId": {
+                          "type": "number"
+                        },
+                        "securityBeat": {
+                          "type": "boolean"
+                        },
+                        "author": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "type": "number"
+                            },
+                            "numId": {
+                              "type": "string"
+                            },
+                            "strId": {
+                              "type": "string"
+                            },
+                            "groupId": {
+                              "type": "string"
+                            },
+                            "groupName": {
+                              "type": "string"
+                            },
+                            "uid": {
+                              "type": "string"
+                            }
+                          },
+                          "required": []
+                        }
+                      },
+                      "required": [
+                        "cid"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "hasMore",
+                  "bottomTimeStamp",
+                  "collectionItemList"
+                ]
+              }
+            },
+            "required": [
+              "errCode",
+              "collectionSearchList"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-example"
+      },
+      "viewLimitation": "Strict installed-example collection metadata profile. Changed native shapes fail validation; media, URLs and rich content are outside this view."
     },
     {
       "action": "get_cookies",
@@ -4558,7 +4703,7 @@
         "get_cookies_rate_limited"
       ],
       "sourceLine": 109650,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_cookies",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_cookies",
@@ -4567,7 +4712,9 @@
         "properties": {
           "domain": {
             "type": "string",
-            "description": "需要获取 cookies 的域名"
+            "description": "需要获取 cookies 的域名",
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?(?![\\s\\S])"
           }
         },
         "required": [
@@ -4577,29 +4724,52 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "cookies": {
-            "type": "string",
-            "description": "Cookies"
+          "view": {
+            "const": "credential-summary"
           },
-          "bkn": {
-            "type": "string",
-            "description": "CSRF Token"
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "cookiesPresent": {
+                "type": "boolean"
+              },
+              "csrfPresent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "scope",
+              "cookiesPresent",
+              "csrfPresent"
+            ]
           }
         },
         "required": [
-          "cookies",
-          "bkn"
-        ],
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.cookies (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for cookies and bkn.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Credential presence and requested domain scope only. Native cookie and CSRF material stays in current request memory."
     },
     {
       "action": "get_credentials",
@@ -4609,7 +4779,7 @@
         "get_credentials_rate_limited"
       ],
       "sourceLine": 111637,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_credentials",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_credentials",
@@ -4618,7 +4788,9 @@
         "properties": {
           "domain": {
             "type": "string",
-            "description": "需要获取 cookies 的域名"
+            "description": "需要获取 cookies 的域名",
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?(?![\\s\\S])"
           }
         },
         "required": [
@@ -4628,30 +4800,53 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "cookies": {
-            "type": "string",
-            "description": "Cookies"
+          "view": {
+            "const": "credential-summary"
           },
-          "token": {
-            "type": "number",
-            "description": "CSRF Token"
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "cookiesPresent": {
+                "type": "boolean"
+              },
+              "csrfPresent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "scope",
+              "cookiesPresent",
+              "csrfPresent"
+            ]
           }
         },
         "required": [
-          "cookies",
-          "token"
-        ],
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.cookies (protected resource/credential)",
         "$.token (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for cookies and token.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Credential presence and requested domain scope only; the native token and cookies are not persisted."
     },
     {
       "action": "get_csrf_token",
@@ -4661,7 +4856,7 @@
         "get_csrf_token_rate_limited"
       ],
       "sourceLine": 111152,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_csrf_token",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_csrf_token",
@@ -4672,24 +4867,48 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "token": {
-            "type": "number",
-            "description": "CSRF Token"
+          "view": {
+            "const": "credential-summary"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "csrf"
+              },
+              "available": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type",
+              "available"
+            ]
           }
         },
         "required": [
-          "token"
-        ],
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.token (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for token.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "CSRF material presence only for the exact configured QQ account."
     },
     {
       "action": "get_doubt_friends_add_request",
@@ -4699,7 +4918,7 @@
         "get_doubt_friends_add_request_rate_limited"
       ],
       "sourceLine": 112918,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_doubt_friends_add_request",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_doubt_friends_add_request",
@@ -4718,15 +4937,91 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "可疑好友申请列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "uin": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "nick": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "msg": {
+                  "type": "string"
+                },
+                "group_code": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "time": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "doubt"
+                }
+              },
+              "required": [
+                "uin",
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Handler-mapped request metadata; the native acceptance flag stays private."
     },
     {
       "action": "get_emoji_likes",
@@ -5000,7 +5295,7 @@
         "get_fileset_info_rate_limited"
       ],
       "sourceLine": 114218,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_fileset_info",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_fileset_info",
@@ -5018,15 +5313,45 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "文件集信息"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "diagnostic"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "result": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "diagnostic",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Native helper result flag only. The full file-set schema remains unavailable from the installed mapper and conflicting example."
     },
     {
       "action": "get_flash_file_list",
@@ -5036,7 +5361,7 @@
         "get_flash_file_list_rate_limited"
       ],
       "sourceLine": 114152,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_flash_file_list",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_flash_file_list",
@@ -5054,15 +5379,45 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "文件列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "diagnostic"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "result": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "result"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "diagnostic",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Native rsp.result flag only. This diagnostic does not expose a file listing or native error text."
     },
     {
       "action": "get_flash_file_url",
@@ -5505,7 +5860,7 @@
         "get_group_album_media_list_rate_limited"
       ],
       "sourceLine": 113382,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_group_album_media_list",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_group_album_media_list",
@@ -5533,15 +5888,57 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "相册媒体列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-example"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "media_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "media_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "media_id"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "media_list"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-example"
+      },
+      "viewLimitation": "Strict installed-example media identity profile; native media URLs need their original resource owner."
     },
     {
       "action": "get_group_at_all_remain",
@@ -5862,7 +6259,7 @@
         "get_group_honor_info_rate_limited"
       ],
       "sourceLine": 110309,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_group_honor_info",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_group_honor_info",
@@ -5892,53 +6289,191 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "group_id": {
-            "type": "number",
-            "description": "群号"
+          "view": {
+            "const": "metadata"
           },
-          "current_talkative": {
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
             "type": "object",
-            "additionalProperties": {},
-            "description": "当前龙王"
-          },
-          "talkative_list": {
-            "type": "array",
-            "items": {},
-            "description": "龙王列表"
-          },
-          "performer_list": {
-            "type": "array",
-            "items": {},
-            "description": "群聊之火列表"
-          },
-          "legend_list": {
-            "type": "array",
-            "items": {},
-            "description": "群聊炽热列表"
-          },
-          "emotion_list": {
-            "type": "array",
-            "items": {},
-            "description": "快乐源泉列表"
-          },
-          "strong_newbie_list": {
-            "type": "array",
-            "items": {},
-            "description": "冒尖小春笋列表"
+            "additionalProperties": false,
+            "properties": {
+              "group_id": {
+                "type": "number"
+              },
+              "current_talkative": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "user_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "nickname": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": []
+              },
+              "talkative_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                }
+              },
+              "performer_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                }
+              },
+              "legend_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                }
+              },
+              "emotion_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                }
+              },
+              "strong_newbie_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "nickname": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": []
+                }
+              }
+            },
+            "required": [
+              "group_id",
+              "current_talkative",
+              "talkative_list",
+              "performer_list",
+              "legend_list",
+              "emotion_list",
+              "strong_newbie_list"
+            ]
           }
         },
         "required": [
-          "group_id",
-          "current_talkative",
-          "talkative_list",
-          "performer_list",
-          "legend_list",
-          "emotion_list",
-          "strong_newbie_list"
-        ],
-        "description": "群荣誉信息",
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.current_talkative.* (opaque)",
@@ -5948,10 +6483,14 @@
         "$.emotion_list[] (opaque)",
         "$.strong_newbie_list[] (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Handler-mapped honor identities and descriptions, with native avatar URLs omitted."
     },
     {
       "action": "get_group_ignore_add_request",
@@ -6249,7 +6788,7 @@
         "get_group_info_ex_rate_limited"
       ],
       "sourceLine": 111199,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_group_info_ex",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_group_info_ex",
@@ -6267,15 +6806,55 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "群扩展信息"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "diagnostic"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "fieldCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "requestedFieldCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "available",
+              "fieldCount",
+              "requestedFieldCount"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "diagnostic",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Presence and field counts only. Requested mask names do not establish native value types."
     },
     {
       "action": "get_group_list",
@@ -6716,7 +7295,7 @@
         "get_group_shut_list_rate_limited"
       ],
       "sourceLine": 111540,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_group_shut_list",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_group_shut_list",
@@ -6734,17 +7313,56 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "array",
-        "items": {},
-        "description": "禁言成员列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-example"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "user_id": {
+                  "type": "number"
+                },
+                "nickname": {
+                  "type": "string"
+                },
+                "shut_up_time": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "user_id",
+                "nickname",
+                "shut_up_time"
+              ]
+            }
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$[] (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-example"
+      },
+      "viewLimitation": "Strict installed-example shut-list profile. The native callback schema is not guaranteed by this example; other shapes fail validation."
     },
     {
       "action": "get_group_system_msg",
@@ -7190,7 +7808,7 @@
         "get_mini_app_ark_rate_limited"
       ],
       "sourceLine": 111936,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_mini_app_ark",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_mini_app_ark",
@@ -7341,24 +7959,61 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
           "data": {
-            "description": "Ark数据"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "type": "string"
+              },
+              "view": {
+                "type": "string"
+              },
+              "ver": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "prompt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "app",
+              "view"
+            ]
           }
         },
         "required": [
+          "view",
+          "evidence",
           "data"
-        ],
-        "description": "获取小程序Ark结果",
-        "additionalProperties": false
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.data (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Normalized raw/non-raw Ark app metadata. Native config, meta and share payload are outside this view."
     },
     {
       "action": "get_msg",
@@ -7527,7 +8182,7 @@
         "get_online_file_msg_rate_limited"
       ],
       "sourceLine": 114257,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_online_file_msg",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_online_file_msg",
@@ -7545,15 +8200,53 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "description": "在线文件消息列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "diagnostic"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "array",
+                  "object"
+                ]
+              },
+              "itemCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "kind",
+              "itemCount"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$ (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "diagnostic",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Native container kind/count only. Native message and transfer row contracts remain unestablished."
     },
     {
       "action": "get_private_file_url",
@@ -7727,7 +8420,7 @@
         "get_qun_album_list_rate_limited"
       ],
       "sourceLine": 113279,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_qun_album_list",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_qun_album_list",
@@ -7751,36 +8444,72 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "album_list": {
-            "type": "array",
-            "items": {},
-            "description": "群相册列表"
+          "view": {
+            "const": "metadata"
           },
-          "attach_info": {
-            "type": "string",
-            "description": "分页附加信息，传入下一次请求以获取更多数据"
+          "evidence": {
+            "const": "installed-example"
           },
-          "has_more": {
-            "type": "boolean",
-            "description": "是否有更多数据"
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "attach_info": {
+                "type": "string"
+              },
+              "has_more": {
+                "type": "boolean"
+              },
+              "album_list": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "album_id": {
+                      "type": "string"
+                    },
+                    "album_name": {
+                      "type": "string"
+                    },
+                    "create_time": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "album_id",
+                    "album_name",
+                    "create_time"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "attach_info",
+              "has_more",
+              "album_list"
+            ]
           }
         },
         "required": [
-          "album_list",
-          "attach_info",
-          "has_more"
-        ],
-        "description": "群相册列表响应",
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.album_list[] (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-example"
+      },
+      "viewLimitation": "Strict installed-example album metadata and original continuation. Native cover URLs are outside this view."
     },
     {
       "action": "get_recent_contact",
@@ -7964,7 +8693,7 @@
         "get_rkey_rate_limited"
       ],
       "sourceLine": 112775,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_rkey",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_rkey",
@@ -7974,44 +8703,64 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "description": "类型 (private/group)"
-            },
-            "rkey": {
-              "type": "string",
-              "description": "RKey"
-            },
-            "created_at": {
-              "type": "number",
-              "description": "创建时间"
-            },
-            "ttl": {
-              "type": "number",
-              "description": "有效期"
-            }
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "credential-summary"
           },
-          "required": [
-            "type",
-            "rkey",
-            "created_at",
-            "ttl"
-          ],
-          "additionalProperties": false
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "enum": [
+                    "private",
+                    "group",
+                    "unknown"
+                  ]
+                },
+                "created_at": {
+                  "type": "number"
+                },
+                "ttl": {
+                  "type": "number"
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type",
+                "created_at",
+                "ttl",
+                "available"
+              ]
+            }
+          }
         },
-        "description": "RKey 列表"
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$[].rkey (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for rkey.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Rkey availability, scope type, creation and TTL only. This view does not expose native rkeys."
     },
     {
       "action": "get_rkey_server",
@@ -8021,7 +8770,7 @@
         "get_rkey_server_rate_limited"
       ],
       "sourceLine": 112736,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_rkey_server",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_rkey_server",
@@ -8032,37 +8781,52 @@
       },
       "publicResponse": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
-          "private_rkey": {
-            "type": "string",
-            "description": "私聊 RKey"
+          "view": {
+            "const": "credential-summary"
           },
-          "group_rkey": {
-            "type": "string",
-            "description": "群聊 RKey"
+          "evidence": {
+            "const": "installed-handler"
           },
-          "expired_time": {
-            "type": "number",
-            "description": "过期时间"
-          },
-          "name": {
-            "type": "string",
-            "description": "名称"
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "privatePresent": {
+                "type": "boolean"
+              },
+              "groupPresent": {
+                "type": "boolean"
+              },
+              "expired_time": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "privatePresent",
+              "groupPresent"
+            ]
           }
         },
         "required": [
-          "name"
-        ],
-        "additionalProperties": false
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$.private_rkey (protected resource/credential)",
         "$.group_rkey (protected resource/credential)"
       ],
-      "dependency": "Protected credential result handles are required for private_rkey and group_rkey.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Private/group rkey presence and native expiry only; no persistent secret store or handle is created."
     },
     {
       "action": "get_robot_uin_range",
@@ -8072,7 +8836,7 @@
         "get_robot_uin_range_rate_limited"
       ],
       "sourceLine": 109724,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.get_robot_uin_range",
       "method": "POST",
       "path": "/api/agent/qq/onebot/get_robot_uin_range",
@@ -8082,17 +8846,54 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "array",
-        "items": {},
-        "description": "机器人Uin范围列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "metadata"
+          },
+          "evidence": {
+            "const": "installed-example"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "minUin": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                },
+                "maxUin": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                }
+              },
+              "required": [
+                "minUin",
+                "maxUin"
+              ]
+            }
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$[] (opaque)"
       ],
-      "dependency": "A reviewed public result projection is required for this opaque or sensitive native response.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "metadata",
+        "evidence": "installed-example"
+      },
+      "viewLimitation": "Strict installed-example robot range strings. Native identifiers retain their original precision."
     },
     {
       "action": "get_share_link",
@@ -8673,7 +9474,7 @@
         "nc_get_rkey_rate_limited"
       ],
       "sourceLine": 111496,
-      "status": "owner-dependency",
+      "status": "read-view",
       "operationId": "agent.qq.onebot.nc_get_rkey",
       "method": "POST",
       "path": "/api/agent/qq/onebot/nc_get_rkey",
@@ -8683,17 +9484,64 @@
         "additionalProperties": false
       },
       "publicResponse": {
-        "type": "array",
-        "items": {},
-        "description": "Rkey列表"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "view": {
+            "const": "credential-summary"
+          },
+          "evidence": {
+            "const": "installed-handler"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "enum": [
+                    "private",
+                    "group",
+                    "unknown"
+                  ]
+                },
+                "created_at": {
+                  "type": "number"
+                },
+                "ttl": {
+                  "type": "number"
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type",
+                "created_at",
+                "ttl",
+                "available"
+              ]
+            }
+          }
+        },
+        "required": [
+          "view",
+          "evidence",
+          "data"
+        ]
       },
       "protectedOrOpaqueNativeFields": [
         "$[] (opaque)"
       ],
-      "dependency": "Protected credential result handles are required for rkey.",
       "aliasSemantics": "Aliases resolve to the same synchronous Rabi contract; native async/rate-limited queue semantics are not emulated.",
       "access": "Original authenticated connection/trusted LAN principal or loopback, enabled running stable Route, exact instance and configured QQ; actual get_login_info before provider dispatch; authority/binding rechecked across awaits.",
-      "receipt": null
+      "receipt": null,
+      "view": {
+        "kind": "credential-summary",
+        "evidence": "installed-handler"
+      },
+      "viewLimitation": "Rkey availability, scope type, creation and TTL only from the native FetchRkey list."
     },
     {
       "action": "nc_get_user_status",
@@ -25279,6 +26127,7 @@
     "No production NapCat/QQ/WebUI calls were made.",
     "Schema AST resolved does not make Any/Unknown safe to disclose.",
     "Managed references are compatibility guidance and reject raw dispatch; missing dependencies are not upstream unsupported.",
-    "No active group-join action exists in this installed action registry; request handling consumes existing flags."
+    "No active group-join action exists in this installed action registry; request handling consumes existing flags.",
+    "Nineteen new read views declare handler/example metadata, diagnostics or credential summaries. These views do not expose complete native results."
   ]
 }

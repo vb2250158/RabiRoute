@@ -12,6 +12,7 @@ import { KeyedAsyncLock } from "@rabiroute/host-api/shared/keyedAsyncLock";
 import { NapcatWebuiSessions, type NapcatWebuiSession } from "./napcatWebuiSession.js";
 import { NapcatApiError, type NapcatApiSelection } from "../manager/napcatApiTransport.js";
 import type { NapcatWebuiApiSession } from "../manager/napcatWebuiApiOperations.js";
+import type { NapcatWebuiManagementSelection, NapcatWebuiManagementSession } from "../manager/napcatWebuiManagementOperations.js";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 import { atomicWriteFileSync } from "@rabiroute/host-api/shared/filePersistence";
 import { adaptLinuxNapcatLaunch, filterLinuxNapcatProcesses, LINUX_NAPCAT_APP_DIR, type LinuxProcessEntry } from "./napcatPlatform.js";
@@ -1484,11 +1485,11 @@ async function requireNapcatWebuiSession(
 }
 
 /** Bridge fixed reads to this instance's original token lookup and shared credential cache. */
-export async function openNapcatWebuiApiSession(
+async function openNapcatBoundWebuiSession(
   ctx: NapcatManagerContext,
-  selection: NapcatApiSelection,
+  selection: Pick<NapcatApiSelection, "routeId" | "instanceId" | "assertCurrent">,
   signal: AbortSignal
-): Promise<NapcatWebuiApiSession> {
+) {
   selection.assertCurrent(); signal.throwIfAborted();
   const runtime = [...ctx.getRuntimes()].find(item => item.definition.id === selection.routeId);
   const definition = runtime?.definition;
@@ -1507,6 +1508,12 @@ export async function openNapcatWebuiApiSession(
   };
   const { session } = await requireNapcatWebuiSession(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId });
   assertCurrent();
+  return { session, assertCurrent };
+}
+
+export async function openNapcatWebuiApiSession(ctx: NapcatManagerContext, selection: NapcatApiSelection,
+  signal: AbortSignal): Promise<NapcatWebuiApiSession> {
+  const { session, assertCurrent } = await openNapcatBoundWebuiSession(ctx, selection, signal);
   return {
     assertCurrent,
     requestFixed: async (method, pathname, requestSignal) => {
@@ -1515,6 +1522,27 @@ export async function openNapcatWebuiApiSession(
       assertCurrent();
       return response;
     }
+  };
+}
+
+/** First-login metadata uses the original configured WebUI owner without requiring OneBot online. */
+export async function openNapcatWebuiManagementSession(ctx: NapcatManagerContext, selection: NapcatWebuiManagementSelection,
+  signal: AbortSignal): Promise<NapcatWebuiManagementSession> {
+  const { session, assertCurrent } = await openNapcatBoundWebuiSession(ctx, selection, signal);
+  return {
+    assertCurrent,
+    requestManagement: async (method, pathname, body, requestSignal) => {
+      assertCurrent(); requestSignal.throwIfAborted();
+      const response = await session.requestManagement(method, pathname, body, requestSignal);
+      assertCurrent();
+      return response;
+    },
+    runBindingOperation: operation => runBoundNapcatOperation(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId }, async () => {
+      assertCurrent();
+      const result = await operation();
+      assertCurrent();
+      return result;
+    })
   };
 }
 

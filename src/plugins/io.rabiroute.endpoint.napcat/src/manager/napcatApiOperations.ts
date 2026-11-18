@@ -2,6 +2,7 @@ import { compileApiContract, type ApiOperationContract, type ApiOperationDefinit
 import { executeDurableDelivery } from "@rabiroute/host-api/manager/durableDeliveryIdempotency";
 import { qqReadSettings } from "@rabiroute/host-api/shared/qqReadSettings";
 import { prepareNapcatApiAttachmentParams, type NapcatApiAttachmentInput } from "./napcatApiAttachments.js";
+import { projectNapcatApiResultProfile } from "./napcatApiResultProfiles.js";
 import { callNapcatApi, NapcatApiError, napcatApiFailure, selectNapcatApiInstance,
   type NapcatApiTransportContext } from "./napcatApiTransport.js";
 
@@ -21,6 +22,7 @@ export type NapcatApiDescriptor = Readonly<{
   managedOwner?: string;
   unavailableReason?: string;
   attachmentInput?: NapcatApiAttachmentInput;
+  resultProfile?: string;
 }>;
 
 export type NapcatApiOperationsContext = NapcatApiTransportContext & {
@@ -178,7 +180,9 @@ export function createNapcatApiOperations(context: NapcatApiOperationsContext,
           selection.assertCurrent();
           const data = await callNapcatApi(context, selection, descriptor.action, nativeParameters, known, controller.signal);
           if (!responseMatches(nativeSchema, data ?? null)) throw new NapcatApiError(503, "QQ_API_RESPONSE_CONTRACT_MISMATCH");
-          const projected = projectNapcatApiResponse(descriptor.response, data ?? null, nativeSchema);
+          const profiled = descriptor.resultProfile
+            ? projectNapcatApiResultProfile(descriptor.resultProfile, data ?? null, body.params as Record<string, unknown>) : data ?? null;
+          const projected = projectNapcatApiResponse(descriptor.response, profiled, descriptor.resultProfile ? descriptor.response : nativeSchema);
           const result = { status: 200, body: { code: 0, data: projected } };
           const validator = compiled.responseValidators.get("200")?.[0]?.body;
           if (!validator?.(result.body)) throw new NapcatApiError(503, "QQ_API_RESPONSE_CONTRACT_MISMATCH");

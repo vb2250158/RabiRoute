@@ -8,6 +8,7 @@ import type { ApiOperationInput } from "@rabiroute/host-api/manager/apiOperation
 import type { GatewayDefinition } from "@rabiroute/host-api/shared/gatewayConfigModel";
 import { createNapcatApiDescriptors, type NapcatApiManifest } from "./napcatApiCatalog.js";
 import { createNapcatApiOperations, projectNapcatApiResponse } from "./napcatApiOperations.js";
+import { napcatResultProfileFixtures } from "./napcatApiResultProfiles.fixture.js";
 
 const manifest = JSON.parse(await fs.readFile(new URL("../../contracts/napcat-4.18.4.json", import.meta.url), "utf8")) as NapcatApiManifest;
 const descriptors = createNapcatApiDescriptors(manifest);
@@ -68,6 +69,7 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       if (new URL(String(url)).hostname === "fixture-media.invalid") return new Response(Buffer.from("fixture-image"));
       const action = new URL(String(url)).pathname.slice(1);
       const descriptor = direct.find(row => row.action === selectedAction)!;
+      if (descriptor.resultProfile && action === selectedAction) return Response.json({ status: "ok", retcode: 0, data: napcatResultProfileFixtures[selectedAction] });
       if (action === "get_msg" && descriptor.attachmentInput) return Response.json({ status: "ok", retcode: 0, data: {
         post_type: "message", message_type: "group", group_id: 12345, self_id: 12345, user_id: 45678, message_id: 12345,
         message: Array.from({ length: 2 }, () => ({ type: descriptor.attachmentInput === "audio-message" ? "record" : "image",
@@ -86,17 +88,19 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       ...(descriptor.mode === "mutation" ? { deliveryId: `fixture-${descriptor.action}` } : {}) }));
     assert.equal(result.status, 200, `${descriptor.action}: ${JSON.stringify(result.body)}`);
   }
-  assert.equal(direct.length, 87);
+  assert.equal(direct.length, 106);
 });
 
-test("credential, file, event-context and test actions retain an explicit owner/dependency boundary", () => {
-  for (const action of ["get_cookies", "get_clientkey", "send_packet", "download_file", ".handle_quick_operation", "test_auto_register_01", "test_auto_register_02"]) {
+test("file, event-context and test actions retain explicit owners while credentials expose summary views", () => {
+  for (const action of ["send_packet", "download_file", ".handle_quick_operation", "test_auto_register_01", "test_auto_register_02"]) {
     const descriptor = descriptors.find(row => row.action === action)!;
     assert.equal(descriptor.mode, "managed", action);
     assert.ok(descriptor.unavailableReason, action);
   }
   assert.equal(descriptors.find(row => row.action === "send_group_msg")!.managedOwner, "agent.send");
   assert.equal(descriptors.find(row => row.action === "get_group_file_url")!.mode, "managed");
+  assert.equal(descriptors.find(row => row.action === "get_cookies")!.resultProfile, "get_cookies");
+  assert.equal(descriptors.find(row => row.action === "get_clientkey")!.resultProfile, "get_clientkey");
 });
 
 test("eleven absent outbound producers are explicit dependencies despite their shared owner reference", async () => {

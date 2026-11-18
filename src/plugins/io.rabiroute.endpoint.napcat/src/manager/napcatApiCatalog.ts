@@ -1,6 +1,7 @@
 import type { ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
 import type { NapcatApiDescriptor } from "./napcatApiOperations.js";
 import { napcatApiAttachmentSourceSchema, type NapcatApiAttachmentInput } from "./napcatApiAttachments.js";
+import { napcatApiResultProfile } from "./napcatApiResultProfiles.js";
 
 type SchemaContract = { resolved: boolean; schema: Record<string, unknown> };
 export type NapcatApiManifest = {
@@ -166,7 +167,13 @@ export function createNapcatApiDescriptors(manifest: NapcatApiManifest): readonl
     let mode: NapcatApiDescriptor["mode"] = "managed";
     const managedOwner = references[row.action];
     const attachmentInput = attachmentInputs[row.action];
-    let unavailableReason = row.testOnly ? "Upstream test interface; excluded from ordinary platform execution." : attachmentInput ? undefined : dependencies[row.action];
+    const resultProfile = napcatApiResultProfile(row.action);
+    if (row.action === "get_cookies" || row.action === "get_credentials") {
+      const properties = parameters.properties as Record<string, Record<string, unknown>>;
+      parameters = { ...parameters, properties: { ...properties, domain: { ...properties.domain, maxLength: 253,
+        pattern: "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?(?![\\s\\S])" } } };
+    }
+    let unavailableReason = row.testOnly ? "Upstream test interface; excluded from ordinary platform execution." : attachmentInput || resultProfile ? undefined : dependencies[row.action];
     if (outboundProducerDependencies.has(row.action)) unavailableReason = "The managed outbound owner agent.send does not yet provide this native forward/Ark/AI/flash/online-transfer producer. Its generic send contract is not a substitute for this shape.";
     if (attachmentInput) {
       const nativeField = attachmentInput === "audio-message" ? "message_id" : attachmentInput === "ocr-image" ? "image" : "file";
@@ -175,21 +182,24 @@ export function createNapcatApiDescriptors(manifest: NapcatApiManifest): readonl
         required: [...((parameters.required ?? []) as string[]).filter(name => name !== nativeField), "attachment"] };
       mode = attachmentInput === "ocr-image" ? "read" : "mutation";
     }
-    if (!managedOwner && !unavailableReason && !attachmentInput) {
+    if (resultProfile) mode = "read";
+    if (!managedOwner && !unavailableReason && !attachmentInput && !resultProfile) {
       if (reads.has(row.action) && (resultProjections[row.action] || !responseNeedsOwner(sourceResponse))) mode = "read";
       else if (mutations.has(row.action)) mode = "mutation";
       else unavailableReason = responseNeedsOwner(sourceResponse)
         ? "A reviewed public result projection is required for this opaque or sensitive native response."
         : "An action-specific execution owner is required for this platform or resource operation.";
     }
-    const response = resultProjections[row.action] ?? (mode === "mutation" && (responseNeedsOwner(sourceResponse) || attachmentInput === "image-file") ? { type: "null" } : sourceResponse);
+    const response = resultProfile?.schema ?? resultProjections[row.action] ?? (mode === "mutation" && (responseNeedsOwner(sourceResponse) || attachmentInput === "image-file") ? { type: "null" } : sourceResponse);
     return { action: row.action, aliases: row.aliases, title: row.summary, version: manifest.source.version,
       description: [row.description || row.summary, managedOwner ? `Existing owner ${managedOwner} retains its original supported shapes and input contract.` : "", unavailableReason,
         mode === "mutation" && response !== sourceResponse ? "This mutation exposes acknowledgement and its durable receipt; opaque native result fields stay private." : "",
         resultProjections[row.action] ? "The public DTO contains reviewed metadata only; opaque records and native resource URLs are omitted." : "",
-        attachmentInput ? "Select an attachment by exact source chat, message ID and index. The original media owner supplies bytes internally; native file/URL/base64 inputs are not public parameters." : ""].filter(Boolean).join(" "),
+        attachmentInput ? "Select an attachment by exact source chat, message ID and index. The original media owner supplies bytes internally; native file/URL/base64 inputs are not public parameters." : "",
+        resultProfile?.description].filter(Boolean).join(" "),
       parameters, response, nativeResponse: cleanSchema(row.returnContract.schema, false), mode, managedOwner, unavailableReason,
       attachmentInput,
+      resultProfile: resultProfile ? row.action : undefined,
       relatedOperations: managedOwner ? [managedOwner] : row.action === "get_essence_msg_list" ? ["agent.qq.message.read"] : undefined };
   });
 }

@@ -9,7 +9,7 @@ import { NapcatLifecycleOwner, type NapcatBinding } from "../plugins/io.rabirout
 import { readNapcatApiManifest } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiManifest.js";
 import { napcatEndpointFixture } from "./napcatEndpointPlugin.fixture.js";
 
-const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + 17;
+const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + 17 + 16 + 1;
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 

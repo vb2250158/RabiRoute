@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { qqReadSettings } from "@rabiroute/host-api/shared/qqReadSettings";
 import { boundedBytes } from "../manager/qqMessageMedia.js";
 import { assertNapcatWebuiFixedRead } from "../manager/napcatWebuiApiRoutes.js";
+import { assertNapcatWebuiManagementRequest } from "../manager/napcatWebuiManagementContracts.js";
 
 export type NapcatWebuiSession = {
   baseUrl: string;
   request(pathname: string, body?: Record<string, unknown>): Promise<Response>;
   requestFixed(method: "GET" | "POST", pathname: string, signal: AbortSignal): Promise<Response>;
+  requestManagement(method: "GET" | "POST", pathname: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response>;
 };
 type Credential = { value: string; expiresAt: number };
 
@@ -20,10 +22,11 @@ export class NapcatWebuiSessions {
 
   async open(baseUrl: string, token: string): Promise<NapcatWebuiSession | null> {
     const base = new URL(baseUrl);
-    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
+    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash || baseUrl.includes("\\")) {
       throw new Error("NAPCAT_WEBUI_BASE_URL_INVALID");
     }
-    baseUrl = base.origin;
+    const prefix = base.pathname.replace(/\/+$/, "");
+    baseUrl = base.origin + prefix;
     const hash = createHash("sha256").update(`${token}.napcat`).digest("hex");
     const key = JSON.stringify([baseUrl, hash]);
     const authorize = (): Promise<Credential | null> => {
@@ -56,9 +59,11 @@ export class NapcatWebuiSessions {
     };
     if (!await authorize()) return null;
     const perform = async (method: "GET" | "POST", pathname: string, body: Record<string, unknown> | undefined, signal?: AbortSignal): Promise<Response> => {
-        const target = new URL(pathname, baseUrl);
-        if (!pathname.startsWith("/api/") || pathname.includes("\\") || target.origin !== baseUrl || target.hash
-          || target.pathname !== pathname.split("?")[0]) throw new Error("NAPCAT_WEBUI_PATH_INVALID");
+        const target = new URL(`${baseUrl}${pathname}`);
+        const nativePath = pathname.split("?")[0]!;
+        if (!pathname.startsWith("/api/") || pathname.includes("\\") || /%(?:2f|5c|2e)/i.test(nativePath)
+          || target.origin !== base.origin || target.hash || !target.pathname.startsWith(`${prefix}/api/`)
+          || target.pathname !== `${prefix}${nativePath}`) throw new Error("NAPCAT_WEBUI_PATH_INVALID");
         for (let attempt = 0; attempt < 2; attempt++) {
           signal?.throwIfAborted();
           const credential = await authorize();
@@ -93,6 +98,10 @@ export class NapcatWebuiSessions {
       requestFixed: (method, pathname, signal) => {
         assertNapcatWebuiFixedRead(method, pathname);
         return perform(method, pathname, undefined, signal);
+      },
+      requestManagement: (method, pathname, body, signal) => {
+        assertNapcatWebuiManagementRequest(method, pathname, body);
+        return perform(method, pathname, body, signal);
       }
     };
   }

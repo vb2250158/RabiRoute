@@ -10,13 +10,15 @@ The baseline is the NapCat 4.18.4 distribution with SHA-256 `66dfaa1b9e7530d4930
 
 | Area | This version |
 | --- | --- |
-| OneBot actions | 32 reads and 55 mutations using the original durable ledger |
+| OneBot actions | 51 reads, including 19 limited views, and 55 mutations using the original durable ledger |
 | Existing operations | 20 supported shapes under their original contracts |
-| Outstanding implementation or native-host boundary | 60 individually documented items |
-| WebUI | 17 fixed reads or summaries; other management actions retain their original owners and explicit dependencies |
+| Outstanding implementation or native-host boundary | 41 individually documented items |
+| WebUI | 17 reads/summaries plus 16 management operations (14 reads, 2 preference writes), 13 legacy entries, 58 dependencies and 8 host boundaries |
 | Events | Typed metadata enters the original NapCat archive, while existing group/private message triggers remain active |
 
 All base actions are discoverable. Missing execution owners return `QQ_API_OWNER_DEPENDENCY_UNAVAILABLE`. Compatible operations return `QQ_API_USE_EXISTING_OWNER`, with the original operation named in their contract. Discovery and actual execution coverage are counted separately.
+
+The 19 added reads provide 3 handler-derived metadata views, 5 strict example profiles, 4 diagnostics and 7 credential summaries. `view` and `evidence` identify their scope. Example-shape mismatches return errors. Diagnostics exclude complete file, message and group data. Credential summaries expose presence, scope, type and expiry metadata.
 
 ## Calls
 
@@ -33,6 +35,8 @@ Actual calls bind a running Route, an explicit instance and the configured QQ ac
 Avatar, group portrait, OCR and voice transcription inputs use the original message-attachment owner. Supply `attachment={kind,targetId,messageId,attachmentIndex}` to identify an exact conversation and message. Caller URLs, host paths and arbitrary base64 cannot replace attachment identity.
 
 Fixed WebUI reads use `POST /api/agent/qq/webui/<id>` with `routeId`, `instanceId` and `params`. The original WebUI session owner retains credentials and independently checks that its logged-in QQ matches the OneBot account. Certificates expose safe status summaries. Logs, pages and icons expose bounded summaries. SSE readers return bounded samples. This read interface excludes private keys, credentials, arbitrary proxies, host paths and plugin execution.
+
+Management calls use `POST /api/agent/qq/webui-management/<id>`. Preference writes also require a stable `deliveryId`, with original receipts at `GET /api/agent/qq/webui-management-receipts/<deliveryId>`. They reuse the original login target and credential owner. Explicit logged-out state permits initialization under its contract. An observed native account must match the configured account. Unbound instances can use the original login panel to establish that binding. Theme updates preserve untouched fields, and automatic-login preferences do not submit a login. The native API lacks atomic CAS across clients, so readback and the original receipt determine the reported result.
 
 ## Joining groups
 

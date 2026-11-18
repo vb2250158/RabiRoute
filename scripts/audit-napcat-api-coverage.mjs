@@ -372,10 +372,11 @@ export function auditNapcatWebuiCoverage(facts, declaration) {
     throw new Error("WebUI coverage source identity mismatch");
   }
   const native = new Set(facts.webuiRoutes.filter(row => row.kind === "api").map(row => `${row.method} ${row.path}`));
-  const states = ["typed-summary", "existing-native-owner", "owner-dependency", "host-owner-boundary"];
+  const states = ["typed-summary", "existing-native-owner", "typed-management", "owner-dependency", "host-owner-boundary"];
   const seen = new Set();
   const byState = Object.fromEntries(states.map(state => [state, 0]));
   const byInventoryGroup = {};
+  const byInventoryGroupAndState = {};
   for (const row of declaration.rows ?? []) {
     const key = `${row.method} ${row.path}`;
     if (!native.has(key) || seen.has(key)) throw new Error("Unknown or duplicate method/path in WebUI coverage");
@@ -386,12 +387,37 @@ export function auditNapcatWebuiCoverage(facts, declaration) {
     seen.add(key);
     byState[row.state]++;
     byInventoryGroup[row.inventoryGroup] = (byInventoryGroup[row.inventoryGroup] ?? 0) + 1;
+    const group = byInventoryGroupAndState[row.inventoryGroup] ??= {};
+    group[row.state] = (group[row.state] ?? 0) + 1;
   }
   if (seen.size !== native.size) throw new Error("WebUI coverage has missing native API rows");
   if (declaration.counts?.total !== seen.size || states.some(state => (declaration.counts?.byState?.[state] ?? 0) !== byState[state])) {
     throw new Error("WebUI coverage declared counts do not match its rows");
   }
-  return { source: declaration.source, counts: { total: seen.size, byState, byInventoryGroup, duplicateMethodPaths: 0 }, rows: declaration.rows };
+  const sameCounts = (declared, actual) => JSON.stringify(Object.entries(declared ?? {}).sort()) === JSON.stringify(Object.entries(actual).sort());
+  if (!sameCounts(declaration.counts.byInventoryGroup, byInventoryGroup) || Object.keys(byInventoryGroupAndState).some(group =>
+    !sameCounts(declaration.counts.byInventoryGroupAndState?.[group], byInventoryGroupAndState[group]))) {
+    throw new Error("WebUI inventory/source group counts do not match its rows");
+  }
+  const receiptOperations = declaration.rabiOnlyOperations ?? [];
+  const receiptIds = new Set();
+  for (const operation of receiptOperations) {
+    if (!operation.operationId || receiptIds.has(operation.operationId) || !operation.path?.startsWith("/api/agent/")
+      || operation.nativeCoverageContribution !== 0 || native.has(`${operation.method} ${operation.path}`)) {
+      throw new Error("Rabi-only receipts cannot contribute native WebUI coverage");
+    }
+    if (operation.runtimeAcceptance !== "not-asserted-by-this-static-manifest") throw new Error("Static WebUI coverage cannot assert runtime acceptance");
+    receiptIds.add(operation.operationId);
+  }
+  const implementedSourceRows = byState["typed-summary"] + byState["existing-native-owner"] + byState["typed-management"];
+  if (declaration.counts.implementedSourceRows !== implementedSourceRows || declaration.counts.pendingProtectedOwnerRows !== byState["owner-dependency"]
+    || declaration.counts.hostOwnerBoundaryRows !== byState["host-owner-boundary"] || declaration.counts.rabiOnlyOperations !== receiptOperations.length) {
+    throw new Error("WebUI implementation/receipt counts do not match its rows");
+  }
+  return { source: declaration.source, implementationRelease: declaration.implementationRelease,
+    counts: { total: seen.size, byState, byInventoryGroup, byInventoryGroupAndState, implementedSourceRows,
+      pendingProtectedOwnerRows: byState["owner-dependency"], hostOwnerBoundaryRows: byState["host-owner-boundary"], rabiOnlyOperations: receiptOperations.length, duplicateMethodPaths: 0 },
+    rows: declaration.rows, rabiOnlyOperations: receiptOperations };
 }
 
 async function main(args) {

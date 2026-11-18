@@ -124,12 +124,17 @@ test("CLI combines an explicit Rabi snapshot deterministically and reports unkno
   }
 });
 
-test("versioned WebUI coverage reconciles 17 summaries, 13 compatible owners, 74 protected dependencies and 8 host boundaries", async () => {
+test("versioned WebUI coverage reconciles 17 summaries, 13 compatible owners, 16 management shapes, 58 dependencies and 8 host boundaries", async () => {
   const facts = JSON.parse(await fs.readFile(new URL("../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-4.18.4.json", import.meta.url), "utf8"));
   const declaration = JSON.parse(await fs.readFile(new URL("../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-webui-4.18.4-coverage.json", import.meta.url), "utf8"));
   const result = auditNapcatWebuiCoverage(facts, declaration);
-  assert.deepEqual(result.counts.byState, { "typed-summary": 17, "existing-native-owner": 13, "owner-dependency": 74, "host-owner-boundary": 8 });
+  assert.deepEqual(result.counts.byState, { "typed-summary": 17, "existing-native-owner": 13, "typed-management": 16, "owner-dependency": 58, "host-owner-boundary": 8 });
   assert.equal(result.counts.total, 112);
+  assert.equal(result.counts.implementedSourceRows, 46);
+  assert.equal(result.counts.rabiOnlyOperations, 1);
+  assert.equal(result.counts.byInventoryGroupAndState["protected-typed-owner"]["typed-management"], 16);
+  assert.equal(result.rabiOnlyOperations[0].nativeCoverageContribution, 0);
+  assert.equal(result.implementationRelease.firstPublicationVersionForManagement, "0.1.15");
   assert.equal(result.counts.byInventoryGroup["protected-typed-owner"], 75);
   assert.equal(result.rows.find(row => row.path === "/api/WebUIConfig/GetSSLStatus").state, "typed-summary");
   assert.throws(() => auditNapcatWebuiCoverage(facts, { ...declaration, rows: declaration.rows.slice(1) }), /missing native API rows/);
@@ -139,4 +144,13 @@ test("versioned WebUI coverage reconciles 17 summaries, 13 compatible owners, 74
   assert.throws(() => auditNapcatWebuiCoverage(facts, falseReady), /cannot assert runtime acceptance/);
   const wrongCount = structuredClone(declaration); wrongCount.counts.byState["typed-summary"] = 18;
   assert.throws(() => auditNapcatWebuiCoverage(facts, wrongCount), /counts do not match/);
+  const falseReceiptCoverage = structuredClone(declaration);
+  falseReceiptCoverage.rabiOnlyOperations[0].nativeCoverageContribution = 1;
+  assert.throws(() => auditNapcatWebuiCoverage(facts, falseReceiptCoverage), /receipts cannot contribute native/);
+  const badGroups = structuredClone(declaration);
+  badGroups.counts.byInventoryGroupAndState["protected-typed-owner"]["typed-management"] = 15;
+  assert.throws(() => auditNapcatWebuiCoverage(facts, badGroups), /group counts do not match/);
+  const receiptInNativeRows = structuredClone(declaration);
+  receiptInNativeRows.rows.push({ ...receiptInNativeRows.rows[0], ...receiptInNativeRows.rabiOnlyOperations[0] });
+  assert.throws(() => auditNapcatWebuiCoverage(facts, receiptInNativeRows), /Unknown or duplicate method/);
 });

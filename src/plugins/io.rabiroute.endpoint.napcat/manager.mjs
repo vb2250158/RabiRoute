@@ -122,11 +122,18 @@ export const activate = definePlugin({ async activate(context) {
       route: id => host.manager.routeRunning(id) ? host.manager.readRoute(id) : undefined,
       assertCurrent: assertAccepting
     };
+    const managementContext = {
+      ...apiContext,
+      route: host.manager.readRoute,
+      openManagementSession: (selection, signal) => implementation.openNapcatWebuiManagementSession(controlContext, selection, signal)
+    };
     const manifest = implementation.readNapcatApiManifest();
     const protocolOperations = [
       ...implementation.createNapcatApiOperations(apiContext, implementation.createNapcatApiDescriptors(manifest)),
       implementation.createNapcatApiReceiptOperation(apiContext),
       implementation.createNapcatApiEventCatalogOperation(manifest),
+      ...implementation.createNapcatWebuiManagementOperations(managementContext),
+      implementation.createNapcatWebuiManagementReceiptOperation(managementContext),
       ...implementation.createNapcatWebuiApiOperations({
         ...apiContext,
         openWebuiSession: (selection, signal) => implementation.openNapcatWebuiApiSession(controlContext, selection, signal)

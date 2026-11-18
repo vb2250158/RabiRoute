@@ -142,7 +142,7 @@ test("credential requests reject redirects and unsafe base URLs", async t => {
   const sessions = new NapcatWebuiSessions();
   await assert.rejects(() => sessions.open(base, "fixture"));
   assert.equal(redirected, 0);
-  for (const url of [base + "/webui", base + "?token=private", "http://user:private@localhost", "file:///tmp/fixture"]) {
+  for (const url of [base + "#fragment", base + "?token=private", "http://user:private@localhost", "file:///tmp/fixture"]) {
     await assert.rejects(() => sessions.open(url, "fixture"), /BASE_URL_INVALID/);
   }
 });
@@ -164,4 +164,58 @@ test("bounded JSON peeking enforces the existing quota and cancellation retains 
   await assert.rejects(() => panel.requestFixed("POST", "/api/test", controller.signal));
   await panel.requestFixed("POST", "/api/test", AbortSignal.timeout(1000));
   assert.equal(logins, 1);
+});
+
+test("reverse-proxy prefixes retain original authentication, reads, legacy actions and management writes", async t => {
+  const calls: Array<{ path: string; authorization?: string; body: unknown }> = [];
+  const base = await serverFor(t, async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+    const pathname = request.url!;
+    calls.push({ path: pathname, authorization: request.headers.authorization, body });
+    response.setHeader("content-type", "application/json");
+    if (pathname.endsWith("/api/auth/login")) response.end(JSON.stringify({ code: 0, data: { Credential: `fixture-${pathname.split("/api/")[0]}` } }));
+    else response.end(JSON.stringify({ code: 0, data: true }));
+  });
+  const sessions = new NapcatWebuiSessions();
+  const first = await sessions.open(base + "/tenant-a/napcat///", "fixture");
+  assert.ok(first);
+  assert.equal(first.baseUrl, base + "/tenant-a/napcat");
+  const signal = AbortSignal.timeout(2000);
+  await first.requestFixed("GET", "/api/base/GetNapCatVersion", signal);
+  await first.request("/api/QQLogin/CheckLoginStatus");
+  await first.requestManagement("POST", "/api/QQLogin/SetQuickLoginQQ", { uin: "" }, signal);
+  const repeated = await sessions.open(base + "/tenant-a/napcat", "fixture");
+  assert.ok(repeated);
+  const second = await sessions.open(base + "/tenant-b/napcat", "fixture");
+  assert.ok(second);
+  await second.requestFixed("GET", "/api/base/GetNapCatVersion", signal);
+  assert.equal(calls.filter(item => item.path.endsWith("/api/auth/login")).length, 2);
+  assert.deepEqual(calls.map(item => item.path), ["/tenant-a/napcat/api/auth/login", "/tenant-a/napcat/api/base/GetNapCatVersion",
+    "/tenant-a/napcat/api/QQLogin/CheckLoginStatus", "/tenant-a/napcat/api/QQLogin/SetQuickLoginQQ", "/tenant-b/napcat/api/auth/login", "/tenant-b/napcat/api/base/GetNapCatVersion"]);
+  assert.equal(calls[3]!.authorization, "Bearer fixture-/tenant-a/napcat");
+  assert.deepEqual(calls[3]!.body, { uin: "" });
+  assert.equal(calls[5]!.authorization, "Bearer fixture-/tenant-b/napcat");
+  const count = calls.length;
+  for (const pathname of ["/api/../outside", "/api/%2e%2e/outside", "/api/%2f..%2foutside", "/api/QQLogin/CheckLoginStatus#fragment", "//outside/api/test"]) {
+    await assert.rejects(() => first.request(pathname));
+  }
+  assert.equal(calls.length, count);
+});
+
+test("authentication JSON is bounded by the original QQ JSON budget", async t => {
+  let logins = 0;
+  const base = await serverFor(t, (_request, response) => {
+    logins++;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ code: 0, data: { Credential: "fixture", padding: "x".repeat(1000) } }));
+  });
+  const sessions = new NapcatWebuiSessions();
+  const previous = process.env.RABIROUTE_QQ_JSON_MAX_BYTES;
+  process.env.RABIROUTE_QQ_JSON_MAX_BYTES = "200";
+  try { await assert.rejects(() => sessions.open(base + "/napcat", "fixture"), /QQ_RESPONSE_TOO_LARGE/); }
+  finally { if (previous === undefined) delete process.env.RABIROUTE_QQ_JSON_MAX_BYTES; else process.env.RABIROUTE_QQ_JSON_MAX_BYTES = previous; }
+  assert.ok(await sessions.open(base + "/napcat", "fixture"));
+  assert.equal(logins, 2);
 });

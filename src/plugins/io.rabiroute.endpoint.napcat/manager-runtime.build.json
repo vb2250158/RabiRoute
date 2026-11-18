@@ -107,6 +107,18 @@
     {
       "name": "createNapcatWebuiApiOperations",
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+    },
+    {
+      "name": "openNapcatWebuiManagementSession",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "createNapcatWebuiManagementOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts"
+    },
+    {
+      "name": "createNapcatWebuiManagementReceiptOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts"
     }
   ],
   "ownedPrefixes": [
@@ -130,7 +142,8 @@
     "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiReceipts.ts",
     "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiEvents.ts",
     "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
-    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementOperations.ts"
   ],
   "packageId": "io.rabiroute.endpoint.napcat"
 }

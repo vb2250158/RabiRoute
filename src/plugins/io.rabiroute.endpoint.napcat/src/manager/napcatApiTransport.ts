@@ -35,14 +35,17 @@ function authenticated(request: IncomingMessage, context: NapcatApiTransportCont
   } catch { return false; }
 }
 
+/** Shared existing authority guard; management bootstrap does not imply OneBot account readiness. */
+export function assertNapcatApiRequestAuthority(context: NapcatApiTransportContext, request: IncomingMessage, signal?: AbortSignal): void {
+  context.assertCurrent?.();
+  signal?.throwIfAborted();
+  if (!authenticated(request, context)) throw new NapcatApiError(403, "QQ_API_AUTH_REQUIRED");
+}
+
 /** Capture the original Route, instance and configured QQ account before any provider call. */
 export function selectNapcatApiInstance(context: NapcatApiTransportContext, request: IncomingMessage,
   routeId: string, instanceId: string, signal?: AbortSignal): NapcatApiSelection {
-  const authorize = () => {
-    context.assertCurrent?.();
-    signal?.throwIfAborted();
-    if (!authenticated(request, context)) throw new NapcatApiError(403, "QQ_API_AUTH_REQUIRED");
-  };
+  const authorize = () => assertNapcatApiRequestAuthority(context, request, signal);
   authorize();
   const definition = context.route(routeId);
   if (!definition || definition.id !== routeId || definition.enabled !== true || !definitionUsesNapcat(definition)) throw new NapcatApiError(409, "QQ_API_ROUTE_UNAVAILABLE");
