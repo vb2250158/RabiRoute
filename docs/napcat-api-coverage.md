@@ -13,7 +13,7 @@
 | OneBot 动作 | 55 个读取（含 23 个受限视图）、2 个源绑定文件字节视图、55 个使用原持久账本的副作用动作 |
 | 既有入口 | 20 项兼容形态，按原操作合同调用 |
 | 待实现或所属宿主限制 | 35 项，逐项保留具体原因 |
-| WebUI | 17 个读取/摘要加 20 个管理入口（18 读、2 偏好写）；13 项旧入口，54 项依赖和 8 项宿主边界 |
+| WebUI | 17 个读取/摘要加 21 个管理入口（18 读、3 偏好写）；13 项旧入口，53 项依赖和 8 项宿主边界 |
 | 事件 | 类型化元数据存档实现已接入；Gateway 实际采用版本与哈希需独立核对 |
 
 目录可发现全部基础动作。调用缺少执行能力的动作会返回 `QQ_API_OWNER_DEPENDENCY_UNAVAILABLE`；兼容入口返回 `QQ_API_USE_EXISTING_OWNER` 并在合同提供原操作名称。目录覆盖率和实际执行覆盖分别计算。
@@ -41,6 +41,10 @@ WebUI 固定读取入口为 `POST /api/agent/qq/webui/<id>`，同样携带 `rout
 新增管理入口为 `POST /api/agent/qq/webui-management/<id>`，偏好写入另需稳定 `deliveryId`，原回执通过 `GET /api/agent/qq/webui-management-receipts/<deliveryId>` 查询。它复用原登录目标和凭据 owner。明确未登录时按初始化合同处理；观察到原生账号后必须与配置账号一致，未绑定实例可使用原登录面板完成绑定。主题更新保留未改字段，自动登录偏好不提交登录操作。原生接口缺少跨客户端原子 CAS，结果按实际读回和原回执判断。
 
 `get_group_file_url` 与 `get_private_file_url` 两个入口返回源绑定文件字节，标记 `nativeContractEquivalent=false`。参数使用精确消息来源或原生群文件缓存引用，签名 URL 仅在请求内存中使用。原生重启或缓存过期会令引用失效，失效时返回原生错误，由原来源取得新的有效引用。Rabi 独立操作 `agent.qq.file.verify-sha256` 按明确大小、预期摘要和可选超时增量核验文件，流式读取保持常量内存，核验结果独立留证。
+
+镜像偏好使用 `POST /api/agent/qq/webui-management/mirror-custom.set`，请求携带 `routeId`、`instanceId`、`params.mirror` 与稳定 `deliveryId`。`mirror` 接受完整 HTTP/S 前缀并保留路径、查询和原字符串，空值清除偏好。原配置权限和账号校验继续生效。该调用固定进入原生配置接口，更新选中 NapCat 进程内偏好及缓存。结果与回执提供精确读回摘要和受限元数据，原值仅保留在请求内存及原生配置 owner。
+
+镜像配置写入只在独立 fixture 验证。正式采用后的验收仅查询实例、合同、资源与健康；真实镜像变更须另有针对该项变更的用户授权。进程内结果与写盘、跨客户端原子 CAS 和其他调用者的后续网络选择分别核对。
 
 ## 加群能力
 

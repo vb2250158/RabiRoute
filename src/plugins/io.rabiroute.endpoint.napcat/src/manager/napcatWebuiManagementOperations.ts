@@ -8,7 +8,7 @@ import { boundedBytes } from "./qqMessageMedia.js";
 import { assertNapcatApiRequestAuthority, NapcatApiError, napcatApiFailure, type NapcatApiTransportContext } from "./napcatApiTransport.js";
 import { napcatWebuiManagementDescriptors, type NapcatWebuiManagementDescriptor } from "./napcatWebuiManagementContracts.js";
 
-import { projectNapcatWebuiMetadata } from "./napcatWebuiMetadataViews.js";
+import { isNapcatMirrorPrefix, projectNapcatMirrorPrefixMetadata, projectNapcatWebuiMetadata } from "./napcatWebuiMetadataViews.js";
 
 type Row = Record<string, unknown>;
 export type NapcatWebuiManagementSelection = Readonly<{ routeId: string; instanceId: string; expectedUserId: string; assertCurrent(): void }>;
@@ -198,6 +198,8 @@ export function createNapcatWebuiManagementOperations(context: NapcatWebuiManage
             || !compiled.bodyValidator?.(input.body)) throw new ManagementError("PARAMETERS_INVALID", 400);
           if (mutation && context.readOnly()) throw new ManagementError("READ_ONLY", 403);
           const body = input.body as { routeId: string; instanceId: string; params: Row; deliveryId?: string };
+          const mirrorValue = spec.id === "mirror-custom.set" && isNapcatMirrorPrefix(body.params.mirror) ? body.params.mirror : undefined;
+          if (spec.id === "mirror-custom.set" && mirrorValue === undefined) throw new ManagementError("PARAMETERS_INVALID", 400);
           const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(qqReadSettings.readTimeoutMs)]) : AbortSignal.timeout(qqReadSettings.readTimeoutMs);
           const binding = selectNapcatWebuiManagementInstance(context, input.request, body.routeId, body.instanceId, signal);
           const session = await context.openManagementSession(binding, signal);
@@ -223,10 +225,21 @@ export function createNapcatWebuiManagementOperations(context: NapcatWebuiManage
             return { status: 200, headers: { "cache-control": "private, no-store" }, body: { code: 0, data } };
           }
           if (spec.id === "quick-login-preference.set" && body.params.userId && body.params.userId !== binding.expectedUserId) throw new ManagementError("ACCOUNT_MISMATCH", 409);
+          const durableParams = mirrorValue === undefined ? body.params : { mirrorDigest: digest(mirrorValue) };
           const outcome = await session.runBindingOperation(() => executeDurableDelivery({ rootDir: context.rootDir, namespace, deliveryId: body.deliveryId,
-            payload: { operation: spec.id, routeId: body.routeId, instanceId: body.instanceId, expectedUserId: binding.expectedUserId, params: body.params },
+            payload: { operation: spec.id, routeId: body.routeId, instanceId: body.instanceId, expectedUserId: binding.expectedUserId, params: durableParams },
             audit: { operation: spec.id, routeId: body.routeId, instanceId: body.instanceId, expectedUserId: binding.expectedUserId }, requestAuthority: binding.assertCurrent,
             deliver: async () => {
+              if (mirrorValue !== undefined) {
+                await bootstrap(session, binding, signal);
+                await call(session, binding, "POST", "/api/Mirror/SetCustom", { mirror: mirrorValue }, signal);
+                const after = object(await call(session, binding, "GET", "/api/Mirror/List", {}, signal));
+                await bootstrap(session, binding, signal);
+                if (after.customMirror !== mirrorValue) throw new ManagementError("WRITE_READBACK_MISMATCH");
+                return validateResult({ applied: true, afterDigest: digest(after.customMirror),
+                  prefixMetadata: projectNapcatMirrorPrefixMetadata(mirrorValue), effectScope: "selected-native-process-memory" });
+              }
+              if (!["quick-login-preference.set", "theme.set"].includes(spec.id)) throw new ManagementError("OPERATION_NOT_REGISTERED", 404);
               const preference = spec.id === "quick-login-preference.set";
               let expectedReadback: unknown = body.params.userId;
               if (!preference) {

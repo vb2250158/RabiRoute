@@ -12,6 +12,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.36 - 2026-11-18
 
+- NapCat plugin `io.rabiroute.endpoint.napcat` 0.1.18 sets or clears the complete mirror prefix through a fixed contract, retaining selected-instance/account checks and original-ID receipts. Sensitive path, query and user information stays in configuration request memory; audit and results retain digests and limited metadata. The preference affects native process memory only.
+
 - WorkBuddy 0.1.9 supports guidance for the ordinary conversation active at dispatch, with frozen execution options and original-ID recovery boundaries; thread-control 0.1.8 exposes the matching contract. File-delivery verification now aligns the later message-length annotation with its original historical result. Host updates retain independently installed package bytes, while imports validate same-version conflicts across every source root.
 
 ## 0.15.35 - 2026-11-18

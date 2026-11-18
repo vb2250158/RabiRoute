@@ -13,7 +13,7 @@ The baseline is the NapCat 4.18.4 distribution with SHA-256 `66dfaa1b9e7530d4930
 | OneBot actions | 55 reads, including 23 limited views, 2 source-bound file byte views, and 55 mutations using the original durable ledger |
 | Existing operations | 20 supported shapes under their original contracts |
 | Outstanding implementation or native-host boundary | 35 individually documented items |
-| WebUI | 17 reads/summaries plus 20 management operations (18 reads, 2 preference writes), 13 legacy entries, 54 dependencies and 8 host boundaries |
+| WebUI | 17 reads/summaries plus 21 management operations (18 reads, 3 preference writes), 13 legacy entries, 53 dependencies and 8 host boundaries |
 | Events | Typed metadata archiving is implemented; the Gateway adopted version and hash require independent runtime evidence |
 
 All base actions are discoverable. Missing execution owners return `QQ_API_OWNER_DEPENDENCY_UNAVAILABLE`. Compatible operations return `QQ_API_USE_EXISTING_OWNER`, with the original operation named in their contract. Discovery and actual execution coverage are counted separately.
@@ -41,6 +41,10 @@ Fixed WebUI reads use `POST /api/agent/qq/webui/<id>` with `routeId`, `instanceI
 Management calls use `POST /api/agent/qq/webui-management/<id>`. Preference writes also require a stable `deliveryId`, with original receipts at `GET /api/agent/qq/webui-management-receipts/<deliveryId>`. They reuse the original login target and credential owner. Explicit logged-out state permits initialization under its contract. An observed native account must match the configured account. Unbound instances can use the original login panel to establish that binding. Theme updates preserve untouched fields, and automatic-login preferences do not submit a login. The native API lacks atomic CAS across clients, so readback and the original receipt determine the reported result.
 
 The two `get_group_file_url` / `get_private_file_url` entries return source-bound bytes with `nativeContractEquivalent=false`. Their closed input uses an exact message source or an original group-file cache reference. Native signed URLs remain request-local. Cache references can expire or disappear after a native restart. An expired reference returns a native error and requires a fresh reference from its original source. The Rabi-only `agent.qq.file.verify-sha256` operation hashes the selected resource incrementally with an explicit size, expected digest and optional timeout. Streaming uses constant memory and retains a separate verification result.
+
+Use `POST /api/agent/qq/webui-management/mirror-custom.set` with `routeId`, `instanceId`, `params.mirror` and a stable `deliveryId`. The complete HTTP/S prefix is passed unchanged, including path and query. An empty value clears the preference. Existing configuration authority and account checks apply. The fixed native endpoint updates the selected NapCat process-memory preference and cache. Results and receipts expose exact-readback digest and limited metadata. The original value stays in request memory and the native configuration owner.
+
+Configuration writes are verified in independent fixtures. Post-adoption production acceptance reads instance, contract, resource and health evidence. A real mirror change requires separate user authorization for that specific change. Process-memory completion, disk persistence, cross-client atomic CAS and later caller network choices retain separate evidence.
 
 ## Joining groups
 

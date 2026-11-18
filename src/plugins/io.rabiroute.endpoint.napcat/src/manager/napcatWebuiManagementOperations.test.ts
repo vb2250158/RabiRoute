@@ -70,8 +70,8 @@ function fixture(t: test.TestContext, override?: (pathname: string, body: Row) =
   return {root,state,instance,route,calls,context,input,run,operations};
 }
 
-test("twenty fixed contracts and eighteen safe reads support explicit first-login bootstrap",async t=>{
-  const f=fixture(t);assert.equal(f.operations.length,20);
+test("twenty-one fixed contracts and eighteen safe reads support explicit first-login bootstrap",async t=>{
+  const f=fixture(t);assert.equal(f.operations.length,21);
   f.instance.botUserId="";
   for(const spec of napcatWebuiManagementDescriptors.filter(item=>item.effects!=="configuration-mutation")){
     f.state.loggedIn=spec.binding==="login-required";

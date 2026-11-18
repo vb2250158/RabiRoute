@@ -1,4 +1,5 @@
 import type { ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
+import { isNapcatMirrorPrefix } from "./napcatWebuiMetadataViews.js";
 
 export type NapcatWebuiManagementDescriptor = Readonly<{
   id: string; method: "GET" | "POST"; nativePath: string; params: ApiSchema; response: ApiSchema; binding: string;
@@ -15,8 +16,9 @@ export function assertNapcatWebuiManagementRequest(method: string, pathname: str
   const descriptor = napcatWebuiManagementDescriptors.find(item => item.method === method && item.nativePath === pathname);
   if (!bootstrap && !readback && !descriptor) invalid();
   const allowed = pathname === "/api/QQLogin/SetQuickLoginQQ" ? ["uin"] : pathname === "/api/base/SetTheme" ? ["theme"]
-    : pathname === "/api/QQLogin/ComputeLinuxGUID" ? ["mac", "machineId"] : [];
+    : pathname === "/api/QQLogin/ComputeLinuxGUID" ? ["mac", "machineId"] : pathname === "/api/Mirror/SetCustom" ? ["mirror"] : [];
   if (Object.keys(body).some(key => !allowed.includes(key))) invalid();
+  if (pathname === "/api/Mirror/SetCustom" && !isNapcatMirrorPrefix(body.mirror)) invalid();
   if (pathname === "/api/QQLogin/SetQuickLoginQQ" && (typeof body.uin !== "string" || body.uin !== "" && !/^[0-9]{5,20}$/.test(body.uin))) invalid();
   if (pathname === "/api/base/SetTheme" && (!body.theme || typeof body.theme !== "object" || Array.isArray(body.theme))) invalid();
   if (pathname === "/api/QQLogin/ComputeLinuxGUID" && Object.values(body).some(value => typeof value !== "string" || value.length > 256)) invalid();
@@ -1567,6 +1569,100 @@ export const napcatWebuiManagementDescriptors: readonly NapcatWebuiManagementDes
       "handlers": [
         96318,
         10597,
+        10603
+      ]
+    }
+  },
+  {
+    "id": "mirror-custom.set",
+    "method": "POST",
+    "nativePath": "/api/Mirror/SetCustom",
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mirror"
+      ],
+      "properties": {
+        "mirror": {
+          "type": "string",
+          "writeOnly": true,
+          "description": "Explicit HTTP/S mirror prefix passed verbatim to the native configuration setter. Empty clears the preference. Paths/query/userinfo stay in request memory and the original native config owner."
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applied",
+        "afterDigest",
+        "prefixMetadata",
+        "effectScope"
+      ],
+      "properties": {
+        "applied": {
+          "const": true
+        },
+        "afterDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "prefixMetadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "direct",
+            "pathPresent",
+            "pathLength",
+            "limitedDisplay",
+            "executable"
+          ],
+          "properties": {
+            "direct": {
+              "type": "boolean"
+            },
+            "origin": {
+              "type": "string"
+            },
+            "pathPresent": {
+              "type": "boolean"
+            },
+            "pathLength": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hasUserinfo": {
+              "type": "boolean"
+            },
+            "hasQuery": {
+              "type": "boolean"
+            },
+            "hasFragment": {
+              "type": "boolean"
+            },
+            "limitedDisplay": {
+              "const": true
+            },
+            "executable": {
+              "const": false
+            }
+          }
+        },
+        "effectScope": {
+          "const": "selected-native-process-memory"
+        }
+      }
+    },
+    "binding": "management-bootstrap",
+    "effects": "configuration-mutation",
+    "description": "Set or clear the exact native process-memory mirror prefix. HTTP/S input may contain path/query and is forwarded unchanged to the fixed native config endpoint, without hostname restrictions. Results/owner audit/receipt retain only digest and limited metadata. The native setter does not persist to disk or provide cross-client atomic CAS.",
+    "sourceLines": {
+      "route": 96430,
+      "handlers": [
+        96331,
+        10600,
+        10593,
         10603
       ]
     }

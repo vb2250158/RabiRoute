@@ -79,3 +79,21 @@ export function projectNapcatWebuiMetadata(id: string, value: unknown): Row | un
   }
   if (id === "mirror-list") return mirrorList(value);
 }
+
+/** Explicit native configuration input, with no target-host policy or normalization. */
+export function isNapcatMirrorPrefix(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value === "") return true;
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && Boolean(url.hostname);
+  } catch { return false; }
+}
+
+export function projectNapcatMirrorPrefixMetadata(value: string): Row {
+  const metadata = mirrorView(value, 0);
+  if (!metadata) throw new Error("QQ_WEBUI_METADATA_RESPONSE_INVALID");
+  const { index: _index, ...result } = metadata;
+  return result;
+}
