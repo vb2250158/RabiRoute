@@ -16,17 +16,24 @@ const runtime = computed(() => store.selectedRuntime);
 const weixinLoginBusy = ref(false);
 
 const weixinLoginError = ref("");
+const bindingMode = ref<"owner" | "other">("owner");
+const verificationPin = ref("");
 
 const gateway = computed(() => store.selectedGateway);
 
 const weixinState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.weixin || {} as Record<string, any>);
 
-async function requestPersonalWeixinLogin(): Promise<void> {
+async function requestWeixinAction(action: "login" | "pin" | "logout"): Promise<void> {
   if (!gateway.value || weixinLoginBusy.value) return;
   weixinLoginBusy.value = true;
   weixinLoginError.value = "";
   try {
-    const response = await fetch(`/gateways/${encodeURIComponent(gateway.value.id)}/weixin-login`, { method: "POST" });
+    const body = action === "login" ? { mode: bindingMode.value }
+      : action === "pin" ? { pin: verificationPin.value.trim(), attemptId: weixinState.value.loginAttemptId } : {};
+    verificationPin.value = "";
+    const response = await fetch(`/api/message/weixin/routes/${encodeURIComponent(gateway.value.id)}/${action}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
+    });
     const payload = await response.json().catch(() => ({})) as { message?: string };
     if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
     await store.load();
@@ -67,7 +74,7 @@ const context = computed(() => endpointProps.context);
                         <v-expansion-panel-title>高级设置（通常无需修改）</v-expansion-panel-title>
                         <v-expansion-panel-text>
                           <div class="catalog-param-grid">
-                            <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="个人微信 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
+                            <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="微信机器人 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
                             <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
                           </div>
                         </v-expansion-panel-text>
@@ -83,8 +90,13 @@ const context = computed(() => endpointProps.context);
                     <div class="status-row"><span>最近消息</span><b>{{ weixinState.lastMessageAt || "-" }}</b></div>
                     <div class="status-row"><span>消息数</span><b>{{ weixinState.messageCount ?? 0 }}</b></div>
                     <div v-if="!weixinState.loggedIn && weixinState.qrCodeDataUrl" class="full-span d-flex flex-column align-center ga-2 mt-2">
-                      <v-img :src="weixinState.qrCodeDataUrl" width="320" max-width="100%" aspect-ratio="1" alt="个人微信登录二维码" />
-                      <span class="section-note">请使用手机微信扫码；二维码约 5 分钟后自动刷新。</span>
+                      <v-img :src="weixinState.qrCodeDataUrl" width="320" max-width="100%" aspect-ratio="1" alt="微信机器人二维码" />
+                      <span class="section-note">{{ weixinState.qrStatus === "real_name_required" ? "请用本人微信完成实名授权。" : "请使用手机微信扫码。" }}</span>
+                      <form v-if="String(weixinState.qrStatus || '').includes('need_verifycode')" class="d-flex ga-2 align-center"
+                        @submit.prevent="requestWeixinAction('pin')">
+                        <v-text-field v-model="verificationPin" label="手机微信验证码" type="password" inputmode="numeric" hide-details autocomplete="one-time-code" />
+                        <v-btn type="submit" :loading="weixinLoginBusy" :disabled="!verificationPin.trim()">提交</v-btn>
+                      </form>
                     </div>
                     <v-alert v-if="weixinState.lastError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
                       {{ weixinState.lastError }}
@@ -93,7 +105,9 @@ const context = computed(() => endpointProps.context);
                       {{ weixinLoginError }}
                     </v-alert>
                     <div class="agent-action-bar full-span mt-2">
-                      <div class="agent-action-status"><span class="section-note">登录态只保存在当前 Route 的运行期 data 目录，不写进公开配置。</span></div>
+                      <v-select v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl" v-model="bindingMode"
+                        :items="[{ title: '绑定本人微信', value: 'owner' }, { title: '邀请他人绑定', value: 'other' }]"
+                        label="绑定方式" density="compact" hide-details />
                       <div class="d-flex ga-2 flex-wrap">
                         <v-btn
                           v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl"
@@ -102,10 +116,12 @@ const context = computed(() => endpointProps.context);
                           variant="tonal"
                           prepend-icon="mdi-qrcode"
                           :loading="weixinLoginBusy"
-                          @click="requestPersonalWeixinLogin"
+                          @click="requestWeixinAction('login')"
                         >
                           生成登录二维码
                         </v-btn>
+                        <v-btn v-if="runtime.running && weixinState.credentialsRetained" size="small" variant="text"
+                          :loading="weixinLoginBusy" @click="requestWeixinAction('logout')">退出登录</v-btn>
                         <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
                       </div>

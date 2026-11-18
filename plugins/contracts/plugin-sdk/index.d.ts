@@ -47,14 +47,21 @@ export type MessageEndpointHostPorts = Readonly<{
   module<T = Readonly<Record<string, unknown>>>(id: string): T;
   assertModules(ids: readonly string[]): void;
 }>;
-export type MessageEndpoint = Readonly<{ type: string; start(): void | PluginDisposer | Promise<void | PluginDisposer> }>;
-export function ownMessageEndpoint(context: PluginContext, endpoint: MessageEndpoint): void;
+export type MessageEndpointStartup = Readonly<{
+  signal: AbortSignal;
+  /** Registers cleanup for resources acquired by a failed start. Register before acquiring them. */
+  onFailure(dispose: PluginDisposer): void;
+}>;
+export type MessageEndpoint = Readonly<{ type: string; start(startup?: MessageEndpointStartup): void | PluginDisposer | Promise<void | PluginDisposer> }>;
+export function ownMessageEndpoint(context: Readonly<{ effects: Pick<EffectScope, "adopt">; publication: Pick<PluginContext["publication"], "add"> }>, endpoint: MessageEndpoint): void;
 export type AgentAdapterHostPorts = MessageEndpointHostPorts & Readonly<{ environment?: Readonly<Record<string, string | undefined>>; manager?: unknown; forActivation?(configuration: unknown): AgentAdapterHostPorts }>;
 export type AgentAdapterDescriptor = Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub";
   transport: Readonly<{ protocol: string; mode: string }>; host?: Readonly<{ name: string; required: boolean }>;
   capabilities: Readonly<Record<string, unknown>> }>;
 export function parseAgentAdapterDescriptor(value: unknown): AgentAdapterDescriptor;
-export type AgentAdapterPackageDescriptor = Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding: Readonly<Record<string, string>> }>;
+export type AgentInitializationMode = "exclusive" | "independent";
+export type AgentAdapterPackageDescriptor = Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding: Readonly<Record<string, string>>;
+  initializationModes?: Readonly<Partial<Record<"manager" | "gateway", AgentInitializationMode>>> }>;
 export function parseAgentAdapterPackageDescriptor(value: unknown): AgentAdapterPackageDescriptor;
 export type AgentAdapterInvocation = Readonly<{ signal?: AbortSignal; assertCurrent?(): void; snapshot?: Readonly<Record<string, unknown>>; [key: string]: unknown }>;
 export type AgentAdapterProvider = Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding: Readonly<Record<string, string>>; identity: PluginIdentity; serviceEndpoint?: unknown; deviceEndpoint?: unknown;
@@ -69,17 +76,44 @@ export type AgentAdapterContext = Readonly<Pick<PluginContext, "identity" | "lif
 }>;
 export function ownAgentAdapter(context: AgentAdapterContext, definition: Readonly<{ type: string; capability: string; manifest: AgentAdapterDescriptor; sessionBinding?: Readonly<Record<string, string>>;
   operations: Readonly<Record<string, (payload: any, invocation?: AgentAdapterInvocation, snapshot?: Readonly<Record<string, unknown>>) => unknown | Promise<unknown>>>;
+  initializationModes?: AgentAdapterPackageDescriptor["initializationModes"];
+  initialization?: Readonly<{ mode: AgentInitializationMode; start?(signal: AbortSignal): void | Promise<void> }>;
   serviceEndpoint?: unknown; deviceEndpoint?: unknown; dispose?(): void | Promise<void> }>): AgentAdapterProvider;
-export function ownMessageEndpointScan(context: PluginContext, provider: Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub"; scan(): unknown | Promise<unknown> }>): void;
+type AcceptedWorkContext = Readonly<Pick<PluginContext, "lifecycle" | "publication"> & { effects: Pick<EffectScope, "adopt"> }>;
+export function ownMessageEndpointScan(context: AcceptedWorkContext & Readonly<{ services: Pick<ServiceResolver, "require"> }>, provider: Readonly<{ type: string; label: string; maturity: "verified" | "experimental" | "stub"; scan(): unknown | Promise<unknown> }>): void;
 export type PluginAcceptedWork = Readonly<{
   runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>;
   acquire(snapshot: Readonly<Record<string, unknown>>): Readonly<{ snapshot: Readonly<Record<string, unknown>>; run<T>(operation: () => T | Promise<T>): Promise<T>; release(): void }>;
   inspect(): Readonly<{ accepting: boolean; activeLeases: number }>;
 }>;
-export function ownPluginAcceptedWork(context: PluginContext, label?: string, cleanup?: PluginDisposer): PluginAcceptedWork;
+export function ownPluginAcceptedWork(context: AcceptedWorkContext, label?: string, cleanup?: PluginDisposer): PluginAcceptedWork;
 export type MessageEndpointEgressLease = Readonly<{ snapshot: Readonly<Record<string, unknown>>; call<T>(operation: string, args: readonly unknown[]): Promise<T>; release(): void }>;
-export type MessageEndpointEgressProvider = Readonly<{ identity: PluginIdentity; acquire(snapshot: Readonly<Record<string, unknown>>): MessageEndpointEgressLease; runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>; inspect(): Readonly<{ accepting: boolean; activeLeases: number }> }>;
-export function ownMessageEndpointEgress(context: PluginContext, definition: Readonly<{ type: string; operations: Readonly<Record<string, (...args: any[]) => unknown>>; dispose?: PluginDisposer }>): MessageEndpointEgressProvider;
+export type MessageEndpointSendVariant = Readonly<{
+  /** Use a channel-qualified type, for example napcat.group-forward. */
+  type: string;
+  contractVersion: number;
+  description: string;
+  dataSchema: Readonly<Record<string, unknown>>;
+  paramsSchema: Readonly<Record<string, unknown>>;
+  /** Read the complete outgoing text for the unchanged host text policy. Must be pure. */
+  readText(data: Readonly<Record<string, unknown>>): string;
+  operation: string;
+}>;
+export type MessageEndpointVariantSendInput = Readonly<{
+  deliveryId: string;
+  gatewayId: string;
+  routeId: string;
+  target: Readonly<Record<string, unknown>>;
+  data: Readonly<Record<string, unknown>>;
+  sourceDataDirs: readonly string[];
+}>;
+export type MessageEndpointVariantSendResult = Readonly<{
+  messageId: string;
+  conversationKey?: string;
+  target?: Readonly<{ targetType?: "group" | "private"; groupId?: string; userId?: string; instanceId?: string }>;
+}>;
+export type MessageEndpointEgressProvider = Readonly<{ identity: PluginIdentity; sendVariants?: Readonly<Record<string, MessageEndpointSendVariant>>; acquire(snapshot: Readonly<Record<string, unknown>>): MessageEndpointEgressLease; runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>; inspect(): Readonly<{ accepting: boolean; activeLeases: number }> }>;
+export function ownMessageEndpointEgress(context: PluginContext, definition: Readonly<{ type: string; operations: Readonly<Record<string, (...args: any[]) => unknown>>; sendVariants?: readonly MessageEndpointSendVariant[]; dispose?: PluginDisposer }>): MessageEndpointEgressProvider;
 export type MessageEndpointCatalog = Readonly<{
   title: string; note: string; icon: string; order: number;
   group: Readonly<{ id: string; title: string; note: string; order: number }>;

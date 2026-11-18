@@ -8,7 +8,7 @@ Agent settings define recipients and execution parameters. Persona automation ru
 
 Open **Persona → Automation**, edit a rule, and choose **Delivery target** under **Notify Agent**:
 
-- **Primary persona:** use the route's current primary binding.
+- **Primary persona:** use the matching route's current primary binding. The list shows the Agent type and bound session task name for each applicable route.
 - **Plan secretary:** use the secretary bound to the message's associated plan. Missing plans or bindings fail explicitly.
 - **Message processing Agent:** reuse the existing pool, tasks, and model settings.
 - **Memory consolidation Agent:** create or reuse the existing consolidation session.

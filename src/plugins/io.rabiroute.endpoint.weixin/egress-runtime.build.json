@@ -5,6 +5,18 @@
       "name": "requestWeixinLogin"
     },
     {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinLoginRequest.ts",
+      "name": "requestWeixinLogout"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinLoginRequest.ts",
+      "name": "submitWeixinPin"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
+      "name": "setWeixinTyping"
+    },
+    {
       "source": "src/plugins/io.rabiroute.endpoint.weixin/src/weixinOpenClaw.ts",
       "name": "sendWeixinText"
     },

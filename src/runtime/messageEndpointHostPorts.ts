@@ -76,7 +76,9 @@ export async function createMessageEndpointHostPorts(options: { loaders?: Readon
         if (!load) throw new Error('Shared endpoint owner is unavailable: ' + id);
         let preparing = pending.get(id);
         if (!preparing) {
-          preparing = Promise.resolve().then(load).then(owner => { loaded.set(id, owner); });
+          preparing = Promise.resolve().then(load)
+            .then(owner => { loaded.set(id, owner); })
+            .finally(() => { pending.delete(id); });
           pending.set(id, preparing);
         }
         return preparing;

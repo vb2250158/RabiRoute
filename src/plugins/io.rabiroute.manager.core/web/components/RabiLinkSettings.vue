@@ -9,7 +9,7 @@ import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch } from "../../../../../rib
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { InstanceIdentityResetClient, readResetIdentity } from "../../../../../ribiwebgui/src/instanceIdentityResetClient";
 
-const props = defineProps<{ ready: boolean }>();
+const props = defineProps<{ ready: boolean; active: boolean }>();
 const emit = defineEmits<{ saving: [value: boolean] }>();
 const store = useGatewayStore();
 const draft = ref(rabiLinkDraftFromMeta(store.meta));
@@ -90,8 +90,10 @@ async function confirmReset() {
     if (!disposed) emit("saving", false);
   }
 }
-const unregister = registerPageSaveAction({ dirty, ready, saving: busy, save });
-onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose(); unregister(); });
+watch(() => props.active, (active, _previous, onCleanup) => {
+  if (active) onCleanup(registerPageSaveAction({ dirty, ready, saving: busy, save }));
+}, { immediate: true });
+onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose(); });
 </script>
 
 <template>
@@ -120,12 +122,10 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
       </div>
       <v-divider class="my-3" />
       <div class="section-title">RabiLink 服务器连接</div>
-      <p class="section-note">同一 RabiLink 应用内已鉴权的设备，默认可使用本机提供的服务，无需逐项授权。</p>
+      <p class="section-note">保存服务器地址后，登录同一账号的电脑会自动连接。</p>
       <v-switch v-model="draft.enabled" label="连接服务器" color="success" inset density="compact" hide-details />
       <div class="form-grid">
         <v-text-field v-model="draft.url" label="服务器地址" placeholder="https://relay.example.com" density="compact" hide-details="auto" />
-        <v-text-field v-model="draft.token" label="应用令牌" :placeholder="store.meta.rabiLinkRelay?.tokenConfigured ? '已安全保存；留空保持不变' : '填写已有应用的令牌'" type="password" autocomplete="new-password" density="compact" hide-details="auto" />
-        <v-text-field v-model="draft.deviceId" label="本机连接标识" density="compact" hide-details="auto" />
       </div>
       <v-divider class="my-3" />
       <div class="section-title mb-2">远端智能体上传</div>
@@ -134,6 +134,8 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
         <v-expansion-panel title="高级连接参数">
           <v-expansion-panel-text>
             <div class="form-grid">
+              <v-text-field v-model="draft.token" label="旧版应用令牌" :placeholder="store.meta.rabiLinkRelay?.tokenConfigured ? '已保存，留空保持不变' : '用于已有应用连接'" type="password" autocomplete="new-password" density="compact" hide-details="auto" />
+              <v-text-field v-model="draft.deviceId" label="本机连接标识" density="compact" hide-details="auto" />
               <v-select v-model="draft.speechServiceMode" label="语音服务连接" :items="[{ title: 'Rabi 自动管理', value: 'managed' }, { title: '指定服务地址', value: 'configured' }]" density="compact" hide-details="auto" />
               <v-text-field v-if="draft.speechServiceMode === 'configured'" v-model="draft.speechServiceUrl" label="语音服务地址（本机或远端）" density="compact" hide-details="auto" />
               <v-text-field v-model.number="claimWaitSeconds" label="领取任务等待（秒）" type="number" min="0" max="60" step="1" density="compact" hide-details="auto" />

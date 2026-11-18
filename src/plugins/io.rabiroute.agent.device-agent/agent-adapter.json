@@ -1,6 +1,7 @@
 {
   "type": "deviceAgent",
   "capability": "agent.adapter.device-agent@1",
+  "initializationModes": { "manager": "independent", "gateway": "independent" },
   "manifest": {
     "type": "deviceAgent",
     "label": "设备 Agent（实验）",

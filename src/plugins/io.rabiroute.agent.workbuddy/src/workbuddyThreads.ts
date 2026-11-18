@@ -10,6 +10,7 @@
 import {
   deliverWorkbuddyMessage,
   ensureWorkbuddyOwnerConnected,
+  WorkbuddyDeliveryError,
   type WorkbuddyPrimaryBinding
 } from "./workbuddySessionBridge.js";
 import {
@@ -71,13 +72,12 @@ export function readWorkbuddyThread(threadId: string): unknown {
 }
 
 /**
- * Deliver one prompt into a WorkBuddy task through the session gateway.
+ * Deliver a prompt through the original live gateway, or open its exact desktop chat if unloaded.
  *
  * The workspace comes from the task rather than from the caller: a task runs in
  * exactly one directory, so a caller-supplied mismatch is a request error
- * instead of something to silently reconcile. A task without a live session
- * process fails closed in `ensureWorkbuddyDeliverable` — nothing here starts a
- * replacement runtime.
+ * instead of something to silently reconcile. The desktop continuation is
+ * available only when the original gateway definitively received no payload.
  * @param params - target task, prompt text, and the caller's expected workspace.
  * @returns the delivery receipt the bridge records for this transport.
  */
@@ -87,11 +87,12 @@ export async function sendWorkbuddyThreadMessage(params: {
   prompt: string;
   cwd: string;
   imagePaths?: string[];
+  continueUnloaded?: (task: WorkbuddyTask) => Promise<void>;
 }): Promise<{
   threadId: string;
   action: "started";
   openedThread: boolean;
-  transport: "http";
+  transport: "http" | "desktop-ipc";
   warning: string;
 }> {
   const task = readWorkbuddyTask(params.threadId);
@@ -109,15 +110,22 @@ export async function sendWorkbuddyThreadMessage(params: {
     cwd: task.workspace,
     endpoint: ""
   };
-  const { task: resolved, endpoint } = await ensureWorkbuddyOwnerConnected(binding);
-  await deliverWorkbuddyMessage({
-    assertAuthorized: params.assertAuthorized,
-    sessionId: resolved.id,
-    text: params.prompt,
-    imagePaths: params.imagePaths,
-    endpoint
-  });
-  // The shared legacy action denotes accepted dispatch; native work may still be queued.
-  return { threadId: resolved.id, action: "started", openedThread: false, transport: "http",
-    warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。" };
+  try {
+    const { task: resolved, endpoint } = await ensureWorkbuddyOwnerConnected(binding);
+    await deliverWorkbuddyMessage({
+      assertAuthorized: params.assertAuthorized,
+      sessionId: resolved.id,
+      text: params.prompt,
+      imagePaths: params.imagePaths,
+      endpoint
+    });
+    // The shared legacy action denotes accepted dispatch; native work may still be queued.
+    return { threadId: resolved.id, action: "started", openedThread: false, transport: "http",
+      warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。" };
+  } catch (error) {
+    if (!params.continueUnloaded || task.background || !(error instanceof WorkbuddyDeliveryError) || error.outcome !== "unreachable") throw error;
+    await params.continueUnloaded(task);
+    return { threadId: task.id, action: "started", openedThread: false, transport: "desktop-ipc",
+      warning: "WorkBuddy 原桌面会话已接收，后续执行状态以原聊天记录为准。" };
+  }
 }

@@ -3,6 +3,7 @@ import test from "node:test";
 import type { RolePlan } from "../src/types.js";
 import {
   cachedFocusedRolePlan,
+  createRoleKnowledgeClient,
   loadFocusedRolePlan,
   cachedPlanFeedbackRevision,
   loadPlanFeedbackWithRevision,
@@ -85,6 +86,38 @@ function plan(presentation?: RolePlan["presentation"]): RolePlan {
     approval: { count: 0 }
   };
 }
+
+test("changing a Codex plan to an existing DSH session reads the owner, writes only the binding and verifies it", async t => {
+  const originalBinding = { agentType: "codex", sessionId: "old", workspace: "C:/old" };
+  let stored = { ...plan(), taskBinding: originalBinding };
+  const thread = { id: "session-5c6f9d60-d218-48d1-acc7-f3dc117f92a2", title: "Existing DSH session", cwd: "C:/new" };
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (path: string, init: RequestInit) => {
+    requests.push(`${init?.method || "GET"} ${path}`);
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (path === "/api/agent/threads") {
+      assert.equal(body.agentTargetId, "local:dsh");
+      assert.equal(body.agentAdapter, "dsh");
+      assert.equal(body.action, "read");
+      assert.equal(body.threadId, thread.id);
+      return Response.json({ code: 0, agentAdapter: "dsh", thread });
+    }
+    if (init?.method === "PATCH") {
+      assert.equal(new Headers(init.headers).get("if-match"), '"revision-before"');
+      assert.equal(new Headers(init.headers).get("idempotency-key"), "plan-bind:fixture");
+      assert.deepEqual(body, { taskBinding: { agentType: "dsh", sessionId: thread.id, sessionTitle: thread.title, workspace: thread.cwd }, messageSource: { type: "user" } });
+      stored = { ...stored, taskBinding: body.taskBinding };
+    }
+    return Response.json({ code: 0, data: stored }, { headers: { etag: '"revision-before"' } });
+  });
+  const client = createRoleKnowledgeClient();
+  const snapshot = await client.loadPlanBindingRevision("Rabi", "plan");
+  assert.deepEqual(snapshot.binding, originalBinding);
+  const result = await client.replacePlanBinding({ roleId: "Rabi", planId: "plan", agentAdapter: "dsh",
+    sessionId: thread.id, expectedRevision: snapshot.etag, requestId: "plan-bind:fixture", previousBinding: snapshot.binding });
+  assert.equal(result.taskBinding?.sessionId, thread.id);
+  assert.deepEqual(requests, ["GET /api/roles/Rabi/plans/plan", "POST /api/agent/threads", "PATCH /api/roles/Rabi/plans/plan", "GET /api/roles/Rabi/plans/plan"]);
+});
 
 test("WebGUI loads a plan revision history by plan id", async () => {
   const originalFetch = globalThis.fetch;

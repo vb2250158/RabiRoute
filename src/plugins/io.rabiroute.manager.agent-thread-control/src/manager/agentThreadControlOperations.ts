@@ -1,17 +1,19 @@
+import { createHash } from 'node:crypto';
 import { agentAdapterTypes } from '@rabiroute/host-api/shared/agentAdapterCapabilities';
 import type { AgentThreadRequest } from '@rabiroute/host-api/agentThreads';
 import { agentThreadBodyFailure, type AgentThreadControlOwner } from './agentThreadControlRoutes.js';
 import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult } from '@rabiroute/host-api/manager/apiOperationContract';
+import { WEB_CHAT_ADAPTER, WEB_CHAT_ATTACHMENT_COUNT, WEB_CHAT_REQUEST_MAX_BYTES } from '../../../../shared/agentWebChat.js';
 
 const text = { type: ['string', 'null'] }, ignored = { type: 'object' }, empty = { type: 'object', additionalProperties: false };
-const source = { type: 'object', required: ['type'], properties: { type: { enum: ['agent', 'agent_hook', 'plan', 'message_adapter', 'system'] }, agentAdapter: { enum: agentAdapterTypes }, agentType: text,
+const source = { type: 'object', required: ['type'], properties: { type: { enum: ['agent', 'agent_hook', 'plan', 'message_adapter', 'system'] }, agentAdapter: { type: 'string' }, agentType: text,
   sessionName: text, sessionId: text, workspace: text, planName: text, planId: text, sourceAgent: { type: 'object' }, messageAdapter: text, conversationType: text, conversationName: text,
   conversationId: text, senderName: text, senderId: text, messageId: text, messageGroupId: text, routeName: text, routeId: text, eventType: text, eventName: text, eventId: text, actorType: text, actorName: text, actorId: text } };
 const strings = { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'null' }] };
 /** Structure only: adapter-owned semantic validation remains in the original driver and ledger. */
 const threadRequest = { type: 'object', properties: {
   action: { enum: ['list', 'read', 'reconcile_delivery', 'open', 'resolve', 'create', 'rename', 'send', 'ds_bot_catalog', 'ds_bot_deliver', 'ds_bot_reconcile'] },
-  agentAdapter: { enum: [...agentAdapterTypes, '', null] }, agentTargetId: text, ledgerOwnerDeviceId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text, ownerDeviceId: text } }, { type: 'null' }] },
+  agentAdapter: text, agentTargetId: text, ledgerOwnerDeviceId: text, instanceBinding: { anyOf: [{ type: 'object', required: ['instanceId', 'agentId'], properties: { instanceId: text, agentId: text, ownerDeviceId: text } }, { type: 'null' }] },
   dsBot: { type: 'object', required: ['botScopeId', 'botId'], additionalProperties: false, properties: { botScopeId: text, botId: text, scheduledAt: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$" } } },
   query: text, limit: true, offset: true, threadId: text, deliveryId: text, title: text, prompt: text, cwd: text,
   history: { type: 'object', additionalProperties: false, properties: { cursor: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 200 } } },
@@ -109,5 +111,43 @@ export function createAgentThreadControlOperations(owner: AgentThreadControlOwne
       } catch (error) { return toResult({ status: 400, body: { code: -1, message: error instanceof Error ? error.message : String(error) } }); }
     }
   };
-  return [...actions, lookup];
+  const bindWebChat = (input: Omit<ApiOperationInput, 'body'>) => {
+    try {
+      const prepared = owner.prepare(input.request, input.signal);
+      return async (parsed: ApiOperationInput): Promise<ApiOperationResult> => {
+        const { agentAdapter, instanceBinding, threadId, dshBaseUrl, deliveryId, prompt, webChatAttachments } = parsed.body as AgentThreadRequest & { threadId: string; deliveryId: string };
+        if (!prompt?.trim() && !webChatAttachments?.length) return toResult(agentThreadBodyFailure(new Error('请输入消息或添加附件。')));
+        const conversationId = threadId.length <= 300 ? threadId : `sha256:${createHash('sha256').update(threadId).digest('hex')}`;
+        return toResult(await prepared.execute({ action: 'send', agentAdapter, instanceBinding,
+          ...(!instanceBinding ? { agentTargetId: `local:${agentAdapter}` } : {}), threadId, dshBaseUrl, deliveryId,
+          prompt: prompt?.trim() || '请查看随消息发送的附件。', webChatAttachments, responsePolicy: 'none', createIfMissing: false,
+          messageSource: { type: 'message_adapter', messageAdapter: WEB_CHAT_ADAPTER, conversationType: 'agent_session',
+             conversationId, messageId: deliveryId, senderName: 'WebChat 用户' } }, true));
+      };
+    } catch (error) { return toResult(agentThreadBodyFailure(error)); }
+  };
+  const webChat: ApiOperationDefinition = {
+    contract: { operationId: 'manager.agent.webchat.send', contractVersion: '1.0.0', method: 'POST',
+      pathTemplate: '/api/agent/webchat', exposure: 'public', transport: 'http', description: 'Send text and optional uploaded attachments to an existing Agent session from WebChat.',
+      request: { path: empty, query: empty, headers: ignored, body: { kind: 'json', maxBytes: WEB_CHAT_REQUEST_MAX_BYTES, schema: {
+        type: 'object', required: ['agentAdapter', 'threadId', 'deliveryId'], additionalProperties: false, properties: {
+          agentAdapter: { type: 'string', minLength: 1 }, instanceBinding: threadRequest.properties.instanceBinding,
+          threadId: { type: 'string', minLength: 1, maxLength: 4096 }, deliveryId: { type: 'string', minLength: 1, maxLength: 100 },
+          dshBaseUrl: text, prompt: { type: 'string', maxLength: 200000 },
+          webChatAttachments: {
+            type: 'array', maxItems: WEB_CHAT_ATTACHMENT_COUNT,
+            items: { type: 'object', required: ['name', 'contentBase64'], additionalProperties: false,
+              properties: { name: { type: 'string', maxLength: 255 }, contentBase64: { type: 'string' } } }
+          }
+        } } } },
+      responses: Object.fromEntries([200, 202, 400, 401, 403, 404, 409, 413, 500, 503].map(status => [String(status), response])),
+      effects: { mode: 'native-owner-action', description: 'Use the original session owner and caller delivery ledger. Store uploaded bytes only for the local Agent before dispatch.' },
+      recovery: { strategy: 'read-original-resource', receiptPath: '/api/agent/deliveries/caller/:callerDeliveryId', description: 'Read the original caller receipt after an uncertain send.' },
+      validators: [{ id: 'webchat-original-session', description: 'Require a message or attachments and deliver to the existing session through the original authenticated owner.' }] },
+    discovery: { title: '向现有 Agent 会话发送 WebChat 消息', summary: '直接发送网页消息和附件到指定会话。', category: { id: 'agents', title: 'Agent 协作' },
+      relatedOperations: ['manager.agent.threads.action', 'agent.deliveries.caller.read'] },
+    prepare: bindWebChat,
+    handler: input => { const prepared = bindWebChat(input); return typeof prepared === 'function' ? prepared(input) : prepared; }
+  };
+  return [...actions, lookup, webChat];
 }

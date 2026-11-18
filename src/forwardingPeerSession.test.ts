@@ -56,17 +56,20 @@ for (const provider of ["codex", "dsh"] as const) {
 
   test(`peer ${provider} worker uses its target reference and never borrows a missing session from local defaults`, async () => {
     const { config, target } = peerConfig(provider);
-    const methods = functions("./forwarding.ts", ["primaryManagedAgentBinding", "configuredPrimaryAgentAdapter", "managedAgentExecution"], {
-      config, resolvePrimaryAgentTarget, peerRouteAgentSession, isPlanAssistantAgentType,
-      instanceWorkerStateDirectory: (_dataDir: string, _binding: unknown, sessionId: string) => `/isolated/${sessionId}`,
-      requestInstanceThread: async () => { throw new Error("Unexpected transport execution in selector test."); }
-    });
-    const execution = await methods.managedAgentExecution();
-    assert.equal(execution.binding.sessionId, target.sessionId); assert.equal(execution.binding.workspace, target.workspace);
-    assert.equal(execution.binding.agentAdapter, provider); assert.equal(execution.dataDir, `/isolated/${target.sessionId}`);
-    config.remoteAgentTargets = [{ ...target, sessionId: "", workspace: "" }];
-    assert.equal(methods.primaryManagedAgentBinding(), undefined);
-    await assert.rejects(methods.managedAgentExecution(), /full session ID and workspace/);
+    const native = await mountForwardingAgentFixture([provider], config, { installReaders: true });
+    try {
+      const methods = functions("./forwarding.ts", ["primaryManagedAgentBinding", "configuredPrimaryAgentAdapter", "managedAgentExecution"], {
+        config, resolvePrimaryAgentTarget, peerRouteAgentSession, isPlanAssistantAgentType,
+        instanceWorkerStateDirectory: (_dataDir: string, _binding: unknown, sessionId: string) => `/isolated/${sessionId}`,
+        requestInstanceThread: async () => { throw new Error("Unexpected transport execution in selector test."); }
+      });
+      const execution = await methods.managedAgentExecution();
+      assert.equal(execution.binding.sessionId, target.sessionId); assert.equal(execution.binding.workspace, target.workspace);
+      assert.equal(execution.binding.agentAdapter, provider); assert.equal(execution.dataDir, `/isolated/${target.sessionId}`);
+      config.remoteAgentTargets = [{ ...target, sessionId: "", workspace: "" }];
+      assert.equal(methods.primaryManagedAgentBinding(), undefined);
+      assert.throws(() => methods.managedAgentExecution(), /full session ID and workspace/);
+    } finally { await native.dispose(); }
   });
 }
 

@@ -19,6 +19,7 @@ import { readCallerCreationLookup } from "../../../../callerCreationMetadata.js"
 import { createRemoteCodexAndDeliver } from "../../../../manager/remoteCodexCreate.js";
 import { sourceScopedAgentDeliveryId, type AgentRequestEndpoint } from "../../../../agentRequests/endpoint.js";
 import { AgentRequestStore as RealAgentRequestStore } from "../../../../agentRequests/store.js";
+import { installAgentAdapterManifestReader } from "../../../../shared/agentAdapterCapabilities.js";
 
 test('caller HTTP lookup separates a frozen create from absent prompt delivery without changing either', async t => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caller-creation-read-'));
@@ -113,6 +114,65 @@ async function fixture(t:test.TestContext, ctx:AgentThreadControlRoutesContext, 
   });
   return {owner,registry,registration,base,call};
 }
+
+test('WebChat HTTP sends only to the supplied existing task and leaves plan defaults out of the direct turn', async t => {
+  const target = 'opaque-target-' + 'x'.repeat(500);
+  const received: unknown[] = [];
+  const f = await fixture(t, context({
+    applyManagedAgentThreadDefaults: () => assert.fail('WebChat used plan execution defaults'),
+    handleAgentThreadRequest: async body => {
+      received.push(body);
+      assert.equal(body.action, 'send');
+      assert.equal(body.threadId, target);
+      assert.equal(body.agentTargetId, 'local:fixture.agent');
+      assert.equal(body.responsePolicy, 'none');
+      assert.equal(body.createIfMissing, false);
+      assert.equal(body.messageSource?.type, 'message_adapter');
+      if (body.messageSource?.type === 'message_adapter') {
+        assert.equal(body.messageSource.messageAdapter, 'WebChat');
+        assert.match(body.messageSource.conversationId!, /^sha256:/);
+      }
+      return { statusCode: 200, data: { ok: true, status: 'delivered', delivery: { targetThreadId: target } } };
+    }
+  }));
+  const send = (payload: unknown) => fetch(`${f.base}/api/agent/webchat`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
+  });
+  const original = { agentAdapter: 'fixture.agent', threadId: target, deliveryId: 'webchat-test' };
+  assert.equal((await send(original)).status, 400);
+  assert.equal((await send({ ...original, prompt: 'Test', createIfMissing: true })).status, 400);
+  assert.equal((await send({ ...original, webChatAttachments: [{ name: 'example.bin', contentBase64: 'AA==' }] })).status, 200);
+  assert.equal(received.length, 1);
+});
+
+test('thread HTTP admission discovers an independently published adapter without a static name registration', async t => {
+  const adapter = 'runtimeInstalledAdapter';
+  let published = true;
+  let calls = 0;
+  const restore = installAgentAdapterManifestReader(() => published ? [{
+    type: adapter, label: adapter, maturity: 'experimental', transport: { protocol: 'fixture', mode: 'native' },
+    capabilities: { managedTasks: { agentThreads: true }, sessionOperations: {} }
+  }] : []);
+  t.after(restore);
+  const f = await fixture(t, context({
+    handleAgentThreadRequest: (body, options) => handleAgentThreadRequest(body, options),
+    agentThreadRequestOptions: (_body, extra) => ({ allowedWorkspaces: [], ...extra,
+      invokeAgentOperation: async <T,>(selected: string, operation: string) => {
+        assert.equal(selected, adapter);
+        assert.equal(operation, 'threads.list');
+        calls++;
+        return [{ id: 'opaque-session', title: 'Native task', updatedAt: new Date(0).toISOString() }] as T;
+      }
+    })
+  }));
+  const body = { action: 'list', agentAdapter: adapter };
+  const response = await f.call('POST', body);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.threads[0].id, 'opaque-session');
+  published = false;
+  assert.equal((await f.call('POST', body)).status, 400);
+  assert.equal(calls, 1);
+});
 
 test('disconnecting a history read cancels the original native provider operation', { timeout: 5000 }, async t => {
   const started = deferred<void>(), cancelled = deferred<void>();

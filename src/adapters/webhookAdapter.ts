@@ -426,7 +426,7 @@ export async function acceptWebhookPayload(
 export function createWebhookAdapter(profile: WebhookAdapterProfile, options: WebhookAdapterOptions = {}): MessageAdapter {
   return {
     type: profile.type,
-    start(): Promise<MessageAdapterDispose> {
+    start(startup): Promise<MessageAdapterDispose> {
       // Bound metadata belongs to this activation, never to the saved port preference.
       const activeProfile = { ...profile };
       const webhookPath = normalizeWebhookPath(activeProfile.path);
@@ -487,6 +487,17 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
         if (statusFailure !== undefined) throw statusFailure;
       })();
 
+      let listeningDispose: MessageAdapterDispose | undefined;
+      let cleanupFlight: Promise<void> | undefined;
+      const cleanup = () => cleanupFlight ??= (async () => {
+        const disposeErrors: unknown[] = [];
+        try { await closeNative(); } catch (error) { disposeErrors.push(error); }
+        try { await listeningDispose?.(); } catch (error) { disposeErrors.push(error); }
+        if (disposeErrors.length === 1) throw disposeErrors[0];
+        if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${activeProfile.label} cleanup failed.`);
+      })();
+      startup?.onFailure(cleanup);
+
       const host = activeProfile.host || "127.0.0.1";
       return new Promise<MessageAdapterDispose>((resolve, reject) => {
         let startupSettled = false;
@@ -524,7 +535,7 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
           reportServerError(error);
           if (startupSettled) return;
           startupSettled = true;
-          void closeNative().then(() => reject(error), () => reject(error));
+          void cleanup().then(() => reject(error), () => reject(error));
         };
 
         server.once("error", onStartupError);
@@ -532,7 +543,6 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
           if (startupSettled) return;
           server.off("error", onStartupError);
           server.on("error", reportServerError);
-          let listeningDispose: MessageAdapterDispose | undefined;
           try {
             const address = server.address();
             if (!address || typeof address === "string") throw new Error("Webhook listener has no bound TCP address.");
@@ -571,35 +581,20 @@ export function createWebhookAdapter(profile: WebhookAdapterProfile, options: We
             let disposeFlight: Promise<void> | undefined;
             resolve(() => disposeFlight ??= (async () => {
               server.off("error", reportServerError);
-              const disposeErrors: unknown[] = [];
-              try {
-                await closeNative();
-              } catch (error) {
-                disposeErrors.push(error);
+              try { await cleanup(); }
+              finally {
+                patchWebhookStatus(activeProfile, {
+                  status: "disabled",
+                  message: `${activeProfile.label} 消息端已停止。`,
+                  path: webhookPath,
+                  port: activeProfile.port
+                });
               }
-              if (typeof listeningDispose === "function") {
-                try {
-                  await listeningDispose();
-                } catch (error) {
-                  disposeErrors.push(error);
-                }
-              }
-              patchWebhookStatus(activeProfile, {
-                status: "disabled",
-                message: `${activeProfile.label} 消息端已停止。`,
-                path: webhookPath,
-                port: activeProfile.port
-              });
-              if (disposeErrors.length === 1) throw disposeErrors[0];
-              if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${activeProfile.label} cleanup failed.`);
             })());
           } catch (error) {
             startupSettled = true;
             server.off("error", reportServerError);
-            await closeNative().catch(() => {});
-            if (typeof listeningDispose === "function") {
-              await Promise.resolve(listeningDispose()).catch(() => {});
-            }
+            await cleanup().catch(() => {});
             const startupError = error instanceof Error ? error : new Error(String(error));
             reportServerError(startupError);
             reject(startupError);

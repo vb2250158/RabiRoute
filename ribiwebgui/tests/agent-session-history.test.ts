@@ -12,6 +12,18 @@ import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
 const native = (sequence: number, type: string, payload: Record<string, unknown>) => ({ sequence, record: { type, payload } });
 const dsh = (seq: number, type: string, data: Record<string, unknown>) => ({ type: 'event', event: { seq, type, data } });
 
+test('only complete Codex instruction envelopes are shown as injected prompts', () => {
+  const heading = '# AGENTS.md instructions for C:\\Projects\\Example';
+  const envelope = `${heading}\r\n\r\n<INSTRUCTIONS>\r\n# Project setup\r\n</INSTRUCTIONS>\r\n<environment_context>\r\n  <cwd>C:\\Projects\\Example</cwd>\r\n</environment_context>`;
+  const entries = [envelope, `${envelope}\nCan you summarize this?`, `${heading}\nA pasted heading.`]
+    .map((message, index) => native(index + 1, 'event_msg', { type: 'user_message', message }));
+  const messages = agentHistoryMessages('codex', agentHistoryEvents('codex', { entries }));
+  assert.equal(messages[0]?.instructionHeading, heading);
+  assert.equal(messages[0]?.text, envelope);
+  assert.equal(messages[1]?.instructionHeading, undefined);
+  assert.equal(messages[2]?.instructionHeading, undefined);
+});
+
 test('configured Agents switch through second-level tabs bound to the selected endpoint', () => {
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url), 'utf8');
   assert.match(source, /<v-tabs v-model="agentKey"[^>]*:aria-label="t\('Agent 端'\)"/);

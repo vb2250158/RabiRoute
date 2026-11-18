@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { requestWorkbuddyDesktopSteer, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
-import { steerWorkbuddyDesktopExpression } from "./workbuddyDesktopSteer.js";
+import { requestWorkbuddyDesktopMessage, requestWorkbuddyDesktopSteer, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
+import { workbuddyDesktopMessageExpression } from "./workbuddyDesktopSteer.js";
 import { workbuddyRecordConfirmsDelivery } from "./workbuddyHistory.js";
 import { RABI_MESSAGE_CONTENT_HEADER, RABI_MESSAGE_SOURCE_HEADER } from "@rabiroute/host-api/shared/rabiMessage";
 
@@ -24,7 +24,7 @@ test("native steering requests immediate delivery in the active local conversati
     assert.equal(id, input.threadId);
     return thread;
   } } } };
-  const evaluate = async () => JSON.parse(JSON.stringify(await runInNewContext(steerWorkbuddyDesktopExpression(input), { window })));
+  const evaluate = async () => JSON.parse(JSON.stringify(await runInNewContext(workbuddyDesktopMessageExpression(input), { window })));
   assert.deepEqual(await evaluate(), { state: "accepted", threadId: input.threadId, deliveryId: input.deliveryId });
   assert.equal(sends.length, 1);
   const [blocks, options] = JSON.parse(JSON.stringify(sends[0]));
@@ -53,10 +53,31 @@ test("a missing or mismatched native acknowledgement remains unknown after WorkB
       }
     };
     const window = { wb: { conversations: { get: async () => thread } } };
-    const receipt = await runInNewContext(steerWorkbuddyDesktopExpression(input), { window });
+    const receipt = await runInNewContext(workbuddyDesktopMessageExpression(input), { window });
     assert.equal(receipt.state, "unknown");
     assert.equal(submitted, 1);
   }
+});
+
+test("ordinary continuation reuses the exact idle desktop chat and keeps the native default queue policy", async () => {
+  const calls: Array<{ text: string; options: Record<string, unknown> }> = [];
+  const info = { id: input.threadId, transport: "local", state: "idle", space: { cwd: input.workspace } };
+  const window = { wb: { conversations: { get: async (threadId: string) => {
+    assert.equal(threadId, input.threadId);
+    return { info, sendPrompt: async (blocks: Array<{ text: string }>, options: Record<string, unknown>) => {
+      calls.push({ text: blocks[0]!.text, options });
+      return undefined;
+    } };
+  } } } };
+  const evaluate = () => runInNewContext(workbuddyDesktopMessageExpression(input, "continue"), { window });
+  assert.equal((await evaluate()).state, "unknown");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.text, input.text);
+  assert.equal(calls[0]!.options.clientRequestId, input.deliveryId);
+  assert.equal(calls[0]!.options.queueDelivery, undefined);
+  info.id = "another";
+  assert.equal((await evaluate()).state, "unavailable");
+  assert.equal(calls.length, 1);
 });
 
 test("only the original native injected user record can recover a steer receipt", () => {
@@ -80,17 +101,22 @@ test("the relay declines steer on an old connector and sends the typed action on
     const first = JSON.parse(await readFile(descriptor, "utf8"));
     await writeFile(descriptor, JSON.stringify({ ...first, steer: true }));
     await assert.rejects(requestWorkbuddyDesktopSteer(input, undefined, descriptor), /不支持本版引导会话/);
+    await assert.rejects(requestWorkbuddyDesktopMessage(input, "continue", undefined, descriptor), /不支持本版后台唤起原会话/);
     await stop();
     let calls = 0;
-    stop = await serveWorkbuddyDesktopRelay(create, descriptor, async actual => {
+    const modes: string[] = [];
+    stop = await serveWorkbuddyDesktopRelay(create, descriptor, async (actual, _signal, mode) => {
       calls++;
+      modes.push(mode);
       assert.deepEqual(actual, input);
       return { state: "accepted", threadId: actual.threadId, deliveryId: actual.deliveryId };
     });
     await assert.rejects(requestWorkbuddyDesktopSteer(input, () => { throw new Error("authorization changed"); }, descriptor), /authorization changed/);
     assert.equal(calls, 0);
     await requestWorkbuddyDesktopSteer(input, undefined, descriptor);
-    assert.equal(calls, 1);
+    await requestWorkbuddyDesktopMessage(input, "continue", undefined, descriptor);
+    assert.equal(calls, 2);
+    assert.deepEqual(modes, ["steer", "continue"]);
   } finally {
     try { await stop(); } finally { await rm(dir, { recursive: true, force: true }); }
   }

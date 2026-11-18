@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
-import { orderedPlanHistoryPaths, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
+import { isPlanHistoryPath, orderedPlanHistoryPaths, validatePlanHistoryCommitment, planHistoryTransactionFence, planHistoryTransactionFenceAsync, planStorageTransactionFence, publishPlanHistoryWalState, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
 import { decodePlanIdentity } from "./planIdentityReadCache.js";
 import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, validatePlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
@@ -128,6 +128,11 @@ export type PlanStorageTransactionOperation =
   | { type: "replace-file"; relativePath: string; content: Buffer };
 
 export type PlanStorageTransactionHooks = {
+  beforeWalActive?: () => void;
+  afterWalActive?: () => void;
+  afterWalManifest?: () => void;
+  afterWalReceipt?: () => void;
+  afterWalCleared?: () => void;
   afterPayloadWrite?: (operationIndex: number, relativePath: string) => void;
   afterOperation?: (operationIndex: number, operation: PlanStorageTransactionOperation["type"]) => void;
 };
@@ -623,6 +628,7 @@ function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, file
   if (!planBytes || !historyBytes) throw new Error("Plan storage package requires plan.json and history.jsonl.");
   const historyPaths = orderedPlanHistoryPaths(byPath.keys());
   const plan = JSON.parse(planBytes.toString("utf8")) as { id?: unknown; status?: unknown; archiveStatus?: unknown; activationStatus?: unknown };
+  validatePlanHistoryCommitment(plan as Record<string, unknown>, byPath);
   if (canonicalLogicalPlanId(plan.id) !== planId) throw new Error("Plan storage package plan.json identity mismatch.");
   if ((bucket === "archive") !== (plan.activationStatus !== undefined ? plan.activationStatus === "已归档" : plan.archiveStatus === "已归档" || plan.status === "已归档")) {
     throw new Error("Plan storage package bucket does not match plan status.");
@@ -1078,10 +1084,12 @@ export function readPlanStoragePackage(
   planId: string,
   bucket: PlanStorageBucket
 ): ReadPlanStoragePackageResult {
+  const fence = planHistoryTransactionFence(roleDir, planId);
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (!location || location.bucket !== bucket) throw new Error(`Canonical ${bucket} plan package does not exist: ${planId}`);
   const physical = physicalPackageInventory(location.directory);
   validatePackageIdentity(location.planId, bucket, physical.files);
+  if (planHistoryTransactionFence(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
   return { ...location, inventoryHash: physical.hash, files: physical.files };
 }
 
@@ -1092,6 +1100,7 @@ export async function readPlanStorageInventoryHash(
   planId: string,
   bucket: PlanStorageBucket
 ): Promise<string> {
+  const fence = await planHistoryTransactionFenceAsync(roleDir, planId);
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (!location || location.bucket !== bucket) throw new Error(`Canonical ${bucket} plan package does not exist: ${planId}`);
   const files: PlanStoragePackageFile[] = [];
@@ -1111,7 +1120,7 @@ export async function readPlanStorageInventoryHash(
       if (!entry.isFile() || !before.isFile()) throw new Error(`Plan storage contains an unsupported entry: ${target}`);
       const fingerprint = `${before.dev}:${before.ino}:${before.size}:${before.mtimeMs}:${before.ctimeMs}`;
       const relativePath = relativePlanPath(target, location.directory);
-      const validateContent = relativePath === "plan.json" || orderedPlanHistoryPaths([relativePath]).length > 0;
+      const validateContent = relativePath === "plan.json" || isPlanHistoryPath(relativePath);
       const cached = revisionFileHashes.get(target);
       let content = Buffer.alloc(0);
       let fileHash = cached?.fingerprint === fingerprint ? cached.hash : undefined;
@@ -1141,6 +1150,7 @@ export async function readPlanStorageInventoryHash(
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
   validatePackageIdentity(location.planId, bucket, files);
+  if (await planHistoryTransactionFenceAsync(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
   return packageInventoryHash(files);
 }
 
@@ -2084,6 +2094,10 @@ function applyStoredTransactionUnderLease(
   }
   const completed = readCommittedStoredTransaction(manifest, transactionRoot);
   if (completed) return completed;
+  planStorageTransactionFence(lease.roleDir, lease.storageId, { kind: manifest.transactionKind, transactionId: manifest.transactionId });
+  assertPlanStorageLeaseOwner(lease);
+  publishPlanHistoryWalState(lease.roleDir, lease.storageId, { kind: manifest.transactionKind, transactionId: manifest.transactionId });
+  assertPlanStorageLeaseOwner(lease);
   const receiptPath = path.join(transactionRoot, "receipt.json");
   const location = resolveCanonicalPlanStorageLocation(manifest.roleDir, manifest.planId);
   if (!location) throw new Error(`Plan storage transaction canonical plan location disappeared: ${manifest.planId}`);
@@ -2133,6 +2147,10 @@ function applyStoredTransactionUnderLease(
     specHash: manifest.specHash,
     committedAt
   }, null, 2)}\n`);
+  hooks?.afterWalReceipt?.();
+  assertPlanStorageLeaseOwner(lease);
+  publishPlanHistoryWalState(lease.roleDir, lease.storageId, null);
+  hooks?.afterWalCleared?.();
   emitCommit({
     kind: manifest.transactionKind,
     roleDir: manifest.roleDir,
@@ -2144,6 +2162,54 @@ function applyStoredTransactionUnderLease(
     committedAt
   });
   return { status: "committed", receiptPath };
+}
+
+export function resumePlanStorageTransactionUnderLease(
+  lease: PlanStorageLease,
+  kind: "plan-feedback" | "plan-feedback-revision",
+  transactionId: string,
+  semanticHash: string
+): { commit: PlanStorageTransactionCommitResult; ledgerAlreadyPublished: boolean } | undefined {
+  assertPlanStorageLeaseOwner(lease);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(transactionId) || !/^[a-f0-9]{64}$/.test(semanticHash)) {
+    throw new Error("Plan storage transaction resume identity is invalid.");
+  }
+  // Do not inspect partially published canonical bytes. Only the exact owner
+  // may pass the WAL fence; every other pending transaction remains fenced.
+  const before = planStorageTransactionFence(lease.roleDir, lease.storageId, { kind, transactionId });
+  const transactionRoot = repositoryTransactionRoot(lease.roleDir, lease.storageId, kind, transactionId);
+  const manifestPath = path.join(transactionRoot, "manifest.json");
+  if (!fs.existsSync(manifestPath)) {
+    // This owner's active marker is published before staging; no canonical operation can precede its manifest.
+    assertPlanStorageLeaseOwner(lease);
+    publishPlanHistoryWalState(lease.roleDir, lease.storageId, null);
+    return undefined;
+  }
+  // Completed transactions are handled by the ordinary ledger idempotency path,
+  // which preserves its established conflict errors for a reused feedback id.
+  if (fs.existsSync(path.join(transactionRoot, "receipt.json"))) return undefined;
+  const manifest = readStoredTransaction(manifestPath, lease.roleDir);
+  if (manifest.transactionKind !== kind || manifest.transactionId !== transactionId
+    || manifest.planId !== lease.planId || manifest.storageId !== lease.storageId
+    || (manifest.semanticHash || manifest.specHash) !== semanticHash) {
+    throw new Error(`Plan storage transaction resume identity mismatch: ${transactionId}`);
+  }
+  const location = resolveCanonicalPlanStorageLocation(lease.roleDir, lease.planId);
+  if (!location) {
+    throw new Error(`Plan storage transaction canonical bucket changed: ${transactionId}`);
+  }
+  verifyStagedTransactionPayload(transactionRoot, location.directory, manifest.operations);
+  const ledgerOperation = manifest.operations.at(-1);
+  if (!ledgerOperation || ledgerOperation.type !== "replace-file" || ledgerOperation.relativePath !== "feedback.jsonl") {
+    throw new Error(`Plan storage transaction has no terminal feedback ledger: ${transactionId}`);
+  }
+  const ledgerPath = path.join(location.directory, "feedback.jsonl");
+  const ledgerAlreadyPublished = fs.existsSync(ledgerPath)
+    && sha256(fs.readFileSync(ledgerPath)) === ledgerOperation.sha256;
+  if (planStorageTransactionFence(lease.roleDir, lease.storageId, { kind, transactionId }) !== before) {
+    throw new Error(`Plan storage transaction changed during resume: ${transactionId}`);
+  }
+  return { commit: applyStoredTransactionUnderLease(lease, manifest, transactionRoot), ledgerAlreadyPublished };
 }
 
 export function commitPlanStorageTransactionUnderLease(
@@ -2166,6 +2232,12 @@ export function commitPlanStorageTransactionUnderLease(
   if (!/^[a-f0-9]{64}$/.test(semanticHash)) throw new Error("Plan storage transaction semanticHash is invalid.");
   const transactionRoot = repositoryTransactionRoot(lease.roleDir, lease.storageId, spec.kind, spec.transactionId);
   const manifestPath = path.join(transactionRoot, "manifest.json");
+  planStorageTransactionFence(lease.roleDir, lease.storageId, { kind: spec.kind, transactionId: spec.transactionId });
+  spec.hooks?.beforeWalActive?.();
+  assertPlanStorageLeaseOwner(lease);
+  publishPlanHistoryWalState(lease.roleDir, lease.storageId, { kind: spec.kind, transactionId: spec.transactionId });
+  assertPlanStorageLeaseOwner(lease);
+  spec.hooks?.afterWalActive?.();
   let manifest: StoredPlanStorageTransaction;
   if (fs.existsSync(manifestPath)) {
     manifest = readStoredTransaction(manifestPath, lease.roleDir);
@@ -2192,6 +2264,7 @@ export function commitPlanStorageTransactionUnderLease(
     stageTransactionPayload(transactionRoot, spec, operations, spec.hooks);
     verifyStagedTransactionPayload(transactionRoot, location.directory, operations);
     atomicWriteFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    spec.hooks?.afterWalManifest?.();
   }
   return applyStoredTransactionUnderLease(lease, manifest, transactionRoot, spec.hooks);
 }

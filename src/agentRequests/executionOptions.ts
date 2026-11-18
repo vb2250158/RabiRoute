@@ -14,6 +14,8 @@ export type EndpointExecutionOptions = {
   sandbox?: CodexTurnSandbox;
   dshDeliveryMode?: "queue" | "steer";
   workbuddyDeliveryMode?: "steer";
+  /** Local DSH owner address captured when the delivery is prepared. */
+  dshBaseUrl?: string;
   grokBotDelivery?: AgentThreadRequest["grokBotDelivery"];
 };
 
@@ -28,7 +30,7 @@ function boundedText(value: unknown, name: string, max: number): string {
 export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecutionOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Endpoint execution options are required.");
   const input = value as Record<string, unknown>;
-  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode", "grokBotDelivery", "localImages"];
+  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode", "dshBaseUrl", "grokBotDelivery", "localImages"];
   if (Object.keys(input).some(key => !fields.includes(key))) throw new Error("Unsupported endpoint execution option.");
   const result: EndpointExecutionOptions = input.cwd === undefined ? {} : { cwd: boundedText(input.cwd, "cwd", 32_768) };
   if (input.model !== undefined) result.model = boundedText(input.model, "model", 500);
@@ -49,6 +51,12 @@ export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecu
   if (input.workbuddyDeliveryMode !== undefined) {
     if (input.workbuddyDeliveryMode !== "steer") throw new Error("Invalid endpoint execution workbuddyDeliveryMode.");
     result.workbuddyDeliveryMode = input.workbuddyDeliveryMode;
+  }
+  if (input.dshBaseUrl !== undefined) {
+    const baseUrl = boundedText(input.dshBaseUrl, "dshBaseUrl", 2048).replace(/\/+$/, "");
+    const url = new URL(baseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Invalid DSH owner URL.");
+    result.dshBaseUrl = baseUrl;
   }
   if (input.grokBotDelivery !== undefined) {
     const delivery = input.grokBotDelivery as Record<string, unknown>;
@@ -85,7 +93,8 @@ export function resolveEndpointExecutionOptions(request: AgentThreadRequest, own
     ...(model !== undefined ? { model } : {}), ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(request.sandbox !== undefined ? { sandbox: request.sandbox } : {}),
     ...(request.dshDeliveryMode !== undefined ? { dshDeliveryMode: request.dshDeliveryMode } : {}),
-    ...(request.workbuddyDeliveryMode !== undefined ? { workbuddyDeliveryMode: request.workbuddyDeliveryMode } : {}) });
+    ...(request.workbuddyDeliveryMode !== undefined ? { workbuddyDeliveryMode: request.workbuddyDeliveryMode } : {}),
+    ...(request.agentAdapter === "dsh" && request.dshBaseUrl?.trim() ? { dshBaseUrl: request.dshBaseUrl } : {}) });
   if (!options.cwd) throw new Error("This PC endpoint requires its actual owner execution directory.");
   if (request.agentAdapter !== "codex" && (options.model !== undefined || options.reasoningEffort !== undefined || options.sandbox !== undefined)) {
     throw new Error("This endpoint provider cannot apply model, reasoningEffort or sandbox through the prepared delivery contract.");

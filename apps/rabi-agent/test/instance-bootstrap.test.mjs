@@ -53,7 +53,7 @@ async function codexPeer(directory, turns) {
   };
 }
 
-const identity = nodeId => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", guid: "guid-fixture", rabiGuid: "guid-fixture", health: { live: true, state: "healthy", requiredReady: true } } });
+const identity = (nodeId, guid = "guid-fixture") => ({ code: 0, data: { nodeId, applicationGenerationId: "generation-fixture", managerInstanceId: "manager-fixture", guid, rabiGuid: guid, health: { live: true, state: "healthy", requiredReady: true } } });
 async function fixture(run) {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "rabi-instance-bootstrap-")));
   const configPath = path.join(directory, "config.json");
@@ -66,7 +66,7 @@ async function fixture(run) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
-function server(requests, nodeId = "fixture-node") {
+function server(requests, nodeId = "fixture-node", guid) {
   return async (url, init) => {
     requests.push({ url: String(url), init });
     assert.equal(init.redirect, "error");
@@ -79,12 +79,34 @@ function server(requests, nodeId = "fixture-node") {
     }
     if (String(url).endsWith("/.well-known/rabiroute-manager")) {
       assert.equal(init.headers.authorization, undefined);
-      return Response.json({ code: 0, data: { ...identity(nodeId).data, protocolVersion: "1" } });
+      return Response.json({ code: 0, data: { ...identity(nodeId, guid).data, protocolVersion: "1" } });
     }
     assert.match(init.headers.authorization, new RegExp(`^Bearer lan1:${nodeId}:[A-Za-z0-9_-]{43}$`));
-    return Response.json(identity(nodeId));
+    return Response.json(identity(nodeId, guid));
   };
 }
+
+test("two managed instances enroll independently and a mismatched Manager receives no ticket", async () => fixture(async ({ directory }) => {
+  const firstPath = path.join(directory, "instances", "host-a", "config.json");
+  const secondPath = path.join(directory, "instances", "host-b", "config.json");
+  const firstRequests = [];
+  const first = await __test.bootstrapConfig(firstPath, server(firstRequests, "fixture-node", "host-a"));
+  const original = fs.readFileSync(firstPath, "utf8");
+  const secondRequests = [];
+  process.env.RABI_MANAGER_URL = "http://other-manager.test:54321";
+  process.env.RABI_NODE_ID = "second-node";
+  process.env.RABI_AGENT_BOOTSTRAP_TICKET = "fixture-ticket";
+  await assert.rejects(__test.bootstrapConfig(secondPath, server(secondRequests, "second-node", "host-a")), /identity mismatch/);
+  assert.equal(secondRequests.some(request => request.url.endsWith("/enroll")), false);
+  assert.equal(fs.existsSync(secondPath), false);
+
+  process.env.RABI_AGENT_BOOTSTRAP_TICKET = "fixture-ticket";
+  const second = await __test.bootstrapConfig(secondPath, server(secondRequests, "second-node", "host-b"));
+  assert.equal(first.managerGuid, "host-a");
+  assert.equal(second.managerGuid, "host-b");
+  assert.notEqual(first.nodeCredential, second.nodeCredential);
+  assert.equal(fs.readFileSync(firstPath, "utf8"), original);
+}));
 
 test("bootstrap exchanges ticket once, persists only credential and registered Agent, reconnect skips enrollment", async () => fixture(async ({ configPath }) => {
   const requests = [];

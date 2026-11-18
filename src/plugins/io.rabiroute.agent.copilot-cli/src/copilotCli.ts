@@ -1,10 +1,11 @@
 import { getTimeoutMs } from "@rabiroute/host-api/shared/timeoutSettings";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { config } from "@rabiroute/host-api/config";
 import { reportAgentState } from "@rabiroute/host-api/agentAdapters/stateReporter";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
+import { stopChildProcessTree } from "@rabiroute/host-api/runtime/windowsProcessTree";
 
 type CopilotCliState = {
   agentAdapterType: "copilotCli";
@@ -231,47 +232,42 @@ function appendJsonl(filePath: string, item: unknown): void {
   });
 }
 
-async function runCopilotCli(message: string, promptPath: string): Promise<{ stdout: string; stderr: string; code: number | null; signal: NodeJS.Signals | null }> {
-  const command = copilotCommand();
-  const script = isWindowsCommandScript(command);
-  const childPrompt = script ? SCRIPT_PROMPT : message;
-  const { args, writePromptToStdin } = argsForPrompt(childPrompt);
-  const cwd = copilotCwd();
-  const timeoutMs = copilotTimeoutMs();
-  const commandLine = script ? [command.replace(CMD_META, '^$1'), ...args.map(commandScriptArgument)].join(" ") : "";
-
+/** The admitted request owns the child until its process and stdio both close. */
+export function waitForCopilotProcess(child: ChildProcess, timeoutMs: number, stopProcessTree = stopChildProcessTree): Promise<{
+  stdout: string; stderr: string; code: number | null; signal: NodeJS.Signals | null;
+}> {
   return new Promise((resolve, reject) => {
-    const child = spawn(script ? process.env.ComSpec || "cmd.exe" : command,
-      script ? ["/d", "/s", "/c", `"${commandLine}"`] : args, {
-      cwd,
-      env: script ? { ...process.env, RABIROUTE_COPILOT_PROMPT_FILE: promptPath } : process.env,
-      shell: false,
-      ...(script ? { windowsVerbatimArguments: true } : {}),
-      windowsHide: true
-    });
-
     let stdout = "";
     let stderr = "";
+    let processError: Error | undefined;
+    let termination: Promise<void> | undefined;
     const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`Copilot CLI timed out after ${timeoutMs}ms. Command: ${command} ${args.join(" ")}`));
+      termination = Promise.resolve().then(() => stopProcessTree(child));
+      void termination.catch(() => {});
     }, timeoutMs);
 
-    child.stdout.on("data", (data) => {
+    child.stdout?.on("data", (data) => {
       stdout += data.toString();
     });
 
-    child.stderr.on("data", (data) => {
+    child.stderr?.on("data", (data) => {
       stderr += data.toString();
     });
 
-    child.on("error", (error) => {
+    child.once("error", error => { processError = error; });
+    child.once("close", async (code: number | null, signal: NodeJS.Signals | null) => {
       clearTimeout(timer);
-      reject(new Error(`Copilot CLI failed to start. Set COPILOT_CLI_BIN to the CLI executable path. ${error.message}`));
-    });
-
-    child.on("exit", (code, signal) => {
-      clearTimeout(timer);
+      if (termination) {
+        try { await termination; }
+        catch (cause) { reject(new Error(`Copilot CLI timed out after ${timeoutMs}ms. Process tree termination failed.`, { cause })); return; }
+        reject(new Error(`Copilot CLI timed out after ${timeoutMs}ms.`));
+        return;
+      }
+      if (processError) {
+        reject(new Error(`Copilot CLI failed to start. Set COPILOT_CLI_BIN to the CLI executable path. ${processError.message}`));
+        return;
+      }
+      if (signal) { reject(new Error(`Copilot CLI terminated by ${signal}.`)); return; }
       if (code && code !== 0) {
         reject(new Error(`Copilot CLI exited with code ${code}: ${truncate(stderr || stdout)}`));
         return;
@@ -279,12 +275,26 @@ async function runCopilotCli(message: string, promptPath: string): Promise<{ std
       resolve({ stdout, stderr, code, signal });
     });
 
-    if (writePromptToStdin) {
-      child.stdin.end(childPrompt);
-    } else {
-      child.stdin.end();
-    }
   });
+}
+
+function runCopilotCli(message: string, promptPath: string) {
+  const command = copilotCommand();
+  const script = isWindowsCommandScript(command);
+  const childPrompt = script ? SCRIPT_PROMPT : message;
+  const { args, writePromptToStdin } = argsForPrompt(childPrompt);
+  const commandLine = script ? [command.replace(CMD_META, '^$1'), ...args.map(commandScriptArgument)].join(" ") : "";
+  const child = spawn(script ? process.env.ComSpec || "cmd.exe" : command,
+    script ? ["/d", "/s", "/c", `"${commandLine}"`] : args, {
+    cwd: copilotCwd(),
+    env: script ? { ...process.env, RABIROUTE_COPILOT_PROMPT_FILE: promptPath } : process.env,
+    shell: false,
+    ...(script ? { windowsVerbatimArguments: true } : {}),
+    windowsHide: true
+  });
+  const output = waitForCopilotProcess(child, copilotTimeoutMs());
+  child.stdin.end(writePromptToStdin ? childPrompt : undefined);
+  return output;
 }
 
 export async function notifyCopilotCli(message: string): Promise<void> {

@@ -10,6 +10,7 @@ import * as endpointTypes from "../../src/shared/messageEndpointTypes";
 import * as speechContract from "../../src/shared/speechControlContract";
 import * as napcatContract from "../../src/shared/napcatStateContract";
 import * as agentDeliveryTarget from "../../src/shared/agentDeliveryTarget";
+import * as personaEventTypes from "../../src/shared/personaEventTypes";
 import * as endpoint from "../src/napcatRuntimeEndpoint";
 import * as httpEndpoint from "../src/webhookRuntimeEndpoint";
 
@@ -25,6 +26,7 @@ const helpers = loadModule(fs.readFileSync(new URL("../src/utils/gatewayHelpers.
   if (name === "@shared/messageEndpointTypes") return endpointTypes;
   if (name === "@shared/speechControlContract") return speechContract;
   if (name === "@shared/agentDeliveryTarget") return agentDeliveryTarget;
+  if (name === "@shared/personaEventTypes") return personaEventTypes;
   if (name.endsWith("/speechDeliveryMode")) return { SPEECH_ROUTE_AUTO_SUBMIT: true };
   if (name === "../pluginCatalogStore") return {};
   if (name === "../napcatRuntimeEndpoint") return endpoint;

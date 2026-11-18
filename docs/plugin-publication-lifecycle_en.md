@@ -53,6 +53,16 @@ Runtime shutdown also checks unconfirmed owners already removed from the active 
 
 ## Ownership and asynchronous startup
 
+An Agent plugin can declare `ownAgentAdapter({ initialization: { mode, start }, dispose, ... })` and leave startup coordination to the SDK. `exclusive` is the default and waits for the previous activation of the same instance to release exclusive resources. Declare `independent` when both versions own separate resources. The new version runs `start(signal)` and can admit work while old requests finish on their original version. Startup runs once after publication. On failure the kernel retires the affected activation and its real dependents, and `dispose` releases resources acquired by that activation.
+
+An Agent package without a custom startup callback can declare `initializationModes` in `agent-adapter.json`, keyed by `manager` and `gateway`. Entries default to `exclusive`. An explicit SDK `initialization.mode` takes precedence over the package declaration. Use `independent` after verifying that both activations own their resources and can complete their own requests. AstrBot, Device Agent, and WorkBuddy declare independent initialization.
+
+Message endpoints register probes through `ownMessageEndpointScan`. Each admitted probe holds its original plugin activation until the probe settles. New probes use the replacement activation, and the previous activation releases its resources after its admitted probes finish. Scan presentation fallback only reads diagnostic data. The endpoint host coalesces concurrent shared-module loads and retains successful loads. A failed attempt affects its callers, and subsequent reconciliation can prepare that module again.
+
+Gateway message endpoints use `ownMessageEndpoint` for exclusive transports. In `start(startup)`, register one startup-failure disposer with `startup?.onFailure(dispose)` before binding a port or opening a connection. Successful startup still returns the normal stop function. If startup fails, the SDK waits for the registered cleanup before allowing the same instance to start again in the running host. A cleanup failure or a legacy start without cleanup evidence keeps the retirement fence in place. Webhook and Feishu listeners register cleanup before binding.
+
+Transports can use `forwardMessageWithCompletion` to join shared inbound routing. A direct delivery resolves after the original request settles. A grouped message transfers to the host queue after context recording and queue admission. WeCom uses this entry to finish accepted messages before retiring its activation.
+
 `rollback` restores an unpublished attempt; `retire` releases a previously published activation. Old retirement must not unconditionally clear a new global pointer, stop a new shared runtime, or restore persistent job state. Retain actual resource objects and activation identity, and release them only after checking ownership.
 
 ```ts

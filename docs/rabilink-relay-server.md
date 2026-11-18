@@ -10,6 +10,8 @@ Relay 负责连接、鉴权和通用中转。RabiPC 负责角色、Skill、聊�
 
 Android 与 PC 的通用加密 Peer Tunnel 按 LAN → P2P → Relay 连接同一目标。Relay 提供同应用设备发现、连接信令及中继，PC 服务拥有实际接口和业务状态。角色默认来源 PC、设备配置 owner PC 与默认消息目标可以不同；调用者显式冻结本次目标。
 
+支持账号隧道的 Rabi 主机端会在同一服务器、同一账号内自动发现彼此，按 LAN、WebRTC、Relay 的顺序建立加密会话。SSE 和 WebSocket 走同一隧道。Relay 核验两台主机各自的设备凭据，隧道再用各自的公钥确认对端。登出、重签或事件连接失效会关闭受影响的隧道。旧版主机可沿用原连接，接收新版账号端通过有限 HTTP 或语音队列发来的请求。
+
 AIUI 宿主只提供 `wx.request` 时，使用既有 buffered HTTP Relay 通道。其实际能力是 HTTP Relay 降级，不能把 Android 的 LAN/P2P 能力当成 AIUI 已验收能力。两种通道最终调用同一公共 Manager API。
 
 Relay 保存账号与凭据、设备连接登记、同应用目标目录、opaque 请求/响应队列、传输 lease、cursor、blob 和操作状态。server 自身诊断日志可保留。角色模板、权限业务、聊天记录拼装、ASR 排序、健康数据解释和 record-first 判断均由 PC 或客户端实现。队列中的原始业务正文不由 Relay 改写或按业务白名单分发。

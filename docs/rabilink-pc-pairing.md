@@ -2,6 +2,18 @@
 
 [English](rabilink-pc-pairing_en.md) | 简体中文
 
+使用支持账号连接的 Rabi 主机端和 Rabi 服务器端时，在每台电脑打开本机的「RabiLink → 配置」，开启服务器连接，保存同一个服务器地址，再在 RabiLink 登录同一个账号。首次使用时可直接注册。设备上线后会出现在「我的设备」。原账号拥有的旧版电脑可继续通过现有中转访问。已绑定本机身份的旧版接入凭据可自动迁移，共用的应用令牌需要登录一次确认账号。
+
+主机重新签发设备凭据时，会先保存本次操作编号和候选凭据。服务器在主机确认前保留当前凭据，短暂断网或响应丢失后，主机可继续核对同一次操作。
+
+以下接入提示词适用于仍依赖应用令牌的平台和旧版工作流。
+
+### Windows 主机自动升级
+
+发布管理员可在安装根的私有 `data/rabilink/host-upgrade.json` 设置 `enabled`、`manifestUrl`、`channel` 和 `publicKey`。`manifestUrl` 使用 HTTPS，`publicKey` 是发布方的 Ed25519 SPKI PEM 公钥。签名清单的 `payload` 和 `signature` 采用 base64url，签名覆盖解码后的 UTF-8 JSON 原始字节。清单写明 `schemaVersion: 1`、`appId: "io.rabiroute.windows"`、`platform: "win32-x64"`、同一 `channel`、毫秒时间戳 `issuedAt` 和 `expiresAt`、`latest` 与 `releases`。每条发布记录提供 `version`、`releaseId`、`payloadSha256`、`installerSha256`、`installerUrl` 和 `size`，候选和可恢复的当前版本都必须在清单里。
+
+安装版主机在账号事件连接建立后检查清单。独立的 Windows 登录用户任务验证签名与两个安装包的 SHA-256，再调用正式安装程序。新 Host 状态和新 Manager 的版本、代次及健康状态回读成功后记录完成。新版本未就绪时恢复原版本。状态保存在私有 `data/rabilink/host-upgrade/status.json`。实际启用需要发布方提供签名渠道和相应安装包。
+
 状态：实验集成。一次性接入、恢复与撤销已通过匹配测试和本机隔离验证；服务器部署此版本后提供接入入口。目标云端的访问与持续运行能力仍按实际环境验收，任务运行时间由平台决定。
 
 ## 三步接入

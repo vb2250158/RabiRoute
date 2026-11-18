@@ -116,6 +116,7 @@ async function initializeGatewayMain(
         runtimeRoot: resolveGatewayPluginRuntimeRoot(runtimeLayout, config.dataDir, "endpoint-plugins"),
         adapterTypes,
         agentRegistry: agentAdapters.registry,
+        ...(gatewayId && gatewayGenerationId ? { publishEndpointPlugins: getGatewayListenerRuntime().publishEndpointPlugins } : {}),
         ...(initialRouteDefinition ? { initialRouteDefinition, initialRouteRevision: bootRevision } : {}),
         ...options.endpointPlugins
       })

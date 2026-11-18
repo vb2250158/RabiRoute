@@ -308,7 +308,7 @@ test("send capabilities returns channels and QQ repair guidance", () => {
   assert.equal(routes.handler(request("GET"), new URL("http://localhost/api/agent/send/capabilities"), response()), true);
   const result = responses[0] as { statusCode: number; body: { data: { channels: Array<{ channel: string }>; contract: { qq: string } } } };
   assert.equal(result.statusCode, 200);
-  assert.deepEqual(result.body.data.channels.map(item => item.channel), ["napcat", "wecom", "weixin", "feishu", "rabilink", "speech", "role_panel", "plan_feedback"]);
+  assert.deepEqual(result.body.data.channels.map(item => item.channel), ["napcat", "wecom", "weixin", "feishu", "qqbot", "rabilink", "speech", "role_panel", "plan_feedback"]);
   assert.match(result.body.data.contract.qq, /channel=napcat/);
 });
 

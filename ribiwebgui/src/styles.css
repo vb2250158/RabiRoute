@@ -1793,55 +1793,6 @@ button.channel-topology-node:focus-visible {
   font-weight: 600;
 }
 
-.route-kind-chip-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 7px;
-}
-
-.route-kind-chip {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 7px;
-  align-items: center;
-  border: 1px solid rgba(17, 32, 51, .12);
-  border-radius: 8px;
-  padding: 8px 9px;
-  background: var(--rr-surface);
-  color: var(--rr-heading);
-  text-align: left;
-  cursor: pointer;
-}
-
-.route-kind-chip:hover {
-  border-color: var(--rr-accent-border);
-  background: var(--rr-accent-surface);
-}
-
-.route-kind-chip.active {
-  border-color: rgba(25, 191, 193, .72);
-  background: linear-gradient(135deg, var(--rr-accent-surface), var(--rr-surface));
-}
-
-.route-kind-chip span,
-.route-kind-chip code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.route-kind-chip span {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.route-kind-chip code {
-  grid-column: 2;
-  color: var(--rr-muted-soft);
-  font-size: 11px;
-}
-
 .compact-empty {
   min-height: 104px;
 }
@@ -2451,11 +2402,6 @@ button.channel-topology-node:focus-visible {
 
 .compact-heading {
   margin-bottom: 10px;
-}
-
-.automation-type-toggle {
-  max-width: 100%;
-  overflow: auto;
 }
 
 .automation-subsection {
@@ -7679,7 +7625,6 @@ html[data-rabiroute-theme="dark"] :is(
   .napcat-auto-summary,
   .napcat-login-control,
   .catalog-section,
-  .route-kind-chip,
   .quick-review,
   .fold-section,
   .fold-section-head,
@@ -7751,7 +7696,6 @@ html[data-rabiroute-theme="dark"] :is(
   .route-card-selected,
   .adapter-card.active,
   .catalog-row.active,
-  .route-kind-chip.active,
   .docs-page-button.active,
   .identity-person-card:active,
   .knowledge-memory-detail-head
@@ -7791,7 +7735,6 @@ html[data-rabiroute-theme="dark"] .knowledge-plan-head {
 
 html[data-rabiroute-theme="dark"] :is(
   .catalog-row:hover,
-  .route-kind-chip:hover,
   .docs-page-button:hover,
   .identity-person-card:hover,
   .knowledge-plan-agent-row.actionable:hover

@@ -51,6 +51,50 @@ function decodeCursor(value: string | undefined, sessionId: string): HistoryCurs
   return cursor;
 }
 
+async function openWorkbuddyTranscript(sessionId: string) {
+  const task = readWorkbuddyTask(sessionId);
+  if (!task) throw new Error(`WorkBuddy task ${sessionId} was not found.`);
+  if (path.basename(sessionId) !== sessionId || sessionId === "." || sessionId === "..") {
+    throw new Error("WorkBuddy 任务 ID 无法用于原生历史定位。");
+  }
+  const projects = await fsp.realpath(path.join(workbuddyHomeDir(), "projects"));
+  const file = await fsp.realpath(path.join(projects, workbuddyProjectId(task.workspace), `${sessionId}.jsonl`));
+  const relative = path.relative(projects, file);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("WorkBuddy 历史来源超出任务目录。");
+  return { file, handle: await fsp.open(file, "r") };
+}
+
+/** Look for a recent receipt before scanning older history pages. */
+export async function hasRecentWorkbuddyDelivery(sessionId: string, deliveryId: string, guidance: boolean): Promise<boolean> {
+  const { handle } = await openWorkbuddyTranscript(sessionId);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error("WorkBuddy 历史来源不是文件。");
+    const length = Math.min(before.size, 2 * 1024 * 1024);
+    if (!length) return false;
+    const offset = before.size - length;
+    const tail = Buffer.alloc(length);
+    if ((await handle.read(tail, 0, length, offset)).bytesRead !== length) return false;
+    const firstNewline = offset ? tail.indexOf(10) : -1;
+    if (offset && firstNewline < 0) return false;
+    let start = firstNewline + 1;
+    const idBytes = Buffer.from(deliveryId);
+    while (start < tail.length) {
+      const newline = tail.indexOf(10, start);
+      if (newline < 0) break;
+      const line = tail.subarray(start, newline);
+      start = newline + 1;
+      if (!line.includes(idBytes)) continue;
+      let record: unknown;
+      try { record = JSON.parse(line.toString("utf8").replace(/^\uFEFF/, "")); } catch { continue; }
+      if (!workbuddyRecordConfirmsDelivery(record, sessionId, deliveryId, guidance)) continue;
+      const after = await handle.stat();
+      return after.size >= before.size && (after.size !== before.size || after.mtimeMs === before.mtimeMs);
+    }
+    return false;
+  } finally { await handle.close(); }
+}
+
 /** Read bounded native JSONL pages without loading or executing the task owner. */
 export async function readWorkbuddyHistory(sessionId: string, options: {
   cursor?: string;
@@ -65,16 +109,7 @@ export async function readWorkbuddyHistory(sessionId: string, options: {
   const maxBytes = options.maxBytes ?? 2 * 1024 * 1024;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200
     || !Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new Error("WorkBuddy 历史分页参数无效。");
-  const task = readWorkbuddyTask(sessionId);
-  if (!task) throw new Error(`WorkBuddy task ${sessionId} was not found.`);
-  if (path.basename(sessionId) !== sessionId || sessionId === "." || sessionId === "..") {
-    throw new Error("WorkBuddy 任务 ID 无法用于原生历史定位。");
-  }
-  const projects = await fsp.realpath(path.join(workbuddyHomeDir(), "projects"));
-  const file = await fsp.realpath(path.join(projects, workbuddyProjectId(task.workspace), `${sessionId}.jsonl`));
-  const relative = path.relative(projects, file);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("WorkBuddy 历史来源超出任务目录。");
-  const handle = await fsp.open(file, "r");
+  const { file, handle } = await openWorkbuddyTranscript(sessionId);
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error("WorkBuddy 历史来源不是文件。");

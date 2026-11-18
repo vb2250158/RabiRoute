@@ -4,10 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readPlanStoragePackage, withPlanStorageLease, commitPlanLifecycleTransitionUnderLease, commitPlanStorageTransactionUnderLease, recoverPlanStorageTransactions, type PlanStoragePackageFile } from "./planStorageRepository.js";
+import { readPlanStoragePackage, readPlanStorageInventoryHash, withPlanStorageLease, commitPlanLifecycleTransitionUnderLease, commitPlanStorageTransactionUnderLease, recoverPlanStorageTransactions, type PlanStoragePackageFile } from "./planStorageRepository.js";
 import { archivedPlanDirectoryDominatesActive, validateCanonicalActivePlanDirectory, validateCanonicalArchivedPlanDirectory } from "./planStoragePolicy.js";
 import { canonicalizeRolePlanStorageDirectories, inspectPlanStorageConflict } from "./planStorageReconciliation.js";
-import { readPlanHistoryDirectory } from "./planHistoryShards.js";
+import { readPlanHistoryDirectory, setPlanHistoryCommitment } from "./planHistoryShards.js";
 
 const id = "history-shards-test";
 const createdAt = "2026-09-01T00:00:00.000Z";
@@ -35,6 +35,25 @@ function packageFile(filePath: string, content: string): PlanStoragePackageFile 
   const bytes = Buffer.from(content);
   return { path: filePath, content: bytes, size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
+
+test("committed history rejects loss or alteration of the terminal shard", async (t) => {
+  const { roleDir, active, archive } = fixture(t);
+  fs.rmSync(active, { recursive: true });
+  const planPath = path.join(archive, "plan.json");
+  const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  fs.writeFileSync(planPath, JSON.stringify(setPlanHistoryCommitment(plan, readPlanHistoryDirectory(archive))));
+  assert.equal(readPlanStoragePackage(roleDir, id, "archive").files.length, 3);
+  assert.equal(await readPlanStorageInventoryHash(roleDir, id, "archive"), readPlanStoragePackage(roleDir, id, "archive").inventoryHash);
+  const shardPath = path.join(archive, "history", "000001.jsonl");
+  const shard = fs.readFileSync(shardPath);
+  fs.unlinkSync(shardPath);
+  assert.throws(() => readPlanStoragePackage(roleDir, id, "archive"), /commitment shard count mismatch/);
+  await assert.rejects(readPlanStorageInventoryHash(roleDir, id, "archive"), /commitment shard count mismatch/);
+  fs.writeFileSync(shardPath, Buffer.from(shard.toString().replace("archived", "altered_")));
+  assert.throws(() => readPlanStoragePackage(roleDir, id, "archive"), /commitment bytes or hash mismatch/);
+  fs.writeFileSync(shardPath, shard);
+  assert.equal(readPlanStoragePackage(roleDir, id, "archive").files.length, 3);
+});
 
 test("history reader refuses a dangling shard directory link rather than hiding records", (t) => {
   const { active } = fixture(t);

@@ -8,7 +8,7 @@ import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from ".
 import { personaMarkdownTitle } from "./personaCatalog.js";
 import { sanitizeRoleId } from "@rabiroute/host-api/shared/routeIdentity";
 import { roleFolderPath } from "@rabiroute/host-api/shared/routePaths";
-import { ROLE_CONFIGURATION_KEYS, roleConfigurationOf, type RoleConfiguration } from "@rabiroute/host-api/shared/roleConfiguration";
+import { ROLE_CONFIGURATION_KEYS, roleConfigurationOf, type RoleConfiguration, type RoleConfigurationRoute } from "@rabiroute/host-api/shared/roleConfiguration";
 import { ensureDefaultPersonaAutomations, normalizeDailyScheduleTimes, type GatewayDefinition } from "@rabiroute/host-api/shared/gatewayConfigModel";
 import { normalizeAgentDeliveryTarget, validateAgentDeliveryTarget } from "@rabiroute/host-api/shared/agentDeliveryTarget";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
@@ -21,6 +21,7 @@ export type RoleConfigurationContext = {
   rolesRoot(): string;
   identity(): PersonaResourceIdentity;
   routes(): readonly GatewayDefinition[];
+  describeRoutePrimaryAgent?: (route: GatewayDefinition) => RoleConfigurationRoute["primaryAgent"];
   presentation?: (roleId: string) => { avatarConfigured: boolean; avatarVersion?: string } | undefined;
   assertCatalogReady(): void;
   isReadOnly?: () => boolean;
@@ -114,7 +115,10 @@ async function detail(context: Context, roleId: string) {
   ]));
   return { roleId, ...metadata, revision, config: roleConfigurationOf(config), personaConfig: config, runningWork,
     rolePath: path.join(directory, "persona.md"), roleDir: directory,
-    routes: context.routes().filter(route => !route.agentRoleDeviceId && route.agentRoleId === roleId).map(route => ({ id: route.id, name: route.routeName || route.name || route.id })) };
+    routes: context.routes().filter(route => !route.agentRoleDeviceId && route.agentRoleId === roleId).map(route => {
+      const primaryAgent = context.describeRoutePrimaryAgent?.(route);
+      return { id: route.id, name: route.routeName || route.name || route.id, ...(primaryAgent ? { primaryAgent } : {}) };
+    }) };
 }
 
 async function list(context: Context, url: URL) {
@@ -302,7 +306,10 @@ async function command(context: Context, roleId: string, action: string, body: C
         // Saving role preferences is not a schedule migration. The storage owner
         // retains this version; only creation and the explicit upgrade advance it.
         const scheduleSchemaVersion = current.automationScheduleSchemaVersion;
-        if (action === "config") for (const key of ROLE_CONFIGURATION_KEYS) delete current[key];
+        if (action === "config") for (const key of ROLE_CONFIGURATION_KEYS) {
+          // Older editors omit this metadata. An empty array explicitly removes the templates.
+          if (key !== "automationDeliveryTemplates" || Object.hasOwn(fragment, key)) delete current[key];
+        }
         const value: Record<string, unknown> = { ...current, ...fragment };
         if (action === "config-patch") for (const [key, valuePart] of Object.entries(fragment)) if (valuePart === null) delete value[key];
         if (scheduleSchemaVersion === undefined) delete value.automationScheduleSchemaVersion;

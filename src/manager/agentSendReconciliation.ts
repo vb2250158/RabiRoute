@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import { agentSendVariantType } from "../agentSendVariant.js";
 import {
   durableDeliveryReceiptPath,
   durableDeliveryRequestDigest,
   normalizeDurableDeliveryId,
   readDurableDeliveryReceiptSnapshot,
+  receiptExecutionActive,
   reconcileDurableDelivery,
   type DurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
@@ -103,6 +105,8 @@ async function reconcileAgentSend(deliveryId: unknown, originalRequest: AgentSen
   options: AgentSendReconciliationOptions, settle: boolean): Promise<AgentSendReconciliationResponse> {
   // Invalid input throws before any receipt read or trusted callback.
   options.requestAuthority?.();
+  const variant = agentSendVariantType(originalRequest);
+  if (variant) return readOriginalVariantResult(deliveryId, originalRequest, variant, options, settle);
   const input = prepareInput(deliveryId, originalRequest);
   const read = readSnapshot(options.rootDir, input.deliveryId);
   options.requestAuthority?.();
@@ -189,6 +193,37 @@ async function reconcileAgentSend(deliveryId: unknown, originalRequest: AgentSen
     ...proof, settlement: proved ? "failed" : "not_attempted",
     code: proved ? "RECEIPT_PERSIST_FAILED" : "ORIGINAL_TERMINAL_UNPROVEN"
   });
+}
+
+function readOriginalVariantResult(deliveryId: unknown, request: AgentSendRequest, variant: string,
+  options: AgentSendReconciliationOptions, settle: boolean): AgentSendReconciliationResponse {
+  const id = normalizeDurableDeliveryId(deliveryId);
+  if (normalizeDurableDeliveryId(request.deliveryId) !== id) throw new Error("Original AgentSendRequest deliveryId does not match deliveryId.");
+  const read = readSnapshot(options.rootDir, id);
+  options.requestAuthority?.();
+  if (!read.snapshot) return read.failure!;
+  const receipt = read.snapshot.receipt;
+  if (receipt.requestDigest !== durableDeliveryRequestDigest(agentSendIdempotencyPayload(request))) {
+    return response(id, 409, { state: "conflict", code: "DIGEST_CONFLICT" });
+  }
+  const audit = receipt.audit as { sendVariant?: { type?: unknown }; routeId?: unknown; channel?: unknown;
+    sender?: AgentSendResult["sender"]; target?: unknown } | undefined;
+  if (audit?.sendVariant?.type !== variant) return response(id, 409, { state: "conflict", code: "RECEIPT_CORRUPT" });
+  const result = receipt.result;
+  if (receipt.state === "completed") {
+    const digest = (value: unknown) => durableDeliveryRequestDigest(JSON.parse(JSON.stringify(value ?? null)));
+    if (!result || result.deliveryId !== id || result.channel !== audit.channel || result.routeId !== audit.routeId
+      || digest(result.sender) !== digest(audit.sender) || digest(result.target) !== digest(audit.target)
+      || !["sent", "draft", "blocked", "failed"].includes(result.status)
+      || (result.status === "sent" && (!result.ok || !result.sentMessageId))) {
+      return response(id, 409, { state: "conflict", code: "RECEIPT_CORRUPT" });
+    }
+    return response(id, 200, { state: settle ? "completed" : "verified", originalResult: result,
+      evidence: { reason: "original_variant_receipt", historicalTerminalProven: true } });
+  }
+  const state = receiptExecutionActive(receipt) ? "in_progress" : "uncertain";
+  return response(id, settle ? 409 : 200, { state: settle ? state : "verified",
+    evidence: { reason: "original_variant_terminal_unproven", historicalTerminalProven: false } });
 }
 
 /** Read-only, including active receipts. No delivery, recovery, retry or mutation. */

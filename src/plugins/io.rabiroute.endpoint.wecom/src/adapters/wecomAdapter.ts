@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BaseMessage, WsFrame } from "@wecom/aibot-node-sdk";
 import { config } from "@rabiroute/host-api/config";
-import { forwardMessage, recordMessageContextOnly } from "@rabiroute/host-api/forwarding";
+import { forwardMessage, forwardMessageWithCompletion, recordMessageContextOnly } from "@rabiroute/host-api/forwarding";
 import { appendAdapterLogToDir, appendWeComMessageToDir, type WeComMessageRecord } from "@rabiroute/host-api/history";
 import type { ForwardTemplateValues } from "@rabiroute/host-api/routing/types";
 import {
@@ -145,7 +145,7 @@ export async function dispatchWeComRecord(
   record: WeComMessageRecord,
   values: ForwardTemplateValues,
   handlers: {
-    forward?: typeof forwardMessage;
+    forward?: (...args: Parameters<typeof forwardMessage>) => unknown;
     recordOnly?: typeof recordMessageContextOnly;
   } = {}
 ): Promise<WeComRecordDisposition> {
@@ -153,7 +153,7 @@ export async function dispatchWeComRecord(
     await (handlers.recordOnly ?? recordMessageContextOnly)("wecom_message", record);
     return "record_only";
   }
-  (handlers.forward ?? forwardMessage)("wecom_message", record, values);
+  await (handlers.forward ?? forwardMessageWithCompletion ?? forwardMessage)("wecom_message", record, values);
   return "forwarded";
 }
 
@@ -163,6 +163,7 @@ export type WeComAdapterDependencies = {
   memoryDataDir?: () => string;
   now?: () => Date;
   createClient?: typeof createWeComClient;
+  dispatchHandlers?: Parameters<typeof dispatchWeComRecord>[2];
 };
 
 type WeComLifecycle = {
@@ -184,7 +185,7 @@ export function createWeComAdapter(
 ): MessageAdapter {
   return {
     type: "wecom",
-    start() {
+    start(startup) {
       const endpoint = dependencies.endpoint?.() ?? {
         botId: config.wecomBotId,
         secret: config.wecomBotSecret,
@@ -213,6 +214,14 @@ export function createWeComAdapter(
           error: (message, ...args) => appendWeComRuntimeLog(lifecycle, { level: "error", event: "sdk_error", message, data: args })
         }
       });
+      const pending = new Set<Promise<WeComRecordDisposition>>();
+      let closing: Promise<void> | undefined;
+      const closeTransport = () => closing ??= (async () => {
+        lifecycle.active = false;
+        try { client.disconnect(); }
+        finally { await Promise.allSettled([...pending]); }
+      })();
+      startup?.onFailure(closeTransport);
       client.on("connected", () => {
         if (!lifecycle.active) return;
         patchWeComStatus({ status: "running", connected: true, message: "企业微信 WebSocket 已连接。", lastError: "" }, lifecycle.dataDir(), lifecycle.now());
@@ -270,7 +279,7 @@ export function createWeComAdapter(
           messageCount: Number(current?.messageCount ?? 0) + 1,
           connected: client.isConnected
         }, lifecycle.dataDir(), lifecycle.now());
-        void dispatchWeComRecord(record, {
+        const admitted = dispatchWeComRecord(record, {
           wecomReqId: record.reqId,
           wecomConversationId: record.conversationId,
           wecomChatId: record.chatId,
@@ -278,16 +287,19 @@ export function createWeComAdapter(
           wecomMessageType: record.messageType,
           repliedMessageId: record.repliedMessageId,
           repliedMessage: frame.body ? quoteTextFromWeComMessage(frame.body) : undefined
-        }).catch(error => {
-          appendWeComRuntimeLog(lifecycle, { level: "error", event: "record_context_failed", message: normalizeWeComError(error) });
+        }, dependencies.dispatchHandlers);
+        pending.add(admitted);
+        void admitted.then(() => { pending.delete(admitted); }, error => {
+          pending.delete(admitted);
+          try { appendWeComRuntimeLog(lifecycle, { level: "error", event: "record_context_failed", message: normalizeWeComError(error) }); }
+          catch (logError) { console.error("Failed to record the WeCom routing error", logError); }
         });
       });
 
-      const dispose: MessageAdapterDispose = () => {
-        if (!lifecycle.active) return;
-        lifecycle.active = false;
+      let disposal: Promise<void> | undefined;
+      const dispose: MessageAdapterDispose = () => disposal ??= (async () => {
         try {
-          client.disconnect();
+          await closeTransport();
         } catch (error) {
           const message = normalizeWeComError(error);
           patchWeComStatus({ status: "error", connected: false, authenticated: false, lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
@@ -301,20 +313,15 @@ export function createWeComAdapter(
           message: "企业微信消息端已停止。"
         }, lifecycle.dataDir(), lifecycle.now());
         appendWeComRuntimeLog(lifecycle, { event: "disabled", message: "WeCom adapter disabled" });
-      };
+      })();
 
-      patchWeComStatus({ status: "running", connected: false, authenticated: false, message: "企业微信消息端启动中。" }, lifecycle.dataDir(), lifecycle.now());
-      appendWeComRuntimeLog(lifecycle, { event: "starting", message: "Starting WeCom adapter" });
       try {
+        patchWeComStatus({ status: "running", connected: false, authenticated: false, message: "企业微信消息端启动中。" }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { event: "starting", message: "Starting WeCom adapter" });
         client.connect();
         return dispose;
       } catch (error) {
-        lifecycle.active = false;
-        try {
-          client.disconnect();
-        } catch {
-          // The original connection failure remains the activation result.
-        }
+        void closeTransport().catch(() => { /* The startup owner observes the same cleanup flight. */ });
         const message = normalizeWeComError(error);
         patchWeComStatus({ status: "error", connected: false, authenticated: false, lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
         appendWeComRuntimeLog(lifecycle, { level: "error", event: "activation_failed", message, error });

@@ -14,6 +14,7 @@ export type GatewayRouteActivationReceipt = Readonly<{
   gatewayGenerationId?: string;
   pid?: number;
   code?: string;
+  restartReasons?: readonly string[];
   blockedByOperationId?: string;
   unavailableInstances?: readonly string[];
 }>;
@@ -107,7 +108,9 @@ export function createGatewayRouteActivationOwner(options: Readonly<{
         const change = classifyRouteChange(baseline, definition, declarations);
         // Shared and unknown fields retain the original full Gateway restart dependency closure.
         if (change.kind === "shared") {
-          if (!inspectOnly) { runtime.needsRestart = true; remember({ gatewayId: definition.id, revision, operationId, state: "requested" }); }
+          runtime.needsRestart = true;
+          remember({ gatewayId: definition.id, revision, operationId, state: "requested", code: "shared_route_dependency",
+            restartReasons: Object.freeze(change.restartReasons) });
           continue;
         }
         if (!inspectOnly) runtime.needsRestart = false;

@@ -27,12 +27,18 @@ export function definePlugin(module) {
 export function ownMessageEndpoint(context, endpoint) {
   if (!endpoint || typeof endpoint.start !== "function") throw new Error("Endpoint must define start().");
   let starting;
+  let recoverStartup;
   let stop;
   let retiring;
   let stopped = false;
   const retire = () => retiring ??= (async () => {
     stopped = true;
-    if (starting) await starting;
+    try { await starting; }
+    catch (error) {
+      if (!recoverStartup) throw error;
+      await recoverStartup();
+      return;
+    }
     if (stop) { const ownedStop = stop; stop = undefined; await ownedStop(); }
   })();
   context.effects.adopt(retire, `release endpoint ${endpoint.type}`);
@@ -43,7 +49,7 @@ export function ownMessageEndpoint(context, endpoint) {
       await previousRetirement;
       signal.throwIfAborted();
       if (stopped) throw new Error(`Endpoint ${endpoint.type} is retiring.`);
-      starting = Promise.resolve().then(() => endpoint.start()).then(dispose => {
+      starting = Promise.resolve().then(() => endpoint.start({ signal, onFailure(dispose) { recoverStartup = dispose; } })).then(dispose => {
         stop = typeof dispose === "function" ? dispose : undefined;
       });
       await starting;
@@ -54,7 +60,11 @@ export function ownMessageEndpoint(context, endpoint) {
 }
 export function ownMessageEndpointScan(context, provider) {
   const host = context.services.require("host.message-endpoints@1");
-  const registration = host.scanProviders.prepare(provider);
+  const work = ownPluginAcceptedWork(context, `endpoint ${provider.type} scan`);
+  const registration = host.scanProviders.prepare({
+    ...provider,
+    scan: () => work.runAcceptedWork(() => provider.scan())
+  });
   context.effects.adopt(registration.dispose, `release endpoint scan ${provider.type}`);
   context.publication.add(registration.publication, `publish endpoint scan ${provider.type}`);
 }
@@ -97,8 +107,28 @@ export function ownPluginAcceptedWork(context, label = "plugin accepted work", c
 
 /** Native services, rather than a second active registry, publish the endpoint egress owner. */
 export function ownMessageEndpointEgress(context, definition) {
+  const sendVariants = Object.create(null);
+  const prepareVariant = definition.sendVariants?.length && context.identity.host === "manager"
+    ? context.services.optional("host.message-endpoints@1")?.manager?.prepareSendVariant : undefined;
+  for (const variant of definition.sendVariants ?? []) {
+    if (typeof variant.type !== "string" || !variant.type.startsWith(`${definition.type}.`)
+      || !/^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$/.test(variant.type) || Object.hasOwn(sendVariants, variant.type)
+      || !Number.isSafeInteger(variant.contractVersion) || variant.contractVersion < 1
+      || typeof variant.description !== "string" || !variant.description.trim()
+      || variant.dataSchema?.type !== "object" || variant.dataSchema.additionalProperties !== false
+      || variant.paramsSchema?.type !== "object" || variant.paramsSchema.additionalProperties !== false
+      || typeof variant.readText !== "function" || typeof variant.operation !== "string" || !Object.hasOwn(definition.operations, variant.operation)
+      || typeof definition.operations[variant.operation] !== "function") {
+      throw new Error(`Invalid send variant for endpoint ${definition.type}.`);
+    }
+    const owned = Object.freeze({ ...variant, dataSchema: immutableAgentMetadata(variant.dataSchema),
+      paramsSchema: immutableAgentMetadata(variant.paramsSchema) });
+    prepareVariant?.(owned);
+    sendVariants[variant.type] = owned;
+  }
   const work = ownPluginAcceptedWork(context, `endpoint ${definition.type} egress`, definition.dispose);
   const provider = Object.freeze({ identity: context.identity, runAcceptedWork: work.runAcceptedWork, inspect: work.inspect,
+    sendVariants: Object.freeze(sendVariants),
     acquire(snapshot) {
       const lease = work.acquire(snapshot);
       return Object.freeze({ snapshot: lease.snapshot,
@@ -151,30 +181,47 @@ export function parseAgentAdapterPackageDescriptor(value) {
   for (const key of ["sessionId", "sessionName", "workspace"]) {
     if (value.sessionBinding[key] !== undefined && !value.sessionBinding[key].trim()) throw new Error("Agent session binding field must be non-empty.");
   }
-  return immutableAgentMetadata({type:value.type,capability:value.capability,manifest,sessionBinding:value.sessionBinding});
+  const initializationModes = value.initializationModes;
+  if (initializationModes !== undefined && (!object(initializationModes) || Object.entries(initializationModes).some(([host, mode]) =>
+    (host !== "manager" && host !== "gateway") || (mode !== "exclusive" && mode !== "independent")))) {
+    throw new Error("Invalid Agent package initialization mode.");
+  }
+  return immutableAgentMetadata({ type: value.type, capability: value.capability, manifest, sessionBinding: value.sessionBinding,
+    ...(initializationModes === undefined ? {} : { initializationModes }) });
 }
 
 /** One Agent package owns its operations and the original accepted-work lifetime. */
 export function ownAgentAdapter(context, definition) {
   const type = required(definition?.type, "Agent adapter type");
   const capabilityRef = required(definition?.capability, "Agent adapter capability");
-  const descriptor = parseAgentAdapterPackageDescriptor({ type, capability: capabilityRef, manifest: definition.manifest, sessionBinding: definition.sessionBinding ?? {} });
+  const descriptor = parseAgentAdapterPackageDescriptor({ type, capability: capabilityRef, manifest: definition.manifest,
+    sessionBinding: definition.sessionBinding ?? {}, initializationModes: definition.initializationModes });
   const manifest = descriptor.manifest;
   if (!definition.operations || typeof definition.operations !== "object") {
     throw new Error("Agent adapter must declare its type, capability, manifest and owned operations.");
   }
   const operations = Object.freeze({ ...definition.operations });
   for (const operation of Object.values(operations)) if (typeof operation !== "function") throw new Error("Agent adapter operations must be functions.");
+  const initialization = definition.initialization;
+  if (initialization !== undefined && (!initialization || !["exclusive", "independent"].includes(initialization.mode)
+    || (initialization.start !== undefined && typeof initialization.start !== "function"))) {
+    throw new Error("Agent adapter initialization requires a valid resource mode and an optional start function.");
+  }
   const sessionBinding = descriptor.sessionBinding;
+  const initializationMode = initialization?.mode ?? descriptor.initializationModes?.[context.identity.host];
   const work = ownPluginAcceptedWork(context, `Agent adapter ${type}`, definition.dispose);
   let ready = false;
   context.publication.add({ publish() {}, rollback() { ready = false; },
     async afterPublish({ previousRetirement, signal }) {
-      await previousRetirement;
+      if (initializationMode !== "independent") await previousRetirement;
       signal.throwIfAborted();
+      if (initialization?.start) {
+        await initialization.start(signal);
+        signal.throwIfAborted();
+      }
       ready = true;
     }, retire() { ready = false; }
-  }, `join previous Agent adapter ${type}`);
+  }, `initialize Agent adapter ${type}`);
   const acquire = snapshot => {
     if (!ready) throw Object.assign(new Error(`Agent adapter ${type} is not ready or is retiring.`), { code: "AGENT_ADAPTER_UNAVAILABLE" });
     let original;

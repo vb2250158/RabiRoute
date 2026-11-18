@@ -39,6 +39,13 @@ const childCode = `
       ...lease.publication(),binding:{...lease.binding,authentication:{kind:'none',description:'原进程缓存状态'}}
     }]})+'\\n';
   const commands=createInterface({input:process.stdin,terminal:false}); commands.on('line',async command=>{
+    if(command.startsWith('plugin-')){
+      const state=command==='plugin-starting'?'initializing':'active';
+      const packageHash=command==='plugin-invalid'?'invalid':(command==='plugin-old'?'a':'b').repeat(64);
+      runtime.publishEndpointPlugins(command==='plugin-empty'?[]:[{instanceId:'endpoint:fixture',packageId:'io.test.endpoint',version:'1.0.0',
+        packageHash,activationId:command==='plugin-old'?'old':'new',state,config:{secret:'fixture-private'}}]);
+      console.log('fixture-'+command);
+    }
     if(command==='half'){
       const bytes=Buffer.from(customLine());const split=bytes.indexOf(Buffer.from('原'))+1;
       process.stdout.write(bytes.subarray(0,split));tail=bytes.subarray(split);process.send?.({kind:'half-written'});
@@ -124,6 +131,43 @@ async function managedChild(t: TestContext, publication: ReturnType<typeof creat
 function bindingOperation(registry: ManagerPluginRouteRegistry) {
   return registry.catalogSnapshot().operations.find(operation => operation.binding)!;
 }
+
+test("live Gateway plugin hashes follow adoption on the original child and remain independent of its listener", async t => {
+  const { runtime, publication, revision } = generationFixture();
+  t.after(async () => { await runtime.dispose(); publication.dispose(); });
+  await runtime.switch([revision("descriptor-owner")]);
+  const native = await managedChild(t, publication);
+  const read = () => publication.readEndpointPlugins("fixture-gateway", native.child);
+  const listener = publication.readListener("fixture-gateway", "listener")!;
+  assert.equal(read(), undefined, "Older publications do not claim an active hash.");
+  native.command("plugin-old");
+  await until(() => read()?.instances[0]?.packageHash === "a".repeat(64));
+  const old = read()!;
+  assert.equal(old.pid, native.child.pid);
+  assert.equal(old.gatewayGenerationId, native.processIdentity.gatewayGenerationId);
+  assert.equal(Object.hasOwn(old.instances[0]!, "config"), false);
+  native.command("plugin-starting");
+  await until(() => read()?.instances[0]?.state === "initializing");
+  native.command("plugin-active");
+  await until(() => read()?.instances[0]?.state === "active" && read()?.instances[0]?.activationId === "new");
+  const next = read()!;
+  assert.equal(next.pid, old.pid);
+  assert.equal(next.gatewayGenerationId, old.gatewayGenerationId);
+  assert.equal(next.instances[0]?.packageHash, "b".repeat(64));
+  assert.ok(next.revision > old.revision);
+  native.command("stale");
+  await until(() => native.output().includes("fixture-stale-emitted"));
+  assert.deepEqual(read(), next);
+  native.command("plugin-invalid");
+  await until(() => native.output().includes("fixture-plugin-invalid"));
+  assert.equal(read(), undefined);
+  listener.assertCurrent();
+  native.command("plugin-empty");
+  await until(() => read()?.instances.length === 0);
+  const replacement = await managedChild(t, publication, "replacement-generation");
+  assert.equal(read(), undefined);
+  assert.equal(publication.readEndpointPlugins("fixture-gateway", replacement.child), undefined);
+});
 
 test("listener descriptors wait for the original child's real published socket and revoke on retirement", async t => {
   const { runtime, publication, revision } = generationFixture();

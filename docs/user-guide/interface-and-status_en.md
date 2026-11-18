@@ -228,7 +228,7 @@ With a project filter, Codex projects in different repository directories remain
 
 Repeated events reuse the receipt for the same task, turn, and target. Uncertain sending outcomes are not automatically retried; check the Route's sending log. Events without a turn ID or final reply are ignored. Rules start disabled and do not send historical messages when added.
 
-Role → Automation has Message rules and Agent Hook tabs. Use the message types on the left to view rules, including Scheduled tasks. Add message rule opens the editor directly; choose a message type and either Notify Agent or Run script. Hook settings are stored per Agent in the role's `personaConfig.json`; Routes using that role share the settings for the corresponding Agent. Legacy Route settings move into the role file on save or explicit migration.
+Role → Automation has Message rules and Agent Hook tabs. Use the message types on the left to view rules, including Scheduled tasks. Add message rule offers template and manual creation. Preview the trigger and action, then choose Create to add the rule. Hook settings are stored per Agent in the role's `personaConfig.json`; Routes using that role share the settings for the corresponding Agent. Legacy Route settings move into the role file on save or explicit migration.
 
 The Agent panel provides only Update Hooks in Agent for initial installation and later updates. Codex uses its official plugin installer. DSH installs into the local `web` profile and requires a plugin reload or DSH restart. Packages live in `plugins/rabi-codex-context/` and `plugins/rabi-dsh-context/`.
 

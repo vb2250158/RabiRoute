@@ -22,6 +22,7 @@ export const AGENT_SEND_CHANNEL_HELP = freezeChannelHelp([
   { channel: "wecom", description: "企业微信会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）", reqId: "请求 ID（可选）" }, example: { channel: "wecom", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "weixin", description: "微信会话。", params: { sessionId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "weixin", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "feishu", description: "飞书会话。", params: { chatId: "会话 ID", userId: "用户 ID（可选）" }, example: { channel: "feishu", params: { chatId: "chat-id" }, payload: { type: "text", text: "消息正文" } } },
+  { channel: "qqbot", description: "回复 QQ 官方机器人的来源消息。", params: { sourceMessageId: "Rabi 提供的来源消息 ID" }, example: { channel: "qqbot", params: { sourceMessageId: "qqbot-example" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "rabilink", description: "RabiLink 设备消息。", params: { proactive: "是否主动发送", sourceMessageId: "非主动发送时的来源消息 ID", targetDeviceIds: "设备 ID 数组", targetDeviceKinds: "设备类型数组", source: "来源标识（可选）", presentation: "呈现方式字符串数组（可选）", priority: "优先级（可选）" }, example: { channel: "rabilink", params: { proactive: true, targetDeviceIds: ["device-id"] }, payload: { type: "text", text: "消息正文" } } },
   { channel: "speech", description: "语音消息。", params: { sessionId: "语音会话 ID（可选）" }, example: { channel: "speech", params: { sessionId: "session-id" }, payload: { type: "text", text: "消息正文" } } },
   { channel: "role_panel", description: "人格面板消息。", params: { roleId: "人格 ID", messageId: "消息 ID（可选）" }, example: { channel: "role_panel", params: { roleId: "role-id" }, payload: { type: "text", text: "消息正文" } } },
@@ -53,6 +54,7 @@ function quotaDescription(read: () => number): string {
 export const AGENT_SEND_LIMITS = Object.freeze({
   agentType: 80, sessionId: 500, planId: 200, attachmentId: 200, conversationToken: 512 });
 export const AGENT_SEND_PAYLOAD_TYPES = ["text", "image", "voice", "file", "markdown", "sticker"] as const;
+export const AGENT_SEND_VARIANT_TYPE = "^[a-z][a-z0-9_-]*\\.[a-z][a-z0-9_-]*$";
 
 // Wire text retains the established String(value).trim() normalization. The owner
 // validates normalized identifiers and byte lengths; no client-side coercion is assumed.
@@ -80,6 +82,9 @@ const conversationContext = { anyOf: [{ type: "null" }, { type: "object", additi
 const hasPayload = (field: string) => ({ properties: { payload: { type: "object", required: [field], properties: { [field]: true } } }, required: ["payload"] });
 const rawName = (name: string) => ({ type: "string", pattern: `^\\s*${name}\\s*$` });
 const payloadType = (name: string) => ({ properties: { payload: { type: "object", required: ["type"], properties: { type: rawName(name) } } }, required: ["payload"] });
+const variantPayload = { type: "object", required: ["type", "data"], additionalProperties: false,
+  properties: { type: { type: "string", maxLength: 100, pattern: AGENT_SEND_VARIANT_TYPE }, data: { type: "object" } } } as const;
+const variantBody = { properties: { payload: variantPayload }, required: ["payload"] } as const;
 const payload = {
   type: "object", required: ["type"], additionalProperties: false,
   properties: {
@@ -107,16 +112,18 @@ function channelParams(channel: AgentSendChannel) {
 export const AGENT_SEND_WIRE_SCHEMA = freezeChannelHelp({
   $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: false,
   required: ["deliveryId", "sender", "routeId", "channel", "params", "payload"],
-  properties: { deliveryId: requiredText, sender, routeId: requiredText, channel: normalizedName([...AGENT_SEND_CHANNEL_HELP.map(value => value.channel), "fennenote"]),
-    params: { type: "object" }, payload, tracking, styleValidation: { anyOf: [{ type: "null" }, { enum: [0, 1] }] },
+  properties: { deliveryId: requiredText, sender, routeId: requiredText, channel: requiredText,
+    params: { type: "object" }, payload: { anyOf: [payload, variantPayload] }, tracking, styleValidation: { anyOf: [{ type: "null" }, { enum: [0, 1] }] },
     messageLengthConfirmation: { anyOf: [{ type: "null" }, { type: "string", pattern: "^[0-9]{13}\\.[a-f0-9]{64}$" }] }, conversationContext },
   allOf: [
+    { if: variantBody, then: { properties: { channel: { type: "string", maxLength: 100, pattern: "^[a-z][a-z0-9_-]*$" } } },
+      else: { properties: { channel: normalizedName([...AGENT_SEND_CHANNEL_HELP.map(value => value.channel), "fennenote"]) } } },
     // @deprecated Wire-only migration alias; remove at the legacy configuration migration milestone.
     { if: { required: ["channel"], properties: { channel: rawName("fennenote") } },
       then: { properties: { params: { type: "object", additionalProperties: false, required: ["sessionId", "mode"],
         properties: { sessionId: requiredText, mode: normalizedName(["message", "playback"]) } } } } },
     ...AGENT_SEND_CHANNEL_HELP.map(definition => ({
-      if: { required: ["channel"], properties: { channel: rawName(definition.channel) } },
+      if: { required: ["channel"], properties: { channel: rawName(definition.channel) }, not: variantBody },
       then: { properties: { params: channelParams(definition.channel) } }
     })),
     { if: hasPayload("fileId"), then: { properties: { channel: normalizedName(["napcat"]),
@@ -142,7 +149,7 @@ export const AGENT_SEND_FIELD_NAMES = freezeChannelHelp({
 
 export const AGENT_SEND_BUSINESS_VALIDATORS = freezeChannelHelp([
   { id: "agent.send.normalize-text", description: "The send owner normalizes established text values with String(value).trim(); it then checks required values, stable sender/session identifiers, plan attachment identifiers, and nonempty device lists. Null/empty optional text means absent." },
-  { id: "agent.send.channel-target", description: "NapCat requires target=group|private and the matching groupId/userId. replyToMessageId is optional for ordinary sends; message_processing group replies require a nonempty quote. WeCom/Feishu require chatId; Weixin requires sessionId. The deprecated fennenote wire alias is migrated to speech. role_panel requires roleId; plan_feedback requires roleId/planId and kind=guidance|approval. RabiLink requires target devices and, unless proactive=true, sourceMessageId." },
+  { id: "agent.send.channel-target", description: "NapCat requires target=group|private and the matching groupId/userId. replyToMessageId is optional for ordinary sends; message_processing group replies require a nonempty quote. QQ Bot requires sourceMessageId and a text payload. WeCom/Feishu require chatId; Weixin requires sessionId. The deprecated fennenote wire alias is migrated to speech. role_panel requires roleId; plan_feedback requires roleId/planId and kind=guidance|approval. RabiLink requires target devices and, unless proactive=true, sourceMessageId." },
   { id: "agent.send.media", description: "Text requires nonempty text. Other media require a path, URL or supported managed reference. planAttachment applies only to image/file and cannot coexist with a nonempty path/URL. Managed fileId requires NapCat target=group and lowercase SHA-256; private managed-file upload is not implemented. Markdown is NapCat-only. Ordered segments require at least one item and one image/markdown item, without top-level text/media. Quotas are enforced by the send owner so errors identify the configured Manager environment setting; the wire schema validates only protocol shape." },
   { id: "agent.send.quotas", description: `Current Manager quotas: RABIROUTE_AGENT_SEND_MAX_SEGMENTS=${quotaDescription(() => agentSendQuotaSettings.segments)} (ordered items); RABIROUTE_AGENT_SEND_MAX_IMAGES=${quotaDescription(() => agentSendQuotaSettings.images)} (image/markdown items); RABIROUTE_MARKDOWN_MAX_SOURCE_BYTES=${quotaDescription(() => markdownImageSettings.sourceBytes)} (UTF-8 bytes per Markdown source, shared with the renderer). All default to 0, meaning unlimited by the application. Change or remove the environment setting and reload Manager to update; provider/runtime limits remain visible.` },
   { id: "agent.send.identity-and-state", description: "The existing owner verifies request source, Route/provider configuration, file ownership and integrity, platform support, message policy, and current delivery state. These are execution correctness checks on the authenticated connection, not another feature grant." },

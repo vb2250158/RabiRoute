@@ -3,11 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createPlan, getPlan, listPlanHistory, updatePlan, type PlanApprovalRequest } from "./roleKnowledge.js";
+import { createPlan, getPlan, getPlanAsync, listPlanHistory, readPlansFromStorageInWorker, readPlanCatalogDiagnostics, updatePlan, type PlanApprovalRequest } from "./roleKnowledge.js";
 import { submitPlanFeedback } from "./planFeedbackSubmission.js";
 import { commitPlanFeedback, createPlanFeedbackRecord, listPlanFeedback, recoverPlanFeedbackStoreTransactions, updatePlanFeedbackDelivery } from "./planFeedback.js";
 import { planPresentation } from "./roleKnowledgePresentation.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
+import { readPlanHistoryDirectory, setPlanHistoryCommitment, planHistoryTransactionFence } from "./planHistoryShards.js";
+
+function sealFixtureHistory(planDir: string): void {
+  const planPath = path.join(planDir, "plan.json");
+  fs.writeFileSync(planPath, JSON.stringify(setPlanHistoryCommitment(JSON.parse(fs.readFileSync(planPath, "utf8")), readPlanHistoryDirectory(planDir))));
+}
 
 const contract: PlanApprovalRequest = { approver: "Owner", request: "Approve the scoped change", recommendation: "Use the minimal change", reason: "Confirm scope",
   files: [{ path: "src/example.ts", action: "modify", change: "Fix the scoped behavior" }], commands: [], changes: [],
@@ -48,6 +54,7 @@ test("feedback transition reads and appends history across a shard boundary", t 
   const template = JSON.parse(original.toString("utf8").trim());
   const padding = 16 * 1024 * 1024 - original.byteLength - 1024;
   fs.appendFileSync(base, `${JSON.stringify({ ...template, id: "history-padding", padding: "x".repeat(padding - 256) })}\n`);
+  sealFixtureHistory(planDir);
   const before = fs.readFileSync(base);
   const saved = submit("sharded-approval", { notifyAgent: false });
   assert.equal(saved.plan.markerStatus, "已审批");
@@ -68,6 +75,7 @@ test("new history shard and feedback ledger recover after an interrupted approva
   const template = JSON.parse(original.toString("utf8").trim());
   const padding = 16 * 1024 * 1024 - original.byteLength - 1024;
   fs.appendFileSync(base, `${JSON.stringify({ ...template, id: "history-padding", padding: "x".repeat(padding - 256) })}\n`);
+  sealFixtureHistory(planDir);
   const before = fs.readFileSync(base);
   const record = createPlanFeedbackRecord({ id: "new-shard-crash", roleId: "test", planId: plan.id, planTitle: plan.title,
     stepId: "review", text: "Scoped approval" });
@@ -102,6 +110,76 @@ test("approval and feedback recover together after a mid-transaction crash", t =
   assert.equal(read().markerStatus, "已审批");
   assert.equal(listPlanFeedback(roleDir, plan.id).length, 1);
   assert.equal(commitPlanFeedback(roleDir, record).created, false);
+});
+test("retry resumes the original feedback WAL before inspecting a partial history", async t => {
+  const { roleDir, plan, read } = fixture(t);
+  const record = createPlanFeedbackRecord({ id: "resume-original", roleId: "test", planId: plan.id,
+    planTitle: plan.title, stepId: "review", text: "Scoped approval" });
+  assert.throws(() => commitPlanFeedback(roleDir, record, undefined, { repositoryTransaction: { hooks: {
+    afterOperation(index) { if (index === 0) throw new Error("injected interruption"); }
+  } } }), /injected interruption/);
+  assert.throws(() => listPlanHistory(roleDir, plan.id), /pending feedback transaction/);
+  await assert.rejects(getPlanAsync(roleDir, plan.id), /pending feedback transaction/);
+  assert.equal(commitPlanFeedback(roleDir, record).created, true);
+  assert.equal(read().markerStatus, "已审批");
+  assert.equal(listPlanFeedback(roleDir, plan.id).length, 1);
+});
+for (const point of ["beforeWalActive", "afterWalActive", "afterWalManifest", "afterWalReceipt", "afterWalCleared"] as const) {
+  test(`feedback WAL preserves its owner after ${point}`, t => {
+    const { roleDir, plan } = fixture(t);
+    const record = createPlanFeedbackRecord({ id: `fault-${point}`, roleId: "test", planId: plan.id,
+      planTitle: plan.title, stepId: "review", text: "Scoped approval" });
+    assert.throws(() => commitPlanFeedback(roleDir, record, undefined, { repositoryTransaction: { hooks: {
+      [point]() { throw new Error(`injected ${point}`); }
+    } } }), new RegExp(`injected ${point}`));
+    if (point === "afterWalActive" || point === "afterWalManifest") {
+      const different = { ...record, id: "different-owner" };
+      assert.throws(() => commitPlanFeedback(roleDir, different), /pending feedback transaction/);
+    }
+    commitPlanFeedback(roleDir, record);
+    assert.equal(listPlanFeedback(roleDir, plan.id).length, 1);
+  });
+}
+test("point and history reads reject damaged committed history", async t => {
+  const { roleDir, plan } = fixture(t);
+  const base = path.join(roleDir, "plans", "active", plan.id, "history.jsonl");
+  const original = fs.readFileSync(base);
+  fs.appendFileSync(base, "{}\n");
+  readPlansFromStorageInWorker(roleDir);
+  assert.throws(() => getPlan(roleDir, plan.id), /commitment/);
+  await assert.rejects(getPlanAsync(roleDir, plan.id), /commitment/);
+  assert.throws(() => listPlanHistory(roleDir, plan.id), /commitment/);
+  fs.writeFileSync(base, original);
+  assert.equal(getPlan(roleDir, plan.id)?.id, plan.id);
+});
+test("catalog isolates one plan with damaged committed history", t => {
+  const { roleDir, plan } = fixture(t);
+  const other = createPlan(roleDir, { title: "Unaffected", focus: "Independent", status: "分析中", keywords: ["independent"],
+    currentStepId: "work", steps: [{ id: "work", title: "Independent work" }] });
+  const base = path.join(roleDir, "plans", "active", plan.id, "history.jsonl");
+  fs.appendFileSync(base, "{}\n");
+  const plans = readPlansFromStorageInWorker(roleDir);
+  assert.equal(plans.some(item => item.id === plan.id), false);
+  assert.equal(plans.some(item => item.id === other.id), true);
+  assert.equal(readPlanCatalogDiagnostics(roleDir).some(item => item.planId === plan.id), true);
+});
+test("warm WAL fence does not reread completed receipts as real feedback grows", t => {
+  const { roleDir, plan } = fixture(t);
+  const originalRead = fs.readFileSync;
+  let receiptReads = 0;
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+    if (String(args[0]).endsWith(`${path.sep}receipt.json`)) receiptReads++;
+    return originalRead(...args);
+  });
+  for (let index = 0; index < 10; index++) {
+    const record = createPlanFeedbackRecord({ id: `growth-${index}`, roleId: "test", planId: plan.id,
+      planTitle: plan.title, stepId: "review", text: `Feedback ${index}` });
+    commitPlanFeedback(roleDir, record);
+    planHistoryTransactionFence(roleDir, plan.id);
+    receiptReads = 0;
+    planHistoryTransactionFence(roleDir, plan.id);
+    assert.equal(receiptReads, 0, `warm read after ${index + 1} commits`);
+  }
 });
 test("approved marker without a pending complete contract does not enable approval", t => {
   const { read, roleDir } = fixture(t);

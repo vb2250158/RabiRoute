@@ -1,4 +1,4 @@
-import {agentNativeFunction,invokeScopedAgentManagerOperation,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
+import {agentNativeFunction,invokeScopedAgentManagerOperation,scopedAgentManagerCapabilities,withAgentManagerInvocation,type AgentManagerOperationInvoker} from './agentAdapters/managerInvocation.js';
 import {isDshSessionId} from './shared/dshSessionIdentity.js';
 import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
 import { executeEndpointAgentDelivery, type EndpointDeliveryOptions, type PreparedEndpointDelivery, type EndpointDeliveryReceipt } from "./agentRequests/endpointDelivery.js";
@@ -33,8 +33,6 @@ import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPo
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 
 import {
-  isAgentThreadCapableAdapter,
-  agentAdapterCapabilities,
   type PlanAssistantAgentType
 } from "./shared/agentAdapterCapabilities.js";
 
@@ -72,9 +70,6 @@ const renameDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute
 const resolveDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["resolveDshSession"]>("dsh","resolveDshSession");
 const sendDshSessionMessage=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["sendDshSessionMessage"]>("dsh","sendDshSessionMessage");
 const readAntigravitySession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.js")["readAntigravitySession"]>("antigravity","readAntigravitySession");
-const listWorkbuddyThreads=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["listWorkbuddyThreads"]>("workbuddy","listWorkbuddyThreads");
-const readWorkbuddyThread=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["readWorkbuddyThread"]>("workbuddy","readWorkbuddyThread");
-const sendWorkbuddyThreadMessage=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyThreads.js")["sendWorkbuddyThreadMessage"]>("workbuddy","sendWorkbuddyThreadMessage");
 
 const maxThreadIdLength = 512;
 const maxQueryLength = 240;
@@ -98,6 +93,7 @@ export type AgentThreadRequest = {
   threadId?: string;
   /** Read the original provider's paged native history without changing the task. */
   history?: { cursor?: string; limit?: number };
+  webChatAttachments?: import('./shared/agentWebChat.js').WebChatAttachment[];
   deliveryId?: string;
   title?: string;
   prompt?: string;
@@ -141,6 +137,22 @@ export type AgentThreadSummary = {
   archived?: boolean;
 };
 
+export type AgentInitialThreadCreationInput = { intentId: string; title: string; workspace: string; prompt: string };
+
+export type AgentInitialThreadCreationResult =
+  | { state: "created"; intentId: string; thread: AgentThreadSummary & { cwd: string }; sequence?: number }
+  | { state: "pending"; intentId: string }
+  | { state: "conflict"; intentId: string; threadIds?: string[] };
+
+export type AgentThreadDeliveryObservation = {
+  deliveryId: string;
+  state: "accepted" | "not_observed";
+  source: string;
+  retryable: false;
+  sequence?: number;
+  nextCursor?: string | null;
+};
+
 export type AgentThreadDriver = {
   list?: (params: {
     query: string;
@@ -177,6 +189,7 @@ export type AgentThreadDriver = {
      * HTTP session endpoint.
      */
     transport: "desktop-ipc" | "http" | "agentapi";
+    acceptedBy?: string;
     warning?: string;
   }>;
 };
@@ -461,8 +474,9 @@ function optionalText(value: unknown, name: string, maxLength: number): string {
   return requiredText(value, name, maxLength);
 }
 
-function normalizeThreadId(value: unknown): string {
+function normalizeThreadId(value: unknown, adapter?: ThreadCapableAgentAdapter): string {
   const threadId = requiredText(value, "threadId", maxThreadIdLength);
+  if (adapter && scopedAgentManagerCapabilities(adapter).sessionOperations) return threadId;
   if (!isCodexTaskId(threadId) && !isDshSessionId(threadId)) {
     throw new Error("Invalid threadId.");
   }
@@ -482,8 +496,8 @@ function inferredThreadAdapter(threadId: string): ThreadCapableAgentAdapter | un
  * This used to be a binary `dsh ? ... : codex` branch, which quietly reported
  * every non-DSH adapter as Codex. Antigravity delivers through the host's own
  * `agy agentapi` CLI, so calling it `codex_desktop_owner`/`desktop-ipc` would
- * have written a false audit trail. Keep the table adapter-keyed so a new
- * adapter adds one row instead of silently inheriting Codex's identity.
+ * have written a false audit trail. Declared session providers supply their own
+ * attribution in the accepted receipt; this table serves the older drivers.
  */
 function deliveryReceiptAttribution(agentAdapter: ThreadCapableAgentAdapter): {
   acceptedBy: string;
@@ -494,8 +508,6 @@ function deliveryReceiptAttribution(agentAdapter: ThreadCapableAgentAdapter): {
       return { acceptedBy: "dsh_session_owner", transport: "http" };
     case "antigravity":
       return { acceptedBy: "antigravity_agentapi_owner", transport: "agentapi" };
-    case "workbuddy":
-      return { acceptedBy: "workbuddy_session_owner", transport: "http" };
     default:
       return { acceptedBy: "codex_desktop_owner", transport: "desktop-ipc" };
   }
@@ -507,12 +519,12 @@ function threadAgentAdapter(request: Pick<AgentThreadRequest, "agentAdapter" | "
   if (rawAdapter && !explicit) {
     throw new Error(`Invalid agentAdapter: ${rawAdapter}`);
   }
-  if (explicit && !isAgentThreadCapableAdapter(explicit)) {
+  if (explicit && scopedAgentManagerCapabilities(explicit).managedTasks?.agentThreads !== true) {
     throw agentThreadUnsupported("agentAdapter", `Agent thread operations are not supported for agentAdapter=${explicit}.`);
   }
   const rawThreadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
   const inferred = inferredThreadAdapter(rawThreadId);
-  if (explicit && inferred && explicit !== inferred) {
+  if (explicit && inferred && explicit !== inferred && !scopedAgentManagerCapabilities(explicit).sessionOperations) {
     throw new Error(`agentAdapter=${explicit} conflicts with threadId owner=${inferred}.`);
   }
   // A self-identifying id wins only when no adapter was named; otherwise Codex is
@@ -527,19 +539,23 @@ async function readAgentThreadForAdapter(
   driver: AgentThreadDriver
 ): Promise<{ value: unknown; summary: AgentThreadSummary | null }> {
   if (driver !== defaultDriver) return readAgentThread(threadId, driver);
-  if (agentAdapterCapabilities(adapter).nativeThreadOperations) {
+  if (scopedAgentManagerCapabilities(adapter).nativeThreadOperations) {
     const result = await invokeScopedAgentManagerOperation<AgentThreadRequestResult>(adapter, "threads.request", { request: { action: "read", agentAdapter: adapter, threadId } }, { assertCurrent: options.requestAuthority });
     if (result.statusCode !== 200) throw new Error("Original Agent thread owner could not read this session.");
     const value = result.data.thread;
+    return { value, summary: threadSummary(value) };
+  }
+  if (scopedAgentManagerCapabilities(adapter).sessionOperations) {
+    const value = await invokeScopedAgentManagerOperation(adapter, "threads.read", { threadId }, {
+      assertCurrent: options.requestAuthority, signal: options.requestSignal
+    });
     return { value, summary: threadSummary(value) };
   }
   const value = adapter === "dsh"
     ? await readDshSession(threadId, await dshBaseUrlFor(options))
     : adapter === "antigravity"
       ? await readAntigravitySession(threadId)
-      : adapter === "workbuddy"
-        ? await readWorkbuddyThread(threadId)
-        : await readCodexThread(threadId);
+      : await readCodexThread(threadId);
   return { value, summary: threadSummary(value) };
 }
 
@@ -562,8 +578,10 @@ async function listThreadsForAdapter(
       allowedWorkspaces
     });
   }
-  if (adapter === "workbuddy" && driver === defaultDriver) {
-    return listWorkbuddyThreads({ query, limit, offset, allowedWorkspaces });
+  if (driver === defaultDriver && scopedAgentManagerCapabilities(adapter).sessionOperations) {
+    return invokeScopedAgentManagerOperation(adapter, "threads.list", { query, limit, offset, allowedWorkspaces }, {
+      assertCurrent: options.requestAuthority, signal: options.requestSignal
+    });
   }
   return listThreads(query, limit, offset, allowedWorkspaces, options, driver, stateDbOnly);
 }
@@ -878,47 +896,6 @@ export function agentThreadDeliveryStateForTest(
   return (thread as { active?: unknown })?.active === true ? "in_progress" : "missing";
 }
 
-/** WorkBuddy gateway admission does not establish that the target user turn exists. */
-function workbuddyDeliveryFromHistory(history: unknown, threadId: string, deliveryId: string) {
-  const page = history as {
-    source?: string;
-    sessionId?: string;
-    nextCursor?: string | null;
-    entries?: Array<{ sequence: number; record: unknown }>;
-  };
-  if (page?.source !== "workbuddy-native-transcript" || page.sessionId !== threadId) {
-    throw new Error("WorkBuddy native history does not belong to the requested task.");
-  }
-  const observed = page.entries?.find(({ record }) => {
-    const message = record as {
-      type?: string;
-      role?: string;
-      sessionId?: string;
-      content?: string | Array<{ type?: string; text?: string }>;
-    };
-    if (message?.type !== "message" || message.role !== "user"
-      || (message.sessionId && message.sessionId !== threadId)) return false;
-    const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
-      ? message.content.filter(part => part?.type === "input_text" || part?.type === "text")
-          .map(part => part.text ?? "").join("\n")
-      : "";
-    if (promptConfirmsDelivery(text, deliveryId)) return true;
-    // Standalone callers can also supply non-UUID IDs in the generated source header.
-    const lines = text.replace(/\r\n/g, "\n").split("\n");
-    const contentStart = lines.indexOf(RABI_MESSAGE_CONTENT_HEADER);
-    if (lines[0] !== RABI_MESSAGE_SOURCE_HEADER || contentStart < 0) return false;
-    const headers = lines.slice(1, contentStart).filter(line => line.startsWith("- 投递 ID："));
-    return headers.length === 1 && headers[0] === `- 投递 ID：${deliveryId}`;
-  });
-  return {
-    deliveryId,
-    state: observed ? "accepted" : "not_observed",
-    source: page.source,
-    retryable: false,
-    ...(observed ? { sequence: observed.sequence } : { nextCursor: page.nextCursor ?? null })
-  };
-}
-
 async function listThreads(
   query: string,
   limit: number,
@@ -994,7 +971,7 @@ async function executeAgentThreadRequest(
   if (options.endpointDelivery && (action === "send" || action === "reconcile_delivery")) {
     return executeEndpointAgentDelivery(request, options.endpointDelivery);
   }
-  if (request.agentAdapter && agentAdapterCapabilities(request.agentAdapter).nativeThreadOperations) {
+  if (request.agentAdapter && scopedAgentManagerCapabilities(request.agentAdapter).nativeThreadOperations) {
     return invokeScopedAgentManagerOperation<AgentThreadRequestResult>(request.agentAdapter, "threads.request", { request }, { assertCurrent: options.requestAuthority });
   }
   if (request.agentAdapter === "grokBot") {
@@ -1055,22 +1032,26 @@ async function executeAgentThreadRequest(
 
   if (action === "read") {
     const agentAdapter = threadAgentAdapter(request);
-    const threadId = normalizeThreadId(request.threadId);
-    const workbuddyDeliveryId = agentAdapter === "workbuddy" ? optionalText(request.deliveryId, "deliveryId", 200) : undefined;
-    if (request.history !== undefined || workbuddyDeliveryId) {
+    const threadId = normalizeThreadId(request.threadId, agentAdapter);
+    const deliveryId = optionalText(request.deliveryId, "deliveryId", 200) || undefined;
+    if (deliveryId && scopedAgentManagerCapabilities(agentAdapter).sessionOperations?.observeDelivery) {
+      const result = await invokeScopedAgentManagerOperation<{ history: unknown; delivery: AgentThreadDeliveryObservation }>(
+        agentAdapter, "threads.observeDelivery", { threadId, deliveryId, cursor: request.history?.cursor, limit: request.history?.limit },
+        { assertCurrent: options.requestAuthority, signal: options.requestSignal }
+      );
+      const data = request.history === undefined
+        ? { thread: (await readAgentThreadForAdapter(agentAdapter, threadId, options, driver)).value }
+        : { history: result.history };
+      return { statusCode: 200, data: { action, agentAdapter, threadId, ...data, delivery: result.delivery } };
+    }
+    if (request.history !== undefined) {
       const history = await invokeScopedAgentManagerOperation(agentAdapter, "threads.history", {
-        sessionId: threadId, cursor: request.history?.cursor, limit: request.history?.limit,
+        sessionId: threadId, cursor: request.history.cursor, limit: request.history.limit,
         ...(agentAdapter === "dsh" ? { baseUrl: await dshBaseUrlFor(options) } : {})
       }, { assertCurrent: options.requestAuthority, signal: options.requestSignal });
-      const delivery = workbuddyDeliveryId ? workbuddyDeliveryFromHistory(history, threadId, workbuddyDeliveryId) : undefined;
-      const thread = request.history === undefined
-        ? (await readAgentThreadForAdapter(agentAdapter, threadId, options, driver)).value
-        : undefined;
-      return { statusCode: 200, data: { action, agentAdapter, threadId,
-        ...(thread === undefined ? { history } : { thread }), ...(delivery ? { delivery } : {}) } };
+      return { statusCode: 200, data: { action, agentAdapter, threadId, history } };
     }
     const thread = await readAgentThreadForAdapter(agentAdapter, threadId, options, driver);
-    const deliveryId = optionalText(request.deliveryId, "deliveryId", 200) || undefined;
     const rolloutReceiptConfirmed = Boolean(
       deliveryId
       && agentAdapterSupportsReceiptRecovery(agentAdapter)
@@ -1091,7 +1072,9 @@ async function executeAgentThreadRequest(
 
   if (action === "open") {
     const agentAdapter = threadAgentAdapter(request);
-    if (agentAdapter === "workbuddy") throw agentThreadUnsupported("action", "Open this task in the WorkBuddy application.");
+    if (agentAdapter === "workbuddy" || scopedAgentManagerCapabilities(agentAdapter).sessionOperations) {
+      throw agentThreadUnsupported("action", `Open this task in the ${agentAdapter} application.`);
+    }
     const threadId = normalizeThreadId(request.threadId);
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const exact = await readAgentThreadForAdapter(agentAdapter, threadId, options, driver);
@@ -1104,9 +1087,6 @@ async function executeAgentThreadRequest(
     }
     // A session's directory is identity detail, not an admission gate: an enabled
     // Agent may drive any loaded session unless a limit is configured explicitly.
-    if (agentAdapter === "workbuddy") {
-      throw new Error("Opening a WorkBuddy task happens inside the WorkBuddy app; the bridge cannot open one.");
-    }
     if (agentAdapter === "dsh") {
       await (options.openDshSession ?? openDshSession)(threadId, await dshBaseUrlFor(options));
     } else {
@@ -1127,7 +1107,9 @@ async function executeAgentThreadRequest(
 
   if (action === "resolve") {
     const agentAdapter = threadAgentAdapter(request);
-    if (agentAdapter === "workbuddy") throw agentThreadUnsupported("action", "Find the task with list and use the complete workbuddy task ID.");
+    if (agentAdapter === "workbuddy" || scopedAgentManagerCapabilities(agentAdapter).sessionOperations) {
+      throw agentThreadUnsupported("action", `Find the task with list and use the complete ${agentAdapter} task ID.`);
+    }
     const rawThreadId = optionalText(request.threadId, "threadId", maxThreadIdLength);
     const fallbackTitle = agentAdapter === "dsh"
       ? rawThreadId
@@ -1252,22 +1234,27 @@ async function executeAgentThreadRequest(
 
   if (action === "create") {
     const agentAdapter = threadAgentAdapter(request);
-    if (agentAdapter === "workbuddy") {
+    const sessionOperations = scopedAgentManagerCapabilities(agentAdapter).sessionOperations;
+    if (sessionOperations) {
+      if (sessionOperations.create !== "with-initial-message") {
+        throw agentThreadUnsupported("action", `Create the task in the ${agentAdapter} application.`);
+      }
       const rawPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
-      if (!rawPrompt || options.creationIntent) throw new Error("WorkBuddy requires an explicit first message to create a desktop chat.");
+      if (!rawPrompt || options.creationIntent) throw new Error(`${agentAdapter} requires an explicit first message to create a chat.`);
       const intentId = callerAgentDeliveryId(request.deliveryId);
-      if (!intentId) throw new Error("WorkBuddy creation requires a stable deliveryId.");
+      if (!intentId) throw new Error(`${agentAdapter} creation requires a stable deliveryId.`);
       const title = requiredText(request.title, "title", maxTitleInputLength);
       const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
       const prompt = renderRabiDeliveryContent({ messageContent: rawPrompt,
         contextBlocks: deliveryBlocks(request.contextBlocks, "contextBlocks"),
         controlBlocks: deliveryBlocks(request.controlBlocks, "controlBlocks") });
       options.assertNewAgentTask?.();
-      const result = await invokeScopedAgentManagerOperation<import("./plugins/io.rabiroute.agent.workbuddy/src/workbuddyDesktopCreation.js").WorkbuddyDesktopCreationResult>(
-        "workbuddy", "threads.create", { intentId, title, workspace: cwd, workspaceLabel: path.win32.basename(cwd), prompt },
+      const input: AgentInitialThreadCreationInput = { intentId, title, workspace: cwd, prompt };
+      const result = await invokeScopedAgentManagerOperation<AgentInitialThreadCreationResult>(
+        agentAdapter, "threads.create", input,
         { assertCurrent: options.requestAuthority, signal: options.requestSignal }
       );
-      if (result.state === "created" && normalizePathForComparison(result.thread.cwd) !== normalizePathForComparison(cwd)) {
+      if (result.intentId !== intentId || (result.state === "created" && normalizePathForComparison(result.thread.cwd) !== normalizePathForComparison(cwd))) {
         return { statusCode: 409, data: { action, agentAdapter, state: "conflict", intentId, retryable: false } };
       }
       const statusCode = result.state === "created" ? 201 : result.state === "pending" ? 202 : 409;
@@ -1452,8 +1439,8 @@ async function executeAgentThreadRequest(
 
   if (action === "rename") {
     const agentAdapter = threadAgentAdapter(request);
-    if (agentAdapter === "workbuddy") {
-      throw agentThreadUnsupported("action", "WorkBuddy task titles are owned by the WorkBuddy app; the bridge cannot rename one.");
+    if (scopedAgentManagerCapabilities(agentAdapter).sessionOperations) {
+      throw agentThreadUnsupported("action", `Rename the task in the ${agentAdapter} application.`);
     }
     const threadId = normalizeThreadId(request.threadId);
     const rawTitle = requiredText(request.title, "title", maxTitleInputLength);
@@ -1475,7 +1462,7 @@ async function executeAgentThreadRequest(
   if (action === "send") {
     await options.agentRequests?.ready();
     let targetAgentAdapter = threadAgentAdapter(request);
-    let threadId = normalizeThreadId(request.threadId);
+    let threadId = normalizeThreadId(request.threadId, targetAgentAdapter);
     const rawPrompt = request.inReplyToRequestId && options.agentRequests
       ? optionalText(request.prompt, "prompt", maxPromptLength) || ""
       : requiredText(request.prompt, "prompt", maxPromptLength);
@@ -1550,7 +1537,7 @@ async function executeAgentThreadRequest(
         : resolution;
       threadId = resolution.thread.id;
       cwd = resolveAgentThreadWorkspaceForTest(resolution.thread.cwd || cwd, options);
-    } else if (requestedTitle && !isDshSessionId(threadId)) {
+    } else if (requestedTitle && targetAgentAdapter === "codex" && !isDshSessionId(threadId)) {
       const title = normalizeCodexThreadTitle(requestedTitle);
       const resolution = await resolveCodexSession({
         threadId,
@@ -1754,8 +1741,10 @@ async function executeAgentThreadRequest(
       if (model) delivery.model = model;
       if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
       if (imagePaths.length) delivery.imagePaths = imagePaths;
-      if (targetAgentAdapter === "workbuddy" && driver === defaultDriver) {
-          return await sendWorkbuddyThreadMessage({ threadId, prompt, cwd, imagePaths });
+      if (driver === defaultDriver && scopedAgentManagerCapabilities(targetAgentAdapter).sessionOperations) {
+        return invokeScopedAgentManagerOperation(targetAgentAdapter, "threads.send", delivery, {
+          assertCurrent: options.requestAuthority, signal: options.requestSignal
+        });
       }
       return targetAgentAdapter === "dsh" && driver === defaultDriver
         ? await sendDshSessionMessage({
@@ -1883,7 +1872,7 @@ async function executeAgentThreadRequest(
           status: "delivered",
           targetThreadId: threadId,
           deliveryId: agentCommunication?.deliveryId ?? standaloneDeliveryId,
-          acceptedBy: receiptAttribution.acceptedBy,
+          acceptedBy: acceptedReceipt?.acceptedBy ?? receiptAttribution.acceptedBy,
           action: acceptedReceipt?.action ?? "accepted",
           transport: acceptedReceipt?.transport ?? receiptAttribution.transport,
           ...(acceptedReceipt ? { openedThread: acceptedReceipt.openedThread } : {}),

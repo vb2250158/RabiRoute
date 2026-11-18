@@ -33,7 +33,7 @@ export function instanceIdentityResetAvailable(environment: NodeJS.ProcessEnv = 
   return environment.RABIROUTE_HOSTED === "1" && path.isAbsolute(executable) && fsSync.existsSync(executable);
 }
 
-function localRequest(request: http.IncomingMessage): boolean {
+export function localIdentitySettingsRequest(request: http.IncomingMessage): boolean {
   if (!isLoopbackRemoteAddress(request.socket.remoteAddress)) return false;
   const authority = request.headers.host;
   // Reject DNS-rebound domains even when their browser Origin matches Host.
@@ -42,7 +42,7 @@ function localRequest(request: http.IncomingMessage): boolean {
   try { local = new URL(`http://${authority}`); }
   catch { return false; }
   if (Number(local.port || 80) !== request.socket.localPort) return false;
-  if (["x-rabilink-tunnel-local", "x-rabiroute-relay-proxy", "x-rabiroute-peer-proxy", "x-forwarded-for", "forwarded"]
+  if (["x-rabilink-internal-hop", "x-rabilink-tunnel-local", "x-rabiroute-relay-proxy", "x-rabiroute-peer-proxy", "x-forwarded-for", "forwarded"]
     .some(header => request.headers[header] !== undefined)) return false;
   const site = request.headers["sec-fetch-site"];
   if (site && site !== "same-origin" && site !== "none") return false;
@@ -224,7 +224,7 @@ export function captureIdentityResetAuthority(request: http.IncomingMessage, url
       // Local transport properties can disappear after body consumption; capture that strict exception once.
       if (!principal && (isLanAgentCredentialToken(bearer) || typeof legacy === "string" && isLanAgentCredentialToken(legacy)
         || [...url.searchParams.values()].some(isLanAgentCredentialToken)
-        || !principalCaptured && !localRequest(request) && !hasAuthenticatedConnectionRequest(request))) throw new Error("Local authorization required.");
+        || !principalCaptured && !localIdentitySettingsRequest(request) && !hasAuthenticatedConnectionRequest(request))) throw new Error("Local authorization required.");
       originalPrincipal = principal; principalCaptured = true;
     } catch (error) {
       if (error instanceof IdentityResetOwnerChangedError) throw error;

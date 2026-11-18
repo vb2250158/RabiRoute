@@ -24,6 +24,9 @@ if (-not $OutputRoot) {
     $OutputRoot = Join-Path $env:LOCALAPPDATA "RabiRoute\build\desktop-runtime"
 }
 $OutputRoot = Assert-LocalDirectory $OutputRoot
+. (Join-Path $scriptDir 'lib/build-output-boundary.ps1')
+$OutputRoot = Assert-BuildOutputBoundary -OutputRoot $OutputRoot -RepositoryRoot $repo `
+    -InputPaths @(Join-Path $env:LOCALAPPDATA 'RabiRoute\build-cache')
 $hostSource = Join-Path $repo "desktop\tray-task-window"
 $pythonRoot = Join-Path $OutputRoot "python"
 $runtimePython = Join-Path $pythonRoot "python.exe"

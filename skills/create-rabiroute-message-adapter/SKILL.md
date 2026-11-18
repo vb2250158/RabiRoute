@@ -171,6 +171,8 @@ Manager 控制面编排共享拥有者，平台实现由各插件包拥有：
 - 通用 normalize、运行、日志和端口声明复用现有 owner。保存沿原 CAS 队列写入；只改端自有字段时经常驻 Gateway 精确 ACK，公共依赖变更继续走真实生命周期。
 - 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
 - 插件启停复用原生 generation 与逐实例设置，展示 desired enabled 和实际执行状态；不另建第二份运行开关表。
+- Gateway 传输交给 `ownMessageEndpoint`。在端口、连接或 worker 启动前，通过 `start(startup)` 的 `startup?.onFailure(dispose)` 登记失败清理。正常启动返回停止函数。按真实资源验证清理和同进程重试，并确认无关端点持续可用。操作细节见[插件生命周期](../../docs/plugin-publication-lifecycle.md#owner-与异步启动)。
+- 入站传输退役时先关闭新消息接纳，再等待已接纳的异步工作。需要等待共享路由时调用 `forwardMessageWithCompletion`，并按目标宿主支持情况检验兼容路径。直接投递以实际完成为准，消息分组以宿主队列完成接纳为准。
 
 当前参考模块：
 
@@ -378,7 +380,7 @@ Raw payload 要落盘，方便重放和排障。规范化失败也要写错误�
 
 - 健康检查、扫描、打开页面、复制命令不能发送真实平台消息。
 - 自动外发默认关闭；只有配置明确允许或用户当场授权时才能 commit。
-- QQ/群聊/私聊等外发要走现有 action safety gate 或明确的发送函数。
+- 新发送形态经 `ownMessageEndpointEgress({ sendVariants })` 声明渠道限定的 `payload.type`、`paramsSchema`、`dataSchema`、完整文本投影和平台操作。用统一发送入口验证规则、原请求租约、回执与停用后的回读。见[渠道发送形态](../../docs/host-plugin-boundaries.md#渠道发送形态)。
 - 语音转写要求“发到 QQ”时，必须检查目标、内容和授权是否足够；不足则生成草稿或追问。
 - 防反馈回路：忽略 self message、识别 TTS 回录、记录已处理 message id。
 

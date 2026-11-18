@@ -9,6 +9,7 @@ import { ensurePersonaPlanWorkflow, writePersonaPlanWorkflow } from "./personaPl
 import { invalidatePlanReads, planReadFence } from "./planReadInvalidation.js";
 import { readPlanCatalogDiagnostics, readPlanPageCatalogInWorker, publishRolePlanCatalog, publishCommittedRolePlan, readPlansFromStorageInWorker, roleKnowledgeFileCountsInWorker } from "./roleKnowledge.js";
 import { ManagerReadWorkerPool, type ManagerReadWorkerChild } from "./manager/managerReadWorkerPool.js";
+import { setPlanHistoryCommitment } from "./planHistoryShards.js";
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),"plan-read-fence-"));
@@ -72,6 +73,26 @@ test("fresh module restores a verified checkpoint without reading unchanged sour
   fs.unlinkSync(file);
   const deletedModule = await import(`${pathToFileURL(path.resolve("src/roleKnowledge.ts")).href}?checkpoint=deleted-${Date.now()}`);
   assert.deepEqual(await deletedModule.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "restart-deleted" }), []);
+});
+
+test("fresh module rereads checkpoint entries carrying history commitments", async t => {
+  const { root, file, plan } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const history = Buffer.from(`${JSON.stringify({ id: "created", planId: plan.id })}\n`);
+  fs.writeFileSync(path.join(path.dirname(file), "history.jsonl"), history);
+  fs.writeFileSync(file, JSON.stringify(setPlanHistoryCommitment(plan, new Map([["history.jsonl", history]]))));
+  const first = await readPlanPageCatalogInWorker(root, planReadFence(root));
+  const { pathToFileURL } = await import("node:url");
+  const fresh = await import(`${pathToFileURL(path.resolve("src/roleKnowledge.ts")).href}?committed-checkpoint=${Date.now()}`);
+  const original = fs.promises.readFile;
+  let sourceReads = 0;
+  t.mock.method(fs.promises, "readFile", async (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === file) sourceReads++;
+    return original(...args);
+  });
+  const restored = await fresh.readPlanPageCatalogInWorker(root, { ...planReadFence(root), epoch: "committed-restart" });
+  assert.deepEqual(restored, first);
+  assert.equal(sourceReads, 1);
 });
 
 test("resident catalog hot reads only scan recovery eligibility; explicit reconciliation sees metadata-preserving writes",async t=>{

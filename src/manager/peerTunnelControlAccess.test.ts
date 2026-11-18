@@ -40,7 +40,9 @@ const webguiFunction = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.tex
 const peerFactory = find(peerAst, n => ts.isFunctionDeclaration(n) && n.name?.text === 'createManagerPeerRuntime');
 const control = find(peerFactory, n => ts.isPropertyAssignment(n) && n.name.getText(peerAst) === 'allowControl') as ts.PropertyAssignment;
 const upgrade = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'admitPeerProxyUpgrade');
+const requestScope = find(ast, n => ts.isFunctionDeclaration(n) && n.name?.text === 'rabiLinkRequestScope');
 const callbackCode = ts.transpileModule(webguiFunction.getText(ast)
+  + '\n' + requestScope.getText(ast)
   + '\n' + upgrade.getText(ast)
   + '\nglobalThis.peerControl = ' + control.initializer.getText(peerAst)
   + ';\nglobalThis.peerUpgradeAdmission = (request, url) => admitPeerProxyUpgrade(request, url, lanAgentAuthority);',
@@ -59,6 +61,7 @@ async function fixture(t: test.TestContext) {
     managerHost: '0.0.0.0', managerPort: 0, managerInstanceId: 'fixture-manager',
     managerHostIdentity: { applicationGenerationId: 'fixture-generation' }, lanAgentAuthority: authority,
     rabiLinkRelayConfigForMeta: () => config,
+    rabiLinkHostAccount: { relay: () => undefined },
     localIpv4AddressEntries: () => [{ address: '127.0.0.1' }],
     remoteRequestUsesIndependentAuthorization: () => false,
     rabiGlobalConfig: { read: () => ({ webguiLan: { enabled: true, accessToken: 'synthetic-webgui-not-provided' } }),

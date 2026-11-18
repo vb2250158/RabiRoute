@@ -1,0 +1,30 @@
+{
+  "name": "io.rabiroute.endpoint.qqbot",
+  "version": "0.1.1",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "rabi.plugin.json",
+    "route-config.json",
+    "*.mjs",
+    "src",
+    "web",
+    "README.md",
+    "README_en.md"
+  ],
+  "peerDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.0"
+  },
+  "devDependencies": {
+    "@rabiroute/plugin-sdk": "^1.1.0",
+    "@rabiroute/host-api": "^1.0.0"
+  },
+  "rabi": {
+    "manifest": "rabi.plugin.json",
+    "sourceLayout": 1,
+    "webSource": "web/entry.ts"
+  },
+  "scripts": {
+    "build": "rabi-plugin-build"
+  }
+}

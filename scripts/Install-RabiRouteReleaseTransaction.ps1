@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$InstallRoot,
-    [Parameter(Mandatory = $true)][string]$PortableZip,
+    [string]$PortableZip = "",
+    [string[]]$ComponentArchive = @(),
+    [string]$ComponentArchiveJsonFile = "",
+    [string]$ComponentsInstalled = "",
     [Parameter(Mandatory = $true)][string]$ExpectedReleaseId,
     [Parameter(Mandatory = $true)][string]$StopHostScript,
     [Parameter(Mandatory = $true)][string]$LegacyMigrationScript,
@@ -171,10 +174,26 @@ function Get-Sha256File([string]$Path) {
     try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
     finally { $sha.Dispose(); $stream.Dispose() }
 }
+# Expand-Archive in Windows PowerShell 5.1 spends tens of minutes on payloads with
+# tens of thousands of small files. bsdtar ships with Windows 10 1803+, handles zip
+# input, and preserves the UTF-8 entry names these release archives use, so prefer
+# it and keep Expand-Archive only as a fallback.
+function Expand-ReleaseArchive([string]$LiteralPath, [string]$DestinationPath) {
+    [IO.Directory]::CreateDirectory($DestinationPath) | Out-Null
+    Assert-NoReparse $DestinationPath
+    $tar = Join-Path $env:SystemRoot "System32\tar.exe"
+    if (Test-Path -LiteralPath $tar -PathType Leaf) {
+        & $tar "-xf" $LiteralPath "-C" $DestinationPath
+        if ($LASTEXITCODE -eq 0) { Assert-NoReparse $DestinationPath; return }
+        throw "Release archive extraction failed (tar exit $LASTEXITCODE): $LiteralPath"
+    }
+    Expand-Archive -LiteralPath $LiteralPath -DestinationPath $DestinationPath -Force
+    Assert-NoReparse $DestinationPath
+}
 function Read-Candidate([string]$Candidate, [string]$Expected) {
     Assert-NoReparse $Candidate
     $allowedRoot = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($name in @("RabiRouteHost.exe","current.json","versions")) { [void]$allowedRoot.Add($name) }
+    foreach ($name in @("RabiRouteHost.exe","current.json","versions","components.json")) { [void]$allowedRoot.Add($name) }
     foreach ($entry in Get-ChildItem -LiteralPath $Candidate -Force) {
         if (-not $allowedRoot.Contains($entry.Name)) { throw "Candidate distribution contains an unowned root entry: $($entry.Name)" }
     }
@@ -196,17 +215,80 @@ function Read-Candidate([string]$Candidate, [string]$Expected) {
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.schemaVersion -ne 1 -or [string]$manifest.appId -ne $AppId -or [string]$manifest.releaseId -ne $Expected -or [string]$manifest.payloadSha256 -ne [string]$pointer.payloadSha256) { throw "Pointer and release manifest do not fence the same payload." }
     $required = @("RabiRouteHost.Core.dll", "node.exe", "dist/manager.js", "ribiwebgui/dist/index.html", "desktop-runtime/main.py", "desktop-runtime/python/python.exe")
+    # Components the user declined are allowed to be absent from the candidate.
+    # The omission set is derived from components.json plus the installer's
+    # component selection, so a skipped archive never weakens hashing for files
+    # that were actually installed.
+    $omittedPrefixes = @()
+    if ($ComponentsInstalled) {
+        $componentStatePath = Join-Path $Candidate "components.json"
+        if (-not (Test-Path -LiteralPath $componentStatePath -PathType Leaf)) { throw "Component selection was supplied but components.json is missing from the release." }
+        $componentState = Get-Content -LiteralPath $componentStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $definitionPath = Join-Path $PSScriptRoot "windows-release-components.json"
+        $definition = Get-Content -LiteralPath $definitionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($definition.schemaVersion -ne 1 -or $componentState.schemaVersion -ne 1 -or [string]$componentState.releaseId -cne $Expected) { throw "Component definition or release identity is invalid." }
+        $trusted = @{}; $observed = @{}; $trustedPrefixes = [Collections.Generic.List[string]]::new()
+        foreach ($component in @($definition.components)) {
+            $id = [string]$component.id
+            if ($id -cnotmatch '^[a-z][a-z0-9-]*$' -or $trusted.ContainsKey($id) -or $component.required -isnot [bool] -or $component.manifestPrefixes -isnot [array]) { throw "Trusted component definition is invalid." }
+            foreach ($prefix in @($component.manifestPrefixes)) {
+                if ($prefix -isnot [string] -or $prefix -cnotmatch '^[A-Za-z0-9@._/-]+/$' -or $prefix.StartsWith('/') -or $prefix.Split('/') -contains '..') { throw "Trusted component prefix is invalid." }
+                foreach ($other in $trustedPrefixes) { if ($prefix.StartsWith($other, [StringComparison]::OrdinalIgnoreCase) -or $other.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Trusted component prefixes overlap." } }
+                $trustedPrefixes.Add($prefix)
+            }
+            $trusted[$id] = $component
+        }
+        if (-not $trusted.ContainsKey("core") -or -not [bool]$trusted["core"].required -or @($trusted["core"].manifestPrefixes).Count -ne 0) { throw "Trusted core component is missing." }
+        foreach ($component in @($componentState.components)) {
+            $id = [string]$component.id
+            if (-not $id -or $observed.ContainsKey($id) -or -not $trusted.ContainsKey($id)) { throw "Component manifest contains unknown or duplicate identity." }
+            $expectedComponent = $trusted[$id]
+            if ($component.required -isnot [bool] -or $component.required -ne $expectedComponent.required) { throw "Component required flag differs from trusted definition: $id" }
+            $actualPrefixes = @($component.manifestPrefixes); $expectedPrefixes = @($expectedComponent.manifestPrefixes)
+            if ($actualPrefixes.Count -ne $expectedPrefixes.Count) { throw "Component prefix count differs from trusted definition: $id" }
+            for ($i = 0; $i -lt $expectedPrefixes.Count; $i++) {
+                if ([string]$actualPrefixes[$i] -cne [string]$expectedPrefixes[$i]) { throw "Component prefix differs from trusted definition: $id" }
+            }
+            $observed[$id] = $true
+        }
+        if ($observed.Count -ne $trusted.Count) { throw "Component manifest is missing a trusted definition." }
+        $selected = @{}
+        foreach ($id in @($ComponentsInstalled.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            if (-not $trusted.ContainsKey($id) -or $selected.ContainsKey($id)) { throw "Component selection contains an unknown or duplicate identity: $id" }
+            $selected[$id] = $true
+        }
+        if ($selected.Count -eq 0) { throw "Component selection contains no installed component." }
+        foreach ($id in $trusted.Keys) {
+            $component = $trusted[$id]
+            if ($selected.ContainsKey($id)) { continue }
+            if ([bool]$component.required) { throw "Component $id is required and cannot be skipped." }
+            foreach ($prefix in @($component.manifestPrefixes)) { $omittedPrefixes += [string]$prefix }
+        }
+    }
+    function Test-ComponentOmitted([string]$Relative) {
+        foreach ($prefix in $omittedPrefixes) {
+            if ($Relative.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        }
+        return $false
+    }
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in @($manifest.files)) {
         $relative = [string]$entry.path
         if (-not $relative -or $relative.Contains('\') -or $relative.StartsWith('/') -or $relative.Split('/') -contains '..' -or -not $seen.Add($relative)) { throw "Manifest contains an unsafe or duplicate path: $relative" }
         $file = Full (Join-Path $version ($relative -replace '/', '\'))
-        if (-not (Is-Under $file $version) -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Manifest file is missing or escaped: $relative" }
+        if (-not (Is-Under $file $version)) { throw "Manifest file escaped: $relative" }
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            if (Test-ComponentOmitted $relative) { continue }
+            throw "Manifest file is missing: $relative"
+        }
         $item = Get-Item -LiteralPath $file
         if ($item.Length -ne [long]$entry.size) { throw "Manifest size mismatch: $relative" }
         if ((Get-Sha256File $file) -ne ([string]$entry.sha256).ToLowerInvariant()) { throw "Manifest hash mismatch: $relative" }
     }
-    foreach ($relative in $required) { if (-not $seen.Contains($relative)) { throw "Required version payload file is missing from manifest: $relative" } }
+    foreach ($relative in $required) {
+        if (-not $seen.Contains($relative)) { throw "Required version payload file is missing from manifest: $relative" }
+        if (Test-ComponentOmitted $relative) { throw "Required version payload file belongs to a skipped component: $relative" }
+    }
     $actual = @(Get-ChildItem -LiteralPath $version -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($version.Length + 1).Replace('\','/') } | Where-Object { $_ -ne 'release-manifest.json' })
     foreach ($relative in $actual) { if (-not $seen.Contains($relative)) { throw "Version payload contains an unmanifested file: $relative" } }
     $canonical = [Text.StringBuilder]::new()
@@ -454,7 +536,24 @@ $install = Full $InstallRoot
 if (-not [IO.Path]::IsPathRooted($install) -or $install -eq (Full ([IO.Path]::GetPathRoot($install)))) { throw "InstallRoot must be an absolute application directory, not a drive root." }
 foreach ($script in @($StopHostScript,$LegacyMigrationScript,$LegacyTaskMigrationScript,$AutostartScript)) { if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "Required transaction helper is missing: $script" } }
 if (($FaultPoint -or $TestSelfTestScript -or $TestLegacyTaskStorePath) -and $env:RABIROUTE_INSTALL_TRANSACTION_TEST_MODE -ne "1") { throw "Test hooks are forbidden outside explicit transaction test mode." }
-if (-not (Test-Path -LiteralPath $PortableZip -PathType Leaf)) { throw "Portable ZIP is missing." }
+# A full portable ZIP or the per-component archives must be supplied. Component
+# archives are extracted in order into the same candidate root; the split is
+# disjoint, so ordering only affects progress reporting.
+$releaseArchives = @()
+if ($ComponentArchiveJsonFile) {
+    $archiveJson = Get-Content -LiteralPath $ComponentArchiveJsonFile -Raw -Encoding UTF8
+    if (-not $archiveJson.Trim().StartsWith("[") -or -not $archiveJson.Trim().EndsWith("]")) { throw "Component archive list must be a JSON array." }
+    $parsedArchives = ConvertFrom-Json -InputObject $archiveJson
+    if ($parsedArchives -isnot [array] -or $parsedArchives.Count -eq 0) { throw "Component archive list must be a nonempty JSON array." }
+    foreach ($archive in $parsedArchives) {
+        if ($archive -isnot [string] -or [string]::IsNullOrWhiteSpace($archive)) { throw "Component archive list contains an invalid path." }
+        $releaseArchives += $archive
+    }
+}
+if ($PortableZip) { $releaseArchives += $PortableZip }
+$releaseArchives += @($ComponentArchive | Where-Object { $_ })
+if ($releaseArchives.Count -eq 0) { throw "No release archive was supplied." }
+foreach ($archive in $releaseArchives) { if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) { throw "Release archive is missing: $archive" } }
 $installMutex = Enter-InstallMutex $install
 try {
 # Fail closed before creating staging or stopping any process when a foreign
@@ -568,7 +667,9 @@ function Save-Journal([string]$State, [string]$VersionMoveState, [bool]$VersionI
 }
 try {
     Save-Journal "staging" "not-started" $false
-    Expand-Archive -LiteralPath $PortableZip -DestinationPath $candidate -Force
+    foreach ($archive in $releaseArchives) {
+        Expand-ReleaseArchive -LiteralPath $archive -DestinationPath $candidate
+    }
     $release = Read-Candidate $candidate $ExpectedReleaseId
     if ($FaultPoint -eq "after-stage") { throw "Injected fault after-stage" }
     Invoke-BootstrapSelfTest $release.bootstrap "Candidate bootstrap self-test"

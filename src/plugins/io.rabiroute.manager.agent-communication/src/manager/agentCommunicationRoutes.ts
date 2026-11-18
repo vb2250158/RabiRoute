@@ -31,6 +31,7 @@ export type AgentCommunicationRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
+  listSendVariants?: () => readonly Readonly<Record<string, unknown>>[];
   findSendTraces: (query: AgentSendTraceQuery) => unknown[];
   send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void }) => Promise<AgentCommunicationHttpResponse>;
   readChatHistory?: (url: URL) => Promise<unknown>;
@@ -218,7 +219,7 @@ function handleSendCapabilities(
   context: AgentCommunicationRoutesContext
 ): boolean {
   if (request.method !== "GET" || requestUrl.pathname !== "/api/agent/send/capabilities") return false;
-  const result = agentSendCapabilities();
+  const result = agentSendCapabilities(context.listSendVariants?.());
   context.jsonResponse(response, result.status, result.body);
   return true;
 }

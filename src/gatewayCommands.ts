@@ -37,6 +37,7 @@ import type { WearableHealthAlert } from "./wearableHealth.js";
 import type { RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
 import { serializeAgentDeliveryTestResult } from "./agentDeliveryTest.js";
 import { SYSTEM_EVENT_STDIN_FLAG, SYSTEM_EVENT_RESULT_PREFIX, type SystemEventIngress } from "./shared/systemEventIngress.js";
+import { isCaptureEventRouteKind } from "./shared/personaEventTypes.js";
 import {
   planStorageGenerationLeaseFromEnvironment,
   verifyPlanStorageGenerationLease
@@ -100,7 +101,8 @@ async function executeGatewayCommand(argv: readonly string[]): Promise<void> {
       const result = await forwardMessageAndWait(
         payload.routeKind,
         payload.record,
-        payload.templateValues
+        payload.templateValues,
+        isCaptureEventRouteKind(payload.routeKind) ? { recordInbound: false, logReplayAttempt: false } : undefined
       );
       console.log(`${SYSTEM_EVENT_RESULT_PREFIX}${JSON.stringify({
         status: result.status,

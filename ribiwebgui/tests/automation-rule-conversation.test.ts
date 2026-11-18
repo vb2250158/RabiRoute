@@ -96,20 +96,24 @@ test("group choices obey source scope and resolve conflicting account aliases by
 });
 
 const pickerPage = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+const filtersPage = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/AutomationMessageFilters.vue", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const pickerScript = parse(pickerPage).descriptor.scriptSetup!.content;
 const pickerAst = ts.createSourceFile("picker.ts", pickerScript, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const emit = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 
 test("actual group picker handler retains manual numbers, clears deliberately, and never saves a name as an ID", () => {
-  const declaration = pickerAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "setAutomationGroupTarget");
+  const filtersScript = parse(filtersPage).descriptor.scriptSetup!.content;
+  const filtersAst = ts.createSourceFile("filters.ts", filtersScript, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declaration = filtersAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "updateQqTarget");
   assert.ok(declaration);
-  const patches: any[] = [];
-  const handler = new Function("patchAutomationMessageTrigger", emit(declaration.getText(pickerAst)) + ";return setAutomationGroupTarget;")((patch: unknown) => patches.push(patch));
-  handler("20001"); handler(" 29999 "); handler("Group A"); handler(null);
+  const patches: Record<string, unknown>[] = [];
+  const handler = new Function("emit", "pending", emit(declaration.getText(filtersAst)) + ";return updateQqTarget;")
+    ((_event: string, patch: Record<string, unknown>) => patches.push(patch), ref([]));
+  for (const value of ["20001", " 29999 ", "Group A", null]) handler("targetGroupId", value);
   assert.deepEqual(patches, [
     { targetGroupId: "20001", targetUserId: "" },
     { targetGroupId: "29999", targetUserId: "" },
-    { targetGroupId: "", targetUserId: "" }
+    { targetGroupId: "" }
   ]);
   assert.ok(patches.every(patch => !("routeKinds" in patch)), "choosing a group preserves the user's trigger kinds");
 });
@@ -135,10 +139,10 @@ test("actual picker choices retain an unresolved configured group through direct
 });
 
 test("the group picker renders avatars in options and selection while accepting stable string values", () => {
-  const start = pickerPage.indexOf('<v-combobox\n                        v-if="activeMessageTrigger?.routeKinds?.some(kind =>');
-  const end = pickerPage.indexOf("</v-combobox>", start);
+  const start = filtersPage.indexOf(`<v-combobox v-else-if="item.key === 'targetGroupId' && endpoint === 'napcat'"`);
+  const end = filtersPage.indexOf("</v-combobox>", start);
   assert.ok(start > 0 && end > start);
-  const template = pickerPage.slice(start, end);
+  const template = filtersPage.slice(start, end);
   assert.match(template, /:return-object="false"/);
   assert.match(template, /#item=/); assert.match(template, /#selection=/);
   assert.equal((template.match(/<QqAvatar/g) || []).length, 2);

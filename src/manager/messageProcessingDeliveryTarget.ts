@@ -1,4 +1,5 @@
-import { resolvePrimaryAgentTarget } from "../shared/routeAgentTargets.js";
+import { resolvePrimaryAgentTarget, type AgentTargetSession } from "../shared/routeAgentTargets.js";
+import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import type { MessageProcessingRequirement } from "../messageProcessing/board.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import {
@@ -11,6 +12,7 @@ export type MessageProcessingDeliveryAgentType = "message_processing" | "primary
 export type MessageProcessingDeliveryTarget = {
   agentType: MessageProcessingDeliveryAgentType;
   worker: NonNullable<MessageProcessingRequirement["worker"]>;
+  instanceBinding?: AgentInstanceBinding;
 };
 
 export type ResolvedMessageProcessingDeliveryTarget = {
@@ -18,63 +20,34 @@ export type ResolvedMessageProcessingDeliveryTarget = {
   previousThreadId?: string;
 };
 
-function configuredPrimaryAgentAdapter(definition: GatewayDefinition): string | undefined {
-  return resolvePrimaryAgentTarget(definition)?.provider;
-}
-
-function primaryPersonaWorker(
-  definition: GatewayDefinition
-): NonNullable<MessageProcessingRequirement["worker"]> | undefined {
-  const adapter = configuredPrimaryAgentAdapter(definition);
-  if (adapter === "dsh") {
-    const sessionId = definition.dshSessionId?.trim();
-    const workspace = definition.dshCwd?.trim();
-    if (!sessionId || !workspace) return undefined;
-    return {
-      agentAdapter: "dsh",
-      threadId: sessionId,
-      threadName: definition.dshSessionName?.trim() || "DSH 主角色",
-      workspace
-    };
-  }
-  if (adapter === "workbuddy") {
-    const sessionId = definition.workbuddySessionId?.trim();
-    const workspace = definition.workbuddyCwd?.trim();
-    if (!sessionId || !workspace) return undefined;
-    return {
-      agentAdapter: "workbuddy",
-      threadId: sessionId,
-      threadName: definition.workbuddySessionName?.trim() || "WorkBuddy 主角色",
-      workspace
-    };
-  }
-  if (adapter !== "codex") return undefined;
-  const threadId = definition.codexThreadId?.trim();
-  const workspace = definition.codexCwd?.trim();
+export function resolveMessageProcessingDeliveryTarget(
+  definition: GatewayDefinition,
+  managedWorker: MessageProcessingRequirement["worker"],
+  localSession: (definition: GatewayDefinition, agentAdapter: string) => AgentTargetSession | undefined
+): MessageProcessingDeliveryTarget | undefined {
+  const primary = resolvePrimaryAgentTarget(definition);
+  if (!primary) return undefined;
+  const instanceBinding = primary.binding;
+  const session = instanceBinding ? primary : localSession(definition, primary.provider);
+  const threadId = session?.sessionId?.trim();
+  const workspace = session?.workspace?.trim();
   if (!threadId || !workspace) return undefined;
+  const owner = instanceBinding ? { instanceBinding } : {};
+  const managedAdapter = primaryMessageProcessingAgentAdapter(definition);
+  if (managedAdapter && managedWorker && messageProcessingWorkerAdapter(managedWorker) === managedAdapter
+    && managedWorker.threadId !== threadId) {
+    return sameCodexWorkspace(managedWorker.workspace, workspace)
+      ? { agentType: "message_processing", worker: { ...managedWorker, agentAdapter: managedAdapter }, ...owner }
+      : undefined;
+  }
   return {
-    agentAdapter: "codex",
-    threadId,
-    threadName: definition.codexThreadName?.trim() || "Codex 主角色",
-    workspace
+    agentType: "primary_persona", ...owner,
+    worker: { agentAdapter: primary.provider, threadId, threadName: session?.sessionName?.trim() || threadId, workspace }
   };
 }
 
-export function resolveMessageProcessingDeliveryTarget(
-  definition: GatewayDefinition,
-  managedWorker: MessageProcessingRequirement["worker"]
-): MessageProcessingDeliveryTarget | undefined {
-  const managedAdapter = primaryMessageProcessingAgentAdapter(definition);
-  if (managedAdapter) {
-    const primaryWorkspace = managedAdapter === "dsh" ? definition.dshCwd : definition.codexCwd;
-    return managedWorker
-      && (managedWorker.agentAdapter ?? (managedWorker.threadId.startsWith("session-") ? "dsh" : "codex")) === managedAdapter
-      && sameCodexWorkspace(managedWorker.workspace, primaryWorkspace)
-      ? { agentType: "message_processing", worker: { ...managedWorker, agentAdapter: managedAdapter } }
-      : undefined;
-  }
-  const worker = primaryPersonaWorker(definition);
-  return worker ? { agentType: "primary_persona", worker } : undefined;
+export function messageProcessingWorkerAdapter(worker: Pick<MessageProcessingDeliveryTarget["worker"], "agentAdapter" | "threadId">): string {
+  return worker.agentAdapter ?? (worker.threadId.startsWith("session-") ? "dsh" : "codex");
 }
 
 export function resolveDeliveredMessageProcessingTarget(
@@ -92,7 +65,7 @@ export function resolveDeliveredMessageProcessingTarget(
   return {
     previousThreadId,
     target: {
-      agentType: target.agentType,
+      ...target,
       worker: {
         agentAdapter: target.worker.agentAdapter,
         threadId,

@@ -517,6 +517,21 @@ test("AgentPacket never injects conversation history into heartbeat events", () 
 });
 
 
+test("capture automation packets identify the system event without a reply target or conversation history", () => {
+  const route = routeProfile({ notificationRules: [
+    { id: "capture", name: "Window", enabled: true, routeKinds: ["recording_window"], template: "{recordingEventId} {message}" }
+  ] });
+  const record = { time: 1710000001, rawMessage: "Fixture window", messageId: "capture-current", senderName: "前台窗口", source: "window", adapterType: "recording" };
+  const decision = createRouteDecision(route, "recording_window", record, { recordingEventId: record.messageId });
+  assert.ok(decision);
+  const packet = buildAgentPacket(decision, decision.matchedRules[0], { roleId: "Rabi", roleDir: "", rolePath: "", dataDir: "" });
+  assert.equal(packet.messageSource.type, "system");
+  assert.equal(packet.templateValues.recentMessageLimit, 0);
+  assert.equal(packet.templateValues.sendRequestJson, undefined);
+  assert.match(packet.message, /全天记录 · 前台窗口/);
+  assert.match(packet.message, /capture-current/);
+});
+
 test("QQ private target matches stable sender IDs, leaves defaults open and does not filter group or voice", () => {
   const rule = { id: "selected-peer", name: "Selected peer", enabled: true, routeKinds: [] as any[], targetUserId: "20001", regex: "", template: "original" };
   const selected = routeProfile({ notificationRules: [rule] });

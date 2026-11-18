@@ -1,5 +1,35 @@
 import type { GatewayDefinition, NotificationRule, PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
 import { automationRulesForGateway, defaultHeartbeatSchedule, syncAutomationRuleProjection } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
+import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
+
+type AutomationTriggerType = PersonaAutomationRuleDefinition["trigger"]["type"];
+type AutomationActionType = PersonaAutomationRuleDefinition["action"]["type"];
+
+export function newAutomationDraft(gateway: GatewayDefinition, triggerType: AutomationTriggerType, actionType: AutomationActionType): PersonaAutomationRuleDefinition {
+  return {
+    id: `automation-${browserUuid()}`,
+    name: triggerType === "schedule" ? "新定时任务" : "新消息动作",
+    enabled: true,
+    trigger: triggerType === "schedule"
+      ? { type: "schedule", schedule: defaultHeartbeatSchedule(gateway, "触发时间") }
+      : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
+    action: actionType === "run_script"
+      ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
+      : { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "", template: "" }
+  };
+}
+
+export function applyAutomationPatch(current: PersonaAutomationRuleDefinition, patch: Partial<PersonaAutomationRuleDefinition>): PersonaAutomationRuleDefinition {
+  const trigger = patch.trigger ?? current.trigger;
+  return {
+    ...current,
+    ...patch,
+    trigger: patch.enabled !== undefined && trigger.type === "schedule"
+      ? { ...trigger, schedule: { ...trigger.schedule, enabled: patch.enabled } }
+      : trigger,
+    action: patch.action ?? current.action
+  };
+}
 
 export function createRoleEditorActions(read: () => GatewayDefinition | null, touch: () => void, onChange?: (gateway: GatewayDefinition) => void) {
   const selectedGateway = { get value() { return read(); } };
@@ -33,29 +63,20 @@ export function createRoleEditorActions(read: () => GatewayDefinition | null, to
     touch();
   }
 
-  function addAutomation(triggerType: "message" | "schedule", actionType: "deliver_agent" | "run_script"): string | undefined {
+  function insertAutomation(draft: PersonaAutomationRuleDefinition): string | undefined {
     const gateway = selectedGateway.value;
     if (!gateway) return undefined;
     const automations = automationRulesForGateway(gateway);
-    const id = `automation-${Date.now().toString(36)}-${automations.length + 1}`;
-    const next: PersonaAutomationRuleDefinition = {
-      id,
-      name: triggerType === "schedule" ? "新定时任务" : "新消息动作",
-      enabled: true,
-      trigger: triggerType === "schedule"
-        ? {
-          type: "schedule",
-          schedule: defaultHeartbeatSchedule(gateway, "触发时间")
-        }
-        : { type: "message", routeKinds: [], targetGroupId: "", allowedSpeakerNames: [], regex: "" },
-      action: actionType === "run_script"
-        ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
-        : { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "", template: "" }
-    };
-    automations.push(next);
+    if (automations.some(rule => rule.id === draft.id)) return draft.id;
+    automations.push(draft);
     syncAutomationRuleProjection(gateway);
     touch();
-    return id;
+    return draft.id;
+  }
+
+  function addAutomation(triggerType: AutomationTriggerType, actionType: AutomationActionType): string | undefined {
+    const gateway = selectedGateway.value;
+    return gateway ? insertAutomation(newAutomationDraft(gateway, triggerType, actionType)) : undefined;
   }
 
   function updateAutomation(ruleId: string, patch: Partial<PersonaAutomationRuleDefinition>): void {
@@ -64,16 +85,7 @@ export function createRoleEditorActions(read: () => GatewayDefinition | null, to
     const automations = automationRulesForGateway(gateway);
     const index = automations.findIndex(rule => rule.id === ruleId);
     if (index < 0) return;
-    const current = automations[index];
-    const trigger = patch.trigger ?? current.trigger;
-    automations[index] = {
-      ...current,
-      ...patch,
-      trigger: patch.enabled !== undefined && trigger.type === "schedule"
-        ? { ...trigger, schedule: { ...trigger.schedule, enabled: patch.enabled } }
-        : trigger,
-      action: patch.action ?? current.action
-    };
+    automations[index] = applyAutomationPatch(automations[index], patch);
     syncAutomationRuleProjection(gateway);
     touch();
   }
@@ -89,5 +101,5 @@ export function createRoleEditorActions(read: () => GatewayDefinition | null, to
     touch();
   }
 
-  return { updateRule, addAutomation, updateAutomation, removeAutomation };
+  return { updateRule, addAutomation, insertAutomation, updateAutomation, removeAutomation };
 }

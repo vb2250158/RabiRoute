@@ -116,6 +116,7 @@ export type RecentMessageEndpoint = MessageEndpointType;
 export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
 export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "napcat",
+  "qqbot",
   "remoteAgent",
   "heartbeat",
   "rolePanel",
@@ -382,6 +383,11 @@ export type GatewayDefinition = {
   feishuEventSubscriptionEnabled?: boolean;
   feishuWebhookPort?: number;
   feishuWebhookPath?: string;
+  qqbotAccountId?: string;
+  qqbotCallbackPort?: number;
+  qqbotTransport?: "webhook" | "websocket";
+  qqbotIntents?: number;
+  qqbotManagementEnabled?: boolean;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -498,6 +504,7 @@ export type GatewayPortClaimKind =
   | "fennenote-webhook"
   | "xiaoai-webhook"
   | "rabilink-webhook"
+  | "qqbot-webhook"
   | "feishu-webhook";
 
 export type GatewayPortClaim = {
@@ -706,6 +713,7 @@ export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
 }
 
 function defaultRouteKindsForMessageAdapter(adapter: MessageEndpointType): string[] {
+  if (adapter === "qqbot") return ["qqbot_private", "qqbot_group", "qqbot_channel", "qqbot_dm"];
   if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
   if (adapter === "remoteAgent") return ["manual_trigger"];
   if (adapter === "heartbeat") return ["heartbeat"];
@@ -722,6 +730,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageEndpointType): strin
 }
 
 function defaultRuleNameForMessageAdapter(adapter: MessageEndpointType): string {
+  if (adapter === "qqbot") return "QQ 机器人默认消息";
   if (adapter === "napcat") return "QQ 默认消息";
   if (adapter === "heartbeat") return "定时默认消息";
   if (adapter === "rolePanel") return "面板默认消息";
@@ -731,7 +740,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageEndpointType): string 
   if (adapter === "rabilink") return "RabiLink 默认消息";
   if (adapter === "wearable") return "智能手表/手环健康告警";
   if (adapter === "wecom") return "企业微信默认消息";
-  if (adapter === "weixin") return "个人微信默认消息";
+  if (adapter === "weixin") return "微信机器人默认消息";
   if (adapter === "feishu") return "飞书默认消息";
   if (adapter === "xiaomiHome") return "米家设备事件";
   if (adapter === "webhook") return "Webhook 默认消息";
@@ -1082,7 +1091,7 @@ function normalizeOptionalMessageAdapters(items: unknown): MessageEndpointType[]
 }
 
 function normalizePayloadKinds(value: unknown, adapterType: MessageEndpointType): MessagePayloadKind[] {
-  const defaults = adapterType === "feishu" ? ["text"] as MessagePayloadKind[] : defaultSupportedOutputs;
+  const defaults = adapterType === "feishu" || adapterType === "qqbot" ? ["text"] as MessagePayloadKind[] : defaultSupportedOutputs;
   if (!Array.isArray(value)) return defaults;
   const kinds = [...new Set(value
     .map(item => String(item || "").trim())
@@ -1489,6 +1498,17 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   if (definition.xiaoaiWebhookPort != null) assertValidPort(definition.xiaoaiWebhookPort, `XiaoAI webhook port for ${definition.id}`, true);
   if (definition.rabiLinkWebhookPort != null) assertValidPort(definition.rabiLinkWebhookPort, `RabiLink webhook port for ${definition.id}`, true);
   if (definition.feishuWebhookPort != null) assertValidPort(definition.feishuWebhookPort, `Feishu webhook port for ${definition.id}`, true);
+  if (definition.qqbotCallbackPort != null) assertValidPort(definition.qqbotCallbackPort, `QQ Bot callback port for ${definition.id}`, true);
+  if (definition.qqbotTransport != null && definition.qqbotTransport !== "webhook" && definition.qqbotTransport !== "websocket") {
+    throw new Error(`QQ Bot transport for ${definition.id} must be webhook or websocket.`);
+  }
+  if (definition.qqbotIntents != null && (!Number.isSafeInteger(definition.qqbotIntents) || definition.qqbotIntents < 0 || definition.qqbotIntents > 0xffffffff)) {
+    throw new Error(`QQ Bot intents for ${definition.id} must be an unsigned 32-bit mask.`);
+  }
+
+  if (definition.qqbotManagementEnabled != null && typeof definition.qqbotManagementEnabled !== "boolean") {
+    throw new Error(`QQ Bot management setting for ${definition.id} must be a boolean.`);
+  }
 
   const identity = resolveRouteIdentity(definition);
   const { agentRoleDeviceId } = normalizeRemotePersonaReference(definition);
@@ -1763,6 +1783,9 @@ export function collectGatewayPortClaims(
     if (activeAdapters.has("webhook") && Number(gateway.webhookPort ?? 0) !== 0) claim(gateway.webhookPort ?? 0, `${gateway.id} webhook`, "webhook", gateway.id);
     if (activeAdapters.has("xiaoai")) claim(gateway.xiaoaiWebhookPort ?? 0, `${gateway.id} XiaoAI webhook`, "xiaoai-webhook", gateway.id);
     if (activeAdapters.has("rabilink")) claim(gateway.rabiLinkWebhookPort ?? 0, `${gateway.id} RabiLink webhook`, "rabilink-webhook", gateway.id);
+    if (activeAdapters.has("qqbot") && gateway.qqbotAccountId && gateway.qqbotTransport !== "websocket" && gateway.qqbotCallbackPort) {
+      claim(gateway.qqbotCallbackPort, `${gateway.id} QQ Bot webhook`, "qqbot-webhook", gateway.id);
+    }
     if (activeAdapters.has("feishu")) claim(gateway.feishuWebhookPort ?? 0, `${gateway.id} Feishu webhook`, "feishu-webhook", gateway.id);
     for (const instance of enabledNapcatInstances) {
       const prefix = `${gateway.id}/${instance.id}`;
@@ -1861,6 +1884,9 @@ export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPor
     if (activeAdapters.has("feishu")) {
       gateway.feishuWebhookPort = gateway.feishuWebhookPort == null || gateway.feishuWebhookPort === 0
         ? 0 : assignIngress(gateway.feishuWebhookPort, Number(gateway.gatewayPort || 8790) + 1);
+    }
+    if (activeAdapters.has("qqbot") && gateway.qqbotAccountId && gateway.qqbotTransport !== "websocket" && gateway.qqbotCallbackPort) {
+      gateway.qqbotCallbackPort = assignIngress(gateway.qqbotCallbackPort, Number(gateway.gatewayPort || 8790) + 1);
     }
   }
 }

@@ -9,10 +9,11 @@ import { createDevicePeerBootstrapOperation, type DevicePeerBootstrapOptions } f
 import { createPersonaBootstrapOperation } from "./remotePersonaRoutes.js";
 import { createPeerLanListenerMetadata, type PeerLanListenerMetadataContext } from "./peerLanListenerMetadata.js";
 import type { PeerLanServer } from "./peerLanServer.js";
+import { RabiLinkAccountTunnel } from "./rabiLinkAccountTunnel.js";
 
 export type ManagerPeerPublication = {
   tunnel?: PeerTunnelRuntime;
-  runtime?: ReturnType<typeof createRabiPeerRuntime>;
+  runtime?: ReturnType<typeof createRabiPeerRuntime> & { accountTunnel: RabiLinkAccountTunnel };
 };
 
 export type ManagerPeerRuntimeOptions = {
@@ -35,10 +36,21 @@ export type ManagerPeerRuntimeOptions = {
 export async function createManagerPeerRuntime(options: ManagerPeerRuntimeOptions) {
   let tunnel!: PeerTunnelRuntime;
   let metadata: ReturnType<typeof createPeerLanListenerMetadata> | undefined;
-  const runtime = createRabiPeerRuntime({ ...options.peer, tunnelOffer: input => tunnel.offer(input) });
+  const accountTunnel = new RabiLinkAccountTunnel({
+    ...options.tunnel,
+    onStatus: value => {
+      if (tunnel && value && typeof value === "object" && "state" in value) tunnel.connections.emit("status", value);
+      else options.tunnel.onStatus(value);
+    },
+    relay: () => {
+      const relay = options.tunnel.accountRelay?.();
+      return relay && "deviceId" in relay && typeof relay.deviceId === "string" ? { ...relay, deviceId: relay.deviceId } : undefined;
+    }
+  });
+  const runtime = Object.assign(createRabiPeerRuntime({ ...options.peer, tunnelOffer: input => tunnel.offer(input) }), { accountTunnel });
   const isPublished = () => options.publication.current().tunnel === tunnel;
   try {
-    tunnel = new PeerTunnelRuntime({ ...options.tunnel, signal: (call, signal) => runtime.signal(call, signal) });
+    tunnel = new PeerTunnelRuntime({ ...options.tunnel, accountTunnel: () => accountTunnel.runtime(), signal: (call, signal) => runtime.signal(call, signal) });
     metadata = createPeerLanListenerMetadata(options.metadata);
     let accepting = true;
     const deviceBootstrap = createDevicePeerBootstrapOperation({
@@ -81,7 +93,7 @@ export async function createManagerPeerRuntime(options: ManagerPeerRuntimeOption
       async stop() {
         const results = await Promise.allSettled([
           Promise.resolve().then(() => tunnel.stop()), Promise.resolve().then(() => runtime.stop()),
-          Promise.resolve().then(() => metadata?.stop())
+          Promise.resolve().then(() => metadata?.stop()), accountTunnel.stop()
         ]);
         const failed = results.find(result => result.status === "rejected");
         if (failed?.status === "rejected") throw failed.reason;
@@ -103,7 +115,7 @@ export async function createManagerPeerRuntime(options: ManagerPeerRuntimeOption
     // Preparation owns only these candidate resources; a published predecessor remains active.
     await Promise.allSettled([
       Promise.resolve().then(() => tunnel?.stop()), Promise.resolve().then(() => runtime.stop()),
-      Promise.resolve().then(() => metadata?.stop())
+      Promise.resolve().then(() => metadata?.stop()), accountTunnel.stop()
     ]);
     throw error;
   }

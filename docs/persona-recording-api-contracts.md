@@ -18,6 +18,8 @@
 | GET | `/media/:day/:file` | 原角色/电脑受控 JPEG/WAV，file 必须是 64 位小写哈希加扩展名 |
 | GET | `/audio` | 先核对可见时间线事件，再读该事件的手机 owner/chunks 或原语音记录；保留上游状态与 MIME/字节 |
 
+设置可选 `messageSources`（共用事件目录的消息类型 ID 数组），旧配置缺省为空。可用 `type=message` 或 `source=message:<类型 ID>` 筛选对应事件。
+
 `createPersonaRecordingOperations` 的准备阶段固定原连接、Manager 身份、角色目录及原 runtime/service/store/read model；已鉴权启用的远端默认可用，不按上下文加功能许可。本机来源与只读配置保留。设置正文延续原无限应用字节上限、空正文 `{}` 和原生校验；全部控制仍要求 `application/json`，start/stop/repair 忽略正文，不能要求原接口没有的字段。
 
 原 `AllDayRecordingService` 继续串行处理控制，并在原队列、存储与语音调用边界复核授权。HTTP 取消等待已接受的原调用终态，不把取消回执当成录制已经停止。手机资源 owner 只能来自原事件，查询不能冒认来源或绕过已选择设备。读取 worker、60 秒历史期限、独立重建队列以及原持久记录保留规则不变。

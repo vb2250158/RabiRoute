@@ -17,6 +17,10 @@
     {
       "source": "src/plugins/io.rabiroute.agent.workbuddy/assets/desktop-window.ps1",
       "target": "assets/desktop-window.ps1"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.agent.workbuddy/assets/desktop-launch.ps1",
+      "target": "assets/desktop-launch.ps1"
     }
   ],
   "workers": [

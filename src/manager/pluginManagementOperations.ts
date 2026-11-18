@@ -63,6 +63,10 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
     { action: "packages.list", method: "GET", path: "/api/plugins/packages", description: "List installed package versions available for plugin installation without executing them." },
     { action: "packages.import", method: "POST", path: "/api/plugins/packages", description: "Import a local SDK-built plugin directory into the persistent package store; existing version bytes remain immutable.",
       body: { type: "object", additionalProperties: false, required: ["sourceDirectory"], properties: { sourceDirectory: symbol } } },
+    { action: "packages.inspectUrl", method: "POST", path: "/api/plugins/packages/inspect", description: "Download a plugin archive from an https URL and return its manifest for review without installing it.",
+      body: { type: "object", additionalProperties: false, required: ["url"], properties: { url: { type: "string", minLength: 8 }, subdirectory: { type: "string" } } } },
+    { action: "packages.importUrl", method: "POST", path: "/api/plugins/packages/from-url", description: "Download and import a plugin archive from an https URL after the reviewed archive digest is confirmed.",
+      body: { type: "object", additionalProperties: false, required: ["url", "expectedArchiveSha256"], properties: { url: { type: "string", minLength: 8 }, expectedArchiveSha256: revision, subdirectory: { type: "string" } } } },
     { action: "instances.install", method: "POST", path: "/api/plugins/instances", description: "Install or restore a plugin instance and initialize it asynchronously; user data retains its original instance identity.",
       body: { type: "object", additionalProperties: false, required: ["expectedRevision", "pluginId", "version"], properties: { expectedRevision: revision, pluginId: symbol, version: symbol, instanceId: symbol } } },
     { action: "instances.remove", method: "DELETE", path: "/api/plugins/instances/:id", description: "Uninstall an instance through the original lifecycle owner, preserving stored configuration and user data.",
@@ -81,7 +85,7 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
       responses: {
         "200": { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "data"], properties: { code: { const: 0 }, data: { type: "object", ...(item.action.startsWith("packages.") ? { properties: {
           packages: { type: "array", items: { type: "object" } }, partial: { type: "boolean" }, diagnostics: { type: "array", items: { type: "object", required: ["root", "path", "code", "message"], properties: { root: symbol, path: symbol, code: symbol, message: symbol } } },
-          ...(item.action === "packages.import" ? { importedPackage: { type: "object", required: ["id", "version", "revision"], properties: { id: symbol, version: symbol, revision } } } : {})
+          ...(item.action === "packages.import" || item.action === "packages.importUrl" ? { importedPackage: { type: "object", required: ["id", "version", "revision"], properties: { id: symbol, version: symbol, revision } } } : {})
         } } : {}) } } } },
         default: { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "message"], properties: { code: { const: -1 }, message: { type: "string" },
           errorCode: { type: "string" }, field: { type: "string" }, repair: { type: "string" }, retryable: { const: false },
@@ -95,7 +99,7 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
       const bound = owner.prepare(input.request, item.action, input.signal);
       return (parsed: ApiOperationInput) => bound.execute({ ...(parsed.body as Record<string, string> ?? {}), id: parsed.path.id });
     };
-    const titles: Partial<Record<PluginCatalogAction, string>> = { 'packages.list': '查看已安装插件包与版本', 'packages.import': '导入本地插件包', 'instances.install': '安装插件实例', 'instances.remove': '卸载插件实例' };
+    const titles: Partial<Record<PluginCatalogAction, string>> = { 'packages.list': '查看已安装插件包与版本', 'packages.import': '导入本地插件包', 'packages.inspectUrl': '预览 URL 插件包', 'packages.importUrl': '从 URL 安装插件包', 'instances.install': '安装插件实例', 'instances.remove': '卸载插件实例' };
     return { contract, discovery: {
       title: titles[item.action], summary: titles[item.action] + '。' + item.description,
       category: { id: 'runtime', title: '插件与运行' }, keywords: ['插件', titles[item.action]!, item.action.replaceAll('.', ' '), 'plugin packages'],

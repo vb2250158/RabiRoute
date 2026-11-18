@@ -73,7 +73,8 @@ export const activate = definePlugin({
                 ...synchronizations,
                 ...(ownsSharedRuntime ? [
                     Promise.resolve().then(() => runtime.peerLanServer.stop()),
-                    Promise.resolve().then(() => runtime.rabiLinkRelayRuntime.stop())
+                    Promise.resolve().then(() => runtime.rabiLinkRelayRuntime.stop()),
+                    Promise.resolve().then(() => runtime.rabiLinkAccountRuntime.stop())
                 ] : [])
             ]);
             const native = await Promise.allSettled([Promise.resolve().then(() => peer?.stop())]);

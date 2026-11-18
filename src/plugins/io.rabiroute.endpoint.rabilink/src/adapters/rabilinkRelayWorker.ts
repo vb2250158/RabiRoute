@@ -69,7 +69,10 @@ type RelayWorkerState = {
 };
 
 const runningRelayWorkers = new Map<string, RelayWorkerState>();
-const acceptedRelayTasks = new Map<string, number>();
+// Package revisions share admission evidence in the same Gateway process.
+const acceptedTasksKey = Symbol.for("rabi.rabilink.accepted-relay-tasks.v1");
+const relayGlobals = globalThis as unknown as Record<symbol, Set<string>>;
+const acceptedRelayTasks = relayGlobals[acceptedTasksKey] ??= new Set<string>();
 const MAX_ACCEPTED_RELAY_TASKS = 2048;
 const RELAY_WRITE_ATTEMPTS = 4;
 const RELAY_WRITE_TIMEOUT_MS = 5000;
@@ -222,11 +225,11 @@ async function fetchRelayJsonReliably(
   throw lastError instanceof Error ? lastError : new Error(String(lastError || "RabiLink Relay request failed."));
 }
 
-function rememberAcceptedRelayTask(taskId: string): void {
-  acceptedRelayTasks.delete(taskId);
-  acceptedRelayTasks.set(taskId, Date.now());
+function rememberAcceptedRelayTask(taskKey: string): void {
+  acceptedRelayTasks.delete(taskKey);
+  acceptedRelayTasks.add(taskKey);
   while (acceptedRelayTasks.size > MAX_ACCEPTED_RELAY_TASKS) {
-    const oldest = acceptedRelayTasks.keys().next().value;
+    const oldest = acceptedRelayTasks.values().next().value;
     if (typeof oldest !== "string") break;
     acceptedRelayTasks.delete(oldest);
   }
@@ -321,12 +324,14 @@ async function materializeRelayAttachments(task: RelayTask, taskId: string, sign
   return output;
 }
 
-async function finishRelayTask(taskId: string, body: Record<string, unknown>, signal: AbortSignal): Promise<void> {
+async function finishRelayTask(taskId: string, body: Record<string, unknown>): Promise<void> {
+  // Once a task has a result, bounded finish writes keep their own timeouts.
+  // Stopping the subscription must still allow that result to reach Relay.
   await fetchRelayJsonReliably(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
     method: "POST",
     headers: relayHeaders(true),
     body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
-  }, "", signal);
+  });
 }
 
 function relayTaskField(task: RelayTask, key: string): string {
@@ -554,13 +559,13 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
   if (!taskId) {
     throw new Error("Relay task has no id.");
   }
+  const taskKey = JSON.stringify([normalizedRelayBaseUrl(), config.rabiLinkRelayDeviceId, config.rabiLinkRelayDeviceGuid, taskId]);
   try { task = normalizeRabiLinkTaskInput(task); }
   catch (error) {
-    await finishRelayTask(taskId, { ok: false, status: 'done', accepted: false, error: error instanceof Error ? error.message : 'Invalid RabiLink input' }, signal);
-    rememberAcceptedRelayTask(taskId);
+    await finishRelayTask(taskId, { ok: false, status: 'done', accepted: false, error: error instanceof Error ? error.message : 'Invalid RabiLink input' });
     return;
   }
-  if (!acceptedRelayTasks.has(taskId)) {
+  if (!acceptedRelayTasks.has(taskKey)) {
     // Validate before any forwarding. Older Relay servers preserve clientMessageId
     // but do not understand live-call deadlines; the PC is the final authority.
     if (String(task.clientMessageId || "").startsWith("rabi-call-v1.")) {
@@ -569,18 +574,17 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
       } catch (error) {
         // Non-replayable live input: a crash after claiming is uncertain, never
         // grounds for a second Agent turn. The retained audio remains recoverable.
-        await finishRelayTask(taskId, { ok: false, status: "done", accepted: false, error: error instanceof Error ? error.message : "Live input rejected" }, signal);
-        rememberAcceptedRelayTask(taskId);
+        await finishRelayTask(taskId, { ok: false, status: "done", accepted: false, error: error instanceof Error ? error.message : "Live input rejected" });
         return;
       }
     }
     if (handleWearableHealthRelayTask(task, taskId)) {
-      rememberAcceptedRelayTask(taskId);
+      rememberAcceptedRelayTask(taskKey);
       await finishRelayTask(taskId, {
         ok: true,
         status: "done",
         accepted: true
-      }, signal);
+      });
       return;
     }
     const attachments = await materializeRelayAttachments(task, taskId, signal);
@@ -636,7 +640,7 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
         : undefined,
       attachments
     }, { splitAfterMs: conversationSplitAfterMs() });
-    rememberAcceptedRelayTask(taskId);
+    rememberAcceptedRelayTask(taskKey);
     if (rabiLinkRelayTaskNeedsReviewWake(disposition)) {
       startDefaultRabiLinkConversationReviewer()?.wake();
     }
@@ -660,7 +664,7 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     ok: true,
     status: "done",
     accepted: true
-  }, signal);
+  });
 }
 
 async function claimRelayTask(signal: AbortSignal): Promise<RelayTask | null> {

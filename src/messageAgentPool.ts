@@ -228,7 +228,7 @@ function normalizeWorker(value: unknown): MessageAgentWorker | undefined {
   const worker = value as Partial<MessageAgentWorker>;
   if (!worker.threadId || !worker.threadName || !worker.workspace) return undefined;
   return {
-    agentAdapter: parseAgentAdapterType(String(worker.agentAdapter || "")) ?? "codex",
+    agentAdapter: workerAgentAdapter({ agentAdapter: parseAgentAdapterType(String(worker.agentAdapter || "")) ?? undefined, threadId: String(worker.threadId) }),
     threadId: String(worker.threadId),
     threadName: normalizeCodexThreadTitle(String(worker.threadName)),
     workspace: String(worker.workspace),
@@ -330,10 +330,12 @@ export function rankMessageAgentWorkers(
 export function readCurrentMessageAgentWorkers(
   statePath: string,
   maxAgents?: number,
-  workspace?: string
+  workspace?: string,
+  agentAdapter?: AgentAdapterType
 ): MessageAgentWorker[] {
   const workers = readPoolState(statePath).workers
-    .filter((worker) => !workspace || sameCodexWorkspace(worker.workspace, workspace));
+    .filter((worker) => (!workspace || sameCodexWorkspace(worker.workspace, workspace))
+      && (!agentAdapter || workerAgentAdapter(worker) === agentAdapter));
   const affinityByThreadId = readAffinityState(affinityStatePathForPoolState(statePath));
   for (const worker of workers) mergeWorkerAffinities(worker, affinityByThreadId.get(worker.threadId) ?? []);
   const ranked = rankMessageAgentWorkers(workers);
@@ -349,9 +351,10 @@ export function resolveCurrentMessageAgentWorker(
   maxAgents?: number,
   context?: MessageAgentPriorityContext,
   routing: MessageAgentSelectionRouting = {},
-  workspace?: string
+  workspace?: string,
+  agentAdapter?: AgentAdapterType
 ): MessageAgentWorkerReference | undefined {
-  const currentWorkers = readCurrentMessageAgentWorkers(statePath, maxAgents, workspace);
+  const currentWorkers = readCurrentMessageAgentWorkers(statePath, maxAgents, workspace, agentAdapter);
   if (currentWorkers.length === 0) return undefined;
   const current = rankMessageAgentWorkers(currentWorkers, context, routing)[0];
   if (!current) return undefined;
@@ -617,6 +620,35 @@ export function messageAgentInitializationPrompt(options: MessageAgentPoolOption
     "渠道回执证明外发；Manager 回执证明 Agent 投递。Agent 间投递填写 messageSource、sourceThreadId、sourceAgentType、responsePolicy；需要回复时补 responseInstruction。",
     "同组补充并入当前上下文；无关消息重新分配。"
   ].join("\n");
+}
+
+/** The state file has one in-process writer across binding changes. */
+export function createMessageAgentPoolOwner<TPool = MessageAgentPool>() {
+  let current: { key: string; pool: TPool; work: Set<Promise<unknown>> } | undefined;
+  let reset = false;
+  return {
+    reset() { reset = true; },
+    async run<TResult>(read: () => { key: string; create(): TPool }, execute: (pool: TPool) => Promise<TResult>): Promise<TResult> {
+      for (;;) {
+        const requested = read();
+        const owner = current;
+        if (!owner || reset || owner.key !== requested.key) {
+          if (owner?.work.size) {
+            await Promise.allSettled([...owner.work]);
+            // The published Route may have changed again while the original writes drained.
+            continue;
+          }
+          current = { key: requested.key, pool: requested.create(), work: new Set() };
+          reset = false;
+        }
+        const selected = current!;
+        const pending = Promise.resolve().then(() => execute(selected.pool));
+        selected.work.add(pending);
+        try { return await pending; }
+        finally { selected.work.delete(pending); }
+      }
+    }
+  };
 }
 
 export class MessageAgentPool {

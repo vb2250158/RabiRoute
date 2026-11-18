@@ -40,6 +40,24 @@ function fixture() {
   return { root, config, marker, events, createWorker, start, stop };
 }
 
+test("managed node instances use separate login entries on every supported platform", () => {
+  const home = os.tmpdir();
+  const config = name => path.join(home, "RabiAgent", "instances", name, "config.json");
+  for (const platform of ["win32", "darwin", "linux"]) {
+    const make = filename => __test.startupFiles(platform, process.execPath, path.join(path.dirname(filename), "launcher.mjs"), filename, { home, uid: 1000 });
+    const original = make(path.join(home, "RabiAgent", "config.json"));
+    const first = make(config("host-a"));
+    const second = make(config("host-b"));
+    assert.notEqual(first.files[0].path, original.files[0].path);
+    assert.notEqual(first.files[0].path, second.files[0].path);
+    assert.match(first.files[0].content, /host-a/);
+    assert.doesNotMatch(second.files[0].content, /host-a/);
+    assert.deepEqual(first.obsolete, []);
+    if (platform !== "win32") assert.notDeepEqual(first.activation, second.activation);
+    if (platform === "linux") assert.notEqual(first.fallback.path, second.fallback.path);
+  }
+});
+
 test("bootstrap release initialization preserves a valid newer pointer and private identity", async () => {
   const f = fixture(); const before = fs.readFileSync(f.config);
   const old = f.createWorker("obsolete-bootstrap", "process.exit(0);");

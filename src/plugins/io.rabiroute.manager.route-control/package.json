@@ -1,6 +1,7 @@
 {
   "name": "io.rabiroute.manager.route-control",
-  "version": "0.1.5",  "type": "module",
+  "version": "0.1.6",
+  "type": "module",
   "license": "MIT",
   "files": [
     "rabi.plugin.json",

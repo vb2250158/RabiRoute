@@ -57,16 +57,18 @@ test("native tray renders owner snapshots and exits when its owner pipe closes",
   const ui = launch(executable, []);
   t.after(() => { if (alive(ui.child.pid)) ui.child.kill(); });
   await waitFor(() => ui.output().includes('"type":"ready"'));
-  ui.child.stdin.write(`${JSON.stringify({ type: "snapshot", summary: "已连接主机", running: true, busy: false, startup: true, details: "无凭据状态记录" })}\n`);
+  ui.child.stdin.write(`${JSON.stringify({ type: "snapshot", summary: "已连接主机", nodeLabel: "测试主机 A", running: true, busy: false, startup: true, details: "无凭据状态记录" })}\n`);
   await waitFor(() => ui.output().includes('"type":"rendered"'));
   const rendered = ui.output().trim().split("\n").map(JSON.parse).find(item => item.type === "rendered");
-  assert.equal(rendered.summary, "已连接主机"); assert.equal(rendered.startup, true); assert.equal(rendered.visible, true);
+  assert.equal(rendered.summary, "已连接主机"); assert.equal(rendered.nodeLabel, "测试主机 A"); assert.equal(rendered.startup, true); assert.equal(rendered.visible, true);
   ui.child.stdin.end();
   assert.equal(await ui.closed, 0, ui.errors());
 });
 
-async function ownerFixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-desktop-owner-"));
+async function ownerFixture(t, { instance, appData } = {}) {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-desktop-owner-"));
+  const root = instance ? path.join(temporary, "instances", instance) : temporary;
+  fs.mkdirSync(root, { recursive: true });
   const config = path.join(root, "config.json"); const entry = path.join(root, "worker.mjs");
   const configBytes = JSON.stringify({ nodeId: "fixture", nodeCredential: "private-fixture-value", agents: [] });
   fs.writeFileSync(config, configBytes);
@@ -91,7 +93,7 @@ setInterval(()=>{},1000);
   const pointerBytes = fs.readFileSync(path.join(root, "current-release.json"));
   const launcher = __test.writeLauncher(config);
   const owner = launch(process.execPath, [launcher, "--config", config], {
-    env: { ...process.env, APPDATA: path.join(root, "appdata"), USERPROFILE: root }
+    env: { ...process.env, APPDATA: appData || path.join(root, "appdata"), USERPROFILE: root }
   });
   const children = new Set();
   const command = async action => {
@@ -109,12 +111,34 @@ setInterval(()=>{},1000);
     await waitFor(() => [...children].every(pid => !alive(pid)));
     assert.equal(fs.readFileSync(config, "utf8"), configBytes);
     assert.deepEqual(fs.readFileSync(path.join(root, "current-release.json")), pointerBytes);
-    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await fs.promises.rm(temporary, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
   let state;
   await waitFor(async () => { try { state = await command("status"); return state.summary === "已连接主机"; } catch { return false; } });
   return { root, owner, command, state, launcher, config };
 }
+
+test("two installed nodes own separate trays and login entries in the same Windows profile", { skip: process.platform !== "win32" }, async t => {
+  const first = await ownerFixture(t, { instance: "host-a" });
+  const second = await ownerFixture(t, { instance: "host-b", appData: path.join(first.root, "appdata") });
+  assert.ok(first.state.trayPid && second.state.trayPid);
+  assert.notEqual(first.state.trayPid, second.state.trayPid);
+  assert.notEqual(first.state.workerPid, second.state.workerPid);
+
+  await first.command("enable-startup");
+  assert.equal((await first.command("status")).startup, true);
+  assert.equal((await second.command("status")).startup, false);
+  await second.command("enable-startup");
+  await first.command("disable-startup");
+  assert.equal((await first.command("status")).startup, false);
+  assert.equal((await second.command("status")).startup, true);
+
+  await first.command("pause");
+  const after = await second.command("status");
+  assert.equal(after.workerPid, second.state.workerPid);
+  assert.equal(after.trayPid, second.state.trayPid);
+  assert.equal(after.running, true);
+});
 
 test("one owner retains its tray across pause, start, restart and reconnect; stop waits for all children", async t => {
   const f = await ownerFixture(t);

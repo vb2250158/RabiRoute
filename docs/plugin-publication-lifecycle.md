@@ -53,6 +53,16 @@ context.publication.add(publication, label?);
 
 ## owner 与异步启动
 
+Agent 插件可用 SDK 的 `ownAgentAdapter({ initialization: { mode, start }, dispose, ... })` 接管启动阶段。`exclusive` 沿用默认行为，等待同实例旧版本释放独占资源。资源彼此独立时声明 `independent`，新版本在旧请求收尾期间完成自己的 `start(signal)` 并开放调用。旧请求继续使用原版本。`start` 只在本次发布后执行一次，失败走内核局部退役，由 `dispose` 清理本次版本取得的资源。
+
+无需自定义启动回调的 Agent 包，在 `agent-adapter.json` 的 `initializationModes` 按 `manager` 和 `gateway` 声明资源模式。未声明的入口沿用 `exclusive`。显式 `initialization.mode` 优先于包的声明。确认两个版本可各自完成请求并拥有各自资源后，再声明 `independent`。AstrBot、设备 Agent 和 WorkBuddy 使用独立初始化。
+
+消息端通过 `ownMessageEndpointScan` 注册扫描。每个已进入的扫描持有原插件版本，直到实际探测结束。替换后新扫描进入新版本，旧版本等待已进入的探测结束后释放资源。扫描结果的展示回退只读取诊断数据。消息端共享模块在同一宿主内合并并发加载，成功后复用。一次加载失败只影响这次调用，后续协调可再次准备该模块。
+
+Gateway 消息端通过 `ownMessageEndpoint` 接管独占传输。`start(startup)` 在占用端口或创建连接前用 `startup?.onFailure(dispose)` 登记一次真实的启动失败清理。成功时仍返回正常停止函数。SDK 在启动失败后等待登记的清理，清理成功后允许原实例在同一宿主内再次启动。清理失败或旧实现无清理凭据时保留退役围栏。Webhook 和飞书监听器在端口绑定前登记清理。
+
+需要等待共享入站路由的传输可使用 `forwardMessageWithCompletion`。直接投递在原请求收尾后完成。分组消息在上下文记录和队列接纳结束后交给宿主队列，随后由队列继续处理。企业微信插件用该入口在旧连接退役时等待已接纳的消息。
+
 `rollback` 和 `retire` 是不同动作：前者恢复尚未发布的尝试，后者释放曾经发布的 activation。旧 `retire` 不能无条件清空新全局指针、停止新 shared runtime 或恢复持久 job 状态。保留实际资源对象和 activation 身份，按 owner 比较后释放。
 
 ```ts

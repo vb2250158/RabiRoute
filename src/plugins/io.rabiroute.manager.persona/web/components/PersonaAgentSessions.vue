@@ -10,6 +10,7 @@ import { chatHistoryScroller, chatHistoryViewport, waitForChatHistoryFrame } fro
 import { renderMarkdownPreview } from '../../../../../ribiwebgui/src/markdownPreview';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
 import HistoryConversationLayout from './HistoryConversationLayout.vue';
+import PersonaAgentSessionComposer from './PersonaAgentSessionComposer.vue';
 import ChatMessageBody from './ChatMessageBody.vue';
 
 const props = defineProps<{ roleId: string; active: boolean }>();
@@ -23,6 +24,12 @@ const members = ref<PersonaAgentTask[]>([]), selectedMember = ref<PersonaAgentTa
 const membersAvailable = computed(() => agentSessionMembersAvailable(agent.value));
 const currentSession = computed(() => selectedMember.value || selected.value);
 const currentSessionId = computed(() => currentSession.value?.id || '');
+const composerTarget = computed(() => props.active && agent.value && currentSession.value && !currentSession.value.archived
+  ? { key: JSON.stringify([props.roleId, agent.value.key, currentSessionId.value]), agent: agent.value, threadId: currentSessionId.value }
+  : undefined);
+function refreshAfterSend(key: string) {
+  if (composerTarget.value?.key === key) void loadHistory();
+}
 const memberOffset = ref<number|null>(null), loadingMembers = ref(false), memberError = ref(''), membersOpen = ref(false);
 const sessionTitle = (task:PersonaAgentTask) => task.agentNickname || task.title || task.id;
 const offset = ref<number | null>(null), cursor = ref<string | null>(null);
@@ -214,7 +221,14 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
         <v-btn v-if="cursor !== null && agent.provider === 'dsh'" class="mb-3" variant="text" :loading="loadingHistory" @click="loadHistory(true)">{{ t('加载更早的消息') }}</v-btn>
         <div ref="listElement" class="session-messages" aria-live="polite" :aria-busy="loadingHistory">
           <v-virtual-scroll ref="virtualList" :items="messages" :item-height="160" renderless><template #default="{ item, itemRef }: { item: AgentSessionMessage; itemRef?: VNodeRef }">
-            <article :ref="itemRef" :key="item.id" class="session-message" :class="{ 'session-user': item.role === 'user' }" :data-message-role="item.role" :data-entry-id="item.id">
+            <article v-if="item.instructionHeading" :ref="itemRef" :key="item.id" class="session-message session-instruction" :data-entry-id="item.id">
+              <button type="button" class="session-instruction-toggle" :aria-expanded="expanded.has(item.id)" @click="toggle(item.id)">
+                <v-icon :icon="expanded.has(item.id) ? 'mdi-chevron-down' : 'mdi-chevron-right'" size="16" />
+                <span>{{ t('提示词注入') }}：<span data-no-i18n>{{ item.instructionHeading }} …</span></span>
+              </button>
+              <pre v-if="expanded.has(item.id)" data-no-i18n>{{ item.text }}</pre>
+            </article>
+            <article v-else :ref="itemRef" :key="item.id" class="session-message" :class="{ 'session-user': item.role === 'user' }" :data-message-role="item.role" :data-entry-id="item.id">
               <AgentAvatar :provider="agent.provider" :kind="item.role === 'user' ? 'user' : 'agent'" />
               <div class="session-message-content">
                 <div class="session-sender">{{ item.role === 'user' ? t('用户') : t('最终回复') }}<time v-if="item.time" :datetime="item.time">{{ new Date(item.time).toLocaleString(locale) }}</time></div>
@@ -245,6 +259,7 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
           <v-btn v-if="memberOffset!==null" block variant="text" :loading="loadingMembers" @click="loadMembers(true)">{{t('加载更多子 Agent')}}</v-btn>
         </div>
       </template>
+      <template #composer><PersonaAgentSessionComposer :target="composerTarget" @sent="refreshAfterSend" /></template>
     </HistoryConversationLayout>
   </section>
 </template>
@@ -273,5 +288,43 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
 .session-user{flex-direction:row-reverse;}
 .session-user .session-sender{justify-content:flex-end;}
 .session-user .session-bubble{border-radius:14px 4px 14px 14px;background:rgba(var(--v-theme-secondary),.12);}
+.session-bubble .markdown-preview {
+  max-inline-size: 900px;
+  font-size: 14px;
+  line-height: 1.75;
+}
+.markdown-preview :deep(> * + *) { margin-block-start: .7em; }
+.markdown-preview :deep(h1), .markdown-preview :deep(h2), .markdown-preview :deep(h3),
+.markdown-preview :deep(h4), .markdown-preview :deep(h5), .markdown-preview :deep(h6) {
+  font-weight: 650;
+  line-height: 1.4;
+}
+.markdown-preview :deep(h1) { font-size: 1.3em; }
+.markdown-preview :deep(h2) { font-size: 1.2em; }
+.markdown-preview :deep(h3) { font-size: 1.12em; }
+.markdown-preview :deep(h4), .markdown-preview :deep(h5), .markdown-preview :deep(h6) { font-size: 1em; }
+.markdown-preview :deep(> * + :is(h1, h2, h3, h4, h5, h6)) { margin-block-start: 1.15em; }
+.markdown-preview :deep(ol), .markdown-preview :deep(ul) { padding-inline-start: 1.7em; }
+.markdown-preview :deep(li + li), .markdown-preview :deep(li > * + *) { margin-block-start: .32em; }
+.markdown-preview :deep(:not(pre) > code) {
+  padding: .08em .3em;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-on-surface), .09);
+  font-size: .9em;
+}
+.markdown-preview :deep(pre) {
+  padding: .7em .85em;
+  border-radius: 6px;
+  background: rgba(var(--v-theme-on-surface), .07);
+  font-size: .9em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.session-instruction{display:grid;justify-items:center;gap:8px;margin-bottom:20px;}
+.session-instruction-toggle{display:flex;align-items:center;gap:4px;max-width:100%;min-height:32px;padding:0 8px;color:rgba(var(--v-theme-on-surface),.64);font-size:12px;border-radius:5px;}
+.session-instruction-toggle:hover,.session-instruction-toggle:focus-visible{background:rgba(var(--v-theme-on-surface),.08);}
+.session-instruction-toggle>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.session-instruction pre{width:100%;margin:0;padding:12px 16px;background:rgba(var(--v-theme-on-surface),.045);border-radius:8px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;}
 @media(max-width:760px){.session-messages{padding:0 4px;}.session-message-content{max-width:calc(100% - 52px);}.session-sender{flex-wrap:wrap;gap:4px 10px;}}
 </style>

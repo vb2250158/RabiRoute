@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
 import { once } from "node:events";
+import { ownMessageEndpoint } from "@rabiroute/plugin-sdk";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { fixtureApiContract } from "../manager/apiOperationContractFixtures.js";
 import { GenerationRuntime } from "./generationRuntime.js";
@@ -267,6 +268,34 @@ test("post-publication failure removes the new owner without resurrecting old st
     assert.equal(rollbacks, 0);
     assert.equal(retired, 1);
   } finally { await runtime.dispose(); }
+});
+
+test("endpoint startup reports the original failure and fences retry if its cleanup fails", async () => {
+  const { runtime, revision } = fixture();
+  let cleanupCalls = 0;
+  let retryStarts = 0;
+  const sibling = revision("peer", () => {}, "peer");
+  try {
+    const failed = await runtime.switch([sibling, revision("broken", context => {
+      ownMessageEndpoint(context, { type: "fixture", start(startup) {
+        startup?.onFailure(() => { cleanupCalls++; throw new Error("cannot close endpoint transport"); });
+        throw new Error("cannot start endpoint transport");
+      } });
+    })]);
+    assert.match(failed.generation.records.find(record => record.identity.instanceId === "worker")?.error?.message ?? "", /cannot start endpoint transport/);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(runtime.pendingRetirements()[0]?.status, "retirement_unconfirmed");
+
+    const retry = await runtime.switch([sibling, revision("retry", context => {
+      ownMessageEndpoint(context, { type: "fixture", start() { retryStarts++; } });
+    })]);
+    assert.equal(retryStarts, 0);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(retry.generation.services.services.get("test.peer@1")?.value, "peer");
+    assert.equal(retry.generation.services.services.has("test.worker@1"), false);
+  } finally {
+    await assert.rejects(runtime.dispose(), /Plugin cleanup failed during shutdown/);
+  }
 });
 
 test("a retirement timeout rejects the startup barrier instead of claiming the previous owner joined", async () => {

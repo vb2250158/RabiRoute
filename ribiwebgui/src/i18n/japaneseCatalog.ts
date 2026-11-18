@@ -683,6 +683,7 @@ export const japaneseCatalog: Record<string, string> = {
   "消息类型": "メッセージタイプ",
 
   "个人微信 / Weixin": "個人の微信",
+  "微信机器人": "WeChat ボット",
   "飞书 / Feishu": "Feishu",
 
   "聊天消息": "チャットメッセージ",

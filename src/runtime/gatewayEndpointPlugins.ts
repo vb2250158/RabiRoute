@@ -20,6 +20,8 @@ import { loadInstalledAgentManagerDescriptors } from "../manager/agentManagerPro
 import type { RabiCordisHost, RabiCordisFiber } from "./cordisHost.js";
 import { pluginStorageMigrationFailure } from "../shared/pluginStorage.js";
 import { applicationRuntimeLayout } from "../shared/runtimeLayout.js";
+import { config, normalizeRuntimeRouteProfiles } from "../config.js";
+import type { GatewayEndpointPluginInstance } from "./gatewayListenerRuntime.js";
 
 export type GatewayEndpointPluginOptions = {
   profilePath: string;
@@ -36,6 +38,7 @@ export type GatewayEndpointPluginOptions = {
   initialRouteRevision?: string;
   agentRegistry?: AgentAdapterRegistry;
   agentsOnly?: boolean;
+  publishEndpointPlugins?(instances: readonly GatewayEndpointPluginInstance[]): void;
 };
 export type GatewayEndpointPluginRuntime = {
   registry: MessageAdapterRegistry;
@@ -55,17 +58,27 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
   const stateRoot = options.stateRoot ?? applicationRuntimeLayout().stateRoot;
   const registry = new MessageAdapterRegistry();
   const projections: Array<() => void> = [];
-  // The original full Route survives a filtered boot environment and later package enablement.
-  const activeTypes = new Set(options.initialRouteDefinition ? gatewayRuntimeAdapterTypes(options.initialRouteDefinition) : options.adapterTypes);
   const scopedPorts = Object.freeze({ ...ports, forActivation(configuration: unknown) {
     const settings = configuration as { __routeTransport?: Readonly<Record<string, unknown>>; __routeInheritedFields?: readonly string[] } | undefined;
     return settings?.__routeTransport ? scopeMessageEndpointHostPorts(ports, settings.__routeTransport, settings.__routeInheritedFields) : ports;
   } });
   const agentPorts = options.agentHostPorts ?? createAgentAdapterHostPorts();
+  function publishEndpointPlugins(generation?: PluginGeneration): void {
+    if (!options.publishEndpointPlugins) return;
+    const instances: GatewayEndpointPluginInstance[] = (generation?.records ?? []).flatMap(record => {
+      if (record.status !== "active") return [];
+      const { instanceId, pluginId, version, revision, activationId } = record.identity;
+      return [{ instanceId, packageId: pluginId, version, packageHash: revision, activationId,
+        state: record.initialization ? "initializing" : "active" }];
+    });
+    try { options.publishEndpointPlugins(instances); }
+    catch (error) { console.error("Failed to publish the current Gateway plugin identities", error); }
+  }
   const kernel = new GenerationRuntime({ host: "gateway", hostServices: [{ capability: "host.message-endpoints@1", value: scopedPorts },
     { capability: "host.message-endpoints@2", value: scopedPorts },
     { capability: "host.message-endpoints@3", value: scopedPorts },
     { capability: "host.agent-adapters@1", value: agentPorts }],
+    onPublished: publishEndpointPlugins,
     applicationIdentity: { applicationGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID || "embedded-gateway", managerInstanceId: process.env.GATEWAY_ID || "embedded-gateway" } });
   const releaseAgentProjection = options.agentRegistry?.bindGeneration(() => kernel.current());
   const releaseAgentGeneration = installAgentAdapterGenerationReader(() => kernel.current());
@@ -86,7 +99,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
   const watchers: FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
 
-  async function selectedProfile(profile: PluginProfile): Promise<PluginProfile> {
+  async function selectedProfile(profile: PluginProfile, activeTypes: ReadonlySet<string>): Promise<PluginProfile> {
     const instances: PluginProfile["instances"][number][] = [];
     for (const instance of profile.instances) {
       if (!instance.enabled) continue;
@@ -119,6 +132,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
     if (update && !appliedRoute) throw new GatewayRouteSnapshotApplyRejected("The original boot Route snapshot is unavailable; a lifecycle restart is required.");
     const before = kernel.current();
     const route = update?.definition ?? appliedRoute;
+    const activeTypes = new Set(route ? gatewayRuntimeAdapterTypes(route) : options.adapterTypes);
     const snapshot = await settings.snapshot();
     const installed = await readInstalledEndpointRouteDeclarations(snapshot.profile, catalog, (id, version) => readPluginManagementManifest(catalog, id, version));
     const installedAgents = await loadInstalledAgentManagerDescriptors(snapshot.profile, catalog);
@@ -127,7 +141,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
     const change = update && appliedRoute ? classifyRouteChange(appliedRoute, update.definition, mergeEndpointRouteDeclarations(priorCatalog.declarations, installed.declarations)) : undefined;
     if (change?.sharedChanged) throw new GatewayRouteSnapshotApplyRejected("Shared Route configuration requires its dependency-component lifecycle switch.");
     diagnostics = [...snapshot.diagnostics, ...installed.diagnostics, ...installedAgents.diagnostics];
-    const profile = await selectedProfile(snapshot.profile);
+    const profile = await selectedProfile(snapshot.profile, activeTypes);
     const next = await loadPluginProfile({ profilePath: options.profilePath, profile, packageCatalog: catalog, runtimeRoot: options.runtimeRoot, host: "gateway", previous: loaded,
       preparationFailure: (packageId, instanceId) => pluginStorageMigrationFailure(packageId, stateRoot, instanceId),
       assertCurrent() { if (disposed) throw new Error("Gateway plugin preparation stopped during shutdown."); } });
@@ -154,13 +168,16 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
         } });
       }
       const routeTypes = gatewayAdapterTypes(route);
+      const transport = declaration ? endpointRouteProjection(route, declaration) : {};
       return Object.freeze({ ...candidate, config: { ...(candidate.config as Record<string, unknown>),
-        __routeTransport: { messageAdapterTypes: routeTypes, messageEndpointTypes: routeTypes, ...(declaration ? endpointRouteProjection(route, declaration) : {}) },
+        __routeTransport: { messageAdapterTypes: routeTypes, messageEndpointTypes: routeTypes, ...transport,
+          ...(declaration?.ownsScheduledAutomation ? { routeProfiles: normalizeRuntimeRouteProfiles(route.routeProfiles ?? [route]) } : {}) },
         __routeTransportInputs: declaration ? endpointRouteInputs(route, declaration) : {},
         __routeInheritedFields: bootRoute && declaration ? inheritedEndpointFields(bootRoute, route, declaration) : []
       } });
     });
     await kernel.switch(candidates, { readyRequires: [] });
+    publishEndpointPlugins(kernel.current());
     loaded = publication.capture(next, kernel.current()).profile;
     for (const failure of next.loadFailures) if (failure.error.code === "package_load_failed") {
       diagnostics.push({ instanceId: failure.instanceId, message: failure.error.message });
@@ -178,16 +195,22 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
       const affectedTypes = change?.endpointTypes ?? declarations.map(item => item.endpointType);
       const affectedCapabilities = declarations.filter(item => affectedTypes.includes(item.endpointType)).map(routeDeclarationCapability);
       const affected = kernel.current().records.filter(record => affectedCapabilities.some(capability => record.manifest.provides.includes(capability)));
+      const beforeAffected = before.records.filter(record => affectedCapabilities.some(capability => record.manifest.provides.includes(capability)));
       const affectedIds = new Set([...next.candidates, ...before.records.map(record => ({ instanceId: record.identity.instanceId, manifest: record.manifest }))]
         .filter(candidate => affectedCapabilities.some(capability => candidate.manifest.provides.includes(capability))).map(candidate => candidate.instanceId));
-      const missing = [...affectedIds].some(id => !affected.some(record => record.identity.instanceId === id));
+      const selectedIds = new Set(profile.instances.map(instance => instance.id));
+      const missing = [...affectedIds].some(id => selectedIds.has(id) && !affected.some(record => record.identity.instanceId === id));
       const loadFailed = next.loadFailures.some(failure => failure.instanceId !== undefined && affectedIds.has(failure.instanceId));
       const failures = affected.filter(record => record.status !== "active" || record.error);
-      const retiring = kernel.current().cleanupDiagnostics.filter(item => !item.lateConfirmed && affected.some(record => record.identity.instanceId === item.instanceId));
+      const retiring = kernel.pendingRetirements().filter(item => affectedIds.has(item.identity.instanceId));
       if (missing || loadFailed || failures.length || retiring.length) {
-        const unchanged = affected.every(record => before.records.some(previous => previous.identity.instanceId === record.identity.instanceId && previous.identity.activationId === record.identity.activationId));
+        const unchanged = affected.length === beforeAffected.length && affected.every(record => beforeAffected.some(previous => previous.identity.activationId === record.identity.activationId));
         if (unchanged && !retiring.length) throw new GatewayRouteSnapshotApplyRejected("Endpoint preparation was rejected; the original activations remain unchanged.");
         throw new Error("Endpoint Route configuration was not fully activated or its original retirement remains unconfirmed.");
+      }
+      if (!options.agentsOnly && declarations.some(item => item.ownsScheduledAutomation && affectedTypes.includes(item.endpointType))) {
+        // Ordinary routing sees the committed profile set. Already accepted scheduler work uses its own profile snapshot.
+        config.routeProfiles = normalizeRuntimeRouteProfiles(update.definition.routeProfiles);
       }
       appliedRoute = structuredClone(update.definition);
       appliedRevision = update.revision;
@@ -210,6 +233,7 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
     if (timer) clearTimeout(timer);
     for (const watcher of watchers) watcher.close();
     await queue;
+    publishEndpointPlugins();
     const results = await Promise.allSettled([kernel.shutdown(), stoppedPreparation]);
     releaseAgentProjection?.();
     releaseAgentGeneration();

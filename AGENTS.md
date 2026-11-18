@@ -47,9 +47,9 @@ RabiRoute 把 Agent 接到用户已有的一切：聊天消息、桌面操作、
 ## 开发、构建与运行
 
 - Agent 适配器改动先读 `skills/create-rabiroute-agent-adapter/SKILL.md`；Rokid/CXR 改动先读 `skills/rokid-development/SKILL.md`，采用项目当前 CXR 技术路线。
-- 新平台适配放 src/adapters；路由、模板和投递在 src/forwarding.ts；管理 API 与生命周期在 src/manager.ts。router 与处理端通过稳定接口协作。
+- 平台实现放 `src/plugins/`，按[宿主与插件边界](docs/host-plugin-boundaries.md)声明能力。路由、授权、共享账本和生命周期由宿主负责。平台兼容改动按原包独立构建、换版和验收。
 - 公共实现采用通用配置、契约与插件。私有业务、凭据和运行数据保存在经 git check-ignore 与跟踪状态确认的本地私有位置；公开代码、示例、日志和产物使用通用标识与脱敏值。
-- 按实际交付入口构建：纯 Web 且后端合同兼容时运行匹配测试与 `npm run webgui:build`；后端、依赖或完整包变化运行匹配测试与 `npm run build`。Manager、WebGUI、插件及启动链先读 `skills/source-hot-patch-development/SKILL.md`，按支持矩阵使用原生热补丁；需要生命周期切换时交给 Host。
+- 按实际交付入口构建：兼容插件使用选包构建；纯 Web 用 `npm run webgui:build`；共享后端、宿主依赖或完整包变化用 `npm run build`。运行匹配测试，按 `skills/source-hot-patch-development/SKILL.md` 选择换版入口；必须切换应用进程时交给 Host。
 - 回读健康与目标行为。热补丁核对同一 Manager/PID 的代码版本和候选 hash，切换核对新 generation；页面核对根 HTML 及实际资源 hash。
 - 清理本次调用链的过期代码、配置、路由和资源。确需兼容时记录用户、迁移路径、退出条件及验证。
 

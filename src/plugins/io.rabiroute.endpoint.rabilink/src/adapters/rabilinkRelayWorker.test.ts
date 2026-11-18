@@ -204,6 +204,67 @@ test("Relay reconnect uses one cancellable loop and passes its signal to retry w
   assert.equal(consumeCalls, 2);
 });
 
+test("retiring a Relay worker waits for an accepted task's original finish request", async (t) => {
+  configureRelay(t, true);
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-accepted-retirement-"));
+  const originalConfig = { dataDir: config.dataDir, memoryDataDir: config.memoryDataDir, primaryAgentAdapter: config.primaryAgentAdapter };
+  Object.assign(config, { dataDir, memoryDataDir: dataDir, primaryAgentAdapter: "dsh" });
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    Object.assign(config, originalConfig);
+    globalThis.fetch = originalFetch;
+    fs.rmSync(dataDir, { force: true, recursive: true });
+  });
+
+  let onEvent!: (eventType: string) => void;
+  let subscription!: AbortSignal;
+  let completeFinish!: () => void;
+  const finish = new Promise<void>(resolve => { completeFinish = resolve; });
+  const finishAttempts: Array<{ url: string; signal: AbortSignal; body: { accepted?: boolean } }> = [];
+  let claims = 0;
+  const restore = setRabiLinkRelayWorkerTestOverrides({
+    consumeEvents: async (signal, callback) => {
+      subscription = signal;
+      onEvent = callback;
+      await waitForAbort(signal);
+    },
+    claimTask: async () => {
+      claims += 1;
+      return { id: "accepted-original", inputFormat: "opaque-v1", raw: { type: "rabilink.review_request", text: "fixture review" } };
+    },
+    patchStatus: () => undefined,
+    startReviewer: () => undefined
+  });
+  t.after(restore);
+  globalThis.fetch = async (input, init) => {
+    finishAttempts.push({ url: String(input), signal: init!.signal!, body: JSON.parse(String(init!.body)) });
+    await finish;
+    if (init?.signal?.aborted) throw init.signal.reason;
+    return new Response("{}", { status: 200 });
+  };
+
+  const lease = await acquireRabiLinkRelayWorker(relayProfile, "/rabilink");
+  try {
+    onEvent("ready");
+    await waitFor(() => finishAttempts.length === 1);
+    let retired = false;
+    const retiring = lease.release().then(() => { retired = true; });
+    assert.equal(subscription.aborted, true);
+    assert.equal(finishAttempts[0].signal.aborted, false);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(retired, false);
+    completeFinish();
+    await retiring;
+    assert.equal(claims, 1);
+    assert.equal(finishAttempts.length, 1);
+    assert.match(finishAttempts[0].url, /\/worker\/tasks\/accepted-original\/finish$/);
+    assert.equal(finishAttempts[0].body.accepted, true);
+  } finally {
+    completeFinish();
+    await lease.release();
+  }
+});
+
 test("RabiLink observations are record-only while explicit messages remain direct", () => {
   assert.equal(rabiLinkRelayTaskDisposition({
     type: "rabilink.observation",

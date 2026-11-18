@@ -2,9 +2,11 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
   const routeId = String(context.routeProfileId || context.routeId || "").trim();
   const targetType = String(context.targetType || "").trim();
   const adapterType = String(context.adapterType || "").trim();
+  if (adapterType === "qqbot" && context.qqbotCanReply === false) return undefined;
   const outputAdapter = String(context.outputAdapter || "").trim();
   const channel = targetType === "plan_feedback"
     ? "plan_feedback"
+    : adapterType === "qqbot" ? "qqbot"
     : targetType === "role_panel" || adapterType === "rolePanel"
       ? "role_panel"
       : targetType === "rabilink" || adapterType === "rabilink"
@@ -31,6 +33,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
         replyToMessageId: context.replyToSource === true && context.messageId != null ? context.messageId : "",
         ...(targetType === "group" ? { replyImageDescriptions: [] } : {})
       }
+    : channel === "qqbot" ? { sourceMessageId: context.messageId }
     : channel === "wecom"
       ? { chatId: context.wecomChatId ?? context.groupId, userId: context.userId, reqId: context.wecomReqId }
       : channel === "feishu"
@@ -67,7 +70,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
     ...(context.lastReadMessageIndex ? { conversationContext: { lastReadMessageIndex: context.lastReadMessageIndex } } : {}),
     params,
     payload: {
-      type: "<纯文字填 text；图片填 image；NapCat Markdown 转图片填 markdown；多段混排仍填 image>",
+      type: channel === "qqbot" ? "text" : "<纯文字填 text；图片填 image；NapCat Markdown 转图片填 markdown；多段混排仍填 image>",
       text: "<填写正文及图片来源类型与关注点；type=markdown 时填 Markdown 源文；多段混排时删除 text/path，改填有序 segments：text、image 或 markdown 段>",
       // Only NapCat carries a local path; other channels resolve media by URL or their own id.
       ...(channel === "napcat"

@@ -1,4 +1,4 @@
-import { ALL_DAY_SOURCES, isReviewEvent, matchesReviewType, type AllDayCatalog, type AllDayEvent, type AllDaySettings } from "../shared/allDayRecording.js";
+import { ALL_DAY_REVIEW_SOURCES, ALL_DAY_REVIEW_TYPES, isReviewEvent, matchesReviewType, type AllDayCatalog, type AllDayEvent, type AllDaySettings } from "../shared/allDayRecording.js";
 import type { AllDayReadJob } from "./allDayRecordingReadStorage.js";
 
 type Entry = { role: string; directory: string; day?: string; kind: "catalog" | "recent"; mobiles: string[]; body: AllDayCatalog; loading: boolean; at: number; error?: string; bytes: number; journal: Map<string, AllDayEvent>; dirty: Set<string>; abort: AbortController };
@@ -109,7 +109,7 @@ export class AllDayRecordingReadModel {
     return {events:merge([],pages.flatMap(page=>page.events)).filter(row=>row.startedAt<until&&row.endedAt>=since),loading:pages.some(page=>page.loading),pendingDays:[...new Set(pages.flatMap(page=>[...(page.pendingDays??[]),...page.incompleteDays]))],readError:pages.find(page=>page.readError)?.readError};
   }
   async page(role: string, direction:"older"|"newer", cursor:{time:number;id:string}, source="all", limit=100, type="all") {
-    if(!Number.isFinite(cursor.time)||cursor.time<0||cursor.id.length>512||!["all",...ALL_DAY_SOURCES,"mobile","session","systemAudio"].includes(source)||!["all","asr","image","window","status","device"].includes(type)) throw new Error("Invalid event cursor");
+    if(!Number.isFinite(cursor.time)||cursor.time<0||cursor.id.length>512||(source!=="all"&&!ALL_DAY_REVIEW_SOURCES.some(value=>value===source))||!ALL_DAY_REVIEW_TYPES.some(value=>value===type)) throw new Error("Invalid event cursor");
     const overview=await this.catalog(role), cursorDay=dayOf(cursor.time);
     const days=overview.days.filter(day=>direction==="older"?day<=cursorDay:day>=cursorDay).sort(); if(direction==="older") days.reverse();
     const events:AllDayEvent[]=[]; let loading=!!overview.loading; const pendingDays:string[]=[];

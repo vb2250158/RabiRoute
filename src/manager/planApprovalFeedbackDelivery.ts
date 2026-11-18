@@ -2,21 +2,16 @@ import { planFeedbackResponseId, type PlanFeedbackRecord } from "../planFeedback
 import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import { planFeedbackResponseMutationInstruction } from "../shared/roleStorageMutationContract.js";
-import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
+import { planTaskDeliveryTarget, type PlanTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 
-export type PlanApprovalFeedbackTaskRequest = {
-  instanceBinding?: AgentInstanceBinding;
-  agentAdapter: PlanAssistantAgentType;
-  threadId: string;
-  title: string;
-  cwd: string;
-  createIfMissing: true;
+export type PlanApprovalFeedbackTaskRequest = PlanTaskDeliveryTarget & {
   prompt: string;
 };
 
 export type PlanApprovalFeedbackTaskDeliveryReadRequest = {
   agentAdapter?: PlanAssistantAgentType;
+  dshBaseUrl?: string;
   instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
@@ -183,6 +178,7 @@ async function readTaskDeliveryAfterError(
     try {
       lastState = await options.readTaskDelivery({
         agentAdapter: taskRequest.agentAdapter,
+        ...(taskRequest.dshBaseUrl ? { dshBaseUrl: taskRequest.dshBaseUrl } : {}),
         ...(taskRequest.instanceBinding ? { instanceBinding: taskRequest.instanceBinding } : {}),
         threadId: taskRequest.threadId,
         cwd: taskRequest.cwd,

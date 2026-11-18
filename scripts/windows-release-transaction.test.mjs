@@ -952,8 +952,10 @@ test("foreign same-name wearable task blocks uninstall without task or code muta
   } finally { cleanupFixture(fixture); }
 });
 
-test("installer embeds the exact portable ZIP and has no flat overwrite or unfenced quit", () => {
-  assert.match(installer, /Source: "\{#PortableZip\}"[\s\S]*Flags: dontcopy/);
+test("installer embeds component archives and trusted rules without flat overwrite or unfenced quit", () => {
+  assert.match(installer, /#include "components\.iss"/);
+  assert.match(installer, /Source: "\.\.\\scripts\\windows-release-components\.json"; Flags: dontcopy/);
+  assert.match(installer, /-ComponentArchiveJsonFile/);
   assert.doesNotMatch(installer, /SourceDir|recursesubdirs|InstallDelete|allow-unfenced-quit/);
   assert.match(installer, /ResultCode := -1/);
   assert.match(installer, /Exec\([\s\S]*ewWaitUntilTerminated, ResultCode\) and \(ResultCode = 0\)/);
@@ -1101,4 +1103,50 @@ test("legacy stable runtime uninstall removes both proven active names and prese
     for (const name of ["node.exe", "RabiRoute.Runtime.exe"]) assert.equal(fs.existsSync(path.join(runtime, name)), false);
     assert.equal(fs.readFileSync(path.join(runtime, "foreign.keep"), "utf8"), "foreign");
   } finally { cleanupFixture(fixture); }
+});
+
+
+test("PowerShell 5.1 -File consumes structured component paths across all selections", { skip: process.platform !== "win32", timeout: 180_000 }, async () => {
+  const { default: yazl } = await import("yazl");
+  const rules = JSON.parse(fs.readFileSync(new URL("./windows-release-components.json", import.meta.url), "utf8"));
+  async function archive(filename, files, emptyDirectory) {
+    const zip = new yazl.ZipFile();
+    for (const [source, relative] of files) zip.addFile(source, relative);
+    if (emptyDirectory) zip.addEmptyDirectory(emptyDirectory);
+    await new Promise((resolve, reject) => { const out = fs.createWriteStream(filename); zip.outputStream.pipe(out); out.on("close", resolve); out.on("error", reject); zip.outputStream.on("error", reject); zip.end(); });
+  }
+  for (const selected of [[], ["agent-codex"], ["agent-cli"], ["agent-codex", "agent-cli"]]) {
+    const f = makeFixture();
+    try {
+      const distribution = path.join(f.root, "distribution"), archiveDir = path.join(f.root, "路径 with spaces");
+      fs.mkdirSync(archiveDir);
+      const componentState = { schemaVersion: 1, releaseId: f.releaseId, components: rules.components.map(({ id, required, manifestPrefixes }) => ({ id, required, manifestPrefixes })) };
+      fs.writeFileSync(path.join(distribution, "components.json"), JSON.stringify(componentState));
+      const core = [], desktop = [];
+      function walk(dir) { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, entry.name); if (entry.isDirectory()) walk(file); else {
+          const relative = path.relative(distribution, file).split(path.sep).join("/");
+          (relative.includes("/desktop-runtime/") ? desktop : core).push([file, relative]);
+        }
+      } }
+      walk(distribution);
+      const archives = [path.join(archiveDir, "核心 core.zip"), path.join(archiveDir, "桌面 desktop.zip")];
+      await archive(archives[0], core); await archive(archives[1], desktop);
+      for (const id of selected) { const file = path.join(archiveDir, `${id}.zip`); await archive(file, [], `versions/${f.releaseId}/fixture-${id}/`); archives.push(file); }
+      const archiveList = path.join(archiveDir, "组件 archives.json"); fs.writeFileSync(archiveList, JSON.stringify(archives), "utf8");
+      const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", transaction, "-InstallRoot", f.install,
+        "-ComponentArchiveJsonFile", archiveList, "-ComponentsInstalled", ["core", "desktop", ...selected].join(","), "-ExpectedReleaseId", f.releaseId,
+        "-StopHostScript", f.helper, "-LegacyMigrationScript", f.helper, "-LegacyTaskMigrationScript", legacyTaskMigration,
+        "-TestLegacyTaskStorePath", f.taskStore, "-AutostartScript", f.helper, "-AutostartEnabled", "false", "-TestSelfTestScript", f.helper,
+        "-FaultPoint", "after-stage"];
+      const result = requireFixtureProcessExit(f, spawnSync(powershell, args, { encoding: "utf8", env: windowsPowerShellEnvironment({ APPDATA: f.appData, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1" }), timeout: transactionWatchdogMs }), "component transaction");
+      assert.notEqual(result.status, 0); assert.match(result.stderr, /Injected fault after-stage/, result.stderr || result.stdout);
+      assert.equal(fs.readFileSync(path.join(f.install, "current.json"), "utf8"), f.previousPointer);
+      if (!selected.length) {
+        const invocation = '& $env:RABI_TEST_TRANSACTION -InstallRoot $env:RABI_TEST_INSTALL -ComponentArchive @($env:RABI_TEST_CORE, $env:RABI_TEST_DESKTOP) -ComponentsInstalled "core,desktop" -ExpectedReleaseId $env:RABI_TEST_RELEASE -StopHostScript $env:RABI_TEST_HELPER -LegacyMigrationScript $env:RABI_TEST_HELPER -LegacyTaskMigrationScript $env:RABI_TEST_TASK_HELPER -TestLegacyTaskStorePath $env:RABI_TEST_TASK_STORE -AutostartScript $env:RABI_TEST_HELPER -AutostartEnabled false -TestSelfTestScript $env:RABI_TEST_HELPER -FaultPoint after-stage';
+        const direct = requireFixtureProcessExit(f, spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", invocation], { encoding: "utf8", env: windowsPowerShellEnvironment({ APPDATA: f.appData, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1", RABI_TEST_TRANSACTION: transaction, RABI_TEST_INSTALL: f.install, RABI_TEST_CORE: archives[0], RABI_TEST_DESKTOP: archives[1], RABI_TEST_RELEASE: f.releaseId, RABI_TEST_HELPER: f.helper, RABI_TEST_TASK_HELPER: legacyTaskMigration, RABI_TEST_TASK_STORE: f.taskStore }), timeout: transactionWatchdogMs }), "programmatic component transaction");
+        assert.notEqual(direct.status, 0); assert.match(direct.stderr, /Injected fault after-stage/, direct.stderr || direct.stdout);
+      }
+    } finally { cleanupFixture(f); }
+  }
 });

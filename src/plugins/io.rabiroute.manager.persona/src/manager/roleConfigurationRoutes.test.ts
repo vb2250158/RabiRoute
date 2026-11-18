@@ -120,6 +120,23 @@ test("unbound roles are listed and save without creating a Route; clearing role 
   assert.equal(stale.response.status, 412);
 }));
 
+test("role detail exposes primary destination labels only for its own Routes", async () => fixture(async f => {
+  f.routes.push(
+    { id: "codex-route", name: "Design route", gatewayPort: 0, agentRoleId: "Example", codexThreadName: "Design review" },
+    { id: "unbound-agent", gatewayPort: 0, agentRoleId: "Example" },
+    { id: "other-role", gatewayPort: 0, agentRoleId: "Other", codexThreadName: "Other task" },
+    { id: "remote-role", gatewayPort: 0, agentRoleId: "Example", agentRoleDeviceId: "peer", codexThreadName: "Remote task" }
+  );
+  f.context.describeRoutePrimaryAgent = route => route.codexThreadName
+    ? { type: "codex", label: "Codex", sessionName: route.codexThreadName, hasSessionId: true } : undefined;
+  const role = await f.get();
+  assert.deepEqual(role.routes, [
+    { id: "codex-route", name: "Design route", primaryAgent: { type: "codex", label: "Codex", sessionName: "Design review", hasSessionId: true } },
+    { id: "unbound-agent", name: "unbound-agent" }
+  ]);
+  assert.equal(role.config.primaryAgent, undefined);
+}));
+
 test("daily time points save through one role rule with its original identity and extensions", async () => fixture(async f => {
   const before = await f.get();
   const rule = { id: "daily-review", enabled: true, privateRule: { retained: true },

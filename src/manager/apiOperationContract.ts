@@ -266,6 +266,12 @@ function schemaHasExternalContext(value: unknown): boolean {
     || schemaHasExternalContext(child));
 }
 
+/** Plugin declarations keep validators independent across candidates and rollbacks. */
+export function compilePluginDataSchema(schema: ApiSchema): ValidateFunction {
+  if (schemaHasExternalContext(schema)) throw new Error("Plugin data schemas need self-contained references and no global schema ID.");
+  return compileApiSchema(schema);
+}
+
 function compileApiSchema(schema: ApiSchema): ValidateFunction {
   // IDs and external references depend on Ajv's schema registry. Preserve its
   // normal compilation/duplicate-ID checks instead of treating JSON as context.

@@ -53,6 +53,8 @@ test("shared and unknown fields keep real restart while endpoint changes compare
   f.runtime.needsRestart = true;
   const result = await f.owner.prepare([f.runtime], "shared-update");
   assert.equal(result.state, "requested");
+  assert.equal(result.gateways[0]?.code, "shared_route_dependency");
+  assert.deepEqual(result.gateways[0]?.restartReasons, ["route.groupNotificationTemplate"]);
   assert.equal(f.runtime.needsRestart, true);
   assert.equal(applied, 1);
 });

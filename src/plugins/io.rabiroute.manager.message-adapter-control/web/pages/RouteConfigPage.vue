@@ -1339,9 +1339,8 @@ watch(() => gateway.value?.id, () => {
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
-                      <div class="section-note">这里配置消息处理 Agent 的模型和运行参数。消息投给谁由角色自动化规则决定。</div>
+                      <div class="section-note">消息默认投给主控会话。角色自动化可以指定同一 Agent 端的消息处理任务。</div>
                     </div>
-
                   </div>
                   <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
                     自动化选择“消息处理 Agent”后，使用这里配置的消息池。选择其他目标的规则不受影响。

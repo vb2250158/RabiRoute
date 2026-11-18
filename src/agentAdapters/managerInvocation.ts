@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentAdapterInvocation, AgentAdapterProvider } from "@rabiroute/plugin-sdk";
 import { currentAgentAdapterGeneration, publishedAgentAdapterProviders } from "../runtime/agentAdapterProviders.js";
+import { agentAdapterCapabilities, type AgentAdapterCapabilities } from "../shared/agentAdapterCapabilities.js";
 
 export type AgentManagerOperationInvoker = <T = unknown>(
   type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation
@@ -47,6 +48,13 @@ export function scopedAgentManagerProviders(fallback: () => readonly AgentAdapte
 /** Pure metadata ports and asynchronous primitives select the same original provider. */
 export function scopedAgentManagerProvider(type: string, fallback: () => readonly AgentAdapterProvider[]): AgentAdapterProvider | undefined {
   return scope.getStore()?.providers?.get(type) ?? (scope.getStore()?.providers ? undefined : fallback().find(provider => provider.type === type));
+}
+
+/** Select capabilities from the same captured owner that will execute the operation. */
+export function scopedAgentManagerCapabilities(type: string): AgentAdapterCapabilities {
+  const providers = scope.getStore()?.providers;
+  if (!providers) return agentAdapterCapabilities(type);
+  return (providers.get(type)?.manifest.capabilities as AgentAdapterCapabilities | undefined) ?? {};
 }
 
 export function invokeAgentProviderOperation<T = unknown>(

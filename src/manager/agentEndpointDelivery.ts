@@ -1,5 +1,7 @@
 import { withAgentManagerInvocation } from "../agentAdapters/managerInvocation.js";
 import { createHash } from "node:crypto";
+import path from 'node:path';
+import { storeWebChatAttachments } from './agentWebChatAttachments.js';
 import { resolveEndpointExecutionOptions, type EndpointExecutionOptions } from "../agentRequests/executionOptions.js";
 import type { AgentThreadRequest, AgentThreadRequestOptions, AgentThreadRemoteSource, AgentThreadSummary } from "../agentThreads.js";
 import type { AgentRequestStore, AgentRequestParty } from "../agentRequests/store.js";
@@ -188,7 +190,8 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
       }
       return receipt as EndpointDeliveryReceipt | undefined;
     }
-    const options = context.localOptions({ threadId: delivery.target.sessionId, agentAdapter: delivery.target.provider as AgentAdapterType });
+    const options = context.localOptions({ threadId: delivery.target.sessionId, agentAdapter: delivery.target.provider as AgentAdapterType,
+      dshBaseUrl: delivery.executionOptions.dshBaseUrl });
     return withAgentManagerInvocation(options, () => executePreparedEndpointDelivery(delivery, { endpoint: delivery.target, assertAuthorized,
       readReceipt: value => receipts.readReceipt(value), writeReceipt: (value, receipt) => receipts.writeReceipt(value, receipt),
       readNotSent: value => receipts.readNotSentProof(value), writeNotSent: (value, proof) => receipts.writeNotSent(value, proof),
@@ -222,14 +225,17 @@ export function createAgentEndpointDelivery(context: AgentEndpointDeliveryContex
     };
     const deliveryOptions: EndpointDeliveryOptions = { store: context.store, managerInstanceId, callerExecutionOptions: originalCallerExecutionOptions,
       assertRequestCurrent: requestAuthority,
+      storeWebChatAttachments: attachments => storeWebChatAttachments(path.join(path.dirname(context.receiptDirectory), 'webchat-attachments'), attachments, requestAuthority),
       authorize: (endpoint, role) => { assertRequest(); authorize(endpoint, role); },
       refreshEndpoints: async (identities, phase) => { assertRequest(); await refreshEndpoints(identities, phase); assertRequest(); },
       resolveExecutionOptions: (request, target) => {
         assertRequest();
         const exactRequest = { ...request, agentAdapter: target.agentAdapter, threadId: target.threadId };
         if (target.endpoint && context.service?.owns(target.endpoint)) return context.service.resolveExecutionOptions(exactRequest, target);
-        const defaults = target.endpoint?.kind === "local" ? context.localOptions(exactRequest).codexDefaults : undefined;
-        return resolveEndpointExecutionOptions(exactRequest, target.workspace, defaults);
+        const localOptions = target.endpoint?.kind === "local" ? context.localOptions(exactRequest) : undefined;
+        return resolveEndpointExecutionOptions({ ...exactRequest,
+          dshBaseUrl: target.agentAdapter === "dsh" ? localOptions?.dshBaseUrl : undefined
+        }, target.workspace, localOptions?.codexDefaults);
       },
       resolveSource: async request => {
         assertRequest();

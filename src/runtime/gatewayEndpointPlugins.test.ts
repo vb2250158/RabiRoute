@@ -9,7 +9,8 @@ import { createWebhookAdapter } from "../adapters/webhookAdapter.js";
 import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
 import { RabiCordisHost } from "./cordisHost.js";
 import { createMessageEndpointHostPorts } from "./messageEndpointHostPorts.js";
-import { createGatewayListenerRuntime } from "./gatewayListenerRuntime.js";
+import { createGatewayListenerRuntime, type GatewayListenerPublication } from "./gatewayListenerRuntime.js";
+import { hashPluginPackage } from "../plugin-kernel/packageLoader.js";
 import { mountGatewayEndpointPlugins } from "./gatewayEndpointPlugins.js";
 import { GenerationRuntime, PluginPackageCatalog, loadPluginProfile } from "../plugin-kernel/index.js";
 import { createPluginManagement } from "../manager/pluginManagement.js";
@@ -24,8 +25,10 @@ import type { ChildProcess } from "node:child_process";
 import { createGatewayRouteActivationOwner, type GatewayRouteActivationRuntime } from "../manager/gatewayRouteActivationOwner.js";
 import { ManagerGatewayRuntimeService } from "../manager/managerGatewayRuntimeService.js";
 import { gatewayRouteSnapshotRevision } from "../shared/gatewayRouteSnapshot.js";
+import { bindGatewayRouteSnapshotReceiver } from "./gatewayRouteSnapshotReceiver.js";
+import type { ForwardMessageOptions } from "../forwarding.js";
 import { classifyRouteChange } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
-import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import { normalizeGatewayDefinition, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
 
 async function waitFor(check: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 20_000;
@@ -49,7 +52,9 @@ test("real Webhook and Heartbeat packages disable, update and fail independently
   stage("begin");
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "endpoint-packages-real-"));
   const host = new RabiCordisHost();
-  const listener = createGatewayListenerRuntime({ identity: { gatewayId: "test-gateway", gatewayGenerationId: "test-generation", pid: process.pid }, publish() {} });
+  const publications: GatewayListenerPublication[] = [];
+  const listener = createGatewayListenerRuntime({ identity: { gatewayId: "test-gateway", gatewayGenerationId: "test-generation", pid: process.pid },
+    publish: snapshot => { publications.push(snapshot); } });
   const originalDataDir = config.dataDir, originalMemoryDataDir = config.memoryDataDir;
   const cleanup: Array<() => Promise<unknown>> = [];
   try {
@@ -92,10 +97,17 @@ test("real Webhook and Heartbeat packages disable, update and fail independently
     await assert.rejects(fs.access(settings.options.settingsRoot), /ENOENT/, "The first settings directory does not exist before Gateway startup.");
     const initialRoute = { automationScheduleSchemaVersion: 1 as const, id: "test-gateway", gatewayPort: port, enabled: true, messageAdapters: ["webhook"], automationRules: [{ id: "test-schedule", trigger: { type: "schedule" as const, schedule: { id: "time", type: "interval" as const, intervalSeconds: 900 } }, action: { type: "deliver_agent" as const, message: "fixture-only" } }], webhookPort: port, webhookPath: "/endpoint-test" };
     const runtime = await mountGatewayEndpointPlugins(host, { initialRouteDefinition: initialRoute, profilePath, settingsRoot: settings.options.settingsRoot, packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime"), adapterTypes: ["webhook"], watch: true,
+      publishEndpointPlugins: listener.publishEndpointPlugins,
       hostPorts: { prepareModules: ids => shared.prepareModules(ids), module<T>(id: string): T { return (overrides[id] ?? shared.module(id)) as T; }, assertModules: ids => shared.assertModules(ids) } });
     stage("native-initial-mount");
     const activation = (type: string) => runtime.current().records.find(record => record.identity.instanceId === `endpoint:${type}`)?.identity.activationId;
     const webhookActivation = activation("webhook");
+    const pluginReport = (type: string) => publications.at(-1)?.endpointPlugins?.find(item => item.instanceId === `endpoint:${type}`);
+    const initialReport = pluginReport("webhook");
+    assert.equal(initialReport?.activationId, webhookActivation);
+    assert.equal(initialReport?.state, "active");
+    const webhookPackage = path.join(built.packagesRoot, "io.rabiroute.endpoint.webhook", versions.webhook!);
+    assert.equal(initialReport?.packageHash, await hashPluginPackage(webhookPackage));
     assert.ok(webhookActivation, JSON.stringify(runtime.current().records));
     assert.equal(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.status, "active", JSON.stringify(runtime.current().records));
     assert.equal(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.error, undefined, JSON.stringify(runtime.current().records));
@@ -214,12 +226,27 @@ test("real Webhook and Heartbeat packages disable, update and fail independently
     await runtime.reconcile();
 
     stage("unrelated-owner-switch-restored-bad-package");
+    const runningWebhook = activation("webhook");
+    const routeWithSchedule = { ...initialRoute, heartbeatMessage, webhookPath };
+    await runtime.applyRouteSnapshot({ ...routeWithSchedule, automationRules: [] }, "route-last-schedule-off");
+    assert.equal(activation("heartbeat"), undefined);
+    assert.equal(activation("webhook"), runningWebhook);
+    await runtime.applyRouteSnapshot(routeWithSchedule, "route-first-schedule-on");
+    assert.ok(activation("heartbeat"));
+    assert.equal(activation("webhook"), runningWebhook);
     const preservedHeartbeat = activation("heartbeat");
-    const webhookBundle = path.join(built.packagesRoot, "io.rabiroute.endpoint.webhook", versions.webhook!, "runtime.mjs");
+    const webhookBundle = path.join(webhookPackage, "runtime.mjs");
     await fs.appendFile(webhookBundle, "\nexport const updatedProtocolRevision = 2;\n");
     await runtime.reconcile();
     assert.notEqual(activation("webhook"), webhookActivation);
     assert.equal(activation("heartbeat"), preservedHeartbeat);
+    const updatedReport = pluginReport("webhook");
+    assert.equal(updatedReport?.packageHash, await hashPluginPackage(webhookPackage));
+    assert.notEqual(updatedReport?.packageHash, initialReport?.packageHash);
+    assert.equal(updatedReport?.activationId, activation("webhook"));
+    assert.equal(updatedReport?.state, "active");
+    assert.equal(publications.at(-1)?.pid, process.pid);
+    assert.equal(publications.at(-1)?.gatewayGenerationId, "test-generation");
     await post();
     assert.equal(delivered.length, 6);
 
@@ -228,12 +255,40 @@ test("real Webhook and Heartbeat packages disable, update and fail independently
     await runtime.reconcile();
     assert.equal(activation("webhook"), undefined);
     assert.equal(activation("heartbeat"), preservedHeartbeat);
+    assert.equal(pluginReport("webhook"), undefined);
+    assert.equal(pluginReport("heartbeat")?.activationId, preservedHeartbeat);
     await assert.rejects(fetch(`http://127.0.0.1:${port}/endpoint-test`));
     assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, "gateway-status.json"), "utf8")).messageAdapters.heartbeat.status, "running");
+
+    const portBlocker = http.createServer();
+    await new Promise<void>((resolve, reject) => {
+      portBlocker.once("error", reject);
+      portBlocker.listen(port, "127.0.0.1", resolve);
+    });
+    try {
+      await settings.update("endpoint:webhook", { expectedRevision: (await settings.snapshot()).revision, enabled: true });
+      await runtime.reconcile();
+      await waitFor(() => runtime.current().records.some(record => record.identity.instanceId === "endpoint:webhook" && record.status === "failed"));
+      assert.match(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.error?.message ?? "", /EADDRINUSE/);
+      assert.equal(activation("heartbeat"), preservedHeartbeat);
+    } finally {
+      await new Promise<void>((resolve, reject) => portBlocker.close(error => error ? reject(error) : resolve()));
+    }
+    await runtime.reconcile();
+    await waitFor(() => runtime.current().records.some(record => record.identity.instanceId === "endpoint:webhook" && record.status === "active" && !record.initialization));
+    assert.equal(activation("heartbeat"), preservedHeartbeat);
+    assert.equal(runtime.current().cleanupDiagnostics.some(item => item.instanceId === "endpoint:webhook" && !item.lateConfirmed), false);
+    await post();
+    assert.equal(delivered.length, 7);
+    await settings.update("endpoint:webhook", { expectedRevision: (await settings.snapshot()).revision, enabled: false });
+    await runtime.reconcile();
+    stage("webhook-recovered-from-occupied-port");
 
     // Webhook depends on the shared listener driver; Heartbeat does not. A failed
     // shared-owner import must fail just that package, before it opens a listener.
     stage("webhook-disable-closed-port");
+    await runtime.unmount();
+    assert.deepEqual(publications.at(-1)?.endpointPlugins, []);
     const brokenPorts = await createMessageEndpointHostPorts({ loaders: { "adapters/webhookAdapter": async () => { throw new Error("controlled unavailable Webhook driver"); } } });
     const isolatedHost = new RabiCordisHost();
     const secondData = path.join(temporary, "independent-owner-data");
@@ -310,13 +365,18 @@ test("scheduled automation owns one native worker without a message connector ca
   }
 });
 
-test("first schedule and last schedule off use the original shared Gateway restart and one native scheduler", { timeout: 120_000 }, async () => {
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "automation-shared-restart-"));
+test("the real scheduler starts on the first rule and stops after the last rule on the same Gateway", { timeout: 120_000 }, async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "automation-hotplug-"));
   const input = new PassThrough(), output = new PassThrough();
   const child = Object.assign(new EventEmitter(), { stdin: input, stdout: output, pid: 42, exitCode: null, signalCode: null }) as unknown as ChildProcess;
-  let host = new RabiCordisHost();
+  const host = new RabiCordisHost();
+  let receiver: ReturnType<typeof bindGatewayRouteSnapshotReceiver> | undefined;
+  const originalProfiles = config.routeProfiles;
+  let finishDelivery!: () => void;
+  const delivery = new Promise<void>(resolve => { finishDelivery = resolve; });
+  const scheduledDeliveries: Array<ForwardMessageOptions["scheduledAutomation"]> = [];
   const metadata = JSON.parse(await fs.readFile(path.join(process.cwd(), "src/plugins/io.rabiroute.endpoint.heartbeat/route-config.json"), "utf8"));
-  const activation = createGatewayRouteActivationOwner({ declarations: async () => [metadata], timeoutMs: 50 });
+  const activation = createGatewayRouteActivationOwner({ declarations: async () => [metadata], timeoutMs: 10000 });
   try {
     // @ts-expect-error Production JavaScript builder is outside src.
     const { buildPluginPackages } = await import("../../scripts/build-plugin-packages.mjs");
@@ -326,20 +386,33 @@ test("first schedule and last schedule off use the original shared Gateway resta
     await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "automation:timer", package: descriptor.id, version: descriptor.version, enabled: true, config: {}, grants: [] }] }));
     const dataDir = path.join(temporary, "data");
     await fs.mkdir(dataDir);
-    const original: GatewayDefinition = { id: "timer-route", gatewayPort: 0, enabled: true, automationScheduleSchemaVersion: 1, messageAdapters: [], automationRules: [] };
-    const rule = { id: "original-task", enabled: true, trigger: { type: "schedule" as const, schedule: { id: "original-clock", type: "interval" as const, intervalSeconds: 86400 } }, action: { type: "deliver_agent" as const, message: "fixture: never sent" } };
-    const added = { ...original, automationRules: [rule] };
-    const disabled = { ...added, automationRules: [{ ...rule, enabled: false }] };
+    const raw: GatewayDefinition = { id: "timer-route", gatewayPort: 0, enabled: true, automationScheduleSchemaVersion: 1, messageAdapters: [], automationRules: [] };
+    const original = normalizeGatewayDefinition(raw);
+    const rule = { id: "original-task", enabled: true, trigger: { type: "schedule" as const, schedule: { id: "original-clock", type: "interval" as const, intervalSeconds: 86400 } }, action: { type: "deliver_agent" as const, message: "fixture: accepted delivery" } };
+    const added = normalizeGatewayDefinition({ ...raw, automationRules: [rule] });
+    const disabled = normalizeGatewayDefinition({ ...raw, automationRules: [{ ...rule, enabled: false }] });
+    assert.equal(original.routeProfiles?.length, 0);
+    assert.equal(added.routeProfiles?.length, 1);
+    const messageRule = { ...rule, id: "message-rule", trigger: { type: "message" as const, regex: "hello" } };
+    const withMessageRule = normalizeGatewayDefinition({ ...raw, automationRules: [rule, messageRule] });
+    assert.equal(classifyRouteChange(added, withMessageRule, [metadata]).kind, "shared");
+    const withRoleChange = { ...added, routeProfiles: added.routeProfiles?.map(profile => ({ ...profile, agentRoleId: "different-role" })) };
+    assert.equal(classifyRouteChange(added, withRoleChange, [metadata]).kind, "shared");
     const shared = await createMessageEndpointHostPorts();
-    let generation = 0;
-    const boot = async (definition: GatewayDefinition) => {
-      generation++;
-      const scoped = { ...config, dataDir, routeProfiles: [definition], messageAdapterTypes: [] };
-      return mountGatewayEndpointPlugins(host, { initialRouteDefinition: definition, profilePath, stateRoot: temporary,
-        settingsRoot: path.join(temporary, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime", String(generation)), adapterTypes: [], watch: false,
-        hostPorts: { prepareModules: ids => shared.prepareModules(ids), assertModules: ids => shared.assertModules(ids), module<T>(id: string): T { return (id === "config" ? { config: scoped } : shared.module(id)) as T; } } });
-    };
-    let native = await boot(original);
+    const scoped = { ...config, dataDir, routeProfiles: [], messageAdapterTypes: [] };
+    const native = await mountGatewayEndpointPlugins(host, { initialRouteDefinition: original, profilePath, stateRoot: temporary,
+      settingsRoot: path.join(temporary, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime"), adapterTypes: [], watch: false,
+      hostPorts: { prepareModules: ids => shared.prepareModules(ids), assertModules: ids => shared.assertModules(ids), module<T>(id: string): T {
+        if (id === "config") return { config: scoped } as T;
+        if (id === "scheduling/heartbeatSchedules") return { nextHeartbeatScheduleTime: (_: unknown, now: Date, options: { lastScheduledAt?: Date }) => options.lastScheduledAt ? null : new Date(now.getTime() + 50) } as T;
+        if (id === "automation/personaAutomationRuntime") return { ...shared.module<Record<string, unknown>>(id), claimAutomationRun: () => true, finishAutomationRun() {} } as T;
+        if (id === "forwarding") return { async forwardMessageAndWait(_kind: unknown, _record: unknown, _values: unknown, options: ForwardMessageOptions) {
+          scheduledDeliveries.push(options.scheduledAutomation);
+          await delivery;
+          return { status: "sent", matchedRuleCount: 1, sentPacketCount: 1, adapterOutcomes: [] };
+        } } as T;
+        return shared.module<T>(id);
+      } } });
     assert.equal(native.current().records.length, 0);
     const runtime: GatewayRouteActivationRuntime = { definition: original, process: child, readiness: "ready", needsRestart: false };
     const runtimes = new Map([[original.id, runtime]]);
@@ -349,31 +422,54 @@ test("first schedule and last schedule off use the original shared Gateway resta
       loadDefinitions: () => [], normalizeDefinition: definition => definition, definitionFingerprint: gatewayRouteSnapshotRevision,
       createRuntime: definition => ({ definition, process: null, readiness: "stopped", needsRestart: false }),
       isRunning: item => Boolean(item.process), reconcileAction: item => item.needsRestart ? "restart" : "none",
-      startRuntime() { throw new Error("A running Gateway must use its existing restart lifecycle."); }, stopRuntime() {}, restartRuntime() { restarts++; }
+      startRuntime() { throw new Error("The Gateway is already running."); }, stopRuntime() {}, restartRuntime() { restarts++; }
     });
-    activation.attach(child, { gatewayId: original.id, gatewayGenerationId: "fixture-boot", pid: 42 }, original, gatewayRouteSnapshotRevision(original));
+    const identity = { gatewayId: original.id, gatewayGenerationId: "fixture-boot", pid: child.pid! };
+    const initialRevision = gatewayRouteSnapshotRevision(original);
+    receiver = bindGatewayRouteSnapshotReceiver({ input, output, identity, initialRevision, applySnapshot: native.applyRouteSnapshot });
+    activation.attach(child, identity, original, initialRevision);
     for (const [definition, expectedWorkers] of [[added, 1], [disabled, 0]] as const) {
-      assert.equal(classifyRouteChange(runtime.definition, definition, [metadata]).kind, "shared");
+      assert.equal(classifyRouteChange(runtime.definition, definition, [metadata]).kind, "endpoint");
       service.loadDefinitions([definition]);
-      assert.equal((await activation.prepare(runtimes.values(), `fixture-save-${expectedWorkers}`)).state, "requested");
-      assert.equal(runtime.needsRestart, true);
-      assert.equal(snapshotFrames, 0, "Shared Automation changes do not use an endpoint-only snapshot apply.");
-      const priorRevision = native.routeRevision();
-      await assert.rejects(native.applyRouteSnapshot(definition, gatewayRouteSnapshotRevision(definition)), /Shared Route configuration/);
-      assert.equal(native.routeRevision(), priorRevision, "Rejected shared apply retains the prior native owner.");
+      const applying = activation.prepare(runtimes.values(), `fixture-save-${expectedWorkers}`);
+      if (!expectedWorkers) {
+        await waitFor(() => native.current().records.length === 0);
+        assert.equal(receiver?.current().operation?.state, "pending");
+        assert.equal(receiver?.current().revision, gatewayRouteSnapshotRevision(added));
+        finishDelivery();
+      }
+      const receipt = await applying;
+      assert.equal(receipt.state, "applied");
+      assert.equal(receipt.gateways[0]?.pid, identity.pid);
+      assert.equal(receipt.gateways[0]?.gatewayGenerationId, identity.gatewayGenerationId);
+      assert.equal(runtime.needsRestart, false);
       service.reconcile();
-      await host.dispose();
-      if (expectedWorkers === 0) assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, "gateway-status.json"), "utf8")).heartbeat.enabled, false);
-      host = new RabiCordisHost();
-      native = await boot(definition);
+      assert.equal(runtime.process, child);
+      assert.equal(native.routeRevision(), gatewayRouteSnapshotRevision(definition));
       assert.equal(native.current().records.filter(record => record.status === "active").length, expectedWorkers);
-      if (expectedWorkers) assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, "gateway-status.json"), "utf8")).heartbeat.scheduleCount, 1);
-      runtime.needsRestart = false;
-      activation.attach(child, { gatewayId: original.id, gatewayGenerationId: `fixture-boot-${generation}`, pid: 42 }, definition, gatewayRouteSnapshotRevision(definition));
+      assert.equal(config.routeProfiles[0]?.automationRules?.[0]?.enabled, expectedWorkers === 1);
+      const { heartbeat } = JSON.parse(await fs.readFile(path.join(dataDir, "gateway-status.json"), "utf8"));
+      assert.equal(heartbeat.enabled, expectedWorkers === 1);
+      assert.equal(heartbeat.scheduleCount, 1);
+      if (expectedWorkers) {
+        await waitFor(() => scheduledDeliveries.length === 1);
+        assert.equal(scheduledDeliveries[0]?.route.automationRules?.[0]?.id, rule.id);
+      } else {
+        assert.equal(scheduledDeliveries.length, 1);
+        assert.equal(heartbeat.lastDeliveryStatus, "sent");
+      }
     }
-    assert.equal(restarts, 2);
+    assert.equal(snapshotFrames, 2);
+    assert.equal(restarts, 0);
+    service.loadDefinitions([original]);
+    assert.equal((await activation.prepare(runtimes.values(), "fixture-remove-rule")).state, "applied");
+    assert.equal(config.routeProfiles.length, 0);
+    assert.equal(restarts, 0);
   } finally {
+    finishDelivery();
+    config.routeProfiles = originalProfiles;
     activation.detach(child);
+    await receiver?.dispose();
     await host.dispose();
     input.destroy(); output.destroy();
     await fs.rm(temporary, { recursive: true, force: true });

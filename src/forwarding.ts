@@ -22,6 +22,7 @@ import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
   appendAgentPacketToDir,
   appendFeishuMessageToDir,
+  appendQqBotMessageToDir,
   appendAdapterLogToDir,
   appendGroupMessageToDir,
   appendHeartbeatEventToDir,
@@ -40,6 +41,8 @@ import {
 } from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
 import { fetchRoleContextProjection } from "./manager/roleContextProjection.js";
+import { projectAllDayMessage } from "./manager/allDayMessageIngress.js";
+import { isCaptureEventRouteKind, messageEventCategory } from "./shared/personaEventTypes.js";
 import { fetchRemotePersonaSnapshot, routeWithRemotePersonaConfig, type RemotePersonaSnapshot } from "./routing/remotePersonaClient.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope, type RabiMessageSource } from "./shared/rabiMessage.js";
 import { observeIdentityEndpoint } from "./identityRelations.js";
@@ -52,6 +55,7 @@ import {
   isManualTriggerRecord,
   isWeComRecord,
   isFeishuRecord,
+  isQqBotRecord,
   isWeixinRecord,
   isVoiceTranscriptRecord
 } from "./routing/routeDecision.js";
@@ -80,7 +84,7 @@ import {
   mergePendingMessageGroup,
   messageGroupEnqueueInputForForward
 } from "./routing/messageGroupingForward.js";
-import { MessageAgentPool, messageAgentPoolStatePath, requestMessageAgentManager } from "./messageAgentPool.js";
+import { createMessageAgentPoolOwner, MessageAgentPool, messageAgentPoolStatePath, requestMessageAgentManager } from "./messageAgentPool.js";
 import { MemoryConsolidationAgent, memoryConsolidationAgentStatePath } from "./memoryConsolidationAgent.js";
 import {
   findReferencedAgentSenders,
@@ -91,6 +95,7 @@ import { collectMessageGroupSourceEvidence, type MessageGroupSourceEvidence } fr
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
+  primaryMessageProcessingAgentAdapter,
   normalizeMessageGroupingPolicy,
   type MessageGroupingPolicy,
   type RecentMessageEndpoint
@@ -143,21 +148,20 @@ export type ForwardMessageOptions = {
   recordInbound?: boolean;
   messageGroup?: PendingMessageGroup;
   signal?: AbortSignal;
+  scheduledAutomation?: Readonly<{ route: RouteProfile; skipWhenAgentBusy: boolean }>;
 };
 
-let messageAgentPool: MessageAgentPool | undefined;
+const messageAgentPool = createMessageAgentPoolOwner();
 let memoryConsolidationAgent: MemoryConsolidationAgent | undefined;
 let messageGroupingQueue: MessageGroupingQueue | undefined;
-let messageAgentPoolScope = "";
 let memoryConsolidationAgentScope = "";
 
 /** Clears process-local grouping workers so tests and runtime reconfiguration do not reuse stale gateway settings. */
 export function resetMessageProcessingRuntime(): void {
   messageGroupingQueue?.close();
   messageGroupingQueue = undefined;
-  messageAgentPool = undefined;
+  messageAgentPool.reset();
   memoryConsolidationAgent = undefined;
-  messageAgentPoolScope = "";
   memoryConsolidationAgentScope = "";
 }
 
@@ -183,7 +187,7 @@ function primaryManagedAgentBinding(): {
   return undefined;
 }
 
-async function managedAgentExecution() {
+function managedAgentExecution() {
   const target = resolvePrimaryAgentTarget(config);
   const instanceBinding = target?.binding;
   const binding = primaryManagedAgentBinding();
@@ -193,14 +197,15 @@ async function managedAgentExecution() {
     dependencies: { request: (payload: Record<string, unknown>) => requestInstanceThread(instanceBinding, { ...payload, agentAdapter: binding.agentAdapter }) } };
 }
 
-async function activeMessageAgentPool(): Promise<MessageAgentPool> {
-  const execution = await managedAgentExecution();
-  const { binding } = execution;
-  if (messageAgentPool && messageAgentPoolScope === execution.dataDir) return messageAgentPool;
-  const adapter = configuredPrimaryAgentAdapter();
+function messageAgentPoolBinding() {
+  const adapter = primaryMessageProcessingAgentAdapter(config);
   const policy = adapter ? config.messageProcessingAgents[adapter] : undefined;
-  if (!binding || !adapter || !policy) throw new Error("Message processing Agent is not configured.");
-  messageAgentPool = new MessageAgentPool({
+  if (!adapter || !policy) throw new Error("Message processing Agent is not configured for the primary Agent.");
+  const execution = managedAgentExecution();
+  const { binding } = execution;
+  if (binding?.agentAdapter !== adapter) throw new Error("Message processing Agent has no primary session binding.");
+  const key = JSON.stringify([execution.dataDir, adapter, binding.sessionId, binding.sessionName, binding.workspace, policy]);
+  return { key, create: () => new MessageAgentPool({
     statePath: messageAgentPoolStatePath(execution.dataDir),
     managerBaseUrl: managerBaseUrl(),
     sourceThreadName: binding.sessionName,
@@ -213,9 +218,7 @@ async function activeMessageAgentPool(): Promise<MessageAgentPool> {
     model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
     reasoningEffort: policy.reasoningEffort || DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
     maxAgents: policy.maxAgents
-  }, execution.dependencies);
-  messageAgentPoolScope = execution.dataDir;
-  return messageAgentPool;
+  }, execution.dependencies) };
 }
 
 async function activeMemoryConsolidationAgent(): Promise<MemoryConsolidationAgent> {
@@ -346,7 +349,7 @@ async function deliverPacketToMessageAgent(
     try {
       await measurePerformanceOperation(
         `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
-        async () => (await activeMessageAgentPool()).deliver(group, messageGroupPrompt(group, packetContent), { messageSource })
+        () => messageAgentPool.run(messageAgentPoolBinding, pool => pool.deliver(group, messageGroupPrompt(group, packetContent), { messageSource }))
       );
       return [{ routeId, ruleId, adapter, status: "delivered" }];
     } catch (error) {
@@ -415,7 +418,7 @@ async function deliverPacketToMessageAgent(
     const referencedSenders = await referencedAgentSendersForMessageGroup(routeId, group);
     const worker = await measurePerformanceOperation(
       `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
-      async () => (await activeMessageAgentPool()).deliver(
+      () => messageAgentPool.run(messageAgentPoolBinding, pool => pool.deliver(
         group,
         messageGroupPrompt(group, packetContent, canonicalRequirementId, sourceEvidence),
         {
@@ -426,7 +429,7 @@ async function deliverPacketToMessageAgent(
             .filter((attachment) => attachment.kind === "image" && attachment.status === "ready" && attachment.path)
             .map((attachment) => ({ id: attachment.id, path: attachment.path! }))
         }
-      )
+      ))
     );
     if (referencedSenders.length > 0) {
       appendAdapterLogToDir("router", {
@@ -632,7 +635,7 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   }
   if (routeKind === "feishu_message") return "feishu_message";
   if (routeKind === "xiaomi_home_event") return "xiaomi_home_event";
-  return routeKind === "private" ? "private" : "group_mention";
+  return routeKind === "private" || routeKind === "qqbot_private" ? "private" : "group_mention";
 }
 
 export async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = [], target?: RouteAgentTarget,
@@ -873,6 +876,8 @@ function appendRecordToRoleDataDir(record: ForwardRecord, dataDir: string): void
     appendWeComMessageToDir(record, dataDir);
   } else if (isFeishuRecord(record)) {
     appendFeishuMessageToDir(record, dataDir);
+  } else if (isQqBotRecord(record)) {
+    appendQqBotMessageToDir(record, dataDir);
   } else if (isWeixinRecord(record)) {
     appendWeixinMessageToDir(record, dataDir);
   } else if (isGroupRecord(record)) {
@@ -894,7 +899,15 @@ function appendRecordToPersonaConversation(route: RouteProfile, routeKind: Forwa
   const scope = messageContextScopeForForward(routeKind, record, { gatewayId: process.env.GATEWAY_ID, routeProfileId: route.id });
   if (!scope) return false;
   try {
-    return Boolean(appendMessageContextToDir(dataDir, scope.record));
+    const saved = appendMessageContextToDir(dataDir, scope.record);
+    if (saved?.appended && saved.record.id && saved.record.direction !== "outbound" && roleContext.roleId && !route.agentRoleDeviceId) {
+      const { id, adapter, time, text } = saved.record;
+      const category = messageEventCategory(routeKind, adapter);
+      if (category && text.trim()) void projectAllDayMessage({ roleId: roleContext.roleId, category, id, time: time * 1000, text }).catch(error => {
+        appendAdapterLogToDir("router", { event: "recording_message_projection_failed", level: "warning", message: String(error.message), data: { routeId: route.id, messageId: id } }, config.dataDir);
+      });
+    }
+    return Boolean(saved);
   } catch (error) {
     appendAdapterLogToDir("router", {
       event: "message_context_append_failed",
@@ -1095,7 +1108,8 @@ async function forwardMessageToRouteInternal(
     try { return rule.agentTarget && resolveAgentDeliveryExecutor(rule.agentTarget, config.agentRecipients) === "primary"; }
     catch { return false; }
   });
-  const scheduledBusyPolicy = scheduledAutomationBusyPolicy(route, extraValues.automationRuleId, config.heartbeatSkipWhenAgentBusy);
+  const scheduledBusyPolicy = scheduledAutomationBusyPolicy(route, extraValues.automationRuleId,
+    options.scheduledAutomation?.skipWhenAgentBusy ?? config.heartbeatSkipWhenAgentBusy);
   if (onlyPrimaryTargets && await heartbeatShouldSkipForBusyAgent(routeKind, scheduledBusyPolicy)) {
     appendAdapterLogToDir("router", {
       event: "heartbeat_skipped_agent_busy",
@@ -1278,7 +1292,10 @@ async function forwardMessageAndWaitInternal(
   extraValues: ForwardTemplateValues = {},
   options: ForwardMessageOptions = {}
 ): Promise<ForwardDeliveryResult> {
-  const routes = routeProfilesForRecord(record);
+  const candidates = routeProfilesForRecord(record);
+  const routes = options.scheduledAutomation ? [options.scheduledAutomation.route] : isCaptureEventRouteKind(routeKind)
+    ? candidates.filter(route => !route.agentRoleDeviceId && "routeProfileId" in record && rolePathsForRoute(route).roleId === record.routeProfileId)
+    : candidates;
   const packets: DeliveryReplayPacket[] = [];
   if (routes.length === 0) {
     logRouteMiss(routeKind, record, "no_active_route_profile");
@@ -1378,6 +1395,15 @@ export function forwardMessage(
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {}
 ): void {
+  void forwardMessageWithCompletion(routeKind, record, extraValues);
+}
+
+/** Resolves after a direct delivery finishes or a grouped message reaches its host owner. */
+export function forwardMessageWithCompletion(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues = {}
+): Promise<void> {
   const groupingPolicy = groupingPolicyForRecord(routeKind, record);
   const matchingRules = routeProfilesForRecord(record).flatMap(route => createRouteDecision(route, routeKind, record, extraValues)?.matchedRules ?? []);
   const groupSelected = matchingRules.length > 0 && matchingRules.every(rule => {
@@ -1393,33 +1419,32 @@ export function forwardMessage(
       process.env.GATEWAY_ID
     );
     if (input) {
-      void recordMessageContextOnly(routeKind, record).then(() => {
-      const queued = activeMessageGroupingQueue().enqueue(input);
-      appendAdapterLogToDir("router", {
-        event: queued.accepted ? "message_group_queued" : "message_group_duplicate",
-        level: "info",
-        message: queued.accepted
-          ? `Queued messageId=${recordId(record)} in ${queued.groupId} items=${queued.itemCount}`
-          : `Ignored duplicate grouped messageId=${recordId(record)}`,
-        data: {
-          routeKind,
-          messageId: recordId(record),
-          groupId: queued.groupId,
-          itemCount: queued.itemCount,
-          endpoint: input.endpoint,
-          conversationKey: input.conversationKey
-        }
-      }, config.dataDir);
+      return recordMessageContextOnly(routeKind, record).then(() => {
+        const queued = activeMessageGroupingQueue().enqueue(input);
+        appendAdapterLogToDir("router", {
+          event: queued.accepted ? "message_group_queued" : "message_group_duplicate",
+          level: "info",
+          message: queued.accepted
+            ? `Queued messageId=${recordId(record)} in ${queued.groupId} items=${queued.itemCount}`
+            : `Ignored duplicate grouped messageId=${recordId(record)}`,
+          data: {
+            routeKind,
+            messageId: recordId(record),
+            groupId: queued.groupId,
+            itemCount: queued.itemCount,
+            endpoint: input.endpoint,
+            conversationKey: input.conversationKey
+          }
+        }, config.dataDir);
       }).catch(error => {
         appendAdapterLogToDir("router", { event: "message_group_record_failed", level: "error",
           message: "Failed to record the grouped message before enqueueing.",
           data: { routeKind, messageId: recordId(record), error: error instanceof Error ? error.message : String(error) } }, config.dataDir);
       });
-      return;
     }
   }
-  void forwardMessageAndWait(routeKind, record, extraValues)
-    .catch((error) => {
+  return forwardMessageAndWait(routeKind, record, extraValues)
+    .then(() => {}, error => {
       appendAdapterLogToDir("router", {
         event: "delivery_error",
         level: "error",

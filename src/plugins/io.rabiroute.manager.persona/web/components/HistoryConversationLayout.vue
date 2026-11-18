@@ -61,6 +61,7 @@ watch(() => props.selected, () => { if(props.infoOpen===undefined) infoOpen.valu
     <section class="history-detail">
       <div class="history-mobile-actions"><v-btn icon="mdi-arrow-left" variant="text" :aria-label="t('返回会话')" @click="back" /><v-spacer /><v-btn v-if="hasDetails" icon="mdi-information-outline" variant="text" :aria-label="t(detailsTitle||'详细信息')" @click="infoOpen=true" /></div>
       <div ref="scrollElement" class="history-message-scroll" data-history-scroll tabindex="0" :aria-label="t('消息记录')"><div ref="scrollContent" class="history-scroll-content"><slot /></div></div>
+      <slot name="composer" />
     </section>
     <div v-if="hasDetails" class="history-splitter history-info-splitter" role="separator" tabindex="0" aria-orientation="vertical" :aria-label="t('调整右侧列表宽度')" :aria-valuenow="detailsWidth" :aria-valuemin="180" :aria-valuemax="detailsMaximum" @pointerdown="details.start" @pointermove="details.move" @pointerup="details.stop" @pointercancel="details.stop" @lostpointercapture="details.stop" @keydown="details.key" @dblclick="details.reset" />
     <aside v-if="hasDetails" class="history-info"><slot name="details" /></aside>

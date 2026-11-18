@@ -1,18 +1,10 @@
 import type { PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
+import { MESSAGE_EVENT_CATEGORIES, RECORDING_CAPTURE_TYPES } from "../../../../shared/personaEventTypes";
 
 // Shared by the rule list and editor so every category has the same meaning.
-export const automationEndpoints = [
-  { value: "napcat", title: "QQ (NapCat / OneBot)", icon: "mdi-qqchat", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"] },
-  { value: "weixin", title: "个人微信 / Weixin", icon: "mdi-wechat", routeKinds: ["weixin_message"] },
-  { value: "wecom", title: "企业微信 / WeCom", icon: "mdi-account-group", routeKinds: ["wecom_message"] },
-  { value: "feishu", title: "飞书 / Feishu", icon: "mdi-message-text-outline", routeKinds: ["feishu_message"] },
-  { value: "xiaomiHome", title: "米家 / Xiaomi Home", icon: "mdi-home-automation", routeKinds: ["xiaomi_home_event"] },
-  { value: "speech", title: "语音服务", icon: "mdi-microphone", routeKinds: ["voice_transcript"] },
-  { value: "rolePanel", title: "角色面板 / 桌面入口", icon: "mdi-desktop-classic", routeKinds: ["role_panel_message", "manual_trigger"] },
-  { value: "wearable", title: "智能手表/手环", icon: "mdi-watch", routeKinds: ["wearable_health_alert"] },
-  { value: "rabilink", title: "RabiLink", icon: "mdi-link-variant", routeKinds: ["rabilink"] },
-  { value: "schedule", title: "定时任务", icon: "mdi-calendar-clock-outline", routeKinds: ["heartbeat"] },
-  { value: "webhook", title: "通用 Webhook / 其他", icon: "mdi-webhook", routeKinds: [] as string[] }
+export const automationEndpoints: Array<{ value: string; title: string; english: string; icon: string; routeKinds: string[] }> = [
+  ...MESSAGE_EVENT_CATEGORIES.map(category => ({ ...category, routeKinds: [...category.routeKinds] })),
+  ...RECORDING_CAPTURE_TYPES.map(type => ({ ...type, routeKinds: [type.routeKind] }))
 ];
 
 export function automationEndpoint(rule: PersonaAutomationRuleDefinition): string {

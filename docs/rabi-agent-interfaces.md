@@ -1484,6 +1484,14 @@ GET /api/personas/messages/receipts/:deliveryId
 
 ## 明确发送接口
 
+`GET /api/agent/send/capabilities` 的 `data.variants` 列出当前 Manager 插件注册的发送形态。每项提供 `channel`、`type`、`contractVersion`、`paramsSchema` 和 `dataSchema`。调用 `/api/agent/send` 时保留原请求外层，用该项的 `paramsSchema` 填写 `params`，并在 `payload` 提交 `{ "type": "<发现的形态>", "data": { ... } }`。普通文本、图片和文件格式继续可用。
+
+首批能力包括 `napcat.group-forward` 和 `qqbot.source-reply`。前者要求明确群号和 NapCat 实例，`data.nodes` 为纯文本条目，署名取自原机器人账号。后者使用 `params.sourceMessageId` 与 `data.text`，从原 Route 和账号的消息记录定位实际来源。两者沿用文本输出策略和原发送账本。
+
+Route 启用会话复核时，扩展形态必须提供复核可识别的具体会话目标。当前 `napcat.group-forward` 支持按群和实例复核，`qqbot.source-reply` 的来源 ID 尚未接入发送前的会话复核。发送前复核的确认绑定原始数据和插件包。消息处理 Agent 的 NapCat 群回复须引用来源消息，因此此类请求不能使用纯文本合并转发。
+
+查询、核对和重复提交使用原 `deliveryId`。已受理形态的包版本和激活身份仅作为审计证据。插件停用后仍能查原回执，未知结果保留为未知。历史回执的核对不表示当前平台仍存在该消息。
+
 
 
 Agent 的外部消息统一使用一个发送接口。旧 `/api/agent/replies` 已取消；`/api/agent/send` 不接受“把 replyContext 原样传回后自动猜目标”的用法。

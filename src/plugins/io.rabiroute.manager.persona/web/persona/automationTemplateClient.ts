@@ -1,6 +1,5 @@
 import type { AutomationTemplate } from "../../src/automation/automationTemplates";
-export { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, automationTemplatePatch } from "../../src/automation/automationTemplates";
-export type { AutomationTemplate } from "../../src/automation/automationTemplates";
+export { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID } from "../../src/automation/automationTemplates";
 export type AutomationTemplateChoice = Omit<AutomationTemplate, "action"> & { action?: AutomationTemplate["action"] };
 export type AutomationTemplatePage = { items: AutomationTemplateChoice[]; nextCursor: string | null; total: number };
 async function read(fetcher: typeof fetch, path: string, signal: AbortSignal) {

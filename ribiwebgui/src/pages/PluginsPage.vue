@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "../i18n/index";
 import { userFacingError } from "../userFacingError";
-import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, readAvailablePluginPackages, importPluginPackage, installManagedPlugin, uninstallManagedPlugin, type AvailablePluginPackage, type ManagedPlugin } from "../pluginManagementClient";
+import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, readAvailablePluginPackages, importPluginPackage, inspectPluginPackageUrl, importPluginPackageUrl, installManagedPlugin, uninstallManagedPlugin, type AvailablePluginPackage, type RemoteArchiveInspection, type ManagedPlugin } from "../pluginManagementClient";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { refreshWebPluginModulesSafely } from "../pluginModuleBootstrap";
 
@@ -16,6 +16,16 @@ const packageError = ref("");
 const packageNotice = ref("");
 const sourceDirectory = ref("");
 const importing = ref(false);
+const urlDialog = ref(false);
+const packageUrl = ref("");
+const packageSubdirectory = ref("");
+const inspectingUrl = ref(false);
+const installingUrl = ref(false);
+const urlError = ref("");
+const inspectedArchive = ref<RemoteArchiveInspection | null>(null);
+const selectedPackagePath = ref("");
+const inspectedPackage = computed(() =>
+  inspectedArchive.value?.packages.find(entry => entry.packagePath === selectedPackagePath.value) ?? null);
 const installing = ref(new Set<string>());
 const query = ref("");
 const status = ref("all");
@@ -125,6 +135,45 @@ async function importDirectory(): Promise<void> {
     packages.value = result; sourceDirectory.value = ""; packageNotice.value = t("插件包已导入，可在下方安装。");
   } catch (cause) { if (live) { packageError.value = userFacingError(cause); try { packages.value = await readAvailablePluginPackages(); } catch { /* Preserve the original import result. */ } } }
   finally { importing.value = false; }
+}
+function openUrlDialog(): void {
+  urlDialog.value = true; packageUrl.value = ""; packageSubdirectory.value = "";
+  inspectedArchive.value = null; selectedPackagePath.value = ""; urlError.value = "";
+}
+async function inspectUrlPackage(): Promise<void> {
+  const url = packageUrl.value.trim();
+  if (inspectingUrl.value || installingUrl.value || !url) return;
+  inspectingUrl.value = true; urlError.value = ""; inspectedArchive.value = null; selectedPackagePath.value = "";
+  try {
+    const inspection = await inspectPluginPackageUrl(url, packageSubdirectory.value);
+    inspectedArchive.value = inspection;
+    const preferred = inspection.packages.find(entry => entry.runnable) ?? inspection.packages[0];
+    selectedPackagePath.value = preferred?.packagePath ?? "";
+  } catch (cause) {
+    urlError.value = userFacingError(cause);
+  } finally { inspectingUrl.value = false; }
+}
+async function installUrlPackage(): Promise<void> {
+  const inspection = inspectedArchive.value;
+  const chosen = inspectedPackage.value;
+  if (!inspection || !chosen || installingUrl.value) return;
+  if (!chosen.runnable) { urlError.value = t("这个目录是插件源码，缺少构建产物，不能直接安装。"); return; }
+  installingUrl.value = true; urlError.value = ""; packageError.value = ""; packageNotice.value = "";
+  try {
+    const result = await importPluginPackageUrl(inspection.sourceUrl, inspection.archiveSha256, chosen.packagePath);
+    packages.value = result;
+    urlDialog.value = false;
+    packageNotice.value = t("插件包已下载并导入，可在下方安装。");
+    void pluginCatalogStore.refresh().then(() => refreshWebPluginModulesSafely());
+  } catch (cause) {
+    urlError.value = userFacingError(cause);
+  } finally { installingUrl.value = false; }
+}
+function formatBytes(bytes: number): string {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 async function installPackage(plugin: AvailablePluginPackage): Promise<void> {
   const key = packageKey(plugin);
@@ -263,6 +312,7 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
         <v-text-field v-model="sourceDirectory" :label="t('本机插件包目录')" variant="outlined" density="compact" hide-details />
         <v-btn type="submit" variant="tonal" :loading="importing" :disabled="importing || !sourceDirectory.trim()">{{ t("导入目录") }}</v-btn>
       </form>
+      <v-btn variant="text" prepend-icon="mdi-link-variant" class="plugin-url-button" @click="openUrlDialog">{{ t("从 URL 安装") }}</v-btn>
       <ul class="plugin-list">
         <li v-for="plugin in packages" :key="packageKey(plugin)" class="plugin-list-row">
           <span class="plugin-icon"><v-icon :icon="plugin.manifest.icon || 'mdi-puzzle-outline'" /></span>
@@ -271,6 +321,47 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
         </li>
       </ul>
     </section>
+    <v-dialog v-model="urlDialog" max-width="620">
+      <v-card>
+        <v-card-title>{{ t("从 URL 安装插件") }}</v-card-title>
+        <v-card-text>
+          <p class="section-note">{{ t("粘贴插件包归档的 https 地址（.zip 或 .tar.gz）。仓库里插件在子目录时，填上子目录再查找。") }}</p>
+          <v-text-field v-model="packageUrl" :label="t('插件包地址')" variant="outlined" density="compact" hide-details
+            placeholder="https://github.com/user/repo/releases/download/v1.0.0/plugin.zip"
+            :disabled="installingUrl" @keyup.enter="inspectUrlPackage" />
+          <v-text-field v-model="packageSubdirectory" :label="t('子目录（可选）')" variant="outlined" density="compact" hide-details class="mt-3"
+            :placeholder="t('例如 src/plugins/io.rabiroute.manager.video')"
+            :disabled="installingUrl" @keyup.enter="inspectUrlPackage" />
+          <v-alert v-if="urlError" type="error" variant="tonal" density="compact" class="mt-3" role="alert">{{ urlError }}</v-alert>
+          <div v-if="inspectedArchive" class="url-preview">
+            <p class="plugin-identifier">{{ formatBytes(inspectedArchive.archiveBytes) }} · {{ t("归档校验值") }}：{{ inspectedArchive.archiveSha256.slice(0, 16) }}…</p>
+            <p v-if="inspectedArchive.packages.length > 1" class="section-note">{{ t("归档里有多个插件，选一个安装。") }}</p>
+            <label v-for="entry in inspectedArchive.packages" :key="entry.packagePath" class="url-package-row"
+              :class="{ 'is-selected': entry.packagePath === selectedPackagePath, 'is-disabled': !entry.runnable }">
+              <input type="radio" :value="entry.packagePath" v-model="selectedPackagePath" :disabled="!entry.runnable || installingUrl" />
+              <span class="url-package-copy">
+                <strong>{{ entry.manifest.displayName || entry.manifest.name || entry.id }}</strong>
+                <span class="plugin-identifier">{{ entry.id }} · v{{ entry.version }}<template v-if="entry.packagePath"> · {{ entry.packagePath }}</template></span>
+                <span v-if="!entry.runnable" class="url-package-warning">{{ t("源码目录，缺少构建产物（例如 web/client.mjs），不能直接安装。") }}</span>
+              </span>
+            </label>
+            <div v-if="inspectedPackage && inspectedPackage.runnable" class="url-package-detail">
+              <p v-if="inspectedPackage.manifest.description" class="plugin-description">{{ inspectedPackage.manifest.description }}</p>
+              <div v-if="inspectedPackage.manifest.capabilities?.length" class="url-capabilities">
+                <span class="url-capabilities-label">{{ t("提供的能力") }}</span>
+                <v-chip v-for="capability in inspectedPackage.manifest.capabilities" :key="capability" size="x-small" variant="outlined">{{ capability }}</v-chip>
+              </div>
+            </div>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" :disabled="installingUrl" @click="urlDialog = false">{{ t("取消") }}</v-btn>
+          <v-btn v-if="!inspectedArchive" variant="tonal" :loading="inspectingUrl" :disabled="inspectingUrl || !packageUrl.trim()" @click="inspectUrlPackage">{{ t("查找") }}</v-btn>
+          <v-btn v-else variant="flat" color="primary" :loading="installingUrl" :disabled="installingUrl || !inspectedPackage || !inspectedPackage.runnable" @click="installUrlPackage">{{ t("确认安装") }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -279,6 +370,19 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
 .plugin-packages h2 { font-size: 1rem; }
 .plugin-import { display: flex; align-items: center; gap: 12px; margin-block: 16px; }
 .plugin-install-button { margin-inline-start: auto; flex-shrink: 0; }
+.plugin-url-button { margin-inline-start: -8px; margin-bottom: 8px; }
+.url-preview { margin-top: 16px; padding: 14px; border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 10px; max-height: 46vh; overflow-y: auto; }
+.url-package-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer; }
+.url-package-row:hover { background: rgba(var(--v-theme-on-surface), .05); }
+.url-package-row.is-selected { background: rgba(var(--v-theme-primary), .1); }
+.url-package-row.is-disabled { cursor: not-allowed; opacity: .6; }
+.url-package-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.url-package-warning { font-size: .78rem; color: rgb(var(--v-theme-error)); }
+.url-package-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(var(--v-theme-on-surface), .1); }
+.url-preview-title { display: flex; align-items: center; gap: 10px; }
+.url-capabilities { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.url-capabilities-label { font-size: .8rem; opacity: .7; margin-inline-end: 4px; }
+.url-digest { font-size: .78rem; opacity: .6; margin-top: 10px; }
 .plugins-page { max-width: 1140px; margin-inline: auto; }
 .plugins-toolbar, .plugin-list-heading, .plugin-name-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .plugins-toolbar { margin-bottom: 28px; min-height: 64px; }

@@ -1,10 +1,11 @@
-import { agentMessageText, agentMessageTime as timestamp, codexVisibleMessage } from '@shared/agentSessionMessages';
+import { agentMessageText, agentMessageTime as timestamp, codexInstructionHeading, codexVisibleMessage } from '@shared/agentSessionMessages';
 
 export type AgentSessionMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   time: string;
+  instructionHeading?: string;
 };
 export type AgentHistoryEvent = AgentSessionMessage & {
   sequence: number;
@@ -75,7 +76,8 @@ export function agentHistoryMessages(provider: string, events: readonly AgentHis
     const previous = messages.at(-1);
     // Codex records the same user/final message in both its event and response streams.
     if (provider === 'codex' && previousEvent?.stream !== event.stream && previous?.role === event.role && previous.text === event.text) continue;
-    messages.push({ id: event.id, role: event.role, text: event.text, time: event.time });
+    const instructionHeading = provider === 'codex' && event.role === 'user' ? codexInstructionHeading(event.text) : undefined;
+    messages.push({ id: event.id, role: event.role, text: event.text, time: event.time, ...(instructionHeading ? { instructionHeading } : {}) });
     previousEvent = event;
   }
   return messages;

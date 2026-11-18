@@ -30,6 +30,7 @@ Plugin Web sources are declared by `package.json.rabi.webSource` and built toget
 
 - Publish source, tests, documentation, icons, schemas, public defaults, and placeholder examples.
 - `route-config.json` defines fields and defaults. Actual accounts, tokens, connections, and role settings stay with the runtime configuration owner.
+- The scheduler declares `ownsScheduledAutomation` in `route-config.json`. Schedule changes use the running Gateway's Route snapshot acknowledgement, including the addition or removal of a profile that contains only schedules. Message rules, persona bindings, and other shared configuration keep their existing owners.
 - Keep actual environment files, authentication, sessions, private saves, logs, model caches, and build output outside public source. Each plugin carries its own ignore rules for a future repository.
 - Export and packaging share the SDK's public-source filter. Review the final diff and example values before publication.
 
@@ -54,6 +55,7 @@ The following index points to authoritative manifests. Read their current values
 | `io.rabiroute.endpoint.feishu` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.feishu) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.feishu/rabi.plugin.json) |
 | `io.rabiroute.endpoint.heartbeat` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.heartbeat) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.heartbeat/rabi.plugin.json) |
 | `io.rabiroute.endpoint.napcat` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.napcat) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.napcat/rabi.plugin.json) |
+| `io.rabiroute.endpoint.qqbot` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.qqbot) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.qqbot/rabi.plugin.json) |
 | `io.rabiroute.endpoint.rabilink` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.rabilink) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.rabilink/rabi.plugin.json) |
 | `io.rabiroute.endpoint.speech` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.speech) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.speech/rabi.plugin.json) |
 | `io.rabiroute.endpoint.webhook` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.webhook) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.webhook/rabi.plugin.json) |

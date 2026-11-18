@@ -50,6 +50,26 @@ A desktop-only reference in the original release store persists the slot revisio
 
 A lost commit acknowledgement is reconciled from the original selection. Report adoption only when committed; restore the old worker only when not committed. Unknown readback retains the original candidate and facts, affecting only the desktop channel. Receipts and independent functions remain available. Rollback constructs a new worker from the old resource instead of resetting a closed instance.
 
+## Agent sessions and desktop connectors
+
+Build, import, and select compatible platform updates through the existing per-plugin delivery path. The Profile selects the configured version and the native runtime reports the active version. Accepted requests finish under the original lease, and uncertain results are reconciled by their original ID. Verify the switch, rollback, and request results with the same Manager generation and external client process.
+
+Read Gateway plugin adoption through `data.manager[].gatewayEndpointPlugins` from `manager.gateway-runtime.list` (`GET /gateways?summary=1`). The `pid` and `gatewayGenerationId` identify the managed child that published each instance's version, `packageHash`, `activationId`, and initialization state. Confirm adoption once the expected hash is `active`. An empty array means there are no active instances; an absent field means the child has provided no verified publication. Use the endpoint's own status to confirm its connection or login.
+
+The public session entry point retains authorization, workspace constraints, creation reservations, and delivery ledgers. Plugins declare session operations and interpret platform session IDs, directories, chat history, and native receipts. Dispatch new capabilities through published adapter registrations and keep platform behavior in its package.
+
+An adapter declaring `capabilities.sessionOperations` in `agent-adapter.json` implements `threads.list`, `threads.read`, and `threads.send`. History uses `threads.history`. An adapter declaring `observeDelivery` provides original history evidence for the same ID through `threads.observeDelivery`. An adapter declaring `create: "with-initial-message"` receives the validated first message, directory, and stable intent ID, and returns a created, pending, or conflict result through `threads.create`. The common API reports the available path for actions the original provider does not support.
+
+An out-of-tree adapter interprets its own opaque task IDs. The HTTP contract validates input structure and checks support against the published adapter. WorkBuddy 0.1.9 implements this contract. A host release that adopts the contract migrates older WorkBuddy selections through its release profile while retaining the instance, enablement, and user configuration.
+
+The client and its connection owner maintain the persistent desktop connection. Verify the live process, protocol, and actual capabilities when connecting. Keep changing selectors and submission behavior in a replaceable implementation and release the previous lease once its result is reconciled. Establish a startup-bound connection or replace the transport through the affected client's lifecycle. Identify the state or protocol boundary before restarting a persistent process.
+
+## Endpoint send formats
+
+Message endpoints declare channel-qualified `payload.type` variants, parameter and data schemas, a text projection, and the native operation through `ownMessageEndpointEgress`. The Manager compiles those schemas during activation preparation. Discovery publishes the same declarations, and the current plugin graph selects the execution owner.
+
+The host owns sender authority, Route selection, send policy, confirmation, and idempotency. The plugin resolves the original platform instance or message source and returns the native receipt. An accepted invocation holds its original version through receipt persistence. Disabling the plugin stops new admissions while the ledger still serves the original delivery ID.
+
 ## Smallest failure scope
 
 | Problem | Affected scope | Still available |

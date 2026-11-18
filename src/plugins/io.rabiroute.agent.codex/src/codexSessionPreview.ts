@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { agentMessagePreview, agentMessageTime, codexVisibleMessage } from '../../../shared/agentSessionMessages.js';
+import { agentMessagePreview, agentMessageTime, codexInstructionHeading, codexVisibleMessage } from '../../../shared/agentSessionMessages.js';
 import { readCodexRolloutLines, statCodexRollout } from './codexRolloutReader.js';
 
 type Preview = {preview:string;lastMessageTime?:string};
@@ -11,7 +11,7 @@ function fromLine(line:string):Preview|undefined {
   try {
     const record = JSON.parse(line);
     const visible = codexVisibleMessage(record);
-    if (!visible?.text.trim()) return undefined;
+    if (!visible?.text.trim() || visible.role === 'user' && codexInstructionHeading(visible.text)) return undefined;
     const time = agentMessageTime(record.timestamp);
     return {preview:agentMessagePreview(visible.text),...(time ? {lastMessageTime:time} : {})};
   } catch { return undefined; }

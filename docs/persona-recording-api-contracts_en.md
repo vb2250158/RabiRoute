@@ -18,6 +18,8 @@ The base paths are `/api/roles/:roleId/all-day-recording` and the existing compa
 | GET | `/media/:day/:file` | Controlled role/computer JPEG/WAV; file is a 64-character lowercase hash plus extension |
 | GET | `/audio` | First check the visible timeline event, then its phone owner/chunks or original speech record; preserve upstream status, MIME and bytes |
 
+Settings accept optional `messageSources` (message type IDs from the shared event catalog); existing settings default to an empty list. Filter message events with `type=message` or `source=message:<type ID>`.
+
 Preparation in `createPersonaRecordingOperations` captures the original connection, Manager identity, role directory and runtime/service/store/read model. Authenticated enabled remote connections have default public access without context-based feature grants. Existing local-origin and read-only checks remain. Settings retain the original unlimited application byte setting, empty-body `{}` and native validation. Controls still require `application/json`; start/stop/repair ignore the body instead of requiring new fields.
 
 `AllDayRecordingService` still serializes controls and rechecks authority in its native queues, storage and speech boundaries. HTTP cancellation waits for accepted native work to reach its terminal state; it does not prove capture has stopped. Phone resource owners come from original events. Query values cannot impersonate sources or bypass selected devices. Original read workers, the 60-second history budget, independent reconstruction queue and durable-record retention remain unchanged.

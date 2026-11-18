@@ -18,6 +18,7 @@ export type PlanFeedbackDeliveryInspection = "accepted" | "in_progress" | "missi
 
 export type PlanFeedbackRecoveryTaskRequest = {
   agentAdapter?: PlanAssistantAgentType;
+  dshBaseUrl?: string;
   instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
@@ -143,6 +144,7 @@ export async function recoverPlanFeedbackCandidate(
   try {
     state = await options.inspect({
       agentAdapter: binding.agentType,
+      ...(binding.agentType === "dsh" && !binding.instanceBinding && binding.baseUrl ? { dshBaseUrl: binding.baseUrl } : {}),
       ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
       threadId: binding.sessionId.trim(),
       cwd: binding.workspace.trim(),

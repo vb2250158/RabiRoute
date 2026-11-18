@@ -134,7 +134,7 @@ export function createFeishuAdapter(
 ): MessageAdapter {
   return {
     type: "feishu",
-    start(): Promise<MessageAdapterDispose> {
+    start(startup): Promise<MessageAdapterDispose> {
       const settings = dependencies.settings?.() ?? {
         appId: config.feishuAppId,
         appSecret: config.feishuAppSecret,
@@ -213,6 +213,20 @@ export function createFeishuAdapter(
       const runtime = dependencies.apiOperations ? undefined : getGatewayListenerRuntime();
       const registry = dependencies.apiOperations ?? { registerExternalListener: (definition: Parameters<ManagerApiOperationsService["registerExternalListener"]>[0]) => runtime!.registerExternalListener("platform.feishu", definition) };
 
+      let closing: Promise<void> | undefined;
+      const closeTransport = () => closing ??= (async () => {
+        lifecycle.active = false;
+        if (binding) {
+          binding.stopAccepting();
+          withdrawPublication();
+        }
+        const closed = await Promise.allSettled([closeFeishuServer(server), Promise.resolve().then(() => binding?.dispose())]);
+        const errors = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+        if (errors.length === 1) throw errors[0];
+        if (errors.length) throw new AggregateError(errors, "Feishu listener cleanup failed.");
+      })();
+      startup?.onFailure(closeTransport);
+
       const host = settings.host || "127.0.0.1";
 
       return new Promise<MessageAdapterDispose>((resolve, reject) => {
@@ -247,7 +261,7 @@ export function createFeishuAdapter(
           startupSettled = true;
           lifecycle.active = false;
           reportServerError(error, "listen_error");
-          void closeFeishuServer(server).then(() => reject(error), cleanupError =>
+          void closeTransport().then(() => reject(error), cleanupError =>
             reject(new AggregateError([error, cleanupError], "Feishu startup and listener cleanup failed.")));
         };
 
@@ -289,14 +303,8 @@ export function createFeishuAdapter(
             resolve(() => {
               if (!disposalPromise) {
                 disposalPromise = (async () => {
-                  lifecycle.active = false;
                   server.off("error", onServerError);
-                  binding?.stopAccepting();
-                  withdrawPublication();
-                  const closed = await Promise.allSettled([closeFeishuServer(server), Promise.resolve().then(() => binding?.dispose())]);
-                  const errors = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
-                  if (errors.length === 1) throw errors[0];
-                  if (errors.length) throw new AggregateError(errors, "Feishu listener cleanup failed.");
+                  await closeTransport();
                   patchRuntimeStatus({
                     status: "disabled",
                     connected: false,
@@ -314,14 +322,10 @@ export function createFeishuAdapter(
             });
           } catch (error) {
             startupSettled = true;
-            lifecycle.active = false;
             server.off("error", onServerError);
-            withdrawPublication();
-            const closed = await Promise.allSettled([closeFeishuServer(server), Promise.resolve().then(() => binding?.dispose())]);
-            const cleanupErrors = closed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
-            const startupError = cleanupErrors.length
-              ? new AggregateError([error, ...cleanupErrors], "Feishu startup and listener cleanup failed.")
-              : error instanceof Error ? error : new Error(String(error));
+            let startupError = error instanceof Error ? error : new Error(String(error));
+            try { await closeTransport(); }
+            catch (cleanupError) { startupError = new AggregateError([error, cleanupError], "Feishu startup and listener cleanup failed."); }
             reportServerError(startupError, "listen_error");
             reject(startupError);
           }

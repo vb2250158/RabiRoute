@@ -8,6 +8,8 @@
 
 角色页面把最近一次成功加载的角色 ID 和来源电脑保存在主机桌面设置 `lastRoleSelection`；无指定角色的入口优先恢复该引用。来源不可用或角色已归档时保留原引用并显示实际状态。
 
+角色配置返回关联路线。已配置主 Agent 的路线包含 `routes[].primaryAgent`，提供 `type`、`label`、可选的 `sessionName` 和 `hasSessionId`，供自动化编辑器显示当前绑定。
+
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | GET | `/api/roles` | 分页列出活动角色；`scope=archived` 查询归档角色；支持 `query`、`cursor`、`limit` |
@@ -49,5 +51,7 @@
 参见[代码架构](code-architecture.md)、[源码热补丁](source-hot-patches.md)。安装版验收需另外核对当前 Manager 身份、契约目录、实际 HTTP 行为和发布候选 hash。
 
 定时规则可通过 `timeOfDays` 在一条规则中指定多个每日时间；提供该字段时优先于旧的 `timeOfDay`。保存其他设置不会自动迁移定时配置版本。
+
+`config.automationDeliveryTemplates` 保存当前角色的自定义投递模板。条目含 `id`、`title`、`triggerType`（`message` 或 `schedule`）、`message` 和 `template`（附加说明）。PUT 省略该字段时保留现有模板，传空数组可清空。PATCH 可传空数组或用 `null` 删除字段。模板只有复制进自动化规则后才参与执行。
 
 自动化规则的查询、创建、局部修改和删除复用本角色 owner，见[自动化规则 API](role-automation-api-contracts.md)。Agent 通过公开 HTTP 请求完成管理，无需直接改角色业务文件。

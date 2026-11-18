@@ -33,6 +33,11 @@ export type ManagedTaskAgentFeature =
 export type AgentAdapterCapabilities = {
   /** The original provider implements threads.request; never fall back to another adapter. */
   nativeThreadOperations?: true;
+  /** The provider implements threads.list, threads.read and threads.send under the shared thread API. */
+  sessionOperations?: {
+    create?: "with-initial-message";
+    observeDelivery?: true;
+  };
   managedTasks?: Partial<Record<ManagedTaskAgentFeature, true>>;
 };
 

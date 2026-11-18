@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { AgentAdapterRegistry } from "./agentAdapterRuntime.js";
 import { createAgentAdapterHostPorts } from "./agentAdapterHostPorts.js";
+import { publishedAgentAdapterProviders } from "./agentAdapterProviders.js";
 import { RabiCordisHost } from "./cordisHost.js";
 import { mountGatewayEndpointPlugins } from "./gatewayEndpointPlugins.js";
 import { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
@@ -27,7 +28,9 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
     const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "native-agents-"));
     const host = new RabiCordisHost(), registry = new AgentAdapterRegistry();
     const deviceEntered = gate(), finishDevice = gate(), astrbotEntered = gate(), finishAstrbot = gate();
+    const overlapEntered = gate(), finishOverlap = gate();
     let holdAstrbot = false, holdDevice = true;
+    let holdOverlap = false;
     const requests: Array<{
         url: string;
         body: any;
@@ -44,6 +47,10 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
             return;
         }
         if (request.url === "/api/chat/send") {
+            if (holdOverlap && body.session_id === "new-session") {
+                overlapEntered.resolve();
+                await finishOverlap.promise;
+            }
             if (holdAstrbot) {
                 astrbotEntered.resolve();
                 await finishAstrbot.promise;
@@ -52,7 +59,7 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
             return;
         }
         if (request.url?.startsWith("/api/device-agents/")) {
-            if (holdDevice) {
+            if (holdDevice && body.deliveryId === envelope.deliveryId) {
                 deviceEntered.resolve();
                 await finishDevice.promise;
             }
@@ -87,9 +94,12 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
             agentHostPorts: createAgentAdapterHostPorts({ loaders: { "agentAdapters/stateReporter": async () => ({ reportAgentState() { } }) } }) });
         const activation = (slug: string) => runtime.current().records.find(record => record.identity.instanceId === `agent:${slug}`)?.identity.activationId;
         assert.equal(runtime.current().records.every(record => record.status === "active"), true, JSON.stringify(runtime.current().records));
-        const deviceActivation = activation("device-agent"), astrbotActivation = activation("astrbot"), pid = process.pid;
+        let deviceActivation = activation("device-agent");
+        const astrbotActivation = activation("astrbot"), pid = process.pid;
         const binding = { instanceId: "original-device", agentId: "original-device-agent" };
-        const inFlight = registry.create("deviceAgent", binding).deliver(envelope);
+        let originalDeviceSettled = false;
+        const inFlight = registry.create("deviceAgent", binding).deliver(envelope).finally(() => { originalDeviceSettled = true; });
+        void inFlight.catch(() => {});
         await deviceEntered.promise;
         const changed = { ...boot, astrbotPassword: "fixture-new", astrbotSessionId: "new-session" };
         await runtime.applyRouteSnapshot(changed, "scoped-agent-change");
@@ -99,15 +109,47 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
         await dispatchToAgentAdapter("astrbot", envelope, [], { id: "local:astrbot", provider: "astrbot" }, async (type, target) => registry.create(type, typeof target === "object" ? target.binding : undefined));
         assert.equal(requests.find(request => request.url === "/api/auth/login")?.body.password, "fixture-new");
         assert.equal(requests.find(request => request.url === "/api/chat/send")?.body.session_id, "new-session");
+        const oldAstrbot = activation("astrbot");
+        holdOverlap = true;
+        let oldSettled = false;
+        const originalAstrbot = registry.create("astrbot").deliver({ ...envelope, deliveryId: "held-original-astrbot" })
+            .finally(() => { oldSettled = true; });
+        void originalAstrbot.catch(() => {});
+        await overlapEntered.promise;
+        const concurrent = { ...changed, astrbotSessionId: "concurrent-session" };
+        const switching = runtime.applyRouteSnapshot(concurrent, "independent-agent-overlap");
+        void switching.catch(() => {});
+        await until(() => activation("astrbot") !== oldAstrbot
+            && publishedAgentAdapterProviders(runtime.current()).get("astrbot")?.inspect().accepting === true);
+        await registry.create("astrbot").deliver({ ...envelope, deliveryId: "new-astrbot-during-overlap" });
+        assert.equal(requests.filter(request => request.url === "/api/chat/send").at(-1)?.body.session_id, "concurrent-session");
+        assert.equal(oldSettled, false);
+        assert.equal(activation("device-agent"), deviceActivation);
+        holdOverlap = false;
+        finishOverlap.resolve();
+        await originalAstrbot;
+        await switching;
         const loginCount = requests.filter(request => request.url === "/api/auth/login").length;
         await runtime.applyRouteSnapshot({ ...changed, astrbotPassword: "" }, "clear-agent-secret");
         await assert.rejects(registry.create("astrbot").deliver(envelope), /ASTRBOT_PASSWORD/);
         assert.equal(requests.filter(request => request.url === "/api/auth/login").length, loginCount, "An empty secret cannot fall back to the previous activation or environment.");
         assert.equal(activation("device-agent"), deviceActivation);
         await runtime.applyRouteSnapshot(changed, "restore-agent-secret");
+        const deviceGatewayFile = path.join(built.packagesRoot, "io.rabiroute.agent.device-agent", versions.get("device-agent")!, "gateway.mjs");
+        await fs.appendFile(deviceGatewayFile, "\n// independently updated Device Agent package\n");
+        const swappingDevice = runtime.reconcile();
+        void swappingDevice.catch(() => {});
+        await until(() => activation("device-agent") !== deviceActivation
+            && publishedAgentAdapterProviders(runtime.current()).get("deviceAgent")?.inspect().accepting === true);
+        const overlapDeliveryId = "new-device-during-overlap";
+        await registry.create("deviceAgent", binding).deliver({ ...envelope, deliveryId: overlapDeliveryId });
+        assert.ok(requests.some(request => request.url.startsWith("/api/device-agents/") && request.body.deliveryId === overlapDeliveryId));
+        assert.equal(originalDeviceSettled, false);
         holdDevice = false;
         finishDevice.resolve();
         await inFlight;
+        await swappingDevice;
+        deviceActivation = activation("device-agent");
         assert.equal(requests.find(request => request.url?.startsWith("/api/device-agents/"))?.body.deliveryId, envelope.deliveryId);
         holdAstrbot = true;
         const retained = registry.create("astrbot"), accepted = retained.deliver(envelope);
@@ -143,6 +185,9 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
         await runtime.reconcile();
         assert.equal(activation("astrbot"), lastGood, "A valid JSON document with invalid descriptor identity cannot uninstall its original owner.");
         assert.equal(activation("device-agent"), deviceActivation);
+        await fs.writeFile(descriptorFile, JSON.stringify({ ...JSON.parse(descriptorBytes.toString("utf8")), initializationModes: { web: "independent" } }));
+        await runtime.reconcile();
+        assert.equal(activation("astrbot"), lastGood, "An invalid declared startup mode cannot uninstall the original owner.");
         await fs.writeFile(descriptorFile, descriptorBytes);
         await runtime.reconcile();
         await fs.appendFile(gatewayFile, "\nthrow new Error('isolated Agent activation failure');\n");
@@ -165,6 +210,7 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
     finally {
         finishDevice.resolve();
         finishAstrbot.resolve();
+        finishOverlap.resolve();
         await host.dispose();
         globalThis.fetch = originalFetch;
         for (const [key, value] of Object.entries(originalEnvironment)) {
@@ -172,6 +218,75 @@ test("physical Agent packages retain one Gateway and unrelated in-flight work ac
                 delete process.env[key];
             else
                 process.env[key] = value;
+        }
+        await new Promise<void>(done => server.close(() => done()));
+        await fs.rm(temporary, { recursive: true, force: true });
+    }
+});
+test("a new Grok Bot Gateway package admits delivery while the original remote receipt is pending", { timeout: 90000 }, async () => {
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "native-grok-handover-"));
+    const host = new RabiCordisHost(), registry = new AgentAdapterRegistry();
+    const entered = gate(), finish = gate();
+    const requests: Array<{ threadId: string; idempotencyKey: string }> = [];
+    const server = http.createServer(async (request, response) => {
+        assert.equal(request.url, "/api/lan-agent/instances/fixture-node/agents/fixture-agent/tasks");
+        let raw = "";
+        for await (const chunk of request) raw += chunk;
+        const body = JSON.parse(raw);
+        requests.push(body);
+        if (body.idempotencyKey === "grok-original") {
+            entered.resolve();
+            await finish.promise;
+        }
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ code: 0, result: { taskId: body.idempotencyKey, status: "accepted" } }));
+    });
+    await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const environment = { GATEWAY_MANAGER_URL: origin, LAN_AGENT_ACCESS_TOKEN: "fixture-access" };
+    const originalEnvironment = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]));
+    const originalFetch = globalThis.fetch;
+    Object.assign(process.env, environment);
+    globalThis.fetch = ((input, init) => {
+        const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+        assert.equal(url.origin, origin);
+        return nativeHttpTestFetch(url, init);
+    }) as typeof fetch;
+    try {
+        // @ts-expect-error JavaScript package builder is outside src.
+        const { buildPluginPackages } = await import("../../scripts/build-plugin-packages.mjs");
+        const packageId = "io.rabiroute.agent.grok-bot";
+        const built = await buildPluginPackages(process.cwd(), { packages: [packageId], outputDirectory: path.join(temporary, "built") });
+        const version = (await canonicalPluginSourceFixture(packageId)).manifest.version;
+        const profilePath = path.join(temporary, "profile.json");
+        await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "agent:grok-bot", package: packageId, version, enabled: true, config: {}, grants: [] }] }));
+        const runtime = await mountGatewayEndpointPlugins(host, { profilePath, settingsRoot: path.join(temporary, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime"), adapterTypes: [], agentRegistry: registry, watch: false,
+            agentHostPorts: createAgentAdapterHostPorts({ loaders: { "agentAdapters/stateReporter": async () => ({ reportAgentState() { } }) } }) });
+        const selected = () => runtime.current().records[0]?.identity;
+        const original = selected()!;
+        const send = (deliveryId: string, threadId: string) => registry.create("grokBot", { instanceId: "fixture-node", agentId: "fixture-agent" }).deliver({ ...envelope, deliveryId }, { threadId });
+        let originalFinished = false;
+        const oldDelivery = send("grok-original", "original-thread").finally(() => { originalFinished = true; });
+        await Promise.race([entered.promise, oldDelivery.then(() => { throw new Error("Original delivery completed before it entered the remote owner."); })]);
+        await fs.appendFile(path.join(built.packagesRoot, packageId, version, "gateway.mjs"), "\n// Independently published Gateway revision.\n");
+        const replacing = runtime.reconcile();
+        void replacing.catch(() => {});
+        await until(() => selected()?.activationId !== original.activationId
+            && publishedAgentAdapterProviders(runtime.current()).get("grokBot")?.inspect().accepting === true);
+        assert.notEqual(selected()!.revision, original.revision);
+        await send("grok-new", "new-thread");
+        assert.equal(originalFinished, false);
+        assert.deepEqual(requests.map(({ threadId, idempotencyKey }) => [threadId, idempotencyKey]), [["original-thread", "grok-original"], ["new-thread", "grok-new"]]);
+        finish.resolve();
+        await oldDelivery;
+        await replacing;
+    } finally {
+        finish.resolve();
+        await host.dispose();
+        globalThis.fetch = originalFetch;
+        for (const [key, value] of Object.entries(originalEnvironment)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
         }
         await new Promise<void>(done => server.close(() => done()));
         await fs.rm(temporary, { recursive: true, force: true });
@@ -223,7 +338,8 @@ test("formal dispatch uses the current DSH activation binding while the original
         const version = (await canonicalPluginSourceFixture("io.rabiroute.agent.dsh")).manifest.version;
         const profilePath = path.join(temporary, "profile.json");
         await fs.writeFile(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [{ id: "agent:dsh", package: "io.rabiroute.agent.dsh", version, enabled: true, config: {}, grants: [] }] }));
-        const boot = { id: "dsh-route", gatewayPort: 8789, enabled: true, messageAdapters: [], agentAdapters: ["dsh"], dshSessionId: oldId, dshSessionName: "Original owner", dshCwd: temporary, dshBaseUrl: origin };
+        const boot = { id: "dsh-route", gatewayPort: 8789, enabled: true, messageAdapters: [], agentAdapters: ["dsh"], dshSessionId: oldId, dshSessionName: "Original owner", dshCwd: temporary, dshBaseUrl: origin,
+            messageProcessingAgents: { dsh: { enabled: true } } };
         const runtime = await mountGatewayEndpointPlugins(host, { profilePath, settingsRoot: path.join(temporary, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(temporary, "runtime"), adapterTypes: [], agentRegistry: registry, initialRouteDefinition: boot, watch: false,
             agentHostPorts: createAgentAdapterHostPorts({ layout: { packageRoot: process.cwd(), stateRoot: temporary }, loaders: { "agentAdapters/stateReporter": async () => ({ reportAgentState() { } }) } }) });
         const optionsSeen: unknown[] = [];
@@ -247,7 +363,7 @@ test("formal dispatch uses the current DSH activation binding while the original
         const source = { instance: { id: endpoint.identity.instanceId }, package: { runtimeRoot: path.join(built.packagesRoot, "io.rabiroute.agent.dsh", version), manifest: endpoint.manifest } };
         const declarations = (await readEndpointRouteDeclarations([source])).declarations;
         assert.equal(classifyRouteChange(boot, changed, declarations).sharedChanged, false);
-        assert.equal(classifyRouteChange({ ...boot, messageProcessingAgents: { dsh: { enabled: true } } }, { ...changed, messageProcessingAgents: { dsh: { enabled: true } } }, declarations).sharedChanged, true);
+        assert.equal(classifyRouteChange({ ...boot, messageProcessingAgents: { dsh: { enabled: true } } }, { ...changed, messageProcessingAgents: { dsh: { enabled: true } } }, declarations).kind, "endpoint");
         assert.equal(classifyRouteChange({ ...boot, codexMemoryConsolidationAgentEnabled: true }, { ...changed, codexMemoryConsolidationAgentEnabled: true }, declarations).sharedChanged, true);
         assert.equal(classifyRouteChange(boot, { ...boot, agentModel: "new-model" }, declarations).sharedChanged, true);
         assert.equal(classifyRouteChange(boot, { ...boot, codexPlanAssistantSessions: [{ threadId: "original-assistant" }] }, declarations).sharedChanged, true);

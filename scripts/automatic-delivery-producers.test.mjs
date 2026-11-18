@@ -19,6 +19,34 @@ const controlText = await fs.readFile(path.join(sourceRoot, 'src/manager/control
 const controlAst = ts.createSourceFile('controlPlaneRoutes.ts', controlText, ts.ScriptTarget.Latest, true);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('ordinary send keeps an ambiguous delivery unknown when the Outbox record is missing', async t => {
+  const { executeIdempotentAgentSend, readAgentSendReceipt } = await importBuilt('manager/agentSendIdempotency.js');
+  const os = await import('node:os');
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rabi-missing-outbox-'));
+  t.after(() => fs.rm(rootDir, { recursive: true, force: true }));
+  const call = findNode(node => ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression) && node.expression.text === 'executeIdempotentAgentSend');
+  const options = call.arguments[1];
+  const recovery = options.properties.find(property => property.name?.getText(controlAst) === 'recover');
+  assert.ok(recovery && ts.isPropertyAssignment(recovery));
+  const compiled = ts.transpileModule(`globalThis.recover = ${recovery.initializer.getText(controlAst)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const context = vm.createContext({ gate: { replayOnly: false }, scopedAgentSendVariant: () => undefined,
+    request: {}, replyOptions: {}, inspectAgentSendDelivery: async () => ({ state: 'missing' }) });
+  vm.runInContext(compiled, context);
+  const request = { deliveryId: 'missing-completion', sender: { agentType: 'codex', sessionId: 'fixture-source' },
+    routeId: 'fixture-route', channel: 'napcat', params: { target: 'group', groupId: '456' },
+    payload: { type: 'text', text: 'isolated fixture' } };
+  let effects = 0;
+  const deliver = async () => { effects++; throw new Error('Effect occurred but completion was lost.'); };
+  await executeIdempotentAgentSend(request, { rootDir, deliver, recover: context.recover });
+  assert.equal(effects, 1);
+  assert.equal(readAgentSendReceipt(rootDir, request.deliveryId)?.state, 'uncertain');
+  await executeIdempotentAgentSend(request, { rootDir, deliver, recover: context.recover });
+  assert.equal(effects, 1, 'The original uncertain ID must also remain non-dispatching on a later call.');
+});
+
 function findNode(predicate) {
   let result;
   const visit = node => {

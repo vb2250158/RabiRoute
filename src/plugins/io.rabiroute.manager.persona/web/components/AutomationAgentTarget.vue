@@ -2,6 +2,7 @@
 import { createDshConnectionClient, type DshConnection } from "../../../../../ribiwebgui/src/dshConnectionClient";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
+import type { RoleConfigurationRoute } from "@shared/roleConfiguration";
 import { normalizeAgentRecipients, normalizeAgentDeliveryTarget, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import { postRouteAgentThreadAction } from "../../../../../ribiwebgui/src/routeAgentThreadClient";
 import { usePersonaService } from "../persona/personaServiceClient";
@@ -11,18 +12,29 @@ import { agentAdapterSupportsManagedTaskFeature, isAgentThreadCapableAdapter } f
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { availableAutomationDsh, automationDsBotDirectory, dsBotDirectoryTargets, chooseDsBot, readDsBotCatalog, type DsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "./automationAgentTargetModel";
 
-const props = defineProps<{ gateway: GatewayDefinition; modelValue?: AgentDeliveryTarget }>();
+const props = defineProps<{ gateway: GatewayDefinition; modelValue?: AgentDeliveryTarget; primaryRoutes: readonly RoleConfigurationRoute[] }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentDeliveryTarget] }>();
 const { t } = useI18n();
 const target = computed(() => props.modelValue ?? primaryDeliveryTarget());
 const recipients = computed(() => normalizeAgentRecipients(props.gateway.agentRecipients));
+const selectedRecipient = computed(() => {
+  const selected = target.value;
+  return selected.kind === "recipient" ? recipients.value.find(item => item.id === selected.recipientId) : undefined;
+});
+function primaryBindingText(route: RoleConfigurationRoute): string {
+  const agent = route.primaryAgent;
+  if (!agent) return t("未配置主角色 Agent");
+  return `${t(agent.label)} · ${agent.sessionName || t(agent.hasSessionId ? "会话任务名称暂不可用" : "未绑定会话任务")}`;
+}
+const primaryDescription = computed(() => props.primaryRoutes.length === 1 ? primaryBindingText(props.primaryRoutes[0])
+  : t(props.primaryRoutes.length > 1 ? "按匹配的路由投递" : "此规则暂无关联路由"));
 const choices = computed(() => [...recipients.value.map(item => {
   const primary = resolvePrimaryAgentTarget(props.gateway);
   const feature = item.executor === "message_pool" ? "messageProcessingAgent" : item.executor === "memory_consolidation" ? "memoryConsolidationAgent" : item.executor === "plan_secretary" ? "planAssistantSessions" : undefined;
   const reason = !primary ? t("未配置主角色 Agent")
     : feature && !agentAdapterSupportsManagedTaskFeature(primary.provider, feature) ? t("当前 Agent 不支持此接收者")
     : item.executor === "plan_secretary" && !props.gateway.codexPlanAssistantSessions?.length ? t("未配置计划秘书会话") : "";
-  return { title: t(item.name), value: item.id, description: reason, props: { disabled: Boolean(reason) } };
+  return { title: t(item.name), value: item.id, description: reason || (item.executor === "primary" ? primaryDescription.value : ""), props: { disabled: Boolean(reason) } };
 }), { title: t("自定义"), value: "$session", description: t("选择 Agent 和已有会话"), props: { disabled: false } }]);
 const agentName = (provider: string) => provider === "codex" ? "Codex" : provider === "dsh" ? "DSH" : provider === "grokBot" ? "Grok Bot" : provider;
 const localDshAvailable = ref(false);
@@ -250,14 +262,13 @@ const sessionItems = computed(() => {
 const recipientHint = computed(() => {
   const selected = target.value;
   if (selected.kind !== "recipient") return "";
-  const recipient = recipients.value.find(item => item.id === selected.recipientId);
+  const recipient = selectedRecipient.value;
   if (!recipient) return t("此接收者已删除，请重新选择。");
   const reason = choices.value.find(item => item.value === selected.recipientId)?.description;
   if (reason) return reason;
   return t(recipient.executor === "plan_secretary" ? "发送给这条消息关联计划的秘书。"
     : recipient.executor === "message_pool" ? "由消息处理池分配会话。"
-    : recipient.executor === "memory_consolidation" ? "发送给已配置的记忆整理 Agent。"
-    : "使用 Agent 设置中的主角色会话。修改绑定后，这条规则会自动跟随。");
+    : "发送给已配置的记忆整理 Agent。");
 });
 function searchSessions(value: string) {
   query.value = value || "";
@@ -277,10 +288,18 @@ function openSessions(open: boolean) {
     <v-select :model-value="target.kind === 'recipient' ? target.recipientId : '$session'" :items="choices"
       :label="t('投递目标')" density="compact" variant="outlined" hide-details @update:model-value="selectRecipient">
       <template #item="{ props: itemProps, item }">
-        <v-list-item v-bind="itemProps" :subtitle="item.raw.description" />
+        <v-list-item v-bind="itemProps">
+          <template v-if="item.raw.description" #subtitle><span data-no-i18n>{{ item.raw.description }}</span></template>
+        </v-list-item>
       </template>
     </v-select>
-    <p v-if="target.kind === 'recipient'" class="delivery-hint">{{ recipientHint }}</p>
+    <ul v-if="selectedRecipient?.executor === 'primary' && primaryRoutes.length" class="primary-bindings">
+      <li v-for="route in primaryRoutes" :key="route.id">
+        <span v-if="primaryRoutes.length > 1" class="delivery-route-name" data-no-i18n>{{ route.name }}</span>
+        <span data-no-i18n>{{ primaryBindingText(route) }}</span>
+      </li>
+    </ul>
+    <p v-else-if="target.kind === 'recipient'" class="delivery-hint">{{ selectedRecipient?.executor === 'primary' ? primaryDescription : recipientHint }}</p>
     <div v-else class="delivery-custom">
       <p class="delivery-hint">{{ t('选择 Agent，再选择接收对象') }}</p>
       <div class="delivery-fields">
@@ -352,6 +371,9 @@ function openSessions(open: boolean) {
 <style scoped>
 .delivery-target { margin-top: 16px; }
 .delivery-hint { margin: 8px 0 0; color: rgb(var(--v-theme-on-surface)); opacity: .7; font-size: 12px; line-height: 1.6; }
+.primary-bindings { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.primary-bindings li { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 3px 0; }
+.delivery-route-name { opacity: .7; }
 .delivery-custom { margin-top: 12px; padding: 12px; border: 1px solid rgba(var(--v-theme-on-surface), .12); border-radius: 8px; }
 .delivery-custom > .delivery-hint:first-child { margin: 0 0 12px; }
 .delivery-fields { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; }

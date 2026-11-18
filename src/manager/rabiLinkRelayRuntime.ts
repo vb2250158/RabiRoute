@@ -34,6 +34,7 @@ export type RabiLinkRelayRuntimeConfig = {
   applicationGenerationId?: string;
   /** Direct Manager endpoints advertised only to PCs using the same application token. */
   peerUrls?: string[];
+  accountTunnel?: boolean;
   localSpeechUrl: string | (() => string);
 };
 
@@ -169,18 +170,28 @@ async function consumeRelayEvents(
   signal: AbortSignal,
   onEvent: (eventType: string, data: Record<string, unknown>) => void
 ): Promise<void> {
+  const silence = config.accountTunnel ? new AbortController() : undefined;
+  let heartbeatTimeout: ReturnType<typeof setTimeout> | undefined;
+  const resetHeartbeatDeadline = () => {
+    if (!silence) return;
+    clearTimeout(heartbeatTimeout);
+    heartbeatTimeout = setTimeout(() => silence.abort(), 90000);
+    heartbeatTimeout.unref();
+  };
   const params = new URLSearchParams({
     ...workerIdentity(config),
     deviceName: config.deviceName,
     capabilities: workerCapabilities(config)
   });
   appendWorkerDiscovery(params, config);
+  resetHeartbeatDeadline();
   const response = await fetch(`${config.url}/api/rabilink/events?${params}`, {
     method: "GET",
     headers: { ...relayHeaders(config), accept: "text/event-stream" },
-    signal
-  });
+    signal: silence ? AbortSignal.any([signal, silence.signal]) : signal
+  }).catch(error => { clearTimeout(heartbeatTimeout); if (silence?.signal.aborted) throw new Error("RabiLink account event heartbeat expired."); throw error; });
   if (!response.ok || !response.body) {
+    clearTimeout(heartbeatTimeout);
     throw new Error(`RabiLink Relay event stream failed: ${response.status} ${response.statusText}`);
   }
   const reader = response.body.getReader();
@@ -193,6 +204,7 @@ async function consumeRelayEvents(
     while (!signal.aborted) {
       const { done, value } = await reader.read();
       if (done) return;
+      resetHeartbeatDeadline();
       buffer += decoder.decode(value, { stream: true });
       while (true) {
         const newline = buffer.indexOf("\n");
@@ -213,7 +225,11 @@ async function consumeRelayEvents(
         }
       }
     }
+  } catch (error) {
+    if (silence?.signal.aborted) throw new Error("RabiLink account event heartbeat expired.");
+    throw error;
   } finally {
+    clearTimeout(heartbeatTimeout);
     try {
       await reader.cancel();
     } catch {
@@ -420,7 +436,7 @@ async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, sign
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), asrAdvertisements.get(config)?.speechAvailable ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), asrAdvertisements.get(config)?.speechAvailable ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : "", config.accountTunnel ? "host-account-tunnel-v1" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -1076,6 +1092,7 @@ export class RabiLinkRelayRuntime {
           if (this.active(generation, signal)) throw new Error("RabiLink Relay event stream closed.");
         } catch (error) {
           if (signal.aborted || abortError(error) || !this.active(generation, signal)) return;
+          if (config.accountTunnel) this.onEvent?.("relay_connection_lost", {});
           const message = runtimeErrorMessage(error);
           this.setStatus({
             state: "error",

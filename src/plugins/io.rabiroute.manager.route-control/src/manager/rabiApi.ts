@@ -34,6 +34,7 @@ export type RabiApiContext = {
   managerInstanceId: string;
   version: () => string;
   globalConfig: RabiGlobalConfigStore;
+  hostAccountRelay?(): ReturnType<RabiGlobalConfigStore["read"]>["rabiLinkRelay"] | undefined;
   runtimes: () => Iterable<GatewayRuntime>;
   runtimeStatus: (runtime: GatewayRuntime) => Record<string, unknown>;
   readConfig: () => GatewayConfigFile;
@@ -972,10 +973,10 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
     async home(): Promise<ApiOperationResult> {
       const headers = { "cache-control": "no-store" };
       try {
-        const savedConfig = ctx.globalConfig.read(), saved = { ...savedConfig.rabiLinkRelay };
+        const savedConfig = ctx.globalConfig.read(), saved = { ...(ctx.hostAccountRelay?.() ?? savedConfig.rabiLinkRelay) };
         const local = { deviceGuid: savedConfig.rabiGuid, rabiPcVersion: ctx.version() };
         const data = await readRabiLinkHome(saved, local);
-        const currentConfig = ctx.globalConfig.read(), current = currentConfig.rabiLinkRelay;
+        const currentConfig = ctx.globalConfig.read(), current = ctx.hostAccountRelay?.() ?? currentConfig.rabiLinkRelay;
         if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId || currentConfig.rabiGuid !== local.deviceGuid) throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
         return { ...success({ code: 0, data }), headers };
       } catch (error) {

@@ -18,6 +18,7 @@ export function createOwnedRuntime(ports) {
                         ...(target.dshBaseUrl ? { dshBaseUrl: target.dshBaseUrl } : {})
                     };
                     assertCurrent();
+                    ports.recordScheduledEvent?.(task.sourceRoleId, runId, scheduledAt.getTime(), `定时任务触发：${task.rule.name || task.rawRuleId}`);
                     return ports.handleAgentThreadRequest(request, ports.agentThreadRequestOptions(request, { requestAuthority: assertCurrent }));
                 }
             });

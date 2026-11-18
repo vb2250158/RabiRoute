@@ -56,7 +56,7 @@ test("identity draft never echoes stored tokens; blank token preserves server cr
 });
 test("connected application settings have one save action without retired service permission forms", () => {
   const settings = source("components/RabiLinkSettings.vue");
-  assert.match(settings, /同一 RabiLink 应用内已鉴权的设备，默认可使用本机提供的服务，无需逐项授权。/);
+  assert.match(settings, /保存服务器地址后，登录同一账号的电脑会自动连接。/);
   assert.match(settings, /<v-expansion-panel title="高级连接参数">[\s\S]*v-model="draft\.speechServiceUrl"/);
   assert.doesNotMatch(settings, /KnowledgeBridgeSettings|knowledgeBridgeClient|speechProxyEnabled|允许语音转接|本机知识 MCP 安全设置|设备授权 JSON/);
   for (const retired of ["components/KnowledgeBridgeSettings.vue", "knowledgeBridgeClient.ts"]) {

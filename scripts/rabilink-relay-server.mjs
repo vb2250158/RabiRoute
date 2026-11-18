@@ -5,6 +5,7 @@ import { createPcPairingService, findPcCredential, assertPcPairingCsrf } from '.
 import { pcPairingPanelHtml, pcPairingBrowserScript } from './rabilink-pc-pairing-ui.mjs';
 import { API_METHODS, apiRequestHeaderAllowed, apiRequestTimingPolicy, apiRequestDiagnosticPath, validateApiRequest } from '../packages/rabi-api-contract/request.mjs';
 import { createDeviceApiService } from './rabilink-device-api.mjs';
+import { accountHostTargets, createHostAccountService, isHostAccountScope } from './rabilink-host-accounts.mjs';
 import { relayTimeout, clientTimeout } from "./lib/relay-timeouts.mjs";
 import http from "node:http";
 import fs from "node:fs";
@@ -801,22 +802,31 @@ const deviceApiService = createDeviceApiService({
     replaceFileSync(temporary, file);
   },
   async dispatch(identity, packet, nonReplayable) {
-    const app = readAppStore().apps.find(item => item.id === identity.appId && item.enabled !== false);
+    const store = readAppStore();
+    const source = store.apps.find(item => item.id === identity.appId && item.enabled !== false);
+    const target = identity.hostAccount && source && accountHostTargets(store, source, workerCanProcessMobileRequests).find(item => item.id === identity.targetDeviceId);
+    if (identity.hostAccount && (!target || !workerOnline(target.worker))) throw new Error('HOST_ACCOUNT_PEER_UNAVAILABLE');
+    const app = target ? target.app : source;
     if (!app) throw new Error('API_CONNECTION_CHANGED');
-    const worker = mobileWorkerTarget(app, new URL('http://request.invalid'), { targetDeviceId: identity.targetDeviceId });
+    const worker = target ? target.worker : mobileWorkerTarget(app, new URL('http://request.invalid'), { targetDeviceId: identity.targetDeviceId });
     const request = createMobileWebguiRequest(app, worker, packet.method, packet.path, packet.body ?? null, {}, identity.requestTimeoutMs);
     request.headers = { accept: 'application/json', ...packet.headers };
     if (packet.body !== undefined && !request.headers['content-type']) request.headers['content-type'] = 'application/json; charset=utf-8';
     if (packet.bodyBase64 !== undefined) request.bodyBase64 = packet.bodyBase64;
     request.nonReplayable = nonReplayable;
     request.publicApiTransport = true;
-    request.deviceApi = { appId: identity.appId, bindingId: identity.bindingId, targetDeviceId: identity.targetDeviceId, authenticatedAt: identity.authenticatedAt };
+    if (target) request.accountForward = { sourceAppId: source.id, sourceCredentialId: identity.bindingId, sourceDeviceId: identity.sourceDeviceId,
+      sourceCredentialHash: identity.credentialHash, targetRef: identity.targetDeviceId, targetGuid: target.worker.guid };
+    else request.deviceApi = { appId: identity.appId, bindingId: identity.bindingId, targetDeviceId: identity.targetDeviceId, authenticatedAt: identity.authenticatedAt };
     request.deviceApiCredentialHash = identity.credentialHash;
     const finished = await waitForWebguiRequest(request, Math.max(1,request.expiresAt - Date.now()));
     if (finished.status !== 'done' || !finished.response) return { structuredContent: { ok: false, uncertain: nonReplayable, code: finished.singleAttempt ? 'SEARCH_DEADLINE_EXCEEDED' : 'API_TRANSPORT_UNCONFIRMED', operationId: packet.operationId } };
+    if (target && !accountForwardStillAuthorized(request)) return { structuredContent: { ok: false, uncertain: nonReplayable, code: 'HOST_ACCOUNT_CONNECTION_CHANGED' } };
     const response = finished.response;
     const raw = Buffer.from(response.bodyBase64 || '', 'base64');
-    let data; try { data = JSON.parse(raw.toString('utf8')); } catch { data = { bodyBase64: raw.toString('base64'), contentType: response.headers?.['content-type'] || '' }; }
+    const binary = { bodyBase64: raw.toString('base64'), contentType: response.headers?.['content-type'] || '' };
+    let data = binary;
+    if (!target) try { data = JSON.parse(raw.toString('utf8')); } catch { /* Keep the original response for non-JSON APIs. */ }
     const statusCode = Number(response.statusCode);
     const outcome = statusCode >= 200 && statusCode < 300;
     return { structuredContent: { ok: outcome, uncertain: nonReplayable && statusCode >= 500, statusCode,
@@ -825,7 +835,9 @@ const deviceApiService = createDeviceApiService({
 });
 const pcPairingService = createPcPairingService({ readStore: readAppStore, writeStore: writeAppStore,
   onEvent: (event, details) => writeEvent(event, details) });
+const hostAccountService = createHostAccountService({ readStore: readAppStore, writeStore: writeAppStore, createAccount, loginAccount });
 const pcPairingRequestWindows = new Map();
+const hostAccountRequestWindows = new Map();
 
 function hasEnabledRabiLinkApps() {
   return readAppStore().apps.some((app) => app.enabled !== false && app.token);
@@ -835,7 +847,7 @@ function findEnabledAppByToken(value) {
   const requestText = String(value || "");
   if (!requestText) return null;
   const store = readAppStore();
-  const appTokenMatch = store.apps.find((app) => app.enabled !== false && app.token === requestText);
+  const appTokenMatch = store.apps.find((app) => !isHostAccountScope(app) && app.enabled !== false && app.token === requestText);
   if (appTokenMatch) return { app: appTokenMatch, deviceBinding: null };
   const pcMatch = findPcCredential(store, requestText);
   if (pcMatch) return pcMatch;
@@ -933,7 +945,7 @@ function publicWorker(worker, app) {
 function accountStorePayload(account, options = {}) {
   const store = readAppStore();
   const apps = account
-    ? store.apps.filter((app) => app.ownerAccountId === account.id)
+    ? store.apps.filter((app) => !isHostAccountScope(app) && app.ownerAccountId === account.id)
     : [];
   const appsById = new Map(apps.map((app) => [app.id, app]));
   const workers = store.workers.filter((worker) => appsById.has(worker.appId));
@@ -1049,15 +1061,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
   }
   writeAppStore(store);
   if (peerChangeReason) {
-    relayEventHub.publish("peer_changed", {
-      appId,
-      data: {
-        peerId: worker.id,
-        peerGuid: worker.guid || "",
-        state: "online",
-        reason: peerChangeReason
-      }
-    });
+    publishWorkerPeerChanged(store, app, { peerId: worker.id, peerGuid: worker.guid || "", state: "online", reason: peerChangeReason });
   }
   return worker;
 }
@@ -1081,15 +1085,7 @@ function recordWorkerDisconnected(appId, deviceId, deviceGuid = "") {
     workerName: worker.name,
     status: "offline"
   });
-  relayEventHub.publish("peer_changed", {
-    appId,
-    data: {
-      peerId: worker.id,
-      peerGuid: worker.guid || "",
-      state: "offline",
-      reason: "disconnected"
-    }
-  });
+  publishWorkerPeerChanged(store, app, { peerId: worker.id, peerGuid: worker.guid || "", state: "offline", reason: "disconnected" });
 }
 
 function createAccount(body) {
@@ -1214,7 +1210,7 @@ function createAppForAccount(account, body) {
 
 function patchOwnedApp(account, appId, body) {
   const store = readAppStore();
-  const app = store.apps.find((item) => item.id === appId && item.ownerAccountId === account.id);
+  const app = store.apps.find((item) => !isHostAccountScope(item) && item.id === appId && item.ownerAccountId === account.id);
   if (!app) {
     const error = new Error(`RabiLink app not found: ${appId}`);
     error.statusCode = 404;
@@ -1256,7 +1252,7 @@ function patchOwnedApp(account, appId, body) {
 
 function deleteOwnedApp(account, appId) {
   const store = readAppStore();
-  const index = store.apps.findIndex((item) => item.id === appId && item.ownerAccountId === account.id);
+  const index = store.apps.findIndex((item) => !isHostAccountScope(item) && item.id === appId && item.ownerAccountId === account.id);
   if (index < 0) {
     const error = new Error(`RabiLink app not found: ${appId}`);
     error.statusCode = 404;
@@ -1377,13 +1373,31 @@ function authorizeRabiLinkRequest(req, url, body) {
           return { ok: false, statusCode: 403, message: 'PC_CREDENTIAL_IDENTITY_REQUIRED' };
       }
     }
-    return { ok: true, app: match.app, deviceBinding: match.deviceBinding || null, insecure: false };
+    return { ok: true, app: match.app, deviceBinding: match.deviceBinding || null, pcCredential: match.pcCredential || null, insecure: false };
   }
   return { ok: false, app: null, deviceBinding: null, insecure: false };
 }
 
 function sendRabiLinkAuthError(res, auth) {
   return sendRabiLinkError(res, auth.statusCode || 401, auth.message || "Unauthorized");
+}
+
+function accountForwardStillAuthorized(request) {
+  const forward = request.accountForward;
+  const store = readAppStore();
+  const app = store.apps.find(item => item.id === forward.sourceAppId && item.enabled !== false && isHostAccountScope(item));
+  if (!app?.pcCredentials?.some(item => item.id === forward.sourceCredentialId && item.credentialHash === forward.sourceCredentialHash
+    && item.enabled !== false && item.appTokenHash === sha256(app.token))) return false;
+  return accountHostTargets(store, app, workerCanProcessMobileRequests).some(target => target.id === forward.targetRef
+    && target.app.id === request.appId && target.worker.id === request.targetDeviceId && target.worker.guid === forward.targetGuid);
+}
+
+function publishWorkerPeerChanged(store, app, data) {
+  if (!app) return;
+  relayEventHub.publish('peer_changed', { appId: app.id, data });
+  if (isHostAccountScope(app) || app.enabled === false || !app.ownerAccountId) return;
+  const account = store.apps.find(item => isHostAccountScope(item) && item.enabled !== false && item.ownerAccountId === app.ownerAccountId);
+  if (account) relayEventHub.publish('peer_changed', { appId: account.id, data: { reason: 'legacy_directory_changed' } });
 }
 
 function sendRabiLinkError(res, statusCode, message) {
@@ -1858,7 +1872,8 @@ function webguiRequestForResponse(request) {
     error: request.error || "",
     ...(request.singleAttempt ? { singleAttempt: true, remainingBudgetMs: Math.max(0, Math.floor(request.searchDeadlineAt - performance.now())) } : {}),
     ...(request.publicApiTransport === true ? { publicApiTransport: true } : {}),
-        ...(request.deviceApi ? { nonReplayable: request.nonReplayable === true, connectionIdentity: { appId: request.deviceApi.appId, deviceId: request.deviceApi.bindingId, authenticatedAt: request.deviceApi.authenticatedAt } } : {})
+    ...(request.deviceApi ? { nonReplayable: request.nonReplayable === true, connectionIdentity: { appId: request.deviceApi.appId, deviceId: request.deviceApi.bindingId, authenticatedAt: request.deviceApi.authenticatedAt } } : {}),
+    ...(request.accountForward ? { nonReplayable: request.nonReplayable, connectionIdentity: { appId: request.accountForward.sourceAppId, deviceId: request.accountForward.sourceDeviceId, authenticatedAt: request.createdAt } } : {})
   };
 }
 
@@ -1890,6 +1905,7 @@ function cleanupWebguiRequests(now = Date.now()) {
 
 function canWorkerClaimWebguiRequest(request, appId = "", deviceId = "", deviceGuid = "") {
   if (appId && request.appId !== appId) return false;
+  if (request.accountForward && request.accountForward.targetGuid !== deviceGuid) return false;
   if (!workerIdentityMatchesTarget(request.targetDeviceId, { deviceId, deviceGuid }, request.appId)) return false;
   return true;
 }
@@ -1918,6 +1934,9 @@ function claimWebguiRequests(limit, deviceId, appId = "", deviceGuid = "") {
       request.leaseUntil = 0;
     }
     if (request.status !== "queued") continue;
+    if (request.accountForward && !accountForwardStillAuthorized(request)) {
+      request.status = 'failed'; request.error = 'HOST_ACCOUNT_CONNECTION_CHANGED'; finishWebguiWaiters(request); continue;
+    }
     if (request.deviceApi) {
       const app = readAppStore().apps.find(item => item.id === request.deviceApi.appId && item.enabled !== false);
       const member = app?.deviceBindings?.find(item => item.id === request.deviceApi.bindingId && item.enabled !== false);
@@ -2178,10 +2197,11 @@ function speechRequestForLog(request) {
 
 function canWorkerClaimSpeechRequest(request, appId = "", deviceId = "", deviceGuid = "") {
   if (appId && request.appId !== appId) return false;
+  if (request.accountForward && (request.accountForward.targetGuid !== deviceGuid || !accountForwardStillAuthorized(request))) return false;
   return workerIdentityMatchesTarget(request.targetDeviceId, { deviceId, deviceGuid }, request.appId);
 }
 
-function createSpeechRequest(req, auth, worker, localPath, rawBody) {
+function createSpeechRequest(req, auth, worker, localPath, rawBody, accountForward) {
   const request = speechRequests.create({
     timeoutMs: clientTimeout(req, speechRequestWaitMs),
     appId: auth.app.id,
@@ -2191,6 +2211,7 @@ function createSpeechRequest(req, auth, worker, localPath, rawBody) {
     path: localPath,
     headers: normalizeProxyRequestHeaders(req.headers),
     expectedWorkerFencing: Boolean(req.headers["x-rabilink-expected-worker-id"]),
+    accountForward,
     bodyBase64: Buffer.isBuffer(rawBody) && rawBody.length > 0 ? rawBody.toString("base64") : ""
   });
   writeEvent("speech_request_created", speechRequestForLog(request));
@@ -2237,14 +2258,26 @@ function sendSpeechProxyResponse(res, request) {
 }
 
 async function handleSpeechProxy(req, url, res) {
-  const auth = authorizeRabiLinkRequest(req, url, {});
+  let auth = authorizeRabiLinkRequest(req, url, {});
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  const worker = requireRokidAppTarget(auth, "speech");
+  const suffix = url.pathname.slice(speechProxyPrefix.length) || "/";
+  let worker, accountForward;
+  if (isHostAccountScope(auth.app)) {
+    const reference = String(req.headers['x-rabilink-peer-target'] || '');
+    const target = accountHostTargets(readAppStore(), auth.app, workerCanProcessMobileRequests).find(item => item.id === reference);
+    if (!target || !auth.pcCredential || !workerOnline(target.worker) || !normalizeWorkerCapabilities(target.worker.capabilities).includes('speech')) {
+      return sendJson(res, 404, { code: 'HOST_ACCOUNT_PEER_NOT_FOUND' });
+    }
+    if (!suffix.startsWith('/v1/') || /^\/v1\/(?:audio-streams|playback|microphone)(?:\/|$)/.test(suffix)) return sendJson(res, 403, { code: 'HOST_ACCOUNT_SPEECH_PATH_INVALID' });
+    accountForward = { sourceAppId: auth.app.id, sourceCredentialId: auth.pcCredential.id, sourceDeviceId: auth.pcCredential.deviceId,
+      sourceCredentialHash: auth.pcCredential.credentialHash, targetRef: reference, targetGuid: target.worker.guid };
+    auth = { ...auth, app: target.app };
+    worker = target.worker;
+  } else worker = requireRokidAppTarget(auth, "speech");
   const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
   if (expectedWorker && expectedWorker !== worker.id) {
     return sendJson(res, 409, { ok: false, message: "Frozen speech target worker changed; request was not queued." });
   }
-  const suffix = url.pathname.slice(speechProxyPrefix.length) || "/";
   const method = String(req.method || 'GET').toUpperCase();
   if (!API_METHODS.includes(method)) return sendJson(res, 405, { code: 'TRANSPORT_METHOD_INVALID' });
   try { validateApiRequest({ method: 'GET', path: suffix }); }
@@ -2256,9 +2289,10 @@ async function handleSpeechProxy(req, url, res) {
   const rawBody = ["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase())
     ? Buffer.alloc(0)
     : await readRawBody(req, { maxBytes: speechBodyMaxBytes, label: "Speech" });
-  const request = createSpeechRequest(req, auth, worker, localPath, rawBody);
+  const request = createSpeechRequest(req, auth, worker, localPath, rawBody, accountForward);
   const finalRequest = await speechRequests.waitForCompletion(request, Math.max(1,request.expiresAt - Date.now()));
   speechRequests.cleanup();
+  if (accountForward && !accountForwardStillAuthorized(request)) return sendJson(res, 403, { code: 'HOST_ACCOUNT_CONNECTION_CHANGED' });
   writeEvent(finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", speechRequestForLog(finalRequest));
   writeAccountLogForApp(auth.app, finalRequest.status === "done" ? "speech_request_done" : "speech_request_failed", {
     title: finalRequest.status === "done" ? "本机语音请求已返回" : "本机语音请求失败",
@@ -3144,7 +3178,7 @@ function bindDeviceSerialToApp(account, appId, body) {
   const serialNumber = validateDeviceSerialNumber(body.serialNumber || body.sn);
   const serialHash = sha256(serialNumber);
   const store = readAppStore();
-  const app = store.apps.find((item) => item.id === appId && item.ownerAccountId === account.id);
+  const app = store.apps.find((item) => !isHostAccountScope(item) && item.id === appId && item.ownerAccountId === account.id);
   if (!app) {
     const error = new Error(`RabiLink app not found: ${appId}`);
     error.statusCode = 404;
@@ -5022,10 +5056,19 @@ function handlePeerDiscovery(req, url, res, body) {
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
-  const peers = readAppStore().workers
+  const store = readAppStore();
+  const peers = (isHostAccountScope(auth.app)
+    ? accountHostTargets(store, auth.app, workerCanProcessMobileRequests).filter(target => target.worker.id !== deviceId && target.worker.guid !== deviceGuid)
+      .map(({ id, worker, app }) => {
+        const peer = publicWorker(worker);
+        const native = app.id === auth.app.id && peer.capabilities.includes('host-account-tunnel-v1');
+        const capabilities = native ? peer.capabilities : peer.capabilities.filter(value => !['peer-rpc-v1', 'peer-tunnel-v1', 'host-account-tunnel-v1'].includes(value));
+        return { ...peer, id, peerUrls: native ? peer.peerUrls : [], capabilities: [...capabilities, 'host-account-http-v1'], legacy: app.id !== auth.app.id };
+      })
+    : store.workers
     .filter(worker => worker.appId === auth.app.id)
     .filter(worker => !(deviceId && worker.id === deviceId) && !(deviceGuid && worker.guid === deviceGuid))
-    .map(worker => publicWorker(worker, auth.app))
+    .map(worker => publicWorker(worker, auth.app)))
     .sort((left, right) => Number(right.online) - Number(left.online) || left.name.localeCompare(right.name));
   return sendJson(res, 200, {
     code: 0,
@@ -5036,6 +5079,30 @@ function handlePeerDiscovery(req, url, res, body) {
 }
 
 // Peer RPC carries an opaque encrypted packet and never accepts a caller URL.
+async function handleAccountPeerSignal(req, url, res) {
+  const auth = authorizeRabiLinkRequest(req, url);
+  if (!auth.ok || !auth.pcCredential || !isHostAccountScope(auth.app)) return sendRabiLinkAuthError(res, auth);
+  const body = await readBody(req, { maxBytes: 131072, label: 'Account peer offer' });
+  const offer = body?.offer;
+  if (!offer || offer.source !== auth.pcCredential.deviceId || !['bootstrap-application', 'p2p', 'relay'].includes(offer.kind)) {
+    return sendJson(res, 403, { code: 'ACCOUNT_PEER_SOURCE_MISMATCH' });
+  }
+  const target = accountHostTargets(readAppStore(), auth.app, workerCanProcessMobileRequests).find(item => item.id === body.targetDeviceId && item.app.id === auth.app.id);
+  if (!target || !workerOnline(target.worker) || !normalizeWorkerCapabilities(target.worker.capabilities).includes('host-account-tunnel-v1')) {
+    return sendJson(res, 404, { code: 'ACCOUNT_PEER_NOT_FOUND' });
+  }
+  const request = createMobileWebguiRequest(target.app, target.worker, 'POST', '/api/rabilink/peer/account-receive', offer, {}, Math.min(clientTimeout(req, webguiRequestWaitMs), 19000));
+  request.publicApiTransport = true;
+  request.nonReplayable = true;
+  request.accountForward = { sourceAppId: auth.app.id, sourceCredentialId: auth.pcCredential.id, sourceDeviceId: auth.pcCredential.deviceId,
+    sourceCredentialHash: auth.pcCredential.credentialHash, targetRef: target.id, targetGuid: target.worker.guid };
+  const finished = await waitForWebguiRequest(request, Math.max(1, request.expiresAt - Date.now()));
+  if (!accountForwardStillAuthorized(request)) return sendJson(res, 403, { code: 'HOST_ACCOUNT_CONNECTION_CHANGED' });
+  if (finished.status !== 'done' || finished.response?.statusCode !== 200) return sendJson(res, 502, { code: 'ACCOUNT_PEER_OFFER_REJECTED' });
+  const result = JSON.parse(Buffer.from(finished.response.bodyBase64, 'base64').toString('utf8'));
+  return sendJson(res, 200, result, { 'cache-control': 'no-store' });
+}
+
 async function handlePeerRpcProxy(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
@@ -5354,6 +5421,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (await htmlShareRelay.handle(req, url, res)) return;
     if (req.method === "OPTIONS") return sendJson(res, 204, {});
+    if (req.method === 'POST' && url.pathname === '/api/rabilink/peer/account-signal') return await handleAccountPeerSignal(req, url, res);
     if (url.pathname.startsWith("/manage/") && manageWebguiMatch(url)) {
       return await handleManageWebgui(req, url, res);
     }
@@ -5362,6 +5430,38 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith("/manage/api/")) {
       return await handleAdminApi(req, url, res);
+    }
+    const hostAccountAction = req.method === 'POST' && url.pathname.match(/^\/api\/rabilink\/host-account\/(login|register|migrate|logout|recover|confirm)$/)?.[1];
+    if (hostAccountAction) {
+      if (hostAccountAction !== 'logout') {
+        const address = req.socket.remoteAddress || 'unknown', now = Date.now();
+        const limit = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) ? 240 : 24;
+        for (const [key, window] of hostAccountRequestWindows) if (window.until <= now) hostAccountRequestWindows.delete(key);
+        const previous = hostAccountRequestWindows.get(address);
+        if ((previous?.count || 0) >= limit || (!previous && hostAccountRequestWindows.size >= 1024)) {
+          return sendJson(res, 429, { code: 'HOST_ACCOUNT_RATE_LIMIT' }, { 'retry-after': '60' });
+        }
+        const window = previous || { count: 0, until: now + 60000 };
+        window.count += 1;
+        hostAccountRequestWindows.set(address, window);
+      }
+      const body = await readBody(req, { maxBytes: 4096, label: 'Host account' });
+      const token = String(req.headers['x-rabilink-token'] || '');
+      if (hostAccountAction === 'logout') {
+        const device = hostAccountService.revoke(token);
+        relayEventHub.disconnect(device);
+        tunnelBroker.revalidate();
+        relayEventHub.publish('account_peer_revoked', { appId: device.appId, data: { peerId: device.peerId, revokedAt: Date.now() } });
+        return sendJson(res, 200, { code: 0, data: {} }, { 'cache-control': 'no-store' });
+      }
+      const { previousDevice, credentials } = hostAccountAction === 'recover' || hostAccountAction === 'confirm'
+        ? hostAccountService.recover(hostAccountAction, body, token) : hostAccountService.authenticate(hostAccountAction, body, token);
+      if (previousDevice) {
+        relayEventHub.disconnect(previousDevice);
+        tunnelBroker.revalidate();
+        relayEventHub.publish('account_peer_revoked', { appId: previousDevice.appId, data: { peerId: previousDevice.peerId, revokedAt: Date.now() } });
+      }
+      return sendJson(res, 200, { code: 0, data: credentials }, { 'cache-control': 'no-store' });
     }
     const pairingClientFiles = {
       '/api/rabilink/pc-pairings/client/rabilink-pair-pc.mjs': 'rabilink-pair-pc.mjs',
@@ -5477,6 +5577,10 @@ const server = http.createServer(async (req, res) => {
       if (!auth.ok || !auth.app) return sendJson(res, 401, { code: 'API_CONNECTION_REQUIRED' });
       const identity = { appId: auth.app.id, bindingId: auth.deviceBinding?.id || '$application', targetDeviceId: auth.deviceBinding?.connectionTargetDeviceId || auth.app.connectionOwnerDeviceId, authenticatedAt: Date.now(), requestTimeoutMs: clientTimeout(req, webguiRequestWaitMs),
         credentialHash: auth.deviceBinding?.credentialHash || sha256(auth.app.token) };
+      if (isHostAccountScope(auth.app)) {
+        if (!auth.pcCredential) return sendJson(res, 401, { code: 'API_CONNECTION_REQUIRED' });
+        Object.assign(identity, { hostAccount: true, bindingId: auth.pcCredential.id, sourceDeviceId: auth.pcCredential.deviceId, credentialHash: auth.pcCredential.credentialHash });
+      }
       try {
         if (req.method === 'GET' && url.pathname.startsWith('/api/rabilink/device/api/operations/')) {
           const id = decodeURIComponent(url.pathname.slice('/api/rabilink/device/api/operations/'.length));
@@ -5490,6 +5594,9 @@ const server = http.createServer(async (req, res) => {
           identity.targetDeviceId = body.targetDeviceId;
         }
         if (!identity.targetDeviceId) return sendJson(res, 409, { code: 'API_CONNECTION_TARGET_REQUIRED' });
+        if (identity.hostAccount && !accountHostTargets(readAppStore(), auth.app, workerCanProcessMobileRequests).some(item => item.id === identity.targetDeviceId)) {
+          return sendJson(res, 404, { code: 'HOST_ACCOUNT_PEER_NOT_FOUND' });
+        }
         const result = await deviceApiService.request(identity, packet);
         return sendJson(res, 200, { code: 0, data: result });
       } catch (error) { return sendJson(res, 400, { code: error.code || 'API_REQUEST_FAILED' }); }

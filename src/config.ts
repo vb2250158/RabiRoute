@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isCaptureEventRouteKind, type CaptureEventRouteKind } from "./shared/personaEventTypes.js";
 import { normalizeAgentRecipients } from "./shared/agentDeliveryTarget.js";
 import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
 import { fileURLToPath } from "node:url";
@@ -56,7 +57,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "qqbot_private" | "qqbot_group" | "qqbot_channel" | "qqbot_dm" | "qqbot_event" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event" | CaptureEventRouteKind;
 
 export type NotificationRule = {
   recentMessageLimit?: number;
@@ -186,7 +187,13 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "wecom_message"
     || kind === "weixin_message"
     || kind === "feishu_message"
-    || kind === "xiaomi_home_event";
+    || kind === "qqbot_private"
+    || kind === "qqbot_group"
+    || kind === "qqbot_channel"
+    || kind === "qqbot_dm"
+    || kind === "qqbot_event"
+    || kind === "xiaomi_home_event"
+    || (typeof kind === "string" && isCaptureEventRouteKind(kind));
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
@@ -296,8 +303,12 @@ function parseRouteProfiles(raw: string | undefined, defaults: RouteProfileDefau
     console.error("Failed to parse ROUTE_PROFILES", error);
     return [];
   }
-  if (!Array.isArray(parsed)) return [];
-  return parsed
+  return normalizeRuntimeRouteProfiles(parsed, defaults);
+}
+
+export function normalizeRuntimeRouteProfiles(profiles: unknown, defaults: RouteProfileDefaults = config): RouteProfile[] {
+  if (!Array.isArray(profiles)) return [];
+  return profiles
     .map((item, index) => normalizeRouteProfile(item, index, defaults))
     .filter((item): item is RouteProfile => Boolean(item));
 }

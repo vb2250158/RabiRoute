@@ -1,4 +1,5 @@
 import { feedbackPlanTransition } from "./planFeedbackWorkflow.js";
+import { planStorageTransactionFence } from "./planHistoryShards.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   assertPlanStorageLeaseOwner,
   commitPlanStorageTransactionUnderLease,
   recoverPlanStorageTransactions,
+  resumePlanStorageTransactionUnderLease,
   resolveCanonicalPlanStorageLocation,
   withPlanStorageLease,
   withPlanStorageLeaseAsync,
@@ -290,6 +292,21 @@ export function commitPlanFeedbackUnderLease(
   if (inputRecord.planId !== lease.planId) {
     throw new Error(`Plan feedback lease does not own plan ${inputRecord.planId}.`);
   }
+  if (options.reuseFeedbackId === undefined) {
+    const preparedForIdentity = attachmentUploads === undefined ? undefined : preparePlanFeedbackAttachments(lease, inputRecord.id, attachmentUploads);
+    const identity = feedbackIdentitySignature({ ...inputRecord,
+      attachments: preparedForIdentity?.map(item => item.metadata) ?? normalizeStoredPlanFeedbackAttachments(inputRecord.attachments),
+      planAttachments: normalizeStoredPlanAttachments(inputRecord.planAttachments) });
+    const resumed = resumePlanStorageTransactionUnderLease(lease, "plan-feedback", transactionId("feedback", inputRecord.id), identity);
+    if (resumed) {
+      const location = canonicalLocationUnderLease(lease);
+      const record = readFeedbackLedger(path.join(location.directory, FEEDBACK_LEDGER_RELATIVE_PATH), inputRecord.planId)
+        .records.filter(item => item.id === inputRecord.id).at(-1);
+      if (!record || feedbackIdentitySignature(record) !== identity) throw new Error(`Plan feedback transaction did not publish its expected ledger row: ${inputRecord.id}`);
+      return { record: materializeRecordPaths(record, location.directory), created: !resumed.ledgerAlreadyPublished };
+    }
+  }
+  planStorageTransactionFence(lease.roleDir, lease.storageId);
   const location = canonicalLocationUnderLease(lease);
   const ledgerPath = path.join(location.directory, FEEDBACK_LEDGER_RELATIVE_PATH);
   const snapshot = readFeedbackLedger(ledgerPath, inputRecord.planId);
@@ -366,6 +383,11 @@ export function commitPlanFeedbackUnderLease(
     semanticHash: identity,
     operations,
     hooks: {
+      beforeWalActive: repositoryHooks?.beforeWalActive,
+      afterWalActive: repositoryHooks?.afterWalActive,
+      afterWalManifest: repositoryHooks?.afterWalManifest,
+      afterWalReceipt: repositoryHooks?.afterWalReceipt,
+      afterWalCleared: repositoryHooks?.afterWalCleared,
       afterPayloadWrite(operationIndex, relativePath) {
         repositoryHooks?.afterPayloadWrite?.(operationIndex, relativePath);
       },
@@ -402,6 +424,7 @@ function appendPlanFeedbackUnderLease(
   if (inputRecord.planId !== lease.planId) {
     throw new Error(`Plan feedback lease does not own plan ${inputRecord.planId}.`);
   }
+  planStorageTransactionFence(lease.roleDir, lease.storageId);
   const location = canonicalLocationUnderLease(lease);
   const ledgerPath = path.join(location.directory, FEEDBACK_LEDGER_RELATIVE_PATH);
   const snapshot = readFeedbackLedger(ledgerPath, inputRecord.planId);
@@ -493,11 +516,14 @@ export function listPlanFeedbackFromSnapshot(
 }
 
 export function listPlanFeedbackUnderLease(lease: PlanStorageLease): PlanFeedbackRecord[] {
+  const before = planStorageTransactionFence(lease.roleDir, lease.storageId);
   const location = canonicalLocationUnderLease(lease);
-  return latestRecords(readFeedbackLedger(
+  const records = latestRecords(readFeedbackLedger(
     path.join(location.directory, FEEDBACK_LEDGER_RELATIVE_PATH),
     lease.planId
   )).map((record) => materializeRecordPaths(record, location.directory));
+  if (planStorageTransactionFence(lease.roleDir, lease.storageId) !== before) throw new Error("Plan feedback changed during transaction.");
+  return records;
 }
 
 export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackRecord[] {

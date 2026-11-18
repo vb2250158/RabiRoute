@@ -10,6 +10,8 @@ import { normalizeAgentRequestEndpoint, normalizeAgentDeliverySource, agentDeliv
 export { sourceScopedAgentDeliveryId } from "./endpoint.js";
 import { AgentThreadContractError, agentThreadContractFailure, agentWorkspaceMismatch, callerAgentDeliveryId, completeAgentSessionId, normalizeAgentThreadSourceType } from "./requestValidation.js";
 import { EndpointDeliveryNotSentError, type EndpointDeliveryNoFrameProof } from "./deliveryFailure.js";
+import { WEB_CHAT_ADAPTER, webChatHostCanReadUploads } from '../shared/agentWebChat.js';
+import { decodeWebChatAttachments } from '../manager/agentWebChatAttachments.js';
 
 export type PreparedEndpointDelivery = {
   deliveryId: string;
@@ -55,6 +57,7 @@ export type EndpointDeliveryOptions = {
   resolveSource: (request: AgentThreadRequest) => Promise<AgentRequestParty> | AgentRequestParty;
   resolveTarget: (request: AgentThreadRequest) => Promise<AgentRequestParty> | AgentRequestParty;
   resolveExecutionOptions: (request: AgentThreadRequest, target: AgentRequestParty) => EndpointExecutionOptions;
+  storeWebChatAttachments?: (attachments: ReturnType<typeof decodeWebChatAttachments>) => Promise<string>;
   /** Captured from the original HTTP body before Manager defaults; never read as a body authority object. */
   callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode" | "workbuddyDeliveryMode">;
   /** Original request-lifetime fence; background recovery has no HTTP request. */
@@ -149,6 +152,9 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
     messageSource: messageSource.type === "plan" ? { type: messageSource.type, planId: messageSource.planId, planName: messageSource.planName } : { type: messageSource.type },
     prompt: request.prompt, contextBlocks: request.contextBlocks ?? [], controlBlocks: request.controlBlocks ?? [],
     ...(request.imagePaths?.length ? { imagePaths: request.imagePaths } : {}),
+    ...(request.webChatAttachments?.length ? { webChatAttachments: request.webChatAttachments.map(({ name, contentBase64 }) => ({
+      name, sha256: createHash('sha256').update(contentBase64).digest('hex')
+    })) } : {}),
     responsePolicy: request.responsePolicy, responseInstruction: request.responseInstruction,
     inReplyToRequestId: request.inReplyToRequestId, result: request.result, nextAction: request.nextAction,
     messageProcessing: request.messageProcessing ? { requirementId: request.messageProcessing.requirementId, outcome: request.messageProcessing.outcome,
@@ -156,6 +162,7 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
     // Unspecified defaults belong to the original frozen delivery, not the retry's current Route configuration.
     execution: { cwd: explicit.cwd, model: explicit.model, reasoningEffort: explicit.reasoningEffort, sandbox: explicit.sandbox, dshDeliveryMode: explicit.dshDeliveryMode,
       workbuddyDeliveryMode: explicit.workbuddyDeliveryMode,
+      dshBaseUrl: request.dshBaseUrl?.trim().replace(/\/+$/, "") || undefined,
       ...(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery }) }
   })).digest("hex");
 }
@@ -207,6 +214,12 @@ function resolvedSourceMetadata(source: AgentRequestParty) {
 }
 
 function resolvedMessageSource(request: AgentThreadRequest, source: AgentRequestParty) {
+  if (source.connection && request.messageSource?.type === 'message_adapter' && request.messageSource.messageAdapter === WEB_CHAT_ADAPTER) {
+    const threadId = request.threadId!;
+    const conversationId = threadId.length <= 300 ? threadId : `sha256:${createHash('sha256').update(threadId).digest('hex')}`;
+    return { type: 'message_adapter' as const, messageAdapter: WEB_CHAT_ADAPTER, conversationType: 'agent_session',
+      conversationId, messageId: request.deliveryId!, senderName: 'WebChat 用户' };
+  }
   if (source.connection) return { type: "system" as const, eventType: "agent_connection", eventName: "Connected sender",
     eventId: source.connection.id.slice(0, 300), actorType: source.connection.transport,
     actorId: source.connection.id.slice(0, 300), actorName: sourceDescription(source.threadName, 500) };
@@ -344,6 +357,10 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
     throw new AgentThreadContractError("WorkBuddy 引导需要稳定的 deliveryId。", "deliveryId", "validation",
       "每条新引导使用独立的 deliveryId。出现未确认结果时，用原编号查询投递回执。");
   }
+  const webChat = request.messageSource?.type === 'message_adapter' && request.messageSource.messageAdapter === WEB_CHAT_ADAPTER;
+  if (webChat && (!callerDeliveryId || request.responsePolicy !== 'none' || request.inReplyToRequestId)) throw new Error('WebChat requires its original message ID and a standalone send.');
+  if (!webChat && request.webChatAttachments !== undefined) throw new Error('WebChat attachments require a WebChat message.');
+  const webChatAttachments = request.webChatAttachments === undefined ? undefined : decodeWebChatAttachments(request.webChatAttachments);
   if (request.imagePaths !== undefined && !Array.isArray(request.imagePaths)) throw new Error("imagePaths must be an array.");
   const source = await options.resolveSource(request);
   const resolvedTarget = await options.resolveTarget(request);
@@ -357,6 +374,11 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
   const sourceAddress = agentDeliverySourceForParty(source);
   if (!sourceAddress || !target.endpoint || target.endpoint.managerInstanceId !== options.managerInstanceId) {
     throw new Error("The current delivery record requires a source address and an exact target endpoint.");
+  }
+  if (webChat && sourceAddress.kind !== 'connection') throw new Error('WebChat requires a browser connection.');
+  if (webChatAttachments?.length && (target.endpoint.kind !== 'local' || request.instanceBinding || !options.storeWebChatAttachments
+    || !webChatHostCanReadUploads(request.dshBaseUrl))) {
+    throw new Error('附件仅支持当前 Manager 上的本机 Agent。');
   }
   const sourceEndpoint = normalizeAgentDeliverySource(sourceAddress), targetEndpoint = target.endpoint;
   if (request.imagePaths?.length && (sourceEndpoint.kind !== "connection" || sourceEndpoint.transport !== "local"
@@ -385,6 +407,9 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
       if (reply) return reply;
     }
     const executionOptions = normalizeEndpointExecutionOptions(options.resolveExecutionOptions(request, target));
+    if (webChatAttachments?.length && !webChatHostCanReadUploads(executionOptions.dshBaseUrl)) {
+      throw new Error('附件仅支持当前 Manager 上的本机 Agent。');
+    }
     const executionOptionsHash = endpointExecutionOptionsHash(executionOptions);
     // An awaited formal-reply reconciliation may have allowed another identical caller to reserve this key.
     const reserved = await resumeCallerDelivery(request, source, target, stableDeliveryId, options);
@@ -397,7 +422,9 @@ export async function executeEndpointAgentDelivery(request: AgentThreadRequest, 
       messageProcessingRequirementId: request.messageProcessing?.requirementId, planId: request.messageProcessing?.planId });
     let delivery: PreparedEndpointDelivery;
     try {
-      const prompt = renderEndpointPrompt(request, source, preparation, executionOptions);
+      const attachmentBlock = webChatAttachments?.length ? await options.storeWebChatAttachments!(webChatAttachments) : undefined;
+      const message = attachmentBlock ? { ...request, contextBlocks: [...(request.contextBlocks ?? []), attachmentBlock] } : request;
+      const prompt = renderEndpointPrompt(message, source, preparation, executionOptions);
       delivery = { deliveryId: preparation.deliveryId, generation: randomUUID(), source: sourceEndpoint,
         target: targetEndpoint, prompt, promptHash: agentDeliveryPromptHash(prompt), executionOptions, executionOptionsHash, preparation, state: "prepared",
         ...(executionOptions.workbuddyDeliveryMode === "steer" ? { blockedReason: "WorkBuddy guidance requires a fresh explicit request." } : {}),

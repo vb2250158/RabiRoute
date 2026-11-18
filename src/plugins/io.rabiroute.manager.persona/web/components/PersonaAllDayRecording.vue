@@ -5,7 +5,8 @@ import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { usePersonaService } from "../persona/personaServiceClient";
 import { readAllDayResource as readRecordingResource, recordingPreview as cachedRecordingPreview, restoreRecordingPreview as restoreCachedRecording, rememberRecordingPreview as rememberCachedRecording } from "../../../../../ribiwebgui/src/allDayRecordingClient";
 import { reviewIndex, reviewWindow, latestReviewEvent, adjacentLoadedEvent, mergeReviewEvents } from "../../../../../ribiwebgui/src/allDayReviewModel";
-import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayRecordingHealth, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot, type AllDayCatalog } from "@shared/allDayRecording";
+import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayMessageSource, allDayRecordingHealth, hasRecordingSources, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot, type AllDayCatalog } from "@shared/allDayRecording";
+import { MESSAGE_EVENT_CATEGORIES, RECORDING_CAPTURE_TYPES } from "@shared/personaEventTypes";
 
 const props = defineProps<{ roleId: string }>();
 const personaService = usePersonaService();
@@ -20,15 +21,10 @@ const { isEnglish } = useI18n();
 const label = (zh: string, en: string) => isEnglish.value ? en : zh;
 const failureMessage = (failure: unknown) => failure instanceof Error && failure.name === "TimeoutError"
   ? label("读取超时，请重试", "Request timed out. Please retry.") : failure instanceof Error ? failure.message : String(failure);
+const captureColors = { systemAudio: "#a4cf80", microphone: "#62d4a0", screen: "#65cde4", window: "#dfba70", camera: "#ba9deb", homeAssistant: "#18b5dc", mobile: "#e69caa", session: "#95a5ad" };
 const sources = computed(() => [
-  { id: "systemAudio", name: label("电脑播放", "System playback"), icon: "mdi-volume-high", color: "#a4cf80" },
-  { id: "microphone", name: label("麦克风", "Microphone"), icon: "mdi-microphone", color: "#62d4a0" },
-  { id: "screen", name: label("屏幕", "Screen"), icon: "mdi-monitor", color: "#65cde4" },
-  { id: "window", name: label("前台窗口", "Foreground window"), icon: "mdi-application-outline", color: "#dfba70" },
-  { id: "camera", name: label("摄像头", "Camera"), icon: "mdi-camera-outline", color: "#ba9deb" },
-  { id: "homeAssistant", name: "Home Assistant", icon: "mdi-home-assistant", color: "#18b5dc" },
-  { id: "mobile", name: label("手机", "Mobile"), icon: "mdi-cellphone", color: "#e69caa" },
-  { id: "session", name: label("采集状态", "Capture status"), icon: "mdi-record-circle-outline", color: "#95a5ad" }
+  ...RECORDING_CAPTURE_TYPES.map(type => ({ id: type.value, name: label(type.title, type.english), icon: type.icon, color: captureColors[type.value] })),
+  ...MESSAGE_EVENT_CATEGORIES.map(type => ({ id: allDayMessageSource(type.value), name: label(type.title, type.english), icon: type.icon, color: "#8cbbeb" }))
 ]);
 const sourceInfo = (id: string) => sources.value.find(source => source.id === id)!;
 function recordingState(event: AllDayEvent) {
@@ -87,9 +83,49 @@ const virtualStart = computed(() => Math.max(0, Math.floor(listScrollTop.value /
 const state = ref<(AllDaySnapshot & { devices?: { id: string; lastReceivedAt: number }[] }) | null>(null);
 const settings = ref<AllDaySettings>(structuredClone(DEFAULT_ALL_DAY_SETTINGS));
 const settingsOpen = ref(false);
+const settingsError = ref("");
+const pendingSource = ref<AllDayEvent["source"] | null>(null);
+const includePhones = ref(false);
+const configuredSources = computed(() => [
+  ...ALL_DAY_SOURCES.filter(source => settings.value.sources[source]),
+  ...(includePhones.value ? ["mobile" as const] : []),
+  ...(settings.value.messageSources ?? []).map(allDayMessageSource)
+]);
+const addableSources = computed(() => sources.value.filter(source => source.id !== "systemAudio" && source.id !== "session" && !configuredSources.value.includes(source.id as typeof configuredSources.value[number])));
+const visibleSources = computed(() => sources.value.filter(source => !source.id.startsWith("message:")
+  || state.value?.settings.messageSources?.some(category => allDayMessageSource(category) === source.id)
+  || markerGroups.value.has(source.id)));
+const isVisualRecording = computed(() => settings.value.sources.screen || settings.value.sources.camera);
+const canSaveSettings = computed(() => (!includePhones.value || settings.value.mobileDeviceIds.length > 0)
+  && Number.isInteger(settings.value.intervalSeconds) && settings.value.intervalSeconds >= 10 && settings.value.intervalSeconds <= 3600
+  && Number.isInteger(settings.value.cameraIndex) && settings.value.cameraIndex >= 0 && settings.value.cameraIndex <= 16);
+
+function changeRecordingSource(source: AllDayEvent["source"], added: boolean) {
+  const capture = ALL_DAY_SOURCES.find(type => type === source);
+  const message = MESSAGE_EVENT_CATEGORIES.find(type => allDayMessageSource(type.value) === source);
+  if (capture) settings.value.sources[capture] = added;
+  else if (message) settings.value.messageSources = added
+    ? [...new Set([...(settings.value.messageSources ?? []), message.value])]
+    : settings.value.messageSources?.filter(type => type !== message.value);
+  else if (source === "mobile") {
+    includePhones.value = added;
+    if (!added) settings.value.mobileDeviceIds = [];
+  }
+  if (capture && !added) {
+    if (!isVisualRecording.value) settings.value.intervalSeconds = state.value?.settings.intervalSeconds ?? DEFAULT_ALL_DAY_SETTINGS.intervalSeconds;
+    if (capture === "camera") settings.value.cameraIndex = state.value?.settings.cameraIndex ?? DEFAULT_ALL_DAY_SETTINGS.cameraIndex;
+  }
+  pendingSource.value = null;
+}
 const selectedId = ref("");
 const filter = ref("all");
 const eventType = ref("all");
+const eventTypes = computed(() => [
+  { id: "all", name: label("全部类型", "All types") }, { id: "message", name: label("消息事件", "Message events") },
+  { id: "asr", name: label("ASR 事件", "ASR events") }, { id: "image", name: label("画面", "Images") },
+  { id: "window", name: label("窗口", "Windows") }, { id: "status", name: label("采集状态", "Capture status") },
+  { id: "device", name: label("设备事件", "Device events") }
+]);
 const matchesFilter = (event: AllDayEvent) => matchesReviewType(event,eventType.value) && (filter.value === "all" || event.source === filter.value);
 const busy = ref(false);
 const error = ref("");
@@ -299,16 +335,6 @@ function loadStatus() {
     if(statusPending.signal.aborted || disposed) return;
     state.value = snapshot; stateError.value = "";
     if(!settingsOpen.value) settings.value = structuredClone(snapshot.settings);
-    if(snapshot.devices?.length && (!snapshot.settings.mobileDeviceIds || snapshot.settings.mobileDeviceIds.length === 0)) {
-      const autoDeviceIds = snapshot.devices.map(d => d.id);
-      snapshot.settings.mobileDeviceIds = autoDeviceIds;
-      if(!settingsOpen.value) settings.value.mobileDeviceIds = autoDeviceIds;
-      void data("/settings", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(snapshot.settings)
-      }).catch(() => {});
-    }
   }).catch(failure => {
     if(!statusPending.signal.aborted && !disposed) stateError.value = failureMessage(failure);
   }).finally(() => { if (statusController === statusPending) statusController = undefined; drainOverview(); });
@@ -420,13 +446,18 @@ async function loadRecent() {
   finally { if (recentController === pending) recentController = undefined; drainOverview(); }
 }
 async function action(name: "start" | "stop" | "settings") {
-  if (name === "start" && state.value && !ALL_DAY_SOURCES.some(source => state.value!.settings.sources[source])) { openSettings(); return; }
+  if (name === "start" && state.value && !hasRecordingSources(state.value.settings)) { openSettings(); return; }
+  if (name === "settings" && !canSaveSettings.value) return;
   busy.value = true; error.value = "";
+  settingsError.value = "";
   try {
     await data(`/${name}`, { method: name === "settings" ? "PUT" : "POST", headers: { "content-type": "application/json" }, ...(name === "settings" ? { body: JSON.stringify(settings.value) } : {}) });
     if (name === "settings") settingsOpen.value = false;
     refreshRecords();
-  } catch (failure) { error.value = failureMessage(failure); }
+  } catch (failure) {
+    if (name === "settings") settingsError.value = failureMessage(failure);
+    else error.value = failureMessage(failure);
+  }
   finally { busy.value = false; }
 }
 function stopMotion() { cancelAnimationFrame(inertia); inertia = 0; }
@@ -610,7 +641,13 @@ watch([viewStart, viewEnd], () => {
   if (viewStart.value >= range.start && viewEnd.value <= range.end) return;
   clearTimeout(rangeTimer); rangeTimer = setTimeout(() => void loadRange(), 120);
 });
-function openSettings() { if (state.value) settings.value = structuredClone(toRaw(state.value.settings)); settingsOpen.value = true; }
+function openSettings() {
+  if (state.value) settings.value = structuredClone(toRaw(state.value.settings));
+  includePhones.value = settings.value.mobileDeviceIds.length > 0;
+  pendingSource.value = null;
+  settingsError.value = "";
+  settingsOpen.value = true;
+}
 watch(() => props.roleId, () => {
   pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false;
   recentController?.abort(); recentController = undefined; cachedPreview.value = false;
@@ -675,7 +712,7 @@ onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogContro
   <section class="all-day" data-testid="persona-all-day-recording">
     <div class="recording-toolbar">
       <div><h2>{{ label('全天记录', 'All-day recording') }}</h2><span class="muted">{{ label('电脑、手机与家庭设备 · 时间轴和事件', 'Computer, mobile and home devices · Timeline and events') }}</span></div>
-    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || (fetching && !listEvents.length)" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="[{id: 'all', name: label('全部类型','All types')}, {id: 'asr', name: label('ASR 事件','ASR events')}, {id: 'image', name: label('画面','Images')}, {id: 'window', name: label('窗口','Windows')}, {id: 'status', name: label('采集状态','Capture status')}, {id: 'device', name: label('设备事件','Device events')}]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="refreshRecords(true)" /></div>
+    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || (fetching && !listEvents.length)" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="eventTypes" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="refreshRecords(true)" /></div>
       <div class="toolbar-buttons">
         <v-chip :color="captureStatus.color" size="small" variant="tonal">{{ captureStatus.text }}</v-chip>
         <v-switch :model-value="state?.enabled ?? state?.running ?? false" :disabled="busy || !state || !!(state.activeRoleId && state.activeRoleId !== roleId)" :loading="busy" color="secondary" hide-details inset :label="label('开启记录', 'Enable recording')" @update:model-value="action($event ? 'start' : 'stop')" />
@@ -716,7 +753,7 @@ onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogContro
       <div v-if="navigationMessage" class="navigation-message" role="status">{{ navigationMessage }}</div>
       <div ref="ruler" class="time-ruler" tabindex="0" role="group" :aria-label="label('记录时间尺，左右方向键切换事件，滚动回看', 'Recording timeline, arrow keys select adjacent events, scroll to browse')" @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="drag = undefined" @pointerleave="leaveDrag" @wheel.prevent="wheel" @keydown.left.prevent="adjacentEvent('older')" @keydown.right.prevent="adjacentEvent('newer')">
         <div class="time-ticks"><time v-for="tick in ticks" :key="tick">{{ span >= 86400_000 ? localDate(new Date(tick)).slice(5) + " " : "" }}{{ formatTime(tick).slice(0, span < 300000 ? 8 : 5) }}</time></div>
-        <div v-for="source in sources" :key="source.id" class="source-lane">
+        <div v-for="source in visibleSources" :key="source.id" class="source-lane">
           <span class="lane-name">{{ source.name }}</span>
           <button v-for="group in markerGroups.get(source.id)?.values()" :key="group.event.id" class="timeline-event" :class="{ selected: selectedId === group.event.id, failed: group.event.state === 'error' }" :style="{ left: `${percent(group.event.startedAt)}%`, width: `${Math.max(.3, percent(group.event.endedAt) - percent(group.event.startedAt))}%`, '--event-color': source.color }" :title="`${formatTime(group.event.startedAt)} · ${source.name}`" :aria-label="`${source.name} ${formatTime(group.event.startedAt)}${group.count > 1 ? ` · ${group.count}` : ''}`" @pointerdown.stop="stopMotion" @click.stop="selectMarker(group)" />
         </div>
@@ -737,23 +774,45 @@ onBeforeUnmount(() => { disposed = true; indexController?.abort(); catalogContro
     </div>
     </div>
     </div>
-    <v-dialog v-model="settingsOpen" max-width="560">
+    <v-dialog v-model="settingsOpen" :persistent="busy" max-width="680">
       <v-card class="section-card"><v-card-title>{{ label('记录设置', 'Recording settings') }}</v-card-title><v-card-text>
-        <p>{{ label('屏幕和摄像头按间隔保存画面；麦克风复用语音服务的监听，暂停记录不会停止原有监听。', 'Screen and camera save periodic frames. Microphone uses the Speech service recording and transcription settings.') }}</p>
-        <v-switch v-for="source in ALL_DAY_SOURCES" :key="source" v-model="settings.sources[source]" :label="sourceInfo(source).name" color="secondary" :disabled="busy" hide-details />
-        <p v-if="settings.sources.homeAssistant" class="muted">{{ label('将 Home Assistant 活动页的事件汇入当前角色，包括普通状态和进度变化。请先在米家设置中连接 Home Assistant；开启记录先同步当天已有活动，再实时接收；暂停时停止接收。', 'Add Home Assistant Activity events to this persona, including ordinary states and progress changes. Connect Home Assistant in Xiaomi Home settings. Recording imports today’s existing activity, then receives live events; pausing stops reception.') }}</p>
-        <p v-for="(message, source) in state?.sourceErrors" :key="source" class="muted">{{ sourceInfo(source).name }}：{{ message }}</p>
-        <v-text-field v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒）', 'Frame interval (seconds)')" :disabled="busy" class="mt-4" />
-        <v-text-field v-if="settings.sources.camera" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" :disabled="busy" />
-        <v-select v-model="settings.mobileDeviceIds" :items="state?.devices || []" :item-title="device => `${label('手机', 'Mobile')} ${device.id.slice(0, 8)}`" item-value="id" multiple chips :label="label('汇总这些手机的事件', 'Include events from these phones')" :disabled="state?.running" />
-        <p v-if="!state?.devices?.length" class="muted">{{ label('尚未收到手机事件。更新手机端并完成一次转写后，再选择设备。', 'No mobile events received. Update the phone app and complete a transcription, then select the device.') }}</p>
-        <p class="muted">{{ label('总开关开启后，下次启动软件自动恢复记录。运行中保存设备设置立即生效；设备不可用时继续记录其他来源。', 'When enabled, recording resumes on application startup. Save source changes while running; unavailable devices do not stop other sources.') }}</p>
-      </v-card-text><v-card-actions><v-spacer /><v-btn @click="settingsOpen = false">{{ label('取消', 'Cancel') }}</v-btn><v-btn color="secondary" :loading="busy" :disabled="busy" @click="action('settings')">{{ label('保存设置', 'Save settings') }}</v-btn></v-card-actions></v-card>
+        <div class="recording-source-add">
+          <v-select v-model="pendingSource" :items="addableSources" item-title="name" item-value="id" :label="label('事件类型', 'Event type')" variant="outlined" density="compact" hide-details :disabled="busy || !addableSources.length">
+            <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :prepend-icon="item.raw.icon" /></template>
+          </v-select>
+          <v-btn prepend-icon="mdi-plus" color="secondary" variant="tonal" :disabled="busy || !pendingSource" @click="pendingSource && changeRecordingSource(pendingSource, true)">{{ label('添加记录项', 'Add recording item') }}</v-btn>
+        </div>
+        <h3 class="recording-source-heading">{{ label('已添加的记录项', 'Recording items') }} <span class="muted">{{ configuredSources.length }}</span></h3>
+        <p v-if="!configuredSources.length" class="recording-source-empty muted">{{ label('还没有记录项。在上方选择事件类型，逐项添加。', 'No recording items yet. Choose an event type above to add one.') }}</p>
+        <div v-for="source in configuredSources" :key="source" class="recording-source-item">
+          <div class="recording-source-row">
+            <v-icon :icon="sourceInfo(source).icon" /> <strong>{{ sourceInfo(source).name }}</strong>
+            <v-btn icon="mdi-close" size="small" variant="text" :aria-label="`${label('移除', 'Remove')} ${sourceInfo(source).name}`" :disabled="busy" @click="changeRecordingSource(source, false)" />
+          </div>
+          <p v-if="source === 'microphone'" class="muted">{{ label('复用语音服务的监听，暂停记录不会停止原有监听。', 'Uses Speech service listening. Pausing recording does not stop existing listening.') }}</p>
+          <p v-if="source === 'homeAssistant'" class="muted">{{ label('在米家设置连接 Home Assistant。开启记录后同步当天活动，再接收新活动。', 'Connect Home Assistant in Xiaomi Home settings. Recording imports today’s activity and then receives live activity.') }}</p>
+          <v-text-field v-if="source === 'camera'" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" variant="outlined" density="compact" hide-details :disabled="busy" />
+          <template v-if="source === 'mobile'">
+            <v-select v-model="settings.mobileDeviceIds" :items="state?.devices || []" :item-title="device => `${label('手机', 'Mobile')} ${device.id.slice(0, 8)}`" item-value="id" multiple chips :label="label('选择要汇总的手机', 'Select phones to include')" variant="outlined" density="compact" hide-details :disabled="busy" />
+            <p v-if="!state?.devices?.length" class="muted">{{ label('手机完成一次转写并同步后，就可以在这里选择。', 'Complete and sync a transcription on the phone to make it available here.') }}</p>
+          </template>
+        </div>
+        <v-text-field v-if="isVisualRecording" v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒，屏幕和摄像头共用）', 'Frame interval in seconds (screen and camera)')" variant="outlined" density="compact" hide-details :disabled="busy" class="mt-4" />
+        <p v-for="(message, source) in state?.sourceErrors" :key="source" class="muted mt-2">{{ sourceInfo(source).name }}：{{ message }}</p>
+        <v-alert v-if="settingsError" type="error" variant="tonal" class="mt-3">{{ settingsError }}</v-alert>
+        <p class="muted mt-4">{{ label('保存后生效。移除记录项不会删除已保存的记录。', 'Changes apply when saved. Removing an item does not delete saved records.') }}</p>
+      </v-card-text><v-card-actions><v-spacer /><v-btn :disabled="busy" @click="settingsOpen = false">{{ label('取消', 'Cancel') }}</v-btn><v-btn color="secondary" :loading="busy" :disabled="busy || !canSaveSettings" @click="action('settings')">{{ label('保存设置', 'Save settings') }}</v-btn></v-card-actions></v-card>
     </v-dialog>
   </section>
 </template>
 
 <style scoped>
+.recording-source-add,.recording-source-row { display: flex; gap: 10px; align-items: center; }
+.recording-source-add .v-input,.recording-source-row strong { flex: 1; min-width: 0; }
+.recording-source-heading { margin: 20px 0 8px; font-size: .95rem; }
+.recording-source-heading span { margin-left: 5px; }
+.recording-source-item,.recording-source-empty { border: 1px solid var(--rr-border-faint); border-radius: 10px; padding: 8px 12px; margin-top: 8px; }
+.recording-source-empty { padding: 18px 12px; }
 .recording-workspace,.review-column,.events-column { display: grid; gap: 18px; min-width: 0; align-content: start; }
 @media(min-width: 1000px) {
   .recording-workspace { grid-template-columns: minmax(0,3fr) minmax(320px,2fr); align-items: start; }

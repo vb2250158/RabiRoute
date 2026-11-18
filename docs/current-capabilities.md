@@ -71,7 +71,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Companion 由唯一 Host 下的 Manager Plugin Kernel 与 generation-scoped process lease 持有，动态 READY URL 经 `/meta` 和双身份 header 围栏，不再拥有登录计划任务或固定 Manager 端口。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
 | 企业微信 / WeCom | 实验支持 | 使用 `@wecom/aibot-node-sdk` 的智能机器人 WebSocket 长连接，支持群消息进入和 Outbox 回发；需要真实 Bot ID/Secret 验证。 |
-| 个人微信 / Weixin | 实验原型 | 通过 OpenClaw iLink API 长轮询个人微信消息；WebGUI 区分安全会话恢复、暂时不可达、明确失效和从未登录，二维码只在用户明确请求后生成。Windows 使用当前用户 DPAPI 保护会话材料，其它平台使用本机 AES-256-GCM。文本可进入 Agent，并可按来源会话回发文本或受控本地文件；入站媒体只记录。长期在线、真实账号风险和稳定性验收仍未完成。 |
+| 微信机器人 | 实验支持 | 腾讯 iLink 官方机器人入口，支持本人扫码、邀请绑定、验证码、退出登录、受保护的会话恢复、文字和媒体接收、原生图片及视频发送、文件发送与输入状态。真实微信收发由隔离联调验收。 |
 | 飞书 / Feishu | 本地实现已验收，待真实凭证联调 | 独立应用事件回调，支持 URL challenge、原始请求体签名校验、Encrypt Key 解密、按 `event_id` 持久去重、按 `chat_id` 隔离上下文并向来源 chat 回发文本。缺少应用凭据或事件订阅确认时监听与出站均关闭；未使用群机器人 Webhook。 |
 
 `disabled` 只是兼容配置值，不是一个消息入口。
@@ -118,7 +118,7 @@ Manager 插件使用 schema/profile v2，明确选择 `in_process`、`isolated` 
 | --- | --- |
 | QQ / NapCat | 必须明确群/私聊目标；支持 text/image/voice/file，以及把 Markdown 文本在本机浏览器渲染成 PNG 后作为图片发送。图片消息可用有序 `segments` 把文字、图片和 Markdown 图排成一条消息；本地图片逐张检查文件存在、类型和可读性，不设目录白名单。群文件使用 `upload_group_file`。普通群发送可省略 `params.replyToMessageId` 或填空字符串；真实 ID 生成引用回复段，`message_processing` 的实际群回复仍须有效来源引用。引用消息含图片时还必须按原图顺序提交 `replyImageDescriptions`；发送成功后，每张来源图片旁保存同名 `.md` 说明和 Agent 会话映射。 |
 | WeCom | 必须提供明确 `params.chatId`；使用 SDK 发送，受 adapter policy 限制。 |
-| 个人微信 | 仅支持回复已收到消息并保存了 context token 的来源会话；可发送文本，或发送消息端策略允许的本地文件，不设本地文件目录白名单。不能主动向任意联系人发消息；图片、语音和视频的专用发送类型未实现。 |
+| 微信机器人 | 按 Route 的外发与载荷设置向已识别的机器人会话发送文字、图片、文件和 MP4 视频。使用当前会话上下文并返回实际发送结果。 |
 | 飞书 | 仅支持文本，回复到原始 `chat_id`；要求应用凭据、事件订阅确认和 adapter 出站 policy。不会回退到通用 Webhook。 |
 | 旧 FenneNote 输出配置 | 读取时迁移到统一 TTS；旧发送通道仅作为转到语音服务的迁移别名，不调用独立 FenneNote 播放服务。 |
 | RabiLink | 受 Route policy 控制；必须明确设备 ID 或设备类型，非主动发送还需 `sourceMessageId`。主动下行不需要伪造来源任务。 |

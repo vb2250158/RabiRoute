@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import {
+  createMessageAgentPoolOwner,
   MessageAgentPool,
   messageAgentInitializationPrompt,
   rankMessageAgentWorkers,
@@ -17,6 +18,31 @@ import {
 } from "./messageAgentPool.js";
 import type { MessageAgentDeliveryRouting, MessageAgentPoolState } from "./messageAgentPool.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
+
+test("a Route binding change drains the old writer before reusing the pool state", async () => {
+  const owner = createMessageAgentPoolOwner<{ binding: string }>();
+  let binding = "original-source", release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const activations: string[] = [];
+  const read = () => {
+    const snapshot = binding;
+    return { key: snapshot, create() { activations.push(snapshot); return { binding: snapshot }; } };
+  };
+  const original = owner.run(read, async pool => { await held; return pool.binding; });
+  try {
+    binding = "intermediate-source";
+    const next = owner.run(read, async pool => pool.binding);
+    binding = "latest-source";
+    const concurrent = owner.run(read, async pool => pool.binding);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(activations, ["original-source"]);
+    release();
+    assert.deepEqual(await Promise.all([original, next, concurrent]), ["original-source", "latest-source", "latest-source"]);
+    assert.deepEqual(activations, ["original-source", "latest-source"]);
+  } finally {
+    release();
+  }
+});
 
 function deliveryPayloadText(payload: Record<string, any> | undefined): string {
   if (!payload) return "";

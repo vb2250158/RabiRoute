@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/host-api",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "type": "module",
   "license": "MIT",
   "description": "Public declarations and export signatures for RabiRoute shared host owners.",
@@ -507,6 +507,9 @@
     "./shared/agentProviderControlContract": {
       "types": "./types/src/shared/agentProviderControlContract.d.ts"
     },
+    "./shared/allDayRecording": {
+      "types": "./types/src/shared/allDayRecording.d.ts"
+    },
     "./shared/codexThreadTitle": {
       "types": "./types/src/shared/codexThreadTitle.d.ts"
     },
@@ -590,6 +593,9 @@
     },
     "./shared/personaChatHistory": {
       "types": "./types/src/shared/personaChatHistory.d.ts"
+    },
+    "./shared/personaEventTypes": {
+      "types": "./types/src/shared/personaEventTypes.d.ts"
     },
     "./shared/personaHistoryChannels": {
       "types": "./types/src/shared/personaHistoryChannels.d.ts"

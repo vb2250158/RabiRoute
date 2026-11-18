@@ -7,11 +7,12 @@ import { canonicalManagerPluginFixture } from "../manager/canonicalManagerPlugin
 const gate = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; };
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 async function fixture(options: { failedStop?: boolean; lateFactory?: ReturnType<typeof gate>; lateClose?: ReturnType<typeof gate>; closeEntered?: ReturnType<typeof gate> } = {}) {
-  const counts = { video: 0, videoStopped: 0, peer: 0, peerStopped: 0, registered: 0 };
+  const counts = { video: 0, videoStopped: 0, peer: 0, peerStopped: 0, registered: 0, accountStopped: 0 };
   let registrationFails = options.failedStop;
   const host = {
     managerListenerReady: false, syncActiveRabiLinkRelay: async () => {},
     peerLanServer: { async stop() {} }, rabiLinkRelayRuntime: { async stop() {} },
+    rabiLinkAccountRuntime: { async stop() { counts.accountStopped++; } },
     createDirectVideoReceiver() { counts.video++; return { async stop() { counts.videoStopped++; if (options.failedStop) throw new Error("fixture video stop failed"); } }; },
     async createPeerRuntime() {
       const index = counts.peer++;
@@ -67,5 +68,5 @@ test("Relay joins a late factory and its late disposer before permitting another
     assert.equal(recovered.generation.records[0]!.status, "active");
     assert.equal(f.counts.video, 2); assert.equal(f.counts.videoStopped, 1);
   } finally { factory.resolve(); close.resolve(); await f.kernel.dispose(); }
-  assert.equal(f.counts.videoStopped, 2); assert.equal(f.counts.peerStopped, 2);
+  assert.equal(f.counts.videoStopped, 2); assert.equal(f.counts.peerStopped, 2); assert.equal(f.counts.accountStopped, 1);
 });

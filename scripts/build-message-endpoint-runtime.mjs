@@ -136,9 +136,30 @@ export async function bundleMessageEndpointWorker(root, specification, outputFil
       ownedPrefixes: [`src/plugins/${packageId}/`], exports: names.map(name => ({ source: specification.source, name })) }, outputFile, options);
     return { ...bundle, inputs: [...new Set([...bundle.inputs, ...inputs])].sort() };
   }
+  let publicHostExports;
   const result = await build({ absWorkingDir: root, entryPoints: [path.join(root, specification.source)], bundle: true, write: false,
     platform: "node", format: "esm", target: "node22", metafile: true, nodePaths: [path.join(options.dependencyRoot ?? root, "node_modules")],
-    external: ["bufferutil", "utf-8-validate"], banner: { js: 'import { createRequire as __endpointWorkerRequire } from "node:module"; const require = __endpointWorkerRequire(import.meta.url);' } });
+    external: ["bufferutil", "utf-8-validate"], banner: { js: 'import { createRequire as __endpointWorkerRequire } from "node:module"; const require = __endpointWorkerRequire(import.meta.url);' },
+    plugins: [{ name: "standalone-worker-public-host-sources", setup(builder) {
+      builder.onResolve({ filter: /^@rabiroute\/host-api\// }, async args => {
+        const moduleId = args.path.slice("@rabiroute/host-api/".length);
+        publicHostExports ??= fs.readFile(path.join(root, "plugins/contracts/host-api/package.json"), "utf8")
+          .then(source => JSON.parse(source).exports);
+        const exported = (await publicHostExports)?.[`./${moduleId}`];
+        if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(moduleId)
+          || exported?.types !== `./types/src/${moduleId}.d.ts`) {
+          throw new Error("Standalone worker requires an explicitly exported host source module.");
+        }
+        const sourceRoot = await fs.realpath(path.join(root, "src"));
+        const source = await fs.realpath(path.join(root, "src", `${moduleId}.ts`));
+        const relative = path.relative(sourceRoot, source);
+        if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+          throw new Error("Standalone worker host source is outside the captured source root.");
+        }
+        return { path: source };
+      });
+    } }]
+  });
   const inputs = Object.keys(result.metafile.inputs).map(input => path.resolve(root, input)).filter(input => !input.includes(`${path.sep}node_modules${path.sep}`));
   const contents = result.outputFiles[0].text;
   if (outputFile) await fs.writeFile(outputFile, contents, "utf8");

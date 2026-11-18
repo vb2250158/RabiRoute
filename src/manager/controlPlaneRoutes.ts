@@ -50,6 +50,9 @@ import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
 import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording } from "./allDayRecordingRoutes.js";
+import { ALL_DAY_MESSAGE_INGRESS, handleAllDayMessageIngress } from "./allDayMessageIngress.js";
+import { RecordingAutomationDispatch } from "./recordingAutomationDispatch.js";
+import { SYSTEM_EVENT_STDIN_FLAG } from "../shared/systemEventIngress.js";
 import { createPersonaRecordingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.js";
 import { CompanionActivity, companionSpeechScope, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
 import { readCompanionContext } from "./companionContextReader.js";
@@ -61,7 +64,8 @@ import { CompanionContinuationStore } from "./companionContinuation.js";
 import { requestLocalSpeech, requestLocalSpeechJson } from "../speech/localSpeechClient.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings, peerRouteAgentSession } from "../shared/routeAgentTargets.js";
 import type { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
-import { createManagerPeerRuntime as prepareManagerPeerRuntime } from "./managerPeerRuntime.js";
+import { createManagerPeerRuntime as prepareManagerPeerRuntime, type ManagerPeerPublication } from "./managerPeerRuntime.js";
+import { ACCOUNT_OFFER_PATH } from "./rabiLinkAccountTunnel.js";
 
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { KnowledgeSearchService } from "./knowledgeSearchService.js";
@@ -84,7 +88,6 @@ import { createDataUpgradeHostRestart } from "./dataUpgradeHostRestart.js";
 import { DATA_UPGRADE_STATUS_EVENT } from "../shared/dataUpgradeContract.js";
 import { createWebguiStaticOperations } from "./webguiStaticOperations.js";
 import { createVideoOperations } from "../plugins/io.rabiroute.manager.video/src/manager/videoOperations.js";
-import { createRabiPeerRuntime } from "./rabiPeerRoutes.js";
 import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
 import os from "node:os";
@@ -134,6 +137,7 @@ import {
   resolveCurrentMessageAgentWorker
 } from "../messageAgentPool.js";
 import {
+  messageProcessingWorkerAdapter,
   resolveDeliveredMessageProcessingTarget,
   resolveMessageProcessingDeliveryTarget,
   type MessageProcessingDeliveryTarget
@@ -210,8 +214,10 @@ import {
   agentSendReceiptResponse,
   executeIdempotentAgentSend,
   findAgentSendTraces,
+  replayAgentSendReceipt,
   readAgentSendReceipt
 } from "./agentSendIdempotency.js";
+import { agentSendVariantDescriptions, agentSendVariantType, prepareAgentSendVariant, scopedAgentSendVariant, withAgentSendVariant } from "../agentSendVariant.js";
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
   type RolePanelAttachment,
@@ -303,6 +309,7 @@ import { handleSourcePatchApi } from "./sourcePatchRoutes.js";
 import { WebPatchService } from "./webPatchService.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
 import { HostInstanceIdentityReset } from "./identityResetRoutes.js";
+import { RabiLinkHostAccount } from "./rabiLinkHostAccount.js";
 import {
   GenerationRuntime,
   loadPluginProfile,
@@ -649,6 +656,11 @@ type GatewayDefinition = {
   feishuEventSubscriptionEnabled?: boolean;
   feishuWebhookPort?: number;
   feishuWebhookPath?: string;
+  qqbotAccountId?: string;
+  qqbotCallbackPort?: number;
+  qqbotTransport?: "webhook" | "websocket";
+  qqbotIntents?: number;
+  qqbotManagementEnabled?: boolean;
   heartbeatIntervalSeconds?: number;
   heartbeatMessage?: string;
   heartbeatSkipWhenAgentBusy?: boolean;
@@ -848,6 +860,19 @@ function configuredAgentProviderTypes(definition: GatewayDefinition): AgentAdapt
 
 function primaryAgentSessionFields(definition: GatewayDefinition, agentAdapter: AgentAdapterType) {
   return peerRouteAgentSession(definition, agentAdapter) ?? configuredLocalAgentSessionFields(definition, agentAdapter);
+}
+
+function describeRoutePrimaryAgent(definition: GatewayDefinition) {
+  const target = resolvePrimaryAgentTarget(definition);
+  if (!target) return undefined;
+  const descriptor = currentAgentSessionDescriptors().get(target.provider);
+  const fields = target.binding?.ownerDeviceId ? target : readAgentSessionBinding(descriptor, definition);
+  const sessionName = fields.sessionName?.trim();
+  return {
+    type: target.provider, label: descriptor?.manifest.label || target.provider,
+    ...(sessionName ? { sessionName } : {}),
+    hasSessionId: Boolean(fields.sessionId?.trim())
+  };
 }
 
 function primaryAgentMessageSource(definition: GatewayDefinition): AgentMessageSource {
@@ -1080,6 +1105,16 @@ const managerRuntimeLayout = resolveRuntimeLayout(
 const packageRoot = managerRuntimeLayout.packageRoot;
 const rootDir = managerRuntimeLayout.stateRoot;
 const resourceCacheKey = randomUUID();
+const recordingAutomationDispatch = new RecordingAutomationDispatch(
+  (roleId, kind) => [...runtimes.values()].flatMap(({ definition }) => {
+    if (!definition.enabled || definition.agentRoleDeviceId || roleIdForDefinition(definition) !== roleId) return [];
+    const rules = [...(definition.automationRules ?? []), ...(definition.routeProfiles ?? []).flatMap(profile => profile.automationRules ?? [])];
+    return rules.some(rule => rule.enabled !== false && rule.trigger.type === "message" && rule.trigger.routeKinds?.includes(kind)
+      && (!rule.sourceRouteIds?.length || rule.sourceRouteIds.includes(definition.id))) ? [definition.id] : [];
+  }),
+  gatewayId => spawnGatewayCommand(runtimes.get(gatewayId)!, childCommand([SYSTEM_EVENT_STDIN_FLAG])),
+  (roleId, reason) => managerOperationalLog.record("warn", "recording_automation_delivery", { action: roleId, result: reason })
+);
 const allDayRecording = createAllDayRecording({
   roleDirectory: roleDirForApi,
   hostId: os.hostname(),
@@ -1090,6 +1125,10 @@ const allDayRecording = createAllDayRecording({
   speechUrl: () => speechServiceUrl(),
   ensureSpeech: async () => { await speechRuntimeControl.start(); },
   changed: roleId => publishManagerEvent("all_day_recording", { roleId }),
+  eventCommitted: (roleId, event) => {
+    try { recordingAutomationDispatch.accept(roleId, event); }
+    catch { managerOperationalLog.record("warn", "recording_automation_delivery", { action: roleId, result: "admission_failed" }); }
+  },
   indexChanged: (roleId, indexDay, indexFailed) => publishManagerEvent("all_day_recording", { roleId, indexDay, indexFailed }),
   readChanged: (roleId, event) => publishManagerEvent("all_day_recording", { roleId, ...event })
 });
@@ -1560,11 +1599,54 @@ function recordRabiLinkRelayReceipt(data: Record<string, unknown>): void {
 
 const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
   onStatus: status => {
-    publishManagerEvent("rabilink_status", status);
+    if (!rabiLinkHostAccount.session()) publishManagerEvent("rabilink_status", status);
   },
   onEvent: (eventType, data) => {
     if (eventType === "outbox_receipt") recordRabiLinkRelayReceipt(data);
+    if (eventType === "peer_changed" && !rabiLinkHostAccount.session()) publishManagerEvent("rabilink_devices_changed", {});
   }
+});
+const rabiLinkAccountRuntime = new RabiLinkRelayRuntime({
+  onStatus: status => {
+    if (rabiLinkHostAccount.session()) publishManagerEvent("rabilink_status", status);
+    if (!managerReadOnly && (status.state === "online" || status.state === "error")) void rabiLinkHostAccount.tryRecover();
+  },
+  onEvent: (eventType, event) => {
+    if (eventType === "ready" && rabiLinkHostAccount.session()) checkRabiLinkHostUpgrade();
+    if (eventType === "relay_connection_lost") activePeerRuntime?.accountTunnel.invalidateAll();
+    if (eventType === "account_peer_revoked" && typeof event.peerId === "string" && typeof event.revokedAt === "number") {
+      activePeerRuntime?.accountTunnel.invalidatePeer(event.peerId, event.revokedAt);
+    }
+    if (eventType === "peer_changed" || eventType === "account_peer_revoked") publishManagerEvent("rabilink_devices_changed", {});
+  }
+});
+let lastRabiLinkHostUpgradeCheck = 0;
+function checkRabiLinkHostUpgrade() {
+  if (process.platform !== "win32" || process.arch !== "x64" || process.env.RABIROUTE_HOSTED !== "1" || managerReadOnly
+    || Date.now() - lastRabiLinkHostUpgradeCheck < 6 * 60 * 60 * 1000) return;
+  const packageRoot = managerRuntimeLayout.packageRoot;
+  const versions = path.dirname(packageRoot), installRoot = path.dirname(versions);
+  const releaseId = path.basename(packageRoot);
+  if (path.basename(versions).toLowerCase() !== "versions" || path.relative(installRoot, rootDir) !== ""
+    || !/^\d+\.\d+\.\d+-[a-f0-9]{12}$/.test(releaseId)) return;
+  const policy = path.join(rootDir, "data", "rabilink", "host-upgrade.json");
+  const entry = path.join(packageRoot, "scripts", "start-rabilink-host-upgrade.ps1");
+  if (!fs.existsSync(policy) || !fs.existsSync(entry)) return;
+  lastRabiLinkHostUpgradeCheck = Date.now();
+  const worker = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", entry, "-InstallRoot", installRoot, "-ReleaseId", releaseId],
+    { cwd: installRoot, windowsHide: true, stdio: ["ignore", "ignore", "inherit"] });
+  worker.on("error", () => console.warn("RabiLink host upgrade worker could not start."));
+  worker.on("exit", code => { if (code) console.warn(`RabiLink host upgrade task scheduling failed (${code}).`); });
+  worker.unref();
+}
+const rabiLinkHostAccount = new RabiLinkHostAccount({
+  file: path.join(rootDir, "data", "rabilink", "host-account.json"),
+  config: () => {
+    const global = rabiGlobalConfig.read();
+    return { relay: rabiLinkRelayConfigForMeta(), deviceGuid: global.rabiGuid, deviceName: global.rabiName || os.hostname() };
+  },
+  changed: async () => { await syncRabiLinkRelayRuntime(() => syncRabiLinkRelayRuntime()); publishManagerEvent("rabilink_account_changed", {}); },
+  readJson: readJsonBody, json: jsonResponse
 });
 
 function readManagerConfig(): ManagerConfig {
@@ -1621,8 +1703,7 @@ function remotePersonaReadContext(): RemotePersonaReadContext {
     managerBaseUrl,
     remoteGeneration: async deviceId => {
       if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
-      await activePeerTunnel.ensureApplicationConnection(deviceId);
-      return (await activePeerTunnel.session(deviceId)).remote.generation;
+      return activePeerTunnel.remoteGeneration(deviceId);
     },
     fetchRemote: async (deviceId, pathname, init) => {
       if (!activePeerTunnel) throw new Error("Peer tunnel is not ready.");
@@ -1768,6 +1849,14 @@ async function requestWeixinLogin(dataDir: string): Promise<void> {
   finally { lease.release(); }
 }
 let publishedPluginGeneration: () => PluginGeneration | undefined = () => undefined;
+function listAgentSendVariants() {
+  const published = publishedPluginGeneration()?.services.services;
+  if (!published) return [];
+  return [...published].flatMap(([capability, service]) => {
+    const channel = /^endpoint\.([a-z][a-z0-9_-]*)\.egress@1$/.exec(capability)?.[1];
+    return channel ? agentSendVariantDescriptions(channel, service.value as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider) : [];
+  });
+}
 let installedAgentDescriptors: ReadonlyMap<string, AgentManagerDescriptor> = new Map();
 function invokePublishedAgentOperation<T = unknown>(type: string, operation: string, payload: unknown, invocation?: AgentAdapterInvocation): Promise<T> {
   return invokeAgentManagerOperation<T>(publishedPluginGeneration(), type, operation, payload, invocation);
@@ -1789,12 +1878,12 @@ function peerRelayConfig() {
     deviceGuid: config.rabiGuid
   };
 }
-let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
+let activePeerRuntime: ManagerPeerPublication["runtime"];
 let activePeerTunnel: PeerTunnelRuntime | undefined;
 function admitPeerProxyUpgrade(request: http.IncomingMessage, url: URL, lanAgentAuthority: LanAgentAuthority): boolean {
   const generation = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
-  const scope = rabiLinkConnectionScope(rabiLinkRelayConfigForMeta());
-  if (rabiLinkTransportAssertionPresent(request) && !rabiLinkTrustedTransport(request, generation, scope)) {
+  const scope = rabiLinkRequestScope(request, generation);
+  if (rabiLinkTransportAssertionPresent(request) && !scope) {
     return false;
   }
   const access = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled,
@@ -1802,11 +1891,9 @@ function admitPeerProxyUpgrade(request: http.IncomingMessage, url: URL, lanAgent
   if (access.kind === "denied") { return false; }
   if (access.kind === "agent") assertTrustedLanAgentPrincipal(request);
   else if (!webguiLanRequestAllowed(request, url)) { return false; }
-  const admittedRabiLink = rabiLinkTrustedTransport(request, generation, scope);
   markAuthenticatedConnectionRequest(request, () => {
     if (access.kind === "agent") assertTrustedLanAgentPrincipal(request);
-    if (admittedRabiLink && (scope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())
-      || !rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, scope))) {
+    if (scope && scope !== rabiLinkRequestScope(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId)) {
       throw new Error("Authenticated connection scope or generation was revoked.");
     }
     if (access.kind !== "agent" && !webguiLanRequestAllowed(request, url)) {
@@ -1819,7 +1906,7 @@ const peerLanServer = new PeerLanServer({
   peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
   peerUpgrade: (request, socket, head) => {
     const shares = resolvePublishedPluginService("manager.html-shares@1") as { upgrade(request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): boolean } | undefined;
-    return shares?.upgrade(request, socket, head) || (activePeerTunnel?.upgrade(request, socket, head) ?? false);
+    return shares?.upgrade(request, socket, head) || activePeerRuntime?.accountTunnel.upgrade(request, socket, head) || (activePeerTunnel?.upgrade(request, socket, head) ?? false);
   },
   port: Number(process.env.RABILINK_PEER_LAN_PORT ?? 0),
   onStatus: status => {
@@ -2140,6 +2227,11 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     feishuEventSubscriptionEnabled: definition.feishuEventSubscriptionEnabled === true,
     feishuWebhookPort: definition.feishuWebhookPort,
     feishuWebhookPath: definition.feishuWebhookPath,
+    qqbotAccountId: definition.qqbotAccountId,
+    qqbotCallbackPort: definition.qqbotCallbackPort,
+    qqbotTransport: definition.qqbotTransport,
+    qqbotIntents: definition.qqbotIntents,
+    qqbotManagementEnabled: definition.qqbotManagementEnabled,
     napcatHttpUrl: definition.napcatHttpUrl,
     napcatWebuiUrl: definition.napcatWebuiUrl,
     napcatAccessToken: definition.napcatAccessToken,
@@ -2251,6 +2343,16 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   const globalRelay = rabiGlobalConfig.read().rabiLinkRelay;
   if (hasGlobalRabiLinkRelayConfig(globalRelay)) return globalRelay;
   return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
+}
+
+function rabiLinkRequestScope(request: http.IncomingMessage, generation: string): string | undefined {
+  const legacy = rabiLinkConnectionScope(rabiLinkRelayConfigForMeta());
+  if (legacy && rabiLinkTrustedTransport(request, generation, legacy)) return legacy;
+  const account = rabiLinkHostAccount.relay();
+  if (account) {
+    const scope = rabiLinkConnectionScope(account);
+    if (scope && rabiLinkTrustedTransport(request, generation, scope)) return scope;
+  }
 }
 
 const rabiLinkDeviceConnections = new RabiLinkDeviceConnections({
@@ -2391,16 +2493,18 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
   if (!managerShouldAutostart) {
     await Promise.all([
       peerLanServer.stop(),
-      rabiLinkRelayRuntime.stop()
+      rabiLinkRelayRuntime.stop(),
+      rabiLinkAccountRuntime.stop()
     ]);
     return;
   }
   const globalConfig = rabiGlobalConfig.read();
   const relay = rabiLinkRelayConfigForMeta();
-  const lanEnabled = relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim());
+  const accountRelay = rabiLinkHostAccount.relay();
+  activePeerRuntime?.accountTunnel.runtime();
+  const lanEnabled = Boolean(accountRelay) || (relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim()));
   if (!lanEnabled) await peerLanServer.stop();
-  await rabiLinkRelayRuntime.sync({
-    ...relay,
+  const workerConfig = {
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
     rabiPcVersion: rabiRoutePackageVersion(),
@@ -2408,7 +2512,13 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
     localSpeechUrl: speechServiceUrl
-  });
+  };
+  const legacyEnabled = !accountRelay || rabiLinkHostAccount.session()?.legacyCompatible === true;
+  await Promise.all([
+    legacyEnabled ? rabiLinkRelayRuntime.sync({ ...relay, ...workerConfig }) : rabiLinkRelayRuntime.stop(),
+    accountRelay ? rabiLinkAccountRuntime.sync({ ...accountRelay, ...workerConfig, accountTunnel: true }) : rabiLinkAccountRuntime.stop()
+  ]);
+  if (!managerReadOnly) void rabiLinkHostAccount.tryRecover().then(() => rabiLinkHostAccount.tryMigrate());
   if (lanEnabled && peerLanServer.status().state !== "listening") {
     try {
       await peerLanServer.start();
@@ -3767,7 +3877,7 @@ function readMessageFiles(
       return !adapterType || adapterType === "webhook";
     }));
   const wecomEntries = sortTail(readEntries("企业微信 / WeCom", "wecom-messages.jsonl"));
-  const weixinEntries = sortTail(readEntries("个人微信 / Weixin", "weixin-messages.jsonl"));
+  const weixinEntries = sortTail(readEntries("微信机器人", "weixin-messages.jsonl"));
 
   return {
     napcat: {
@@ -3897,12 +4007,18 @@ function readAdapterLogs(
   };
 }
 
+function runtimeStatusWithEndpointPlugins(runtime: GatewayRuntime, cached?: Record<string, unknown>): Record<string, unknown> {
+  const status = memoryOnlyGatewayRuntimeStatus(rootDir, runtime, cached);
+  const gatewayEndpointPlugins = runtime.process && gatewayListenerPublicationHost?.readEndpointPlugins(runtime.definition.id, runtime.process);
+  return gatewayEndpointPlugins ? { ...status, gatewayEndpointPlugins } : status;
+}
+
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
   const service = activeGatewayDiagnosticsSnapshotService();
   service.requestRefresh();
   const snapshot = service.read(true);
   const cached = snapshot.records.find(record => record.id === runtime.definition.id);
-  return memoryOnlyGatewayRuntimeStatus(rootDir, runtime, cached);
+  return runtimeStatusWithEndpointPlugins(runtime, cached);
 }
 
 function runtimeStatusWithRoleInfoCache(
@@ -3955,6 +4071,11 @@ function runtimeStatusWithRoleInfoCache(
     feishuEventSubscriptionEnabled: runtime.definition.feishuEventSubscriptionEnabled === true,
     feishuWebhookPort: runtime.definition.feishuWebhookPort,
     feishuWebhookPath: runtime.definition.feishuWebhookPath,
+    qqbotAccountId: runtime.definition.qqbotAccountId,
+    qqbotCallbackPort: runtime.definition.qqbotCallbackPort,
+    qqbotTransport: runtime.definition.qqbotTransport,
+    qqbotIntents: runtime.definition.qqbotIntents,
+    qqbotManagementEnabled: runtime.definition.qqbotManagementEnabled,
     weixinBaseUrl: runtime.definition.weixinBaseUrl,
     weixinBotType: runtime.definition.weixinBotType,
     heartbeatIntervalSeconds: runtime.definition.heartbeatIntervalSeconds ?? 900,
@@ -4804,6 +4925,18 @@ async function performAgentSend(
   request: AgentSendRequest,
   options: { remoteSource?: TrustedLanAgentSource; requestAuthority?: () => void; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
 ): Promise<AgentCommunicationHttpResponse> {
+  if (agentSendVariantType(request)) {
+    options.requestAuthority?.();
+    const replay = replayAgentSendReceipt(rootDir, request);
+    if (replay) return replay;
+    const channel = String(request.channel ?? "").trim();
+    const provider = resolvePublishedPluginService(`endpoint.${channel}.egress@1`) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined;
+    return withAgentSendVariant(request, provider, () => queueAgentSend(request, options));
+  }
+  return queueAgentSend(request, options);
+}
+
+function queueAgentSend(request: AgentSendRequest, options: Parameters<typeof performAgentSend>[1]) {
   const snapshot = { rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(),
     runtimes: [...runtimes.values()].map(runtime => ({ ...runtime.definition,
       napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition))
@@ -4992,10 +5125,12 @@ async function performConversationAgentSend(
     rootDir,
     requestAuthority: options.requestAuthority,
     deliver,
-    recover: gate.replayOnly ? undefined : async () => {
+    recover: gate.replayOnly || scopedAgentSendVariant(request) ? undefined : async () => {
       const inspection = await inspectAgentSendDelivery(request, replyOptions);
       if (inspection.state === "completed") return inspection;
-      if (inspection.state === "missing") return { state: "retry" };
+      if (inspection.state === "missing") {
+        return { state: "uncertain", reason: "No authoritative send record was found. A missing record does not prove the original delivery was not sent." };
+      }
       return { state: "uncertain", reason: inspection.reason };
     }
   });
@@ -5080,9 +5215,10 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
       agentAdapter: worker.agentAdapter ?? (isDshSessionId(worker.threadId) ? "dsh" : "codex"),
       threadId: worker.threadId,
       title: worker.threadName,
-      createIfMissing: true,
+      createIfMissing: !target.instanceBinding,
+      ...(target.instanceBinding ? { instanceBinding: target.instanceBinding } : {}),
       cwd: worker.workspace,
-      sandbox: "workspace-write",
+      ...(messageProcessingWorkerAdapter(worker) === "codex" ? { sandbox: "workspace-write" as const } : {}),
       messageSource,
       prompt
     }, {
@@ -5130,8 +5266,11 @@ function currentMessageProcessingTarget(requirement: MessageProcessingRequiremen
   }
   const managedAdapter = primaryMessageProcessingAgentAdapter(runtime.definition);
   const maxAgents = managedAdapter ? runtime.definition.messageProcessingAgents?.[managedAdapter]?.maxAgents : undefined;
-  const messageAgentModeEnabled = Boolean(managedAdapter);
-  const managedWorker = messageAgentModeEnabled
+  const originalWorker = requirement.worker;
+  const continuesManagedWorker = managedAdapter && originalWorker
+    && messageProcessingWorkerAdapter(originalWorker) === managedAdapter
+    && originalWorker.threadId !== primaryAgentSessionId(runtime.definition);
+  const managedWorker = continuesManagedWorker
     ? resolveCurrentMessageAgentWorker(
       messageAgentPoolStatePath(messageWorkerDataDir(runtime.definition)),
       requirement.worker,
@@ -5143,10 +5282,11 @@ function currentMessageProcessingTarget(requirement: MessageProcessingRequiremen
         sender: requirement.source.sender
       },
       {},
-      primaryAgentWorkspace(runtime.definition)
+      primaryAgentWorkspace(runtime.definition),
+      managedAdapter
     )
     : undefined;
-  return resolveMessageProcessingDeliveryTarget(effectiveInstanceDefinition(runtime.definition), managedWorker);
+  return resolveMessageProcessingDeliveryTarget(effectiveInstanceDefinition(runtime.definition), managedWorker, configuredLocalAgentSessionFields);
 }
 
 function runtimeForMessageProcessingTarget(target: MessageProcessingDeliveryTarget): GatewayRuntime | undefined {
@@ -5207,6 +5347,9 @@ async function persistResolvedMessageProcessingTarget(
   }
   if (target.agentType === "primary_persona") {
     const primaryAdapter = target.worker.agentAdapter ?? (target.worker.threadId.startsWith("session-") ? "dsh" : "codex");
+    if (target.instanceBinding || (primaryAdapter !== "codex" && primaryAdapter !== "dsh")) {
+      throw new Error("This Agent owner must update its own primary session binding.");
+    }
     const configuredThreadId = String(primaryAgentSessionId(runtime.definition) || "").trim();
     if (configuredThreadId !== resolved.previousThreadId && configuredThreadId !== replacement.threadId) {
       throw new Error(`Primary Persona binding changed before archived task replacement could be saved: ${configuredThreadId}`);
@@ -5285,7 +5428,8 @@ function currentMessageProcessingTargetByThreadId(threadId: string): MessageProc
             threadName: matchingWorker.threadName,
             workspace: matchingWorker.workspace
           }
-        : undefined
+        : undefined,
+      configuredLocalAgentSessionFields
     );
     return target ? [target] : [];
   });
@@ -5308,7 +5452,12 @@ async function reconcileMessageProcessingAgentRequests(): Promise<void> {
     const target = requirement
       ? currentMessageProcessingTarget(requirement)
       : currentMessageProcessingTargetByThreadId(party.threadId);
-    if (!target) return null;
+    // Existing Agent requests have their own source and destination. A change
+    // to default message routing cannot redirect a reply to another provider
+    // or to the new primary session.
+    if (!target || target.agentType !== "message_processing"
+      || target.instanceBinding || (party.endpoint && party.endpoint.kind !== "local")
+      || messageProcessingWorkerAdapter(target.worker) !== messageProcessingWorkerAdapter(party)) return undefined;
     const worker = target.worker;
     const agentType = target.agentType;
     if (worker.threadId === party.threadId && agentType === party.agentType) return undefined;
@@ -5389,10 +5538,11 @@ async function deliverKnowledgeCallbackReminder(requirement: MessageProcessingRe
     agentAdapter: worker.agentAdapter ?? (isDshSessionId(worker.threadId) ? "dsh" : "codex"),
     threadId: worker.threadId,
     title: worker.threadName,
-    createIfMissing: true,
+    createIfMissing: !target.instanceBinding,
+    ...(target.instanceBinding ? { instanceBinding: target.instanceBinding } : {}),
     cwd: worker.workspace,
     prompt,
-    sandbox: "workspace-write",
+    ...(messageProcessingWorkerAdapter(worker) === "codex" ? { sandbox: "workspace-write" as const } : {}),
     messageSource
   }, {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
@@ -5540,7 +5690,6 @@ async function recordUserFeedbackChat(roleId: string, feedback: PlanFeedbackReco
 async function sendPlanFeedbackToTask(
   roleId: string,
   planId: string,
-  dshBaseUrl: string | undefined,
   request: PlanQaTaskRequest | PlanApprovalFeedbackTaskRequest,
   deliveryId = "deliveryId" in request ? request.deliveryId : undefined,
   userFeedback?: PlanFeedbackRecord
@@ -5558,17 +5707,18 @@ async function sendPlanFeedbackToTask(
     title: request.title,
     createIfMissing: request.createIfMissing,
     cwd: request.cwd,
+    ...(request.dshBaseUrl ? { dshBaseUrl: request.dshBaseUrl } : {}),
     deliveryId,
     messageSource: planMessageSource(
       planId,
       plan.title
     ),
     prompt: request.prompt,
-    sandbox: "workspace-write"
+    ...(request.agentAdapter === "codex" ? { sandbox: "workspace-write" as const } : {})
   }, {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
-    dshBaseUrl
+    dshBaseUrl: request.dshBaseUrl
   });
   if (userFeedback) await recordUserFeedbackChat(roleId, userFeedback, result);
   requireConfirmedPlanDelivery(result);
@@ -6040,18 +6190,7 @@ async function processPlanFeedbackPostCommit(
       storage: planQaStoragePort(application),
       feedback: record,
       signal,
-      sendToTask: (request) => {
-        const runtime = runtimeForRoleDelivery(
-          roleId,
-          String(record.gatewayId || gatewayId || "").trim()
-        );
-        return sendPlanFeedbackToTask(
-          roleId,
-          record.planId,
-          runtime.definition.dshBaseUrl,
-          request
-        );
-      },
+      sendToTask: (request) => sendPlanFeedbackToTask(roleId, record.planId, request),
       readTaskDelivery: inspectPlanFeedbackDelivery
     });
     if (qaResult.status === "dispatching") {
@@ -6179,7 +6318,6 @@ async function runPlanFeedbackDelivery(
       sendToTask: (request) => sendPlanFeedbackToTask(
         roleId,
         secretaryAssignment.plan.id,
-        runtime.definition.dshBaseUrl,
         request,
         record.id,
         record
@@ -6675,7 +6813,8 @@ async function inspectPlanFeedbackDelivery(
     deliveryId: request.deliveryId
   }, {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
-    defaultWorkspace: rootDir
+    defaultWorkspace: rootDir,
+    dshBaseUrl: request.dshBaseUrl
   });
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || `Plan feedback readback failed with HTTP ${result.statusCode}.`));
@@ -6812,11 +6951,7 @@ function standaloneGatewayPayload(
       const payload = buildStandaloneGatewayPayload(
         {
           runtimes: runtimes.values(),
-          runtimeStatus: runtime => memoryOnlyGatewayRuntimeStatus(
-            rootDir,
-            runtime,
-            cachedById.get(runtime.definition.id)
-          ),
+          runtimeStatus: runtime => runtimeStatusWithEndpointPlugins(runtime, cachedById.get(runtime.definition.id)),
           routeDir: configRepository.domainRoot("route").value ? path.relative(rootDir, configRepository.requireDomainRoot("route")).replace(/\\/g, "/") : undefined,
           rolesDir: configRepository.domainRoot("roles").value ? path.relative(rootDir, configRepository.requireDomainRoot("roles")).replace(/\\/g, "/") : undefined,
           directoryDiagnostics: [configRepository.domainRoot("route").error, configRepository.domainRoot("roles").error].filter(Boolean),
@@ -7022,7 +7157,7 @@ function metaPayload(): Record<string, unknown> {
       restartRequired: !managerHostOverride && globalConfig.webguiLan.enabled !== managerListensOnLan(managerHost)
     },
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
-    rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
+    rabiLinkRelayRuntime: rabiLinkHostAccount.session() ? rabiLinkAccountRuntime.status() : rabiLinkRelayRuntime.status(),
     managerRuntime: managerRuntimeDiagnosticsSummary(),
     hostPrivilege: {
       state: process.env.RABIROUTE_HOST_ELEVATED === "1" ? "administrator" : process.env.RABIROUTE_HOST_ELEVATED === "0" ? "limited" : "unknown",
@@ -7689,7 +7824,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readRuntimes: () => [...runtimes.values()].map(runtime => ({ definition: structuredClone(runtime.definition), running: Boolean(runtime.process), status: structuredClone(readGatewayStatus(runtime.definition)) })),
         appendRouteLog: (id: string, line: string) => { const runtime = runtimes.get(id); if (runtime) appendLog(runtime, line); },
         readGatewayStatus, normalizeDefinition,
+        prepareSendVariant: prepareAgentSendVariant,
         readRoute: (routeId: string) => runtimes.get(routeId)?.definition,
+        routeDataDir: (routeId: string) => {
+          const runtime = runtimes.get(routeId);
+          return runtime ? dataDirFor(runtime.definition) : undefined;
+        },
         routeRunning: (routeId: string) => Boolean(runtimes.get(routeId)?.process && runtimes.get(routeId)?.readiness === "ready"),
         routeStartedAt: (routeId: string) => runtimes.get(routeId)?.startedAt ?? undefined,
         requestIsLoopback: (request: http.IncomingMessage) => isLoopbackRemoteAddress(request.socket.remoteAddress),
@@ -7729,7 +7869,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           });
           guard();
           if (computeDeviceId !== undefined && computeDeviceId.length > 200) throw new SpeechControlError("模型服务电脑编号无效。", 400);
-          const targetLocal = rabiLinkTrustedTransport(request, generation, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()));
+          const targetLocal = Boolean(rabiLinkRequestScope(request, generation));
           return { guard, targetLocal, ...(peer && selected ? { selectedPeer: { runtime: peer, deviceId: selected } } : {}),
             run: operation => speechComputeTarget.run(computeDeviceId ?? selected, operation) };
         }
@@ -7879,6 +8019,7 @@ get managerInstanceId() { return managerInstanceId; },
 set managerInstanceId(value) { managerInstanceId = value; },
 get readConfig() { return readConfig; },
 get managerReadOnly() { return managerReadOnly; },
+get describeRoutePrimaryAgent() { return describeRoutePrimaryAgent; },
 get routeCatalogPersonas() { return routeCatalogPersonas; },
 get path() { return path; },
 get requireRouteCatalogLifecycle() { return requireRouteCatalogLifecycle; },
@@ -7935,6 +8076,7 @@ get managerReadOnly() { return managerReadOnly; },
 get path() { return path; },
 get rootDir() { return rootDir; } }) }),
     Object.freeze({ capability: "host.manager.route-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get rabiLinkHostAccount() { return rabiLinkHostAccount; },
 get rootDir() { return rootDir; },
 get routeRoot() { return managerRouteRoot(); },
 set routeRoot(value) { configRepository.routeRoot = value; },
@@ -8001,6 +8143,8 @@ get testGatewayAgentDelivery() { return testGatewayAgentDelivery; },
 get listGatewayDeliveryReplayAttempts() { return listGatewayDeliveryReplayAttempts; },
 get replayGatewayDelivery() { return replayGatewayDelivery; } }) }),
     Object.freeze({ capability: "host.manager.rabilink-relay@2", value: Object.freeze({ ...managerFeatureHostPorts, get rabiLinkRelayConfigForMeta() { return rabiLinkRelayConfigForMeta; },
+get rabiLinkHostAccount() { return rabiLinkHostAccount; },
+get rabiLinkAccountRuntime() { return rabiLinkAccountRuntime; },
 get rabiGlobalConfig() { return rabiGlobalConfig; },
 get rabiLinkConnectionScope() { return rabiLinkConnectionScope; },
 get managerHostIdentity() { return managerHostIdentity; },
@@ -8164,10 +8308,16 @@ get runtimes() { return runtimes; },
 get readGatewayStatus() { return readGatewayStatus; },
 get isLoopbackRemoteAddress() { return isLoopbackRemoteAddress; },
 get performAgentSend() { return performAgentSend; },
+get listAgentSendVariants() { return listAgentSendVariants; },
 get publishManagerEvent() { return publishManagerEvent; },
 get readJsonBody() { return readJsonBody; },
 get rootDir() { return rootDir; } }) }),
     Object.freeze({ capability: "host.manager.agent-thread-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get agentRequests() { return agentRequests; },
+recordScheduledEvent(roleId: string, id: string, time: number, text: string) {
+  void allDayRecording.service.receiveMessage(roleId, "schedule", { id, time, text }).catch(() => {
+    managerOperationalLog.record("warn", "recording_schedule_projection_failed", { action: roleId });
+  });
+},
 get agentThreadRequestFailureData() { return agentThreadRequestFailureData; },
 get agentThreadRequestOptions() { return agentThreadRequestOptions; },
 get getTrustedLanAgentSource() { return getTrustedLanAgentSource; },
@@ -8738,7 +8888,10 @@ createManagerEventOperationDefinition
       console.error(JSON.stringify({ event: "recording_archive_restore_failed", code: "archive_unavailable" }));
     });
   }
-  managerRuntimeOwner.register("all_day_recording", () => allDayRecording.dispose());
+  managerRuntimeOwner.register("all_day_recording", async () => {
+    await recordingAutomationDispatch.dispose();
+    await allDayRecording.dispose();
+  });
   managerRuntimeOwner.register("companion_activity", async () => { await companionActivity.dispose(); await companionFrameDelivery.dispose(); });
   managerRuntimeOwner.register("request_scoped_resources", () => stopManagerResources());
   managerRuntimeOwner.register("manual_trigger_processes", () => manualTriggerProcesses.stopAll());
@@ -8803,8 +8956,10 @@ createManagerEventOperationDefinition
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
       pathname = requestUrl.pathname;
-      if (rabiLinkTransportAssertionPresent(request) && !rabiLinkTrustedTransport(request,
-        managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()))) {
+      const incomingGeneration = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
+      const incomingRabiLink = rabiLinkTransportAssertionPresent(request);
+      const incomingScope = incomingRabiLink ? rabiLinkRequestScope(request, incomingGeneration) : undefined;
+      if (incomingRabiLink && !incomingScope) {
         jsonResponse(response, 403, { code: -1, error: "INTERNAL_TRANSPORT_AUTHORITY_INVALID" });
         return;
       }
@@ -8868,6 +9023,15 @@ createManagerEventOperationDefinition
         }),
         json: jsonResponse
       })) return;
+      if (pathname === ALL_DAY_MESSAGE_INGRESS && await handleAllDayMessageIngress(request, requestUrl, response, {
+        identity: { applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, managerInstanceId },
+        authorize: (routeId, roleId, capability) => {
+          const definition = runtimes.get(routeId)?.definition;
+          return Boolean(!managerReadOnly && definition?.enabled && !definition.agentRoleDeviceId && roleIdForDefinition(definition) === roleId
+            && currentPersonaMessageAuthority().verify(routeId, roleId, capability));
+        },
+        readJson: readJsonBody, receive: (roleId, category, message, authorize) => allDayRecording.service.receiveMessage(roleId, category, message, authorize), json: jsonResponse
+      })) return;
       if (handleRoleContextProjectionRequest(request, requestUrl, response, {
         identity: {
           applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
@@ -8921,21 +9085,27 @@ createManagerEventOperationDefinition
       // EventSource/resource requests use the existing browser query credential.
       // Authentication retains the original URL; business schemas receive no credential field.
       markConsumedConnectionQueryParameters(request, [WEBGUI_TOKEN_QUERY_KEY]);
-      if (!enrollmentAccess && (lanAgentAccess.kind === "agent" || !isLoopbackRemoteAddress(request.socket.remoteAddress) || localModelSettingsRequestAllowed(request)
-        || rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())))) {
-        const admittedGeneration = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
-        const admittedRabiLink = rabiLinkTrustedTransport(request, admittedGeneration, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()));
-        const admittedRabiLinkScope = admittedRabiLink ? rabiLinkConnectionScope(rabiLinkRelayConfigForMeta()) : undefined;
+      if (!enrollmentAccess && (lanAgentAccess.kind === "agent" || !isLoopbackRemoteAddress(request.socket.remoteAddress) || localModelSettingsRequestAllowed(request) || incomingScope)) {
         markAuthenticatedConnectionRequest(request, () => {
           if (lanAgentAccess.kind === "agent") assertTrustedLanAgentPrincipal(request);
-          if (admittedRabiLink && (!admittedRabiLinkScope
-            || admittedRabiLinkScope !== rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())
-            || !rabiLinkTrustedTransport(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId, rabiLinkConnectionScope(rabiLinkRelayConfigForMeta())))) {
+          if (incomingScope && incomingScope !== rabiLinkRequestScope(request, managerHostIdentity?.applicationGenerationId ?? managerInstanceId)) {
             throw new Error("Authenticated connection scope or generation was revoked.");
           }
           if (lanAgentAccess.kind !== "agent"
             && !webguiLanRequestAllowed(request, requestUrl)) throw new Error("Authenticated Manager connection was revoked.");
         });
+      }
+      if (await rabiLinkHostAccount.handle(request, requestUrl, response, managerReadOnly)) return;
+      if (pathname === ACCOUNT_OFFER_PATH && request.method === "POST") {
+        try {
+          const peer = activePeerRuntime;
+          if (!incomingScope || !peer) throw new Error("Unavailable account tunnel.");
+          const body = await readJsonBody(request, 131_072);
+          if (peer !== activePeerRuntime) throw new Error("Account tunnel owner changed.");
+          const result = await peer.accountTunnel.receive(request, body);
+          jsonResponse(response, 200, result);
+        } catch { jsonResponse(response, 403, { error: "ACCOUNT_PEER_OFFER_REJECTED" }); }
+        return;
       }
       if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method, pathname)) {
         jsonResponse(response, 423, {

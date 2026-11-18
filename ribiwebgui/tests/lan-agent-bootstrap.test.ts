@@ -12,6 +12,16 @@ const pageBindings = {
   useRoute: () => ({ query: {} }), useRouter: () => ({ replace: () => {} }), peerManagerPath
 };
 
+test("a known Manager selects a distinct node directory while retaining its existing enrollment", () => {
+  const base = { managerUrl: "https://manager.test", token: "fixture-only", publicKeySha256: "a".repeat(64), platform: "windows" as const };
+  const first = buildLanAgentBootstrapPrompt({ ...base, managerGuid: "fixture-host-a" });
+  const second = buildLanAgentBootstrapPrompt({ ...base, managerGuid: "fixture-host-b" });
+  assert.match(first, /instances\/fixture-host-a\/config\.json/);
+  assert.match(second, /instances\/fixture-host-b\/config\.json/);
+  assert.doesNotMatch(second, /fixture-host-a/);
+  assert.match(second, /匹配本主机 guid 的现有配置留在原路径/);
+});
+
 test("LAN bootstrap includes the selected Mac platform, trust pin and explicit per-request targets", () => {
   const prompt = buildLanAgentBootstrapPrompt({ managerUrl: "http://192.168.1.20:23456/#/lan-agents", token: "fixture-only", publicKeySha256: "a".repeat(64), platform: "macos" });
   assert.match(prompt, /http:\/\/192\.168\.1\.20:23456\/api\/lan-agent\/releases\/manifest/);
@@ -87,7 +97,7 @@ test("replacement verifies the running connector before retiring old entrypoints
 test("copy installs only a freshly issued ticket, never the WebGUI admin token", async () => {
   const source = fs.readFileSync(new URL("../src/pages/LanAgentsPage.vue", import.meta.url), "utf8");
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm, "");
-  const code = ts.transpileModule(script + "\nreturn { copyInstallPrompt, connectionToken, releasePublicKeySha256, targetPlatform };", { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+  const code = ts.transpileModule(script + "\nreturn { copyInstallPrompt, connectionToken, releasePublicKeySha256, targetPlatform, managerGuid };", { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   let copied = "";
   let requested = false;
   let requestCount = 0;
@@ -110,12 +120,15 @@ test("copy installs only a freshly issued ticket, never the WebGUI admin token",
   const state = vm.runInNewContext(`(function() { ${code} })()`, context);
   state.connectionToken.value = "fixture-admin-secret";
   state.releasePublicKeySha256.value = "a".repeat(64);
+  state.managerGuid.value = "fixture-host";
   await state.copyInstallPrompt();
   assert.equal(requestCount, 0);
   state.targetPlatform.value = "macos";
   await state.copyInstallPrompt();
   assert.equal(requestCount, 1);
   assert.match(copied, /Manager URL: https:\/\/manager\.test/);
+  assert.match(copied, /Manager GUID: fixture-host/);
+  assert.match(copied, /instances\/fixture-host\/config\.json/);
   assert.ok(copied.includes(new Date(expiresAt).toISOString()));
   assert.ok(copied.includes("Release public key SHA-256: " + "a".repeat(64)));
   assert.match(copied, /30 分钟内有效，只能成功兑换一次/);

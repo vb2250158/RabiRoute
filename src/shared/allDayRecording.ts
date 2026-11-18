@@ -1,3 +1,5 @@
+import { MESSAGE_EVENT_CATEGORIES, type MessageEventCategory } from "./personaEventTypes.js";
+
 export const ALL_DAY_CAPTURE_SOURCES = ["microphone", "screen", "window", "camera"] as const;
 export const ALL_DAY_SOURCES = [...ALL_DAY_CAPTURE_SOURCES, "homeAssistant"] as const;
 export type AllDaySource = typeof ALL_DAY_SOURCES[number];
@@ -6,18 +8,26 @@ export type AllDaySettings = {
   intervalSeconds: number;
   cameraIndex: number;
   mobileDeviceIds: string[];
+  messageSources?: MessageEventCategory[];
 };
 export const DEFAULT_ALL_DAY_SETTINGS: AllDaySettings = {
   sources: { microphone: false, screen: false, window: false, camera: false, homeAssistant: false },
   intervalSeconds: 60, cameraIndex: 0, mobileDeviceIds: []
 };
+export type AllDayMessageSource = `message:${MessageEventCategory}`;
+export const allDayMessageSource = (category: MessageEventCategory): AllDayMessageSource => `message:${category}`;
+export const ALL_DAY_REVIEW_SOURCES = [...ALL_DAY_SOURCES, "mobile", "session", "systemAudio", ...MESSAGE_EVENT_CATEGORIES.map(category => allDayMessageSource(category.value))] as const;
+export const ALL_DAY_REVIEW_TYPES = ["all", "asr", "image", "window", "status", "device", "message"] as const;
+export const hasRecordingSources = (settings: AllDaySettings): boolean => ALL_DAY_SOURCES.some(source => settings.sources[source])
+  || Boolean(settings.messageSources?.length || settings.mobileDeviceIds.length);
+
 export type AllDayEvent = {
   id: string;
   startedAt: number;
   endedAt: number;
-  source: AllDaySource | "mobile" | "session" | "systemAudio";
+  source: AllDaySource | "mobile" | "session" | "systemAudio" | AllDayMessageSource;
   deviceId: string;
-  kind: "audio" | "image" | "window" | "status" | "device";
+  kind: "audio" | "image" | "window" | "status" | "device" | "message";
   text: string;
   state: "saved" | "error";
   transcriptionState?: "pending" | "processing" | "ready" | "empty" | "error";
@@ -45,7 +55,7 @@ export function allDayRecordingHealth(snapshot: AllDaySnapshot, now: number): Al
   const failedSources = sources.filter(source => snapshot.sourceErrors?.[source]);
   if (snapshot.error && (!snapshot.lastSampleAt || failedSources.length === sources.length || !failedSources.length)) return "failed";
   if (snapshot.error || failedSources.length) return "degraded";
-  if (!ALL_DAY_CAPTURE_SOURCES.some(source => snapshot.settings.sources[source])) return "waiting";
+  if (!ALL_DAY_CAPTURE_SOURCES.some(source => snapshot.settings.sources[source])) return snapshot.settings.messageSources?.length || snapshot.settings.mobileDeviceIds.length ? "recording" : "waiting";
   if (snapshot.lastSampleAt === null) return "starting";
   return now - snapshot.lastSampleAt > Math.max(30_000, snapshot.settings.intervalSeconds * 2_000) ? "stale" : "recording";
 }
@@ -74,5 +84,8 @@ export function normalizeAllDaySettings(value: unknown): AllDaySettings {
   if (!Number.isInteger(input.intervalSeconds) || Number(input.intervalSeconds) < 10 || Number(input.intervalSeconds) > 3600) throw new Error("Sample interval must be 10–3600 seconds");
   if (!Number.isInteger(input.cameraIndex) || Number(input.cameraIndex) < 0 || Number(input.cameraIndex) > 16) throw new Error("Invalid camera index");
   if (!Array.isArray(input.mobileDeviceIds) || input.mobileDeviceIds.length > 32 || input.mobileDeviceIds.some(id => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id))) throw new Error("Invalid mobile devices");
-  return { sources: Object.fromEntries(ALL_DAY_SOURCES.map(source => [source, input.sources![source] ?? false])) as AllDaySettings["sources"], intervalSeconds: input.intervalSeconds!, cameraIndex: input.cameraIndex!, mobileDeviceIds: [...new Set(input.mobileDeviceIds)] };
+  const messageSources = input.messageSources;
+  if (messageSources !== undefined && (!Array.isArray(messageSources) || messageSources.length > MESSAGE_EVENT_CATEGORIES.length
+    || messageSources.some(source => !MESSAGE_EVENT_CATEGORIES.some(category => category.value === source)))) throw new Error("Invalid recording message sources");
+  return { sources: Object.fromEntries(ALL_DAY_SOURCES.map(source => [source, input.sources![source] ?? false])) as AllDaySettings["sources"], intervalSeconds: input.intervalSeconds!, cameraIndex: input.cameraIndex!, mobileDeviceIds: [...new Set(input.mobileDeviceIds)], ...(messageSources?.length ? { messageSources: [...new Set(messageSources)] } : {}) };
 }

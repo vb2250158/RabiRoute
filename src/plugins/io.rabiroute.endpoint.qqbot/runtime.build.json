@@ -1,0 +1,6 @@
+{
+  "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/gateway.ts",
+  "factory": "createQqBotEndpoint",
+  "packageId": "io.rabiroute.endpoint.qqbot",
+  "ownedPrefixes": ["src/plugins/io.rabiroute.endpoint.qqbot/"]
+}

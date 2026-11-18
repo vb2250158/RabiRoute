@@ -3,10 +3,15 @@ import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { normalizeDailyScheduleTimes } from "@shared/dailyScheduleTimes";
+import type { CustomAutomationDeliveryTemplate } from "@shared/roleConfiguration";
 import SpeechParameterSlider from "../../../../../ribiwebgui/src/components/SpeechParameterSlider.vue";
 import AutomationAgentTarget from "../components/AutomationAgentTarget.vue";
-import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, automationTemplatePatch, loadAutomationTemplates, loadAutomationTemplate, type AutomationTemplate, type AutomationTemplateChoice } from "../persona/automationTemplateClient";
+import { applyAutomationPatch, newAutomationDraft } from "../persona/roleEditorActions";
+import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, loadAutomationTemplates, loadAutomationTemplate, type AutomationTemplateChoice } from "../persona/automationTemplateClient";
+import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
+import { normalizeAgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
+import AutomationMessageFilters from "../components/AutomationMessageFilters.vue";
 import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
 import QqAvatar from "../components/QqAvatar.vue";
@@ -89,38 +94,55 @@ const personaAvatarClient = createPersonaAvatarClient(personaService.fetch);
 const personaVoiceIdentityClient = createPersonaVoiceIdentityClient(personaService.fetch);
 const personaSpeech = createSpeechControlClient(personaService.fetch);
 const remoteVoiceProfiles = ref<SpeechPersona[]>([]);
+const automationPreview = ref<PersonaAutomationRuleDefinition | null>(null);
 const dailyTimeDrafts = ref<Record<string, string[]>>({});
+const committedDailyTimeDrafts = computed(() => Object.entries(dailyTimeDrafts.value)
+  .filter(([id]) => id !== automationPreview.value?.id));
 const invalidDsBotTarget = computed(() => hasIncompleteDsBotTargetDraft(store.selectedGateway));
-const invalidDailyTimes = computed(() => Object.values(dailyTimeDrafts.value).some(timeOfDays => normalizeDailyScheduleTimes({ timeOfDays }) === null));
+const invalidDailyTimes = computed(() => committedDailyTimeDrafts.value.some(([, timeOfDays]) => normalizeDailyScheduleTimes({ timeOfDays }) === null));
 watch(() => [store.selectedRoleId, store.sourceDeviceId, store.draft], () => { dailyTimeDrafts.value = {}; }, { flush: "sync" });
 const PersonaMessages = defineAsyncComponent(() => import("../components/PersonaMessages.vue"));
 const releaseRoleSave = registerPageSaveAction({
-  dirty: computed(() => store.dirty || routeStore.dirty || Object.keys(dailyTimeDrafts.value).length > 0),
+  dirty: computed(() => store.dirty || routeStore.dirty || committedDailyTimeDrafts.value.length > 0),
   ready: computed(() => store.ready && !routeStore.loading && !invalidDailyTimes.value && !invalidDsBotTarget.value),
   saving: computed(() => store.saving || routeStore.saving),
   save: async () => {
     if (invalidDailyTimes.value) throw new Error(translateText("请先补全有效的每日时间点。"));
     if (invalidDsBotTarget.value) throw new Error(translateText("请先完成 DSBot 目标选择。"));
     // Role saves refresh Route data, so commit Route drafts first.
-    if (routeStore.dirty) await routeStore.saveChangedRoutes();
+    const routesChanged = routeStore.dirty;
+    if (routesChanged) await routeStore.saveChangedRoutes();
     if (store.dirty) await store.save();
-    dailyTimeDrafts.value = {};
+    else if (routesChanged) await store.refreshLinkedRoutes();
+    const id = automationPreview.value?.id;
+    dailyTimeDrafts.value = id && dailyTimeDrafts.value[id] ? { [id]: dailyTimeDrafts.value[id] } : {};
   }
 });
 const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
-const automationTemplateDialog = ref(false);
+const automationCreationDialog = ref(false);
+const automationCreationEndpoint = ref("napcat");
+const choosingCreationTemplate = ref(false);
+const creationTemplateId = ref<string | null>(null);
 const automationTemplates = ref<AutomationTemplateChoice[]>([...DEFAULT_AUTOMATION_TEMPLATES]);
 const automationTemplateCursor = ref<string | null>(null);
-const selectedAutomationTemplateId = ref(BLANK_AUTOMATION_TEMPLATE_ID);
+const automationTemplateCatalogLoaded = ref(false);
+const selectedAutomationTemplateId = ref("");
 const automationTemplateLoading = ref(false);
 const automationTemplateError = ref("");
+const editingAutomationTemplateName = ref(false);
+const automationTemplateName = ref("");
 let automationTemplateRequest: AbortController | undefined;
-const selectedAutomationTemplate = computed(() => automationTemplates.value.find(item => item.id === selectedAutomationTemplateId.value));
 onBeforeUnmount(() => automationTemplateRequest?.abort());
-watch(automationTemplateDialog, open => { if (!open) automationTemplateRequest?.abort(); });
+watch(automationCreationDialog, open => { if (!open) automationTemplateRequest?.abort(); }, { flush: "sync" });
+watch(automationDialog, open => {
+  if (open) return;
+  automationTemplateRequest?.abort();
+  if (automationPreview.value) delete dailyTimeDrafts.value[automationPreview.value.id];
+  automationPreview.value = null;
+}, { flush: "sync" });
 const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
 type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
@@ -177,12 +199,25 @@ const gateway = computed(() => store.sourceDeviceId === personaService.deviceId 
 const automationTemplateOwner = computed(() => JSON.stringify([store.selectedRoleId, store.sourceDeviceId,
   gateway.value?.id || "", gateway.value ? personaReferenceIdentity(gateway.value) : ""]));
 watch(automationTemplateOwner, () => {
-  automationTemplateDialog.value = false;
-  automationTemplateRequest?.abort(); automationTemplateRequest = undefined;
-  automationTemplateLoading.value = false; automationTemplateError.value = "";
-  automationTemplateCursor.value = null; automationTemplates.value = [...DEFAULT_AUTOMATION_TEMPLATES];
-  selectedAutomationTemplateId.value = BLANK_AUTOMATION_TEMPLATE_ID;
+  automationCreationDialog.value = false;
+  automationDialog.value = false;
+  automationTemplateCursor.value = null;
+  automationTemplateCatalogLoaded.value = false;
+  automationTemplates.value = [...DEFAULT_AUTOMATION_TEMPLATES];
 }, { flush: "sync" });
+const ownAutomationTemplates = computed(() => store.draft?.automationDeliveryTemplates ?? []);
+const selectedCustomAutomationTemplate = computed(() => ownAutomationTemplates.value
+  .find(item => `custom:${item.id}` === selectedAutomationTemplateId.value));
+const automationTemplateChoices = computed(() => [
+  ...automationTemplates.value.filter(item => item.id !== BLANK_AUTOMATION_TEMPLATE_ID)
+    .map(item => ({ value: `catalog:${item.id}`, title: t(item.title), subtitle: t(item.description) })),
+  ...ownAutomationTemplates.value.map(item => ({ value: `custom:${item.id}`, title: item.title, subtitle: t("自定义模板") }))
+]);
+const automationActionChoices = computed(() => [
+  { value: "deliver_agent", title: t("通知 Agent"), subtitle: "" },
+  { value: "run_script", title: t("运行脚本"), subtitle: "" },
+  ...automationTemplateChoices.value
+]);
 const isRemotePersona = computed(() => Boolean(gateway.value?.agentRoleDeviceId));
 const personaSecondaryNavItems = computed(() => buildWebNavigation(
   pluginCatalogStore.contributions.value,
@@ -252,7 +287,12 @@ const storedUnassignedVoiceIdentities = computed(() => unassignedVoiceIdentities
 const unidentifiedVoiceCount = computed(() => unresolvedVoiceprints.value.length + storedUnassignedVoiceIdentities.value.length);
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const automations = computed(() => gateway.value ? automationRulesForGateway(gateway.value) : []);
-const activeAutomation = computed(() => automations.value.find(rule => rule.id === activeAutomationId.value) || null);
+const activeAutomation = computed(() => automationPreview.value ?? automations.value.find(rule => rule.id === activeAutomationId.value) ?? null);
+const automationPrimaryRoutes = computed(() => {
+  const sourceIds = activeAutomation.value?.sourceRouteIds;
+  const routes = store.detail?.routes ?? [];
+  return sourceIds?.length ? routes.filter(route => sourceIds.includes(route.id)) : routes;
+});
 const automationQqRoutes = ref<HistoryQqRoute[]>([]);
 const automationQqDirectories = ref<AutomationQqDirectory[]>([]);
 const automationQqLoading = ref(false);
@@ -322,6 +362,15 @@ const automationDeliveryIncomplete = computed(() => {
   return action?.type === "deliver_agent" && action.target?.kind === "session"
     && (!action.target.agentTargetId || !action.target.sessionId);
 });
+const previewDsBotIncomplete = computed(() => Boolean(automationPreview.value
+  && hasIncompleteDsBotTargetDraft({ automationRules: [automationPreview.value] })));
+const previewDailyTimeIncomplete = computed(() => {
+  const preview = automationPreview.value;
+  return preview?.trigger.type === "schedule" && preview.trigger.schedule.type === "daily_time"
+    && normalizeDailyScheduleTimes({ timeOfDays: dailyAutomationTimes() }) === null;
+});
+const automationPreviewIncomplete = computed(() =>
+  automationDeliveryIncomplete.value || previewDsBotIncomplete.value || previewDailyTimeIncomplete.value);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/roles");
 const voiceProfilePath = computed(() => {
@@ -781,7 +830,7 @@ const selectedEndpoint = computed({
 });
 
 watch(selectedEndpoint, endpoint => {
-  if (automationDialog.value) selectedAutomationEndpoint.value = endpoint;
+  if (automationDialog.value && !automationPreview.value) selectedAutomationEndpoint.value = endpoint;
 });
 
 const activeMessageTrigger = computed(() => {
@@ -807,7 +856,10 @@ function automationEnabled(rule: PersonaAutomationRuleDefinition): boolean {
 
 function openAutomation(ruleId: string): void {
   activeAutomationId.value = ruleId;
-  selectedAutomationEndpoint.value = selectedEndpoint.value;
+  selectedAutomationTemplateId.value = "";
+  automationTemplateError.value = "";
+  editingAutomationTemplateName.value = false;
+  if (!automationPreview.value) selectedAutomationEndpoint.value = selectedEndpoint.value;
   automationDialog.value = true;
   routeKindQuery.value = "";
   if (selectedEndpoint.value === "xiaomiHome") {
@@ -815,61 +867,171 @@ function openAutomation(ruleId: string): void {
   }
 }
 
-async function openAutomationTemplatePicker(): Promise<void> {
-  automationTemplateDialog.value = true;
+async function withAutomationTemplateRequest(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
   automationTemplateRequest?.abort();
-  const controller = new AbortController(); automationTemplateRequest = controller;
-  const owner = automationTemplateOwner.value;
-  automationTemplateLoading.value = true; automationTemplateError.value = "";
+  const controller = new AbortController();
+  automationTemplateRequest = controller;
+  automationTemplateLoading.value = true;
+  automationTemplateError.value = "";
   try {
-    const page = await loadAutomationTemplates(personaService.fetch, controller.signal);
-    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = page.items; automationTemplateCursor.value = page.nextCursor; }
-  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
-  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
-}
-async function loadMoreAutomationTemplates(): Promise<void> {
-  if (!automationTemplateCursor.value || automationTemplateLoading.value) return;
-  const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
-  const owner = automationTemplateOwner.value;
-  try {
-    const page = await loadAutomationTemplates(personaService.fetch, controller.signal, automationTemplateCursor.value);
-    if (!controller.signal.aborted && owner === automationTemplateOwner.value) { automationTemplates.value = [...automationTemplates.value, ...page.items]; automationTemplateCursor.value = page.nextCursor; }
-  } catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); }
-  finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
-}
-async function createAutomation(choice?: AutomationTemplateChoice): Promise<void> {
-  if (choice && !automationTemplateDialog.value) return;
-  const owner = automationTemplateOwner.value;
-  let template = choice as AutomationTemplate | undefined;
-  if (choice && !choice.action) {
-    automationTemplateRequest?.abort();
-    const controller = new AbortController(); automationTemplateRequest = controller; automationTemplateLoading.value = true;
-    try { template = await loadAutomationTemplate(personaService.fetch, controller.signal, choice.id); if (controller.signal.aborted || !automationTemplateDialog.value || owner !== automationTemplateOwner.value) return; }
-    catch (error) { if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error); return; }
-    finally { if (automationTemplateRequest === controller) { automationTemplateLoading.value = false; automationTemplateRequest = undefined; } }
-  }
-  if (owner !== automationTemplateOwner.value) return;
-  const endpoint = selectedAutomationEndpoint.value || "napcat";
-  const triggerType = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID && template.triggerType ? template.triggerType : endpoint === "schedule" ? "schedule" : "message";
-  let id: string | undefined;
-  try {
-    const patch = template && template.id !== BLANK_AUTOMATION_TEMPLATE_ID ? automationTemplatePatch(template) : undefined;
-    id = store.addAutomation(triggerType, "deliver_agent");
-    if (!id) return;
-    if (patch) store.updateAutomation(id, patch);
+    await work(controller.signal);
   } catch (error) {
-    if (id) store.removeAutomation(id);
-    automationTemplateError.value = userFacingError(error);
+    if (!controller.signal.aborted) automationTemplateError.value = userFacingError(error);
+  } finally {
+    if (automationTemplateRequest === controller) {
+      automationTemplateLoading.value = false;
+      automationTemplateRequest = undefined;
+    }
+  }
+}
+
+function refreshAutomationTemplates(cursor?: string): Promise<void> {
+  return withAutomationTemplateRequest(async signal => {
+    const page = await loadAutomationTemplates(personaService.fetch, signal, cursor);
+    if (signal.aborted) return;
+    automationTemplates.value = cursor ? [...automationTemplates.value, ...page.items] : page.items;
+    automationTemplateCursor.value = page.nextCursor;
+    automationTemplateCatalogLoaded.value = true;
+  });
+}
+
+function openAutomationActionMenu(open: boolean): void {
+  if (open && !automationTemplateCatalogLoaded.value && !automationTemplateLoading.value) void refreshAutomationTemplates();
+}
+
+function openAutomationCreation(): void {
+  automationCreationEndpoint.value = selectedAutomationEndpoint.value || "napcat";
+  choosingCreationTemplate.value = false;
+  creationTemplateId.value = null;
+  automationTemplateError.value = "";
+  automationCreationDialog.value = true;
+}
+
+function chooseCreationTemplate(): void {
+  choosingCreationTemplate.value = true;
+  if (!automationTemplateCatalogLoaded.value) void refreshAutomationTemplates();
+}
+
+function beginAutomationPreview(definition?: AutomationTemplateChoice, selection = ""): void {
+  if (!automationCreationDialog.value || !gateway.value) return;
+  const originalEndpoint = automationCreationEndpoint.value;
+  const triggerType = definition?.triggerType ?? (originalEndpoint === "schedule" ? "schedule" : "message");
+  const endpoint = triggerType === "schedule" ? "schedule" : originalEndpoint === "schedule" ? "napcat" : originalEndpoint;
+  let draft = newAutomationDraft(gateway.value, triggerType, "deliver_agent");
+  if (definition?.action) draft = applyAutomationPatch(draft, {
+    name: definition.title,
+    action: templateDeliveryAction(definition.action)
+  });
+  automationPreview.value = draft;
+  automationCreationDialog.value = false;
+  openAutomation(draft.id);
+  selectedEndpoint.value = endpoint;
+  selectedAutomationTemplateId.value = selection;
+}
+
+async function previewFromTemplate(): Promise<void> {
+  const selection = creationTemplateId.value;
+  if (!selection || !automationCreationDialog.value) return;
+  const choice = automationTemplateChoice(selection);
+  if (!choice) return;
+  await withAutomationTemplateRequest(async signal => {
+    const definition = choice.action ? choice : await loadAutomationTemplate(personaService.fetch, signal, choice.id);
+    if (!signal.aborted && automationCreationDialog.value && creationTemplateId.value === selection) beginAutomationPreview(definition, selection);
+  });
+}
+
+function confirmAutomationPreview(): void {
+  const preview = automationPreview.value;
+  if (!automationDialog.value || !preview || !store.ready || store.saving || automationTemplateLoading.value || automationPreviewIncomplete.value) return;
+  if (!store.insertAutomation(preview)) return;
+  selectedAutomationEndpoint.value = automationEndpoint(preview);
+  automationDialog.value = false;
+}
+
+function automationTemplateChoice(value: string): AutomationTemplateChoice | undefined {
+  const custom = ownAutomationTemplates.value.find(item => `custom:${item.id}` === value);
+  return custom ? {
+    id: custom.id, title: custom.title, description: "", version: "1", triggerType: custom.triggerType,
+    action: { type: "deliver_agent", message: custom.message, template: custom.template }
+  } : automationTemplates.value.find(item => `catalog:${item.id}` === value);
+}
+
+function templateDeliveryAction(
+  action: NonNullable<AutomationTemplateChoice["action"]>,
+  current?: Extract<PersonaAutomationRuleDefinition["action"], { type: "deliver_agent" }>
+): PersonaAutomationRuleDefinition["action"] {
+  return { ...current, ...action, template: action.template ?? "",
+    target: action.target === undefined && current?.target ? current.target : normalizeAgentDeliveryTarget(action.target) };
+}
+
+async function selectAutomationAction(value: string | null): Promise<void> {
+  const rule = activeAutomation.value;
+  if (!rule || !value) return;
+  editingAutomationTemplateName.value = false;
+  if (value === "deliver_agent" || value === "run_script") {
+    automationTemplateRequest?.abort();
+    automationTemplateError.value = "";
+    selectedAutomationTemplateId.value = "";
+    setAutomationActionType(value);
     return;
   }
-  automationTemplateDialog.value = false;
-  openAutomation(id);
-  selectedEndpoint.value = triggerType === "schedule" ? "schedule" : endpoint;
+
+  const choice = automationTemplateChoice(value);
+  if (!choice) return;
+  const originalFields = JSON.stringify([rule.trigger, rule.action]);
+  await withAutomationTemplateRequest(async signal => {
+    const definition = choice.action ? choice : await loadAutomationTemplate(personaService.fetch, signal, choice.id);
+    const action: AutomationTemplateChoice["action"] = definition.action;
+    const current = activeAutomation.value;
+    if (!action || signal.aborted || !current || current.id !== rule.id || JSON.stringify([current.trigger, current.action]) !== originalFields) return;
+    const currentAction = current.action.type === "deliver_agent" ? current.action : undefined;
+    const nextAction = templateDeliveryAction(action, currentAction);
+    if (definition.triggerType && definition.triggerType !== current.trigger.type) {
+      selectedEndpoint.value = definition.triggerType === "schedule" ? "schedule" : "napcat";
+    }
+    patchAutomation({ action: nextAction });
+    selectedAutomationTemplateId.value = value;
+  });
+}
+
+function editAutomationTemplateName(): void {
+  automationTemplateName.value = selectedCustomAutomationTemplate.value?.title ?? activeAutomation.value?.name ?? "";
+  editingAutomationTemplateName.value = true;
+}
+
+function saveCustomAutomationTemplate(): void {
+  const draft = store.draft;
+  const rule = activeAutomation.value;
+  const title = automationTemplateName.value.trim();
+  if (!draft || rule?.action.type !== "deliver_agent" || !title) return;
+  const selected = selectedCustomAutomationTemplate.value;
+  const template: CustomAutomationDeliveryTemplate = {
+    id: selected?.id ?? browserUuid(),
+    title,
+    triggerType: rule.trigger.type,
+    message: rule.action.message ?? "",
+    template: rule.action.template ?? ""
+  };
+  draft.automationDeliveryTemplates = selected
+    ? ownAutomationTemplates.value.map(item => item.id === selected.id ? template : item)
+    : [...ownAutomationTemplates.value, template];
+  selectedAutomationTemplateId.value = `custom:${template.id}`;
+  editingAutomationTemplateName.value = false;
+}
+
+function removeCustomAutomationTemplate(): void {
+  const draft = store.draft;
+  const selected = selectedCustomAutomationTemplate.value;
+  if (draft && selected) {
+    draft.automationDeliveryTemplates = ownAutomationTemplates.value.filter(item => item.id !== selected.id);
+    selectedAutomationTemplateId.value = "";
+    editingAutomationTemplateName.value = false;
+  }
 }
 
 function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
-  if (!activeAutomation.value) return;
-  store.updateAutomation(activeAutomation.value.id, patch);
+  if (automationPreview.value) automationPreview.value = applyAutomationPatch(automationPreview.value, patch);
+  else if (activeAutomation.value) store.updateAutomation(activeAutomation.value.id, patch);
 }
 
 function removeActiveAutomation(): void {
@@ -900,30 +1062,9 @@ function setAutomationActionType(type: "deliver_agent" | "run_script"): void {
   });
 }
 
-function setAutomationGroupTarget(value: unknown): void {
-  const id = typeof value === "string" ? value.trim() : "";
-  if (id && !/^[1-9]\d*$/.test(id)) return;
-  patchAutomationMessageTrigger({ targetGroupId: id, targetUserId: "" });
-}
-
-function setAutomationPrivateTarget(value: unknown): void {
-  const targetUserId = typeof value === "string" && /^[1-9]\d*$/.test(value) ? value : "";
-  patchAutomationMessageTrigger(targetUserId
-    ? { targetUserId, targetGroupId: "", routeKinds: ["private"] }
-    : { targetUserId: "" });
-}
-
 function patchAutomationMessageTrigger(patch: Record<string, unknown>): void {
   if (!activeAutomation.value || activeAutomation.value.trigger.type !== "message") return;
   patchAutomation({ trigger: { ...activeAutomation.value.trigger, ...patch } as PersonaAutomationRuleDefinition["trigger"] });
-}
-
-function toggleAutomationRouteKind(kind: string): void {
-  if (!activeAutomation.value || activeAutomation.value.trigger.type !== "message") return;
-  const next = new Set(activeAutomation.value.trigger.routeKinds || []);
-  if (next.has(kind)) next.delete(kind);
-  else next.add(kind);
-  patchAutomationMessageTrigger({ routeKinds: [...next] });
 }
 
 function patchAutomationSchedule(patch: Partial<NotificationScheduleDefinition>): void {
@@ -1987,7 +2128,7 @@ onBeforeUnmount(() => {
               <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
                 <div class="automation-toolbar">
                   <strong>{{ selectedAutomationEndpointTitle }}</strong>
-                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationTemplatePicker">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
+                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationCreation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
                 </div>
 
                 <div v-if="visibleAutomations.length === 0" class="empty-state">
@@ -2059,33 +2200,45 @@ onBeforeUnmount(() => {
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="automationTemplateDialog" max-width="720" scrollable aria-label="选择投递模板">
+    <v-dialog v-model="automationCreationDialog" max-width="480"
+      :aria-label="t(automationCreationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则')">
       <v-card class="app-card">
-        <v-card-title>选择投递模板</v-card-title>
-        <v-card-text>
-          <v-progress-linear v-if="automationTemplateLoading" indeterminate class="mb-3" />
-          <v-alert v-if="automationTemplateError" type="warning" variant="tonal" class="mb-3">{{ automationTemplateError }}</v-alert>
-          <v-select v-model="selectedAutomationTemplateId" :items="automationTemplates" item-title="title" item-value="id" :return-object="false" :disabled="automationTemplateLoading" label="投递模板">
-            <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps" :title="t(item.raw.title)" :subtitle="t(item.raw.description)" /></template>
-            <template #selection="{ item }">{{ t(item.raw.title) }}</template>
+        <v-card-title>{{ t(automationCreationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则') }}</v-card-title>
+        <v-card-text v-if="!choosingCreationTemplate" class="d-grid">
+          <v-btn block variant="tonal" color="secondary" prepend-icon="mdi-file-document-outline" class="mb-2"
+            @click="chooseCreationTemplate">{{ t('通过模板创建') }}</v-btn>
+          <v-btn block variant="outlined" prepend-icon="mdi-pencil-outline"
+            @click="beginAutomationPreview()">{{ t('手动创建') }}</v-btn>
+        </v-card-text>
+        <v-card-text v-else>
+          <v-select v-model="creationTemplateId" :items="automationTemplateChoices" :label="t('选择投递模板')"
+            :loading="automationTemplateLoading" density="compact" variant="outlined" hide-details>
+            <template #item="{ props: itemProps, item }">
+              <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
+            </template>
+            <template v-if="automationTemplateCursor" #append-item>
+              <v-btn variant="text" :disabled="automationTemplateLoading"
+                @click.stop="refreshAutomationTemplates(automationTemplateCursor || undefined)">{{ t('更多模板') }}</v-btn>
+            </template>
           </v-select>
-          <v-btn v-if="automationTemplateCursor" variant="text" :disabled="automationTemplateLoading" @click="loadMoreAutomationTemplates">更多模板</v-btn>
-          <p v-if="selectedAutomationTemplate" class="section-note">{{ t(selectedAutomationTemplate.description) }}</p>
-          <p class="section-note">模板会填入普通规则，执行时间、目标 Agent 和正文可继续编辑。</p>
+          <v-alert v-if="automationTemplateError" type="warning" variant="tonal" density="compact" class="mt-2">{{ automationTemplateError }}</v-alert>
         </v-card-text>
         <v-card-actions>
-          <v-spacer /><v-btn variant="text" @click="automationTemplateDialog = false">取消</v-btn>
-          <v-btn color="primary" :disabled="!selectedAutomationTemplate || automationTemplateLoading" @click="createAutomation(selectedAutomationTemplate)">添加规则</v-btn>
+          <v-spacer />
+          <v-btn variant="text" @click="automationCreationDialog = false">{{ t('取消') }}</v-btn>
+          <v-btn v-if="choosingCreationTemplate" color="primary" :disabled="!creationTemplateId || automationTemplateLoading"
+            @click="previewFromTemplate">{{ t('预览模板') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="automationDialog" max-width="1200" class="editor-dialog" aria-label="自动化规则">
+    <v-dialog v-model="automationDialog" max-width="1200" class="editor-dialog"
+      :aria-label="t(automationPreview ? '规则预览' : '自动化规则')">
       <v-card v-if="activeAutomation && gateway" class="app-card editor-dialog-card automation-editor">
         <v-card-title class="automation-editor-head">
           <div>
-            <div class="section-title">自动化规则</div>
-            <div class="section-note" data-no-i18n>{{ gateway.agentRoleId }} · {{ activeAutomation.id }}</div>
+            <div class="section-title">{{ t(automationPreview ? '规则预览' : '自动化规则') }}</div>
+            <div v-if="!automationPreview" class="section-note" data-no-i18n>{{ gateway.agentRoleId }} · {{ activeAutomation.id }}</div>
           </div>
           <div class="rule-dialog-actions">
             <v-switch
@@ -2097,7 +2250,7 @@ onBeforeUnmount(() => {
               hide-details
               @update:model-value="value => patchAutomation({ enabled: Boolean(value) })"
             />
-            <v-btn icon="mdi-close" variant="text" @click="automationDialog = false" />
+            <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭')" @click="automationDialog = false" />
           </div>
         </v-card-title>
 
@@ -2325,99 +2478,6 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
 
-                  <!-- QQ (NapCat) -->
-                  <template v-else-if="selectedEndpoint === 'napcat'">
-                    <div class="form-grid mt-2">
-                      <div class="full-span">
-                        <div class="text-caption text-medium-emphasis mb-2">触发场景</div>
-                        <div class="route-kind-chip-grid">
-                          <button
-                            v-for="kind in ['direct_at', 'direct_reply', 'indirect_reply', 'group_message', 'private']"
-                            :key="kind"
-                            class="route-kind-chip"
-                            :class="{ active: activeMessageTrigger?.routeKinds?.includes(kind) }"
-                            type="button"
-                            @click="toggleAutomationRouteKind(kind)"
-                          >
-                            <v-icon size="18">{{ activeMessageTrigger?.routeKinds?.includes(kind) ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                            <span>{{ routeKindLabels[kind] || kind }}</span>
-                          </button>
-                        </div>
-                      </div>
-                      <v-autocomplete
-                        v-if="activeMessageTrigger?.routeKinds?.includes('private')"
-                        :model-value="activeMessageTrigger?.targetUserId || null"
-                        :items="automationPrivateChoices"
-                        :loading="automationQqLoading"
-                        label="只限这个 QQ 私聊对象（可选）"
-                        hint="选择联系人会限定为该 QQ 号的私聊；清空表示不限私聊对象。"
-                        persistent-hint
-                        clearable
-                        density="compact"
-                        variant="outlined"
-                        class="mt-2"
-                        @update:model-value="setAutomationPrivateTarget"
-                      />
-                      <v-combobox
-                        v-if="activeMessageTrigger?.routeKinds?.some(kind => ['direct_at', 'direct_reply', 'indirect_reply', 'group_message'].includes(kind))"
-                        :model-value="activeMessageTrigger?.targetGroupId || null"
-                        :items="automationGroupChoices"
-                        :return-object="false"
-                        :loading="automationQqLoading"
-                        label="只限这个群（可选）"
-                        placeholder="搜索群名或群号，也可输入群号"
-                        hint="选择群或输入群号；清空表示不限群。"
-                        persistent-hint
-                        clearable
-                        density="compact"
-                        variant="outlined"
-                        class="mt-2"
-                        @update:model-value="setAutomationGroupTarget"
-                      >
-                        <template #item="{ props: itemProps, item }">
-                          <v-list-item v-bind="itemProps"><template #prepend><QqAvatar :id="String(item.value || '')" kind="group" :name="item.title" :size="32" class="mr-3" /></template></v-list-item>
-                        </template>
-                        <template #selection="{ item }"><QqAvatar :id="String(item.value || '')" kind="group" :name="item.title" :size="24" class="mr-2" /><span class="text-truncate" data-no-i18n>{{ item.title }}</span></template>
-                      </v-combobox>
-                      <v-text-field
-                        :model-value="activeMessageTrigger?.regex"
-                        label="消息包含或正则匹配（可选）"
-                        placeholder="例如：需求|报错|构建失败"
-                        density="compact"
-                        variant="outlined"
-                        class="mt-2"
-                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                      />
-                    </div>
-                  </template>
-
-                  <!-- 语音服务 -->
-                  <template v-else-if="selectedEndpoint === 'speech'">
-                    <div class="form-grid mt-2">
-                      <v-combobox
-                        class="full-span"
-                        :model-value="activeMessageTrigger?.allowedSpeakerNames || []"
-                        label="只限这些说话人（可选）"
-                        chips
-                        multiple
-                        closable-chips
-                        density="compact"
-                        variant="outlined"
-                        placeholder="输入说话人并按回车"
-                        @update:model-value="value => patchAutomationMessageTrigger({ allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })"
-                      />
-                      <v-text-field
-                        class="full-span mt-2"
-                        :model-value="activeMessageTrigger?.regex"
-                        label="转写内容包含或正则匹配（可选）"
-                        placeholder="例如：唤醒词|夜雨"
-                        density="compact"
-                        variant="outlined"
-                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                      />
-                    </div>
-                  </template>
-
                   <!-- 定时任务 (schedule) -->
                   <template v-else-if="selectedEndpoint === 'schedule'">
                     <v-select
@@ -2501,30 +2561,16 @@ onBeforeUnmount(() => {
 
                   </template>
 
-                  <!-- 其他/通用消息端 (weixin, wecom, rolePanel, etc.) -->
-                  <template v-else>
-                    <div class="form-grid mt-2">
-                      <v-text-field
-                        class="full-span"
-                        :model-value="activeMessageTrigger?.regex"
-                        label="消息包含或正则匹配（可选）"
-                        placeholder="留空表示匹配所有该渠道消息"
-                        density="compact"
-                        variant="outlined"
-                        @update:model-value="value => patchAutomationMessageTrigger({ regex: String(value || '') })"
-                      />
-                      <v-text-field
-                        v-if="(activeMessageTrigger?.routeKinds || []).some((kind: string) => ['wecom_message', 'feishu_message'].includes(kind))"
-                        class="full-span"
-                        :model-value="activeMessageTrigger?.targetGroupId"
-                        label="只限这个群（可选）"
-                        placeholder="留空表示不限群"
-                        density="compact"
-                        variant="outlined"
-                        @update:model-value="value => patchAutomationMessageTrigger({ targetGroupId: String(value || '') })"
-                      />
-                    </div>
-                  </template>
+                  <AutomationMessageFilters
+                    v-else-if="activeMessageTrigger"
+                    :key="activeAutomation.id + '::' + selectedEndpoint"
+                    :endpoint="selectedEndpoint"
+                    :trigger="activeMessageTrigger"
+                    :qq-groups="automationGroupChoices"
+                    :qq-contacts="automationPrivateChoices"
+                    :qq-loading="automationQqLoading"
+                    @patch="patchAutomationMessageTrigger"
+                  />
                 </div>
               </div>
 
@@ -2534,22 +2580,31 @@ onBeforeUnmount(() => {
                     <strong>触发后做什么</strong>
 
                   </div>
-                  <v-btn-toggle
-                    :model-value="activeAutomation.action.type"
-                    color="secondary"
-                    mandatory
-                    divided
-                    class="automation-type-toggle"
-                    @update:model-value="value => setAutomationActionType(value === 'run_script' ? 'run_script' : 'deliver_agent')"
+                  <v-select
+                    :model-value="selectedAutomationTemplateId || activeAutomation.action.type"
+                    :items="automationActionChoices"
+                    :label="t('类型')"
+                    :loading="automationTemplateLoading"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    @update:menu="openAutomationActionMenu"
+                    @update:model-value="selectAutomationAction"
                   >
-                    <v-btn value="deliver_agent" prepend-icon="mdi-message-arrow-right-outline">通知 Agent</v-btn>
-                    <v-btn value="run_script" prepend-icon="mdi-console-line">运行脚本</v-btn>
-                  </v-btn-toggle>
+                    <template #item="{ props: itemProps, item }">
+                      <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
+                    </template>
+                    <template v-if="automationTemplateCursor || automationTemplateError" #append-item>
+                      <v-btn v-if="automationTemplateError" variant="text" :disabled="automationTemplateLoading" @click.stop="refreshAutomationTemplates()">{{ t('重试') }}</v-btn>
+                      <v-btn v-else variant="text" :disabled="automationTemplateLoading" @click.stop="refreshAutomationTemplates(automationTemplateCursor || undefined)">{{ t('更多模板') }}</v-btn>
+                    </template>
+                  </v-select>
+                  <v-alert v-if="automationTemplateError" type="warning" variant="tonal" density="compact" class="mt-2">{{ automationTemplateError }}</v-alert>
 
                   <template v-if="activeAutomation.action.type === 'deliver_agent'">
-                    <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target"
+                    <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target" :primary-routes="automationPrimaryRoutes"
                       @update:model-value="target => patchAutomationAction({ target })" />
-                    <p v-if="invalidDsBotTarget" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
+                    <p v-if="automationPreview ? previewDsBotIncomplete : invalidDsBotTarget" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
                     <div v-if="activeAutomation.trigger.type === 'message'" class="mt-4">
                       <v-switch
                         :model-value="automationRecentMessageLimit > 0"
@@ -2603,6 +2658,16 @@ onBeforeUnmount(() => {
                       spellcheck="false"
                       @update:model-value="value => patchAutomationAction({ template: String(value || '') })"
                     />
+                    <div v-if="!automationPreview && editingAutomationTemplateName" class="d-flex flex-wrap align-center ga-2">
+                      <v-text-field v-model="automationTemplateName" :label="t('模板名称')" density="compact" hide-details
+                        class="flex-grow-1" @keydown.enter.prevent="saveCustomAutomationTemplate" />
+                      <v-btn variant="text" @click="editingAutomationTemplateName = false">{{ t('取消') }}</v-btn>
+                      <v-btn color="secondary" variant="tonal" :disabled="!automationTemplateName.trim()" @click="saveCustomAutomationTemplate">{{ t('保存模板') }}</v-btn>
+                      <v-btn v-if="selectedCustomAutomationTemplate" color="error" variant="text" @click="removeCustomAutomationTemplate">{{ t('删除模板') }}</v-btn>
+                    </div>
+                    <v-btn v-else-if="!automationPreview" variant="text" color="secondary" prepend-icon="mdi-content-save-outline" @click="editAutomationTemplateName">
+                      {{ t(selectedCustomAutomationTemplate ? '更新自定义模板' : '另存为自定义模板') }}
+                    </v-btn>
                   </template>
 
                   <template v-else>
@@ -2641,14 +2706,19 @@ onBeforeUnmount(() => {
 
         <v-card-actions class="px-6 pb-5">
           <v-btn
-            v-if="activeAutomation.id !== 'role-panel-message'"
+            v-if="!automationPreview && activeAutomation.id !== 'role-panel-message'"
             color="error"
             variant="text"
             @click="removeActiveAutomation()"
           >删除规则</v-btn>
           <v-spacer />
           <span v-if="automationDeliveryIncomplete" class="text-caption mr-2">请选择 Agent 和会话</span>
-          <v-btn color="primary" :disabled="automationDeliveryIncomplete" @click="automationDialog = false">完成</v-btn>
+          <template v-if="automationPreview">
+            <v-btn variant="text" @click="automationDialog = false">{{ t('取消') }}</v-btn>
+            <v-btn color="primary" :disabled="!store.ready || store.saving || automationTemplateLoading || automationPreviewIncomplete"
+              @click="confirmAutomationPreview">{{ t('新建') }}</v-btn>
+          </template>
+          <v-btn v-else color="primary" :disabled="automationDeliveryIncomplete" @click="automationDialog = false">完成</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

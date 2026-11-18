@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
-import { orderedPlanHistoryPaths, readPlanHistoryDirectory, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
+import { orderedPlanHistoryPaths, readPlanHistoryDirectory, setPlanHistoryCommitment, validatePlanHistoryCommitment, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
 import { canonicalPlanStorageName, planDirectory } from "./planStorageLayout.js";
 import {
   canonicalLogicalPlanId,
@@ -245,12 +245,13 @@ function renderManagedStorageRewrites(
   const rewrites: Array<{ relativePath: string; content: string }> = [];
   const planFile = path.join(directory, PLAN_FILE);
   const planText = fs.readFileSync(planFile, "utf8");
-  const planValue = JSON.parse(planText) as unknown;
+  const planValue = JSON.parse(planText) as Record<string, unknown>;
+  const historyFiles = readPlanHistoryDirectory(directory);
+  validatePlanHistoryCommitment(planValue, historyFiles);
   const rewrittenPlan = rewriteManagedStoragePaths(planValue, sourcePath, canonicalPath);
   if (rewrittenPlan.changed) {
     rewrites.push({ relativePath: PLAN_FILE, content: `${JSON.stringify(rewrittenPlan.value, null, 2)}\n` });
   }
-  const historyFiles = readPlanHistoryDirectory(directory);
   for (const relativePath of [...orderedPlanHistoryPaths(historyFiles.keys()), "feedback.jsonl"]) {
     const filePath = path.join(directory, relativePath);
     if (!fs.existsSync(filePath)) continue;
@@ -306,10 +307,21 @@ function boundedHistoryRewrites(
     if (Buffer.byteLength(content, "utf8") + bytes > PLAN_HISTORY_FILE_LIMIT) flush();
     content += row;
   }
+  if (shards.length > 0 && content && !content.endsWith("\n")) {
+    if (Buffer.byteLength(content, "utf8") === PLAN_HISTORY_FILE_LIMIT) throw new Error("Plan history record exceeds the per-file limit during name migration.");
+    content += "\n";
+  }
   flush();
   const newPaths = new Set(shards.map(shard => shard.relativePath));
+  const planRewrite = rewrites.find(rewrite => rewrite.relativePath === PLAN_FILE);
+  const plan = JSON.parse(planRewrite?.content ?? fs.readFileSync(path.join(directory, PLAN_FILE), "utf8")) as Record<string, unknown>;
+  const hadCommitment = Object.hasOwn(plan, "historyCommitment");
+  delete plan.historyCommitment;
+  const committedPlan = shards.length > 1 || hadCommitment
+    ? setPlanHistoryCommitment(plan, new Map(shards.map(shard => [shard.relativePath, Buffer.from(shard.content, "utf8")]))) : plan;
   return {
-    rewrites: [...rewrites.filter(rewrite => !paths.includes(rewrite.relativePath)), ...shards],
+    rewrites: [...rewrites.filter(rewrite => !paths.includes(rewrite.relativePath) && rewrite.relativePath !== PLAN_FILE),
+      { relativePath: PLAN_FILE, content: `${JSON.stringify(committedPlan, null, 2)}\n` }, ...shards],
     obsoleteHistoryPaths: paths.filter(relativePath => !newPaths.has(relativePath))
   };
 }

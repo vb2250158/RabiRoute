@@ -16,6 +16,10 @@ Each Agent platform ships as an individual native package with `rabi.plugin.json
 
 Manager and Gateway use the same plugin Profile and enablement settings, publishing host-specific capabilities. Each package owns execution, discovery, sessions and platform management. Original shared owners retain Routes, creation reservations, source authorization, plans, memory and formal delivery ledgers. Disabling rejects new work and joins actual completion of accepted resources, without closing external applications or services.
 
+The public session API dispatches through the active plugin capability. The host owns request validation, workspace authorization, common receipts, and version leases. The provider owns native target addressing, history interpretation, execution, and result verification. Extend the shared contract for new capabilities and keep platform behavior in the plugin. An unsupported action returns an actionable error for the selected provider.
+
+Verify a plugin version switch and rollback with the host and external client processes held fixed. Check the configured version, running version, connector version, and original session result independently. Give the persistent connection and replaceable business operations independent lifecycles. Reconcile accepted work using its original version and request ID. See [Host and plugin boundaries](host-plugin-boundaries_en.md#agent-sessions-and-desktop-connectors).
+
 An individual scan loads the package implementation in its isolated execution boundary. Aggregation settles each provider separately so a broken package or data item affects only its own result. Page entry scans automatically once; further scans require explicit refresh. Card loading, expansion, input, health queries and saving do not scan. Missing plugins preserve saved fields, complete task IDs, remote-instance identity and primary Agent selection, without borrowing another platform's task or retargeting a delivery.
 
 ## Base integration and optional host enhancements

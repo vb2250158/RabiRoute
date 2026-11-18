@@ -9,6 +9,7 @@ export function createOwnedRuntime(ports) {
             applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId,
             managerInstanceId: ports.managerInstanceId,
             version: ports.rabiRoutePackageVersion, globalConfig: ports.rabiGlobalConfig,
+            hostAccountRelay: () => ports.rabiLinkHostAccount.relay(),
             runtimes: () => ports.runtimes.values(),
             runtimeStatus: ports.runtimeStatus,
             readConfig: ports.readConfig,

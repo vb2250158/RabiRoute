@@ -3,6 +3,7 @@ import { prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } 
 import { resolveAgentSendRoute } from "./agentSendRoute.js";
 import type { AgentReplyOptions } from "./outbox.js";
 import { normalizeMessageAdapterPolicy } from "./shared/gatewayConfigModel.js";
+import { scopedAgentSendVariant } from "./agentSendVariant.js";
 
 const CONFIRMATION_LIFETIME_MS = 10 * 60 * 1000;
 
@@ -20,14 +21,17 @@ export class AgentSendMessageLengthGuard {
     const policy = route.runtime.messageAdapterPolicies?.napcat;
     const threshold = normalizeMessageAdapterPolicy(policy, "napcat").textConfirmationThreshold;
     if (!threshold) return { blocked: false };
-    const text = String(prepared.internal.text ?? "").replace(/\[CQ:[^\]]*\]/g, "").trim();
+    const variant = scopedAgentSendVariant(request);
+    const outgoingText = String(prepared.internal.text ?? "");
+    const text = (variant ? outgoingText : outgoingText.replace(/\[CQ:[^\]]*\]/g, "")).trim();
     const characterCount = Array.from(text).length;
     const metadata = { characterCount, threshold, confirmed: false };
     if (characterCount <= threshold) return { blocked: false, metadata };
     // Bind the full normalized send, not just its text: a confirmation cannot move to a different sender,
     // delivery ID, destination, attachment, or configured threshold. Style review remains independent.
     const fingerprint = JSON.stringify({ deliveryId: prepared.deliveryId, sender: prepared.sender,
-      routeId: prepared.routeId, channel: prepared.channel, internal: prepared.internal, threshold });
+      routeId: prepared.routeId, channel: prepared.channel, internal: prepared.internal, threshold,
+      ...(variant ? { variantPayload: request.payload, variantPackageHash: variant.receipt.packageHash } : {}) });
     const signature = (expires: number) => createHmac("sha256", this.secret).update(`${expires}:${fingerprint}`).digest();
     const token = prepared.messageLengthConfirmation;
     if (token) {

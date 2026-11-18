@@ -42,6 +42,7 @@ Web 入口由插件的 `package.json.rabi.webSource` 声明，工作区 Vite 构
 
 - 提交源码、测试、文档、图标、配置 schema、公开默认值及使用占位值的示例。
 - `route-config.json` 定义字段和默认值；实际账号、token、连接及角色配置由运行配置拥有者保存。
+- 调度包在 `route-config.json` 声明 `ownsScheduledAutomation`，使定时规则的变动经原 Gateway 的配置回执应用。仅包含定时规则的角色配置加入或退出时随之采用。消息规则、角色绑定等共享配置继续由原拥有者处理。
 - 实际 `.env`、认证文件、会话、私有存档、运行日志、模型缓存和构建产物保存在私有位置。每个插件自己的 `.gitignore` 同时适用于将来独立仓库。
 - 导出与打包共用 SDK 的公开源文件筛选入口；不会因为插件根目录出现本地配置，就把它当作公开默认值发布。提交前仍审阅差异和真实示例值。
 
@@ -66,6 +67,7 @@ Web 入口由插件的 `package.json.rabi.webSource` 声明，工作区 Vite 构
 | `io.rabiroute.endpoint.feishu` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.feishu) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.feishu/rabi.plugin.json) |
 | `io.rabiroute.endpoint.heartbeat` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.heartbeat) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.heartbeat/rabi.plugin.json) |
 | `io.rabiroute.endpoint.napcat` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.napcat) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.napcat/rabi.plugin.json) |
+| `io.rabiroute.endpoint.qqbot` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.qqbot) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.qqbot/rabi.plugin.json) |
 | `io.rabiroute.endpoint.rabilink` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.rabilink) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.rabilink/rabi.plugin.json) |
 | `io.rabiroute.endpoint.speech` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.speech) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.speech/rabi.plugin.json) |
 | `io.rabiroute.endpoint.webhook` | [source](https://github.com/vb2250158/RabiRoute/tree/main/src/plugins/io.rabiroute.endpoint.webhook) | [rabi.plugin.json](https://github.com/vb2250158/RabiRoute/blob/main/src/plugins/io.rabiroute.endpoint.webhook/rabi.plugin.json) |

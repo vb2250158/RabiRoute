@@ -4,6 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { readPlanHistoryDirectory, setPlanHistoryCommitment } from "./planHistoryShards.js";
+
+function sealTestHistory(directory: string): void {
+  const file = path.join(directory, "plan.json");
+  fs.writeFileSync(file, JSON.stringify(setPlanHistoryCommitment(JSON.parse(fs.readFileSync(file, "utf8")), readPlanHistoryDirectory(directory))));
+}
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import {
   archiveCompletedPlans,
@@ -283,6 +289,7 @@ test("plan update rotates near-limit history without losing records or changing 
   const count = rows.length;
   const original = first + rows.join("");
   fs.writeFileSync(historyPath, original);
+  sealTestHistory(path.dirname(historyPath));
   const priorPlan = fs.readFileSync(planJsonFile(roleDir, plan.id, "active"));
   const updated = updatePlan(roleDir, plan.id, { title: "Updated at boundary" });
   assert.equal(updated.title, "Updated at boundary");
@@ -307,6 +314,10 @@ test("legacy history without a trailing newline rotates without joining audit re
   const nearLimit = `${first}\n${JSON.stringify({ ...row, id: "legacy-last", padding: "x".repeat(16 * 1024 * 1024 - Buffer.byteLength(first) - 1024) })}`;
   assert.ok(Buffer.byteLength(nearLimit) < 16 * 1024 * 1024);
   fs.writeFileSync(historyPath, nearLimit);
+  const legacyPlanPath = planJsonFile(roleDir, plan.id, "active");
+  const legacyPlan = JSON.parse(fs.readFileSync(legacyPlanPath, "utf8"));
+  delete legacyPlan.historyCommitment;
+  fs.writeFileSync(legacyPlanPath, JSON.stringify(legacyPlan));
   const updated = updatePlan(roleDir, plan.id, { title: "Rotated legacy tail" });
   assert.equal(updated.title, "Rotated legacy tail");
   const shardPath = path.join(path.dirname(historyPath), "history", "000001.jsonl");
@@ -335,6 +346,7 @@ test("archiving repartitions path-expanded history without dropping or reorderin
   const firstShard = path.join(path.dirname(historyPath), "history", "000001.jsonl");
   fs.mkdirSync(path.dirname(firstShard), { recursive: true });
   fs.writeFileSync(firstShard, second);
+  sealTestHistory(path.dirname(historyPath));
   assert.ok(fs.statSync(historyPath).size <= limit && fs.statSync(firstShard).size <= limit);
   updatePlan(roleDir, plan.id, { archiveStatus: "已归档", activationStatus: "已归档" });
   const archivedDir = planDirectory(roleDir, plan.id, "archive");
@@ -486,7 +498,9 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
   const remap = (text: string): string => text
     .replaceAll(currentAttachmentDirectory, legacyAttachmentDirectory)
     .replaceAll(currentFeedbackAttachmentDirectory, legacyFeedbackAttachmentDirectory);
-  const planJson = remap(fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8"));
+  const legacyPlan = JSON.parse(remap(fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8")));
+  delete legacyPlan.historyCommitment;
+  const planJson = JSON.stringify(legacyPlan);
   const historyJsonl = remap(fs.readFileSync(planHistoryFile(roleDir, plan.id, "active"), "utf8"));
   const feedbackJsonl = remap(fs.readFileSync(planFeedbackFile(roleDir, plan.id, "active"), "utf8"));
   fs.mkdirSync(path.join(roleDir, "plans", "items", "active"), { recursive: true });
@@ -631,7 +645,8 @@ test("cold plan catalogs load asynchronously and share one in-flight cache fill"
     assert.equal(eventLoopYielded, true);
     assert.equal(first.length, 80);
     assert.equal(second, first);
-    assert.equal(reads >= 80 && reads < 160, true);
+    // A cold scan also verifies the committed history for each plan.
+    assert.equal(reads >= 160 && reads < 240, true);
     const coldReads = reads;
     assert.equal(await listPlansAsync(roleDir), first);
     assert.equal(reads, coldReads);

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "id": "core",
+      "title": "核心运行时",
+      "description": "Node 运行时、Host、后端、插件与文档。安装必需。",
+      "required": true,
+      "default": true,
+      "manifestPrefixes": []
+    },
+    {
+      "id": "desktop",
+      "title": "桌面组件（托盘、桌宠、字幕窗口）",
+      "description": "Qt 桌面运行时。Host 启动后要等待托盘就绪，因此该组件必需。",
+      "required": true,
+      "default": true,
+      "manifestPrefixes": [
+        "desktop-runtime/"
+      ]
+    },
+    {
+      "id": "agent-codex",
+      "title": "Codex Agent（OpenAI Codex CLI）",
+      "description": "内置 Codex CLI 原生二进制。不装则 Codex 适配器无法创建新任务，其他功能不受影响。",
+      "required": false,
+      "default": true,
+      "manifestPrefixes": [
+        "node_modules/@openai/"
+      ]
+    },
+    {
+      "id": "agent-cli",
+      "title": "独立 Agent CLI",
+      "description": "apps/rabi-agent 命令行客户端及其原生资源。",
+      "required": false,
+      "default": false,
+      "manifestPrefixes": [
+        "apps/rabi-agent/"
+      ]
+    }
+  ]
+}

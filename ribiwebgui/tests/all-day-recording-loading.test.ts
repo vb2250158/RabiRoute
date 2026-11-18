@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { compileScript, parse } from "@vue/compiler-sfc";
 import { transformSync } from "esbuild";
 import * as allDayContract from "../../src/shared/allDayRecording";
+import * as personaEventTypes from "../../src/shared/personaEventTypes";
 import { DEFAULT_ALL_DAY_SETTINGS, type AllDayEvent } from "../../src/shared/allDayRecording";
 
 const row = (id: string, time: number): AllDayEvent => ({ id, startedAt: time, endedAt: time, deviceId: "fixture", source: "window", kind: "window", text: id, state: "saved" });
@@ -47,7 +48,7 @@ function fixture(t: import("node:test").TestContext, fail = false, blockStatus =
         const pendingDay=options.loadingDay || (!dayReleased ? options.blockDay : undefined);
         const data = url.includes("/page?") ? {events:[],hasMore:true,loading:options.pageLoading,pendingDays:pendingDay?[pendingDay]:[]} : day ? {events:[],days:[day],incompleteDays:day === options.incompleteDay || day===pendingDay ? [day] : [],loading:day===pendingDay} : url.includes("/catalog") ? { events: options.days?.length ? [] : rows, incompleteDays: [], days: options.days ?? [] } : url.endsWith("/recent") ? { events: [rows.at(-1)] } : url.includes("/events?") ? { events:rows.filter(row=>{const date=new Date(row.startedAt).toISOString().slice(0,10);return date!==pendingDay&&date!==options.failDay;}),loading:!!pendingDay,pendingDays:[pendingDay,options.failDay,options.incompleteDay].filter(Boolean),readError:options.failDay?"Failed day read":undefined } : { settings: DEFAULT_ALL_DAY_SETTINGS, enabled: false, running: false, activeRoleId: null, error: "" };
         return read(new Response(JSON.stringify({ code: 0, data })));
-      } } : name.startsWith("@shared/") ? allDayContract : require(name)
+      } } : name === "@shared/personaEventTypes" ? personaEventTypes : name.startsWith("@shared/") ? allDayContract : require(name)
   });
   const scope = vue.effectScope();
   const model = scope.run(() => module.exports.default.setup({ roleId: "fixture" }, { expose() {} }));
@@ -55,6 +56,30 @@ function fixture(t: import("node:test").TestContext, fail = false, blockStatus =
   const flush = async () => { await new Promise(resolve => setImmediate(resolve)); for (let i = 0; i < 12; i++) await vue.nextTick(); };
   return { model, calls, deadlines, rows, flush, releaseStatus, releaseDay:()=>{dayReleased=true;releaseDay();handlers.get("all_day_recording")?.({data:JSON.stringify({roleId:"fixture",readDay:options.blockDay})});}, ready: (readDay: string) => handlers.get("all_day_recording")?.({data:JSON.stringify({roleId:"fixture",readDay})}), changed: (indexDay?: string, indexFailed = false) => handlers.get("all_day_recording")?.({ data: JSON.stringify({ roleId: "fixture", indexDay, indexFailed }) }) };
 }
+
+test("recording settings add and remove individual existing and message sources without writing on open", async t => {
+  const f = fixture(t);
+  await f.flush();
+  f.model.openSettings();
+  assert.equal(f.model.configuredSources.value.length, 0);
+  assert.ok(f.model.addableSources.value.some((source: { id: string }) => source.id === "message:napcat"));
+  f.model.changeRecordingSource("screen", true);
+  f.model.changeRecordingSource("message:napcat", true);
+  f.model.changeRecordingSource("message:napcat", true);
+  assert.deepEqual([...f.model.configuredSources.value], ["screen", "message:napcat"]);
+  assert.equal(f.model.isVisualRecording.value, true);
+  assert.ok(!f.model.addableSources.value.some((source: { id: string }) => source.id === "message:napcat"));
+  f.model.changeRecordingSource("screen", false);
+  f.model.changeRecordingSource("mobile", true);
+  assert.equal(f.model.canSaveSettings.value, false);
+  f.model.changeRecordingSource("mobile", false);
+  assert.equal(f.model.canSaveSettings.value, true);
+  assert.deepEqual([...f.model.configuredSources.value], ["message:napcat"]);
+  assert.ok(!f.calls.some(url => url.endsWith("/settings")));
+  f.model.settingsOpen.value = false;
+  f.model.openSettings();
+  assert.equal(f.model.configuredSources.value.length, 0);
+});
 
 test("cold snapshot acknowledgements retain history and navigation waits for readiness without spinning or rebuilding",async t=>{
   const options={days:["2033-05-17","2033-05-18"],loadingDay:"2033-05-17",pageLoading:true,emptyCache:true};

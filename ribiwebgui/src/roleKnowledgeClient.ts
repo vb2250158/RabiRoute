@@ -3,6 +3,10 @@ import type { RoleMemory, RoleMemoryPayload, RolePlan, RolePlanFeedback, RolePla
 import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
 import { knowledgeItemMatchesQuery } from "./knowledgeSearch";
+import { planBindingTargetKey } from "@shared/planBindingOwner";
+import type { PlanAssistantAgentType } from "@shared/agentAdapterCapabilities";
+
+export type PlanBindingSession = { id: string; title: string; cwd?: string; archived?: boolean; updatedAt?: string };
 
 export type RolePlanPageCounts = {
   total: number;
@@ -76,7 +80,7 @@ export type PlanAgentSessionStatus =
 export type PlanAgentBindingStatus = {
   role: PlanAgentRole;
   configured: boolean;
-  agentType: "codex" | "dsh";
+  agentType: PlanAssistantAgentType;
   threadId: string;
   threadTitle: string;
   workspace: string;
@@ -472,6 +476,63 @@ async function loadRolePlanPreview(roleId: string, planId: string): Promise<Role
   ));
 }
 
+function planBindingPath(roleId: string, planId: string): string {
+  return `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`;
+}
+
+async function loadPlanBindingRevision(roleId: string, planId: string, signal?: AbortSignal) {
+  const { data, etag } = await managerResource<RolePlan>(planBindingPath(roleId, planId), { cache: "no-store", signal });
+  if (!etag) throw new ManagerRequestError("Plan edit requires the current strong ETag.", 412);
+  return { etag, binding: data.taskBinding };
+}
+
+async function planBindingThreadRequest<T>(agentAdapter: string, payload: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const response = await boundedManagerFetch("/api/agent/threads", {
+    method: "POST", signal, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...payload, agentAdapter, agentTargetId: `local:${agentAdapter}` })
+  });
+  const body = await response.json().catch(() => ({})) as T & { code?: number; agentAdapter?: string; message?: string };
+  if (!response.ok || body.code !== 0 || body.agentAdapter !== agentAdapter) {
+    throw new ManagerRequestError(body.message || `Could not read ${agentAdapter} sessions (HTTP ${response.status}).`, response.status);
+  }
+  return body;
+}
+
+async function listPlanBindingSessions(agentAdapter: string, offset: number, dshBaseUrl?: string, signal?: AbortSignal) {
+  return planBindingThreadRequest<{ threads: PlanBindingSession[]; nextOffset: number | null }>(agentAdapter,
+    { action: "list", offset, limit: 50, dshBaseUrl }, signal);
+}
+
+async function replacePlanBinding(input: {
+  roleId: string; planId: string; agentAdapter: string; sessionId: string; dshBaseUrl?: string;
+  expectedRevision: string; requestId: string; previousBinding?: RolePlan["taskBinding"];
+}): Promise<RolePlan> {
+  const dshBaseUrl = input.agentAdapter === "dsh" ? input.dshBaseUrl : undefined;
+  const { thread } = await planBindingThreadRequest<{ thread: PlanBindingSession }>(input.agentAdapter,
+    { action: "read", threadId: input.sessionId, dshBaseUrl });
+  if (!thread || thread.id !== input.sessionId || thread.archived || !thread.cwd?.trim()) {
+    throw new Error("The selected session is archived, missing or has no workspace.");
+  }
+  const path = planBindingPath(input.roleId, input.planId);
+  const taskBinding = {
+    agentType: input.agentAdapter, sessionId: thread.id, sessionTitle: thread.title, workspace: thread.cwd.trim(),
+    ...(dshBaseUrl ? { baseUrl: dshBaseUrl } : {}),
+    ...(input.previousBinding?.completionHook
+      ? { completionHook: input.previousBinding.completionHook } : {})
+  };
+  await managerResource<RolePlan>(path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "if-match": input.expectedRevision, "idempotency-key": input.requestId },
+    body: JSON.stringify({ taskBinding, messageSource: { type: "user" } })
+  });
+  const saved = await loadRolePlan(input.roleId, input.planId);
+  if (!saved.taskBinding || planBindingTargetKey(saved.taskBinding) !== planBindingTargetKey(taskBinding)
+    || saved.taskBinding.workspace !== taskBinding.workspace || saved.taskBinding.baseUrl !== dshBaseUrl) {
+    throw new ManagerRequestError("The plan readback did not confirm the selected session binding.", 409);
+  }
+  return saved;
+}
+
 async function loadRolePlan(roleId: string, planId: string, signal?: AbortSignal): Promise<RolePlan> {
   const plan = normalizeRolePlanFromManager(await managerData<RolePlan>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`, { signal }
@@ -614,7 +675,7 @@ async function openPlanAgentTask(
   roleId: string,
   planId: string,
   role: PlanAgentRole
-): Promise<{ opened: true; agentType: "codex" | "dsh"; threadId: string; threadTitle: string; workspace: string; instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding }> {
+): Promise<{ opened: true; agentType: PlanAssistantAgentType; threadId: string; threadTitle: string; workspace: string; instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding }> {
   return managerData(
     `/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`,
     {
@@ -791,7 +852,7 @@ async function submitPlanFeedback(input: {
     idempotencyKey: receiptIdempotencyKey
   };
 }
-return { ROLE_PLAN_PAGE_SIZE, ROLE_PLAN_BACKGROUND_PAGE_SIZE, ROLE_MEMORY_BACKGROUND_PAGE_SIZE, ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS, synchronizeRoleKnowledgeLifecycle, normalizeRolePlanFromManager, loadRoleKnowledgeFileCounts, loadRoleKnowledge, loadPlanHistory, loadPlanFeedbackWithRevision, loadPlanFeedback, cachedPlanFeedbackRevision, loadRolePlanPage, loadRolePlanPreview, loadRolePlan, cachedFocusedRolePlan, loadFocusedRolePlan, loadPlanAgentStatuses, openPlanHistoryAgent, openPlanAgentTask, loadRoleMemory, loadRoleMemoryCounts, loadPendingMemoryConsolidationRunCount, loadRoleMemoryPage, submitPlanFeedback };
+return { ROLE_PLAN_PAGE_SIZE, ROLE_PLAN_BACKGROUND_PAGE_SIZE, ROLE_MEMORY_BACKGROUND_PAGE_SIZE, ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS, synchronizeRoleKnowledgeLifecycle, normalizeRolePlanFromManager, loadRoleKnowledgeFileCounts, loadRoleKnowledge, loadPlanHistory, loadPlanFeedbackWithRevision, loadPlanFeedback, cachedPlanFeedbackRevision, loadRolePlanPage, loadRolePlanPreview, loadRolePlan, cachedFocusedRolePlan, loadFocusedRolePlan, loadPlanAgentStatuses, openPlanHistoryAgent, openPlanAgentTask, loadRoleMemory, loadRoleMemoryCounts, loadPendingMemoryConsolidationRunCount, loadRoleMemoryPage, submitPlanFeedback, loadPlanBindingRevision, listPlanBindingSessions, replacePlanBinding };
 }
 
 export const { ROLE_PLAN_PAGE_SIZE, ROLE_PLAN_BACKGROUND_PAGE_SIZE, ROLE_MEMORY_BACKGROUND_PAGE_SIZE, ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS, synchronizeRoleKnowledgeLifecycle, normalizeRolePlanFromManager, loadRoleKnowledgeFileCounts, loadRoleKnowledge, loadPlanHistory, loadPlanFeedbackWithRevision, loadPlanFeedback, cachedPlanFeedbackRevision, loadRolePlanPage, loadRolePlanPreview, loadRolePlan, cachedFocusedRolePlan, loadFocusedRolePlan, loadPlanAgentStatuses, openPlanHistoryAgent, openPlanAgentTask, loadRoleMemory, loadRoleMemoryCounts, loadPendingMemoryConsolidationRunCount, loadRoleMemoryPage, submitPlanFeedback } = createRoleKnowledgeClient();

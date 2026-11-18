@@ -71,7 +71,8 @@ async function handleAgentThreadBody(
   remoteSource?: AgentThreadRemoteSource,
   requestAuthority?: () => void,
   trustedDeviceSource?: RabiLinkAgentPrincipal,
-  requestSignal?: AbortSignal
+  requestSignal?: AbortSignal,
+  directWebChat = false
 ): Promise<AgentThreadControlResult> {
   // Capture only caller-selected execution fields before Route defaults are applied.
   // The request body cannot supply this internal snapshot itself.
@@ -80,7 +81,7 @@ async function handleAgentThreadBody(
       .filter(field => Object.prototype.hasOwnProperty.call(body, field))
       .map(field => [field, body[field]])
   )) as NonNullable<AgentThreadRequestOptions["callerExecutionOptions"]>;
-  const managedBody = context.applyManagedAgentThreadDefaults(body);
+  const managedBody = directWebChat ? body : context.applyManagedAgentThreadDefaults(body);
   try {
     const result = await context.handleAgentThreadRequest(
       managedBody,
@@ -242,7 +243,7 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
             canSubmitSameIntent: delivery.state === "prepared" && delivery.executionOptions.workbuddyDeliveryMode !== "steer",
             ...(delivery.receipt ? { receipt: delivery.receipt } : {}) } } };
         },
-        async execute(body: AgentThreadRequest): Promise<AgentThreadControlResult> {
+        async execute(body: AgentThreadRequest, directWebChat = false): Promise<AgentThreadControlResult> {
           const sourceEvent = body.action === "send" || (body.action === "create" && Boolean(body.prompt));
           const deviceSource = devicePrincipal?.deviceOwner ? devicePrincipal : undefined;
           const declaredSource = body.messageSource?.type === "agent" || body.messageSource?.type === "agent_hook"
@@ -262,7 +263,7 @@ export function createAgentThreadControlOwner(context: AgentThreadControlRoutesC
             fence();
             const forwarded = await context.forwardPeerReply?.(invocationBody, fence);
             if (forwarded) return { status: forwarded.statusCode, body: forwarded.data };
-            const result = await handleAgentThreadBody(invocationBody, context, remoteSource, fence, deviceSource, signal);
+            const result = await handleAgentThreadBody(invocationBody, context, remoteSource, fence, deviceSource, signal, directWebChat);
             try { fence(); }
             catch (error) {
               if (body.action !== "list" && body.action !== "read" && error && typeof error === "object") Object.assign(error, { uncertain: true });

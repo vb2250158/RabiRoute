@@ -108,6 +108,18 @@ export function createPluginManagement(options: {
       const importedPackage = await options.packages.importDirectory(sourceDirectory, invocation.assertCurrent);
       return { ...await this.packages!(invocation) as Record<string, unknown>, importedPackage };
     },
+    async inspectUrl(url, invocation, subdirectory) {
+      if (!options.packages) throw new Error("Remote plugin package imports are unavailable.");
+      invocation.assertCurrent();
+      const inspected = await options.packages.inspectUrl(url, undefined, subdirectory);
+      invocation.assertCurrent();
+      return inspected;
+    },
+    async importUrl(url, expectedArchiveSha256, invocation, subdirectory) {
+      if (!options.packages) throw new Error("Remote plugin package imports are unavailable.");
+      const importedPackage = await options.packages.importUrl(url, invocation.assertCurrent, expectedArchiveSha256, subdirectory);
+      return { ...await this.packages!(invocation) as Record<string, unknown>, importedPackage };
+    },
     async install(input, invocation) {
       invocation.assertCurrent();
       const manifest = await options.manifest(input.pluginId, input.version);

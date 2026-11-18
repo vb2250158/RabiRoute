@@ -378,6 +378,44 @@ function fixture() {
   return { persistence, store, options, request, receipts, dispatched: () => dispatched };
 }
 
+test('WebChat uploads keep exact bytes, original target and an idempotent connection receipt', async t => {
+  const { storeWebChatAttachments } = await import('../manager/agentWebChatAttachments.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'webchat-endpoint-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = fixture(), source = { threadId: '', agentType: 'agent', connection: { kind: 'connection' as const, managerInstanceId: 'manager', transport: 'local' as const, id: 'desktop' } };
+  const threadId = 'existing-task-' + 'x'.repeat(500);
+  const target = { ...party('b'), threadId, endpoint: { ...endpoint('b'), kind: 'local' as const, instanceId: undefined, nodeId: undefined, agentId: 'local:dsh', sessionId: threadId } };
+  const bytes = Buffer.from([0, 38, 255]);
+  const request: AgentThreadRequest = { action: 'send', agentAdapter: 'dsh', threadId: target.threadId, prompt: 'Read the attached file.',
+    deliveryId: 'webchat-test', createIfMissing: false, responsePolicy: 'none',
+    messageSource: { type: 'message_adapter', messageAdapter: 'WebChat', conversationType: 'agent_session', conversationId: target.threadId, messageId: 'webchat-test', senderName: 'WebChat 用户' },
+    webChatAttachments: [{ name: '../fixture.bin', contentBase64: bytes.toString('base64') }] };
+  const options: EndpointDeliveryOptions = { ...f.options, resolveSource: () => source, resolveTarget: () => target,
+    storeWebChatAttachments: attachments => storeWebChatAttachments(root, attachments),
+    dispatch: async (delivery, guard) => {
+      assert.equal(delivery.target.sessionId, target.threadId);
+      assert.match(delivery.prompt, /处理端|WebChat/);
+      assert.match(delivery.prompt, /Read the attached file\./);
+      const match = /· `([^`]+)`/.exec(delivery.prompt)!;
+      assert.ok(path.relative(root, match[1]!).startsWith('message-'));
+      assert.deepEqual(fs.readFileSync(match[1]!), bytes);
+      return f.options.dispatch(delivery, guard);
+    } };
+  const first = await executeEndpointAgentDelivery(request, options);
+  const again = await executeEndpointAgentDelivery(request, options);
+  assert.equal(first.data.status, 'delivered');
+  assert.deepEqual(again.data.delivery, first.data.delivery);
+  assert.equal(f.dispatched(), 1);
+  assert.equal(fs.readdirSync(root).length, 1);
+  assert.equal(f.store.list().length, 0);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, webChatAttachments: [{ name: '../fixture.bin', contentBase64: 'YQ==' }] }, options), /conflict/i);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, webChatAttachments: [{ name: 'bad', contentBase64: 'invalid!' }] }, options), /附件编码/);
+  await assert.rejects(executeEndpointAgentDelivery({ ...request, deliveryId: 'unreachable-attachment' }, {
+    ...options, resolveExecutionOptions: () => ({ cwd: 'workspace', dshBaseUrl: 'http://example.test' })
+  }), /本机 Agent/);
+  assert.equal(fs.readdirSync(root).length, 1);
+});
+
 test("connection sources keep real node namespaces and frozen receipts across restart without creating a source task", async () => {
   const f = fixture();
   const connection = (id: string) => ({ threadId: "", agentType: "agent", connection: { kind: "connection" as const, managerInstanceId: "manager", transport: "lan-agent" as const, id } });

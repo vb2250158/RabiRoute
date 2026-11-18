@@ -6,9 +6,80 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased
+## 0.15.37 - 2026-11-19
 
-- Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
+- New plan-history writes include shard size and digest verification. Resume incomplete feedback through its original transaction, isolate damaged plans, and retain legacy data and cache-refresh compatibility.
+
+- WorkBuddy 0.1.10 adds ordinary-chat guidance, connector cold start and original-ID continuation. WebChat input, attachments and prompt injection retain original tasks and receipts. Markdown and code wrap within narrow layouts.
+- Validate installer components against built-in release rules and required files, with multiple archives supported on Windows PowerShell 5.1. Gateway readback includes the executing process, generation, package digest and activation identity.
+- Keep missing send records uncertain to prevent automatic replay of possibly delivered content.
+- Update Host API to 1.16.0 and plugin SDK to 1.5.0. Locally repackaged SDK consumers receive independent version increments. Remote node SDKs remain with their original maintenance tasks.
+
+| Plugin | Version |
+| --- | --- |
+| `io.rabiroute.manager.video` | 0.2.6 |
+| `io.rabiroute.manager.core` | 0.1.11 |
+| `io.rabiroute.manager.persona` | 0.1.26 |
+| `io.rabiroute.manager.speech` | 0.1.8 |
+| `io.rabiroute.manager.performance` | 0.1.8 |
+| `io.rabiroute.manager.bilibili-history` | 0.1.4 |
+| `io.rabiroute.manager.route-control` | 0.1.6 |
+| `io.rabiroute.manager.agent-state-control` | 0.1.5 |
+| `io.rabiroute.manager.gateway-runtime` | 0.1.5 |
+| `io.rabiroute.manager.rabilink-relay` | 0.1.5 |
+| `io.rabiroute.manager.html-shares` | 0.1.4 |
+| `io.rabiroute.manager.wearable-companion` | 0.1.4 |
+| `io.rabiroute.manager.memory-consolidation` | 0.1.4 |
+| `io.rabiroute.manager.message-processing-control` | 0.1.5 |
+| `io.rabiroute.manager.message-processing-automation` | 0.1.4 |
+| `io.rabiroute.manager.plan-feedback-delivery` | 0.1.4 |
+| `io.rabiroute.manager.message-adapter-control` | 0.1.4 |
+| `io.rabiroute.manager.agent-adapter-catalog` | 0.1.5 |
+| `io.rabiroute.manager.agent-communication` | 0.1.8 |
+| `io.rabiroute.manager.agent-thread-control` | 0.1.9 |
+| `io.rabiroute.manager.remote-agent` | 0.1.5 |
+| `io.rabiroute.manager.diagnostics` | 0.1.12 |
+| `io.rabiroute.manager.desktop` | 0.1.4 |
+| `io.rabiroute.manager.desktop-pet` | 0.1.4 |
+| `io.rabiroute.manager.yeyu-gamer` | 0.1.4 |
+| `io.rabiroute.manager.xiaomi-home` | 0.1.10 |
+| `io.rabiroute.endpoint.napcat` | 0.1.19 |
+| `io.rabiroute.endpoint.heartbeat` | 0.1.6 |
+| `io.rabiroute.endpoint.wecom` | 0.1.5 |
+| `io.rabiroute.endpoint.weixin` | 0.1.6 |
+| `io.rabiroute.endpoint.feishu` | 0.1.6 |
+| `io.rabiroute.endpoint.qqbot` | 0.1.1 |
+| `io.rabiroute.endpoint.webhook` | 0.1.4 |
+| `io.rabiroute.endpoint.speech` | 0.1.4 |
+| `io.rabiroute.endpoint.rabilink` | 0.1.6 |
+| `io.rabiroute.agent.codex` | 0.1.11 |
+| `io.rabiroute.agent.copilot-cli` | 0.1.4 |
+| `io.rabiroute.agent.marvis` | 0.1.4 |
+| `io.rabiroute.agent.astrbot` | 0.1.5 |
+| `io.rabiroute.agent.dsh` | 0.1.8 |
+| `io.rabiroute.agent.workbuddy` | 0.1.10 |
+| `io.rabiroute.agent.antigravity` | 0.1.4 |
+| `io.rabiroute.agent.device-agent` | 0.1.5 |
+| `io.rabiroute.agent.grok-bot` | 0.1.4 |
+| `io.rabiroute.manager.voice-assistant` | 1.1.14 |
+
+- Message endpoint plugins can register formats with the unified send API. NapCat text forwards and Official QQ Bot source replies use the existing policies and receipts. DSH message-processing bindings can hand over within the current Gateway. When shared Route fields require a process switch, the activation receipt names them.
+
+- RabiLink hosts can register and sign in. Hosts on the same server and account appear under **My devices** automatically. Older hosts owned by the account remain reachable over the relay, and device-bound credentials support migration. Existing application connections remain compatible.
+
+- WeChat Bot uses Tencent iLink for owner and invitation binding, verification PINs, sign-out, inbound voice, video and files, native MP4 output, and typing status.
+
+- Rabi Node 0.4.8 supports connecting one computer to multiple hosts. Each instance has independent configuration, credentials, and login startup. Windows shows one tray icon per instance. The Remote Agent tab is now Node management.
+
+- Add the experimental Official QQ Bot endpoint with Webhook and WebSocket transport, direct messages, group and channel messages, channel DMs and platform events. Its operation catalog covers proactive messages, rich media, streaming and administration.
+
+- Selecting the primary persona as an automation destination shows the Agent type and bound session task name for each applicable route.
+
+- Add all-day recording items by type. Recording and automation share an event catalog: recordings can include message sources, and message rules can trigger on capture events.
+
+- Message rules use editable lists for trigger scenarios and restrictions, including existing selections and saved restrictions.
+
+- Adding a message rule or scheduled task offers template or manual creation. Choose Create to add the previewed rule to the list. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
 ## 0.15.36 - 2026-11-18
 

@@ -5,16 +5,17 @@ import path from "node:path";
 import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 import type { WorkbuddyDesktopCreationInput, WorkbuddyDesktopCreationResult } from "./workbuddyDesktopCreation.js";
 import { isLegacyWorkbuddyDesktopLayout, isWorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
-import type { WorkbuddyDesktopSteerInput, WorkbuddyDesktopSteerResult } from "./workbuddyDesktopSteer.js";
+import type { WorkbuddyDesktopMessageMode, WorkbuddyDesktopMessageInput, WorkbuddyDesktopMessageResult } from "./workbuddyDesktopSteer.js";
 
 const pipePrefix = "\\\\.\\pipe\\RabiRoute.WorkBuddy.Desktop.";
 const frameLimit = 2 * 1024 * 1024;
 const composerLayoutContract = 1;
 const steerContract = 2;
+const continuationContract = 1;
 const descriptorPath = () => path.join(workbuddyHomeDir(), "rabiroute-desktop-relay.json");
-type DesktopRelay = { pipe: string; token: string; composerLayoutContract?: number; steerContract?: number };
+type DesktopRelay = { pipe: string; token: string; composerLayoutContract?: number; steerContract?: number; continuationContract?: number };
 
-export class WorkbuddyDesktopSteerNotSentError extends Error {}
+export class WorkbuddyDesktopMessageNotSentError extends Error {}
 
 function receiveFrame(socket: Socket): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -49,7 +50,7 @@ function authenticates(actual: unknown, expected: string): boolean {
     && timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
-function steerInput(value: unknown): value is WorkbuddyDesktopSteerInput {
+function steerInput(value: unknown): value is WorkbuddyDesktopMessageInput {
   if (!value || typeof value !== "object") return false;
   const input = value as Record<string, unknown>;
   return ["threadId", "workspace", "text", "deliveryId"].every(key =>
@@ -60,9 +61,10 @@ function steerInput(value: unknown): value is WorkbuddyDesktopSteerInput {
 export async function serveWorkbuddyDesktopRelay(
   create: (input: WorkbuddyDesktopCreationInput, signal: AbortSignal) => Promise<WorkbuddyDesktopCreationResult>,
   descriptor = descriptorPath(),
-  steer?: (input: WorkbuddyDesktopSteerInput, signal: AbortSignal) => Promise<WorkbuddyDesktopSteerResult>
+  send?: (input: WorkbuddyDesktopMessageInput, signal: AbortSignal, mode: WorkbuddyDesktopMessageMode) => Promise<WorkbuddyDesktopMessageResult>
 ): Promise<() => Promise<void>> {
-  const relay = { pipe: `${pipePrefix}${randomUUID()}`, token: randomBytes(32).toString("hex"), composerLayoutContract, ...(steer && { steerContract }) };
+  const relay = { pipe: `${pipePrefix}${randomUUID()}`, token: randomBytes(32).toString("hex"), composerLayoutContract,
+    ...(send && { steerContract, continuationContract }) };
   const server = createServer({ allowHalfOpen: false }, socket => {
     const controller = new AbortController();
     socket.setTimeout(30_000, () => socket.destroy());
@@ -71,9 +73,9 @@ export async function serveWorkbuddyDesktopRelay(
       try {
         const request = await receiveFrame(socket) as { token?: unknown; input?: unknown; action?: unknown };
         if (!authenticates(request?.token, relay.token)) throw new Error("Unauthorized WorkBuddy desktop request.");
-        let result: WorkbuddyDesktopCreationResult | WorkbuddyDesktopSteerResult;
-        if (request.action === "steer" && steer && steerInput(request.input)) {
-          result = await steer(request.input, controller.signal);
+        let result: WorkbuddyDesktopCreationResult | WorkbuddyDesktopMessageResult;
+        if ((request.action === "steer" || request.action === "continue") && send && steerInput(request.input)) {
+          result = await send(request.input, controller.signal, request.action);
         } else if (request.action === undefined && creationInput(request.input)) {
           result = await create(request.input, controller.signal);
         } else throw new Error("Invalid or unsupported WorkBuddy desktop request.");
@@ -95,14 +97,45 @@ export async function serveWorkbuddyDesktopRelay(
   };
 }
 
-async function readRelay(descriptor: string, notConnected: string): Promise<DesktopRelay> {
-  const relay = await readFile(descriptor, "utf8").then(text => JSON.parse(text) as DesktopRelay).catch(error => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(notConnected);
+async function findRelay(descriptor: string): Promise<DesktopRelay | null> {
+  const relay = await readFile(descriptor, "utf8").then(text => text ? JSON.parse(text) as DesktopRelay : null).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   });
-  if (!relay?.pipe?.startsWith(pipePrefix) || !/^[a-f0-9-]{36}$/.test(relay.pipe.slice(pipePrefix.length))
-    || !/^[a-f0-9]{64}$/.test(relay.token)) throw new Error("WorkBuddy 桌面连接器配置无效。");
+  if (relay === null) return null;
+  if (typeof relay.pipe !== "string" || !relay.pipe.startsWith(pipePrefix) || !/^[a-f0-9-]{36}$/.test(relay.pipe.slice(pipePrefix.length))
+    || typeof relay.token !== "string" || !/^[a-f0-9]{64}$/.test(relay.token)) throw new Error("WorkBuddy 桌面连接器配置无效。");
   return relay;
+}
+
+function probeRelay(relay: DesktopRelay): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(relay.pipe);
+    socket.setTimeout(1_000, () => { socket.destroy(); reject(new Error("WorkBuddy 桌面连接器尚未响应。")); });
+    socket.once("connect", () => { socket.destroy(); resolve(true); });
+    socket.once("close", () => resolve(false));
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") resolve(false);
+      else reject(error);
+    });
+  });
+}
+
+/** A transport probe sends no message and works with older connected workers. */
+export async function isWorkbuddyDesktopRelayReady(descriptor = descriptorPath()): Promise<boolean> {
+  const relay = await findRelay(descriptor);
+  return relay ? probeRelay(relay) : false;
+}
+
+/** Only the desktop launcher calls this, after proving that the original desktop is closed. */
+export async function clearClosedWorkbuddyDesktopRelay(descriptor = descriptorPath()): Promise<void> {
+  const stale = await findRelay(descriptor);
+  if (!stale) return;
+  if (await probeRelay(stale)) throw new Error("WorkBuddy 桌面连接器仍在运行。");
+  const current = await findRelay(descriptor);
+  if (!current) return;
+  if (current.pipe !== stale.pipe || current.token !== stale.token) throw new Error("WorkBuddy 桌面连接器已切换。");
+  await unlink(descriptor);
 }
 
 async function invokeRelay<Result>(relay: DesktopRelay, payload: { input: unknown; action?: string }, signal?: AbortSignal) {
@@ -129,7 +162,8 @@ export async function requestWorkbuddyDesktopCreation(
   descriptor = descriptorPath()
 ): Promise<WorkbuddyDesktopCreationResult> {
   signal?.throwIfAborted();
-  const relay = await readRelay(descriptor, "WorkBuddy 桌面创建尚未连接，请先启动桌面连接器。");
+  const relay = await findRelay(descriptor);
+  if (!relay) throw new Error("WorkBuddy 桌面创建尚未连接，请先启动桌面连接器。");
   const { layout, ...baseInput } = input;
   if (layout !== undefined && !isWorkbuddyDesktopLayout(layout)) throw new Error("WorkBuddy 桌面布局无效。");
   const canSelectLayout = relay.composerLayoutContract === composerLayoutContract;
@@ -142,20 +176,33 @@ export async function requestWorkbuddyDesktopCreation(
 }
 
 export async function requestWorkbuddyDesktopSteer(
-  input: WorkbuddyDesktopSteerInput,
+  input: WorkbuddyDesktopMessageInput,
   assertAuthorized?: () => void | Promise<void>,
   descriptor = descriptorPath()
 ): Promise<void> {
-  const relay = await readRelay(descriptor, "WorkBuddy 桌面连接器尚未连接，请先启动桌面连接器。").catch(error => {
-    throw new WorkbuddyDesktopSteerNotSentError(error instanceof Error ? error.message : String(error));
+  return requestWorkbuddyDesktopMessage(input, "steer", assertAuthorized, descriptor);
+}
+
+export async function requestWorkbuddyDesktopMessage(
+  input: WorkbuddyDesktopMessageInput,
+  mode: WorkbuddyDesktopMessageMode,
+  assertAuthorized?: () => void | Promise<void>,
+  descriptor = descriptorPath()
+): Promise<void> {
+  const relay = await findRelay(descriptor).catch(error => {
+    throw new WorkbuddyDesktopMessageNotSentError(error instanceof Error ? error.message : String(error));
   });
-  if (relay.steerContract !== steerContract) throw new WorkbuddyDesktopSteerNotSentError("当前 WorkBuddy 桌面连接器不支持本版引导会话，请更新连接器。");
-  await assertAuthorized?.();
-  const result = await invokeRelay<WorkbuddyDesktopSteerResult>(relay, { action: "steer", input });
-  if (result.threadId !== input.threadId || result.deliveryId !== input.deliveryId) {
-    throw new Error("WorkBuddy 引导请求未返回匹配的接收回执。");
+  if (!relay) throw new WorkbuddyDesktopMessageNotSentError("WorkBuddy 桌面连接器尚未连接，请先启动桌面连接器。");
+  if (mode === "steer" ? relay.steerContract !== steerContract : relay.continuationContract !== continuationContract) {
+    const name = mode === "steer" ? "引导会话" : "后台唤起原会话";
+    throw new WorkbuddyDesktopMessageNotSentError(`当前 WorkBuddy 桌面连接器不支持本版${name}，请更新连接器。`);
   }
-  if (result.state === "inactive") throw new WorkbuddyDesktopSteerNotSentError("WorkBuddy 目标会话当前没有可引导的执行轮次。");
-  if (result.state === "unavailable") throw new WorkbuddyDesktopSteerNotSentError("WorkBuddy 桌面端未确认目标会话或工作区。");
-  if (result.state !== "accepted") throw new Error("WorkBuddy 引导结果待确认，请查询原投递编号和目标会话历史。");
+  await assertAuthorized?.();
+  const result = await invokeRelay<WorkbuddyDesktopMessageResult>(relay, { action: mode, input });
+  if (result.threadId !== input.threadId || result.deliveryId !== input.deliveryId) {
+    throw new Error("WorkBuddy 桌面投递未返回匹配的接收回执。");
+  }
+  if (result.state === "inactive") throw new WorkbuddyDesktopMessageNotSentError("WorkBuddy 目标会话当前没有可引导的执行轮次。");
+  if (result.state === "unavailable") throw new WorkbuddyDesktopMessageNotSentError("WorkBuddy 桌面端未确认目标会话或工作区。");
+  if (result.state !== "accepted") throw new Error("WorkBuddy 桌面投递结果待确认，请查询原投递编号和目标会话历史。");
 }

@@ -10,8 +10,18 @@ import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, A
 const string = { type: "string" };
 const roleId = { type: "string", minLength: 1, pattern: "^[\\p{L}\\p{N}_-]+$" };
 const configuration = { type: "object", properties: Object.fromEntries(ROLE_CONFIGURATION_KEYS.map(key => [key, true])) };
-const configurationInput = { type: "object", properties: {
+const automationDeliveryTemplates = { type: "array", items: { type: "object", additionalProperties: false,
+  required: ["id", "title", "triggerType", "message", "template"], properties: {
+    id: { type: "string", minLength: 1 }, title: { type: "string", pattern: "\\S" },
+    triggerType: { enum: ["message", "schedule"] }, message: string, template: string
+  }
+} };
+const configurationWithTemplates = { ...configuration, properties: {
   ...configuration.properties,
+  automationDeliveryTemplates
+} };
+const configurationInput = { type: "object", properties: {
+  ...configurationWithTemplates.properties,
   automationRules: { if: { type: "array" }, then: { type: "array", items: {
     if: { type: "object" }, then: { type: "object", properties: {
       trigger: {
@@ -31,7 +41,10 @@ const configurationInput = { type: "object", properties: {
 const roleDetail = { type: "object", required: ["roleId", "schemaVersion", "revision", "archivedAt", "config", "runningWork", "rolePath", "roleDir", "routes"],
   properties: { roleId, schemaVersion: { const: 1 }, revision: { type: "string", pattern: "^[a-f0-9]{64}$" }, archivedAt: { type: ["string", "null"] },
     config: configuration, personaConfig: { type: "object" }, runningWork: { type: "integer", minimum: 0 }, rolePath: string, roleDir: string,
-    routes: { type: "array", items: { type: "object", required: ["id", "name"], properties: { id: string, name: string } } } } };
+    routes: { type: "array", items: { type: "object", required: ["id", "name"], properties: {
+      id: string, name: string, primaryAgent: { type: "object", required: ["type", "label", "hasSessionId"],
+        properties: { type: string, label: string, sessionName: string, hasSessionId: { type: "boolean" } } }
+    } } } } };
 const documentDetail = { type: "object", required: ["roleId", "document", "personaConfig", "revision", "configurationRevision"], properties: { roleId, document: string, personaConfig: { type: "object" }, revision: string, configurationRevision: string } };
 const roleList = { type: "object", required: ["roles", "nextCursor"], properties: {
   roles: { type: "array", items: { type: "object", required: ["roleId", "title", "archivedAt", "error"], properties: {
@@ -125,7 +138,10 @@ export function createRoleConfigurationOperations(context: RoleConfigurationCont
         headers: nativeCommand || action === "create" ? { type: "object", ...(nativeCommand ? { required: ["idempotency-key"] } : {}), properties: { "idempotency-key": { type: "string", pattern: "^[A-Za-z0-9:._-]{1,128}$" } } } : { type: "object" },
         body: !mutation ? { kind: "none", allowIgnoredBody: true } : { kind: "json", maxBytes: 0,
           allowAnyContentType: true, schema: { type: "object", required: action === "create" ? ["roleId", "title"] : action === "document" ? ["expectedRevision", "document"] : action === "config-patch" ? ["expectedRevision", "config"] : ["expectedRevision"], properties: {
-            expectedRevision: string, roleId: string, title: string, confirmationId: string, document: string, config: action === "config" ? configurationInput : action === "config-patch" ? { type: "object" } : configuration
+            expectedRevision: string, roleId: string, title: string, confirmationId: string, document: string,
+            config: action === "config" ? configurationInput : action === "config-patch"
+              ? { type: "object", properties: { automationDeliveryTemplates: { anyOf: [automationDeliveryTemplates, { type: "null" }] } } }
+              : configurationWithTemplates
           } } }
       },
       responses: { [action === "create" ? "201" : "200"]: { mediaType: "application/json; charset=utf-8", schema: {

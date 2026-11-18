@@ -8,7 +8,7 @@ import type { PluginCatalogApiContext, PluginCatalogInvocation } from "./pluginC
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 
 export type PluginCatalogAction = "catalog.read" | "reconciliation.read" | "reconciliation.run" | "modules.list" | "modules.read" | "instances.read" | "instances.update"
-  | "packages.list" | "packages.import" | "instances.install" | "instances.remove";
+  | "packages.list" | "packages.import" | "packages.inspectUrl" | "packages.importUrl" | "instances.install" | "instances.remove";
 const noStore = { "cache-control": "no-store" };
 function json(status: number, body: unknown, headers: Record<string, string> = {}): ApiOperationResult {
   return { status, body: errorResponsePresentation(body, status), headers: { ...noStore, ...headers } };
@@ -25,9 +25,9 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
       const list = modules?.list, read = modules?.read, rootReader = context.root;
       const originalGeneration = runtime.current();
       const management = context.management, listInstances = management?.list, updateInstance = management?.update;
-      const packages = management?.packages, importPackage = management?.importPackage, install = management?.install, uninstall = management?.uninstall;
+      const packages = management?.packages, importPackage = management?.importPackage, inspectUrl = management?.inspectUrl, importUrl = management?.importUrl, install = management?.install, uninstall = management?.uninstall;
       const root = rootReader?.();
-      const mutation = ["reconciliation.run", "instances.update", "packages.import", "instances.install", "instances.remove"].includes(action);
+      const mutation = ["reconciliation.run", "instances.update", "packages.import", "packages.importUrl", "instances.install", "instances.remove"].includes(action);
       const fail = (status: number, code: string, field: string): never => {
         throw new ApiContractError(status, code, field, operationId, dispatched, mutation ? dispatched ? "unknown" : "not_started" : undefined);
       };
@@ -80,15 +80,18 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
       return {
         invocation,
         async execute(input: { host?: string | null; webRelease?: string | null; id?: string; rev?: string; relativePath?: string; expectedRevision?: string; enabled?: boolean;
-          sourceDirectory?: string; pluginId?: string; version?: string; instanceId?: string }): Promise<ApiOperationResult> {
+          sourceDirectory?: string; pluginId?: string; version?: string; instanceId?: string;
+          url?: string; expectedArchiveSha256?: string; subdirectory?: string }): Promise<ApiOperationResult> {
           try {
             assertCurrent();
             if (mutation && readOnly) return { ...json(403, { code: -1, message: "Manager is running in read-only acceptance mode." }), mutationOutcome: "not_started" };
-            if (["packages.list", "packages.import", "instances.install", "instances.remove"].includes(action)) {
+            if (["packages.list", "packages.import", "packages.inspectUrl", "packages.importUrl", "instances.install", "instances.remove"].includes(action)) {
               if (!management) return json(503, { code: -1, message: "Plugin management is unavailable." });
               let value: unknown;
               if (action === "packages.list" && packages) value = await packages.call(management, invocation);
               else if (action === "packages.import" && importPackage) { dispatched = true; value = await importPackage.call(management, input.sourceDirectory!, invocation); }
+              else if (action === "packages.inspectUrl" && inspectUrl) value = await inspectUrl.call(management, input.url!, invocation, input.subdirectory);
+              else if (action === "packages.importUrl" && importUrl) { dispatched = true; value = await importUrl.call(management, input.url!, input.expectedArchiveSha256, invocation, input.subdirectory); }
               else if (action === "instances.install" && install) { dispatched = true; value = await install.call(management, {
                 expectedRevision: input.expectedRevision!, pluginId: input.pluginId!, version: input.version!, instanceId: input.instanceId
               }, invocation); }

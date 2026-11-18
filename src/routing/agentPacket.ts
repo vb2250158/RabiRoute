@@ -43,6 +43,7 @@ import type { ForwardTemplateValues } from "./types.js";
 import type { RouteDecision } from "./routeDecision.js";
 import type { RemotePersonaSnapshot } from "./remotePersonaClient.js";
 import { messageContextScopeForForward } from "./messageContextScope.js";
+import { RECORDING_CAPTURE_TYPES, isCaptureEventRouteKind } from "../shared/personaEventTypes.js";
 import { conversationIndexForRecord } from "../conversationMessageCursor.js";
 import {
   isGroupRecord,
@@ -50,6 +51,7 @@ import {
   isManualTriggerRecord,
   isPlanFeedbackRecord,
   isFeishuRecord,
+  isQqBotRecord,
   isRolePanelRecord,
   isWeComRecord,
   isWeixinRecord,
@@ -558,7 +560,7 @@ function recentMessageContextForDecision(decision: RouteDecision, rule: Notifica
   text: string;
   lastReadMessageIndex?: string;
 } {
-  if (decision.routeKind === "plan_feedback") {
+  if (decision.routeKind === "plan_feedback" || isCaptureEventRouteKind(decision.routeKind)) {
     return { limit: 0, text: "" };
   }
   const scope = messageContextScopeForForward(decision.routeKind, decision.record, {
@@ -814,6 +816,8 @@ function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
 }
 
 function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: RouteDecision["record"]): string {
+  const captureType = RECORDING_CAPTURE_TYPES.find(type => type.routeKind === routeKind);
+  if (captureType) return `全天记录 · ${captureType.title}`;
   if (routeKind === "private") return "QQ 私聊消息提醒";
   if (routeKind === "group_message") return "QQ 群聊消息提醒";
   if (routeKind === "direct_at") return "QQ 群聊直接提醒";
@@ -832,6 +836,8 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: Rout
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   if (routeKind === "weixin_message") return "个人微信消息提醒";
   if (routeKind === "feishu_message") return "飞书群聊消息提醒";
+  if (routeKind === "qqbot_private") return "QQ 机器人单聊";
+  if (routeKind === "qqbot_group") return "QQ 机器人群内 @";
   if (routeKind === "xiaomi_home_event") return "米家设备事件";
   return "RabiRoute 消息提醒";
 }
@@ -867,7 +873,7 @@ function messageSourceForDecision(decision: RouteDecision, values: ForwardTempla
   if (decision.routeKind === "plan_feedback") {
     return { type: "plan", ...planSourceIdentity(record, roleDir) };
   }
-  if (decision.routeKind === "heartbeat" || decision.routeKind === "manual_trigger") {
+  if (decision.routeKind === "heartbeat" || decision.routeKind === "manual_trigger" || isCaptureEventRouteKind(decision.routeKind)) {
     return {
       type: "system",
       eventType: decision.routeKind,
@@ -937,7 +943,8 @@ function outputPipelineForDecision(decision: RouteDecision): ResolvedPipeline {
 function templateValuesForDecision(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): ForwardTemplateValues {
   const record = decision.record;
   const route = decision.route;
-  const isVoiceTranscript = isVoiceTranscriptRecord(record);
+  const isCaptureEvent = isCaptureEventRouteKind(decision.routeKind);
+  const isVoiceTranscript = !isCaptureEvent && isVoiceTranscriptRecord(record);
   const sender = isVoiceTranscript
     ? record.senderName || record.source || "voice_transcript"
     : record.senderName || ("userId" in record ? record.userId : "RabiRoute");
@@ -948,6 +955,7 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
   const isPlanFeedback = isPlanFeedbackRecord(record);
   const isWeCom = isWeComRecord(record);
   const isFeishu = isFeishuRecord(record);
+  const isQqBot = isQqBotRecord(record);
   const isWeixin = isWeixinRecord(record);
   const localReplyContext = (isRolePanel || isPlanFeedback) && record.replyContext && typeof record.replyContext === "object"
     ? record.replyContext
@@ -962,7 +970,10 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isPlanFeedback ? planFeedbackTargetId : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
   const feishuChatId = isFeishu ? record.chatId : undefined;
-  const targetType = isGroup || isWeCom || isFeishu ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
+  const qqbotGroupId = isQqBot ? record.groupId : undefined;
+  const qqbotChannelId = isQqBot ? record.channelId : undefined;
+  const qqbotDmGuildId = isQqBot ? record.dmGuildId : undefined;
+  const targetType = isCaptureEvent ? "recording" : isGroup || isWeCom || isFeishu || qqbotGroupId || (qqbotChannelId && !qqbotDmGuildId) ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const sendApiPath = "/api/agent/send";
   const sendApiUrl = `${runtimeManagerBaseUrl()}${sendApiPath}`;
@@ -970,8 +981,8 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
   const dataDirPath = relativeWorkspacePath(personaDataDir);
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
   const rolePath = relativeWorkspacePath(roleContext.rolePath);
-  const groupLogPath = relativeWorkspacePath(path.join(personaDataDir, isWeCom ? "wecom-messages.jsonl" : isFeishu ? "feishu-messages.jsonl" : "group-messages.jsonl"));
-  const privateLogPath = relativeWorkspacePath(path.join(personaDataDir, isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
+  const groupLogPath = relativeWorkspacePath(path.join(personaDataDir, isQqBot ? "qqbot-messages.jsonl" : isWeCom ? "wecom-messages.jsonl" : isFeishu ? "feishu-messages.jsonl" : "group-messages.jsonl"));
+  const privateLogPath = relativeWorkspacePath(path.join(personaDataDir, isQqBot ? "qqbot-messages.jsonl" : isWeixin ? "weixin-messages.jsonl" : "private-messages.jsonl"));
   const heartbeatLogPath = relativeWorkspacePath(path.join(personaDataDir, "heartbeat-events.jsonl"));
   const manualTriggerLogPath = relativeWorkspacePath(path.join(personaDataDir, "manual-trigger-events.jsonl"));
   const rolePanelLogPath = relativeWorkspacePath(path.join(roleContext.roleDir || personaDataDir, "role-panel", "messages.jsonl"));
@@ -1000,7 +1011,7 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
     messageGroupId: record.messageGroupId,
     messageGroupMessageIds: record.messageGroupMessageIds,
     messageProcessingRequirementId: decision.extraValues?.messageProcessingRequirementId,
-    groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
+    groupId: isGroup ? record.groupId : qqbotGroupId ?? wecomGroupId ?? feishuChatId,
     userId: "userId" in record ? record.userId : undefined,
     targetGroupId: config.targetGroupId || undefined,
     instanceId: "instanceId" in record ? record.instanceId : undefined,
@@ -1033,6 +1044,10 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
     wecomSenderId: isWeCom ? record.senderId ?? record.userId : undefined,
     wecomMessageType: isWeCom ? record.messageType : undefined,
     feishuChatId,
+    qqbotCanReply: isQqBot ? Boolean(record.platformMessageId) : undefined,
+    qqbotChannelId,
+    qqbotDmGuildId,
+    qqbotEventId: isQqBot ? record.eventId : undefined,
     feishuMessageId: isFeishu ? record.messageId : undefined,
     weixinSessionId: isWeixin ? record.sessionId : undefined,
     weixinUserId: isWeixin ? record.userId : undefined,
@@ -1055,10 +1070,10 @@ function templateValuesForDecision(decision: RouteDecision, rule: NotificationRu
     sender,
     senderName: record.senderName,
     userId: "userId" in record ? record.userId : undefined,
-    groupId: isGroup ? record.groupId : wecomGroupId ?? feishuChatId,
+    groupId: isGroup ? record.groupId : qqbotGroupId ?? wecomGroupId ?? feishuChatId,
     targetType,
-    targetId: isWeCom ? wecomGroupId : isFeishu ? feishuChatId : targetId,
-    messageTarget: isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isFeishu ? `飞书群 ${feishuChatId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划反馈 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
+    targetId: isWeCom ? wecomGroupId : isFeishu ? feishuChatId : qqbotGroupId ?? targetId,
+    messageTarget: isQqBot ? (qqbotGroupId ? `QQ 机器人群聊 ${qqbotGroupId}` : `QQ 机器人单聊 ${record.userId}`) : isWeixin ? `个人微信会话 ${record.sessionId}` : isWeCom ? `企业微信群 ${wecomGroupId ?? "unknown"}` : isFeishu ? `飞书群 ${feishuChatId ?? "unknown"}` : isGroup ? `群 ${targetId}` : isHeartbeat ? "RabiRoute 心跳" : isManualTrigger ? `手动触发 ${targetId}` : isPlanFeedback ? `计划反馈 ${targetId}` : isRolePanel ? `角色面板 ${targetId}` : isVoiceTranscript ? decision.routeKind === "rabilink" ? `RabiLink ${targetId}` : `语音转写 ${targetId}` : `私聊 ${targetId}`,
     message: record.rawMessage,
     rawMessage: record.rawMessage,
     routeText: decision.routeText,

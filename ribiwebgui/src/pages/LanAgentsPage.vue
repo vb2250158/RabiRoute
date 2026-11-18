@@ -69,6 +69,7 @@ const issuingTicket = ref(false);
 const ticketExpiresAt = ref("");
 const targetPlatform = ref<LanAgentBootstrapPlatform>();
 const managerUrl = ref(window.location.origin);
+const managerGuid = ref("");
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
 const namingInstance = ref<AgentInstance>();
@@ -111,7 +112,7 @@ async function copyInstallPrompt(): Promise<void> {
   if (issuingTicket.value) return;
   if (!targetPlatform.value) { error.value = "请先选择目标电脑系统。"; return; }
   const platform = targetPlatform.value;
-  const target = { deviceId: ownerDeviceId.value, managerUrl: managerUrl.value, publicKeySha256: releasePublicKeySha256.value };
+  const target = { deviceId: ownerDeviceId.value, managerUrl: managerUrl.value, managerGuid: managerGuid.value, publicKeySha256: releasePublicKeySha256.value };
   error.value = "";
   copied.value = false;
   issuingTicket.value = true;
@@ -123,7 +124,7 @@ async function copyInstallPrompt(): Promise<void> {
     if (target.deviceId !== ownerDeviceId.value) return;
     if (!data?.ticket || !Number.isFinite(data.expiresAt) || data.expiresAt! <= Date.now()) throw new Error("未取得有效的一次性接入票据，请刷新后重试。");
     ticketExpiresAt.value = new Date(data.expiresAt!).toISOString();
-    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: target.managerUrl, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: target.publicKeySha256, platform }));
+    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: target.managerUrl, managerGuid: target.managerGuid, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: target.publicKeySha256, platform }));
     copied.value = true;
   } catch (reason) {
     error.value = userFacingError(reason);
@@ -158,6 +159,7 @@ async function refresh(): Promise<void> {
   loading.value = true;
   error.value = "";
   releasePublicKeySha256.value = "";
+  managerGuid.value = "";
   try {
     const access = await readJson(await fetch("/api/webgui-access", { cache: "no-store", signal: controller.signal }));
     if (controller.signal.aborted) return;
@@ -179,6 +181,7 @@ async function refresh(): Promise<void> {
     if (catalog.status === "rejected") throw catalog.reason;
     instances.value = (catalog.value.instances as AgentInstance[]).map(instance => ({ ...instance, ...(deviceId ? { ownerDeviceId: deviceId } : {}) }));
     if (meta.status === "fulfilled") {
+      managerGuid.value = text(meta.value.rabiGuid);
       const lan = meta.value.webguiLan;
       connectionAvailable.value = deviceId ? lan?.enabled === true && lan?.listeningOnLan === true : connectionAvailable.value;
       const address = meta.value.lanDiscovery?.interfaces?.[0]?.address;
@@ -216,7 +219,7 @@ async function requestUpdate(node: NodeStatus): Promise<void> {
 }
 
 watch(ownerDeviceId, () => {
-  managerUrl.value = ""; releaseVersion.value = ""; releasePublicKeySha256.value = ""; connectionAvailable.value = false;
+  managerUrl.value = ""; managerGuid.value = ""; releaseVersion.value = ""; releasePublicKeySha256.value = ""; connectionAvailable.value = false;
   copied.value = false; ticketExpiresAt.value = ""; enrollmentOpen.value = false;
   instances.value = []; nodes.value = []; tasks.value = [];
   namingInstance.value = undefined; addingInstanceId.value = "";
@@ -230,11 +233,11 @@ onBeforeUnmount(() => { refreshController?.abort(); });
   <v-container class="lan-agents-page" fluid>
     <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-3">
       <div>
-        <h2 class="text-subtitle-1 font-weight-bold">远端智能体</h2>
+        <h2 class="text-subtitle-1 font-weight-bold">节点管理</h2>
         <p class="text-body-2 lan-muted mb-0">{{ selectedHostName }} · 在线 {{ onlineCount }} / {{ instances.length }} 个执行实例。</p>
       </div>
       <div class="d-flex flex-wrap ga-2">
-        <v-btn prepend-icon="mdi-plus" color="primary" @click="enrollmentOpen = true">接入一台电脑</v-btn>
+        <v-btn prepend-icon="mdi-plus" color="primary" @click="enrollmentOpen = true">接入节点</v-btn>
         <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh">刷新</v-btn>
       </div>
     </div>
@@ -255,7 +258,7 @@ onBeforeUnmount(() => { refreshController?.abort(); });
     </v-dialog>
     <v-dialog v-model="enrollmentOpen" max-width="760">
     <v-card>
-      <v-card-title>接入一台电脑</v-card-title>
+      <v-card-title>接入节点</v-card-title>
       <v-card-text>
         <ol class="pl-5 mb-3">
           <li>选择目标电脑系统，复制对应的接入提示词。</li>
@@ -282,7 +285,7 @@ onBeforeUnmount(() => { refreshController?.abort(); });
       </v-expansion-panel>
     </v-expansion-panels>
     <v-alert v-if="!loading && !nodes.length" type="info" variant="tonal" class="mb-4">
-      当前主机的终端与电脑能力可直接使用。只运行轻量客户端的其他电脑，可通过“接入一台电脑”加入此主机。
+      当前主机的终端与电脑能力可直接使用。其他电脑可通过「接入节点」加入此主机。
     </v-alert>
 
     <v-expansion-panels multiple>

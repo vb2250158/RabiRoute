@@ -286,24 +286,35 @@ test("Feishu Fiber waits for listener readiness, forwards messages, and releases
   await second.dispose();
 });
 
-test("Feishu listener conflict rejects Cordis mount and records failure", async (t) => {
+test("Feishu listener conflict records failure and exposes cleanup for a same-process retry", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-conflict-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const blocker = http.createServer();
   const port = await listen(blocker);
-  t.after(() => close(blocker));
-  const runtime = await createMessageAdapterRuntime([definition({
+  t.after(() => blocker.listening ? close(blocker) : undefined);
+  const adapter = createFeishuAdapter({
     settings: () => settings(port),
     dataDir: () => dataDir,
     memoryDataDir: () => dataDir
-  })]);
-  t.after(() => runtime.dispose());
+  });
+  let cleanup: MessageAdapterDispose | undefined;
+  const startup = { signal: new AbortController().signal, onFailure(dispose: MessageAdapterDispose) { cleanup = dispose; } };
 
-  await assert.rejects(runtime.mount("feishu"), /EADDRINUSE/);
+  await assert.rejects(async () => adapter.start(startup), /EADDRINUSE/);
   const status = readStatus(dataDir).messageAdapters.feishu;
   assert.equal(status.status, "failed");
   assert.equal(status.listenerReady, false);
   assert.match(status.lastError, /EADDRINUSE/);
+  assert.ok(cleanup, "A failed start must let the SDK join the listener cleanup.");
+  await cleanup();
+  await close(blocker);
+  const dispose = await adapter.start(startup);
+  try {
+    assert.equal(typeof dispose, "function");
+    assert.equal(readStatus(dataDir).messageAdapters.feishu.listenerReady, true);
+  } finally {
+    await dispose?.();
+  }
 });
 
 test("Feishu disposal prevents an incomplete callback from persisting or forwarding", async (t) => {

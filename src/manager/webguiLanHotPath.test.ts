@@ -61,7 +61,7 @@ function connectionGuard(kind: "agent" | "unrelated", revoked = false, webAllowe
   visit(ast);
   assert.ok(callback);
   let webChecks = 0, agentChecks = 0;
-  const context = vm.createContext({ lanAgentAccess: { kind }, request: {}, requestUrl: {}, admittedRabiLink: false,
+  const context = vm.createContext({ lanAgentAccess: { kind }, request: {}, requestUrl: {}, incomingScope: undefined,
     assertTrustedLanAgentPrincipal: () => { agentChecks++; if (revoked) throw new Error("revoked agent"); },
     webguiLanRequestAllowed: () => { webChecks++; return webAllowed; }
   });

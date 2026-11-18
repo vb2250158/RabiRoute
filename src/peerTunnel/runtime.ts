@@ -15,11 +15,13 @@ import { proxyTunnel, proxyTunnelUpgrade, peerProxyRequestHeaders, serveTunnel, 
 import type { DiscoveredRabiPeer } from "../rabiPeerDiscovery.js";
 import type { PeerCall } from "../rabiPeerClient.js";
 import { PERSONA_PEER_SERVICE, PERSONA_REFERENCE_CAPABILITY, personaPeerRequestAllowed } from "../shared/personaPeerService.js";
+import { fetchAccountHost, proxyAccountHost, type AccountProxyRelay } from "../manager/rabiLinkHostAccountProxy.js";
+import type { PeerConnectionStatus } from "../shared/peerTunnelContract.js";
 import { issueInternalManagerHopHeaders } from "../shared/internalManagerHop.js";
 import type { ApiUpgradeInput, ApiHttpProxyInput } from "../manager/apiOperationContract.js";
 import { openPeerEvents, PEER_EVENT_LIMITS } from "./events.js";
 
-type Config = { selectedDeviceId: string; trustedDevices: TunnelGrant[]; services: Record<string, TunnelService> };
+type Config = { selectedDeviceId: string; accountSelections?: Record<string, string>; trustedDevices: TunnelGrant[]; services: Record<string, TunnelService> };
 export const APPLICATION_ACCESS_CAPABILITY = "rabilink-application-access-v1";
 export const APPLICATION_BOOTSTRAP_DOMAIN = "rabi-application-bootstrap-v1";
 export const DEVICE_DELEGATION_DOMAIN = "rabi-device-delegation-v1";
@@ -45,6 +47,9 @@ export class PeerTunnelRuntime {
   private readonly sessionScopes = new WeakMap<TunnelSession, string>();
   private readonly deviceGrants = new Map<string, DeviceGrant>();
   private readonly pending = new Set<Promise<unknown>>();
+  private directoryAccount?: AccountProxyRelay;
+  private readonly accountProbes = new Map<string, Pick<PeerConnectionStatus, "state" | "transport" | "latencyMs" | "measuredAt">>();
+  private readonly revokedAccountPeers = new Set<string>();
   private retirement?: Promise<void>;
   readonly identity;
   private track<T>(work: Promise<T>): Promise<T> {
@@ -57,6 +62,9 @@ export class PeerTunnelRuntime {
     discover(): Promise<DiscoveredRabiPeer[]>;
     signal(call: PeerCall, signal?: AbortSignal): Promise<unknown>;
     relay(): { url: string; token: string };
+    accountRelay?(): AccountProxyRelay | undefined;
+    accountTunnel?(): PeerTunnelRuntime | undefined;
+    lanScope?: "account";
     services(): Record<string, TunnelService>;
     onStatus(value: unknown): void;
     allowControl?(request: http.IncomingMessage, url: URL): boolean;
@@ -79,11 +87,18 @@ export class PeerTunnelRuntime {
       throw error; // Corrupt authorization must fail closed, not reset selection to local.
     }
   }
-  selected() { return this.config().selectedDeviceId; }
+  private accountSelectionKey(account: AccountProxyRelay) { return createHash("sha256").update(`${account.url}\n${account.accountId}`).digest("hex"); }
+  selected() {
+    const config = this.config(), account = this.options.accountRelay?.();
+    if (!account) return config.selectedDeviceId;
+    const id = config.accountSelections?.[this.accountSelectionKey(account)];
+    return typeof id === "string" ? id : "";
+  }
   private controlAllowed(request: http.IncomingMessage, url: URL): boolean {
     return this.options.allowControl ? this.options.allowControl(request, url) : ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress || "");
   }
   private grant(id: string): TunnelGrant & { epoch?: string } {
+    if (this.revokedAccountPeers.has(id)) throw new TunnelDenied("peer_service_denied");
     if (id.startsWith("glasses-")) {
       const device = this.deviceGrants.get(id);
       if (!device || device.expiresAt <= Date.now() || !this.applicationConnectionAllowed() || device.bootstrapScope !== this.bootstrapScope()) throw new TunnelDenied("peer_device_authority_expired");
@@ -152,13 +167,19 @@ export class PeerTunnelRuntime {
   async select(id: string, assertCurrent?: () => void) {
     assertCurrent?.();
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
+    const account = this.options.accountRelay?.();
     if (id) { await this.ensureApplicationConnection(id); assertCurrent?.(); const peer = await this.target(id); assertCurrent?.(); if (!peer.supported) throw new Error("peer_upgrade_required"); }
     assertCurrent?.();
-    const config = this.config(); config.selectedDeviceId = id;
+    if (account) this.assertAccountRelay(account);
+    else if (this.options.accountRelay?.()) throw new TunnelDenied("peer_service_denied");
+    const config = this.config();
+    if (account) (config.accountSelections ??= {})[this.accountSelectionKey(account)] = id;
+    else config.selectedDeviceId = id;
     mkdirSync(path.dirname(this.file), { recursive: true });
     const temp = this.file + "." + randomUUID() + ".tmp";
     writeFileSync(temp, JSON.stringify(config, null, 2), { flag: "wx", mode: 0o600 }); renameSync(temp, this.file);
     this.connections.select(id); this.connections.emit("selection", { selectedDeviceId: id }); this.options.onStatus({ selectedDeviceId: id });
+    if (account) this.options.accountTunnel?.()?.connections.select(id);
   }
   startLanDiscovery(port: number) {
     if (this.options.readOnly || this.bonjour || !Number.isInteger(port) || port < 1) return;
@@ -180,6 +201,7 @@ export class PeerTunnelRuntime {
     this.lanBrowser.on("down", service => { this.lanPeers.delete(String(service.txt?.deviceId || "")); });
   }
   private mergedPeers() {
+    if (this.options.accountRelay?.()) return this.peers;
     const map = new Map(this.peers.map(peer => [peer.id, peer]));
     for (const [id, peer] of this.lanPeers) {
       const old = map.get(id); map.set(id, { ...peer, name: old?.name || peer.name, capabilities: [...new Set([...peer.capabilities, ...(old?.capabilities || [])])], peerUrls: [...new Set([...peer.peerUrls, ...(old?.peerUrls || [])])].slice(0, 4) });
@@ -187,8 +209,20 @@ export class PeerTunnelRuntime {
     return [...map.values()];
   }
   async directory(force = false) {
+    const account = this.options.accountRelay?.();
+    if (account?.token !== this.directoryAccount?.token || account?.url !== this.directoryAccount?.url) {
+      this.directoryAccount = account;
+      this.directoryFlight = undefined;
+      this.directoryAt = 0;
+      this.peers = [];
+      this.accountProbes.clear();
+    }
     if (!this.directoryFlight && (force || Date.now() - this.directoryAt > 5_000)) {
-      const flight = this.options.discover().then(peers => { this.peers = peers; this.directoryAt = Date.now(); return peers; }).catch(error => {
+      const flight = this.options.discover().then(peers => {
+        if (this.directoryFlight === flight) { this.peers = peers; this.directoryAt = Date.now(); }
+        return peers;
+      }).catch(error => {
+        if (this.directoryFlight !== flight) throw error;
         if (!this.lanPeers.size && !this.peers.length) throw error;
         this.directoryAt = Date.now(); this.peers = this.peers.map(peer => ({ ...peer, online: false })); return this.peers;
       });
@@ -196,9 +230,17 @@ export class PeerTunnelRuntime {
       void flight.finally(() => { if (this.directoryFlight === flight) this.directoryFlight = undefined; }).catch(() => {});
     }
     if (this.directoryFlight) await this.directoryFlight;
-    return { selectedDeviceId: this.selected(), peers: this.mergedPeers().filter(peer => peer.id !== this.identity.deviceId).map(peer => ({ ...this.connections.snapshot(this.candidate(peer)), personaSupported: peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY) })) };
+    if (this.options.accountRelay?.()?.token !== account?.token) throw new TunnelDenied("peer_service_denied");
+    const peers = this.mergedPeers().filter(peer => peer.id !== this.identity.deviceId && (!account || peer.capabilities.includes("host-account-http-v1"))).map(peer => {
+      const native = account && peer.capabilities.includes("host-account-tunnel-v1") ? this.options.accountTunnel?.() : undefined;
+      const status = native ? native.connections.snapshot(native.candidate(peer)) : this.connections.snapshot(this.candidate(peer));
+      const snapshot = account && peer.online ? this.accountProbes.get(peer.id) : undefined;
+      return { ...status, ...snapshot, personaSupported: peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY) };
+    });
+    return { selectedDeviceId: this.selected(), peers };
   }
   private candidate(peer: DiscoveredRabiPeer): TunnelCandidate & DiscoveredRabiPeer {
+    if (this.options.accountRelay?.() && peer.capabilities.includes("host-account-http-v1")) return { ...peer, supported: true, trusted: true };
     let trusted = false; try { this.grant(peer.id); trusted = true; } catch { /* A pin is not a current application connection. */ }
     return { ...peer, supported: peer.capabilities.includes("peer-tunnel-v1") && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY), trusted };
   }
@@ -206,7 +248,13 @@ export class PeerTunnelRuntime {
     await this.directory(); const peer = this.mergedPeers().find(item => item.id === id);
     if (!peer) throw new Error("peer_not_discovered"); return this.candidate(peer);
   }
-  async session(id: string, probe = false) {
+  async session(id: string, probe = false): Promise<TunnelSession> {
+    const account = this.options.accountRelay?.();
+    if (account) {
+      const owner = await this.nativeAccountTunnel(id, account);
+      if (!owner) throw new Error("peer_upgrade_required");
+      return owner.session(id, probe);
+    }
     await this.ensureApplicationConnection(id);
     const grant = this.grant(id);
     const session = await this.connections.get(await this.target(id), probe);
@@ -217,6 +265,31 @@ export class PeerTunnelRuntime {
   async probe(ids: string[], assertCurrent?: () => void) {
     assertCurrent?.();
     if (ids.length > PEER_EVENT_LIMITS.ids) throw new Error("At most ten visible peers may be probed.");
+    const account = this.options.accountRelay?.();
+    if (account) {
+      await Promise.all(ids.map(async id => {
+        assertCurrent?.();
+        const peer = await this.target(id).catch(() => undefined);
+        this.assertAccountRelay(account);
+        if (!peer?.online) return;
+        const tunnel = await this.nativeAccountTunnel(id, account, peer);
+        if (tunnel) { await tunnel.probe([id], assertCurrent); return; }
+        const start = performance.now();
+        let connected = false;
+        try {
+          const result = await this.fetch(id, "manager", "/meta");
+          connected = result.ok;
+          await result.body?.cancel();
+        } catch { /* Report a failed probe without changing the Relay registration. */ }
+        assertCurrent?.();
+        this.assertAccountRelay(account);
+        const snapshot = { state: connected ? "connected" : "failed", transport: connected ? "relay" : null,
+          latencyMs: connected ? Math.round(performance.now() - start) : null, measuredAt: Date.now() } as const;
+        this.accountProbes.set(id, snapshot);
+        this.connections.emit("status", { ...this.connections.snapshot(peer), ...snapshot });
+      }));
+      return this.directory(true);
+    }
     await Promise.all(ids.map(async id => { assertCurrent?.(); try { await this.session(id, true); } catch { assertCurrent?.(); /* Status remains visible in the directory. */ } assertCurrent?.(); }));
     assertCurrent?.();
     return this.directory();
@@ -224,6 +297,14 @@ export class PeerTunnelRuntime {
   /** Authenticate the current application once before using any offered service. */
   async ensureApplicationConnection(id: string): Promise<void> {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
+    const account = this.options.accountRelay?.();
+    if (account) {
+      const peer = await this.target(id);
+      this.assertAccountRelay(account);
+      if (!peer.capabilities.includes("host-account-http-v1") || !peer.online) throw new TunnelDenied("peer_service_denied");
+      await (await this.nativeAccountTunnel(id, account, peer))?.ensureApplicationConnection(id);
+      return;
+    }
     if (!this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
     // A delegated Eye lease is already authenticated; it must never use application TOFU.
     if (id.startsWith("glasses-")) { this.grant(id); return; }
@@ -237,6 +318,25 @@ export class PeerTunnelRuntime {
     this.applicationBootstrapFlights.set(id, flight);
     try { await flight; }
     finally { if (this.applicationBootstrapFlights.get(id) === flight) this.applicationBootstrapFlights.delete(id); }
+  }
+  revokeAccountPeer(id: string) {
+    this.revokedAccountPeers.add(id);
+    this.applicationBootstrapReady.delete(id);
+    this.directoryAt = 0;
+    this.connections.revoke(id);
+    for (const session of this.incoming) if (session.remote.deviceId === id) void session.close();
+  }
+  async remoteGeneration(id: string): Promise<string> {
+    const account = this.options.accountRelay?.();
+    const owner = account ? await this.nativeAccountTunnel(id, account) : this;
+    if (owner) return (await owner.session(id)).remote.generation;
+    const response = await this.fetch(id, "manager", "/meta");
+    if (!response.ok) { await response.body?.cancel(); throw new Error("Remote Manager identity is unavailable."); }
+    const result = await response.json() as { applicationGenerationId?: string; managerInstanceId?: string };
+    this.assertAccountRelay(account!);
+    const generation = result.applicationGenerationId || result.managerInstanceId;
+    if (typeof generation !== "string" || !generation || generation.length > 128) throw new Error("Remote Manager identity is unavailable.");
+    return generation;
   }
   private async bootstrapApplicationConnection(id: string, scope: string): Promise<void> {
     const peer = await this.target(id);
@@ -255,6 +355,7 @@ export class PeerTunnelRuntime {
     if (!prior) config.trustedDevices.push({ deviceId: id, publicKey: reply.publicKey, services: [], bootstrapScope: scope });
     else { prior.bootstrapScope = scope; prior.services = []; }
     this.persist(config);
+    this.revokedAccountPeers.delete(id);
     this.applicationBootstrapReady.set(id, { scope, publicKey: reply.publicKey });
     this.options.onStatus({ deviceId: id, trusted: true });
   }
@@ -272,9 +373,28 @@ export class PeerTunnelRuntime {
     await proxyTunnel(session, "manager", url.pathname + url.search, request, response, authorize);
     authorize?.();
   }
-  fetch(id: string, service: string, pathname: string, init: RequestInit = {}) {
+  fetch(id: string, service: string, pathname: string, init: RequestInit = {}): Promise<Response> {
     if (service === PERSONA_PEER_SERVICE && !personaPeerRequestAllowed({ method: init.method || "GET", path: pathname })) return Promise.reject(new TunnelDenied("peer_service_denied"));
+    const account = this.options.accountRelay?.();
+    if (account) {
+      if (this.options.readOnly) return Promise.reject(new TunnelDenied("manager_read_only"));
+      return this.nativeAccountTunnel(id, account).then(tunnel => tunnel
+        ? tunnel.fetch(id, service, pathname, init)
+        : fetchAccountHost(account, id, service, pathname, init, () => this.assertAccountRelay(account)));
+    }
     return this.session(id).then(session => tunnelFetch(session, service, pathname, init));
+  }
+  private assertAccountRelay(account: AccountProxyRelay) {
+    const current = this.options.accountRelay?.();
+    if (this.controller.signal.aborted || current?.token !== account.token || current?.url !== account.url) throw new TunnelDenied("peer_service_denied");
+  }
+  private async nativeAccountTunnel(id: string, account: AccountProxyRelay, target?: DiscoveredRabiPeer) {
+    const peer = target ?? await this.target(id);
+    this.assertAccountRelay(account);
+    if (!peer.capabilities.includes("host-account-tunnel-v1")) return;
+    const tunnel = this.options.accountTunnel?.();
+    if (!tunnel) throw new TunnelDenied("peer_service_denied");
+    return tunnel;
   }
   private relayUrl(room: string) {
     const relay = this.options.relay(); const url = new URL(relay.url);
@@ -344,6 +464,7 @@ export class PeerTunnelRuntime {
       if (!prior) config.trustedDevices.push({ deviceId: bootstrap.source, publicKey: bootstrap.publicKey, services: [], bootstrapScope: scope });
       else { prior.services = []; prior.bootstrapScope = scope; }
       this.persist(config);
+      this.revokedAccountPeers.delete(bootstrap.source);
       this.applicationBootstrapReady.set(bootstrap.source, { scope, publicKey: bootstrap.publicKey });
       return { deviceId: this.identity.deviceId, generation: this.identity.generation, publicKey: this.identity.publicKey };
     }
@@ -363,13 +484,26 @@ export class PeerTunnelRuntime {
   async openProxyHttp(input: ApiHttpProxyInput): Promise<void> {
     const { request, url, response, path } = input;
     const pathname = "/" + path.path + url.search;
+    const account = this.options.accountRelay?.();
     const authorize = () => {
       input.assertCurrent();
       if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
-      if (!this.controlAllowed(request, url) || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
+      if (!this.controlAllowed(request, url)) throw new TunnelDenied("peer_service_denied");
+      if (account) this.assertAccountRelay(account);
+      else if (this.options.accountRelay?.() || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
     };
     authorize();
     if (path.service === PERSONA_PEER_SERVICE && !personaPeerRequestAllowed({ method: request.method || "GET", path: pathname })) throw new TunnelDenied("peer_service_denied");
+    if (account) {
+      const tunnel = await this.nativeAccountTunnel(path.deviceId!, account);
+      authorize();
+      if (tunnel) {
+        const session = await tunnel.session(path.deviceId!);
+        authorize();
+        await proxyTunnel(session, path.service!, pathname, request, response, authorize, { ...input, requestHeaders: peerProxyRequestHeaders(request.headers) });
+      } else await proxyAccountHost(input, account, authorize);
+      return;
+    }
     const requestHeaders = peerProxyRequestHeaders(request.headers);
     const session = await this.session(path.deviceId!);
     authorize();
@@ -378,19 +512,25 @@ export class PeerTunnelRuntime {
   async openProxyUpgrade(input: ApiUpgradeInput): Promise<void> {
     const { request, url, socket } = input;
     if (this.options.readOnly || !this.controlAllowed(request, url)) { socket.destroy(); return; }
+    const account = this.options.accountRelay?.();
     const authorize = () => {
       input.assertCurrent();
-      if (this.options.readOnly || !this.controlAllowed(request, url) || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
+      if (this.options.readOnly || !this.controlAllowed(request, url)) throw new TunnelDenied("peer_service_denied");
+      if (account) this.assertAccountRelay(account);
+      else if (this.options.accountRelay?.() || !this.applicationConnectionAllowed()) throw new TunnelDenied("peer_service_denied");
     };
     authorize();
     const requestHeaders = peerProxyRequestHeaders(request.headers);
-    const session = await this.session(input.path.deviceId!);
+    const owner = account ? await this.nativeAccountTunnel(input.path.deviceId!, account) : this;
+    if (!owner) throw new Error("peer_upgrade_required");
+    const session = await owner.session(input.path.deviceId!);
     authorize();
     await proxyTunnelUpgrade(session, input.path.service!, "/" + input.path.path + url.search, request, socket, Buffer.from(input.head), authorize, { ...input, requestHeaders });
   }
   upgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): boolean {
     const url = new URL(request.url || "/", "http://peer.local");
     if (url.pathname !== "/api/rabilink/peer/tunnel/socket") return false;
+    if ((url.searchParams.get("scope") || undefined) !== this.options.lanScope) return false;
     const source = url.searchParams.get("source") || "";
     void this.ensureApplicationConnection(source).then(() => {
       this.grant(source);
@@ -415,6 +555,7 @@ export class PeerTunnelRuntime {
           if (url.protocol !== "http:" || url.username || url.password || parts.length !== 4 || !parts.every(n => Number.isInteger(n) && n >= 0 && n <= 255)
             || !(a === 10 || a === 127 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a === 169 && b === 254)) throw new Error("Invalid LAN candidate.");
           url.protocol = "ws:"; url.pathname = "/api/rabilink/peer/tunnel/socket"; url.search = new URLSearchParams({ source: this.identity.deviceId }).toString();
+          if (this.options.lanScope) url.searchParams.set("scope", this.options.lanScope);
           const attempt = AbortSignal.any([signal, controllers[index].signal]);
           const channel = await connectWebsocket(url.toString(), {}, attempt);
           const session = await establishTunnel(channel, this.identity, grant, true, attempt);

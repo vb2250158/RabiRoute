@@ -7,6 +7,7 @@ export type PlanTaskDeliveryTarget = {
   threadId: string;
   title: string;
   cwd: string;
+  dshBaseUrl?: string;
   instanceBinding?: AgentInstanceBinding;
   createIfMissing: true;
 };
@@ -30,6 +31,7 @@ export function planTaskDeliveryTarget(plan: PlanItem): PlanTaskDeliveryTarget |
     threadId,
     title: binding?.sessionTitle?.trim() || plan.title,
     cwd,
+    ...(binding.agentType === "dsh" && !binding.instanceBinding && binding.baseUrl ? { dshBaseUrl: binding.baseUrl } : {}),
     ...(binding.instanceBinding ? { instanceBinding: binding.instanceBinding } : {}),
     createIfMissing: true
   };

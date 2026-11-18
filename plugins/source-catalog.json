@@ -87,6 +87,13 @@
       "versionFile": "rabi.plugin.json"
     },
     {
+      "sourceId": "io.rabiroute.endpoint.qqbot",
+      "directory": "src/plugins/io.rabiroute.endpoint.qqbot",
+      "ecosystem": "rabiroute",
+      "publicationName": "io.rabiroute.endpoint.qqbot",
+      "versionFile": "rabi.plugin.json"
+    },
+    {
       "sourceId": "io.rabiroute.endpoint.rabilink",
       "directory": "src/plugins/io.rabiroute.endpoint.rabilink",
       "ecosystem": "rabiroute",

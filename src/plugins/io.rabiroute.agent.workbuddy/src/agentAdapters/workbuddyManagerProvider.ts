@@ -2,11 +2,13 @@ import path from 'node:path';
 import * as endpointOwner from "./workbuddyOwnerExecution.js";
 import * as threads from '../workbuddyThreads.js';
 import { readWorkbuddyHistory, workbuddyRecordConfirmsDelivery } from '../workbuddyHistory.js';
-import { readWorkbuddyDesktopIntent, type WorkbuddyDesktopCreationInput } from '../workbuddyDesktopCreation.js';
+import { readWorkbuddyDesktopIntent } from '../workbuddyDesktopCreation.js';
 import { requestWorkbuddyDesktopCreation } from '../workbuddyDesktopRelay.js';
+import { createWorkbuddyDesktopBootstrap } from '../workbuddyDesktopBootstrap.js';
 import { legacyWorkbuddyDesktopLayout, type WorkbuddyDesktopLayout } from '../workbuddyDesktopLayout.js';
 import { workbuddyHomeDir } from '../workbuddySessionStore.js';
 import { updateHooks } from './workbuddyHookInstallation.js';
+import type { AgentInitialThreadCreationInput, AgentThreadDeliveryObservation } from '@rabiroute/host-api/agentThreads';
 import { commonManagerOperations, nativeOperations, createAgentScanOperations, type AgentOwnedManager } from '@rabiroute/host-api/agentAdapters/managerNativeOperations';
 import type { AgentManagerImplementationOptions } from '@rabiroute/host-api/manager/agentManagerHostPorts';
 import type { AgentManagerDescriptor } from '@rabiroute/host-api/manager/agentManagerProviders';
@@ -17,8 +19,8 @@ const desktopLayout: WorkbuddyDesktopLayout = Object.freeze({ ...legacyWorkbuddy
 
 /** An accepted gateway request is visible only once its user message reaches this native history. */
 function observeWorkbuddyDelivery(
-  history: Awaited<ReturnType<typeof readWorkbuddyHistory>>, threadId: string, deliveryId: string
-) {
+  history: NonNullable<Awaited<ReturnType<typeof readWorkbuddyHistory>>>, threadId: string, deliveryId: string
+): AgentThreadDeliveryObservation {
   if (history.source !== "workbuddy-native-transcript" || history.sessionId !== threadId) {
     throw new Error("WorkBuddy native history does not belong to the requested task.");
   }
@@ -30,6 +32,7 @@ function observeWorkbuddyDelivery(
 }
 
 export function createManager(options: AgentManagerImplementationOptions, descriptor: AgentManagerDescriptor, signal: AbortSignal): AgentOwnedManager {
+  const ensureDesktopReady = createWorkbuddyDesktopBootstrap(options.host.packageRoot);
   return {
     operations: {
       "threads.list": (payload: Parameters<typeof threads.listWorkbuddyThreads>[0]) => threads.listWorkbuddyThreads(payload),
@@ -38,14 +41,17 @@ export function createManager(options: AgentManagerImplementationOptions, descri
         ...await threads.sendWorkbuddyThreadMessage({ ...payload, assertAuthorized: invocation?.assertCurrent }),
         acceptedBy: "workbuddy_session_owner"
       }),
-      "threads.create": async (payload: Omit<WorkbuddyDesktopCreationInput, "workspaceLabel" | "layout">, invocation) => {
+      "threads.create": async (payload: AgentInitialThreadCreationInput, invocation) => {
         invocation?.assertCurrent?.();
         if (options.host.readOnly()) throw new Error("Manager is read-only.");
         const requestSignal = invocation?.signal;
         const input = { ...payload, workspaceLabel: path.win32.basename(payload.workspace), layout: desktopLayout };
         const existing = await readWorkbuddyDesktopIntent(input, path.join(workbuddyHomeDir(), "rabiroute-desktop-intents"), requestSignal);
         invocation?.assertCurrent?.();
-        return existing ?? requestWorkbuddyDesktopCreation(input, requestSignal);
+        if (existing) return existing;
+        await ensureDesktopReady(requestSignal, invocation?.assertCurrent);
+        invocation?.assertCurrent?.();
+        return requestWorkbuddyDesktopCreation(input, requestSignal);
       },
       "threads.history": (payload, invocation) => readWorkbuddyHistory(payload.sessionId, {
         cursor: payload.cursor, limit: payload.limit, signal: invocation?.signal,
@@ -56,17 +62,19 @@ export function createManager(options: AgentManagerImplementationOptions, descri
         return { history, delivery: observeWorkbuddyDelivery(history, threadId, deliveryId) };
       },
       "endpoint.execute": (_payload, invocation) => {
-        const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.executeEndpointOnOwner> | undefined;
+        const args = invocation?.nativeArgs as Pick<Parameters<typeof endpointOwner.executeEndpointOnOwner>, 0 | 1 | 2> | undefined;
         if (!args) throw new Error("Original native endpoint arguments are required.");
-        return endpointOwner.executeEndpointOnOwner(...args);
-      },
-      "endpoint.recover": (_payload, invocation) => {
-        const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.recoverSteerReceipt> | undefined;
-        return args ? endpointOwner.recoverSteerReceipt(...args) : undefined;
+        return endpointOwner.executeEndpointOnOwner(args[0], args[1], args[2],
+          () => ensureDesktopReady(invocation?.signal, invocation?.assertCurrent));
       },
       ...commonManagerOperations(options, descriptor, signal, {
         workbuddyEndpoint: 'workbuddyEndpoint'
-      }), ...nativeOperations({
+      }),
+      "endpoint.recover": (_payload, invocation) => {
+        const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.recoverWorkbuddyDeliveryReceipt> | undefined;
+        return args ? endpointOwner.recoverWorkbuddyDeliveryReceipt(...args) : undefined;
+      },
+      ...nativeOperations({
         listWorkbuddyThreads: threads.listWorkbuddyThreads, readWorkbuddyThread: threads.readWorkbuddyThread, sendWorkbuddyThreadMessage: threads.sendWorkbuddyThreadMessage
       }), 'hooks.update': (_payload, invocation) => updateHooks(options.host.packageRoot, undefined, {
         signal: invocation?.signal

@@ -23,6 +23,7 @@ import {
 } from "./replyImageDescriptions.js";
 import { normalizeStyleValidationMode, type StyleValidationMode } from "./shared/languageStyle.js";
 import type { LanguageStyleValidationResult } from "./languageStyleValidation.js";
+import { agentSendVariantType, scopedAgentSendVariant } from "./agentSendVariant.js";
 
 export type AgentSendSender = {
   agentType: string;
@@ -36,7 +37,7 @@ export type AgentSendResult = AgentReplyResult & {
   conversationContextError?: string;
   deliveryId?: string;
   sender?: AgentSendSender;
-  channel?: AgentSendChannel;
+  channel?: string;
   routeId?: string;
   target?: Record<string, unknown>;
   replyImageDescriptionArchive?: ReplyImageDescriptionArchive;
@@ -69,7 +70,7 @@ type NormalizedAgentSend = {
   deliveryId: string;
   sender: AgentSendSender;
   routeId: string;
-  channel: AgentSendChannel;
+  channel: string;
   allowAdditionalReply: boolean;
   replyImageDescriptions: string[];
   target: Record<string, unknown>;
@@ -285,8 +286,9 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   const requestedChannel = textValue(request.channel, "channel") as AgentSendChannel;
   // @deprecated Read old serialized sends through speech; remove at the legacy configuration migration milestone.
   const channel = requestedChannel === "fennenote" ? "speech" : requestedChannel;
+  const variant = scopedAgentSendVariant(request);
   const channelHelp = agentSendChannelHelp(channel);
-  if (!channelHelp) {
+  if (!channelHelp && !variant) {
     const supportedChannels = AGENT_SEND_CHANNEL_HELP.map(item => item.channel);
     const error = new Error(`Unsupported send channel: ${channel}. Use one of: ${supportedChannels.join(", ")}. QQ/NapCat uses channel=napcat, not channel=qq.`);
     Object.assign(error, { code: "UNSUPPORTED_SEND_CHANNEL", supportedChannels, help: AGENT_SEND_CHANNEL_HELP, repair: "Use channel=napcat for QQ/NapCat and copy the matching params example. Do not retry with a different deliveryId unless the receipt is confirmed absent." });
@@ -294,7 +296,8 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   }
   const params = { ...objectValue(request.params, "params") };
   const rawPayload = objectValue(request.payload, "payload");
-  const payload = payloadFields(rawPayload, channel);
+  if (agentSendVariantType(request) && !variant) throw new Error("Plugin send variant requires its published provider.");
+  const payload = payloadFields(variant ? { type: "text", text: variant.text } : rawPayload, channel);
   if (Object.prototype.hasOwnProperty.call(rawPayload, "fileId") && (channel !== "napcat" || params.target !== "group")) {
     throw new Error("payload.fileId requires channel=napcat and params.target=group.");
   }
@@ -336,8 +339,14 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     if (params.mode !== "message" && params.mode !== "playback") throw new Error("params.mode must be message or playback for the retired fennenote alias.");
     delete params.mode;
   }
-  assertOnlyFields(params, Object.keys(channelHelp.params), "params");
-  if (channel === "napcat") {
+  if (channelHelp && !variant) assertOnlyFields(params, Object.keys(channelHelp.params), "params");
+  if (variant) {
+    target = structuredClone(params);
+    Object.assign(internal, { adapterType: channel,
+      targetType: params.target === "group" || params.target === "private" ? params.target : undefined,
+      groupId: params.groupId, userId: params.userId, instanceId: params.instanceId,
+      messageId: params.sourceMessageId ?? params.replyToMessageId });
+  } else if (channel === "napcat") {
     const targetType = textValue(params.target, "params.target") as "group" | "private";
     if (targetType !== "group" && targetType !== "private") throw new Error("params.target must be group or private for napcat.");
     const groupId = targetType === "group" ? textValue(params.groupId, "params.groupId") : undefined;
@@ -349,9 +358,6 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     const replyToMessageId = textValue(params.replyToMessageId, "params.replyToMessageId", false);
     replyImageDescriptions = stringList(params.replyImageDescriptions, "params.replyImageDescriptions");
     allowAdditionalReply = booleanValue(params.allowAdditionalReply, "params.allowAdditionalReply");
-    if (targetType === "group" && sender.agentType === "message_processing" && !replyToMessageId) {
-      throw new Error("message_processing NapCat group sends require a non-empty params.replyToMessageId so the reply stays attached to its source message.");
-    }
     target = { target: targetType, groupId, userId, instanceId: textValue(params.instanceId, "params.instanceId", false), replyToMessageId };
     Object.assign(internal, {
       adapterType: "napcat",
@@ -362,6 +368,11 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
       messageId: replyToMessageId
     });
     Object.assign(replyContext, { replyToSource: Boolean(replyToMessageId) });
+  } else if (channel === "qqbot") {
+    if (payload.payloadType !== "text") throw new Error("QQ Bot source replies require a text payload.");
+    const sourceMessageId = textValue(params.sourceMessageId, "params.sourceMessageId");
+    target = { sourceMessageId };
+    Object.assign(internal, { adapterType: "qqbot", messageId: sourceMessageId });
   } else if (channel === "wecom") {
     const chatId = textValue(params.chatId, "params.chatId") as string;
     target = { chatId, userId: textValue(params.userId, "params.userId", false) };
@@ -425,6 +436,12 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     throw new Error(`Send channel has no normalizer: ${unhandledChannel}`);
   }
 
+  if (channel === "napcat" && target.target === "group" && sender.agentType === "message_processing") {
+    const quote = target.replyToMessageId;
+    if ((typeof quote !== "string" && typeof quote !== "number") || !String(quote).trim()) {
+      throw new Error("message_processing NapCat group sends require a non-empty params.replyToMessageId so the reply stays attached to its source message.");
+    }
+  }
   return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, messageLengthConfirmation: messageLengthConfirmation ?? undefined,
     conversationContext: context as NormalizedAgentSend["conversationContext"], internal };
 }
@@ -483,9 +500,12 @@ export async function handleAgentSend(
 ): Promise<AgentSendResult> {
   const normalized = normalizeAgentSend(request);
   const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options, reviewedSource, platformSource);
-  const result = await handleAgentReply(normalized.internal, platformSource
-    ? { ...options, assertReplySourceCurrent: platformSource.assertCurrent }
-    : options);
+  const variant = scopedAgentSendVariant(request);
+  const result = await handleAgentReply(normalized.internal, {
+    ...options,
+    ...(platformSource ? { assertReplySourceCurrent: platformSource.assertCurrent } : {}),
+    ...(variant ? { sendVariant: { variant, target: normalized.target } } : {})
+  });
   const replyImageDescriptionArchive = result.status === "sent" && imageDescriptionPlan
     ? archiveReplyImageDescriptions(imageDescriptionPlan, {
         rootDir: options.rootDir,

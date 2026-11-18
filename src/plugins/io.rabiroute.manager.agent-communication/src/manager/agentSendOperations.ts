@@ -8,7 +8,7 @@ import { hasAuthenticatedConnectionRequest } from "@rabiroute/host-api/manager/c
 import { apiDigest, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
 import type { IncomingMessage } from "node:http";
 
-type SendContext = Pick<AgentCommunicationRoutesContext, "send" | "receiptResponse">;
+type SendContext = Pick<AgentCommunicationRoutesContext, "send" | "receiptResponse" | "listSendVariants">;
 
 const empty = { type: "object", properties: {}, additionalProperties: false } as const;
 const deliveryId = { type: "string", maxLength: 200, pattern: "^[A-Za-z0-9._:-]+$" } as const;
@@ -18,7 +18,7 @@ const sendResult = json({ type: "object", required: ["code", "ok", "status"], pr
     "conversation_context_confirmation_required", "message_length_confirmation_required", "style_confirmation_required"] },
   reason: { type: "string" }, deliveryId, sender: { type: "object", required: ["agentType", "sessionId"], additionalProperties: false,
     properties: { agentType: { type: "string" }, sessionId: { type: "string" } } },
-  routeId: { type: "string" }, channel: { enum: AGENT_SEND_CHANNEL_HELP.map(value => value.channel) }, target: { type: "object" },
+  routeId: { type: "string" }, channel: { type: "string" }, target: { type: "object" },
   idempotency: { type: "object", required: ["deliveryId", "state", "duplicate"], additionalProperties: false,
     properties: { deliveryId, state: { enum: ["completed", "missing", "in_progress", "uncertain", "conflict"] }, duplicate: { type: "boolean" } } }
 }, additionalProperties: true });
@@ -29,7 +29,7 @@ const blocked = json({ type: "object", required: ["code", "ok", "status", "messa
 }, additionalProperties: false });
 
 export const agentSendOperationContract: ApiOperationContract = {
-  operationId: "agent.send", contractVersion: "1.0.0", method: "POST", pathTemplate: "/api/agent/send",
+  operationId: "agent.send", contractVersion: "1.1.0", method: "POST", pathTemplate: "/api/agent/send",
   aliases: ["agent:POST:/api/agent/send"],
   description: "Send through an explicitly selected channel, using a durable delivery ID and the existing provider rules.",
   exposure: "public", transport: "http",
@@ -78,12 +78,13 @@ export function agentSendError(error: unknown): ApiOperationResult {
       retryRule: agentSendOperationContract.recovery.description } } };
 }
 
-export function agentSendCapabilities(): ApiOperationResult {
+export function agentSendCapabilities(variants: readonly Readonly<Record<string, unknown>>[] = []): ApiOperationResult {
   return { status: 200, headers: { "cache-control": "no-store" }, body: { code: 0, data: {
     schemaVersion: "2", contractRevision: agentSendOperationContract.contractVersion,
     channelsDigest: apiDigest(AGENT_SEND_CHANNEL_HELP), requestContractDigest: apiDigest(AGENT_SEND_REQUEST_CONTRACT),
     requestContract: AGENT_SEND_REQUEST_CONTRACT,
     generatedAt: new Date().toISOString(), channels: AGENT_SEND_CHANNEL_HELP,
+    ...(variants.length ? { variants, variantsDigest: apiDigest(variants) } : {}),
     contract: { deliveryId: "stable caller-generated ID", retryRule: agentSendOperationContract.recovery.description,
       qq: "QQ/NapCat uses channel=napcat, params.target=group|private. Managed fileId supports group files only; private managed-file upload is not implemented." }
   } } };
@@ -97,7 +98,7 @@ export function createAgentSendOperations(context: SendContext): readonly ApiOpe
       relatedOperations: ['agent.send.capabilities', 'agent.qq.contacts.read', 'agent.send.receipt.read']
     }, handler: input => runAgentSend(input.request, input.body as AgentSendRequest, context) },
     { discovery: { title: '查询渠道发送能力与参数', summary: '读取可用渠道、请求字段、校验规则和回执查询方式。', category: { id: 'messages', title: '消息' }, keywords: ['发送能力', '发送配置', 'send capabilities', 'message schema'], relatedOperations: ['agent.send'] }, contract: {
-      operationId: "agent.send.capabilities", contractVersion: "2.0.0", method: "GET", pathTemplate: "/api/agent/send/capabilities",
+      operationId: "agent.send.capabilities", contractVersion: "2.1.0", method: "GET", pathTemplate: "/api/agent/send/capabilities",
       aliases: ["agent:GET:/api/agent/send/capabilities"],
       description: "Read the same channel definitions, wire schema and named business validators used by the send operation.",
       exposure: "public", transport: "http", request: { path: empty, query: empty, headers: { type: "object" }, body: { kind: "none" } },
@@ -106,10 +107,11 @@ export function createAgentSendOperations(context: SendContext): readonly ApiOpe
           additionalProperties: false, properties: { schemaVersion: { const: "2" }, contractRevision: { type: "string" }, channelsDigest: { type: "string" }, requestContractDigest: { type: "string" },
             requestContract: { type: "object", required: ["version", "kind", "schema", "validators"], additionalProperties: false,
               properties: { version: { const: 2 }, kind: { const: "runtime-json-schema" }, schema: { type: "object" }, validators: { type: "array", items: { type: "object" } } } },
-            generatedAt: { type: "string", format: "date-time" }, channels: { type: "array", items: { type: "object" } }, contract: { type: "object" } } }
+            generatedAt: { type: "string", format: "date-time" }, channels: { type: "array", items: { type: "object" } },
+            variants: { type: "array", items: { type: "object" } }, variantsDigest: { type: "string" }, contract: { type: "object" } } }
       } }) }, effects: { mode: "read", description: "Reads immutable send definitions; does not send or reserve a delivery." },
       recovery: { strategy: "repeatable-read", description: "Refresh after the API catalog identity changes; discovery does not grant additional permissions." }, validators: []
-    }, handler: () => agentSendCapabilities() },
+    }, handler: () => agentSendCapabilities(context.listSendVariants?.()) },
     { discovery: { title: '读取原消息发送回执', summary: '使用原 deliveryId 查询渠道实际发送结果和待确认状态。', category: { id: 'messages', title: '消息' }, keywords: ['消息回执', '投递结果', 'send receipt', 'delivery status'], relatedOperations: ['agent.send.capabilities'] }, contract: {
       operationId: "agent.send.receipt.read", contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/agent/send/receipts/:deliveryId",
       aliases: ["agent:GET:/api/agent/send/receipts/:deliveryId"],

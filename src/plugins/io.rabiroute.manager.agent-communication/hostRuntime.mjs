@@ -42,6 +42,7 @@ export function createOwnedRuntime(ports) {
                 coverage: { scope: "node", nodeId, connected: true, includesDisconnectedNodeQueues: false } };
         },
         agentSendReceiptResponse: ports.agentSendReceiptResponse,
+        listAgentSendVariants: ports.listAgentSendVariants,
         maintenance: Object.freeze({
             verify: (deliveryId, request, options) => ports.maintainAgentSendReceipt(deliveryId, request, options, false),
             settle: (deliveryId, request, options) => ports.maintainAgentSendReceipt(deliveryId, request, options, true)

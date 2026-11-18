@@ -76,6 +76,12 @@ There is no fixed count gate for active terminals or observers. The 64-record ho
 Local native-shell, HTTP/WebSocket/SSE and input-receipt validation is covered. Installed and real two-computer acceptance are tracked separately.
 
 
+## Connect one computer to multiple hosts
+
+Node version 0.4.8 supports multiple instances on one computer. Copy a separate enrollment prompt from **RabiLink → Node management → Connect a node** on each host. Additional hosts use configurations under `RabiAgent/instances/<host GUID>/config.json` for the current user. Reconnecting the same host reuses its original configuration.
+
+Windows shows a separate tray icon for each instance. Hover to check its host. Pause, reconnect, exit, and login startup apply to that instance. macOS and Linux register separate background startup entries. Pass the instance’s absolute configuration path to `--config` when starting, managing, or calling it manually.
+
 ## Windows tray (0.2.1, experimental)
 
 The tray and status window use the Rabi icon included in the signed release package.

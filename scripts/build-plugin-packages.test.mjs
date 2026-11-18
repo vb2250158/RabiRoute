@@ -7,7 +7,33 @@ import test from "node:test";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { buildPluginPackages, finalizePluginBuildWebArtifacts, finalizeSelectedPluginWebArtifacts } from "./build-plugin-packages.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { bundleMessageEndpointRuntime } from "./build-message-endpoint-runtime.mjs";
+import { bundleMessageEndpointRuntime, bundleMessageEndpointWorker } from "./build-message-endpoint-runtime.mjs";
+
+test("standalone workers bundle only explicitly public host sources and reject unknown or escaping modules", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-public-host-source-"));
+  try {
+    await fs.mkdir(path.join(root, "src/shared"), { recursive: true });
+    await fs.mkdir(path.join(root, "plugins/contracts/host-api"), { recursive: true });
+    await fs.writeFile(path.join(root, "plugins/contracts/host-api/package.json"), JSON.stringify({ exports: {
+      "./shared/published": { types: "./types/src/shared/published.d.ts" },
+      "./../outside": { types: "./types/src/../outside.d.ts" }
+    } }));
+    await fs.writeFile(path.join(root, "src/shared/published.ts"), 'export const value = "captured-public-owner";');
+    await fs.writeFile(path.join(root, "src/shared/private.ts"), 'export const value = "unpublished-owner";');
+    const entry = path.join(root, "src/worker.ts");
+    const output = path.join(root, "worker.mjs");
+    await fs.writeFile(entry, 'import { value } from "@rabiroute/host-api/shared/published"; console.log(value);');
+    const built = await bundleMessageEndpointWorker(root, { source: "src/worker.ts" }, output);
+    const inputPaths = await Promise.all(built.inputs.map(input => fs.realpath(input)));
+    assert.ok(inputPaths.includes(await fs.realpath(path.join(root, "src/shared/published.ts"))));
+    assert.equal(built.contents.includes("@rabiroute/host-api"), false);
+    assert.equal(execFileSync(process.execPath, [output], { encoding: "utf8", timeout: 5000, windowsHide: true }).trim(), "captured-public-owner");
+    for (const moduleId of ["shared/private", "../outside"]) {
+      await fs.writeFile(entry, `import { value } from ${JSON.stringify(`@rabiroute/host-api/${moduleId}`)}; console.log(value);`);
+      await assert.rejects(bundleMessageEndpointWorker(root, { source: "src/worker.ts" }, output), /explicitly exported host source module/);
+    }
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
 
 test('package-owned native sidecars resolve after relocation without a node_modules directory',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'endpoint-native-sidecar-'));

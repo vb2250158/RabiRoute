@@ -2,6 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, resolveEndpointExecutionOptions } from "./executionOptions.js";
 
+test("a prepared local DSH delivery retains its selected owner URL", () => {
+  const options = resolveEndpointExecutionOptions({ agentAdapter: "dsh", cwd: "C:/plan", dshBaseUrl: "http://127.0.0.1:33080/" }, undefined, undefined);
+  assert.deepEqual(options, { cwd: "C:/plan", dshBaseUrl: "http://127.0.0.1:33080" });
+  assert.notEqual(endpointExecutionOptionsHash(options), endpointExecutionOptionsHash({ ...options, dshBaseUrl: "http://127.0.0.1:33081" }));
+});
+
 test("WorkBuddy steer is frozen in the prepared delivery and unavailable to other adapters", () => {
   const input = { agentAdapter: "workbuddy", cwd: "C:/plan", workbuddyDeliveryMode: "steer" } as const;
   const options = resolveEndpointExecutionOptions(input, undefined, undefined);

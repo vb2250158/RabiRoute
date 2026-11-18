@@ -5,6 +5,13 @@ import os from 'node:os';
 import test, {type TestContext} from 'node:test';
 import * as zlib from 'node:zlib';
 import {CodexSessionPreviewReader} from './codexSessionPreview.js';
+
+test('an injected AGENTS.md envelope does not replace the last conversation preview', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.file, [record('event_msg', { type: 'user_message', message: 'Last visible question' }),
+    record('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: '# AGENTS.md instructions for C:\\Example\n\n<INSTRUCTIONS>\n# Project rules\n</INSTRUCTIONS>' }] })].join('\n') + '\n');
+  assert.equal((await new CodexSessionPreviewReader().read(f.thread))?.preview, 'Last visible question');
+});
 import {agentMessagePreview} from '../../../shared/agentSessionMessages.js';
 const record=(type:string,payload:Record<string,unknown>)=>JSON.stringify({type,timestamp:'2026-11-17T07:30:00Z',payload});
 function fixture(t:TestContext){const root=fs.mkdtempSync(path.join(os.tmpdir(),'rabi-session-preview-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const file=path.join(root,'session.jsonl');return{file,thread:{id:'thread',rolloutPath:file}};}

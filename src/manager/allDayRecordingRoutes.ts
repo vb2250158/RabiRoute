@@ -14,6 +14,7 @@ export function createAllDayRecording(options: {
   speechUrl(): string;
   ensureSpeech?(): Promise<void>;
   changed(roleId: string): void;
+  eventCommitted?(roleId: string, event: AllDayEvent): void;
   indexChanged?(roleId: string, day: string, failed: boolean): void;
   readChanged?(roleId: string, event: AllDayReadReady): void;
   runRead?(job: AllDayReadJob, signal?: AbortSignal): Promise<unknown>;
@@ -28,7 +29,11 @@ export function createAllDayRecording(options: {
       const input:AllDayReadJob={kind:"scan",directory,day,mobileRoot:options.mobileRoot,mobileDeviceIds:[]};
       return options.runRead ? await options.runRead(input) as AllDayEvent[] : repairReads!.run<AllDayEvent[]>({type:"all_day_recording_read",input});
     },
-    committed: (role,event,bytes,complete) => reads.committed(role,event,bytes,complete)
+    committed: (role,event,bytes,complete) => {
+      reads.committed(role,event,bytes,complete);
+      const captureRole = service.captureAutomationRole(role, event);
+      if (captureRole) options.eventCommitted?.(captureRole, event);
+    }
   });
   reads = new AllDayRecordingReadModel({directory:role=>store.directory(role),mobileRoot:options.mobileRoot,settings:role=>store.settings(role),
     run:(input,signal)=>options.runRead ? options.runRead(input,signal) : managerKnowledgePageWorkerPool.run({type:"all_day_recording_read",input},{signal,timeoutMs:getTimeoutMs("backend.manager.allDayRecordingRoutes.run.managerKnowledgePageWorkerPool.run.timeoutMs", 60_000)}),

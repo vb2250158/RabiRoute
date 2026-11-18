@@ -12,6 +12,10 @@ Messages run from oldest to newest, with new messages at the bottom. A thin scro
 
 Open a persona's **Message History** and select **Agent sessions**. Switch between configured Agents using the second-level tabs, then choose a session or task. Search, refresh and load more sessions from the list. The conversation shows user inputs and final replies.
 
+Use the composer at the bottom to send a WebChat message directly to the selected session. For local Agents, choose files with the paperclip or paste files into the composer. Select **Send** or press Ctrl+Enter (Command+Enter on macOS). If delivery is unconfirmed, check the original receipt from the composer.
+
+Codex's automatically loaded `AGENTS.md` appears in the conversation as a centered **Injected prompt** notice. Select it to expand or collapse the full text.
+
 The session list starts in a flat view. Each description previews its latest user input or final reply. Use the folder button above the list to switch to project folders. Each folder initially shows five sessions, with **Show more** for additional sessions. Project headings collapse or expand, and the browser remembers the selected view.
 
 Codex main sessions appear on the left. Selecting one shows its working subagents in the **Subagents** panel on the right, using native parent-child relationships. Select a subagent to read its user inputs and final replies, then choose **Back to main session**. On narrow screens, open the roster with the **Subagents** information button.
@@ -39,7 +43,11 @@ An older Route without a saved primary keeps its original first entry; an existi
 
 If Primary Agent delivery fails, RabiRoute records the failure and does not switch to another Agent. This prevents two handlers from replying or performing the same external action.
 
-The primary is selected per Route, not globally for the application. When investigating why a message reached an Agent, first check its Route ID and then that Route's primary. With an independent message-processing Agent enabled, a message may first reach a processing session on the primary's provider; this does not change the primary or permit delivery to a different provider.
+Role automations can select a message-processing task on the Route's Primary Agent. Agent-to-Agent deliveries name the exact handler and session, so an existing task can continue on a secondary Agent.
+
+Plans continue to use their bound execution session. To change it, open the plan details, choose **Change execution session** under **Plan Agents**, then select the Agent and an existing session and save. Later plan feedback goes to the new session.
+
+Each Route has its own primary. To see why a message reached an Agent, check its Route ID and then that Route's primary.
 
 ## Three requirements for Codex
 

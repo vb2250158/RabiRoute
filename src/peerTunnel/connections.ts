@@ -58,6 +58,12 @@ export class PeerConnections extends EventEmitter {
     if (!value.measuredAt || Date.now() - value.measuredAt > 30_000) value.latencyMs = null;
     return value;
   }
+  revoke(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.status.trusted = false;
+    void entry.session?.close();
+  }
   async get(peer: TunnelCandidate, probe = false): Promise<TunnelSession> {
     if (this.controller.signal.aborted) throw new Error("Tunnel manager stopped.");
     const entry = this.entry(peer);

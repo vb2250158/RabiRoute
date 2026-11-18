@@ -8,8 +8,17 @@ export function gatewayListenerOperationId(gatewayId: string, localName: string)
   return `gateway.${createHash("sha256").update(gatewayId).digest("hex").slice(0, 16)}.${localName}`;
 }
 export type GatewayListenerIdentity = Readonly<{ gatewayId: string; gatewayGenerationId: string; pid: number }>;
+export type GatewayEndpointPluginInstance = Readonly<{
+  instanceId: string;
+  packageId: string;
+  version: string;
+  packageHash: string;
+  activationId: string;
+  state: "initializing" | "active";
+}>;
 export type GatewayListenerPublication = GatewayListenerIdentity & Readonly<{
   schemaVersion: 1; revision: number; listeners: readonly ApiExternalListenerPublication[];
+  endpointPlugins?: readonly GatewayEndpointPluginInstance[];
 }>;
 
 /** One native Gateway owns its registry and emits metadata over its existing supervisor stdout pipe. */
@@ -21,8 +30,10 @@ export function createGatewayListenerRuntime(options: {
   if (!identity.gatewayId || !identity.gatewayGenerationId || !Number.isSafeInteger(identity.pid) || identity.pid < 1) throw new Error("Gateway listener publication requires the original process identity.");
   const registry = new ManagerPluginRouteRegistry(), listeners = new Set<ApiExternalListenerRegistration>();
   let revision = 0, closed = false, disposal: Promise<void> | undefined;
+  let endpointPlugins: readonly GatewayEndpointPluginInstance[] | undefined, endpointPluginSignature: string | undefined;
   const publish = () => options.publish({ ...identity, schemaVersion: 1, revision: ++revision,
-    listeners: [...listeners].map(listener => listener.publication()).filter(listener => listener.active) });
+    listeners: [...listeners].map(listener => listener.publication()).filter(listener => listener.active),
+    ...(endpointPlugins ? { endpointPlugins } : {}) });
   function registerExternalListener(instanceId: string, definition: ApiExternalListenerDefinition): ApiExternalListenerRegistration {
     if (closed) throw new Error("Gateway listener runtime is closed.");
     const original = registry.registerExternalListener(instanceId, definition);
@@ -50,6 +61,14 @@ export function createGatewayListenerRuntime(options: {
     listeners.add(wrapped); publish(); return wrapped;
   }
   return Object.freeze({ registerExternalListener,
+    publishEndpointPlugins(instances: readonly GatewayEndpointPluginInstance[]) {
+      if (closed) return;
+      const signature = JSON.stringify(instances);
+      if (signature === endpointPluginSignature) return;
+      endpointPlugins = instances;
+      publish();
+      endpointPluginSignature = signature;
+    },
     listenerAddressForProtocol(protocol: string) {
       const matches = [...listeners].filter(value => value.binding.protocol === protocol && value.publication().active);
       return matches.length === 1 ? Object.freeze({ ...matches[0]!.binding.address }) : undefined;

@@ -20,6 +20,10 @@ export function agentMessageTime(value:unknown):string {
   return Number.isFinite(date.getTime()) ? date.toISOString() : '';
 }
 
+export function codexInstructionHeading(text: string): string | undefined {
+  return /^(# AGENTS\.md instructions for [^\r\n]+)\r?\n\s*<INSTRUCTIONS>[\s\S]*?\r?\n<\/INSTRUCTIONS>(?:\s*<environment_context>[\s\S]*?<\/environment_context>)?\s*$/.exec(text.trim())?.[1];
+}
+
 /** The history view and its preview share the same user/final-message boundary. */
 export function codexVisibleMessage(value:unknown):{role:'user'|'assistant';text:string}|undefined {
   const record = object(value), payload = object(record.payload);

@@ -1,0 +1,10 @@
+{
+  "endpointType": "qqbot",
+  "routeKeys": ["qqbotAccountId", "qqbotCallbackPort", "qqbotTransport", "qqbotIntents", "qqbotManagementEnabled"],
+  "runtimeFields": {
+    "qqbotAccountId": { "paths": ["qqbotAccountId"], "default": "", "trim": true },
+    "qqbotCallbackPort": { "paths": ["qqbotCallbackPort"], "default": 0, "format": "number" },
+    "qqbotTransport": { "paths": ["qqbotTransport"], "default": "webhook" },
+    "qqbotIntents": { "paths": ["qqbotIntents"], "default": 33554432, "format": "number" }
+  }
+}

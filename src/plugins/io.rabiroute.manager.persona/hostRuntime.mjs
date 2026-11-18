@@ -43,6 +43,7 @@ export function createOwnedRuntime(ports) {
             rolesRoot: () => ports.rolesRoot,
             identity: () => ({ applicationGenerationId: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId, managerInstanceId: ports.managerInstanceId }),
             routes: () => ports.readConfig().gateways,
+            describeRoutePrimaryAgent: route => ports.describeRoutePrimaryAgent?.(route),
             isReadOnly: () => ports.managerReadOnly,
             presentation: roleId => ports.routeCatalogPersonas().find(role => role.roleId === roleId && ports.path.resolve(role.rolesRoot) === ports.path.resolve(ports.rolesRoot)),
             assertCatalogReady: () => {

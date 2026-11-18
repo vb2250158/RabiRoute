@@ -23,7 +23,9 @@ test("Gateway endpoints come from independent selected packages with their own i
     assert.equal(typeof specification.source, "string");
     assert.equal(typeof specification.factory, "string");
     const gateway = await fs.readFile(path.join(directory, "gateway.mjs"), "utf8");
-    assert.match(gateway, /createEndpoint\(host\)/);
+    assert.match(gateway, /import \{ (?:createEndpoint|createImplementation), hostModules \} from "\.\/runtime\.mjs"/);
+    assert.match(gateway, /(?:createEndpoint\(host\)|createImplementation\(host\)\.create\()/);
+    assert.match(gateway, /ownMessageEndpoint\(context, (?:endpoint|createEndpoint\(host\))\)/);
     assert.match(gateway, /await host\.prepareModules\(hostModules\)/);
     assert.doesNotMatch(gateway, /host\.(?:create\w+Adapter|start\w+Adapter)/);
   }

@@ -345,7 +345,7 @@ export type RolePlan = {
     assignedAt?: string;
   };
   taskBinding?: {
-    agentType: "codex" | "dsh";
+    agentType: import("@shared/agentAdapterCapabilities").PlanAssistantAgentType;
     sessionId: string;
     instanceBinding?: import("@shared/agentInstance").AgentInstanceBinding;
     sessionTitle?: string;

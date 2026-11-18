@@ -166,6 +166,69 @@ export async function importPluginPackage(sourceDirectory: string): Promise<read
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceDirectory })
   }));
 }
+/** A plugin archive read from a URL, before the user confirms installation. */
+/** One plugin found inside a downloaded archive. */
+export type InspectedPluginPackage = Readonly<{
+  id: string;
+  version: string;
+  manifest: Readonly<{ name?: string; displayName?: string; description?: string; icon?: string; capabilities?: readonly string[] }>;
+  packagePath: string;
+  runnable: boolean;
+  missingEntries: readonly string[];
+}>;
+export type RemoteArchiveInspection = Readonly<{
+  archiveSha256: string;
+  archiveBytes: number;
+  sourceUrl: string;
+  packages: readonly InspectedPluginPackage[];
+}>;
+export function pluginManifestSummary(manifest: unknown): InspectedPluginPackage["manifest"] {
+  const source = record(manifest) ? manifest : {};
+  return {
+    ...(typeof source.name === "string" ? { name: source.name } : {}),
+    ...(typeof source.displayName === "string" ? { displayName: source.displayName } : {}),
+    ...(typeof source.description === "string" ? { description: source.description } : {}),
+    ...(typeof source.icon === "string" && /^mdi-[a-z0-9-]+$/.test(source.icon) ? { icon: source.icon } : {}),
+    ...(Array.isArray(source.capabilities) ? { capabilities: strings(source.capabilities) } : {})
+  };
+}
+export async function inspectPluginPackageUrl(url: string, subdirectory?: string): Promise<RemoteArchiveInspection> {
+  const payload: Record<string, string> = { url };
+  if (subdirectory?.trim()) payload.subdirectory = subdirectory.trim();
+  const value = await request("/api/plugins/packages/inspect", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload)
+  });
+  if (!record(value) || value.code !== 0 || !record(value.data)) {
+    throw new Error(record(value) && typeof value.message === "string" ? value.message : "Plugin package preview failed.");
+  }
+  const data = value.data;
+  if (typeof data.archiveSha256 !== "string" || !Array.isArray(data.packages)) {
+    throw new Error("Plugin package preview is incomplete.");
+  }
+  return {
+    archiveSha256: data.archiveSha256,
+    archiveBytes: typeof data.archiveBytes === "number" ? data.archiveBytes : 0,
+    sourceUrl: typeof data.sourceUrl === "string" ? data.sourceUrl : url,
+    packages: data.packages.flatMap((item): InspectedPluginPackage[] => {
+      if (!record(item) || typeof item.id !== "string" || typeof item.version !== "string") return [];
+      return [{
+        id: item.id,
+        version: item.version,
+        packagePath: typeof item.packagePath === "string" ? item.packagePath : "",
+        runnable: item.runnable === true,
+        missingEntries: strings(item.missingEntries),
+        manifest: pluginManifestSummary(item.manifest)
+      }];
+    })
+  };
+}
+export async function importPluginPackageUrl(url: string, expectedArchiveSha256: string, subdirectory?: string): Promise<readonly AvailablePluginPackage[]> {
+  const payload: Record<string, string> = { url, expectedArchiveSha256 };
+  if (subdirectory?.trim()) payload.subdirectory = subdirectory.trim();
+  return parseAvailablePluginPackages(await request("/api/plugins/packages/from-url", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload)
+  }));
+}
 export async function installManagedPlugin(plugin: Pick<AvailablePluginPackage, "pluginId" | "version">,
   expectedRevision: string, instanceId: string): Promise<PluginManagementCatalog> {
   return parsePluginInstances(await request("/api/plugins/instances", { method: "POST", headers: { "content-type": "application/json" },

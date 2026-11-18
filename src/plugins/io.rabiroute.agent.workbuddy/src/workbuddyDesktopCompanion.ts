@@ -5,8 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createWorkbuddyDesktopCreator } from "./workbuddyDesktopCreation.js";
-import { serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
-import { steerWorkbuddyDesktopExpression, type WorkbuddyDesktopSteerResult } from "./workbuddyDesktopSteer.js";
+import { clearClosedWorkbuddyDesktopRelay, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
+import { workbuddyDesktopMessageExpression, type WorkbuddyDesktopMessageResult } from "./workbuddyDesktopSteer.js";
 import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 
 const execute = promisify(execFile);
@@ -18,6 +18,7 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
   const renderer = pathToFileURL(path.join(path.dirname(executable), "resources", "app.asar", "renderer", "index.html")).pathname.toLowerCase();
   const observeArgs = ["-NoProfile", "-NonInteractive", "-File", windowObserver, "-Executable", executable];
   await execute("powershell.exe", observeArgs, { windowsHide: true, timeout: 5000 });
+  await clearClosedWorkbuddyDesktopRelay();
   const child = spawn(executable, ["--remote-debugging-pipe"], {
     detached: true, windowsHide: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
     env: { ...process.env, WORKBUDDY_REMOTE_DEBUGGING_PORT: "" }
@@ -109,9 +110,9 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
       insertText: async text => { await call("Input.insertText", { text }, sessionId); },
       observeWindow: () => observe(),
     }, path.join(workbuddyHomeDir(), "rabiroute-desktop-intents"));
-    const stopRelay = await serveWorkbuddyDesktopRelay(create, undefined, async (input, signal) => {
+    const stopRelay = await serveWorkbuddyDesktopRelay(create, undefined, async (input, signal, mode) => {
       signal.throwIfAborted();
-      return (await run(steerWorkbuddyDesktopExpression(input), true, true)).value as WorkbuddyDesktopSteerResult;
+      return (await run(workbuddyDesktopMessageExpression(input, mode), true, true)).value as WorkbuddyDesktopMessageResult;
     });
     let stopping: Promise<void> | undefined;
     const stop = () => stopping ??= stopRelay().finally(disconnect);

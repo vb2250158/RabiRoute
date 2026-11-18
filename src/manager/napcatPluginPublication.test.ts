@@ -7,9 +7,28 @@ import { once } from "node:events";
 import type { NapcatManagerResources } from "../plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.js";
 import { NapcatLifecycleOwner, type NapcatBinding } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatLifecycleOwner.js";
 import { readNapcatApiManifest } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiManifest.js";
+import { napcatWebuiApiReadSpecs } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.js";
+import { napcatWebuiManagementDescriptors } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.js";
 import { napcatEndpointFixture } from "./napcatEndpointPlugin.fixture.js";
 
-const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + 17 + 20 + 1 + 1;
+const expectedWebuiOperations = [
+  ...napcatWebuiApiReadSpecs.map(spec => `agent.qq.webui.${spec.id}`),
+  ...napcatWebuiManagementDescriptors.map(spec => `agent.qq.webui.management.${spec.id}`),
+  "agent.qq.webui.management.receipt.read"
+].sort();
+const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + expectedWebuiOperations.length + 1;
+
+function assertPublishedNapcatOperations(f: Awaited<ReturnType<typeof napcatEndpointFixture>>) {
+  assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
+  const actualWebuiOperations = f.operations.catalogSnapshot().operations.map(entry => entry.contract.operationId)
+    .filter(id => id.startsWith("agent.qq.webui.")).sort();
+  assert.deepEqual(actualWebuiOperations, expectedWebuiOperations);
+  const egress = f.kernel.current().services.services.get("endpoint.napcat.egress@1")?.value as
+    { sendVariants: Record<string, { type: string; operation: string }> } | undefined;
+  assert.ok(egress);
+  assert.deepEqual(Object.keys(egress.sendVariants), ["napcat.group-forward"]);
+  assert.equal(egress.sendVariants["napcat.group-forward"]?.operation, "sendGroupForwardVariant");
+}
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
@@ -21,7 +40,7 @@ test("the actual bundled NapCat manager owns its API, scan and process records; 
     const activation = f.kernel.current().records[0]!.identity.activationId;
     const provider = f.scanProviders.snapshot()[0];
     assert.equal(provider.type, "napcat");
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
+    assertPublishedNapcatOperations(f);
     const recordPath = path.join(f.root, "data/.runtime/napcat-process-ownership.json");
     const records = await fs.readFile(recordPath, "utf8");
     await f.kernel.switch([f.candidate("failed", { activate(context) { context.effects.add(() => { throw new Error("controlled candidate failure"); }); } })]);
@@ -51,7 +70,7 @@ test("the combined NapCat endpoint waits for the exact previous owner retirement
     assert.equal(f.kernel.current().records[0]?.identity.revision, "new");
     assert.equal(f.kernel.current().records[0]?.status, "active");
     assert.equal(f.scanProviders.snapshot().length, 1);
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
+    assertPublishedNapcatOperations(f);
   } finally { release(); await f.dispose(); }
 });
 
@@ -67,7 +86,7 @@ test("a synchronous publication failure restores the original NapCat operations 
     } })]), /controlled publication failure/);
     assert.equal(f.kernel.current().records[0]!.identity.activationId, activation);
     assert.equal(f.scanProviders.snapshot()[0], provider);
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
+    assertPublishedNapcatOperations(f);
   } finally { await f.dispose(); }
 });
 
@@ -139,14 +158,15 @@ test("NapCat disable preserves failed process retirement and fences a replacemen
   } finally { await f.dispose().catch(error => { assert.match(String(error), /retirement|cleanup|dispos/i); }); }
 });
 
-test("the real NapCat SDK scan helper enforces its declared @1 dependency alongside direct @3", { timeout: 60000 }, async () => {
+test("the real NapCat SDK egress and scan helpers enforce their declared @1 dependency alongside direct @3", { timeout: 60000 }, async () => {
   const f = await napcatEndpointFixture();
   try {
     await f.kernel.switch([f.candidate("undeclared-scan-service", undefined, ["host.message-endpoints@3"])]);
     assert.equal(f.kernel.current().records[0]?.status, "failed");
-    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@1/);
+    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare optional capability: host\.message-endpoints@1/);
     assert.deepEqual(f.scanProviders.snapshot(), []);
     assert.deepEqual(f.operations.snapshot(), []);
+    assert.equal(f.kernel.current().services.services.has("endpoint.napcat.egress@1"), false);
   } finally { await f.dispose(); }
 });
 
@@ -160,7 +180,7 @@ test("the actual NapCat @1 and @3 dependencies share one host and retire both SD
     assert.equal(f.kernel.current().records[0]?.status, "active", JSON.stringify(f.kernel.current()));
     assert.equal(sameOwner, true);
     assert.equal(f.scanProviders.snapshot().length, 1);
-    assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
+    assertPublishedNapcatOperations(f);
     assert.ok(f.kernel.current().contributions);
     await f.kernel.switch([]);
     assert.deepEqual(f.scanProviders.snapshot(), []);

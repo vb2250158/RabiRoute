@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendPlanHistoryRecord, orderedPlanHistoryPaths, readPlanHistoryBytes } from "./planHistoryShards.js";
+import { appendPlanHistoryRecord, orderedPlanHistoryPaths, readPlanHistoryBytes, setPlanHistoryCommitment } from "./planHistoryShards.js";
 import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { planActivationStatus, planMarkerStatus } from "./planState.js";
@@ -14,7 +14,8 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
   phase: "saved" | "delivered", actor?: PlanHistoryActor): { record: PlanFeedbackRecord; operations: PlanStorageTransactionOperation[] } {
   const unchanged = { record: feedback, operations: [] };
   if (feedback.kind !== "approval_suggestion" || feedback.author === "agent") return unchanged;
-  const before = readCanonicalPlanJsonUnderLease(lease) as unknown as PlanItem;
+  const { historyCommitment: _historyCommitment, ...beforeRaw } = readCanonicalPlanJsonUnderLease(lease);
+  const before = beforeRaw as unknown as PlanItem;
   const workflow = ensurePersonaPlanWorkflow(lease.roleDir).workflow;
   if (planActivationStatus(before, workflow) !== "进行中" || before.currentStepId !== feedback.stepId) return unchanged;
   const marker = planMarkerStatus(before);
@@ -46,7 +47,7 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
   appendPlanHistoryRecord(historyFiles, row);
   const latestPath = orderedPlanHistoryPaths(historyFiles.keys()).at(-1)!;
   return { record, operations: [
-    { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(after, null, 2)}\n`) },
+    { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(after as unknown as Record<string, unknown>, historyFiles), null, 2)}\n`) },
     { type: "replace-file", relativePath: latestPath, content: historyFiles.get(latestPath)! }
   ] };
 }

@@ -46,7 +46,11 @@ The role configuration page opens directly with section tabs. The current-role, 
 
 The Automation area starts with the Message rules / Agent Hook tabs, without a duplicate heading, description, or total rule count.
 
-In Role → Automation → Message rules, choose a message type on the left to view its rules and count. Add message rule opens the editor directly with that type selected; the editor also lets you switch types on the left. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Finish editing and save the role to apply changes. On narrow screens, the type bar moves to the top and scrolls horizontally.
+In Role → Automation → Message rules, choose a message type on the left to view its rules and count. Select Add message rule and choose Create from template or Create manually. Edit the preview and select Create to add the rule. Closing or cancelling discards the preview. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Finish editing and save the role to apply changes. On narrow screens, the type bar moves to the top and scrolls horizontally.
+
+Under the rule action, use **Type** to choose **Notify Agent**, **Run script**, or a delivery template. You can then edit the trigger, destination, and text. **Save as custom template** captures the current text and trigger type. Click **Save** at the top of the page to make the template available to other rules for this role.
+
+**Trigger scenarios** shows the scenarios used by the rule. Use **Add scenario** to choose group replies, private messages, or other supported scenarios. Picking the first scenario from **All scenarios** narrows the rule to that scenario. Choose **All scenarios** in the same menu to restore all scenarios for the current channel. Use **Add restriction** to choose and configure a group, private contact, speaker, or message match as available.
 
 The list only shows types with existing rules, including disabled rules. Deleting the last rule of a type hides that type and selects a remaining type. When no rules exist, Add message rule remains available; the editor offers every type.
 

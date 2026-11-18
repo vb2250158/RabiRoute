@@ -1,4 +1,5 @@
 import { normalizeAgentDeliveryTarget, type AgentDeliveryTarget, type AgentDsBotDestination } from "@shared/agentDeliveryTarget";
+import { RECORDING_CAPTURE_TYPES } from "@shared/personaEventTypes";
 import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, MessageEndpointType, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   defaultRolePanelNotificationRule,
@@ -31,11 +32,17 @@ export function isNonMessageEndpoint(type: MessageAdapterType): boolean {
 }
 
 export const routeKindLabels: Record<string, string> = {
+  ...Object.fromEntries(RECORDING_CAPTURE_TYPES.map(type => [type.routeKind, type.title])),
   direct_at: "群聊-直接 @",
   direct_reply: "群聊-直接回复",
   indirect_reply: "群聊-间接回复",
   group_message: "群聊-普通消息",
   private: "私聊",
+  qqbot_private: "QQ 机器人单聊",
+  qqbot_group: "QQ 机器人群内 @",
+  qqbot_channel: "QQ 机器人频道消息",
+  qqbot_dm: "QQ 机器人频道私信",
+  qqbot_event: "QQ 机器人平台事件",
   heartbeat: "定时触发",
   manual_trigger: "手动触发",
   role_panel_message: "角色面板消息",
@@ -43,7 +50,7 @@ export const routeKindLabels: Record<string, string> = {
   voice_transcript: "语音转写",
   wearable_health_alert: "智能手表/手环健康告警",
   wecom_message: "企业微信消息",
-  weixin_message: "个人微信消息"
+  weixin_message: "微信机器人消息"
 };
 
 export const templateVars = [
@@ -117,9 +124,9 @@ export const templateVars = [
   { name: "wecomChatId", description: "企业微信群聊 chat id；模板里的 groupId 会优先使用这个值。" },
   { name: "wecomSenderId", description: "企业微信发送者 userid；模板里的 userId 会优先使用这个值。" },
   { name: "wecomMessageType", description: "企业微信消息类型，例如 text、mixed、image、voice、file。" },
-  { name: "weixinSessionId", description: "个人微信来源会话 ID；回复只能返回这条来源会话。" },
-  { name: "weixinUserId", description: "个人微信发送者 ID。" },
-  { name: "weixinMessageType", description: "个人微信消息类型，例如 text、mixed、image、voice、file。" }
+  { name: "weixinSessionId", description: "微信机器人来源会话 ID；回复只能返回这条来源会话。" },
+  { name: "weixinUserId", description: "微信机器人发送者 ID。" },
+  { name: "weixinMessageType", description: "微信机器人消息类型，例如 text、mixed、image、voice、file。" }
 ];
 
 export function normalizeTemplateText(value: unknown): string {
@@ -235,7 +242,7 @@ export function adapterLabel(type: string): string {
   if (type === "rabilink") return "移动端（全天记录）";
   if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
-  if (type === "weixin") return "个人微信 / Weixin";
+  if (type === "weixin") return "微信机器人";
   if (type === "feishu") return "飞书 / Feishu";
   if (type === "webhook") return "通用 Webhook";
   if (type === "disabled") return "已禁用";
@@ -494,6 +501,17 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       ]
     },
     {
+      adapter: "qqbot",
+      title: "QQ 官方机器人",
+      note: "接收 QQ 单聊、群聊、频道、频道私信及平台事件。",
+      groups: [
+        { title: "单聊事件", routeKinds: ["qqbot_private"] },
+        { title: "群聊事件", routeKinds: ["qqbot_group"] },
+        { title: "频道事件", routeKinds: ["qqbot_channel", "qqbot_dm"] },
+        { title: "平台事件", routeKinds: ["qqbot_event"] }
+      ]
+    },
+    {
       adapter: "heartbeat",
       title: "定时触发",
       note: "内部定时事件；勾选后仅在规则启用且入口产生 heartbeat 时投递。",
@@ -540,9 +558,9 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
     },
     {
       adapter: "weixin",
-      title: "个人微信 / Weixin",
-      note: "个人微信私聊消息；文本进入 Agent，回复只回到原会话。",
-      groups: [{ title: "个人微信私聊", routeKinds: ["weixin_message"] }]
+      title: "微信机器人",
+      note: "微信机器人会话消息，可收发文字和媒体。",
+      groups: [{ title: "微信机器人私聊", routeKinds: ["weixin_message"] }]
     },
     {
       adapter: "webhook",
@@ -554,7 +572,7 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
 }
 
 export function isGroupRouteKind(routeKind: string): boolean {
-  return ["direct_at", "direct_reply", "indirect_reply", "group_message"].includes(routeKind);
+  return ["direct_at", "direct_reply", "indirect_reply", "group_message", "qqbot_group"].includes(routeKind);
 }
 
 export function ruleHasGroupRoute(rule: NotificationRule): boolean {

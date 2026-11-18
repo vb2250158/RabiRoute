@@ -1,3 +1,4 @@
+import type { MessageEndpointStartup } from "@rabiroute/plugin-sdk";
 import type {
   GatewayMessageAdapterType,
   LegacyMessageAdapterType,
@@ -17,7 +18,7 @@ export type MessageAdapterDispose = () => void | Promise<void>;
 
 export type MessageAdapter = {
   type: GatewayMessageAdapterType;
-  start(): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
+  start(startup?: MessageEndpointStartup): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
 };
 
 export type MessageAdapterManifest = {

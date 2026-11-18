@@ -2,6 +2,18 @@
 
 English | [简体中文](rabilink-pc-pairing.md)
 
+When both the Rabi host and the Rabi server support account connections, open **RabiLink → Settings** on each PC, enable the connection, and save the same server address. Register if needed, then sign in with the same account on each PC. Online hosts appear under **My devices**. Older computers owned by the account remain reachable over the existing relay. A device-bound pairing credential can migrate automatically. Sign in once to confirm the account when the old setup uses a shared application token.
+
+During device credential rotation, the host first saves the operation ID and candidate credential locally. The server keeps the existing credential active until confirmation. The host can recover the same operation after a connection interruption or a lost response.
+
+The prompt below covers integrations and workflows that use application tokens.
+
+### Automatic Windows host upgrades
+
+A release administrator can set `enabled`, `manifestUrl`, `channel` and `publicKey` in the private `data/rabilink/host-upgrade.json` under the installation root. `manifestUrl` uses HTTPS and `publicKey` is the release publisher's Ed25519 SPKI PEM public key. The manifest envelope uses base64url `payload` and `signature`. The signature covers the exact decoded UTF-8 JSON bytes. The manifest includes `schemaVersion: 1`, `appId: "io.rabiroute.windows"`, `platform: "win32-x64"`, its `channel`, millisecond `issuedAt` and `expiresAt`, `latest` and `releases`. Each release includes `version`, `releaseId`, `payloadSha256`, `installerSha256`, `installerUrl` and `size`. Include the candidate and the exact installed release for recovery.
+
+Installed hosts check the manifest when the account event connection opens. A separate Windows user task verifies the signature and both installer digests before calling the official installer. It records completion after the new Host and Manager agree on the healthy generation and version. If the new version fails readiness, the task restores the previous release. Status is stored in private `data/rabilink/host-upgrade/status.json`. Enabling this path requires the publisher's signed channel and matching installers.
+
 Status: experimental integration. One-time enrollment, recovery and revocation passed matching tests and isolated local verification. Servers expose this entry after deploying this version. Access and persistence in each target cloud environment still require acceptance; the platform controls temporary task lifetime.
 
 ## Three steps

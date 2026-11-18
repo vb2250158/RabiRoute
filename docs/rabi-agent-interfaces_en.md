@@ -1432,6 +1432,14 @@ A candidate is for verification only and cannot support real-name address, autho
 
 ## Explicit send API
 
+`data.variants` from `GET /api/agent/send/capabilities` lists the formats registered by the current Manager plugins. Each entry supplies `channel`, `type`, `contractVersion`, `paramsSchema`, and `dataSchema`. For `/api/agent/send`, keep the existing request envelope, fill `params` using the selected variant's schema, and use `{ "type": "<discovered variant>", "data": { ... } }` as `payload`. The ordinary text, image, and file formats remain supported.
+
+The initial variants are `napcat.group-forward` and `qqbot.source-reply`. The former requires an exact group and NapCat instance and uses `data.nodes` for text entries attributed to the authenticated bot. The latter uses `params.sourceMessageId` and `data.text` and resolves the original message in the selected Route and account. Both use the existing text output policy and send ledger.
+
+When a Route enables conversation review, a variant must supply an exact conversation target recognized by the review service. `napcat.group-forward` supports review by group and instance. The source ID used by `qqbot.source-reply` still needs integration with pre-send conversation review. A conversation confirmation binds the original payload and plugin package. NapCat group replies from message-processing Agents require an original quote, so those requests cannot use text-only merged forwards.
+
+Keep the original `deliveryId` for lookup, verification, and duplicate submission. The package revision and activation identity are stored as audit evidence. Receipts remain readable after the plugin is disabled, and an unconfirmed result remains uncertain. Historical receipt verification does not establish current presence on the platform.
+
 
 
 All outbound endpoint messages use one API. The legacy `/api/agent/replies` endpoint is removed. `/api/agent/send` does not accept an unchanged `replyContext` and infer a destination from it.

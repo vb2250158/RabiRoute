@@ -43,7 +43,7 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
     assert.deepEqual(first.entries, [{ sequence: 1, record: user }]);
     assert.equal(first.warnings[0]?.errorCode, "WORKBUDDY_HISTORY_ROW_INVALID");
     assert.ok(first.nextCursor);
-    const manager = createManager({} as AgentManagerImplementationOptions, {
+    const manager = createManager({ host: { packageRoot: root } } as AgentManagerImplementationOptions, {
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
       sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
     }, new AbortController().signal);
@@ -61,6 +61,15 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
     assert.deepEqual(response.data.delivery, {
       deliveryId, state: "accepted", source: "workbuddy-native-transcript", retryable: false, sequence: 1
     });
+    const receipt = { deliveryId, generation: "gen", target: { provider: "workbuddy", sessionId: user.sessionId },
+      promptHash: "prompt", executionOptionsHash: "execution", executionOptions: { cwd: "C:/work/one" } };
+    const recover = manager.operations["endpoint.recover"]!;
+    const readReceipt = (input: typeof receipt) => recover({}, { nativeArgs: [input, () => undefined] });
+    const recovered = await readReceipt(receipt) as { deliveryId: string; action: string; transport: string };
+    assert.equal(recovered.deliveryId, deliveryId);
+    assert.equal(recovered.action, "started");
+    assert.equal(recovered.transport, "workbuddy_native_history");
+    assert.equal(await readReceipt({ ...receipt, executionOptions: { ...receipt.executionOptions, workbuddyDeliveryMode: "steer" } } as typeof receipt), undefined);
     const quoted = await handleAgentThreadRequest({ ...request, history: { cursor: first.nextCursor!, limit: 2 } }, options);
     assert.deepEqual(quoted.data.delivery, {
       deliveryId, state: "not_observed", source: "workbuddy-native-transcript", retryable: false, nextCursor: null
@@ -89,9 +98,13 @@ test("unbound WorkBuddy history uses exact tasks, bounded cursors and complete n
     await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { signal: aborted.signal }), /abort/i);
     fs.writeFileSync(file, "{}\n");
     await assert.rejects(readWorkbuddyHistory("11111111-1111-4111-8111-111111111111", { cursor: first.nextCursor! }), /来源已变化/);
+    const oldRow = JSON.stringify({ type: "message", role: "assistant", content: "x".repeat(1024) });
+    fs.writeFileSync(file, (oldRow + "\n").repeat(2200) + JSON.stringify(user) + "\n" + JSON.stringify(user));
+    const afterLongHistory = await readReceipt(receipt) as { deliveryId: string; transport: string };
+    assert.equal(afterLongHistory.deliveryId, deliveryId);
+    assert.equal(afterLongHistory.transport, "workbuddy_native_history");
   });
 });
-
 
 test("the provider recovers steer only from the exact native injection record", async t => {
   const threadId = "11111111-1111-4111-8111-111111111111";
@@ -99,7 +112,6 @@ test("the provider recovers steer only from the exact native injection record", 
   const root = createHome([{ id: threadId, cwd, title: "Task" }]);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const directory = path.join(root, "projects", workbuddyProjectId(cwd));
-  fs.mkdirSync(directory, { recursive: true });
   const manifest = JSON.parse(fs.readFileSync(new URL("../agent-adapter.json", import.meta.url), "utf8")).manifest;
   const delivery = {
     deliveryId: "original-guide", generation: "original-generation",
@@ -113,12 +125,15 @@ test("the provider recovers steer only from the exact native injection record", 
     providerData: { startsNewUserRequest: true, rootRequestId: "turn-A", conversationRequestId: "turn-A" }
   };
   const file = path.join(directory, threadId + ".jsonl");
-  fs.writeFileSync(file, JSON.stringify(user) + "\n");
   await withHome(root, async () => {
-    const manager = createManager({} as AgentManagerImplementationOptions, {
+    const manager = createManager({ host: { packageRoot: root } } as AgentManagerImplementationOptions, {
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest, sessionBinding: {}
     }, new AbortController().signal);
     const probe = () => manager.operations["endpoint.recover"]!({}, { nativeArgs: [delivery, () => undefined] });
+    assert.equal(await probe(), undefined);
+    fs.mkdirSync(directory, { recursive: true });
+    assert.equal(await probe(), undefined);
+    fs.writeFileSync(file, JSON.stringify(user) + "\n");
     assert.equal(await probe(), undefined);
     fs.appendFileSync(file, JSON.stringify({
       ...user, providerData: { ...user.providerData, startsNewUserRequest: false }
@@ -126,7 +141,7 @@ test("the provider recovers steer only from the exact native injection record", 
     assert.deepEqual(await probe(), {
       deliveryId: delivery.deliveryId, generation: delivery.generation, endpoint: delivery.target,
       promptHash: delivery.promptHash, executionOptionsHash: delivery.executionOptionsHash,
-      accepted: true, transport: "workbuddy_desktop", action: "steered"
+      accepted: true, transport: "workbuddy_native_history", action: "steered"
     });
   });
 });
@@ -280,7 +295,7 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
   ]);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   await withHome(root, async () => {
-    const { operations } = createManager({} as AgentManagerImplementationOptions, {
+    const { operations } = createManager({ host: { packageRoot: root } } as AgentManagerImplementationOptions, {
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
     }, new AbortController().signal);
     const invokeAgentOperation: AgentManagerOperationInvoker = async <T>(
@@ -302,9 +317,8 @@ test("public thread bridge returns scoped WorkBuddy pages without a fallback dri
     assert.deepEqual((second.data.threads as Array<{ id: string }>).map(thread => thread.id), ["allowed-old"]);
     assert.equal(second.data.nextOffset, null);
     await assert.rejects(handleAgentThreadRequest({ action: "create", agentAdapter: "workbuddy", title: "not-created" }, options), /requires an explicit first message/);
-    await assert.rejects(handleAgentThreadRequest({ action: "rename", agentAdapter: "workbuddy", threadId: "allowed-old", title: "not-renamed" }, options), /WorkBuddy task titles are owned by the WorkBuddy app/);
+    await assert.rejects(handleAgentThreadRequest({ action: "rename", agentAdapter: "workbuddy", threadId: "allowed-old", title: "not-renamed" }, options), /Rename the task in the workbuddy application/);
     await assert.rejects(handleAgentThreadRequest({ action: "resolve", agentAdapter: "workbuddy", title: "not-created" }, options), /complete workbuddy task ID/);
-    await assert.rejects(handleAgentThreadRequest({ action: "open", agentAdapter: "workbuddy", threadId: "allowed-old" }, options), /Open this task in the WorkBuddy application/);
   });
 });
 
@@ -323,7 +337,7 @@ test("WorkBuddy public create dispatches an exact workspace and stable intent th
       return { state: "created", intentId: input.intentId, sequence: 3, thread: { id: "native-id", title: "Actual title", cwd: input.workspace } };
     }, path.join(root, "rabiroute-desktop-relay.json"));
     try {
-      const manager = createManager({ host: { readOnly: () => false } } as AgentManagerImplementationOptions, {
+      const manager = createManager({ host: { readOnly: () => false, packageRoot: root } } as AgentManagerImplementationOptions, {
         type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
         sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
       }, new AbortController().signal);
@@ -392,7 +406,7 @@ test("WorkBuddy reconciles an original creation while its desktop relay is offli
   }));
   await withHome(root, async () => {
     const retiring = new AbortController();
-    const manager = createManager({ host: { readOnly: () => false } } as AgentManagerImplementationOptions, {
+    const manager = createManager({ host: { readOnly: () => false, packageRoot: root } } as AgentManagerImplementationOptions, {
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
     }, retiring.signal);
     const create = manager.operations["threads.create"]!;
@@ -407,7 +421,7 @@ test("WorkBuddy reconciles an original creation while its desktop relay is offli
     const admitted = create(payload);
     retiring.abort();
     assert.deepEqual(await admitted, { state: "created", intentId: payload.intentId, sequence: 1, thread: { id, title: "Native title", cwd: workspace } });
-    await assert.rejects(async () => create({ ...payload, intentId: "first-time-create" }), /桌面创建尚未连接/);
+    await assert.rejects(async () => create({ ...payload, intentId: "first-time-create" }), /桌面创建尚未连接|需要 Windows 登录会话/);
   });
 });
 
@@ -463,13 +477,15 @@ test("delivery posts to the live session gateway and reports the http receipt", 
   const originalPassword = process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
   const calls: Array<{ url: string; body: unknown }> = [];
   const responses = [
-    { status: 200, body: { data: { delivered: true } } }
+    { status: 200, body: { data: { delivered: true } } },
+    { status: 500, body: {} }
   ];
   let index = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const step = responses[Math.min(index, responses.length - 1)];
     index += 1;
+    if (index === 3) throw new TypeError("Fixture gateway is closed", { cause: { code: "ECONNREFUSED" } });
     return new Response(JSON.stringify(step.body), {
       status: step.status,
       headers: { "content-type": "application/json" }
@@ -487,14 +503,74 @@ test("delivery posts to the live session gateway and reports the http receipt", 
         transport: "http",
         warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。"
       });
+      await assert.rejects(sendWorkbuddyThreadMessage({ threadId: "t1", prompt: "original body", cwd: "C:\\work\\one",
+        continueUnloaded: async () => assert.fail("uncertain live HTTP delivery must not use the desktop") }), /投递结果待确认/);
+      const closed = await sendWorkbuddyThreadMessage({ threadId: "t1", prompt: "one body", cwd: "C:\\work\\one",
+        continueUnloaded: async task => { assert.equal(task.id, "t1"); } });
+      assert.equal(closed.transport, "desktop-ipc");
     });
     assert.equal(calls[0]?.url, "http://127.0.0.1:5762/api/v1/sessions/t1/reply");
     const delivery = calls[0]?.body as { text?: string } | undefined;
     assert.equal(delivery?.text, "请处理这条缺陷");
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 3);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalPassword === undefined) delete process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD;
     else process.env.RABI_WORKBUDDY_GATEWAY_PASSWORD = originalPassword;
   }
+});
+
+test("unloaded continuation can use only the original ordinary desktop task", async t => {
+  const cwd = "C:\\work\\one";
+  const root = createHome([
+    { id: "wanted", cwd, title: "same title" },
+    { id: "another", cwd, title: "same title" },
+    { id: "archived", cwd, title: "same title", deleted_at: 1 }
+  ]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dispatched: string[] = [];
+  await withHome(root, async () => {
+    const base = { cwd, prompt: "original body", continueUnloaded: async (task: { id: string }) => { dispatched.push(task.id); } };
+    const receipt = await sendWorkbuddyThreadMessage({ ...base, threadId: "wanted" });
+    assert.equal(receipt.threadId, "wanted");
+    assert.equal(receipt.transport, "desktop-ipc");
+    await assert.rejects(sendWorkbuddyThreadMessage({ ...base, threadId: "archived" }), /已归档/);
+    await assert.rejects(sendWorkbuddyThreadMessage({ ...base, threadId: "wanted", cwd: "C:\\work\\other" }), /cannot accept/);
+    assert.deepEqual(dispatched, ["wanted"]);
+  });
+});
+
+test("the Manager continues an unloaded original chat through the typed desktop relay", { skip: process.platform !== "win32" }, async t => {
+  const root = createHome([]);
+  const cwd = path.join(root, "project");
+  fs.mkdirSync(cwd);
+  const database = new DatabaseSync(path.join(root, "workbuddy.db"));
+  database.prepare("INSERT INTO sessions (id, cwd, title) VALUES (?, ?, ?)").run("ordinary", cwd, "Original desktop chat");
+  database.close();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await withHome(root, async () => {
+    let submissions = 0;
+    const stop = await serveWorkbuddyDesktopRelay(() => assert.fail("continuation must never create"), path.join(root, "rabiroute-desktop-relay.json"),
+      async (input, _signal, mode) => {
+        assert.equal(mode, "continue");
+        assert.deepEqual(input, { threadId: "ordinary", workspace: cwd, deliveryId: "original-send", text: "Resumed message" });
+        submissions++;
+        return { state: "accepted", threadId: input.threadId, deliveryId: input.deliveryId };
+      });
+    try {
+      const manager = createManager({ host: { packageRoot: root } } as AgentManagerImplementationOptions, {
+        type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
+      }, new AbortController().signal);
+      let authority = 0;
+      const deliver = () => manager.operations["endpoint.execute"]!({}, { nativeArgs: [
+        { deliveryId: "original-send", prompt: "Resumed message", target: { provider: "workbuddy", sessionId: "ordinary" }, executionOptions: { cwd } },
+        {}, () => { authority++; }
+      ] });
+      const receipt = await deliver() as { threadId: string; transport: string };
+      assert.equal(receipt.threadId, "ordinary");
+      assert.equal(receipt.transport, "desktop-ipc");
+      assert.equal(submissions, 1);
+      assert.ok(authority >= 3);
+    } finally { await stop(); }
+  });
 });

@@ -9,3 +9,5 @@ Web 入口在 manifest 中直接声明 `entries.web.module: "./web/client.mjs"`�
 Windows 的 `.cmd` / `.bat` 启动入口使用固定的英文取件指令；原始消息保存在本次投递原有的私有 UTF-8 提示词文件中，文件路径仅通过该子进程的 `RABIROUTE_COPILOT_PROMPT_FILE` 环境变量传入。Copilot 读取该文件执行原任务；消息中的引号、换行或命令符号不交给 cmd 解释。原生可执行文件继续接收独立参数。`COPILOT_CLI_ARGS`、工作目录和会话配置仍由用户管理；显式省略 `{prompt}` 的自定义参数保留 stdin 模式，脚本入口的 stdin 同样只接收固定取件指令。
 
 配置切换、共享任务依赖和接入要求见 [Agent 接入规范](../../../../docs/agent-adapter-standard-requirements.md)，插件生命周期见 [SDK](../../../contracts/plugin-sdk/README.md)。
+
+Gateway 换版等待旧版 CLI 任务关闭进程和输出管道。超时时，Windows 终止该次投递的进程树，收到原进程关闭回执后再释放旧版租约。退出信号、启动失败和超时不会写入成功回执。

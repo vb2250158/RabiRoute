@@ -23,6 +23,26 @@ test("shared owners load once on demand and an unrelated failed owner stays loca
   assert.equal(brokenLoads, 1);
 });
 
+test("concurrent endpoint activations share a failed load and can recover through the same host ports", async () => {
+  const owner = Object.freeze({ value: "recovered owner" });
+  let loads = 0;
+  const ports = await createMessageEndpointHostPorts({ loaders: {
+    recoverable: async () => {
+      if (++loads === 1) throw new Error("controlled transient failure");
+      return owner;
+    }
+  } });
+  const first = await Promise.allSettled([ports.prepareModules(["recoverable"]), ports.prepareModules(["recoverable"])]);
+  assert.deepEqual(first.map(result => result.status), ["rejected", "rejected"]);
+  assert.equal(loads, 1);
+  assert.throws(() => ports.module("recoverable"), /unavailable/);
+
+  await Promise.all([ports.prepareModules(["recoverable"]), ports.prepareModules(["recoverable"])]);
+  await ports.prepareModules(["recoverable"]);
+  assert.equal(ports.module("recoverable"), owner);
+  assert.equal(loads, 2);
+});
+
 
 test("published Xiaomi and native listener dependencies prepare through their single shared owners", async () => {
   const ports = await createMessageEndpointHostPorts();

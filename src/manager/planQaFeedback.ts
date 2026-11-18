@@ -3,23 +3,18 @@ import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback
 import { planStepIsCompleted, type PlanItem, type PlanStep } from "../roleKnowledge.js";
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
 import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
-import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
+import { planTaskDeliveryTarget, type PlanTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { planStatusKeyForRole, type PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 
-export type PlanQaTaskRequest = {
-  instanceBinding?: AgentInstanceBinding;
-  agentAdapter: PlanAssistantAgentType;
-  threadId: string;
-  title: string;
-  cwd: string;
-  createIfMissing: true;
+export type PlanQaTaskRequest = PlanTaskDeliveryTarget & {
   deliveryId: string;
   prompt: string;
 };
 
 export type PlanQaTaskDeliveryReadRequest = {
   agentAdapter?: PlanAssistantAgentType;
+  dshBaseUrl?: string;
   instanceBinding?: AgentInstanceBinding;
   threadId: string;
   cwd: string;
@@ -501,6 +496,7 @@ export async function consumePlanQaFeedback(
     }
     const readback = await options.readTaskDelivery({
       agentAdapter: taskTarget.agentAdapter,
+      ...(taskTarget.dshBaseUrl ? { dshBaseUrl: taskTarget.dshBaseUrl } : {}),
       ...(taskTarget.instanceBinding ? { instanceBinding: taskTarget.instanceBinding } : {}),
       threadId: taskTarget.threadId,
       cwd: taskTarget.cwd,
@@ -539,6 +535,7 @@ export async function consumePlanQaFeedback(
       try {
         const readback = await options.readTaskDelivery({
           agentAdapter: taskTarget.agentAdapter,
+          ...(taskTarget.dshBaseUrl ? { dshBaseUrl: taskTarget.dshBaseUrl } : {}),
           ...(taskTarget.instanceBinding ? { instanceBinding: taskTarget.instanceBinding } : {}),
           threadId: taskTarget.threadId,
           cwd: taskTarget.cwd,

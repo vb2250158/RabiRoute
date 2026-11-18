@@ -17,6 +17,7 @@ import { ManagementDiagnostics } from "./lib/management-diagnostics.mjs";
 import { DeliveryOwner } from "./lib/delivery-owner.mjs";
 import { runDeliveryCommand } from "./lib/delivery-control.mjs";
 import { createEndpointSession, EndpointAuthenticationError } from "./lib/endpoint-session.mjs";
+import { verifyPublicEndpoint } from "./lib/manager-discovery.mjs";
 import { createDesktopPresentation } from "./lib/desktop-presentation.mjs";
 import { TerminalService } from "./lib/terminal-service.mjs";
 import { ComputerService } from "./lib/computer-service.mjs";
@@ -44,6 +45,13 @@ function homeDataDirectory() {
 function configPathFromArgs(args = process.argv.slice(2)) {
   const index = args.indexOf("--config");
   return index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : path.join(homeDataDirectory(), "config.json");
+}
+
+function nodeInstanceGuid(configPath) {
+  const directory = path.dirname(configPath);
+  const name = path.basename(directory);
+  return path.basename(configPath) === "config.json" && path.basename(path.dirname(directory)) === "instances"
+    && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(name) ? name : "";
 }
 
 function normalizeManagerUrl(value) {
@@ -143,7 +151,8 @@ function parseWorkspaceList(value, fallback) {
 async function verifyNodeIdentity(config, fetcher = fetch, configPath) {
   const endpoint = await createEndpointSession({ config, configPath, fetchImpl: fetcher }).ensure();
   Object.assign(config, endpoint.config);
-  return { guid: endpoint.guid, applicationGenerationId: endpoint.generation, managerInstanceId: endpoint.instance };
+  return { guid: endpoint.guid, applicationGenerationId: endpoint.generation, managerInstanceId: endpoint.instance,
+    managerName: typeof endpoint.meta?.rabiName === "string" ? endpoint.meta.rabiName.trim().slice(0, 80) : "" };
 }
 
 async function bootstrapConfig(configPath, fetcher = fetch) {
@@ -171,8 +180,15 @@ async function bootstrapLockedConfig(configPath, fetcher) {
   const previous = readJson(configPath, undefined);
   if (fs.existsSync(configPath) && !previous) throw new Error("The existing instance configuration is invalid; refusing to replace its identity.");
   const managerUrl = normalizeManagerUrl(process.env.RABI_MANAGER_URL || previous?.managerUrl);
+  const managerGuid = nodeInstanceGuid(configPath) || process.env.RABI_AGENT_MANAGER_GUID?.trim() || previous?.managerGuid;
   const ticket = String(process.env.RABI_AGENT_BOOTSTRAP_TICKET || "").trim();
   delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
+  if (managerGuid && previous?.managerGuid && managerGuid !== previous.managerGuid) {
+    throw new Error("This node belongs to a different Manager. Use its own instance configuration.");
+  }
+  if (managerGuid && (managerGuid !== previous?.managerGuid || managerUrl !== previous?.managerUrl)) {
+    await verifyPublicEndpoint(managerUrl, { fetchImpl: fetcher, guid: managerGuid });
+  }
   const recoveryPath = `${configPath}.enrollment.json`;
   let recovery = readJson(recoveryPath, undefined);
   if (fs.existsSync(recoveryPath) && (!recovery || recovery.managerUrl !== managerUrl
@@ -197,7 +213,7 @@ async function bootstrapLockedConfig(configPath, fetcher) {
   };
   // Validate saved credentials before deciding whether this paste needs its ticket.
   if (previous?.nodeCredential && !recovery) {
-    const config = { ...previous, managerUrl };
+    const config = { ...previous, managerUrl, managerGuid };
     try {
       await verifyNodeIdentity(config, fetcher);
       return commit(config);
@@ -218,7 +234,7 @@ async function bootstrapLockedConfig(configPath, fetcher) {
     autoUpdate: previous?.autoUpdate !== false,
     nodeId: previous?.nodeId || recovery?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
-    managerGuid: String(previous?.managerGuid || "").trim() || undefined,
+    managerGuid,
     applicationGenerationId: String(previous?.applicationGenerationId || "").trim() || undefined,
     managerInstanceId: String(previous?.managerInstanceId || "").trim() || undefined,
     defaultWorkspace,
@@ -405,7 +421,8 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
   const children = new Set(); const sockets = new Set(); const stopWaiters = new Set();
   let worker; let candidate; let stopping = false; let released = false; let retryTimer; let stopDeadline; let failures = 0; let workerStartedAt;
   let presentation; let paused = false; let transitioning = false; let presentationClosing = false; let presentationClosed = false;
-  let publicState = { summary: "正在启动连接器", version: "", agents: "", task: "", managerOrigin: "", busy: false };
+  let publicState = { summary: "正在启动连接器", version: "", agents: "", task: "", managerOrigin: "", managerName: "", busy: false };
+  const instanceLabel = nodeInstanceGuid(configPath).slice(0, 8);
   const recentEvents = [];
   const startupPlan = () => startupFiles("win32", process.execPath, launcherPath(configPath), configPath, { home: process.env.USERPROFILE, env: process.env });
   const startupEnabled = () => process.platform === "win32" && fs.existsSync(startupPlan().files[0].path);
@@ -419,6 +436,7 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
   };
   const publicSnapshot = () => ({
     summary: publicState.summary, running: Boolean(worker), busy: transitioning || Boolean(candidate) || publicState.busy,
+    nodeLabel: [publicState.managerName || (publicState.managerOrigin && new URL(publicState.managerOrigin).host), instanceLabel].filter(Boolean).join(" · "),
     startup: startupEnabled(), canOpenManager: Boolean(publicState.managerOrigin),
     details: [`状态：${publicState.summary}`, `主程序 PID：${process.pid}`, `连接器 PID：${worker?.pid || "—"}`,
       `版本：${publicState.version || "待确认"}`, `主机：${publicState.managerOrigin || "待连接"}`,
@@ -551,7 +569,7 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
         clearTimeout(pending.timer); deliveryControls.delete(message.requestId);
         pending.socket.end(JSON.stringify({ ...message.result, requestId: message.requestId }) + "\n");
       } else if (message?.type === "desktopSnapshot") {
-        for (const key of ["summary", "version", "agents", "task"]) if (typeof message[key] === "string") publicState[key] = message[key].slice(0, 2048);
+        for (const key of ["summary", "version", "agents", "task", "managerName"]) if (typeof message[key] === "string") publicState[key] = message[key].slice(0, 2048);
         publicState.busy = message.busy === true;
         try {
           const origin = new URL(message.managerOrigin);
@@ -720,12 +738,12 @@ function writeLauncher(configPath, policy = { baseDelayMs: 1000, maxDelayMs: 300
   const hookShim = `import fs from "node:fs";\nimport path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport async function requestInstanceHook(input, configPath, fetcher = fetch) {\n const current = JSON.parse(fs.readFileSync(path.join(path.dirname(path.resolve(configPath)), "current-release.json"), "utf8"));\n const module = await import(pathToFileURL(path.join(path.dirname(current.entrypoint), "lib", "instance-hook.mjs")).href);\n return module.requestInstanceHook(input, configPath, fetcher);\n}\n`;
   writeObservedText(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim);
   const launcher = launcherPath(configPath);
-  const code = `// RABI_AGENT_POSIX_OWNER_PROTOCOL:2\nimport fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\nimport { createRequire } from "node:module";\nconst createPosixOwnerLeaseRuntime = ${createPosixOwnerLeaseRuntime.toString()};\nconst requirePosixOwnerProtocol = ${requirePosixOwnerProtocol.toString()};\nconst readLauncherControlDiagnostic = ${readLauncherControlDiagnostic.toString()};\nconst createDesktopPresentation = ${createDesktopPresentation.toString()};\nconst startupCommand = ${startupCommand.toString()};\nconst startupFiles = ${startupFiles.toString()};\nconst launcherPath = ${launcherPath.toString()};\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}, ${JSON.stringify(nativeSpec)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
+  const code = `// RABI_AGENT_POSIX_OWNER_PROTOCOL:2\nimport fs from "node:fs";\nimport path from "node:path";\nimport net from "node:net";\nimport { createHash } from "node:crypto";\nimport { spawn } from "node:child_process";\nimport { createRequire } from "node:module";\nconst createPosixOwnerLeaseRuntime = ${createPosixOwnerLeaseRuntime.toString()};\nconst requirePosixOwnerProtocol = ${requirePosixOwnerProtocol.toString()};\nconst readLauncherControlDiagnostic = ${readLauncherControlDiagnostic.toString()};\nconst createDesktopPresentation = ${createDesktopPresentation.toString()};\nconst nodeInstanceGuid = ${nodeInstanceGuid.toString()};\nconst startupCommand = ${startupCommand.toString()};\nconst startupFiles = ${startupFiles.toString()};\nconst launcherPath = ${launcherPath.toString()};\n(${stableLauncher.toString()})(${JSON.stringify(path.resolve(configPath))}, ${JSON.stringify(policy)}, ${JSON.stringify(nativeSpec)}).catch(error => { process.stderr.write(error.message + "\\n"); process.exitCode = 1; });\n`;
   writeObservedText(launcher, code);
   return launcher;
 }
 
-function startupCommand(platform, executable, script, config) {
+function startupCommand(platform, executable, script, config, serviceName = "com.rabiroute.agent") {
   const args = [executable, script, "--config", config];
   if (platform === "win32") {
     const quote = value => {
@@ -736,7 +754,7 @@ function startupCommand(platform, executable, script, config) {
   }
   if (platform === "darwin") {
     const xml = value => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.rabiroute.agent</string><key>ProgramArguments</key><array>${args.map(value => `<string>${xml(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>30</integer></dict></plist>\n`;
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${xml(serviceName)}</string><key>ProgramArguments</key><array>${args.map(value => `<string>${xml(value)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>30</integer></dict></plist>\n`;
   }
   // Exec quoting is not shell quoting. Escape reserved characters, then the
   // desktop-entry string layer; literal percent signs are not field codes.
@@ -747,6 +765,8 @@ function startupCommand(platform, executable, script, config) {
 function startupFiles(platform, executable, script, config, { home, env = {}, uid, stopTimeoutMs = 10000 } = {}) {
   const files = [];
   const add = (filename, content) => { files.push({ path: filename, content }); return filename; };
+  const guid = nodeInstanceGuid(config);
+  const suffix = guid ? `-${guid}` : "";
   if (platform === "win32") {
     startupCommand(platform, executable, script, config); // Validate Windows argv before rendering VBS.
     const startup = path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
@@ -754,23 +774,25 @@ function startupFiles(platform, executable, script, config, { home, env = {}, ui
     // process variable; launch Node directly, without a second cmd expansion.
     const vbsLiteral = value => `"${value.replace(/"/g, '""')}"`;
     const command = [executable, script, "--config", config].map(value => `"${value.replace(/%/g, "%RABI_LITERAL_PERCENT%")}"`).join(" ");
-    add(path.join(startup, "RabiAgent.vbs"), `Option Explicit\r\nDim shell\r\nSet shell = CreateObject("WScript.Shell")\r\nshell.Environment("PROCESS")("RABI_LITERAL_PERCENT") = Chr(37)\r\nshell.Run ${vbsLiteral(command)}, 0, False\r\n`);
+    add(path.join(startup, `RabiAgent${suffix}.vbs`), `Option Explicit\r\nDim shell\r\nSet shell = CreateObject("WScript.Shell")\r\nshell.Environment("PROCESS")("RABI_LITERAL_PERCENT") = Chr(37)\r\nshell.Run ${vbsLiteral(command)}, 0, False\r\n`);
     files[files.length - 1].encoding = "utf16le"; // WSH reads Unicode only with a UTF-16 BOM.
-    return { files, obsolete: [path.join(startup, "RabiAgent.cmd")], mode: "windows-login-hidden", activation: [] };
+    return { files, obsolete: guid ? [] : [path.join(startup, "RabiAgent.cmd")], mode: "windows-login-hidden", activation: [] };
   }
   if (platform === "darwin") {
     if (!Number.isSafeInteger(uid) || uid < 0) throw new Error("A current user uid is required for launchd.");
-    const plist = add(path.join(home, "Library", "LaunchAgents", "com.rabiroute.agent.plist"), startupCommand(platform, executable, script, config));
-    return { files, obsolete: [], mode: "user-launchd", activation: [["launchctl", ["print", `gui/${uid}/com.rabiroute.agent`]], ["launchctl", ["bootstrap", `gui/${uid}`, plist]]] };
+    const label = `com.rabiroute.agent${suffix}`;
+    const plist = add(path.join(home, "Library", "LaunchAgents", `${label}.plist`), startupCommand(platform, executable, script, config, label));
+    return { files, obsolete: [], mode: "user-launchd", activation: [["launchctl", ["print", `gui/${uid}/${label}`]], ["launchctl", ["bootstrap", `gui/${uid}`, plist]]] };
   }
   const directory = env.XDG_CONFIG_HOME || path.join(home, ".config");
   const quote = value => {
     if (/[\r\n\0]/.test(value)) throw new Error("Invalid systemd startup argument.");
     return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$")}"`;
   };
-  add(path.join(directory, "systemd", "user", "rabi-agent.service"), `[Unit]\nDescription=Rabi Agent current-user connector\nStartLimitIntervalSec=300\nStartLimitBurst=5\n[Service]\nType=simple\nExecStart=${[executable, script, "--config", config].map(quote).join(" ")}\nRestart=on-failure\nRestartSec=30\nKillMode=control-group\nTimeoutStopSec=${stopTimeoutMs / 1000}\n[Install]\nWantedBy=default.target\n`);
-  return { files, obsolete: [], mode: "user-systemd", activation: [["systemctl", ["--user", "show-environment"]], ["systemctl", ["--user", "daemon-reload"]], ["systemctl", ["--user", "enable", "--now", "rabi-agent.service"]]],
-    fallback: { path: path.join(directory, "autostart", "rabi-agent.desktop"), content: startupCommand("linux", executable, script, config) } };
+  const service = `rabi-agent${suffix}.service`;
+  add(path.join(directory, "systemd", "user", service), `[Unit]\nDescription=Rabi Agent current-user connector\nStartLimitIntervalSec=300\nStartLimitBurst=5\n[Service]\nType=simple\nExecStart=${[executable, script, "--config", config].map(quote).join(" ")}\nRestart=on-failure\nRestartSec=30\nKillMode=control-group\nTimeoutStopSec=${stopTimeoutMs / 1000}\n[Install]\nWantedBy=default.target\n`);
+  return { files, obsolete: [], mode: "user-systemd", activation: [["systemctl", ["--user", "show-environment"]], ["systemctl", ["--user", "daemon-reload"]], ["systemctl", ["--user", "enable", "--now", service]]],
+    fallback: { path: path.join(directory, "autostart", `rabi-agent${suffix}.desktop`), content: startupCommand("linux", executable, script, config) } };
 }
 
 function runStartupCommand(executable, args, timeoutMs = 10000) {
@@ -1079,7 +1101,7 @@ class RabiAgentRuntime {
     let managerOrigin = "";
     try { managerOrigin = new URL(this.config.managerUrl).origin; } catch { }
     const payload = {
-      type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin,
+      type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin, managerName: this.managerName || "",
       agents: instanceAgents(this.config).map(agent => `${agent.provider} · ${this.agentExecutionStatus.get(agent.agentId) || "按请求指定会话"}`).join("\n") || "按请求指定 Agent 类型与完整会话 ID",
       task: `${this.lastDesktopTask}${this.terminals.activeCount ? ` · ${this.terminals.activeCount} 个终端` : ""}`,
       busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0,
@@ -1262,8 +1284,9 @@ class RabiAgentRuntime {
       // A socket belongs to the authenticated Manager captured for this
       // handshake, even if a concurrent CLI replaces the installed config.
       const originalConfig = { ...this.config }, connectionConfig = { ...originalConfig };
-      await verifyNodeIdentity(connectionConfig, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
+      const identity = await verifyNodeIdentity(connectionConfig, fetch, fs.existsSync(this.configPath) ? this.configPath : undefined);
       if (this.stopped || this.connectionPaused) return;
+      this.managerName = identity.managerName;
       const endpointKeys = ["managerUrl", "managerGuid", "applicationGenerationId", "managerInstanceId"];
       if (["nodeId", "nodeCredential", ...endpointKeys].every(key => this.config[key] === originalConfig[key])) {
         for (const key of endpointKeys) this.config[key] = connectionConfig[key];

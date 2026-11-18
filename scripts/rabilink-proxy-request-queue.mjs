@@ -35,6 +35,7 @@ export class RelayProxyRequestQueue {
       headers: { ...(input.headers || {}) },
       expectedWorkerFencing: input.expectedWorkerFencing === true,
       nonReplayable: !['GET', 'HEAD', 'OPTIONS'].includes(String(input.method || 'GET').toUpperCase()),
+      ...(input.accountForward ? { accountForward: input.accountForward } : {}),
       bodyBase64: input.bodyBase64 || "",
       response: null,
       error: ""

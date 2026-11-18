@@ -86,6 +86,7 @@
     "dshSessionName",
     "dshCwd"
   ],
+  "messageProcessingBinding": "scoped",
   "sharedWhenEnabledPaths": [
     [
       "messageProcessingAgents",

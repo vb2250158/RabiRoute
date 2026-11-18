@@ -60,6 +60,27 @@ export type PrivateMessageRecord = {
   segments?: unknown[];
 };
 
+export type QqBotMessageRecord = {
+  adapterType: "qqbot";
+  gatewayId: string;
+  instanceId: string;
+  accountRevision: string;
+  groupId?: string;
+  channelId?: string;
+  dmGuildId?: string;
+  guildId?: string;
+  eventType?: string;
+  eventId?: string;
+  nativeEvent?: Record<string, unknown>;
+  remoteAttachments?: Array<{ url: string; name?: string; contentType?: string; size?: number }>;
+  userId: string;
+  platformMessageId: string;
+  messageId: string;
+  rawMessage: string;
+  senderName?: string;
+  time: number;
+};
+
 export type HeartbeatEventRecord = {
   time: number;
   rawMessage: string;
@@ -458,8 +479,8 @@ function feishuEventIdentity(record: Pick<FeishuMessageRecord, "eventId" | "mess
   return String(record.eventId || record.messageId || "").trim();
 }
 
-function appendFeishuMessageOnce(filePath: string, record: FeishuMessageRecord): boolean {
-  const identity = feishuEventIdentity(record);
+function appendUniqueHistoryRecord<T>(filePath: string, record: T, recordIdentity: (record: T) => string): boolean {
+  const identity = recordIdentity(record);
   const lockPath = `${filePath}.lock`;
   return withFileLockSync(lockPath, () => {
     if (identity && fs.existsSync(filePath)) {
@@ -468,7 +489,7 @@ function appendFeishuMessageOnce(filePath: string, record: FeishuMessageRecord):
         () => fs.readFileSync(filePath, "utf8").split(/\r?\n/).some((line) => {
           if (!line.trim()) return false;
           try {
-            return feishuEventIdentity(JSON.parse(line) as FeishuMessageRecord) === identity;
+            return recordIdentity(JSON.parse(line) as T) === identity;
           } catch {
             return false;
           }
@@ -482,11 +503,16 @@ function appendFeishuMessageOnce(filePath: string, record: FeishuMessageRecord):
 }
 
 export function appendFeishuMessage(record: FeishuMessageRecord): boolean {
-  return appendFeishuMessageOnce(feishuLogPath(), record);
+  return appendUniqueHistoryRecord<FeishuMessageRecord>(feishuLogPath(), record, feishuEventIdentity);
 }
 
 export function appendFeishuMessageToDir(record: FeishuMessageRecord, dataDir: string): boolean {
-  return appendFeishuMessageOnce(feishuLogPath(dataDir), record);
+  return appendUniqueHistoryRecord<FeishuMessageRecord>(feishuLogPath(dataDir), record, feishuEventIdentity);
+}
+
+export function appendQqBotMessageToDir(record: QqBotMessageRecord, dataDir: string): boolean {
+  fs.mkdirSync(dataDir, { recursive: true });
+  return appendUniqueHistoryRecord(path.join(dataDir, "qqbot-messages.jsonl"), record, item => item.messageId);
 }
 
 function weixinLogPath(dataDir = config.memoryDataDir): string {

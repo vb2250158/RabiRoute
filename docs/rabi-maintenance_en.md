@@ -143,3 +143,9 @@ Recent, consolidated and archived pages, counts and Hook context share an in-pro
 Memory catalogs use one dedicated resident child with concurrency one. Page projection and other knowledge queries cannot scatter its file cache across children. Every request still validates current files and failures are not cached. The catalog read budget defaults to thirty-five seconds and is configurable with `RABIROUTE_MEMORY_CATALOG_READ_TIMEOUT_MS`; callers must also budget discovery and binding checks.
 
 Synchronous plan locks allow the initial heartbeat acknowledgement to use the existing lease lifetime instead of failing after ten seconds. No transaction runs before acknowledgement; the worker still verifies the lock file, owner, reclamation fence and expiry on every renewal. Renewal intervals and final acknowledgement limits are unchanged.
+
+## Plan history integrity
+
+New plan-history writes record each shard’s size and SHA-256 digest within the same transaction. Package and history reads verify those records. Missing or mismatched history affects the corresponding plan while other plans remain available. Resume an incomplete feedback write through its original transaction and ID. A new request cannot replace the pending operation.
+
+Older data remains readable. A new baseline covers the history visible when it was recorded. It cannot prove earlier completeness or restore previously lost content. Cached reads retain the existing directory-watcher and UNC TTL refresh contract, including its window between external modification and cache invalidation.

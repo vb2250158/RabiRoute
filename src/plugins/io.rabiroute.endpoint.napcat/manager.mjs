@@ -5,8 +5,10 @@ import { createImplementation, hostModules } from "./manager-runtime.mjs";
 export const activate = definePlugin({ async activate(context) {
   const host = context.services.require("host.message-endpoints@3");
   await host.prepareModules(egressModules);
-  const egress = createEgress(host);
-  ownMessageEndpointEgress(context, { type: "napcat", operations: egress });
+  const { createNapcatGroupForward, ...egress } = createEgress(host);
+  const groupForward = createNapcatGroupForward(host.manager.readRoute);
+  ownMessageEndpointEgress(context, { type: "napcat", operations: { ...egress, sendGroupForwardVariant: groupForward.sendGroupForwardVariant },
+    sendVariants: [groupForward.variant] });
   await host.prepareModules(hostModules);
   const implementation = createImplementation(host);
   const owner = implementation.createNapcatManagerOwner(host.manager, host.managers.current("napcat"), context.lifecycle.signal);

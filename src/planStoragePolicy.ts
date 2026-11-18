@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
-import { isPlanHistoryPath, readPlanHistoryBytes, readPlanHistoryDirectory, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
+import { isPlanHistoryPath, readPlanHistoryBytes, readPlanHistoryDirectory, validatePlanHistoryCommitment, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
 import { isArchivedPlanStatus, planStorageDirectory } from "./planStorageLayout.js";
 import {
   inventoryPlanStorageDirectory,
@@ -45,7 +45,7 @@ export function readPlanStorageJsonObject(filePath: string): Record<string, unkn
 
 function readHistory(directory: string, planId: string): PlanHistoryRecordLike[] {
   const records: PlanHistoryRecordLike[] = [];
-  for (const line of readPlanHistoryBytes(readPlanHistoryDirectory(directory)).toString("utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const line of validatedHistoryBytes(directory).toString("utf8").split(/\r?\n/).filter(Boolean)) {
     const value = JSON.parse(line) as PlanHistoryRecordLike;
     if (!value || typeof value !== "object" || value.planId !== planId || typeof value.id !== "string") {
       throw new Error(`Plan history contains an invalid record: ${directory}`);
@@ -56,6 +56,17 @@ function readHistory(directory: string, planId: string): PlanHistoryRecordLike[]
     records.push(value);
   }
   return records;
+}
+
+function validatedHistoryBytes(directory: string): Buffer {
+  const files = readPlanHistoryDirectory(directory);
+  validatePlanHistoryCommitment(readPlanStorageJsonObject(path.join(directory, PLAN_FILE)), files);
+  return readPlanHistoryBytes(files);
+}
+
+function auditSnapshot(plan: Record<string, unknown>): Record<string, unknown> {
+  const { historyCommitment: _historyCommitment, ...snapshot } = plan;
+  return snapshot;
 }
 
 function supportingFilesArePreserved(active: PlanStorageInventory, archive: PlanStorageInventory): boolean {
@@ -90,8 +101,8 @@ export function planLineageDominanceReason(
     || activeUpdatedAt > terminalAt) return null;
   if (activePlan.completedAt !== undefined && activePlan.completedAt !== archivePlan.completedAt) return null;
 
-  const activeHistoryBytes = readPlanHistoryBytes(readPlanHistoryDirectory(activeDirectory));
-  const archiveHistoryBytes = readPlanHistoryBytes(readPlanHistoryDirectory(archiveDirectory));
+  const activeHistoryBytes = validatedHistoryBytes(activeDirectory);
+  const archiveHistoryBytes = validatedHistoryBytes(archiveDirectory);
   if (activeHistoryBytes.byteLength === 0 && archiveHistoryBytes.byteLength === 0) {
     return "terminal_archive_temporally_dominates_legacy_active_snapshot";
   }
@@ -105,7 +116,7 @@ export function planLineageDominanceReason(
   for (let index = archiveHistory.length - 1; index >= 0; index -= 1) {
     const record = archiveHistory[index]!;
     if (record.kind === "archived"
-      && isDeepStrictEqual(record.before, activePlan)
+      && isDeepStrictEqual(record.before, auditSnapshot(activePlan))
       && isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
         ?? (record.after as { status?: unknown })?.status)) {
       transitionIndex = index;
@@ -121,7 +132,7 @@ export function planLineageDominanceReason(
         ?? (record.after as { status?: unknown })?.status)) return null;
     expected = record.after;
   }
-  return isDeepStrictEqual(expected, archivePlan)
+  return isDeepStrictEqual(expected, auditSnapshot(archivePlan))
     ? "archived_history_superset_dominates_reintroduced_completed_plan"
     : null;
 }
@@ -153,7 +164,7 @@ export function validateCanonicalArchivedPlanDirectory(archiveDirectory: string,
     }
     expected = record.after;
   }
-  if (!isDeepStrictEqual(expected, archivePlan)) {
+  if (!isDeepStrictEqual(expected, auditSnapshot(archivePlan))) {
     throw new Error(`Archived plan package identity does not match its history tail: ${id}`);
   }
 }
@@ -173,7 +184,7 @@ export function validateCanonicalActivePlanDirectory(activeDirectory: string, pl
   if (history.length === 0 || history.some(record => record.kind === "archived")) {
     throw new Error(`Active plan package history is missing or contains a terminal transition: ${id}`);
   }
-  if (!isDeepStrictEqual(history.at(-1)?.after, activePlan)) {
+  if (!isDeepStrictEqual(history.at(-1)?.after, auditSnapshot(activePlan))) {
     throw new Error(`Active plan package identity does not match its history tail: ${id}`);
   }
 }

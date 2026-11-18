@@ -14,6 +14,32 @@ async function fixture(t: import("node:test").TestContext) {
   return new AllDayRecordingStore(role => path.join(root, role), "computer-a", path.join(root, "mobile"));
 }
 
+test("message-only recording captures only enrolled categories under the active persona and supports paging", async t => {
+  const store = await fixture(t);
+  const service = new AllDayRecordingService(store, {
+    changed() {}, capture: async () => assert.fail("Message-only recording must not start capture"),
+    startMicrophone: async () => assert.fail("Message-only recording must not start microphone"),
+    stopMicrophone: async () => {}, audio: async () => [], audioFile: async () => Buffer.alloc(0)
+  });
+  await service.configure("one", { ...DEFAULT_ALL_DAY_SETTINGS, messageSources: ["napcat", "napcat"] });
+  t.after(() => service.dispose());
+  assert.deepEqual((await store.settings("one")).messageSources, ["napcat"]);
+  assert.throws(() => normalizeAllDaySettings({ ...DEFAULT_ALL_DAY_SETTINGS, messageSources: ["unknown"] }), /Invalid recording message sources/);
+  const message = { id: "fixture-message", time: Date.now(), text: "fixture inbound" };
+  assert.equal(await service.receiveMessage("one", "napcat", message), false);
+  const started = await service.start("one");
+  message.time = started.startedAt! + 1;
+  assert.equal(await service.receiveMessage("another", "napcat", message), false);
+  assert.equal(await service.receiveMessage("one", "feishu", message), false);
+  assert.equal(await service.receiveMessage("one", "napcat", message), true);
+  assert.equal(await service.receiveMessage("one", "napcat", message), false);
+  await service.configure("one", DEFAULT_ALL_DAY_SETTINGS);
+  assert.equal(await service.receiveMessage("one", "napcat", { ...message, id: "after-removal" }), false);
+  await service.stop("one");
+  const page = await store.page("one", "older", { time: message.time + 10, id: "after" }, "message:napcat", 20, "message");
+  assert.deepEqual(page.events.map(event => event.text), ["fixture inbound"]);
+});
+
 test("ASR completion commits while camera capture is blocked, updates once, and releases its subscription", async t => {
   const store = await fixture(t);
   let wake!: (id?: string) => void, releaseCapture!: () => void, released = 0, queries = 0;

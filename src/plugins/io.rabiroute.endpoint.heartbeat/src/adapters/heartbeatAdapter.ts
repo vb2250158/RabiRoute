@@ -79,7 +79,7 @@ export type HeartbeatAdapterDependencies = {
   nextScheduleTime?: typeof nextHeartbeatScheduleTime;
   setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
   clearTimer?: (timer: NodeJS.Timeout) => void;
-  runTask?: (task: ScheduledAutomationTask, scheduledAt: Date) => void;
+  runTask?: (task: ScheduledAutomationTask, scheduledAt: Date) => void | Promise<void>;
 };
 
 type HeartbeatLifecycle = {
@@ -232,7 +232,7 @@ function recordHeartbeatDeliveryError(lifecycle: HeartbeatLifecycle, record: Hea
   });
 }
 
-function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle: HeartbeatLifecycle): void {
+function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle: HeartbeatLifecycle): void | Promise<void> {
   const schedule = task.rule.trigger.schedule;
   const routeId = task.route.id;
   const routeName = task.route.name;
@@ -270,7 +270,7 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle:
       lastActionType: task.rule.action.type,
       scheduleCount: lifecycle.tasks.length
     });
-    void executeScriptAutomation({ route: task.route, rule: task.rule as ScriptAutomationTask["rule"] }).then((result) => {
+    return executeScriptAutomation({ route: task.route, rule: task.rule as ScriptAutomationTask["rule"] }).then((result) => {
       finishAutomationRun(runId, result.status, {
         routeId,
         automationRuleId: task.rule.id,
@@ -296,7 +296,6 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle:
         lastActionType: task.rule.action.type
       });
     });
-    return;
   }
 
   const now = Math.floor(lifecycle.now().getTime() / 1000);
@@ -342,14 +341,14 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle:
     tickCount,
     scheduleCount: lifecycle.tasks.length
   });
-  void forwardMessageAndWait("heartbeat", record, {
+  return forwardMessageAndWait("heartbeat", record, {
     triggerRouteId: routeId,
     automationRuleId: task.rule.id,
     automationRuleName: taskName,
     automationTemplate: task.rule.action.template || "",
     scheduleId: schedule.id,
     scheduleName
-  })
+  }, { scheduledAutomation: { route: task.route, skipWhenAgentBusy: config.heartbeatSkipWhenAgentBusy } })
     .then((result) => {
       finishAutomationRun(runId, result.status, {
         routeId,
@@ -391,12 +390,12 @@ export function createHeartbeatAdapter(
 ): MessageAdapter {
   return {
     type: "heartbeat",
-    start() {
+    start(startup) {
       const tasks = (dependencies.collectTasks?.()
         ?? collectScheduledAutomationTasks(activeRouteProfiles()))
         .map((task) => ({ ...task }));
-      let lifecycle!: HeartbeatLifecycle;
-      lifecycle = {
+      const pending = new Set<Promise<void>>();
+      const lifecycle: HeartbeatLifecycle = {
         active: true,
         tasks,
         dataDir: dependencies.dataDir ?? (() => config.dataDir),
@@ -405,18 +404,27 @@ export function createHeartbeatAdapter(
         setTimer: dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
         clearTimer: dependencies.clearTimer ?? ((timer) => clearTimeout(timer)),
         runTask(task, scheduledAt) {
-          if (dependencies.runTask) {
-            dependencies.runTask(task, scheduledAt);
-            return;
-          }
-          tickHeartbeat(task, scheduledAt, lifecycle);
+          const work = dependencies.runTask ? dependencies.runTask(task, scheduledAt) : tickHeartbeat(task, scheduledAt, lifecycle);
+          if (!work) return;
+          pending.add(work);
+          void work.then(() => { pending.delete(work); }, error => {
+            pending.delete(work);
+            console.error("Scheduled automation did not finish its receipt", error);
+          });
         }
       };
 
-      const dispose: MessageAdapterDispose = () => {
-        if (!lifecycle.active) return;
+      let stopFlight: Promise<void> | undefined;
+      const stopWork = () => stopFlight ??= (async () => {
         lifecycle.active = false;
-        clearHeartbeatTimers(lifecycle);
+        try { clearHeartbeatTimers(lifecycle); }
+        finally { await Promise.allSettled([...pending]); }
+      })();
+      startup?.onFailure(stopWork);
+
+      let disposal: Promise<void> | undefined;
+      const dispose: MessageAdapterDispose = () => disposal ??= (async () => {
+        await stopWork();
         patchHeartbeatStatus(lifecycle, {
           enabled: false,
           scheduleCount: lifecycle.tasks.length,
@@ -427,7 +435,7 @@ export function createHeartbeatAdapter(
           message: `Heartbeat disabled, schedules=${lifecycle.tasks.length}`,
           data: { scheduleCount: lifecycle.tasks.length }
         });
-      };
+      })();
 
       patchHeartbeatStatus(lifecycle, {
         enabled: true,
@@ -464,8 +472,7 @@ export function createHeartbeatAdapter(
         patchScheduleSummary(lifecycle);
         return dispose;
       } catch (error) {
-        lifecycle.active = false;
-        clearHeartbeatTimers(lifecycle);
+        void stopWork().catch(() => { /* The startup owner observes the same cleanup flight. */ });
         const message = error instanceof Error ? error.message : String(error);
         patchHeartbeatStatus(lifecycle, {
           enabled: false,

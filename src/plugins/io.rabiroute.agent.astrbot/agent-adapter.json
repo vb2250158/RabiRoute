@@ -1,6 +1,7 @@
 {
   "type": "astrbot",
   "capability": "agent.adapter.astrbot@1",
+  "initializationModes": { "manager": "independent", "gateway": "independent" },
   "manifest": {
     "type": "astrbot",
     "label": "AstrBot",

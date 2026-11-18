@@ -10,6 +10,8 @@ This is experimental. Local fixtures, builds, installed runtime, public deployme
 
 Android and PC use the generic encrypted Peer Tunnel in LAN → P2P → Relay order to reach the same target. Relay provides same-application discovery, connection signaling and forwarding; PC services own endpoints and state. Persona source, device profile owner and default message target may differ. Callers freeze the target for each operation.
 
+Hosts with account tunneling discover each other on the same server and account, then establish an encrypted session over LAN, WebRTC or Relay, in that order. SSE and WebSocket use the same tunnel. Relay checks each device credential, and the tunnel verifies each host's own key. Sign-out, credential rotation and loss of the event connection close affected tunnels. Older hosts retain their existing connection and can receive finite HTTP and speech requests from account hosts.
+
 An AIUI host limited to `wx.request` uses the existing buffered HTTP Relay fallback. Its capability is HTTP Relay, not verified AIUI LAN/P2P. Both transports reach the same public Manager APIs.
 
 Relay stores accounts, credentials, connection assignments, same-application directories, opaque request/response queues, leases, cursors, blobs and operation status. Server diagnostics remain supported. Persona templates, business authorization, history assembly, ASR priorities, health interpretation and record-first decisions belong to PCs or clients. Relay neither rewrites opaque business bodies nor dispatches them through per-API business allowlists.

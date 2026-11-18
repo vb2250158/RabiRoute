@@ -22,6 +22,8 @@ import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
 import PlanQuestionFields from "../components/PlanQuestionFields.vue";
 import { approvalDecisionQuestions, planQuestionReply, type PlanQuestionAnswer } from "@shared/planQuestions";
 import PlanStepDetail from "../components/PlanStepDetail.vue";
+import PlanTaskBindingDialog from "../components/PlanTaskBindingDialog.vue";
+import { agentAdapterManifest } from "@shared/agentAdapterCapabilities";
 import "../../../../../ribiwebgui/src/planFeedbackFocus.css";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../../../../../ribiwebgui/src/knowledgeSearch";
@@ -80,6 +82,14 @@ const openPlanHistoryAgent = (...args: Parameters<ReturnType<typeof createRoleKn
 const submitPlanFeedback = (...args: Parameters<ReturnType<typeof createRoleKnowledgeClient>["submitPlanFeedback"]>) => scopedRoleKnowledge().submitPlanFeedback(...args);
 
 const { isEnglish, t } = useI18n();
+const planBindingDraft = ref<RolePlan>();
+function acceptPlanBinding(plan: RolePlan) {
+  if (planBindingDraft.value?.id !== plan.id) return;
+  planBindingDraft.value = undefined;
+  plans.value = plans.value.map(item => item.id === plan.id ? plan : item);
+  delete planAgentStatuses[plan.id];
+  void refreshPlanAgentStatuses([plan.id], true);
+}
 const skillsOpen = ref(false);
 const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
@@ -333,6 +343,7 @@ let planListDialogContentRequest: Promise<void> | null = null;
 const routeSummary = computed(() => roles.detail?.routes[0] ? store.routeSummaryForKey(roles.detail.routes[0].id) : null);
 const roles = useRoleStore();
 const roleId = computed(() => String(route.params.roleId || "").trim());
+watch([roleId, () => route.query.source], () => { planBindingDraft.value = undefined; });
 
 /**
  * Single-plan focus, addressed as `/routes/:id/plan/:planId`.
@@ -924,7 +935,7 @@ async function openPlanAgent(plan: RolePlan, role: PlanAgentRole): Promise<void>
   delete planAgentNotices[key];
   try {
     const opened = await openPlanAgentTask(roleId.value, plan.id, role);
-    const agentName = opened.agentType === "dsh" ? "DSH" : "Codex";
+    const agentName = agentAdapterManifest(opened.agentType).label;
     planAgentNotices[key] = {
       tone: "success",
       text: isEnglish.value ? `Opened the bound session in ${agentName}.` : `已在 ${agentName} 中定位绑定会话。`
@@ -2836,6 +2847,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
 <template>
   <div class="page-shell knowledge-page">
+    <PlanTaskBindingDialog
+      v-if="planBindingDraft"
+      :role-id="roleId" :plan="planBindingDraft" :client="scopedRoleKnowledge()"
+      @close="planBindingDraft = undefined" @saved="acceptPlanBinding"
+    />
     <!-- Single-plan mode has no catalog totals to report. -->
     <div v-if="!focusedPlanId" class="knowledge-metrics">
       <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ knowledgeCountsReady ? planCounts.plans : '—' }}</b><small>plans/active/&lt;planId&gt;</small></div>
@@ -3363,11 +3379,16 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               >
                 {{ t("正在加载计划详情…") }}
               </v-alert>
-              <section v-if="planAgentRoles(plan).length" class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
+              <section v-if="planAgentRoles(plan).length || (!planHost && plan.archiveStatus !== '已归档')" class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
                 <div class="knowledge-plan-agents-head">
                   <div>
                     <span><v-icon size="17">mdi-robot-outline</v-icon>{{ t("计划关联 Agent") }}</span>
                   </div>
+                  <v-btn
+                    v-if="!planHost && plan.archiveStatus !== '已归档'"
+                    size="small" variant="text" prepend-icon="mdi-swap-horizontal"
+                    @click="planBindingDraft = plan"
+                  >{{ t(plan.taskBinding ? '更换执行会话' : '绑定执行会话') }}</v-btn>
                   <v-btn
                     v-if="planAgentShouldRetry(plan)"
                     size="small"
@@ -3393,7 +3414,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     :data-tone="planAgentStatusTone(planAgentBindingStatus(plan, agentRole))"
                     :disabled="!planAgentBindingStatus(plan, agentRole)?.canOpen || planAgentBindingStatus(plan, agentRole)?.working"
                     :aria-label="planAgentBindingStatus(plan, agentRole)?.canOpen && !planAgentBindingStatus(plan, agentRole)?.working
-                      ? (isEnglish ? `Open ${planAgentTitle(plan, agentRole)} in Codex` : `在 Codex 中打开${planAgentTitle(plan, agentRole)}`)
+                      ? (isEnglish ? `Open ${planAgentTitle(plan, agentRole)}` : `打开${planAgentTitle(plan, agentRole)}`)
                       : undefined"
                     @click="openPlanAgent(plan, agentRole)"
                   >

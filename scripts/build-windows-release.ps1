@@ -66,6 +66,21 @@ function Remove-PayloadEntry([string]$PathValue) {
 
 Assert-LocalDirectory $OutputRoot
 Assert-LocalDirectory $repo
+. (Join-Path $scriptDir 'lib/build-output-boundary.ps1')
+if (-not $DesktopRuntimeRoot) {
+    $DesktopRuntimeRoot = Join-Path $env:TEMP ("rabiroute-desktop-runtime-" + [guid]::NewGuid().ToString("N"))
+}
+if (-not $HostRuntimeRoot) {
+    $HostRuntimeRoot = Join-Path $env:LOCALAPPDATA ("RabiRoute\build\release-host-" + [guid]::NewGuid().ToString("N"))
+}
+$desktopRuntime = Assert-BuildOutputBoundary -OutputRoot $DesktopRuntimeRoot -RepositoryRoot $repo `
+    -InputPaths @($HostRuntimeRoot, $ReuseInstalledHostRoot)
+$hostRuntime = Assert-BuildOutputBoundary -OutputRoot $HostRuntimeRoot -RepositoryRoot $repo `
+    -InputPaths @($DesktopRuntimeRoot, $ReuseInstalledHostRoot)
+$releaseLeaves = @('version-payload', 'distribution', 'components', 'build-backups',
+    "RabiRoute-$Version-windows-x64-portable.zip", "RabiRoute-$Version-windows-x64-setup.exe", 'SHA256SUMS.txt')
+$OutputRoot = Assert-BuildOutputBoundary -OutputRoot $OutputRoot -RepositoryRoot $repo `
+    -InputPaths @($desktopRuntime, $hostRuntime, $ReuseInstalledHostRoot, $TrackedFilesManifest) -OwnedLeaves $releaseLeaves
 
 $excludedRuntimeFiles = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase)
@@ -300,10 +315,6 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed." }
 }
 
-if (-not $DesktopRuntimeRoot) {
-    $DesktopRuntimeRoot = Join-Path $env:TEMP ("rabiroute-desktop-runtime-" + [guid]::NewGuid().ToString("N"))
-}
-
 function Copy-RequiredPortableRuntimeFiles {
     foreach ($relative in $requiredPortableRuntimeFiles) {
         $source = Join-Path $repo ($relative -replace "/", "\")
@@ -318,13 +329,8 @@ function Copy-RequiredPortableRuntimeFiles {
         }
     }
 }
-$desktopRuntime = [System.IO.Path]::GetFullPath($DesktopRuntimeRoot)
 Assert-LocalDirectory $desktopRuntime
 
-if (-not $HostRuntimeRoot) {
-    $HostRuntimeRoot = Join-Path $env:LOCALAPPDATA ("RabiRoute\build\release-host-" + [guid]::NewGuid().ToString("N"))
-}
-$hostRuntime = [System.IO.Path]::GetFullPath($HostRuntimeRoot)
 Assert-LocalDirectory $hostRuntime
 
 if (-not $SkipDesktopBuild) {
@@ -382,6 +388,8 @@ foreach ($relative in $required) {
 
 Write-Step "Creating a privacy-safe runtime payload"
 . (Join-Path $scriptDir 'lib/release-output-lifecycle.ps1')
+$null = Assert-BuildOutputBoundary -OutputRoot $OutputRoot -RepositoryRoot $repo `
+    -InputPaths @($desktopRuntime, $hostRuntime, $ReuseInstalledHostRoot, $TrackedFilesManifest) -OwnedLeaves $releaseLeaves
 Reset-ReleasePayloadOutput -OutputRoot $OutputRoot -ProtectedRoots @($desktopRuntime, $hostRuntime) -Version $Version
 New-Item -ItemType Directory -Force -Path $payload | Out-Null
 
@@ -660,6 +668,25 @@ if (-not $SkipSmokeTest) {
 
 $portableName = "RabiRoute-$Version-windows-x64-portable.zip"
 $portablePath = Join-Path $OutputRoot $portableName
+$componentOutput = Join-Path $OutputRoot "components"
+Write-Step "Splitting the distribution into installer components"
+& node.exe (Join-Path $scriptDir "split-windows-release-components.mjs") --distribution $distribution --output $componentOutput | Where-Object { $_ -notmatch '^\{' } | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) { throw "Component split failed." }
+$componentsDocument = Get-Content -LiteralPath (Join-Path $componentOutput "components.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+$componentDefineNames = @{ "core" = "Core"; "desktop" = "Desktop"; "agent-codex" = "AgentCodex"; "agent-cli" = "AgentCli" }
+$componentDefines = @("#define ReleaseTag `"v$Version`"")
+foreach ($component in $componentsDocument.components) {
+    $id = [string]$component.id
+    if (-not $componentDefineNames.ContainsKey($id)) { throw "Installer has no define name for component: $id" }
+    $defineName = $componentDefineNames[$id]
+    $archivePath = Join-Path $componentOutput ([string]$component.archive)
+    $componentDefines += "#define ${defineName}Archive `"$archivePath`""
+    $componentDefines += "#define ${defineName}Sha256 `"$([string]$component.sha256)`""
+    $componentDefines += "#define ${defineName}Size $([long]$component.sizeBytes)"
+    $componentDefines += "#define ${defineName}Mb $([math]::Ceiling([long]$component.sizeBytes / 1MB))"
+}
+$componentDefinesPath = Join-Path $repo "installer\components.iss"
+[System.IO.File]::WriteAllLines($componentDefinesPath, [string[]]$componentDefines, [System.Text.UTF8Encoding]::new($false))
 Write-Step "Creating $portableName"
 New-PortableArchive -SourceRoot $distribution -DestinationPath $portablePath
 Write-Step "Verifying the portable archive round-trip"
@@ -678,6 +705,11 @@ if (-not $SkipInstaller) {
 }
 
 $artifacts = @($portablePath)
+if (-not $SkipInstaller) {
+    # The installer fetches optional modules from the matching release, so the
+    # per-component archives are release assets of their own.
+    $artifacts += @(Get-ChildItem -LiteralPath $componentOutput -Filter "component-*.zip" -File | Sort-Object Name | ForEach-Object { $_.FullName })
+}
 if ($installerPath) { $artifacts += $installerPath }
 $checksumPath = Join-Path $OutputRoot "SHA256SUMS.txt"
 $checksumLines = foreach ($artifact in $artifacts) {

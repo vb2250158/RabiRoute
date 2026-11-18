@@ -116,4 +116,17 @@ test("registered HTTP prepared operations preserve one intent through lost accep
   assert.equal(absent.body.canSubmitSameIntent, true); assert.equal(aReplies, 1); assert.equal(bSends, 1);
   const spoof = await call("pc-b", "/api/agent/prepared-deliveries", { ledgerOwnerDeviceId: "pc-a", delivery });
   assert.notEqual(spoof.status, 200, "JSON owner address cannot replace transport provenance"); assert.equal(bSends, 1);
+  const webChat = { agentAdapter: request.agentAdapter, instanceBinding: request.instanceBinding,
+    threadId: request.threadId, deliveryId: 'webchat-peer-fixture', prompt: 'Peer WebChat message' };
+  const remoteAttachment = await call('pc-a', '/api/agent/webchat', {
+    ...webChat, webChatAttachments: [{ name: 'fixture.txt', contentBase64: 'YQ==' }]
+  });
+  assert.equal(remoteAttachment.status, 400);
+  const webChatResult = await call('pc-a', '/api/agent/webchat', webChat);
+  assert.equal(webChatResult.body.status, 'delivered');
+  assert.equal(webChatResult.body.delivery.targetThreadId, 'target-b');
+  const webChatReceipt = await call('pc-a', '/api/agent/deliveries/caller/webchat-peer-fixture');
+  assert.equal(webChatReceipt.body.data.state, 'committed');
+  assert.equal(webChatReceipt.body.data.receipt.endpoint.sessionId, 'target-b');
+  assert.equal(bSends, 2);
 });

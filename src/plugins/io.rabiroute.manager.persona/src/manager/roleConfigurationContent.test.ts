@@ -10,7 +10,7 @@ import { createRoleConfigurationOperations } from "./roleConfigurationOperations
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "../../../../manager/connectionRequestAccess.js";
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, port = 0) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "role-content-api-"));
   await fs.mkdir(path.join(root, "Existing"));
   await fs.writeFile(path.join(root, "Existing/persona.md"), "# Existing\nOriginal text");
@@ -28,22 +28,46 @@ async function fixture(t: test.TestContext) {
     markAuthenticatedConnectionRequest(request, () => { if (!enabled) throw new Error("Connection revoked"); });
     if (!registry.handle(request, new URL(request.url!, "http://fixture.invalid"), response)) response.writeHead(404).end("{}");
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/roles`;
   t.after(async () => {
-    server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve()));
+    server.closeAllConnections(); await registration.dispose();
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith("role-content-api-"));
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { root, failPublication: () => { failPublication = true; }, revoke: () => { enabled = false; }, reconnect: () => { enabled = true; },
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
+  });
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/roles`;
+  return { root, base, failPublication: () => { failPublication = true; }, revoke: () => { enabled = false; }, reconnect: () => { enabled = true; },
     async call(suffix: string, method = "GET", body?: unknown, key = "fixture-key") {
-      const response = await fetch(base + suffix, { method, headers: { "content-type": "application/json", "idempotency-key": key },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-      return { status: response.status, body: await response.json() as any };
+      // The OS can allocate a valid loopback TCP port that Fetch forbids for
+      // browsers. These tests exercise the HTTP API, using its actual listener.
+      const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const request = http.request(base + suffix, { method, headers: { "content-type": "application/json", "idempotency-key": key } }, resolve);
+        request.once("error", reject);
+        request.end(body === undefined ? undefined : JSON.stringify(body));
+      });
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) chunks.push(Buffer.from(chunk));
+      return { status: response.statusCode!, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as any };
     }
   };
 }
+
+test("HTTP role fixture reaches its exact listener when the OS port is restricted by Fetch", async t => {
+  let f: Awaited<ReturnType<typeof fixture>>;
+  try { f = await fixture(t, 6667); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") { t.skip("Private loopback port 6667 is occupied"); return; }
+    throw error;
+  }
+  await assert.rejects(fetch(f.base), error => (error as Error & { cause?: Error }).cause?.message === "bad port");
+  const result = await f.call("/Existing/document");
+  assert.equal(result.status, 200);
+  assert.equal(result.body.data.document, "# Existing\nOriginal text");
+});
 
 function quota(t: test.TestContext, name: string, value: string): void {
   const previous = process.env[name]; process.env[name] = value;
@@ -60,6 +84,31 @@ test("full config PATCH preserves omitted keys and exposes complete data over HT
   assert.equal(patched.body.data.personaConfig.contextInjection.mode, "focused");
   assert.equal((await f.call("/Existing/document")).body.data.personaConfig.contextInjection.mode, "focused");
   assert.equal((await f.call("/Existing/configuration", "PATCH", { expectedRevision: original.body.data.revision, config: { custom: "stale" } }, "stale-patch")).status, 412);
+});
+
+test("role delivery templates round-trip through configuration and survive older editor saves", async t => {
+  const f = await fixture(t);
+  const original = await f.call("/Existing/configuration");
+  const automationDeliveryTemplates = [{ id: "review", title: "Review", triggerType: "schedule",
+    message: "Review progress", template: "Report open issues" }];
+  const save = await f.call("/Existing/configuration", "PUT", { expectedRevision: original.body.data.revision,
+    config: { ...original.body.data.config, automationDeliveryTemplates } }, "save-templates");
+  assert.equal(save.status, 200, JSON.stringify(save.body));
+  assert.deepEqual((await f.call("/Existing/configuration")).body.data.config.automationDeliveryTemplates, automationDeliveryTemplates);
+  const legacy = await f.call("/Existing/configuration", "PUT", { expectedRevision: save.body.data.revision,
+    config: { speechTriggerKeywords: ["changed"] } }, "legacy-editor");
+  assert.equal(legacy.status, 200, JSON.stringify(legacy.body));
+  assert.deepEqual(legacy.body.data.config.automationDeliveryTemplates, automationDeliveryTemplates);
+  const invalid = await f.call("/Existing/configuration", "PATCH", { expectedRevision: legacy.body.data.revision,
+    config: { automationDeliveryTemplates: [{ ...automationDeliveryTemplates[0], triggerType: "invalid" }] } }, "invalid-templates");
+  assert.equal(invalid.status, 400);
+  const invalidCreate = await f.call("", "POST", { roleId: "Invalid", title: "Invalid",
+    config: { automationDeliveryTemplates: "invalid" } }, "invalid-create-templates");
+  assert.equal(invalidCreate.status, 400);
+  const clear = await f.call("/Existing/configuration", "PUT", { expectedRevision: legacy.body.data.revision,
+    config: { ...legacy.body.data.config, automationDeliveryTemplates: [] } }, "clear-templates");
+  assert.equal(clear.status, 200, JSON.stringify(clear.body));
+  assert.deepEqual((await f.call("/Existing/configuration")).body.data.config.automationDeliveryTemplates, []);
 });
 
 test("document revision covers text and configuration and document retries keep the original receipt", async t => {

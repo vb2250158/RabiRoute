@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { once } from "node:events";
+import { WebSocketServer, type WebSocket } from "ws";
 import type { WsFrame } from "@wecom/aibot-node-sdk";
 import type { WeComMessageRecord } from "../../../../history.js";
 import { createMessageAdapterRuntime } from "../../../../runtime/messageAdapterRuntime.js";
@@ -13,6 +15,11 @@ import {
   type WeComAdapterDependencies
 } from "./wecomAdapter.js";
 import type { MessageAdapterDefinition, MessageAdapterDispose } from "../../../../adapters/messageAdapter.js";
+import { RabiCordisHost } from "../../../../runtime/cordisHost.js";
+import { createMessageEndpointHostPorts } from "../../../../runtime/messageEndpointHostPorts.js";
+import { mountGatewayEndpointPlugins } from "../../../../runtime/gatewayEndpointPlugins.js";
+import { gatewayRouteSnapshotRevision } from "../../../../shared/gatewayRouteSnapshot.js";
+import type { GatewayDefinition } from "../../../../shared/gatewayConfigModel.js";
 
 type Handler = (...args: any[]) => void;
 
@@ -163,7 +170,7 @@ test("WeCom Fiber creates a fresh client for each mount", async (t) => {
   assert.equal(readStatus(dataDir).messageAdapters.wecom.status, "disabled");
 });
 
-test("WeCom activation failure disconnects the client and records error", (t) => {
+test("WeCom activation failure exposes the original disconnect and records error", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-wecom-failure-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const client = new FakeWeComClient();
@@ -175,7 +182,10 @@ test("WeCom activation failure disconnects the client and records error", (t) =>
     createClient: () => client as unknown as WeComClientLike
   });
 
-  assert.throws(() => adapter.start(), /connect failed/);
+  let cleanup: MessageAdapterDispose | undefined;
+  assert.throws(() => adapter.start({ signal: new AbortController().signal, onFailure(dispose) { cleanup = dispose; } }), /connect failed/);
+  assert.ok(cleanup);
+  await cleanup();
   assert.equal(client.connectCalls, 1);
   assert.equal(client.disconnectCalls, 1);
   const status = readStatus(dataDir).messageAdapters.wecom;
@@ -245,4 +255,89 @@ test("wecom owns an independent SDK package entry", () => {
   const manifest = JSON.parse(fs.readFileSync(new URL("../../rabi.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.entries.gateway, { execution: "in_process", module: "./gateway.mjs" });
   assert.ok(manifest.provides.includes("endpoint.wecom@1"));
+});
+
+test("the built WeCom package reconnects in the same Gateway after its accepted delivery finishes", { timeout: 120_000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wecom-native-hotplug-"));
+  const host = new RabiCordisHost();
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const sockets: WebSocket[] = [];
+  const subscribed: string[] = [];
+  const forwarded: string[] = [];
+  let finish!: () => void;
+  const firstDelivery = new Promise<void>(resolve => { finish = resolve; });
+  server.on("connection", socket => {
+    sockets.push(socket);
+    socket.on("message", bytes => {
+      const frame = JSON.parse(bytes.toString());
+      if (frame.cmd !== "aibot_subscribe") return;
+      subscribed.push(frame.body.bot_id);
+      socket.send(JSON.stringify({ headers: frame.headers, errcode: 0 }));
+    });
+  });
+  const waitFor = async (check: () => boolean) => {
+    const timeout = Date.now() + 12_000;
+    while (!check()) {
+      if (Date.now() >= timeout) throw new Error("WeCom fixture did not reach the expected state.");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  try {
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    // @ts-expect-error The production builder is JavaScript outside src.
+    const { buildPluginPackages } = await import("../../../../../scripts/build-plugin-packages.mjs");
+    const packageId = "io.rabiroute.endpoint.wecom";
+    const built = await buildPluginPackages(process.cwd(), { packages: [packageId], outputDirectory: path.join(root, "built") });
+    const version = JSON.parse(fs.readFileSync(new URL("../../rabi.plugin.json", import.meta.url), "utf8")).version;
+    const profilePath = path.join(root, "profile.json");
+    fs.writeFileSync(profilePath, JSON.stringify({ schemaVersion: 2, readyRequires: [], instances: [
+      { id: "endpoint:wecom", package: packageId, version, enabled: true, config: {}, grants: [] }
+    ] }));
+    const initial: GatewayDefinition = { id: "wecom-fixture", gatewayPort: 0, enabled: true, messageAdapters: ["wecom"],
+      wecomBotId: "fixture-old", wecomBotSecret: "synthetic-credential", wecomWsUrl: `ws://127.0.0.1:${address.port}` };
+    const shared = await createMessageEndpointHostPorts();
+    const runtime = await mountGatewayEndpointPlugins(host, { initialRouteDefinition: initial, profilePath, stateRoot: root,
+      settingsRoot: path.join(root, "settings"), packageRoots: [built.packagesRoot], runtimeRoot: path.join(root, "runtime"),
+      adapterTypes: ["wecom"], watch: false, hostPorts: { ...shared, module<T>(id: string): T {
+        if (id === "config") return { config: { ...initial, dataDir: root, memoryDataDir: root } } as T;
+        if (id === "forwarding") return { async forwardMessageWithCompletion(_kind: unknown, record: WeComMessageRecord) {
+          forwarded.push(String(record.messageId));
+          if (forwarded.length === 1) await firstDelivery;
+        } } as T;
+        return shared.module<T>(id);
+      } } });
+    await waitFor(() => subscribed.length === 1);
+    const original = runtime.current().records.find(record => record.identity.instanceId === "endpoint:wecom")!.identity;
+    const initialFrame = messageFrame();
+    sockets[0]!.send(JSON.stringify({ ...initialFrame, cmd: "aibot_msg_callback" }));
+    await waitFor(() => forwarded.length === 1);
+
+    const next = { ...initial, wecomBotId: "fixture-new" };
+    const replacement = runtime.applyRouteSnapshot(next, gatewayRouteSnapshotRevision(next));
+    // Observe a failed switch without leaking the original delivery fixture on assertion failure.
+    void replacement.catch(() => {});
+    await waitFor(() => sockets[0]!.readyState === sockets[0]!.CLOSED);
+    assert.equal(sockets.length, 1);
+    assert.equal(runtime.routeRevision(), gatewayRouteSnapshotRevision(initial));
+    finish();
+    await replacement;
+    await waitFor(() => subscribed.length === 2);
+    assert.deepEqual(subscribed, ["fixture-old", "fixture-new"]);
+    const active = runtime.current().records.find(record => record.identity.instanceId === "endpoint:wecom")!.identity;
+    assert.equal(active.applicationGenerationId, original.applicationGenerationId);
+    assert.equal(active.managerInstanceId, original.managerInstanceId);
+    assert.notEqual(active.activationId, original.activationId);
+    assert.equal(runtime.routeRevision(), gatewayRouteSnapshotRevision(next));
+    sockets[1]!.send(JSON.stringify({ ...initialFrame, cmd: "aibot_msg_callback", body: { ...initialFrame.body, msgid: "message-2" } }));
+    await waitFor(() => forwarded.length === 2);
+    assert.deepEqual(forwarded, ["message-1", "message-2"]);
+  } finally {
+    finish();
+    await host.dispose();
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

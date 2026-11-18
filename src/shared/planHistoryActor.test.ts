@@ -50,6 +50,11 @@ test("real storage worker persists actors, preserves old history and fences idem
   const history = JSON.parse(fs.readFileSync(historyPath, "utf8").trim());
   delete history.actor;
   fs.writeFileSync(historyPath, `${JSON.stringify(history)}\n`);
+  // Model a real pre-commitment plan instead of invalidating a new plan's digest.
+  const planPath = path.join(path.dirname(historyPath), "plan.json");
+  const legacyPlan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+  delete legacyPlan.historyCommitment;
+  fs.writeFileSync(planPath, `${JSON.stringify(legacyPlan)}\n`);
   assert.equal(listPlanHistory(roleDir, legacy.id)[0]?.actor, undefined);
   const pool = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "actor-generation", managerInstanceId: "actor-manager" });
   t.after(() => pool.stop());

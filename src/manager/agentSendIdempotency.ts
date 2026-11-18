@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
+import { scopedAgentSendVariant } from "../agentSendVariant.js";
 import {
+  durableDeliveryRequestDigest,
   durableDeliveryReceiptPath,
   executeDurableDelivery,
   normalizeDurableDeliveryId,
@@ -388,11 +390,14 @@ export async function executeIdempotentAgentSend(
   const contentKey = messageProcessingContentKey(options.rootDir, prepared, request);
   let contentDuplicate = false;
   const payload = agentSendIdempotencyPayload(request);
+  const variant = scopedAgentSendVariant(request);
   const outcome = await executeDurableDelivery({
     rootDir: options.rootDir,
     namespace: RECEIPT_NAMESPACE,
     deliveryId,
     payload,
+    ...(variant ? { audit: { sendVariant: variant.receipt, routeId: prepared.routeId, channel: prepared.channel,
+      sender: prepared.sender, target: prepared.target } } : {}),
     deliver: async () => {
       const coalesced = await coalesceMessageProcessingContent(contentKey, options.deliver, options.requestAuthority);
       contentDuplicate = coalesced.duplicate;
@@ -421,6 +426,16 @@ export async function executeIdempotentAgentSend(
     outcome.state === "uncertain" && !outcome.duplicate ? 503 : 409,
     outcome.duplicate
   );
+}
+
+export function replayAgentSendReceipt(rootDir: string, request: AgentSendRequest): IdempotentAgentSendResponse | undefined {
+  const deliveryId = normalizeDurableDeliveryId(request.deliveryId);
+  const receipt = readAgentSendReceipt(rootDir, deliveryId);
+  if (!receipt) return undefined;
+  if (receipt.requestDigest !== durableDeliveryRequestDigest(agentSendIdempotencyPayload(request))) {
+    return nonTerminalResponse(deliveryId, "conflict", "The original delivery ID belongs to a different send request.", 409);
+  }
+  return agentSendReceiptResponse(rootDir, deliveryId);
 }
 
 export function agentSendReceiptResponse(rootDir: string, deliveryId: string): IdempotentAgentSendResponse {

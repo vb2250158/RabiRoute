@@ -20,7 +20,9 @@ Before replacement, the owner verifies the complete original revision after movi
 
 ## Automation delivery templates
 
-Choose a default or plugin template while adding automation, then edit its schedule, target Agent, busy policy and message in the existing rule editor. A template expands into an ordinary rule. Later template changes preserve user-edited rules, and execution uses the existing automation scheduler.
+Adding automation offers Create from template and Create manually. Preview the rule, then choose Create to add it to the list. Under **Type**, choose **Notify Agent**, **Run script**, a built-in or plugin template, or a custom template for the current role. The template fills an ordinary rule. You can edit its schedule, target Agent, busy policy and message, and the existing automation scheduler executes it.
+
+**Save as custom template** copies the current trigger type, message text and extra instructions. Save the role configuration to use it in other rules for that role. Updating or deleting a template changes the template list.
 
 Defaults cover memory consolidation and Skill maintenance, work review and memory capture, plan progress, message summaries, runtime status and blank delivery. The memory task reads related memories and existing Skills, updates an existing method or creates a reusable Skill, then saves, reads back and summarizes actual results.
 

@@ -48,7 +48,7 @@ import {
   assertPlanStoragePackageRecoveryReady, assertPlanStoragePackageRecoveryReadyAsync,
   assertPlanStoragePackageRecoverySnapshot, PlanStoragePackageRecoveryPendingError, type PlanPackageRecoverySnapshot
 } from "./planStoragePackageFence.js";
-import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, readPlanHistoryDirectory, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
+import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, readPlanHistoryDirectory, readPlanHistoryDirectoryAsync, setPlanHistoryCommitment, validatePlanHistoryCommitment, planHistoryTransactionFence, planHistoryTransactionFenceAsync, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
 import {
   memoryStorageCaseFold,
   memoryStorageCollisionKey,
@@ -1769,10 +1769,18 @@ function planFile(roleDir: string, plan: PlanItem): string {
 }
 
 function planHistoryFileContents(roleDir: string, planId: string): Buffer[] {
-  return (["active", "archive"] as const).flatMap(bucket => {
-    const files = readPlanHistoryDirectory(planDirectory(roleDir, planId, bucket));
+  const fence = planHistoryTransactionFence(roleDir, planId);
+  const result = (["active", "archive"] as const).flatMap(bucket => {
+    const directory = planDirectory(roleDir, planId, bucket);
+    const files = readPlanHistoryDirectory(directory);
+    if (files.size || fs.existsSync(path.join(directory, "plan.json"))) {
+      const plan = JSON.parse(fs.readFileSync(path.join(directory, "plan.json"), "utf8")) as Record<string, unknown>;
+      validatePlanHistoryCommitment(plan, files);
+    }
     return orderedPlanHistoryPaths(files.keys()).map(relative => files.get(relative)!);
   });
+  if (planHistoryTransactionFence(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
+  return result;
 }
 
 function planLifecycleTransactionId(kind: "plan-create" | "plan-update" | "plan-archive", ...identity: string[]): string {
@@ -1892,6 +1900,7 @@ type PlanFileCacheEntry = {
   ino?: number;
   plan: PlanItem | null;
   diagnostic?: PlanCatalogDiagnostic;
+  historyCommitted?: boolean;
 };
 
 function samePlanFileMetadata(entry: Pick<PlanFileCacheEntry, "size" | "mtimeMs" | "ctimeMs" | "ino">, stat: fs.Stats): boolean {
@@ -1985,17 +1994,30 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
     }
     signatureParts.push(planFileSignature(filePath,stat));
     let cachedFile = cachedFiles.get(filePath);
-    if (!cachedFile || cachedFile.diagnostic || !samePlanFileMetadata(cachedFile,stat)) {
+    if (!cachedFile || cachedFile.diagnostic || cachedFile.historyCommitted || !samePlanFileMetadata(cachedFile,stat)) {
       const raw = readJson<Record<string, unknown>>(filePath);
+      let diagnostic: PlanCatalogDiagnostic | undefined;
+      if (raw?.historyCommitment !== undefined) {
+        try {
+          const id = canonicalLogicalPlanId(raw.id), fence = planHistoryTransactionFence(roleDir, id);
+          validatePlanHistoryCommitment(raw, readPlanHistoryDirectory(path.dirname(filePath)));
+          if (planHistoryTransactionFence(roleDir, id) !== fence) throw new Error("Plan changed during feedback transaction.");
+        } catch (error) {
+          diagnostic = { code: "invalid_plan_record", file: path.relative(roleDir, filePath).replaceAll(path.sep, "/"),
+            ...(typeof raw.id === "string" ? { planId: raw.id } : {}), message: error instanceof Error ? error.message : String(error) };
+        }
+      }
       cachedFile = {
         size: stat.size,
         mtimeMs: stat.mtimeMs,
         ctimeMs:stat.ctimeMs, ino:stat.ino,
-        plan: raw ? normalizePlan(raw) : null
+        plan: raw && !diagnostic ? normalizePlan(raw) : null,
+        historyCommitted: raw?.historyCommitment !== undefined,
+        ...(diagnostic ? { diagnostic } : {})
       };
       cachedFiles.set(filePath, cachedFile);
     }
-    if (cachedFile.plan) items.push(cachedFile.plan);
+    if (cachedFile.plan && !cachedFile.diagnostic) items.push(cachedFile.plan);
   }
   return { signature: signatureParts.join("\u001e"), items };
 }
@@ -2077,11 +2099,13 @@ async function readPlanCollectionFile(roleDir: string, file: string, previous?: 
       throw Object.assign(new Error("Plan file changed while reading its collection."), { code: "ESTALE" });
     }
     let plan: PlanItem | null = null;
+    let historyCommitted = false;
     try {
       const raw = JSON.parse(text) as Record<string, unknown> | null;
+      historyCommitted = raw?.historyCommitment !== undefined;
       plan = raw && typeof raw === "object" && !Array.isArray(raw) ? normalizePlan(raw) : null;
     } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
-    return { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, plan,
+    return { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino, plan, historyCommitted,
       ...(!plan ? { diagnostic: { code: "invalid_plan_record" as const,
         file: path.relative(roleDir, file).replaceAll(path.sep, "/"),
         message: "This plan file cannot be projected; its original bytes are retained." } } : {}) };
@@ -2131,13 +2155,27 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
         return readChangedPlanFile(filePath, false);
       }
     }
+    let diagnostic: PlanCatalogDiagnostic | undefined;
+    if (raw?.historyCommitment !== undefined) {
+      const roleDir = path.dirname(path.dirname(path.dirname(path.dirname(filePath))));
+      try {
+        const id = canonicalLogicalPlanId(raw.id), fence = await planHistoryTransactionFenceAsync(roleDir, id);
+        validatePlanHistoryCommitment(raw, await readPlanHistoryDirectoryAsync(path.dirname(filePath)));
+        if (await planHistoryTransactionFenceAsync(roleDir, id) !== fence) throw new Error("Plan changed during feedback transaction.");
+      } catch (error) {
+        diagnostic = { code: "invalid_plan_record", file: path.relative(roleDir, filePath).replaceAll(path.sep, "/"),
+          ...(typeof raw.id === "string" ? { planId: raw.id } : {}), message: error instanceof Error ? error.message : String(error) };
+      }
+    }
     return {
       filePath,
       entry: {
         size: after.size,
         mtimeMs: after.mtimeMs,
         ctimeMs:after.ctimeMs, ino:after.ino,
-        plan: raw ? normalizePlan(raw) : null
+        plan: raw && !diagnostic ? normalizePlan(raw) : null,
+        historyCommitted: raw?.historyCommitment !== undefined,
+        ...(diagnostic ? { diagnostic } : {})
       }
     };
   } catch (error) {
@@ -2363,6 +2401,11 @@ function ensurePlanListWatchers(roleDir: string): boolean {
       if (bucket !== "active" && bucket !== "archive") return;
       const isPlanFile = parts.length === 3 && parts[2]?.toLowerCase() === "plan.json";
       const isPlanDirectory = parts.length <= 2;
+      const isHistory = parts.length >= 3 && (parts[2]?.toLowerCase() === "history.jsonl" || parts[2]?.toLowerCase() === "history");
+      if (isHistory && parts[1]) {
+        markPlanListCacheDirty(roleDir, path.join(directory, parts[0]!, parts[1], "plan.json"));
+        return;
+      }
       // Recovery leases, transaction manifests and plan attachments do not
       // change the catalog. Only canonical plan files or bucket/directory
       // replacement events can invalidate a page under construction.
@@ -2401,6 +2444,8 @@ function ensurePlanListWatchers(roleDir: string): boolean {
 type PlanRecord = {
   filePath: string;
   plan: PlanItem;
+  historyCommitted?: boolean;
+  historyRaw?: Record<string, unknown>;
 };
 
 function planCandidateFiles(roleDir: string, planId: string): string[] {
@@ -2414,6 +2459,20 @@ function planRecordFromFile(filePath: string, planId: string): PlanRecord | null
   const raw = readJson<Record<string, unknown>>(filePath);
   const plan = raw ? normalizePlan(raw) : null;
   return plan?.id === planId ? { filePath, plan } : null;
+}
+
+function verifyPointPlanHistory(record: PlanRecord): void {
+  const files = readPlanHistoryDirectory(path.dirname(record.filePath));
+  const raw = readJson<Record<string, unknown>>(record.filePath);
+  if (!raw || raw.id !== record.plan.id) throw new Error(`Plan changed during history verification: ${record.plan.id}`);
+  validatePlanHistoryCommitment(raw, files);
+}
+
+async function verifyPointPlanHistoryAsync(record: PlanRecord, signal?: AbortSignal): Promise<void> {
+  const files = await readPlanHistoryDirectoryAsync(path.dirname(record.filePath), signal);
+  const raw = record.historyRaw ?? JSON.parse(await fs.promises.readFile(record.filePath, { encoding: "utf8", signal })) as Record<string, unknown>;
+  if (raw.id !== record.plan.id) throw new Error(`Plan changed during history verification: ${record.plan.id}`);
+  validatePlanHistoryCommitment(raw, files);
 }
 
 function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
@@ -2466,7 +2525,8 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
     const { signature, items } = readPlansWithFileCache(roleDir, files);
     const previous = planListCache.get(cacheKey);
     const plans = previous?.signature === signature ? previous.plans : immutablePlanCatalog(uniquePlans(items));
-    planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
+    const diagnostics = [...(planFileCache.get(cacheKey)?.values() ?? [])].flatMap(entry => entry.diagnostic ? [entry.diagnostic] : []);
+    planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans, ...(diagnostics.length ? { diagnostics } : {}) });
     planListDirtyAt.delete(cacheKey);
     planListDirtyFiles.delete(cacheKey);
     return readablePlanCatalog(roleDir, plans);
@@ -2479,6 +2539,10 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
 function isPlanCheckpointEntry(value: unknown): value is PlanFileCacheEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<PlanFileCacheEntry>;
+  // Older checkpoints do not record whether the physical plan carries a commitment.
+  if (typeof entry.historyCommitted !== "boolean") return false;
+  // A prior process cannot certify current shard bytes from plan.json metadata alone.
+  if (entry.historyCommitted) return false;
   if (!Number.isSafeInteger(entry.size) || entry.size! < 0
     || !Number.isFinite(entry.mtimeMs) || !Number.isFinite(entry.ctimeMs)
     || !Number.isFinite(entry.ino) || !entry.ino || !entry.ctimeMs || !entry.plan) return false;
@@ -2699,8 +2763,12 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
       if (cachedPlan) return cachedPlan;
     }
   }
+  const before = planHistoryTransactionFence(roleDir, canonicalPlanId);
   assertPlanStoragePackageRecoveryReady(roleDir, canonicalPlanId);
-  return findPlanRecord(roleDir, canonicalPlanId)?.plan ?? null;
+  const record = findPlanRecord(roleDir, canonicalPlanId);
+  if (record) verifyPointPlanHistory(record);
+  if (planHistoryTransactionFence(roleDir, canonicalPlanId) !== before) throw new Error("Plan changed during feedback transaction.");
+  return record?.plan ?? null;
 }
 
 const PLAN_BY_ID_ASYNC_READ_CONCURRENCY = 32;
@@ -2720,8 +2788,9 @@ async function readPlanRecordAsync(
   }
   signal?.throwIfAborted();
   try {
-    const plan = normalizePlan(JSON.parse(text) as Record<string, unknown>);
-    return plan?.id === planId ? { filePath, plan } : null;
+    const raw = JSON.parse(text) as Record<string, unknown>;
+    const plan = normalizePlan(raw);
+    return plan?.id === planId ? { filePath, plan, historyCommitted: raw.historyCommitment !== undefined, historyRaw: raw } : null;
   } catch {
     return null;
   }
@@ -2771,6 +2840,7 @@ export async function getPlanAsync(
 ): Promise<PlanItem | null> {
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const { signal } = options;
+  const before = await planHistoryTransactionFenceAsync(roleDir, canonicalPlanId, signal);
   signal?.throwIfAborted();
   await awaitAbortable(assertPlanStoragePackageRecoveryReadyAsync(roleDir, canonicalPlanId, signal), signal);
   const hint = options.candidateFiles;
@@ -2814,6 +2884,8 @@ export async function getPlanAsync(
   if (matches.length > 1) {
     throw new Error(`Plan storage conflict for ${canonicalPlanId}: the stable plan id exists in more than one storage bucket.`);
   }
+  if (matches[0]?.historyCommitted) await verifyPointPlanHistoryAsync(matches[0], signal);
+  if (await planHistoryTransactionFenceAsync(roleDir, canonicalPlanId, signal) !== before) throw new Error("Plan changed during feedback transaction.");
   return matches[0]?.plan ?? null;
 }
 
@@ -3865,7 +3937,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
         const rawPlanFile = sourcePackage.files.find((file) => file.path === "plan.json");
         if (!rawPlanFile) throw new Error("Canonical plan package has no plan.json.");
-        const beforeRaw = JSON.parse(rawPlanFile.content.toString("utf8")) as Record<string, unknown>;
+        const { historyCommitment: _historyCommitment, ...beforeRaw } = JSON.parse(rawPlanFile.content.toString("utf8")) as Record<string, unknown>;
         const latestStatus = resolvePersonaPlanStatus(workflow, beforeRaw.markerStatus ?? beforeRaw.status, { includeLegacyAliases: true });
         if (!latestStatus) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${String(beforeRaw.status)}`);
         if (latestStatus.matchedBy === "key" && beforeRaw.activationStatus !== undefined && beforeRaw.markerStatus === latestStatus.key && !hasLegacyPlanStepState(beforeRaw.steps)) return;
@@ -3896,7 +3968,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         }]);
         const history = createPlanHistoryRecord(historyBefore as unknown as PlanItem, next);
         appendPlanHistoryRecord(files, history);
-        files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
+        files.set("plan.json", Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(next as unknown as Record<string, unknown>, files), null, 2)}\n`, "utf8"));
         commitPlanLifecycleTransitionUnderLease(lease, {
           transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v3", sourcePackage.inventoryHash),
           kind: destinationBucket === sourcePackage.bucket ? "plan-update" : "plan-archive",
@@ -3975,8 +4047,8 @@ export function createPlan(
       );
     }
     const history = createPlanHistoryRecord(undefined, plan, mutation?.actor);
-    files.set("plan.json", Buffer.from(`${JSON.stringify(plan, null, 2)}\n`, "utf8"));
     appendPlanHistoryRecord(files, history);
+    files.set("plan.json", Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(plan as unknown as Record<string, unknown>, files), null, 2)}\n`, "utf8"));
     commitPlanLifecycleTransitionUnderLease(lease, {
       transactionId: planLifecycleTransactionId("plan-create", plan.id, recordedAt),
       kind: "plan-create",
@@ -4023,6 +4095,7 @@ export function updatePlanPrepared(
     files: planFileCache.get(cacheKey)
   };
   return withPlanStorageLock(roleDir, canonicalPlanId, (lease) => {
+    planHistoryTransactionFence(roleDir, canonicalPlanId);
     const record = findPlanRecord(roleDir, canonicalPlanId);
     if (!record) throw new Error(`Plan not found: ${canonicalPlanId}`);
     const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
@@ -4069,10 +4142,10 @@ export function updatePlanPrepared(
         preparedAttachments
       );
     }
-    const storedBefore = JSON.parse(sourcePackage.files.find((file) => file.path === "plan.json")?.content.toString("utf8") || "{}") as PlanItem;
+    const { historyCommitment: _historyCommitment, ...storedBefore } = JSON.parse(sourcePackage.files.find((file) => file.path === "plan.json")?.content.toString("utf8") || "{}") as PlanItem & { historyCommitment?: unknown };
     const historyRecord = preparation.projectHistory({ roleDir, sourcePlan: storedBefore, next, currentBucket, destinationBucket, mutation });
     appendPlanHistoryRecord(files, historyRecord);
-    files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
+    files.set("plan.json", Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(next as unknown as Record<string, unknown>, files), null, 2)}\n`, "utf8"));
     commitPlanLifecycleTransitionUnderLease(lease, {
       transactionId: planLifecycleTransactionId(
         currentBucket === destinationBucket ? "plan-update" : "plan-archive",

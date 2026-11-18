@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveCopilotSessionName } from "./copilotCli.js";
+import { resolveCopilotSessionName, waitForCopilotProcess } from "./copilotCli.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 test("Copilot session names have a dedicated configuration source", () => {
@@ -13,10 +14,58 @@ test("Copilot session names have a dedicated configuration source", () => {
   assert.equal(resolveCopilotSessionName(undefined, undefined), "");
 });
 
+test("Copilot releases its output only after the child and its streams close", async () => {
+  const child = new ChildProcess();
+  const stdout = new PassThrough();
+  child.stdout = stdout;
+  let settled = false;
+  const result = waitForCopilotProcess(child, 10000).finally(() => { settled = true; });
+  child.emit("exit", 0, null);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  stdout.write("output after exit");
+  child.emit("close", 0, null);
+  assert.equal((await result).stdout, "output after exit");
+});
+
+test("Copilot timeout waits for process-tree termination and the original close", async () => {
+  const child = new ChildProcess();
+  let confirmStop!: () => void;
+  const stop = new Promise<void>(resolve => { confirmStop = resolve; });
+  let notifyStop!: () => void;
+  const stopping = new Promise<void>(resolve => { notifyStop = resolve; });
+  let settled = false;
+  const result = waitForCopilotProcess(child, 5, async subject => {
+    assert.equal(subject, child);
+    notifyStop();
+    await stop;
+  }).finally(() => { settled = true; });
+  const rejected = assert.rejects(result, /timed out after 5ms/);
+  await stopping;
+  child.emit("exit", null, "SIGTERM");
+  child.emit("close", null, "SIGTERM");
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  confirmStop();
+  await rejected;
+});
+
+test("a signal or spawn failure does not create a successful Copilot receipt", async () => {
+  const signaledChild = new ChildProcess();
+  const signaled = assert.rejects(waitForCopilotProcess(signaledChild, 10000), /terminated by SIGTERM/);
+  signaledChild.emit("close", null, "SIGTERM");
+  await signaled;
+  const failedChild = new ChildProcess();
+  const failed = assert.rejects(waitForCopilotProcess(failedChild, 10000), /failed to start.*fixture launch error/);
+  failedChild.emit("error", new Error("fixture launch error"));
+  failedChild.emit("close", -1, null);
+  await failed;
+});
+
 const sourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const SCRIPT_PROMPT = "Read the UTF-8 task at the file path in environment variable RABIROUTE_COPILOT_PROMPT_FILE, then follow all instructions in that file.";
 
-async function controlledDelivery(t: test.TestContext, input: string, options: { extension?: "cmd" | "bat"; native?: boolean; stdin?: boolean; exit?: number } = {}) {
+async function controlledDelivery(t: test.TestContext, input: string, options: { extension?: "cmd" | "bat"; native?: boolean; stdin?: boolean; exit?: number; timeout?: boolean } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-copilot-private-"));
   t.after(async () => {
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
@@ -30,7 +79,11 @@ async function controlledDelivery(t: test.TestContext, input: string, options: {
   const receiver = path.join(root, "controlled-receiver.cjs");
   const wrapper = path.join(root, `controlled wrapper.${options.extension ?? "cmd"}`);
   await fs.writeFile(inputFile, JSON.stringify(input), "utf8");
-  await fs.writeFile(receiver, `const fs=require('node:fs');let stdin='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>stdin+=s);process.stdin.on('end',()=>{const promptFile=process.env.RABIROUTE_COPILOT_PROMPT_FILE;process.stdout.write(JSON.stringify({argv:process.argv.slice(2),stdin,promptFile,text:promptFile?fs.readFileSync(promptFile,'utf8'):undefined}));process.exitCode=Number(process.env.CONTROLLED_COPILOT_EXIT||0);});`, "utf8");
+  const fixturePidPath = path.join(root, "controlled-receiver.pid");
+  const receiverSource = options.timeout
+    ? `require('node:fs').writeFileSync(${JSON.stringify(fixturePidPath)},String(process.pid));setInterval(()=>{},1000);`
+    : `const fs=require('node:fs');let stdin='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>stdin+=s);process.stdin.on('end',()=>{const promptFile=process.env.RABIROUTE_COPILOT_PROMPT_FILE;process.stdout.write(JSON.stringify({argv:process.argv.slice(2),stdin,promptFile,text:promptFile?fs.readFileSync(promptFile,'utf8'):undefined}));process.exitCode=Number(process.env.CONTROLLED_COPILOT_EXIT||0);});`;
+  await fs.writeFile(receiver, receiverSource, "utf8");
   await fs.writeFile(wrapper, `@echo off\r\n"${process.execPath}" "%~dp0controlled-receiver.cjs" %*\r\n`, "utf8");
   const moduleUrl = new URL("./copilotCli.ts", import.meta.url).href;
   const configUrl = pathToFileURL(path.join(sourceRoot, "config.ts")).href;
@@ -46,7 +99,7 @@ async function controlledDelivery(t: test.TestContext, input: string, options: {
       ROLES_DIR: path.join(root, "roles"), GATEWAY_ID: "", GATEWAY_MANAGER_URL: "http://127.0.0.1:1",
       COPILOT_CLI_BIN: options.native ? process.execPath : wrapper, COPILOT_CLI_ARGS: JSON.stringify(args),
       COPILOT_CWD: options.native ? "" : cwd, COPILOT_THREAD_NAME: options.native ? "" : 'Session & quote " value %PATH% !literal! ^',
-      COPILOT_CLI_TIMEOUT_MS: "5000", RABIROUTE_COPILOT_PROMPT_FILE: undefined,
+      COPILOT_CLI_TIMEOUT_MS: options.timeout ? "2000" : "5000", RABIROUTE_COPILOT_PROMPT_FILE: undefined,
       CONTROLLED_INPUT: inputFile, CONTROLLED_RESULT: resultFile, CONTROLLED_NATIVE: options.native ? "1" : "0",
       CONTROLLED_COPILOT_EXIT: String(options.exit ?? 0), TSX_TSCONFIG_PATH: path.join(sourceRoot, "../tsconfig.json") }
   });
@@ -66,6 +119,15 @@ async function controlledDelivery(t: test.TestContext, input: string, options: {
   assert.equal(await fs.readFile(promptPath, "utf8"), input);
   assert.equal(await fs.stat(path.join(cwd, "unexpected-shell-marker.txt")).then(() => true, () => false), false);
   const rows = await fs.readFile(path.join(root, "data/copilot-output.jsonl"), "utf8").then(text => text.trim().split(/\r?\n/).map(line => JSON.parse(line)), () => []);
+  if (options.timeout) {
+    assert.match(outcome.error ?? "", /timed out after 2000ms/);
+    assert.equal(outcome.error?.includes(input), false);
+    assert.equal(rows.length, 0);
+    const fixturePid = Number(await fs.readFile(fixturePidPath, "utf8"));
+    assert.ok(Number.isSafeInteger(fixturePid) && fixturePid > 0);
+    assert.throws(() => process.kill(fixturePid, 0), { code: "ESRCH" });
+    return;
+  }
   if (options.exit) {
     assert.match(outcome.error ?? "", new RegExp(`exited with code ${options.exit}`));
     assert.equal(rows.length, 0, "A rejected child must not produce a successful output receipt.");
@@ -111,4 +173,7 @@ test("native executable still receives the short original message as an independ
 });
 test("command-script failure preserves the original prompt and does not claim a successful receipt", { skip: process.platform !== "win32" }, async t => {
   await controlledDelivery(t, dangerousLookingText, { exit: 7 });
+});
+test("Windows timeout stops the actual launcher and its controlled descendant before returning", { skip: process.platform !== "win32" }, async t => {
+  await controlledDelivery(t, dangerousLookingText, { extension: "cmd", timeout: true });
 });

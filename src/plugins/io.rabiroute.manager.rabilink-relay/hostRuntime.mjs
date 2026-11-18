@@ -24,7 +24,10 @@ export function createOwnedRuntime(ports) {
                 dataDir: ports.path.join(ports.rootDir, "data", "rabilink"),
                 deviceId: ports.rabiLinkRelayConfigForMeta().deviceId,
                 generation: ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId,
-                discover: () => ports.discoverRabiPeers(ports.peerRelayConfig()), relay: () => ports.peerRelayConfig(),
+                discover: () => {
+                    const relay = ports.rabiLinkHostAccount.relay();
+                    return ports.discoverRabiPeers(relay ? { ...relay, deviceGuid: ports.rabiGlobalConfig.read().rabiGuid } : ports.peerRelayConfig());
+                }, relay: () => ports.peerRelayConfig(), accountRelay: () => ports.rabiLinkHostAccount.relay(),
                 services: () => {
                     const generation = ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId;
                     const services = { manager: { baseUrl: ports.managerBaseUrl, headers: { "x-rabilink-tunnel-local": generation } },
@@ -72,6 +75,7 @@ export function createOwnedRuntime(ports) {
         managerPluginRoutes: ports.managerPluginRoutes,
         peerLanServer: ports.peerLanServer,
         rabiLinkRelayRuntime: ports.rabiLinkRelayRuntime,
+        rabiLinkAccountRuntime: ports.rabiLinkAccountRuntime,
         syncRabiLinkRelayRuntime: ports.syncRabiLinkRelayRuntime,
         get managerListenerReady() { return ports.managerListenerReady; },
         set managerListenerReady(value) { ports.managerListenerReady = value; },

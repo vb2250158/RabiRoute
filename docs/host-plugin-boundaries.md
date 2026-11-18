@@ -50,6 +50,26 @@ Persona 的 `worker/plan-update.mjs` 拥有计划更新的准备、历史投影�
 
 提交响应丢失时读取原选版。确认已提交才报告采用；确认未提交才恢复旧 worker；读回仍未知时保留原候选及事实，只影响该桌面通道。原回执和无依赖功能继续可用。回退创建原资源的新 worker，不重置已经关闭的对象。
 
+## Agent 会话与桌面连接器
+
+兼容的平台变更使用原插件包的独立构建、导入及选版入口。Profile 选择配置版本，原生运行目录报告生效版本。旧版本请求沿其原租约完成，未知回执按原编号查询。验收以同代 Manager、同一外部客户端进程的换版、回滚和请求结果为准。
+
+Gateway 插件通过 `manager.gateway-runtime.list`（`GET /gateways?summary=1`）回读 `data.manager[].gatewayEndpointPlugins`。其中 `pid` 与 `gatewayGenerationId` 来自同一个受管子进程，`instances` 包含当前插件的版本、`packageHash`、`activationId` 和初始化状态。等待目标实例报告预期哈希和 `active` 后再确认采用。空数组表示当前无活动实例，字段缺失表示当前进程没有可核验的发布。连接或登录是否就绪继续按消息端自己的状态确认。
+
+公共会话入口保留鉴权、工作区约束、创建预留和投递账本。插件声明支持的会话操作，解释平台的会话 ID、工作目录、聊天记录和原生回执。新增插件能力时，通过已发布的适配器注册分发，平台差异集中在各自包内。
+
+在 `agent-adapter.json` 声明 `capabilities.sessionOperations` 的适配器实现 `threads.list`、`threads.read`、`threads.send`。历史沿用 `threads.history`。声明 `observeDelivery` 的适配器从原历史返回 `threads.observeDelivery` 的同号证据。声明 `create: "with-initial-message"` 的适配器接收宿主校验过的首条消息、目录和原创建编号，经 `threads.create` 返回创建、待查或冲突结果。原目标不支持的动作由公共入口说明可用路径。
+
+树外适配器的完整任务 ID 由该适配器解释。公共 HTTP 合同只校验输入结构，使用当前已发布的适配器能力判断是否可执行。WorkBuddy 0.1.9 接入此合同。采用含此合同的新版宿主时，旧 WorkBuddy 选版按发行清单迁移，保留实例、启停与用户配置。
+
+桌面连接器的长连接由实际客户端和连接逻辑的拥有者维护。接入时核对当前进程、协议与实际能力。将易变的选择器和提交逻辑放在可换版的实现中，核对回执后归还旧版本租约。首次建立启动期连接或更换传输时，按受影响客户端的生命周期操作。涉及常驻进程重启时，先确认哪一层的状态或协议需要迁移。
+
+## 渠道发送形态
+
+消息端通过 `ownMessageEndpointEgress` 的 `sendVariants` 声明渠道内带命名空间的 `payload.type`、参数与数据 Schema、文本投影和原生执行操作。Manager 准备激活时编译 Schema。活动能力目录返回同一声明，扩展形态的执行方由当前插件发布图选定。
+
+宿主负责发送者、Route、发送规则、确认与幂等。插件负责找到原平台实例或来源，调用平台和返回同一次发送的回执。一次调用持有原版本租约，直到写完账本并返回。停用时新请求无法取得该能力，原投递 ID 继续沿账本核对。
+
 ## 最小失败范围
 
 | 问题 | 处理范围 | 保持可用 |

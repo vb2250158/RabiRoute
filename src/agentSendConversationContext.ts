@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { conversationScope } from "./conversationMessageCursor.js";
 import { prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { scopedAgentSendVariant } from "./agentSendVariant.js";
 import { resolveAgentSendRoute } from "./agentSendRoute.js";
 import { conversationDataDirForRoute, type AgentReplyOptions } from "./outbox.js";
 import { type MessageContextRecord } from "./messageContextStore.js";
@@ -35,6 +36,17 @@ function conversationIdentity(request: AgentSendRequest, options: AgentReplyOpti
   if (requireReview && policy.enabled !== true) return undefined;
   const dataDir = conversationDataDirForRoute(options, route);
   const target = send.target;
+  const variant = scopedAgentSendVariant(request);
+  if (variant) {
+    const hasId = (value: unknown) => typeof value === "string" && Boolean(value.trim());
+    const hasDeviceList = (value: unknown): value is string[] => Array.isArray(value) && value.every(hasId);
+    const exactTarget = send.channel === "napcat" ? hasId(target.instanceId)
+      && (target.target === "group" ? hasId(target.groupId) : target.target === "private" && hasId(target.userId))
+      : send.channel === "rabilink" ? hasDeviceList(target.targetDeviceIds) && hasDeviceList(target.targetDeviceKinds)
+        && target.targetDeviceIds.length + target.targetDeviceKinds.length > 0
+        : hasId(target.chatId || target.sessionId || target.roleId);
+    if (!exactTarget) throw new Error(`Conversation review requires an exact supported conversation target for ${variant.receipt.type}.`);
+  }
   let instanceId = String(target.instanceId || "");
   if (send.channel === "napcat" && !instanceId) {
     const instances = (route.runtime.napcatInstances ?? []).filter(item => item.enabled !== false);
@@ -45,7 +57,7 @@ function conversationIdentity(request: AgentSendRequest, options: AgentReplyOpti
     : send.channel === "rabilink" ? { deviceIds: [...(target.targetDeviceIds as string[])].sort(), deviceKinds: [...(target.targetDeviceKinds as string[])].sort() }
     : { chatId: target.chatId, sessionId: target.sessionId, roleId: target.roleId };
   const { key, scope } = conversationScope(dataDir, route.runtime.id, adapter, identity);
-  return { send, route, dataDir, adapter, target, instanceId, key, scope, policy };
+  return { send, route, dataDir, adapter, target, instanceId, key, scope, policy, variant };
 }
 
 
@@ -85,7 +97,7 @@ export class AgentSendConversationContextGuard {
     // Resolve the optional policy before review-only account identity or history work.
     const conversation = conversationIdentity(request, options, true);
     if (!conversation) return { blocked: false };
-    const { send, route, dataDir, adapter, target, instanceId, scope, policy } = conversation;
+    const { send, route, dataDir, adapter, target, instanceId, scope, policy, variant } = conversation;
     const filter = { gatewayId: route.runtime.id, channel: send.channel, adapter, target, instanceId };
     const pendingKey = JSON.stringify({ deliveryId: send.deliveryId, sender: send.sender, scope });
     const cacheKey = JSON.stringify({ sender: send.sender, scope });
@@ -103,7 +115,8 @@ export class AgentSendConversationContextGuard {
     const token = send.conversationContext?.confirmationToken;
     // Tokens also bind the exact send. Length/style tokens stay independent, and do not change message identity.
     const fingerprint = () => JSON.stringify({ deliveryId: send.deliveryId, sender: send.sender, routeId: send.routeId,
-      channel: send.channel, internal: send.internal, latestMessageIndex, policy });
+      channel: send.channel, internal: send.internal, latestMessageIndex, policy,
+      ...(variant ? { payload: request.payload, packageHash: variant.receipt.packageHash } : {}) });
     const sign = (expiry: number) => createHmac("sha256", this.secret).update(`${expiry}:${fingerprint()}`).digest();
     let confirmed = false;
     if (token) {

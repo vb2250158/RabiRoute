@@ -31,6 +31,7 @@ test("one Manager keeps old Peer on failed candidate and publishes replacement b
     syncRabiLinkRelayRuntime: async () => {},
     peerLanServer: { stop: async () => { sharedStops++; } },
     rabiLinkRelayRuntime: { stop: async () => { sharedStops++; } },
+    rabiLinkAccountRuntime: { stop: async () => { sharedStops++; } },
     createDirectVideoReceiver: () => ({ stop: async () => {} }),
     createDirectVideoOperations: () => [], createRabiLinkAgentDeviceOperations: () => [],
     createRabiLinkMobileOperations: () => [], createDeviceAgentOperations: () => [],
@@ -93,7 +94,7 @@ test("one Manager keeps old Peer on failed candidate and publishes replacement b
   assert.equal(peers[0].closed, true); assert.equal(active, 4); assert.equal(sharedStops, 0);
   await kernel.switch([candidate("one")]); // Fresh candidate for an explicit rollback.
   assert.equal(active, 5); assert.equal(publications, 4); assert.equal(sharedStops, 0);
-  await kernel.dispose(); assert.equal(active, undefined); assert.equal(sharedStops, 2);
+  await kernel.dispose(); assert.equal(active, undefined); assert.equal(sharedStops, 3);
 });
 
 test("session retirement joins accepted writes and native producer cleanup", async () => {

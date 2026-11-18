@@ -1,5 +1,6 @@
 import type { IdentityRelationContext } from "../identityRelations.js";
 import type { ForwardRecord, ForwardRouteKind } from "./types.js";
+import { isCaptureEventRouteKind } from "../shared/personaEventTypes.js";
 
 export type ConversationProjectCandidate = {
   projectId: string;
@@ -68,11 +69,11 @@ export function conversationSituationForIdentity(
   }
   const projectCandidates = [...candidates.values()].sort((a, b) => a.projectId.localeCompare(b.projectId));
   const routeKind = input.routeKind;
-  const target = routeKind === "private" || routeKind === "weixin_message"
+  const target = routeKind === "private" || routeKind === "weixin_message" || routeKind === "qqbot_private"
     ? "private"
-    : routeKind === "group_message" || routeKind === "direct_at" || routeKind === "direct_reply" || routeKind === "indirect_reply" || routeKind === "wecom_message" || routeKind === "feishu_message"
+    : routeKind === "group_message" || routeKind === "direct_at" || routeKind === "direct_reply" || routeKind === "indirect_reply" || routeKind === "wecom_message" || routeKind === "feishu_message" || routeKind === "qqbot_group"
       ? "group"
-      : routeKind === "heartbeat" || routeKind === "manual_trigger" || routeKind === "plan_feedback" || routeKind === "role_panel_message" || routeKind === "xiaomi_home_event"
+      : routeKind === "heartbeat" || routeKind === "manual_trigger" || routeKind === "plan_feedback" || routeKind === "role_panel_message" || routeKind === "xiaomi_home_event" || isCaptureEventRouteKind(routeKind ?? "")
         ? "system"
         : "unknown";
   return {

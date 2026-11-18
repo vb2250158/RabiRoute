@@ -8,4 +8,8 @@ The Persona plugin owns configuration reads, change notifications and native rol
 
 The internal `heartbeat` ID preserves the existing execution, delivery, and history contract without a second engine. The official persona configuration upgrade retains legacy task IDs, enabled states, and Route scopes. An inherited busy policy preserves differences between existing Routes. Configure new tasks directly in Automation.
 
+During Gateway retirement, the scheduler closes admission and clears its timers. It hands over ownership after accepted scripts and deliveries finish writing their original receipts. A failed start uses the same cleanup. Once cleanup succeeds, the host can retry the plugin in the existing process.
+
+A Gateway that supports `ownsScheduledAutomation` applies schedule edits while running. Enabling the first schedule loads the scheduler, and disabling or deleting the last schedule unloads it. Other endpoints keep running. The Route snapshot is acknowledged after startup or retirement completes. A Gateway that is stopped follows its usual startup procedure.
+
 A daily rule can store several local times in `timeOfDays`, such as `10:00`, `14:00` and `18:00`. The scheduler runs the remaining points today and moves to the first point tomorrow after the final one; missed points retain the existing no-catch-up behavior. All points share one rule and runtime task, while the existing receipt key includes the planned firing time. Legacy `timeOfDay` remains supported. An invalid list stops only that schedule; other valid rules continue running.

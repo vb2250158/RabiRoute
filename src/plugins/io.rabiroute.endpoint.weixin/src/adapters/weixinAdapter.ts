@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import QRCode from "qrcode";
 import { config } from "@rabiroute/host-api/config";
-import { forwardMessage, recordMessageContextOnly } from "@rabiroute/host-api/forwarding";
+import { forwardMessage, forwardMessageWithCompletion, recordMessageContextOnly } from "@rabiroute/host-api/forwarding";
 import {
   appendAdapterLogToDir,
   appendWeixinMessageToDir,
@@ -12,8 +12,11 @@ import {
 import type { ForwardTemplateValues } from "@rabiroute/host-api/routing/types";
 import {
   pollWeixinQrSession,
+  notifyWeixinConnection,
+  pollWeixinRealName,
+  startWeixinRealName,
   pollWeixinUpdates,
-  downloadWeixinImages,
+  downloadWeixinMedia,
   readWeixinState,
   requestWeixinQrSession,
   textFromWeixinItems,
@@ -33,7 +36,12 @@ import {
 } from "./weixinSessionLifecycle.js";
 import {
   clearWeixinLoginRequest,
-  hasActiveWeixinLoginRequest
+  completeWeixinLogout,
+  hasActiveWeixinLoginRequest,
+  hasWeixinLogoutRequest,
+  readWeixinLoginMode,
+  waitForWeixinPin,
+  WEIXIN_LOGOUT_REQUEST_FILE
 } from "../weixinLoginRequest.js";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 
@@ -126,13 +134,13 @@ export type WeixinRecordDisposition = "forwarded" | "record_only";
 export async function dispatchWeixinRecord(
   record: WeixinMessageRecord,
   values: ForwardTemplateValues,
-  handlers: { forward?: typeof forwardMessage; recordOnly?: typeof recordMessageContextOnly } = {}
+  handlers: { forward?: (...args: Parameters<typeof forwardMessage>) => unknown; recordOnly?: typeof recordMessageContextOnly } = {}
 ): Promise<WeixinRecordDisposition> {
-  if (record.messageType !== "text" && !record.attachments?.length) {
+  if (record.messageType !== "text" && !record.attachments?.length && !textFromWeixinItems(record.segments).hasText) {
     await (handlers.recordOnly ?? recordMessageContextOnly)("weixin_message", record);
     return "record_only";
   }
-  (handlers.forward ?? forwardMessage)("weixin_message", record, values);
+  await (handlers.forward ?? forwardMessageWithCompletion ?? forwardMessage)("weixin_message", record, values);
   return "forwarded";
 }
 
@@ -148,7 +156,8 @@ export type WeixinAdapterDependencies = {
   requestQrSession?: typeof requestWeixinQrSession;
   pollQrSession?: typeof pollWeixinQrSession;
   pollUpdates?: typeof pollWeixinUpdates;
-  downloadImages?: typeof downloadWeixinImages;
+  notifyConnection?: typeof notifyWeixinConnection;
+  downloadImages?: typeof downloadWeixinMedia;
   toQrDataUrl?: (content: string) => Promise<string>;
   hasLoginRequest?: typeof hasActiveWeixinLoginRequest;
   clearLoginRequest?: typeof clearWeixinLoginRequest;
@@ -165,6 +174,7 @@ type WeixinLifecycle = {
   baseUrl: string;
   botType: string;
   recentMessageIds: Set<string>;
+  pendingDeliveries: Set<Promise<void>>;
   now(): Date;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   readState: typeof readWeixinState;
@@ -172,7 +182,10 @@ type WeixinLifecycle = {
   requestQrSession: typeof requestWeixinQrSession;
   pollQrSession: typeof pollWeixinQrSession;
   pollUpdates: typeof pollWeixinUpdates;
-  downloadImages: typeof downloadWeixinImages;
+  notifyConnection: typeof notifyWeixinConnection;
+  liveState?: WeixinOpenClawState;
+  pollAbort?: AbortController;
+  downloadImages: typeof downloadWeixinMedia;
   toQrDataUrl(content: string): Promise<string>;
   hasLoginRequest: typeof hasActiveWeixinLoginRequest;
   clearLoginRequest: typeof clearWeixinLoginRequest;
@@ -196,12 +209,11 @@ function patchActiveWeixinStatus(lifecycle: WeixinLifecycle, patch: Record<strin
 async function recordFromInbound(
   lifecycle: WeixinLifecycle,
   state: WeixinOpenClawState,
-  message: WeixinInboundMessage
+  message: WeixinInboundMessage,
+  sessionId: string,
+  messageId: string
 ): Promise<WeixinMessageRecord | null> {
-  const sessionId = String(message.from_user_id || "").trim();
-  if (!sessionId) return null;
   const parsed = textFromWeixinItems(message.item_list);
-  const messageId = String(message.message_id || message.msg_id || lifecycle.randomId()).trim();
   const rawTime = Number(message.create_time_ms || message.create_time || 0);
   const time = rawTime > 1_000_000_000_000
     ? Math.floor(rawTime / 1000)
@@ -217,7 +229,7 @@ async function recordFromInbound(
   );
   if (!lifecycle.active) return null;
   const attachmentHint = attachments.length
-    ? `\n[图片附件：${attachments.map((attachment) => attachment.path).join(", ")}]`
+    ? `\n[微信附件：${attachments.map((attachment) => attachment.path).join(", ")}]`
     : "";
   return {
     time,
@@ -238,14 +250,14 @@ async function recordFromInbound(
 
 function statusPatch(status: WeixinSessionStatus): Record<string, unknown> {
   const message = status.phase === "restoring"
-    ? "正在从安全存储恢复个人微信会话。"
+    ? "正在从安全存储恢复微信机器人会话。"
     : status.phase === "restored"
-      ? "个人微信会话已恢复，正在接收消息。"
+      ? "微信机器人会话已恢复，正在接收消息。"
       : status.phase === "temporarily_unreachable"
-        ? "个人微信暂时不可达；会话凭据已保留，不需要重新扫码。"
+        ? "微信机器人暂时不可达；会话凭据已保留，不需要重新扫码。"
         : status.phase === "invalid"
-          ? "个人微信会话已由服务端判定失效，需要重新扫码。"
-          : "个人微信从未登录，需要扫码后才能接收消息。";
+          ? "微信机器人会话已由服务端判定失效，需要重新扫码。"
+          : "微信机器人从未登录，需要扫码后才能接收消息。";
   return {
     status: status.phase === "temporarily_unreachable" ? "degraded" : "running",
     sessionPhase: status.phase,
@@ -265,37 +277,45 @@ async function processInbound(
 ): Promise<boolean> {
   if (!lifecycle.active) return false;
   const sessionId = String(message.from_user_id || "").trim();
-  if (!sessionId) return false;
+  if (!sessionId || Number(message.message_type) === 2) return false;
   const contextToken = String(message.context_token || "").trim();
-  if (contextToken) state.contextTokens[sessionId] = contextToken;
-  const record = await recordFromInbound(lifecycle, state, message);
-  if (!lifecycle.active || !record || lifecycle.recentMessageIds.has(String(record.messageId))) {
-    return lifecycle.active && Boolean(contextToken);
+  const messageId = String(message.message_id || message.msg_id || "").trim() || lifecycle.randomId();
+  if (lifecycle.recentMessageIds.has(messageId)) {
+    if (contextToken) state.contextTokens[sessionId] = contextToken;
+    return Boolean(contextToken);
   }
-  rememberMessageId(lifecycle.recentMessageIds, String(record.messageId));
+  const record = await recordFromInbound(lifecycle, state, message, sessionId, messageId);
+  if (!lifecycle.active || !record) return false;
+  if (contextToken) state.contextTokens[sessionId] = contextToken;
   lifecycle.appendMessage(record, lifecycle.memoryDataDir);
-  if (!lifecycle.active) return false;
-  const disposition = await lifecycle.dispatchRecord(record, {
+  rememberMessageId(lifecycle.recentMessageIds, String(record.messageId));
+  const delivery = lifecycle.dispatchRecord(record, {
     weixinSessionId: record.sessionId,
     weixinUserId: record.userId,
     weixinMessageType: record.messageType,
     repliedMessageId: record.repliedMessageId,
     repliedMessage: record.quotedText
+  }).then(disposition => {
+    if (lifecycle.active) {
+      const current = readGatewayStatus(lifecycle.dataDir).messageAdapters?.weixin;
+      patchActiveWeixinStatus(lifecycle, {
+        status: "running",
+        loggedIn: true,
+        lastError: "",
+        lastMessageAt: lifecycle.now().toISOString(),
+        messageCount: Number(current?.messageCount || 0) + 1,
+        message: disposition === "forwarded" ? "微信机器人消息已交给 RabiRoute。" : "微信机器人媒体消息已记录；无可读取附件。"
+      });
+    }
+    appendWeixinRuntimeLog(lifecycle, { event: "inbound_message", message: disposition,
+      data: { messageId: record.messageId, messageType: record.messageType, hasReply: Boolean(record.repliedMessageId) } });
   });
-  if (!lifecycle.active) return false;
-  const current = readGatewayStatus(lifecycle.dataDir).messageAdapters?.weixin;
-  patchActiveWeixinStatus(lifecycle, {
-    status: "running",
-    loggedIn: true,
-    lastError: "",
-    lastMessageAt: lifecycle.now().toISOString(),
-    messageCount: Number(current?.messageCount || 0) + 1,
-    message: disposition === "forwarded" ? "个人微信消息已交给 RabiRoute。" : "个人微信媒体消息已记录；无可读取附件。"
-  });
-  appendWeixinRuntimeLog(lifecycle, {
-    event: "inbound_message",
-    message: disposition,
-    data: { messageId: record.messageId, messageType: record.messageType, hasReply: Boolean(record.repliedMessageId) }
+  lifecycle.pendingDeliveries.add(delivery);
+  void delivery.then(() => { lifecycle.pendingDeliveries.delete(delivery); }, error => {
+    lifecycle.pendingDeliveries.delete(delivery);
+    const message = error instanceof Error ? error.message : String(error);
+    try { appendWeixinRuntimeLog(lifecycle, { level: "error", event: "record_context_failed", message, data: { messageId: record.messageId } }); }
+    catch (logError) { console.error("Failed to record the Weixin routing error", logError); }
   });
   return true;
 }
@@ -307,11 +327,16 @@ function applyConfirmedLogin(
 ): void {
   const token = String(data.bot_token || "").trim();
   if (!token) throw new Error("微信扫码已确认，但响应没有 bot_token。 ");
+  const accountId = String(data.ilink_bot_id || "").trim() || undefined;
+  if (!accountId || state.accountId !== accountId) {
+    state.contextTokens = {};
+    state.syncBuf = undefined;
+  }
   state.token = token;
   state.authState = "recoverable";
   state.credentialsRetained = true;
   state.lastConfirmedAt = now.toISOString();
-  state.accountId = String(data.ilink_bot_id || "").trim() || undefined;
+  state.accountId = accountId;
   state.userId = String(data.ilink_user_id || "").trim() || undefined;
   const baseUrl = String(data.baseurl || "").trim();
   if (baseUrl) state.baseUrl = baseUrl.replace(/\/$/, "");
@@ -325,8 +350,22 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
   }
   patchActiveWeixinStatus(lifecycle, statusPatch(describeWeixinStartup(state)));
   let qrSession: WeixinQrSession | undefined;
+  let attemptId = "";
+  let realName: Awaited<ReturnType<typeof startWeixinRealName>> | undefined;
+  let realNameApproved = false;
+  let realNameAttempts = 0;
+  let qrCount = 0;
   while (lifecycle.active) {
     try {
+      if (hasWeixinLogoutRequest(lifecycle.dataDir)) {
+        await closeWeixinConnection(lifecycle);
+        state = { baseUrl: lifecycle.baseUrl, contextTokens: {}, authState: "never_logged_in", updatedAt: lifecycle.now().toISOString() };
+        lifecycle.writeState(lifecycle.dataDir, state);
+        lifecycle.clearLoginRequest(lifecycle.dataDir);
+        completeWeixinLogout(lifecycle.dataDir);
+        patchActiveWeixinStatus(lifecycle, { ...statusPatch(describeWeixinStartup(state)), accountId: "",
+          qrCode: "", qrCodeImageContent: "", qrCodeDataUrl: "", qrExpiresAt: "", loginAttemptId: "" });
+      }
       if (!state.token) {
         const startup = describeWeixinStartup(state);
         if (!startup.loginRequired) {
@@ -337,6 +376,11 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
           continue;
         }
         if (!lifecycle.hasLoginRequest(lifecycle.dataDir, lifecycle.now())) {
+          qrSession = undefined;
+          realName = undefined;
+          realNameApproved = false;
+          realNameAttempts = 0;
+          qrCount = 0;
           patchActiveWeixinStatus(lifecycle, {
             ...statusPatch(startup),
             qrStatus: "not_requested",
@@ -349,12 +393,41 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
           await lifecycle.sleep(2000, lifecycle.controller.signal);
           continue;
         }
+        if (readWeixinLoginMode(lifecycle.dataDir, lifecycle.now()) === "other" && !realNameApproved) {
+          if (!realName) {
+            realNameAttempts += 1;
+            realName = await startWeixinRealName(lifecycle.controller.signal);
+            const qrCodeDataUrl = await lifecycle.toQrDataUrl(realName.qrContent);
+            patchActiveWeixinStatus(lifecycle, { qrCodeDataUrl, qrStatus: "real_name_required",
+              qrExpiresAt: new Date(realName.expiresAt).toISOString(), message: "请先用本人微信扫描实名授权码。" });
+          }
+          const auth = lifecycle.now().getTime() >= realName.expiresAt ? 3
+            : await pollWeixinRealName(realName.ticket, lifecycle.controller.signal).catch(() => 0);
+          if (auth !== 1) {
+            if (auth === 3 && realNameAttempts < 2) { realName = undefined; continue; }
+            if (auth !== 0) {
+              lifecycle.clearLoginRequest(lifecycle.dataDir);
+              patchActiveWeixinStatus(lifecycle, { qrCodeDataUrl: "", qrStatus: "real_name_failed",
+                message: "微信实名授权未完成，请重新开始。" });
+            }
+            await lifecycle.sleep(1000, lifecycle.controller.signal);
+            continue;
+          }
+          realNameApproved = true;
+        }
         if (!qrSession || lifecycle.now().getTime() - qrSession.startedAt >= 5 * 60 * 1000) {
+          if (++qrCount > 3 || (realName && realName.expiresAt - lifecycle.now().getTime() < 60000)) {
+            lifecycle.clearLoginRequest(lifecycle.dataDir);
+            patchActiveWeixinStatus(lifecycle, { qrCodeDataUrl: "", qrStatus: "expired", message: "微信绑定已超时，请重新开始。" });
+            continue;
+          }
           qrSession = await lifecycle.requestQrSession(
             state.baseUrl,
             lifecycle.botType,
-            lifecycle.controller.signal
+            lifecycle.controller.signal,
+            realName?.ticket
           );
+          attemptId = lifecycle.randomId();
           if (!lifecycle.active) break;
           const qrCodeDataUrl = await lifecycle.toQrDataUrl(qrSession.qrcodeImageContent);
           if (!lifecycle.active) break;
@@ -362,24 +435,31 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
             status: "running",
             loggedIn: false,
             qrStatus: qrSession.status,
+            loginAttemptId: attemptId,
             qrCode: qrSession.qrcode,
             qrCodeImageContent: qrSession.qrcodeImageContent,
             qrCodeDataUrl,
             qrExpiresAt: new Date(qrSession.startedAt + 5 * 60 * 1000).toISOString(),
             lastError: "",
-            message: "请使用手机微信扫码登录个人微信消息端。"
+            message: "请使用手机微信扫码登录微信机器人消息端。"
           });
           appendWeixinRuntimeLog(lifecycle, { event: "qr_ready", message: "Weixin login QR is ready." });
         }
+        const needsPin = qrSession.status.includes("need_verifycode");
+        const pin = needsPin ? await waitForWeixinPin(lifecycle.dataDir, attemptId,
+          qrSession.startedAt + 5 * 60 * 1000 - lifecycle.now().getTime(), lifecycle.controller.signal) : undefined;
+        if (needsPin && !pin) continue;
         const login = await lifecycle.pollQrSession(
           state.baseUrl,
           qrSession,
-          lifecycle.controller.signal
+          lifecycle.controller.signal,
+          pin
         );
         if (!lifecycle.active) break;
         const qrStatus = String(login.status || "wait").trim();
         qrSession.status = qrStatus;
-        patchActiveWeixinStatus(lifecycle, { qrStatus, loggedIn: false });
+        patchActiveWeixinStatus(lifecycle, { qrStatus, loggedIn: false,
+          ...(qrStatus.includes("need_verifycode") ? { message: "请填写手机微信显示的验证码。" } : {}) });
         if (qrStatus === "confirmed") {
           applyConfirmedLogin(state, login, lifecycle.now());
           lifecycle.writeState(lifecycle.dataDir, state);
@@ -392,26 +472,41 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
             qrCode: "",
             qrCodeImageContent: "",
             qrCodeDataUrl: "",
+            loginAttemptId: "",
             accountId: state.accountId,
             lastError: "",
-            message: "个人微信已登录，正在接收消息。"
+            message: "微信机器人已登录，正在接收消息。"
           });
           appendWeixinRuntimeLog(lifecycle, { event: "login_confirmed", message: "Weixin login confirmed." });
-        } else if (qrStatus === "expired") {
+        } else if (qrStatus === "scaned_but_redirect") {
+          const hostname = typeof login.redirect_host === "string" ? login.redirect_host.trim() : "";
+          if (!/^[\w.-]+\.weixin\.qq\.com$/i.test(hostname)) throw new Error("微信返回的扫码接入地址无效。");
+          qrSession.pollBaseUrl = "https://" + hostname;
+        } else if (qrStatus === "expired" || qrStatus === "verify_code_blocked") {
           qrSession = undefined;
+        } else if (qrStatus === "binded_redirect") {
           lifecycle.clearLoginRequest(lifecycle.dataDir);
+          patchActiveWeixinStatus(lifecycle, { qrCodeDataUrl: "", loginAttemptId: "", message: "微信已绑定此机器人。请在微信里核对绑定状态。" });
         } else {
           await lifecycle.sleep(1000, lifecycle.controller.signal);
         }
         continue;
       }
 
-      const updates = await lifecycle.pollUpdates(state, lifecycle.controller.signal);
+      if (!lifecycle.liveState) {
+        lifecycle.liveState = state;
+        await lifecycle.notifyConnection(state, true, lifecycle.controller.signal).catch(() => undefined);
+      }
+      const pollAbort = new AbortController();
+      lifecycle.pollAbort = pollAbort;
+      if (hasWeixinLogoutRequest(lifecycle.dataDir)) continue;
+      const updates = await lifecycle.pollUpdates(state, AbortSignal.any([lifecycle.controller.signal, pollAbort.signal]));
       if (!lifecycle.active) break;
       if (!weixinApiSucceeded(updates)) {
         const failure = applyWeixinPollFailure(state, updates, lifecycle.now());
         state = failure.state;
         if (failure.status.phase === "invalid") {
+          await closeWeixinConnection(lifecycle);
           lifecycle.writeState(lifecycle.dataDir, state);
           qrSession = undefined;
           patchActiveWeixinStatus(lifecycle, statusPatch(failure.status));
@@ -421,22 +516,34 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
       }
       const restored = applyWeixinPollSuccess(state, lifecycle.now());
       state = restored.state;
-      if (updates.get_updates_buf != null) state.syncBuf = String(updates.get_updates_buf);
-      let changed = updates.get_updates_buf != null;
+      const suggestedTimeout = Number(updates.longpolling_timeout_ms);
+      if (Number.isFinite(suggestedTimeout) && suggestedTimeout > 0) state.longPollingTimeoutMs = Math.min(120000, suggestedTimeout + 2000);
+      let changed = false;
       const messages = Array.isArray(updates.msgs) ? updates.msgs : [];
       for (const item of messages) {
         if (!lifecycle.active) break;
         if (!item || typeof item !== "object" || Array.isArray(item)) continue;
         changed = await processInbound(lifecycle, state, item as WeixinInboundMessage) || changed;
       }
-      if (!lifecycle.active) break;
-      if (changed || restored.status.phase === "restored") lifecycle.writeState(lifecycle.dataDir, state);
+      if (!lifecycle.active) {
+        // Keep context from admitted messages, but leave unfinished parts of this batch for the next activation.
+        if (changed) lifecycle.writeState(lifecycle.dataDir, state);
+        break;
+      }
+      if (typeof updates.get_updates_buf === "string" && updates.get_updates_buf) {
+        const next = { ...state, syncBuf: String(updates.get_updates_buf) };
+        lifecycle.writeState(lifecycle.dataDir, next);
+        state = next;
+      } else if (changed || restored.status.phase === "restored") {
+        lifecycle.writeState(lifecycle.dataDir, state);
+      }
       patchActiveWeixinStatus(lifecycle, {
         ...statusPatch(restored.status),
         lastPollAt: lifecycle.now().toISOString()
       });
     } catch (error) {
       if (!lifecycle.active) break;
+      if (hasWeixinLogoutRequest(lifecycle.dataDir)) continue;
       const failure = applyWeixinPollFailure(state, error, lifecycle.now());
       state = failure.state;
       const message = failure.status.error || (error instanceof Error ? error.message : String(error));
@@ -447,12 +554,18 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
   }
 }
 
+async function closeWeixinConnection(lifecycle: WeixinLifecycle): Promise<void> {
+  const state = lifecycle.liveState;
+  lifecycle.liveState = undefined;
+  if (state) await lifecycle.notifyConnection(state, false).catch(() => undefined);
+}
+
 export function createWeixinAdapter(
   dependencies: WeixinAdapterDependencies = {}
 ): MessageAdapter {
   return {
     type: "weixin",
-    start() {
+    start(startup?: { onFailure(cleanup: MessageAdapterDispose): void }) {
       const lifecycle: WeixinLifecycle = {
         active: true,
         controller: new AbortController(),
@@ -461,6 +574,7 @@ export function createWeixinAdapter(
         baseUrl: dependencies.baseUrl?.() ?? config.weixinBaseUrl,
         botType: dependencies.botType?.() ?? config.weixinBotType,
         recentMessageIds: new Set<string>(),
+        pendingDeliveries: new Set<Promise<void>>(),
         now: dependencies.now ?? (() => new Date()),
         sleep: dependencies.sleep ?? waitForDelay,
         readState: dependencies.readState ?? readWeixinState,
@@ -468,7 +582,8 @@ export function createWeixinAdapter(
         requestQrSession: dependencies.requestQrSession ?? requestWeixinQrSession,
         pollQrSession: dependencies.pollQrSession ?? pollWeixinQrSession,
         pollUpdates: dependencies.pollUpdates ?? pollWeixinUpdates,
-        downloadImages: dependencies.downloadImages ?? downloadWeixinImages,
+        notifyConnection: dependencies.notifyConnection ?? notifyWeixinConnection,
+        downloadImages: dependencies.downloadImages ?? downloadWeixinMedia,
         toQrDataUrl: dependencies.toQrDataUrl ?? ((content) => QRCode.toDataURL(content, {
           errorCorrectionLevel: "M",
           margin: 2,
@@ -480,13 +595,27 @@ export function createWeixinAdapter(
         dispatchRecord: dependencies.dispatchRecord ?? dispatchWeixinRecord,
         randomId: dependencies.randomId ?? randomUUID
       };
+      let runPromise: Promise<void> | undefined;
+      let closing: Promise<void> | undefined;
+      let logoutWatcher: fs.FSWatcher | undefined;
+      const stopWork = () => closing ??= (async () => {
+        lifecycle.active = false;
+        lifecycle.controller.abort();
+        logoutWatcher?.close();
+        try { await runPromise; }
+        finally { await Promise.allSettled([closeWeixinConnection(lifecycle), ...lifecycle.pendingDeliveries]); }
+      })();
+      startup?.onFailure(stopWork);
       lifecycle.recentMessageIds = loadRecentMessageIds(lifecycle.memoryDataDir);
       const state = lifecycle.readState(lifecycle.dataDir, lifecycle.baseUrl);
       patchWeixinStatus(lifecycle.dataDir, {
         ...statusPatch(describeWeixinStartup(state)),
         maturity: "experimental"
       }, lifecycle.now());
-      const runPromise = runWeixinAdapter(lifecycle).catch((error) => {
+      logoutWatcher = fs.watch(lifecycle.dataDir, { persistent: false }, (_, filename) => {
+        if ((!filename || filename === WEIXIN_LOGOUT_REQUEST_FILE) && hasWeixinLogoutRequest(lifecycle.dataDir)) lifecycle.pollAbort?.abort();
+      });
+      runPromise = runWeixinAdapter(lifecycle).catch((error) => {
         if (!lifecycle.active) return;
         const message = error instanceof Error ? error.message : String(error);
         patchWeixinStatus(lifecycle.dataDir, {
@@ -498,14 +627,9 @@ export function createWeixinAdapter(
         }, lifecycle.now());
         appendWeixinRuntimeLog(lifecycle, { level: "error", event: "runtime_failed", message });
       });
-      const dispose: MessageAdapterDispose = async () => {
-        if (!lifecycle.active) {
-          await runPromise;
-          return;
-        }
-        lifecycle.active = false;
-        lifecycle.controller.abort();
-        await runPromise;
+      let disposal: Promise<void> | undefined;
+      const dispose: MessageAdapterDispose = () => disposal ??= (async () => {
+        await stopWork();
         patchWeixinStatus(lifecycle.dataDir, {
           status: "disabled",
           polling: false,
@@ -515,10 +639,10 @@ export function createWeixinAdapter(
           qrCodeImageContent: "",
           qrCodeDataUrl: "",
           qrExpiresAt: "",
-          message: "个人微信消息端已停止。"
+          message: "微信机器人消息端已停止。"
         }, lifecycle.now());
         appendWeixinRuntimeLog(lifecycle, { event: "disabled", message: "Weixin adapter disabled" });
-      };
+      })();
       return dispose;
     }
   };

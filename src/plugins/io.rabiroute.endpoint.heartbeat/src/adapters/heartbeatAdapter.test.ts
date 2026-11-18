@@ -179,6 +179,48 @@ test("Heartbeat Fiber supports repeated mounting without accumulating timers", a
   assert.equal(readStatus(dataDir).messageAdapters.heartbeat.status, "disabled");
 });
 
+test("Heartbeat retirement joins the accepted run after closing timer admission", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-heartbeat-drain-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const timers = fakeTimers();
+  let now = Date.parse("2026-08-21T00:00:00.000Z");
+  let finish!: () => void;
+  const accepted = new Promise<void>(resolve => { finish = resolve; });
+  let runs = 0;
+  const adapter = createHeartbeatAdapter({
+    collectTasks: () => [scheduledTask(1)],
+    dataDir: () => dataDir,
+    now: () => new Date(now),
+    nextScheduleTime: (_schedule, date) => new Date((date ?? new Date(0)).getTime() + 1000),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    runTask() { runs++; return accepted; }
+  });
+  const dispose = await adapter.start() as MessageAdapterDispose;
+  try {
+    now += 1000;
+    timers.fire([...timers.active][0]);
+    assert.equal(runs, 1);
+    const stale = timers.records.get([...timers.active][0])?.callback;
+
+    let retired = false;
+    const closing = dispose();
+    void Promise.resolve(closing).then(() => { retired = true; });
+    assert.equal(dispose(), closing);
+    assert.equal(timers.active.size, 0);
+    stale?.();
+    assert.equal(runs, 1);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(retired, false);
+    finish();
+    await closing;
+    assert.equal(readStatus(dataDir).messageAdapters.heartbeat.status, "disabled");
+  } finally {
+    finish();
+    await dispose();
+  }
+});
+
 test("Heartbeat activation failure clears timers created before the failure", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-heartbeat-failure-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));

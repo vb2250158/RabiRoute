@@ -1,5 +1,6 @@
 {
   "endpointType": "heartbeat",
+  "ownsScheduledAutomation": true,
   "routeKeys": [
     "heartbeatIntervalSeconds",
     "heartbeatMessage",

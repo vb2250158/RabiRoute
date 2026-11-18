@@ -66,7 +66,7 @@ test('real approval and CLI save register an independent PC, preserve configurat
   assert.equal(saved.rabiLinkRelay.speechProxyEnabled, false); assert.equal(saved.rabiLinkRelay.enabled, true);
   assert.match(saved.rabiLinkRelay.token, /^rbw_/); assert.notEqual(saved.rabiLinkRelay.token, f.app.token);
   const params = new URLSearchParams({ deviceId: saved.rabiLinkRelay.deviceId, deviceGuid: guid, deviceName: 'Cloud PC', waitMs: '1', capabilities: 'webgui' });
-  const registered = await f.json('/worker/tasks?' + params, { token: saved.rabiLinkRelay.token });
+  const registered = await f.json('/worker/webgui-requests?' + params, { token: saved.rabiLinkRelay.token });
   assert.equal(registered.response.status, 200);
   const peers = await f.json('/api/rabilink/peers', { token: saved.rabiLinkRelay.token });
   assert.equal(peers.response.status, 200);

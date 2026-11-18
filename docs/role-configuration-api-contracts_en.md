@@ -50,4 +50,8 @@ See [code architecture](code-architecture_en.md) and [source hot patches](source
 
 For daily schedules, `timeOfDays` specifies multiple times on one rule and takes precedence over the legacy `timeOfDay` when supplied. Saving unrelated settings does not migrate the stored schedule version.
 
+`config.automationDeliveryTemplates` stores custom delivery templates for the current role. Each entry has `id`, `title`, `triggerType` (`message` or `schedule`), `message`, and `template` (extra instructions). PUT preserves templates when the field is omitted and clears them when it receives an empty array. PATCH accepts an empty array or removes the field with `null`. A template participates in execution after its contents are copied into an automation rule.
+
+Role configuration returns linked routes. A route with a configured primary Agent includes `routes[].primaryAgent` with `type`, `label`, optional `sessionName`, and `hasSessionId`. The automation editor uses these fields to show the current binding.
+
 Automation-rule listing, creation, patching and deletion share this role owner; see [automation rule API](role-automation-api-contracts_en.md). Agents manage roles through public HTTP requests without editing role business files directly.

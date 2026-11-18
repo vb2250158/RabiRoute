@@ -8,6 +8,8 @@ The manifest declares `entries.web.module: "./web/client.mjs"` directly. The com
 
 See the [Agent integration requirements](../../../../docs/agent-adapter-standard-requirements_en.md) for configuration switching and shared-task dependencies, and the [SDK](../../../contracts/plugin-sdk/README_en.md) for lifecycle contracts.
 
+Gateways with scoped handover can adopt a message-processing session binding in place. The existing pool finishes its pending writes before the replacement opens the same store using the latest binding. Shared consumers such as memory consolidation keep their existing lifecycle.
+
 When `dshBaseUrl` is omitted, the existing local DSH discovery uses explicit `DSH_WEB_URL` and original startup-log addresses without a fixed-port fallback. Missing owner addresses are reported as unconfigured and RPC is rejected. Discovery does not start, restart or change DSH. Explicit URLs remain supported.
 ## Native DSH sessions and plugins
 

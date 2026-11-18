@@ -11,11 +11,13 @@ import type {
   PlanFeedbackMessageRecord,
   RolePanelMessageRecord,
   FeishuMessageRecord,
+  QqBotMessageRecord,
   WeComMessageRecord,
   WeixinMessageRecord,
   VoiceTranscriptEventRecord
 } from "../history.js";
 import { systemEventRuleForRouteKind } from "./systemEventRules.js";
+import { isCaptureEventRouteKind } from "../shared/personaEventTypes.js";
 
 export type RouteDecision = {
   route: RouteProfile;
@@ -48,7 +50,11 @@ function expandRouteVariables(pattern: string, variables: Record<string, string>
 }
 
 export function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
-  return "groupId" in record && !isWeComRecord(record) && !isFeishuRecord(record);
+  return "groupId" in record && !isWeComRecord(record) && !isFeishuRecord(record) && !isQqBotRecord(record);
+}
+
+export function isQqBotRecord(record: ForwardRecord): record is QqBotMessageRecord {
+  return "adapterType" in record && record.adapterType === "qqbot";
 }
 
 export function isWeComRecord(record: ForwardRecord): record is WeComMessageRecord {
@@ -88,7 +94,7 @@ export function isVoiceTranscriptRecord(record: ForwardRecord): record is VoiceT
 
 export function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTemplateValues, route?: RouteProfile): Record<string, string> {
   const isGroup = isGroupRecord(record);
-  const groupId = isGroup || isWeComRecord(record) || isFeishuRecord(record) ? record.groupId : undefined;
+  const groupId = isGroup || isWeComRecord(record) || isFeishuRecord(record) || isQqBotRecord(record) ? record.groupId : undefined;
   const variables: Record<string, string> = {
     ...config.routeVariables,
     ...(route?.routeVariables ?? {}),
@@ -143,6 +149,7 @@ export function notificationRuleMatches(
   if (rule.routeKinds.length > 0 && !rule.routeKinds.includes(routeKind)) {
     return false;
   }
+  if (!rule.routeKinds.length && isCaptureEventRouteKind(routeKind)) return false;
 
   if (typeof extraValues.triggerRouteId === "string" && extraValues.triggerRouteId.trim() && route.id !== extraValues.triggerRouteId.trim()) {
     return false;
@@ -153,13 +160,13 @@ export function notificationRuleMatches(
   }
 
   if (rule.targetGroupId?.trim()) {
-    const groupId = isGroupRecord(record) || isWeComRecord(record) || isFeishuRecord(record) ? record.groupId : undefined;
+    const groupId = isGroupRecord(record) || isWeComRecord(record) || isFeishuRecord(record) || isQqBotRecord(record) ? record.groupId : undefined;
     if (groupId == null || String(groupId) !== rule.targetGroupId.trim()) {
       return false;
     }
   }
 
-  if (routeKind === "private" && rule.targetUserId?.trim()) {
+  if ((routeKind === "private" || routeKind === "qqbot_private") && rule.targetUserId?.trim()) {
     if (!("userId" in record) || String(record.userId) !== rule.targetUserId.trim()) return false;
   }
 

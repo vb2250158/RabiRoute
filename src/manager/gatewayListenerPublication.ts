@@ -3,15 +3,32 @@ import { EventEmitter } from "node:events";
 import type { GatewayListenerDescriptor, GatewayListenerAccess } from "@rabiroute/plugin-sdk";
 import { StringDecoder } from "node:string_decoder";
 import { currentPluginActivation, runPluginActivation } from "../plugin-kernel/pluginActivationContext.js";
-import { GATEWAY_LISTENER_PUBLICATION_PREFIX, gatewayListenerOperationId, type GatewayListenerIdentity, type GatewayListenerPublication } from "../runtime/gatewayListenerRuntime.js";
+import { GATEWAY_LISTENER_PUBLICATION_PREFIX, gatewayListenerOperationId, type GatewayEndpointPluginInstance, type GatewayListenerIdentity, type GatewayListenerPublication } from "../runtime/gatewayListenerRuntime.js";
 import type { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import type { ApiExternalListenerBinding, ApiExternalListenerPublication } from "./apiExternalListenerBinding.js";
 
 const MAX_PUBLICATION_LINE_BYTES = 4 * 1024 * 1024;
+const validPluginField = (value: unknown): value is string => typeof value === "string" && value.length > 0 && !/[\u0000-\u001f\u007f]/.test(value);
+
+function parseEndpointPlugins(value: unknown): readonly GatewayEndpointPluginInstance[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const instances: GatewayEndpointPluginInstance[] = [], ids = new Set<string>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") return undefined;
+    const { instanceId, packageId, version, packageHash, activationId, state } = entry;
+    if (!validPluginField(instanceId) || ids.has(instanceId) || !validPluginField(packageId)
+      || !validPluginField(version) || !validPluginField(activationId) || typeof packageHash !== "string"
+      || !/^[a-f0-9]{64}$/.test(packageHash) || (state !== "active" && state !== "initializing")) return undefined;
+    ids.add(instanceId);
+    instances.push(Object.freeze({ instanceId, packageId, version, packageHash, activationId, state }));
+  }
+  return Object.freeze(instances);
+}
 
 /** Connects only the exact child already started by the existing Gateway supervisor. */
 export function createGatewayListenerPublicationHost(registry: ManagerPluginRouteRegistry) {
   type Entry = { child: ChildProcess; identity: GatewayListenerIdentity; publication?: GatewayListenerPublication; invalid: boolean;
+    endpointPlugins?: readonly GatewayEndpointPluginInstance[];
     listenersById: Map<string, ApiExternalListenerPublication>;
     current(): boolean; detach(): void };
   type Projection = { active: boolean; activation: NonNullable<ReturnType<typeof currentPluginActivation>>; sources: Map<Entry, () => void> };
@@ -120,6 +137,7 @@ export function createGatewayListenerPublicationHost(registry: ManagerPluginRout
           if (indexed.has(id)) { indexed.delete(id); duplicates.add(id); }
           else if (!duplicates.has(id)) indexed.set(id, listener);
         }
+        entry.endpointPlugins = parseEndpointPlugins(value.endpointPlugins);
         entry.publication = value; entry.listenersById = indexed; revision = value.revision; entry.invalid = false; changed();
       } catch { entry.publication = undefined; entry.listenersById.clear(); entry.invalid = true; changed(); }
     };
@@ -158,6 +176,12 @@ export function createGatewayListenerPublicationHost(registry: ManagerPluginRout
     return detach;
   }
   return Object.freeze({ attach, readListener, waitForListener, refresh: changed,
+    readEndpointPlugins(gatewayId: string, expectedChild?: ChildProcess) {
+      const entry = attached.get(gatewayId);
+      if (stopped || !entry?.current() || expectedChild && entry.child !== expectedChild
+        || entry.invalid || !entry.publication || !entry.endpointPlugins) return undefined;
+      return Object.freeze({ ...entry.identity, revision: entry.publication.revision, instances: entry.endpointPlugins });
+    },
     /** Activation-owned projection over the one Manager-lifetime parser/cache. Never replays or restarts a child. */
     project() {
       if (stopped) throw new Error("Gateway publication host is closed.");

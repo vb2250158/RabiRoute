@@ -1,6 +1,7 @@
 {
   "type": "grokBot",
   "capability": "agent.adapter.grok-bot@1",
+  "initializationModes": { "gateway": "independent" },
   "manifest": {
     "type": "grokBot",
     "label": "Grok Bot",

@@ -29,14 +29,14 @@ public sealed class RabiAgentPresentation : ApplicationContext {
     readonly ToolStripMenuItem checkUpdate = new ToolStripMenuItem("检查/更新 程序");
     readonly ToolStripMenuItem manager = new ToolStripMenuItem("打开主机管理页");
     readonly ToolStripMenuItem startup = new ToolStripMenuItem("开机启动");
-    readonly ToolStripMenuItem exit = new ToolStripMenuItem("退出 Rabi Agent");
+    readonly ToolStripMenuItem exit = new ToolStripMenuItem("退出此节点");
     bool ownerAlive = true;
 
     public RabiAgentPresentation() {
         windowIcon = new Icon(IconPath);
         trayIcon = new Icon(windowIcon, SystemInformation.SmallIconSize);
         window.Icon = windowIcon;
-        window.Text = "Rabi Agent · 状态与日志";
+        window.Text = "Rabi 节点端 · 状态与日志";
         window.Size = new Size(640, 480);
         window.StartPosition = FormStartPosition.CenterScreen;
         window.ShowInTaskbar = true;
@@ -59,7 +59,7 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         manager.Click += (s,e) => Send("open-manager");
         startup.Click += (s,e) => Send("startup", !startup.Checked);
         exit.Click += (s,e) => Send("exit");
-        tray.Icon = trayIcon; tray.Text = "Rabi Agent · 正在启动";
+        tray.Icon = trayIcon; tray.Text = "Rabi 节点端 · 正在启动";
         tray.ContextMenuStrip = menu; tray.Visible = true;
         tray.DoubleClick += (s,e) => { window.Show(); window.Activate(); };
         // Create the dispatch handle before the reader can publish a snapshot.
@@ -86,7 +86,9 @@ public sealed class RabiAgentPresentation : ApplicationContext {
     bool Flag(Dictionary<string,object> data, string key) { return data.ContainsKey(key) && data[key] is bool && (bool)data[key]; }
     void Render(Dictionary<string,object> data) {
         state.Text = Text(data, "summary");
-        var tooltip = "Rabi Agent · " + state.Text;
+        var nodeLabel = Text(data, "nodeLabel");
+        window.Text = string.IsNullOrEmpty(nodeLabel) ? "Rabi 节点端 · 状态与日志" : "Rabi 节点端 · " + nodeLabel;
+        var tooltip = string.IsNullOrEmpty(nodeLabel) ? "Rabi 节点端 · " + state.Text : "Rabi 节点端 · " + nodeLabel;
         tray.Text = tooltip.Length > 63 ? tooltip.Substring(0,63) : tooltip;
         bool running = Flag(data, "running");
         bool busy = Flag(data, "busy");
@@ -98,7 +100,7 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         manager.Enabled = Flag(data, "canOpenManager");
         startup.Checked = Flag(data, "startup");
         details.Text = Text(data, "details").Replace("\n", Environment.NewLine);
-        Emit(new { type = "rendered", summary = state.Text, startup = startup.Checked, running, visible = tray.Visible, checkUpdate = checkUpdate.Enabled });
+        Emit(new { type = "rendered", summary = state.Text, nodeLabel, startup = startup.Checked, running, visible = tray.Visible, checkUpdate = checkUpdate.Enabled });
     }
     protected override void ExitThreadCore() {
         ownerAlive = false; tray.Visible = false; tray.Dispose(); window.Dispose();

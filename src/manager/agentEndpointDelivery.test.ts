@@ -52,6 +52,31 @@ test("factory accepts a source without cwd, freezes trusted device identity and 
   assert.throws(() => fromDevice.authorize(device), /revoked/);
 });
 
+test("explicit Agent and plan sends address the requested owner despite changes to Route defaults", async () => {
+  const workspace = process.cwd();
+  let routeDshUrl = "http://127.0.0.1:31080";
+  const reads: Array<[string, string, string | undefined]> = [];
+  const context = { store: new AgentRequestStore({ read: () => undefined, write: () => {} }),
+    registry: { localInstanceId: "manager" }, authority: {}, config: {}, receiptDirectory: "unused-memory-receipts",
+    readLocal: async (adapter: string, id: string, options: { dshBaseUrl?: string }) => {
+      reads.push([adapter, id, options.dshBaseUrl]);
+      return { id, title: "Existing task", cwd: workspace, updatedAt: "" };
+    },
+    localOptions: (request: AgentThreadRequest) => ({ allowedWorkspaces: [workspace],
+      ...(request.agentAdapter === "dsh" ? { dshBaseUrl: request.dshBaseUrl || routeDshUrl } : {}) })
+  } as unknown as AgentEndpointDeliveryContext;
+  const options = createAgentEndpointDelivery(context).options();
+  const handoff: AgentThreadRequest = { action: "send", agentAdapter: "codex", threadId: "original-codex-task",
+    cwd: workspace, messageSource: { type: "agent", agentAdapter: "dsh", sessionId: "original-dsh-task", sessionName: "DSH" } };
+  assert.equal((await options.resolveTarget(handoff)).endpoint?.provider, "codex");
+  const dshBaseUrl = "http://127.0.0.1:31082";
+  const feedback: AgentThreadRequest = { action: "send", agentAdapter: "dsh", threadId: "original-dsh-task", cwd: workspace, dshBaseUrl };
+  const target = await options.resolveTarget(feedback);
+  routeDshUrl = "http://127.0.0.1:31083";
+  assert.equal(options.resolveExecutionOptions(feedback, target).dshBaseUrl, dshBaseUrl);
+  assert.deepEqual(reads, [["codex", "original-codex-task", undefined], ["dsh", "original-dsh-task", dshBaseUrl]]);
+});
+
 test("source descriptions do not read a local task or require a registered role", async () => {
   let reads = 0;
   const context = { store: new AgentRequestStore({ read: () => undefined, write: () => {} }),

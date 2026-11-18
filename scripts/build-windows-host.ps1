@@ -25,6 +25,8 @@ function Assert-LocalDirectory([string]$PathValue) {
 }
 
 Assert-LocalDirectory $OutputRoot
+. (Join-Path $scriptDir 'lib/build-output-boundary.ps1')
+$OutputRoot = Assert-BuildOutputBoundary -OutputRoot $OutputRoot -RepositoryRoot $repo
 $artifacts = Join-Path $env:LOCALAPPDATA ("RabiRoute\build\windows-host-artifacts-" + [guid]::NewGuid().ToString("N"))
 $coreProject = Join-Path $repo "desktop\windows-host\RabiRouteHost.csproj"
 $tests = Join-Path $repo "desktop\windows-host\RabiRouteHost.Tests\RabiRouteHost.Tests.csproj"
@@ -41,6 +43,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Windows bootstrap tests failed." }
     }
 
+    $null = Assert-BuildOutputBoundary -OutputRoot $OutputRoot -RepositoryRoot $repo
     if (Test-Path -LiteralPath $OutputRoot) {
         Remove-Item -LiteralPath $OutputRoot -Recurse -Force
     }

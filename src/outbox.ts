@@ -8,6 +8,7 @@ import type { MessageEndpointEgressProvider, MessageEndpointEgressLease } from "
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import type { WeComEndpoint } from "./plugins/io.rabiroute.endpoint.wecom/src/wecom.js";
 import type { FeishuEndpoint } from "./plugins/io.rabiroute.endpoint.feishu/src/feishu.js";
+import type { QqBotMessageRecord } from "./history.js";
 import {
   normalizeRolePanelAttachments,
   type RolePanelAttachment,
@@ -29,11 +30,13 @@ import {
 } from "./rabilinkConversationLedger.js";
 import {
   appendMessageContextToDir,
-  messageContextFromOutboxEvent
+  messageContextFromOutboxEvent,
+  resolveMessageConversationKey
 } from "./messageContextStore.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import { renderMarkdownToPngPages, mermaidDiagramSource, markdownImageSettings, checkMarkdownQuota } from "./markdownImage.js";
 import { QQ_STICKER_ID } from "./shared/qqStickerContract.js";
+import type { AgentSendVariant } from "./agentSendVariant.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -128,9 +131,12 @@ export type AgentReplyRuntime = {
   wecomBotSecret?: string;
   wecomWsUrl?: string;
   feishuAppId?: string;
+  qqbotAccountId?: string;
   feishuAppSecret?: string;
   feishuEventSubscriptionEnabled?: boolean;
   routeProfiles?: AgentReplyRouteProfile[];
+  messageAdapters?: string[];
+  messageAdaptersDisabled?: string[];
   messageAdapterPolicies?: MessageAdapterPolicies;
   rabiLinkRelay?: {
     enabled?: boolean;
@@ -168,6 +174,7 @@ export type AgentReplyOptions = {
   publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<string>;
   /** Trusted native service owner; never accepted from request JSON. */
   endpointEgress?: (capability: string) => MessageEndpointEgressProvider | undefined;
+  sendVariant?: Readonly<{ variant: AgentSendVariant; target: Readonly<Record<string, unknown>> }>;
   rootDir: string;
   routeRoot: string;
   rolesRoot: string;
@@ -1814,7 +1821,70 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     return result;
   }
 
+  if (options.sendVariant) {
+    const { variant, target } = options.sendVariant;
+    const selectedRouteId = route.profile?.id ?? route.runtime.id;
+    const channel = variant.channel as Parameters<typeof messageAdapterPolicyFor>[1];
+    const policy = messageAdapterPolicyFor({ id: route.runtime.id, gatewayPort: 0, messageAdapters: [channel],
+      messageAdapterPolicies: route.runtime.messageAdapterPolicies }, channel);
+    if (!explicitTarget || channel !== request.sendChannel || !route.runtime.messageAdapters?.includes(channel)
+      || route.runtime.messageAdaptersDisabled?.includes(channel) || !policy.outputEnabled || !policy.supportedOutputs.includes("text")) {
+      const result: AgentReplyResult = { ...draft("The selected Route does not allow this endpoint's text output.", text, contextTarget, selectedRouteId), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason!, withDeliveryTrace(result));
+      return result;
+    }
+    options.assertReplySourceCurrent?.();
+    const sent = await variant.send({ deliveryId: variant.deliveryId, gatewayId: route.runtime.id, routeId: selectedRouteId, target,
+      sourceDataDirs: agentReplyDataDirsForRoute(options, route) });
+    const sentMessageId = valueString(sent?.messageId);
+    if (!sentMessageId) throw new Error("The endpoint returned no native send receipt.");
+    const destination = { ...contextTarget, ...sent.target };
+    const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: selectedRouteId, messageId,
+      targetType: destination.targetType, groupId: destination.groupId, userId: destination.userId,
+      instanceId: destination.instanceId, sentMessageId };
+    appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withDeliveryTrace(outboundConversationData(route,
+      destination, { ...context, ...(sent.conversationKey ? { conversationKey: sent.conversationKey } : {}) }, text, result)));
+    return result;
+  }
+
   const routeSourceRecord = "sourceRecord" in route ? route.sourceRecord : undefined;
+  if (contextTarget.adapterType === "qqbot") {
+    const policy = messageAdapterPolicyFor({
+      id: route.runtime.id,
+      gatewayPort: 0,
+      messageAdapters: ["qqbot"],
+      messageAdapterPolicies: route.runtime.messageAdapterPolicies
+    }, "qqbot");
+    const source = messageId?.startsWith("qqbot-") && route.runtime.qqbotAccountId
+      && route.runtime.messageAdapters?.includes("qqbot") && !route.runtime.messageAdaptersDisabled?.includes("qqbot")
+      ? agentReplyDataDirsForRoute(options, route).map(dir => path.join(dir, "qqbot-messages.jsonl"))
+        .map(file => readJsonl(file).find(item => item.messageId === messageId && item.adapterType === "qqbot"
+          && item.gatewayId === route.runtime.id && item.instanceId === route.runtime.qqbotAccountId))
+        .find(Boolean) as QqBotMessageRecord | undefined
+      : undefined;
+    if (!source?.platformMessageId || !policy.outputEnabled || !policy.supportedOutputs.includes("text") || content.kind !== "text" || !text.trim()) {
+      const result: AgentReplyResult = { ...draft("QQ 机器人回复需要当前 Route 的来源消息和已启用的文本发送。", text, contextTarget, routeProfileId), status: "blocked" };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+      return result;
+    }
+    const groupId = source.groupId ?? (!source.dmGuildId ? source.channelId : undefined);
+    const target = sourceRecordFromLog({ ...source, groupId }, groupId ? "group" : "private", "qqbot");
+    try {
+      const send = bind<(source: QqBotMessageRecord, text: string) => Promise<{ messageId: string }>>("qqbot", "reply");
+      const sent = await send(source, text);
+      const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId,
+        targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: target.instanceId, sentMessageId: sent.messageId };
+      const conversationKey = resolveMessageConversationKey({ adapter: "qqbot", gatewayId: source.gatewayId,
+        instanceId: source.instanceId, groupId: source.groupId, userId: source.userId,
+        qqbotChannelId: source.channelId, qqbotDmGuildId: source.dmGuildId });
+      appendOutboxLog(options, route, "info", "qqbot_reply_sent", text.slice(0, 500), outboundConversationData(route, target, { conversationKey }, text, result));
+      return result;
+    } catch (error) {
+      const result: AgentReplyResult = { ...draft(error instanceof Error ? error.message : "QQ 机器人回复失败。", text, target, routeProfileId), status: egressFailureStatus(error) };
+      appendOutboxLog(options, route, "error", "qqbot_reply_failed", result.reason ?? "failed", result);
+      return result;
+    }
+  }
   const loggedTarget = routeSourceRecord ?? findSourceRecord(options, route, messageId);
   const definedContextTarget = Object.fromEntries(
     Object.entries(contextTarget).filter(([, value]) => value !== undefined)

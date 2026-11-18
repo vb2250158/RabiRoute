@@ -3,7 +3,8 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { renameFileWithRetry } from "../shared/filePersistence.js";
-import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_REVIEW_SOURCES, ALL_DAY_REVIEW_TYPES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayMessageSource, hasRecordingSources, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import type { MessageEventCategory } from "../shared/personaEventTypes.js";
 import type { HomeAssistantActivityPort, HomeAssistantActivityRecord, HomeAssistantActivityRequest } from "../shared/homeAssistantActivity.js";
 import { MOBILE_RECORDING_MAX_CHUNKS, MOBILE_RECORDING_TEXT_MAX_CODE_UNITS, MOBILE_RECORDING_EVENT_ID_PATTERN, MOBILE_RECORDING_TRANSCRIPTION_STATES, RESOURCE_HASH_PATTERN } from "./resourceCacheProtocol.js";
 
@@ -363,8 +364,8 @@ export class AllDayRecordingStore {
     return { events, days: [...days].sort(), incompleteDays: [...incompleteDays].sort() };
   }
   async page(roleId: string, direction: "older" | "newer", cursor: { time: number; id: string }, source = "all", limit = 100, eventType = "all", authorize?: RecordingAuthorization) {
-    if (!["all", "asr", "image", "window", "status", "device"].includes(eventType)) throw new Error("Invalid event type");
-    if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || !["all", ...ALL_DAY_SOURCES, "mobile", "session", "systemAudio"].includes(source)) throw new Error("Invalid event cursor");
+    if (!ALL_DAY_REVIEW_TYPES.some(value => value === eventType)) throw new Error("Invalid event type");
+    if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || (source !== "all" && !ALL_DAY_REVIEW_SOURCES.some(value => value === source))) throw new Error("Invalid event cursor");
     const settings = await this.settings(roleId, authorize);
     const directories = [path.join(this.directory(roleId), "events"), ...(settings.mobileDeviceIds.length ? [path.join(this.mobileRoot, "events")] : [])];
     const dates = new Set<string>();
@@ -520,7 +521,7 @@ export class AllDayRecordingService {
         return this.snapshot(roleId, authorize);
       }
       const settings = await this.store.settings(roleId, authorize);
-      if (!ALL_DAY_SOURCES.some(source => settings.sources[source]) && await this.store.enabledRole(authorize) !== roleId) throw new Error("Select at least one recording source");
+      if (!hasRecordingSources(settings) && await this.store.enabledRole(authorize) !== roleId) throw new Error("Select at least one recording source");
       const now = Date.now();
       this.sourceErrors = settings.sources.homeAssistant ? { homeAssistant: "Home Assistant 活动连接尚未就绪" } : {};
       const session: RecordingSession = { homeAssistantSince: settings.sources.homeAssistant ? activityDayStart(now) : undefined, roleId, id: randomUUID(), settings, startedAt: now, audioSince: now, lastSampleAt: null, error: "", stopping: false, windowTitle: null };
@@ -568,6 +569,36 @@ export class AllDayRecordingService {
     }, authorize);
   }
   async dispose() { if (this.session) await this.stop(this.session.roleId, true); }
+  captureAutomationRole(roleId: string | null, event: AllDayEvent): string | undefined {
+    const session = this.session;
+    if (!session || event.startedAt < session.startedAt || (session.stopping && event.source !== "session")) return;
+    if (roleId !== null) return roleId === session.roleId ? roleId : undefined;
+    if (session.settings.mobileDeviceIds.includes(event.deviceId)) return session.roleId;
+  }
+  private pendingMessages = 0;
+  receiveMessage(roleId: string, category: MessageEventCategory, input: { id: string; time: number; text: string }, authorize?: RecordingAuthorization): Promise<boolean> {
+    const enrolled = this.session;
+    if (!enrolled || enrolled.roleId !== roleId || enrolled.stopping || input.time < enrolled.startedAt - 1000 || !enrolled.settings.messageSources?.includes(category)) return Promise.resolve(false);
+    if (this.pendingMessages >= 64) return Promise.reject(new Error("Recording message queue is full"));
+    const directory = this.store.directory(roleId);
+    const assertCurrent = () => {
+      authorize?.();
+      if (this.store.directory(roleId) !== directory) throw new Error("Recording directory changed");
+    };
+    this.pendingMessages++;
+    return this.serialize(async () => {
+      const session = this.session;
+      if (session !== enrolled || session.stopping || !session.settings.messageSources?.includes(category)) return false;
+      const event: AllDayEvent = {
+        id: `message:${category}:${input.id}`, startedAt: input.time, endedAt: input.time,
+        source: allDayMessageSource(category), deviceId: this.store.hostId, kind: "message", text: input.text, state: "saved"
+      };
+      if (await this.store.hasEvent(roleId, event)) return false;
+      await this.store.append(roleId, event, undefined, assertCurrent);
+      this.dependencies.changed(roleId);
+      return true;
+    }, assertCurrent).finally(() => { this.pendingMessages--; });
+  }
   /** Persist the Activity stream under the active recording persona, independent of Agent routing. */
   receiveHomeAssistant(roleId: string, input: HomeAssistantActivityRecord): Promise<boolean> {
     const enrolled = this.session;

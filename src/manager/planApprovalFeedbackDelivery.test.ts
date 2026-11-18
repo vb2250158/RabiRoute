@@ -67,6 +67,27 @@ test("remote feedback and its lost-response readback retain the same endpoint", 
   assert.equal(result.mode, "bound_task"); assert.equal(sends, 1); assert.equal(reads, 1);
 });
 
+test("a plan bound to DSH uses its own endpoint for delivery and receipt readback", async () => {
+  const threadId = "session-e21e4982-f79b-4bb8-b7c1-efad48789afe";
+  const workspace = "C:/fixture/plan";
+  const dshBaseUrl = "http://127.0.0.1:33080";
+  const expected = { agentAdapter: "dsh", threadId, cwd: workspace, dshBaseUrl };
+  const completed = await deliverPlanApprovalFeedback({
+    roleId: "Planner", managerBaseUrl: "http://localhost", feedback,
+    plan: plan({ agentType: "dsh", sessionId: threadId, workspace, baseUrl: dshBaseUrl }),
+    sendToTask: async ({ agentAdapter, threadId, cwd, dshBaseUrl }) => {
+      assert.deepEqual({ agentAdapter, threadId, cwd, dshBaseUrl }, expected);
+      throw new PlanFeedbackDeliveryPendingError("response lost");
+    },
+    readTaskDelivery: async request => {
+      assert.deepEqual(request, { ...expected, deliveryId: feedback.id });
+      return "accepted";
+    },
+    sendToPersona: async () => {}
+  });
+  assert.equal(completed.mode, "bound_task");
+});
+
 test("HTTP 202 without a delivery receipt stays pending and never announces success", async () => {
   let sends = 0;
   const notices: string[] = [];

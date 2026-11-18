@@ -44,6 +44,7 @@ export const activate = definePlugin({
             readJsonBody: runtime.readJsonBody,
             jsonResponse: runtime.jsonResponse,
             receiptResponse: deliveryId => runtime.agentSendReceiptResponse(runtime.rootDir, deliveryId),
+            listSendVariants: runtime.listAgentSendVariants,
             findSendTraces: query => runtime.findAgentSendTraces(runtime.rootDir, query),
             readNodeDeliveryRecords: runtime.readNodeDeliveryRecords,
             controlNodeDeliveryRecord: runtime.controlNodeDeliveryRecord,

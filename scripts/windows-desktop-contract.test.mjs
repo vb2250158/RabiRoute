@@ -448,7 +448,9 @@ test("RabiSpeech legacy service migration is exact, fail-closed, and cannot be r
     /\$excludedRuntimeFiles[\s\S]{0,600}"plugin-adapters\/rabi-speech\/scripts\/install-service\.ps1"/,
   );
   assert.doesNotMatch(installer, /Source: .*plugin-adapters\\rabi-speech/i);
-  assert.match(installer, /Source: "\{#PortableZip\}"/);
+  assert.match(installer, /Source: "\{#CoreArchive\}"; DestName: "component-core\.zip"; Flags: dontcopy/);
+  assert.match(installer, /Source: "\{#DesktopArchive\}"; DestName: "component-desktop\.zip"; Flags: dontcopy/);
+  assert.match(installer, /-ComponentArchiveJsonFile/);
   assert.match(releaseTransaction, /release-manifest\.json/);
 });
 

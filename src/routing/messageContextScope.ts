@@ -15,8 +15,8 @@ export type ForwardMessageContextScope = {
 };
 
 export function messageContextHistoryKindForRouteKind(routeKind: ForwardRouteKind): MessageContextHistoryKind {
-  if (routeKind === "private") return "private";
-  if (["group_message", "direct_at", "direct_reply", "indirect_reply"].includes(routeKind)) return "group";
+  if (routeKind === "private" || routeKind === "qqbot_private" || routeKind === "qqbot_dm") return "private";
+  if (["group_message", "direct_at", "direct_reply", "indirect_reply", "qqbot_group", "qqbot_channel", "qqbot_event"].includes(routeKind)) return "group";
   if (routeKind === "wecom_message") return "wecom";
   if (routeKind === "weixin_message") return "private";
   if (routeKind === "feishu_message") return "feishu";
@@ -45,6 +45,8 @@ export function messageContextScopeForForward(
   if (routeKind === "plan_feedback") return undefined;
   const rawRecord = {
     ...record,
+    ...(routeKind === "qqbot_channel" && "channelId" in record ? { groupId: record.channelId } : {}),
+    ...(routeKind === "qqbot_dm" && "dmGuildId" in record ? { userId: record.dmGuildId } : {}),
     gatewayId: values.gatewayId,
     routeProfileId: "routeProfileId" in record && record.routeProfileId ? record.routeProfileId : values.routeProfileId
   };
