@@ -84,7 +84,11 @@ export function createPluginManagement(options: {
         const error = failure && typeof failure === "object" && "message" in failure ? String(failure.message) : failure;
         return [{
           instanceId: instance.id, pluginId: instance.package, version: instance.version, enabled: installedIds.has(instance.id) && instance.enabled, installed: installedIds.has(instance.id),
-          ...(active?.status === "active" && active.identity.pluginId === instance.package ? { runningVersion: active.identity.version } : {}),
+          ...(active?.status === "active" && active.identity.pluginId === instance.package ? {
+            runningVersion: active.identity.version,
+            runningPackageHash: active.identity.revision,
+            runningActivationId: active.identity.activationId
+          } : {}),
           status: active?.status === "active" ? "active" : retirementStatus ?? active?.status ?? (settingErrors.has(instance.id) ? "settings_error" : !instance.enabled ? "disabled" : loaded.error ? "failed" : "inactive"),
           ...(retiring.length ? { retiringActivations: retiring } : {}),
           retirementDiagnostics: generation.cleanupDiagnostics.filter(row => row.instanceId === instance.id),

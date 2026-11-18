@@ -97,3 +97,8 @@ Here `bridge` is an existing stable host bridge, while `service` and `ownedWorke
 A selected version is located in managed, bundled, then additional roots, followed by package, execution-policy and authorized-root validation. Independently installed packages retain their original content digest across Host updates.
 
 Import checks the same version in every root before reusing an existing package. A differing digest returns `PLUGIN_PACKAGE_VERSION_CONFLICT`; subsequent changes require an incremented plugin version.
+
+
+### Active native package identity
+
+`GET /api/plugins/instances` reports `runningVersion`, `runningPackageHash` and `runningActivationId` from the active native activation. They remain bound to that activation while a configured replacement is pending. Compare the running hash with the accepted package hash and retain the returned application and Manager generation identity.

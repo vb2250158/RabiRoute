@@ -97,3 +97,8 @@ context.publication.add({
 指定版本的目录按 managed、bundled、additional 顺序定位，随后完成包合法性、执行策略与授权目录校验。独立安装的原包跨 Host 更新继续采用其原内容摘要。
 
 导入会核对所有根中的同版本内容摘要，确认相同后复用已有包。任一来源存在同版本内容冲突时返回 `PLUGIN_PACKAGE_VERSION_CONFLICT`，后续差量使用递增插件版本发布。
+
+
+### 活动原生包身份
+
+`GET /api/plugins/instances` 的 `runningVersion`、`runningPackageHash` 和 `runningActivationId` 来自当前活动的原生实例。配置新版本等待采用期间，这些字段继续对应原活动实例。验收时将运行哈希与已验收包哈希比较，并保留同一响应的应用代际和 Manager 身份。

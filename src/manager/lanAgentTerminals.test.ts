@@ -3,6 +3,86 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { LanAgentTerminals, TerminalDispatchNotSentError } from "./lanAgentTerminals.js";
 import { ApiContractError } from "./apiOperationContract.js";
+import { TERMINAL_LIMITS } from "../shared/agentInteractiveProtocol.js";
+
+test("GET restores only the original native session and reports the lost Manager replay", async () => {
+  const terminalId = randomUUID(), calls: Record<string, unknown>[] = [];
+  const hub = new LanAgentTerminals(async (instance, body) => {
+    assert.equal(instance, "original-node"); calls.push(body);
+    return { terminalId, state: "running", pid: 384, nextInputSequence: 431 };
+  });
+  const result = await hub.read("original-node", terminalId) as { terminal: { pid: number; nextInputSequence: number }; truncated: boolean; nextOutputSequence: number; outputEvents: unknown[] };
+  assert.deepEqual(calls, [{ action: "get", terminalId }]);
+  assert.equal(result.terminal.pid, 384); assert.equal(result.terminal.nextInputSequence, 431);
+  assert.equal(result.truncated, true); assert.equal(result.nextOutputSequence, 0); assert.deepEqual(result.outputEvents, []);
+  const events: string[] = [];
+  const stop = hub.subscribe("original-node", terminalId, 0, event => events.push(event.type));
+  assert.deepEqual(events, ["gap"]);
+  hub.receive("original-node", { terminalId, type: "output", data: "new output" });
+  assert.deepEqual(events, ["gap", "output"]); stop();
+  const current = await hub.read("original-node", terminalId, 1) as { truncated: boolean };
+  assert.equal(current.truncated, false);
+  await assert.rejects(hub.read("original-node", terminalId, 431), { code: "TERMINAL_OUTPUT_CURSOR_INVALID" });
+  assert.ok(calls.every(body => body.action === "get"));
+});
+
+test("restoration preserves native missing errors and rejects another session or revoked authority", async () => {
+  const terminalId = randomUUID(), missing = new Error("Original SDK terminal not found");
+  const absent = new LanAgentTerminals(async () => { throw missing; });
+  await assert.rejects(absent.read("node", terminalId), error => error === missing);
+  assert.throws(() => absent.subscribe("node", terminalId, 0, () => {}), /not found/);
+  const foreign = new LanAgentTerminals(async () => ({ terminalId: randomUUID(), state: "running" }));
+  await assert.rejects(foreign.read("node", terminalId), /different session identity/);
+  assert.throws(() => foreign.subscribe("node", terminalId, 0, () => {}), /not found/);
+  let authorized = true;
+  const revoked = new LanAgentTerminals(async () => { authorized = false; return { terminalId, state: "running" }; });
+  await assert.rejects(revoked.read("node", terminalId, 0, 0, () => { if (!authorized) throw new Error("Original authorization revoked"); }), /authorization revoked/);
+  assert.throws(() => revoked.subscribe("node", terminalId, 0, () => {}), /not found/);
+});
+
+test("disconnect invalidates a pending original lookup before its replay cache can be restored", async () => {
+  const terminalId = randomUUID();
+  let finish!: (value: unknown) => void;
+  const hub = new LanAgentTerminals(() => new Promise(resolve => { finish = resolve; }));
+  const pending = hub.read("node", terminalId);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  hub.disconnect("node"); finish({ terminalId, state: "running" });
+  await assert.rejects(pending, /connection changed/);
+  assert.throws(() => hub.subscribe("node", terminalId, 0, () => {}), /not found/);
+});
+
+test("same-ID restoration preserves a concurrently admitted original bucket and its observed output", async () => {
+  const terminalId = randomUUID();
+  let finish!: (value: unknown) => void;
+  const calls: string[] = [];
+  const hub = new LanAgentTerminals(async (_instance, body) => {
+    calls.push(String(body.action));
+    if (body.action === "get") return new Promise(resolve => { finish = resolve; });
+    return { terminalId, state: "running" };
+  });
+  const pending = hub.read("node", terminalId);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await hub.execute("node", { action: "open", terminalId });
+  hub.receive("node", { terminalId, type: "output", data: "already observed" });
+  finish({ terminalId, state: "running" });
+  const result = await pending as { truncated: boolean; outputEvents: Array<{ data?: string }> };
+  assert.equal(result.truncated, false); assert.equal(result.outputEvents[0]?.data, "already observed");
+  assert.deepEqual(calls, ["get", "open"]);
+});
+
+test("pending restoration is bounded at128 unique IDs while the same ID shares its original GET", async () => {
+  let release!: () => void, calls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const hub = new LanAgentTerminals(async (_instance, body) => { calls++; await gate; return { terminalId: body.terminalId, state: "running" }; });
+  const ids = Array.from({ length: TERMINAL_LIMITS.transportSessions }, () => randomUUID());
+  const pending = ids.map(id => hub.read("node", id));
+  const shared = hub.read("node", ids[0]!);
+  await assert.rejects(hub.read("node", randomUUID()), /recovery capacity/);
+  assert.equal(calls, TERMINAL_LIMITS.transportSessions);
+  release(); await Promise.all([...pending, shared]);
+  assert.equal(calls, TERMINAL_LIMITS.transportSessions);
+  await assert.rejects(hub.read("node", randomUUID()), /replay capacity/);
+});
 
 test("invalid output cursors and waits expose same-terminal reads without invoking input", async () => {
   let calls = 0, events = 0;

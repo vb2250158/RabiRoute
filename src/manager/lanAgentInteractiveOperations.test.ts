@@ -93,15 +93,30 @@ test('remote file lookup transport failure is not a parameter or missing-file re
   assert.equal(body.reason, 'remote_query_failed'); assert.equal(body.uncertain, undefined); assert.equal(f.calls.length, 0);
 });
 
-test('an unopened terminal read returns exact same-instance discovery without opening or replaying input', { timeout: 15000 }, async t => {
+test('a fresh Manager restores an existing SDK terminal through GET without opening or replaying input', { timeout: 15000 }, async t => {
   const f = await fixture(t);
+  f.sessions.set(f.terminalId, { terminalId: f.terminalId, shell: 'cmd', cwd: 'fixture-private-cwd', state: 'running',
+    createdAt: new Date().toISOString(), nextInputSequence: 431, pid: 384 });
+  const response = await f.client.invokeOperation('manager.lan-agent.terminals.read', { path: f.target, query: { after: 0, waitMs: 0 } });
+  assert.equal(response.statusCode, 200, String(response.body));
+  const body = JSON.parse(String(response.body));
+  assert.equal(body.data.terminal.terminalId, f.terminalId); assert.equal(body.data.terminal.pid, 384);
+  assert.equal(body.data.terminal.nextInputSequence, 431); assert.equal(body.data.truncated, true);
+  assert.equal(body.data.nextOutputSequence, 0); assert.deepEqual(body.data.outputEvents, []);
+  assert.equal(f.calls.length, 1); assert.deepEqual(f.calls[0]!.params, { action: 'get', terminalId: f.terminalId });
+  assert.equal(f.sessions.size, 1);
+});
+
+test('a fresh Manager returns the original SDK missing-terminal error without opening a replacement', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  f.intercept(message => {
+    f.socket.send(JSON.stringify({ type: 'managementResult', requestId: message.requestId, error: 'Original SDK terminal not found' }));
+    return true;
+  });
   const response = await f.client.invokeOperation('manager.lan-agent.terminals.read', { path: f.target, query: { after: 0, waitMs: 0 } });
   assert.equal(response.statusCode, 400, String(response.body));
-  const body = JSON.parse(String(response.body)); assert.equal(body.errorCode, 'TERMINAL_STREAM_NOT_FOUND');
-  assert.equal(body.field, 'path.terminalId'); assert.equal(body.reason, 'terminal_stream_not_open');
-  assert.deepEqual(body.help, { method: 'GET', path: `/api/lan-agent/instances/${f.instanceId}/terminals` });
-  assert.match(body.repair, /data.shells/); assert.match(body.repair, /"action":"open"/); assert.ok(body.repair.includes(f.terminalId));
-  assert.equal(body.retryable, false); assert.equal(f.calls.length, 0); assert.equal(f.sessions.size, 0);
+  assert.match(String(response.body), /Original SDK terminal not found/);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0]!.params.action, 'get'); assert.equal(f.sessions.size, 0);
 });
 
 test('terminal cursor and wait errors survive registered HTTP with no extra connector actions', { timeout: 15000 }, async t => {

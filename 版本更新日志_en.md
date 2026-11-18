@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.39 - 2026-11-19
+
+- Observe the compiled WebRTC channel-open timeout immediately while preserving caller errors and joining accepted signaling work. Core 0.1.12 restores existing terminal read views after Manager generation changes while retaining the original process, input sequence and output-gap evidence. Plugin instance reads expose the active package hash and activation ID for adoption verification.
+
 ## 0.15.38 - 2026-11-19
 
 - Desktop Assistant 0.2.3 includes the updated execution detail presentation.

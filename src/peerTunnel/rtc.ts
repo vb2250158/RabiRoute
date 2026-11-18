@@ -87,6 +87,7 @@ export class TunnelRtc {
         signal.addEventListener("abort", cancelled, { once: true });
         if (signal.aborted) cancelled(); else if (channel.readyState === "open") finish();
       }));
+      void opened.catch(rejectAbort);
       const producer = this.track((async () => {
         await peer.setLocalDescription(await peer.createOffer());
         signal.throwIfAborted();

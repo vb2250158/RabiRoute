@@ -72,7 +72,7 @@ test("standalone worker resolves host API from frozen input outside the reposito
   const { bundleMessageEndpointWorker } = await import(new URL("../../scripts/build-message-endpoint-runtime.mjs", import.meta.url).href);
   const entry = path.join(directory, "worker.mjs");
   const built = await bundleMessageEndpointWorker(directory, { source }, entry, { dependencyRoot: packageRoot });
-  const inputPaths = await Promise.all(built.inputs.map(input => fs.realpath(input)));
+  const inputPaths = await Promise.all(built.inputs.map((input: string) => fs.realpath(input)));
   assert.ok(inputPaths.includes(await fs.realpath(path.join(directory, "src/shared/fixture.ts"))));
   assert.equal((await import(pathToFileURL(entry).href)).value, "frozen-input");
 });

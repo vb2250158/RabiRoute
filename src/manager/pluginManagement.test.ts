@@ -266,11 +266,13 @@ test("configured package upgrade reports the original running version until nati
   const management = createPluginManagement({ runtime: f.runtime, settings: f.settings,
     manifest: async () => ({ ...original.manifest, version: "2.0.0" }), reconcile: async () => {} });
   const result = await management.list({ assertCurrent() {} }) as {
-    instances: { version: string; runningVersion?: string; status: string }[]
+    instances: { version: string; runningVersion?: string; runningPackageHash?: string; runningActivationId?: string; status: string }[]
   };
   assert.equal(result.instances[0]?.version, "2.0.0");
   assert.equal(result.instances[0]?.runningVersion, original.identity.version);
   assert.equal(result.instances[0]?.runningVersion, "1.0.0");
+  assert.equal(result.instances[0]?.runningPackageHash, original.identity.revision);
+  assert.equal(result.instances[0]?.runningActivationId, original.identity.activationId);
   assert.equal(result.instances[0]?.status, "active");
   assert.equal(f.runtime.current().records[0]?.identity.activationId, original.identity.activationId);
 });
