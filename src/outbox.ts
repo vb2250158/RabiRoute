@@ -170,6 +170,8 @@ export type AgentPlanFeedbackSubmitPort = (
 export type AgentReplyOptions = {
   /** Trusted quoted-source guard; recheck immediately before each QQ provider call. */
   assertReplySourceCurrent?: () => void;
+  /** Original Manager call authority. Rechecked after resolving any managed variant attachment. */
+  assertVariantAuthority?: () => void;
   /** Published HTML feature owner; ordinary replies have no dependency on it. */
   publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<string>;
   /** Trusted native service owner; never accepted from request JSON. */
@@ -209,7 +211,7 @@ export type AgentReplyOptions = {
 
 export type AgentReplyResult = {
   ok: boolean;
-  status: "sent" | "draft" | "blocked" | "failed";
+  status: "sent" | "acknowledged" | "draft" | "blocked" | "failed";
   reason?: string;
   deliveryError?: NapCatRequestError["diagnostic"];
   routeProfileId?: string;
@@ -219,6 +221,7 @@ export type AgentReplyResult = {
   userId?: string;
   instanceId?: string;
   sentMessageId?: string;
+  receiptMode?: "ack-only";
   sentFileId?: string;
   sentFileName?: string;
   draft?: {
@@ -1754,7 +1757,9 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
   const publishRabiLinkRelayMessage = bind<typeof import("./plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.js").publishRabiLinkRelayMessage>("rabilink", "publishRabiLinkRelayMessage");
   const uploadRabiLinkRelayAttachment = bind<typeof import("./plugins/io.rabiroute.endpoint.rabilink/src/adapters/rabilinkRelayWorker.js").uploadRabiLinkRelayAttachment>("rabilink", "uploadRabiLinkRelayAttachment");
   const requestLocalSpeech = bind<typeof import("./speech/localSpeechClient.js").requestLocalSpeech>("speech", "requestLocalSpeech");
-  const content = requestContent(request);
+  const content: ReplyContent = options.sendVariant
+    ? { kind: "text", text: options.sendVariant.variant.text, message: [] }
+    : requestContent(request);
   const text = content.text;
   const context = contextObject(request);
   const explicitTarget = request.explicitTarget === true;
@@ -1827,24 +1832,49 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     const channel = variant.channel as Parameters<typeof messageAdapterPolicyFor>[1];
     const policy = messageAdapterPolicyFor({ id: route.runtime.id, gatewayPort: 0, messageAdapters: [channel],
       messageAdapterPolicies: route.runtime.messageAdapterPolicies }, channel);
+    const kinds = text.trim() || !variant.mediaKinds.length ? ["text" as const, ...variant.mediaKinds] : variant.mediaKinds;
     if (!explicitTarget || channel !== request.sendChannel || !route.runtime.messageAdapters?.includes(channel)
-      || route.runtime.messageAdaptersDisabled?.includes(channel) || !policy.outputEnabled || !policy.supportedOutputs.includes("text")) {
-      const result: AgentReplyResult = { ...draft("The selected Route does not allow this endpoint's text output.", text, contextTarget, selectedRouteId), status: "blocked" };
+      || route.runtime.messageAdaptersDisabled?.includes(channel) || !policy.outputEnabled || kinds.some(kind => !policy.supportedOutputs.includes(kind))) {
+      const result: AgentReplyResult = { ...draft("The selected Route does not allow this endpoint's requested output.", text, contextTarget, selectedRouteId), status: "blocked" };
       appendOutboxLog(options, route, "warning", "reply_blocked", result.reason!, withDeliveryTrace(result));
       return result;
     }
-    options.assertReplySourceCurrent?.();
-    const sent = await variant.send({ deliveryId: variant.deliveryId, gatewayId: route.runtime.id, routeId: selectedRouteId, target,
-      sourceDataDirs: agentReplyDataDirsForRoute(options, route) });
-    const sentMessageId = valueString(sent?.messageId);
-    if (!sentMessageId) throw new Error("The endpoint returned no native send receipt.");
-    const destination = { ...contextTarget, ...sent.target };
-    const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: selectedRouteId, messageId,
-      targetType: destination.targetType, groupId: destination.groupId, userId: destination.userId,
-      instanceId: destination.instanceId, sentMessageId };
-    appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withDeliveryTrace(outboundConversationData(route,
-      destination, { ...context, ...(sent.conversationKey ? { conversationKey: sent.conversationKey } : {}) }, text, result)));
-    return result;
+    if (agentReplyPersonaDeviceId(route) && variant.attachments.some(attachment => "planAttachment" in attachment)) {
+      const result: AgentReplyResult = { ok: false, status: "blocked", routeProfileId: selectedRouteId, messageId,
+        reason: "REMOTE_PERSONA_OWNER_REQUIRED: a remote persona plan attachment cannot be resolved through local plan storage." };
+      appendOutboxLog(options, route, "warning", "reply_blocked", result.reason!, withDeliveryTrace(result));
+      return result;
+    }
+    type ResolvedAttachment = NonNullable<Parameters<AgentSendVariant["send"]>[0]["attachments"]>[number];
+    const send = async (attachments: readonly ResolvedAttachment[]): Promise<AgentReplyResult> => {
+      const attachment = variant.attachments[attachments.length];
+      if (attachment) {
+        const next = (file: { path: string; fileName: string }) => send([...attachments, { kind: attachment.kind, ...file }]);
+        if ("fileId" in attachment) {
+          if (!options.withManagedGroupFile) throw new Error("Managed upload resolver is unavailable for this route.");
+          return options.withManagedGroupFile(attachment.fileId, attachment.fileSha256, next);
+        }
+        const reference = managedPlanAttachmentReference({ planAttachment: attachment.planAttachment }, attachment.kind)!;
+        return resolveManagedPlanAttachment(options, reference, next);
+      }
+      options.assertVariantAuthority?.();
+      options.assertReplySourceCurrent?.();
+      const sent = await variant.send({ deliveryId: variant.deliveryId, gatewayId: route.runtime.id, routeId: selectedRouteId, target,
+        sourceDataDirs: agentReplyDataDirsForRoute(options, route), ...(attachments.length ? { attachments } : {}) });
+      const destination = { ...contextTarget, ...sent.target };
+      const result = { ok: true, routeProfileId: selectedRouteId, messageId,
+        targetType: destination.targetType, groupId: destination.groupId, userId: destination.userId, instanceId: destination.instanceId };
+      if ("acknowledged" in sent) {
+        const ack: AgentReplyResult = { ...result, status: "acknowledged", receiptMode: "ack-only" };
+        appendOutboxLog(options, route, "info", "reply_acknowledged", "Native action acknowledged.", withDeliveryTrace(ack));
+        return ack;
+      }
+      const message: AgentReplyResult = { ...result, status: "sent", sentMessageId: sent.messageId };
+      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withDeliveryTrace(outboundConversationData(route,
+        destination, { ...context, ...(sent.conversationKey ? { conversationKey: sent.conversationKey } : {}) }, text, message)));
+      return message;
+    };
+    return send([]);
   }
 
   const routeSourceRecord = "sourceRecord" in route ? route.sourceRecord : undefined;

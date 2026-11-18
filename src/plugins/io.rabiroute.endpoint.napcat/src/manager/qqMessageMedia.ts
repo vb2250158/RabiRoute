@@ -29,7 +29,7 @@ export async function boundedBytes(response: Response, max: number, limitSetting
 }
 
 /** Shared finite HTTP byte owner for materialized reads and explicit streaming verification. */
-export async function consumeBoundedQqBytes(response: Response, max: number, consume: (chunk: Uint8Array) => void,
+export async function consumeBoundedQqBytes(response: Response, max: number, consume: (chunk: Uint8Array) => unknown,
   signal?: AbortSignal, limitSetting?: string, completeResource = false): Promise<number> {
   if (!response.ok || !response.body) {
     await response.body?.cancel().catch(() => undefined);
@@ -52,12 +52,17 @@ export async function consumeBoundedQqBytes(response: Response, max: number, con
     if (Number(response.headers.get("content-length")) > max) throw tooLarge();
     for (;;) {
       signal?.throwIfAborted();
-      const item = await reader.read();
+      let item: ReadableStreamReadResult<Uint8Array>;
+      try { item = await reader.read(); }
+      catch {
+        signal?.throwIfAborted();
+        throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
+      }
       signal?.throwIfAborted();
       if (item.done) break;
       if (item.value.length > max - size) throw tooLarge();
       size += item.value.length;
-      consume(item.value);
+      await consume(item.value);
     }
     return size;
   } finally { signal?.removeEventListener("abort", aborted); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
@@ -201,6 +206,14 @@ export async function readQqMedia(endpoint: NapCatEndpoint, media: QqMedia, sign
 
 /** Internal only: accepts metadata resolved by a fixed authorized native action. No public URL input. */
 export async function readResolvedQqMediaBytes(result: Record<string, unknown>, media: QqMedia, signal: AbortSignal, transport: typeof fetch = fetch, options: QqMediaReadOptions = {}): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  await consumeResolvedQqMediaBytes(result, media, signal, chunk => { chunks.push(Buffer.from(chunk)); }, transport, options);
+  return Buffer.concat(chunks);
+}
+
+/** The same authorized native-URL byte owner, with awaited sink backpressure for bounded artifact storage. */
+export async function consumeResolvedQqMediaBytes(result: Record<string, unknown>, media: QqMedia, signal: AbortSignal,
+  consume: (chunk: Uint8Array) => void | Promise<void>, transport: typeof fetch = fetch, options: QqMediaReadOptions = {}): Promise<number> {
   // NapCat resolves the selected attachment; CDN host names and ports are not permissions.
   const QQ_MEDIA_MAX_BYTES = qqReadSettings.mediaBytes;
   if (Number(result.file_size) > QQ_MEDIA_MAX_BYTES) throw new QqReadError(413, "QQ_MEDIA_TOO_LARGE");
@@ -211,9 +224,15 @@ export async function readResolvedQqMediaBytes(result: Record<string, unknown>, 
   }
   const url = resolvedQqMediaUrl(value);
   const completeFile = media.kind === "file" && options.mode === "url-only";
-  const bytes = await boundedBytes(await transport(url, { signal, redirect: "follow" }), QQ_MEDIA_MAX_BYTES, "RABIROUTE_QQ_MEDIA_MAX_BYTES", completeFile);
-  if (!bytes.length && !allowEmptyFile) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
-  return bytes;
+  let response: Response;
+  try { response = await transport(url, { signal, redirect: "follow" }); }
+  catch {
+    signal.throwIfAborted();
+    throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
+  }
+  const size = await consumeBoundedQqBytes(response, QQ_MEDIA_MAX_BYTES, consume, signal, "RABIROUTE_QQ_MEDIA_MAX_BYTES", completeFile);
+  if (!size && !allowEmptyFile) throw new QqReadError(422, "QQ_MEDIA_EMPTY");
+  return size;
 }
 
 /** Shared internal native-result URL validation; callers never supply a public URL argument. */

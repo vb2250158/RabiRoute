@@ -66,11 +66,13 @@ test("attachment relocation still verifies metadata before accepting the archive
 });
 
 test("the actual Manager send caller passes the same identity and forwards the owner's canonical result", () => {
-  const text = fs.readFileSync(new URL("./manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
-  const source = ts.createSourceFile("controlPlaneRoutes.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const routes = fs.readFileSync(new URL("./manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
+  assert.match(routes, /resolveSendManagedPlanAttachment<T>\([\s\S]*?resolveManagedPlanAttachment\(roleDirForApi, reference\);\s*return send\(\{ path: filePath, fileName \}\);/);
+  const text = fs.readFileSync(new URL("./manager/managedEndpointAttachment.ts", import.meta.url), "utf8");
+  const source = ts.createSourceFile("managedEndpointAttachment.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   let caller: ts.FunctionDeclaration | undefined;
   const find = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "resolveSendManagedPlanAttachment") caller = node;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "resolveManagedPlanAttachment") caller = node;
     ts.forEachChild(node, find);
   };
   find(source);
@@ -89,14 +91,14 @@ test("the actual Manager send caller passes the same identity and forwards the o
   assert.equal(result?.initializer, resolveCalls[0]);
   assert.deepEqual(resolveCalls[0]!.arguments.map(arg => arg.getText(source)), ["roleDir", "plan.id", "attachment"]);
   assert.ok(!calls.some(call => call.expression.getText(source).startsWith("fs.")), "parent must not repeat the storage owner's I/O");
-  const send = calls.find(call => call.expression.getText(source) === "send");
-  assert.ok(send && ts.isObjectLiteralExpression(send.arguments[0]!));
-  const values = Object.fromEntries(send.arguments[0].properties.filter(ts.isPropertyAssignment)
+  const returned = body.statements.find(ts.isReturnStatement)?.expression;
+  assert.ok(returned && ts.isObjectLiteralExpression(returned));
+  const values = Object.fromEntries(returned.properties.filter(ts.isPropertyAssignment)
     .map(property => [property.name.getText(source), property.initializer.getText(source)]));
-  assert.deepEqual(values, { path: "realFile", fileName: "attachment.name" });
+  assert.deepEqual(values, { path: "realFile", fileName: "attachment.name", sha256: "attachment.sha256", bytes: "attachment.size" });
   const callerText = body.getText(source);
   assert.match(callerText, /sanitizeRoleId\(reference\.roleId \?\? ""\)/);
-  assert.match(callerText, /roleDirForApi\(roleId\)/);
+  assert.match(callerText, /roleDirectory\(roleId\)/);
   assert.match(callerText, /getPlan\(roleDir, reference\.planId\)/);
   assert.match(callerText, /item\.id === reference\.attachmentId/);
   assert.match(callerText, /attachment\.kind !== "image" && attachment\.kind !== "file"/);

@@ -3,12 +3,10 @@ import { definePlugin, ownMessageEndpointEgress, ownMessageEndpointScan } from "
 import { createImplementation, hostModules } from "./manager-runtime.mjs";
 
 export const activate = definePlugin({ async activate(context) {
-  const host = context.services.require("host.message-endpoints@3");
+  const host = context.services.require("host.message-endpoints@4");
   await host.prepareModules(egressModules);
-  const { createNapcatGroupForward, ...egress } = createEgress(host);
-  const groupForward = createNapcatGroupForward(host.manager.readRoute);
-  ownMessageEndpointEgress(context, { type: "napcat", operations: { ...egress, sendGroupForwardVariant: groupForward.sendGroupForwardVariant },
-    sendVariants: [groupForward.variant] });
+  const egress = createEgress(host);
+  const groupForward = egress.createNapcatGroupForward(host.manager.readRoute);
   await host.prepareModules(hostModules);
   const implementation = createImplementation(host);
   const owner = implementation.createNapcatManagerOwner(host.manager, host.managers.current("napcat"), context.lifecycle.signal);
@@ -48,7 +46,7 @@ export const activate = definePlugin({ async activate(context) {
 });
   ownMessageEndpointScan(context, { type: "napcat", label: "NapCat / OneBot", maturity: "verified", scan: owner.scan });
   let accepting = false, started = false, startupAttempted = false, published = false;
-  let registration, retirement;
+  let registration, retirement, reactive, managementContext;
   const flights = new Set();
   const assertAccepting = () => { if (!accepting) throw new Error("NapCat endpoint is not accepting actions."); };
   const controlContext = owner.context(assertAccepting);
@@ -58,6 +56,25 @@ export const activate = definePlugin({ async activate(context) {
     void operation.then(() => flights.delete(operation), () => flights.delete(operation));
     return operation;
   };
+  const nativeEgressContext = {
+    route: host.manager.readRoute, local: host.manager.requestIsLoopback,
+    resolveNativeDirectory: (binding, signal, authorize) => implementation.resolveNapcatWebuiNativeDirectory({ ...managementContext,
+      openManagementSession: (selection, requestSignal) => implementation.openNapcatWebuiManagementSession(owner.context(selection.assertCurrent), selection, requestSignal)
+    }, binding, signal, authorize)
+  };
+  const nativeProducers = implementation.createNapcatNativeEgressProducers(nativeEgressContext);
+  const quickReply = implementation.createNapcatQuickReplyProducer(nativeEgressContext);
+  const publicEgress = Object.fromEntries(["readReplySource", "getLoginInfo", "sendGroupMessage", "sendPrivateMessage",
+    "uploadGroupFile", "uploadPrivateFile", "readNapCatGroupFiles", "napcatStickerMessage"].map(name => [name, egress[name]]));
+  ownMessageEndpointEgress(context, { type: "napcat", operations: {
+    ...publicEgress, sendGroupForwardVariant: groupForward.sendGroupForwardVariant,
+    ...Object.fromEntries(nativeProducers.map(producer => [producer.variant.operation, producer.send])),
+    [quickReply.variant.operation]: quickReply.send
+  }, sendVariants: [groupForward.variant, ...nativeProducers.map(producer => producer.variant), quickReply.variant],
+    async dispose() {
+      await dispose();
+      if (published && host.managers.current("napcat")?.resources !== owner.resources) await owner.stopResources();
+    } });
   const supervisor = new implementation.NapcatSupervisorService({
     restartDelayMs: 30000,
     async run(signal) {
@@ -89,9 +106,7 @@ export const activate = definePlugin({ async activate(context) {
     accepting = false;
     hook.dispose();
     const retired = registration?.dispose();
-    const results = await Promise.allSettled([supervisor.stop(), retired, ...flights]);
-    if (published && host.managers.current("napcat")?.resources !== owner.resources)
-      results.push(...await Promise.allSettled([owner.stopResources()]));
+    const results = await Promise.allSettled([supervisor.stop(), retired, reactive?.dispose(), ...flights]);
     const failures = results.filter(result => result.status === "rejected");
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), "NapCat endpoint retirement failed.");
   })();
@@ -124,26 +139,71 @@ export const activate = definePlugin({ async activate(context) {
       route: host.manager.readRoute,
       assertCurrent: assertAccepting
     };
-    const managementContext = {
+    managementContext = {
       ...apiContext,
+      resourceObjects: host.manager.resourceObjects,
+      protectedResourceObjects: host.manager.protectedResourceObjects,
       route: host.manager.readRoute,
+      acquireNativeFileLease() {
+        let release;
+        const held = new Promise(resolve => { release = resolve; });
+        flights.add(held);
+        let active = true;
+        return { assertCurrent() { if (!active) throw new Error("Native directory lease is released."); },
+          release() { if (active) { active = false; flights.delete(held); release(); } } };
+      },
+      prepareWebuiToken: (selection, operationId) => implementation.prepareNapcatWebuiTokenCommit({
+        assertCurrent: assertAccepting,
+        readRoutes: host.manager.readRoutes,
+        routeVersion: host.manager.routeVersion,
+        writeRoute: host.manager.writeRoute,
+        resolveRouteMutation: host.manager.resolveRouteMutation,
+        syncRoutes: host.manager.syncRoutes,
+        inspectSource: (binding, token) => implementation.verifyNapcatWebuiTokenCommitSource(controlContext, binding, token)
+      }, selection, operationId),
       openManagementSession: (selection, signal) => implementation.openNapcatWebuiManagementSession(controlContext, selection, signal)
     };
     const manifest = implementation.readNapcatApiManifest();
     const sourceFileOperations = implementation.createSourceFileOperations(apiContext);
-    const sourceOperationIds = new Set(sourceFileOperations.map(operation => operation.contract.operationId));
+    const artifactOperations = implementation.createNapcatArtifactOperations({
+      ...apiContext,
+      resourceObjects: host.manager.resourceObjects,
+      protectedResourceObjects: host.manager.protectedResourceObjects
+    });
+    const egressContext = { ...apiContext, submitAgentSendVariant: host.manager.submitAgentSendVariant };
+    const nativeContext = { ...apiContext, resolveQuickRequest: (selection, eventRef, signal) =>
+      implementation.readNapcatQuickRequestContext(host.manager.protectedResourceObjects, selection, eventRef, selection.assertCurrent, signal) };
+    const nativeOperations = implementation.createNapcatApiOperations(nativeContext, implementation.createNapcatApiDescriptors(manifest));
+    const nativeByAction = new Map(nativeOperations.map(operation => [operation.contract.operationId, operation]));
+    const specific = [
+      ...sourceFileOperations, ...artifactOperations,
+      ...implementation.createNapcatDownloadStreamOperations(apiContext),
+      ...implementation.createNapcatNativeEgressOperations(egressContext),
+      ...implementation.createNapcatFileResourceOperations({ ...apiContext, resourceObjects: host.manager.resourceObjects,
+        protectedResourceObjects: host.manager.protectedResourceObjects, withManagedAttachment: host.manager.withManagedAttachment }),
+      implementation.createNapcatEmojiLikesOperation(apiContext), implementation.createNapcatShareLinkOperation(apiContext),
+      implementation.createNapcatTestStreamOperation(apiContext),
+      implementation.createNapcatStopOperation({ ...apiContext,
+        stopOwnedNapcat: (request, authorize) => implementation.stopNapcatInstance(owner.context(authorize), request) }),
+      implementation.createNapcatQuickOperation({ ...egressContext, protectedResourceObjects: host.manager.protectedResourceObjects,
+        invokeNativeAction: (action, input) => {
+          const operation = nativeByAction.get(`agent.qq.onebot.${action}`);
+          if (!operation) throw new Error("Original native action is unavailable.");
+          return operation.handler(input);
+        } })
+    ];
+    const specificNames = new Set(specific.flatMap(operation => [operation.contract.operationId, ...(operation.contract.aliases ?? [])]));
+    reactive = implementation.createNapcatWebuiReactiveOwner(managementContext);
     const protocolOperations = [
-      ...implementation.createNapcatApiOperations(apiContext, implementation.createNapcatApiDescriptors(manifest))
-        .filter(operation => !sourceOperationIds.has(operation.contract.operationId)),
-      ...sourceFileOperations,
-      implementation.createNapcatApiReceiptOperation(apiContext),
-      implementation.createNapcatApiEventCatalogOperation(manifest),
+      ...nativeOperations.filter(operation => ![operation.contract.operationId, ...(operation.contract.aliases ?? [])].some(name => specificNames.has(name))), ...specific,
+      implementation.createNapcatApiReceiptOperation(apiContext), implementation.createNapcatApiEventCatalogOperation(manifest),
       ...implementation.createNapcatWebuiManagementOperations(managementContext),
       implementation.createNapcatWebuiManagementReceiptOperation(managementContext),
-      ...implementation.createNapcatWebuiApiOperations({
-        ...apiContext,
-        openWebuiSession: (selection, signal) => implementation.openNapcatWebuiApiSession(controlContext, selection, signal)
-      })
+      ...implementation.createNapcatWebuiExtendedOperations(managementContext),
+      ...implementation.createNapcatWebuiFileOperations(managementContext),
+      ...implementation.createNapcatWebuiAuthOperations(managementContext), ...reactive.operations,
+      ...implementation.createNapcatWebuiApiOperations({ ...apiContext,
+        openWebuiSession: (selection, signal) => implementation.openNapcatWebuiApiSession(controlContext, selection, signal) })
     ];
     registration = await host.operations.registerOperationsAsync(context.identity.instanceId, [...operations, ...qqOperations, ...protocolOperations], context.lifecycle.signal);
     return dispose;

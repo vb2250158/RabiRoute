@@ -297,7 +297,7 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   const params = { ...objectValue(request.params, "params") };
   const rawPayload = objectValue(request.payload, "payload");
   if (agentSendVariantType(request) && !variant) throw new Error("Plugin send variant requires its published provider.");
-  const payload = payloadFields(variant ? { type: "text", text: variant.text } : rawPayload, channel);
+  const payload = variant ? { payloadType: "text", text: variant.text } : payloadFields(rawPayload, channel);
   if (Object.prototype.hasOwnProperty.call(rawPayload, "fileId") && (channel !== "napcat" || params.target !== "group")) {
     throw new Error("payload.fileId requires channel=napcat and params.target=group.");
   }

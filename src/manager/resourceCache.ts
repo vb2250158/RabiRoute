@@ -75,9 +75,30 @@ export class ResourceCache {
       return this.settings();
     });
   }
+  private ownerDirectory(owner: string): string {
+    if (!owner) throw new Error("Invalid resource identity");
+    return path.join(this.stateDir, "resource-cache-index", digest(owner));
+  }
   private index(owner: string, id: string) {
-    if (!owner || !validId(id)) throw new Error("Invalid resource identity");
-    return path.join(this.stateDir, "resource-cache-index", digest(owner), id + ".json");
+    if (!validId(id)) throw new Error("Invalid resource identity");
+    return path.join(this.ownerDirectory(owner), id + ".json");
+  }
+  async findByOwner(owner: string): Promise<readonly { id: string; bytes: number; sha256: string }[]> {
+    let directory: import("node:fs").Dir;
+    try { directory = await fs.opendir(this.ownerDirectory(owner)); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const objects: { id: string; bytes: number; sha256: string }[] = [];
+    for await (const entry of directory) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const id = entry.name.slice(0, -5);
+      if (!validId(id)) continue;
+      const bytes = await this.read(owner, id);
+      objects.push({ id, bytes: bytes.length, sha256: id });
+    }
+    return objects.sort((left, right) => left.id.localeCompare(right.id));
   }
   async read(owner: string, id: string) {
     const reference = JSON.parse(await fs.readFile(this.index(owner,id), "utf8"));

@@ -7,11 +7,20 @@ import test from 'node:test';
 
 const ps = value => `'${String(value).replaceAll("'", "''")}'`;
 const scripts = ['Install-RabiRouteReleaseTransaction.ps1', 'Stop-RabiRouteHostFenced.ps1'];
-const functionText = file => readFileSync(path.resolve('scripts', file), 'utf8').match(/function Repair-ChildProcessEnvironment \{[\s\S]*?\n\}/)[0];
+const environmentPolicy = source => source.replace(/\r\n/g, '\n').match(/function Repair-ChildProcessEnvironment \{[\s\S]*?\n\}/)[0];
+const functionText = file => environmentPolicy(readFileSync(path.resolve('scripts', file), 'utf8'));
 test('standalone installer and stop carry identical environment policy without a new deployment dependency', () => {
   assert.equal(functionText(scripts[0]), functionText(scripts[1]));
   const embedding = readFileSync('installer/RabiRoute.iss', 'utf8');
   for (const file of scripts) assert.ok(embedding.includes(file));
+});
+
+test('environment policy comparison accepts LF and CRLF while preserving every content character', () => {
+  const source = readFileSync(path.resolve('scripts', scripts[0]), 'utf8');
+  const lf = source.replace(/\r\n/g, '\n');
+  const crlf = lf.replace(/\n/g, '\r\n');
+  assert.equal(environmentPolicy(lf), environmentPolicy(crlf));
+  assert.notEqual(environmentPolicy(lf.replace('never choose between values', 'choose between values')), environmentPolicy(crlf));
 });
 
 // CreateProcessW receives an actual UTF-16 environment block. No JS env object,

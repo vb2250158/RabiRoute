@@ -1530,6 +1530,7 @@ export async function openNapcatWebuiManagementSession(ctx: NapcatManagerContext
   signal: AbortSignal): Promise<NapcatWebuiManagementSession> {
   const { session, assertCurrent } = await openNapcatBoundWebuiSession(ctx, selection, signal);
   return {
+    sourceIdentity: createHash("sha256").update(JSON.stringify([selection.routeId, selection.instanceId, session.baseUrl])).digest("hex"),
     assertCurrent,
     requestManagement: async (method, pathname, body, requestSignal) => {
       assertCurrent(); requestSignal.throwIfAborted();
@@ -1537,6 +1538,18 @@ export async function openNapcatWebuiManagementSession(ctx: NapcatManagerContext
       assertCurrent();
       return response;
     },
+      requestMultipart: async (pathname, query, files, requestSignal) => {
+        assertCurrent(); requestSignal.throwIfAborted();
+        const response = await session.requestMultipart(pathname, query, files, requestSignal);
+        assertCurrent();
+        return response;
+      },
+      runTokenRotation: operation => runBoundNapcatOperation(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId }, async () => {
+        assertCurrent();
+        // Only the typed rotation owner may migrate its authority after the original persisted CAS.
+        // Its ledger callback verifies the replacement source/session; ordinary operations keep the old tail fence below.
+        return operation();
+      }),
     runBindingOperation: operation => runBoundNapcatOperation(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId }, async () => {
       assertCurrent();
       const result = await operation();
@@ -1544,6 +1557,24 @@ export async function openNapcatWebuiManagementSession(ctx: NapcatManagerContext
       return result;
     })
   };
+}
+
+/** Internal token-commit proof from the original selected credential lookup; no token/path leaves this owner. */
+export async function verifyNapcatWebuiTokenCommitSource(ctx: NapcatManagerContext, selection: NapcatWebuiManagementSelection,
+  token?: string): Promise<{ credentialSource: "config" | "provided"; nativeConfigMatches: boolean; configuredValueMatches: boolean; explicitTokenSource?: "instance" | "legacy" }> {
+  selection.assertCurrent();
+  const target = await napcatLoginTarget(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId });
+  const source = target.tokenInfo.source;
+  if (source !== "config" && source !== "provided") throw new NapcatApiError(409, "QQ_WEBUI_TOKEN_SOURCE_UNAVAILABLE");
+  const native = await readNapcatWebuiToken(ctx, target.webuiUrl, undefined, [target.instance]);
+  const runtime = [...ctx.getRuntimes()].find(item => item.definition.id === selection.routeId);
+  const instance = runtime?.definition.napcatInstances?.find(item => item.id === selection.instanceId);
+  const explicitTokenSource = source === "provided" && typeof instance?.webuiToken === "string" && instance.webuiToken.trim()
+    ? "instance" : source === "provided" && runtime?.definition.napcatWebuiToken ? "legacy" : undefined;
+  if (source === "provided" && !explicitTokenSource) throw new NapcatApiError(409, "QQ_WEBUI_TOKEN_SOURCE_UNAVAILABLE");
+  selection.assertCurrent();
+  return { credentialSource: source, nativeConfigMatches: token !== undefined && native.source === "config" && native.found && !native.correctedWebuiUrl && native.token === token,
+    configuredValueMatches: token !== undefined && target.tokenInfo.token === token, ...(explicitTokenSource ? {explicitTokenSource} : {}) };
 }
 
 async function callNapcatWebui<T>(

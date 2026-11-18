@@ -12,6 +12,7 @@ export type NapcatEventRecord = Readonly<{
   version: 1; source: NapcatEventSource; kind: string; eventClasses: readonly string[];
   fields: Readonly<Record<string, string | number | boolean | Record<string, boolean>>>;
   requestFlagPresent?: boolean;
+  requestEventRef?: string;
 }>;
 
 const selectorNames = ["post_type", "message_type", "notice_type", "request_type", "meta_event_type", "sub_type"] as const;
@@ -53,7 +54,7 @@ export function projectNapcatApiEvent(manifest: NapcatEventManifest, source: Nap
   for (const name of selectorNames) if (allowed.has(name) && typeof event[name] === "string" && identifier.test(event[name])) fields[name] = event[name];
   for (const name of identityNames) if (allowed.has(name) && messageId.test(String(event[name] ?? ""))) fields[name] = String(event[name]);
   for (const name of numberNames) if (allowed.has(name) && typeof event[name] === "number" && Number.isFinite(event[name])) fields[name] = event[name];
-  for (const name of textNames) if (allowed.has(name) && typeof event[name] === "string") fields[name] = event[name].slice(0, 2000);
+  for (const name of textNames) if (event.post_type !== "request" && allowed.has(name) && typeof event[name] === "string") fields[name] = event[name].slice(0, 2000);
   if (allowed.has("is_add") && typeof event.is_add === "boolean") fields.is_add = event.is_add;
   if (allowed.has("status") && event.status && typeof event.status === "object") {
     const status = event.status as Record<string, unknown>;
@@ -65,8 +66,10 @@ export function projectNapcatApiEvent(manifest: NapcatEventManifest, source: Nap
 }
 
 /** Use the existing adapter-history owner and its data mutation audit; this creates no second ledger. */
-export function appendNapcatApiEvent(manifest: NapcatEventManifest, source: NapcatEventSource, input: unknown, dataDir: string): NapcatEventRecord | undefined {
-  const record = projectNapcatApiEvent(manifest, source, input);
+export function appendNapcatApiEvent(manifest: NapcatEventManifest, source: NapcatEventSource, input: unknown, dataDir: string, requestEventRef?: string): NapcatEventRecord | undefined {
+  const projected = projectNapcatApiEvent(manifest, source, input);
+  const record = projected && requestEventRef && /^[a-f0-9]{64}$/.test(requestEventRef) && projected.fields.post_type === "request"
+    ? {...projected, requestEventRef} : projected;
   if (record) appendAdapterLogToDir("napcat", { event: "typed_event", instanceId: source.instanceId, data: record }, dataDir);
   return record;
 }

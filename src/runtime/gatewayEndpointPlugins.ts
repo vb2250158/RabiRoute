@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import path from "node:path";
+import { ResourceCache } from "../manager/resourceCache.js";
+import { createProtectedResourceObjects } from "../manager/protectedResourceObjects.js";
+import { createAsyncLocalSecretProtector } from "../shared/localSecretProtection.js";
 import type { MessageEndpointHostPorts, AgentAdapterHostPorts } from "@rabiroute/plugin-sdk";
 import { GenerationRuntime, PluginPackageCatalog, loadPluginProfile, type LoadedPluginProfile, type PluginGeneration, type PluginProfile } from "../plugin-kernel/index.js";
 import { PluginProfileSettings, type PluginProfileSettingsSnapshot } from "../plugin-runtime-host/profileSettings.js";
@@ -54,8 +57,23 @@ export type GatewayEndpointPluginRuntime = {
 export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options: GatewayEndpointPluginOptions): Promise<GatewayEndpointPluginRuntime> {
   const settings = new PluginProfileSettings({ profilePath: options.profilePath, settingsRoot: options.settingsRoot, migrationsPath: options.migrationsPath });
   const catalog = new PluginPackageCatalog(options.packageRoots);
-  const ports = options.hostPorts ?? await createMessageEndpointHostPorts();
+  const basePorts = options.hostPorts ?? await createMessageEndpointHostPorts();
   const stateRoot = options.stateRoot ?? applicationRuntimeLayout().stateRoot;
+  const resourceCache = new ResourceCache(path.join(stateRoot, "data"));
+  const protectedResources = createProtectedResourceObjects(
+    resourceCache,
+    createAsyncLocalSecretProtector(path.join(stateRoot, "data")),
+    "message-endpoint-private-metadata@1"
+  );
+  const ports = Object.freeze({
+    ...basePorts,
+    protectedResourceObjects: Object.freeze({
+      plaintextChunkBytes: 256 * 1024,
+      putProtected: protectedResources.putProtected,
+      readProtected: protectedResources.readProtected,
+      findByOwner: protectedResources.findByOwner
+    })
+  });
   const registry = new MessageAdapterRegistry();
   const projections: Array<() => void> = [];
   const scopedPorts = Object.freeze({ ...ports, forActivation(configuration: unknown) {
@@ -77,9 +95,10 @@ export async function mountGatewayEndpointPlugins(host: RabiCordisHost, options:
   const kernel = new GenerationRuntime({ host: "gateway", hostServices: [{ capability: "host.message-endpoints@1", value: scopedPorts },
     { capability: "host.message-endpoints@2", value: scopedPorts },
     { capability: "host.message-endpoints@3", value: scopedPorts },
+    { capability: "host.message-endpoints@4", value: scopedPorts },
     { capability: "host.agent-adapters@1", value: agentPorts }],
     onPublished: publishEndpointPlugins,
-    applicationIdentity: { applicationGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID || "embedded-gateway", managerInstanceId: process.env.GATEWAY_ID || "embedded-gateway" } });
+    applicationIdentity: { applicationGenerationId: process.env.RABIROUTE_GATEWAY_GENERATION_ID || "embedded-gateway", managerInstanceId: options.initialRouteDefinition?.id ?? (process.env.GATEWAY_ID || "embedded-gateway") } });
   const releaseAgentProjection = options.agentRegistry?.bindGeneration(() => kernel.current());
   const releaseAgentGeneration = installAgentAdapterGenerationReader(() => kernel.current());
   let declaredAgentManifests: AgentAdapterManifest[] = [];

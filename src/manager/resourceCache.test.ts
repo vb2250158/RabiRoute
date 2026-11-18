@@ -12,6 +12,95 @@ import { Readable } from "node:stream";
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
+import ts from "typescript";
+import { RESOURCE_OBJECT_MAX_BYTES } from "./resourceCacheProtocol.js";
+
+async function resourceFixtureSnapshot(root: string): Promise<string[]> {
+  const result: string[] = [];
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name), relative = path.relative(root, file);
+      if (entry.isDirectory()) { result.push(`dir:${relative}`); await visit(file); }
+      else if (entry.isFile()) result.push(`file:${relative}:${createHash("sha256").update(await fs.readFile(file)).digest("hex")}`);
+      else result.push(`other:${relative}`);
+    }
+  }
+  await visit(root);
+  return result.sort();
+}
+
+test("resource owner enumeration is isolated, durable, read-only and rejects corruption", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "resource-owner-list-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ResourceCache(root);
+  const first = Buffer.from("owner alpha content"), second = Buffer.from("owner beta content");
+  const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const firstId = hash(first), secondId = hash(second);
+  assert.deepEqual(await store.findByOwner("missing"), []);
+  await store.put("alpha", firstId, first);
+  await store.put("beta", firstId, first);
+  await store.put("beta", secondId, second);
+  const indexDirectory = path.join(root, "resource-cache-index", hash(Buffer.from("alpha")));
+  await fs.writeFile(path.join(indexDirectory, `${firstId}.json.partial`), "incomplete");
+  await fs.writeFile(path.join(indexDirectory, "not-a-hash.json"), "ignored");
+  await fs.mkdir(path.join(indexDirectory, `${secondId}.json`));
+  const before = await resourceFixtureSnapshot(root);
+  const expected = [{ id: firstId, bytes: first.length, sha256: firstId }];
+  assert.deepEqual(await new ResourceCache(root).findByOwner("alpha"), expected);
+  assert.deepEqual(await store.findByOwner("beta"), [
+    { id: firstId, bytes: first.length, sha256: firstId },
+    { id: secondId, bytes: second.length, sha256: secondId }
+  ].sort((left, right) => left.id.localeCompare(right.id)));
+  assert.deepEqual(await resourceFixtureSnapshot(root), before);
+  const index = path.join(indexDirectory, `${firstId}.json`);
+  const originalIndex = await fs.readFile(index);
+  const reference = JSON.parse(originalIndex.toString("utf8")) as { file: string };
+  await fs.writeFile(index, "{");
+  await assert.rejects(store.findByOwner("alpha"), SyntaxError);
+  await fs.writeFile(index, originalIndex);
+  await fs.writeFile(reference.file, "corrupt");
+  await assert.rejects(store.findByOwner("alpha"), /integrity check failed/);
+  await fs.rm(reference.file);
+  await assert.rejects(store.findByOwner("alpha"), { code: "ENOENT" });
+  await assert.rejects(store.findByOwner(""), /Invalid resource identity/);
+});
+
+test("resource owner port uses the real cache, existing 1 MiB bound and write guards", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "resource-owner-port-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const source = ts.createSourceFile("controlPlaneRoutes.ts", await fs.readFile(new URL("./controlPlaneRoutes.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
+  const matches: ts.PropertyAssignment[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === "resourceObjects") matches.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.equal(matches.length, 1);
+  const body = ts.transpileModule(`return ${matches[0]!.initializer.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const createPort = new Function("resourceCache", "RESOURCE_OBJECT_MAX_BYTES", "managerReadOnly", body) as
+    (cache: ResourceCache, max: number, readOnly: boolean) => { maxObjectBytes: number; read(owner: string, id: string): Promise<Buffer>;
+      findByOwner(owner: string): Promise<readonly { id: string; bytes: number; sha256: string }[]>;
+      put(owner: string, id: string, bytes: Uint8Array, authorize: () => void): Promise<unknown> };
+  const cache = new ResourceCache(root), port = createPort(cache, RESOURCE_OBJECT_MAX_BYTES, false);
+  const readOnlyPort = createPort(cache, RESOURCE_OBJECT_MAX_BYTES, true);
+  assert.equal(port.maxObjectBytes, 1024 * 1024);
+  const bytes = Buffer.alloc(port.maxObjectBytes, 1), id = createHash("sha256").update(bytes).digest("hex");
+  let checks = 0;
+  assert.throws(() => readOnlyPort.put("owner", id, bytes, () => { checks++; }), /read-only Manager/);
+  assert.equal(checks, 1);
+  assert.throws(() => port.put("owner", id, bytes, () => { throw new Error("denied"); }), /denied/);
+  assert.deepEqual(await fs.readdir(root), []);
+  let revocationChecks = 0;
+  await assert.rejects(port.put("revoked", id, bytes, () => {
+    if (++revocationChecks === 3) throw new Error("authorization revoked");
+  }), /authorization revoked/);
+  assert.deepEqual(await cache.findByOwner("revoked"), []);
+  await port.put("owner", id, bytes, () => { checks++; });
+  assert.deepEqual(await port.read("owner", id), bytes);
+  assert.deepEqual(await port.findByOwner("owner"), [{ id, bytes: bytes.length, sha256: id }]);
+  const oversize = Buffer.alloc(port.maxObjectBytes + 1, 2);
+  await assert.rejects(port.put("owner", createHash("sha256").update(oversize).digest("hex"), oversize, () => {}), /size or checksum/);
+});
 
 test("durable resources survive path changes and restart; scope and checksum fail closed", async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(),"rabi-resource-"));

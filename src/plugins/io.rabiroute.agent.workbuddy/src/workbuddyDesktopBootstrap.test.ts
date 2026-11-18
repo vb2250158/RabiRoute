@@ -6,13 +6,15 @@ import test from "node:test";
 import { createWorkbuddyDesktopBootstrap } from "./workbuddyDesktopBootstrap.js";
 import { clearClosedWorkbuddyDesktopRelay, isWorkbuddyDesktopRelayReady, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
 
+const fixturePaths = { scannerEntry: path.resolve("package-fixture/workers/scan.mjs"), applicationRoot: path.resolve("application-fixture") };
+
 test("an active connector is reused and concurrent cold starts join one launch", async () => {
   let ready = false;
   let calls = 0;
-  const ensure = createWorkbuddyDesktopBootstrap("package-fixture", {
+  const ensure = createWorkbuddyDesktopBootstrap(fixturePaths, {
     supported: true, timeoutMs: 1000,
     isReady: async () => ready,
-    launch: async root => { assert.equal(root, "package-fixture"); calls++; ready = true; },
+    launch: async paths => { assert.deepEqual(paths, fixturePaths); calls++; ready = true; },
   });
   await Promise.all([ensure(), ensure(), ensure()]);
   await ensure();
@@ -24,7 +26,7 @@ test("one cancelled request leaves other waiters attached to the same desktop st
   let began!: () => void, release!: () => void;
   const entered = new Promise<void>(resolve => { began = resolve; });
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const ensure = createWorkbuddyDesktopBootstrap("package-fixture", {
+  const ensure = createWorkbuddyDesktopBootstrap(fixturePaths, {
     supported: true, timeoutMs: 1000, isReady: async () => ready,
     launch: async () => { began(); await gate; ready = true; }
   });

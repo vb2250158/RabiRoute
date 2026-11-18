@@ -14,12 +14,34 @@ type Row = Record<string, unknown>;
 export type NapcatWebuiManagementSelection = Readonly<{ routeId: string; instanceId: string; expectedUserId: string; assertCurrent(): void }>;
 export type NapcatWebuiManagementSession = {
   assertCurrent(): void;
+  /** Opaque fingerprint of the original authenticated native WebUI origin and prefix. */
+  sourceIdentity?: string;
   requestManagement(method: "GET" | "POST", pathname: string, body: Row, signal: AbortSignal): Promise<Response>;
   runBindingOperation<T>(operation: () => Promise<T>): Promise<T>;
+  /** The exact token write replaces its own old WebUI snapshot; the operation must verify the new owner. */
+  runTokenRotation?<T>(operation: () => Promise<T>): Promise<T>;
+  requestMultipart?(pathname: string, query: Row, files: readonly { field: string; filename: string; bytes: Uint8Array }[], signal: AbortSignal): Promise<Response>;
+};
+export type NapcatWebuiResourceObjects = {
+ maxObjectBytes: number;
+ put(owner: string, id: string, bytes: Uint8Array, authorize: () => void): Promise<{id:string;bytes:number;sha256:string;durable:boolean}>;
+ read(owner: string, id: string): Promise<Buffer>;
+ findByOwner(owner: string): Promise<readonly {id:string;bytes:number;sha256:string}[]>;
+};
+export type NapcatWebuiProtectedResourceObjects = {
+ putProtected(owner: string, bytes: Buffer, authorize: () => void, signal?: AbortSignal): Promise<{id:string;bytes:number;sha256:string;durable:boolean}>;
+ readProtected(owner: string, id: string, authorize: () => void, signal?: AbortSignal): Promise<Buffer>;
 };
 export type NapcatWebuiManagementContext = NapcatApiTransportContext & {
   rootDir: string;
   readOnly(): boolean;
+  resourceObjects?: NapcatWebuiResourceObjects;
+  protectedResourceObjects?: NapcatWebuiProtectedResourceObjects;
+  /** Original native token source / persisted Route CAS owner. Never mutate a runtime-only definition. */
+  prepareWebuiToken?(binding: NapcatWebuiManagementSelection, operationId: string): Promise<{
+   commit(newToken:string):Promise<{state:"committed"|"uncertain";operationId:string;revision:string;assertCurrent():void}>;
+  }>;
+  acquireNativeFileLease?(): {assertCurrent():void;release():void};
   openManagementSession(selection: NapcatWebuiManagementSelection, signal: AbortSignal): Promise<NapcatWebuiManagementSession>;
 };
 class ManagementError extends NapcatApiError {
@@ -167,7 +189,7 @@ function project(id: string, value: unknown, params: Row): Row {
   throw new ManagementError("OPERATION_NOT_REGISTERED", 404);
 }
 
-function contractFor(spec: NapcatWebuiManagementDescriptor): ApiOperationContract {
+export function contractFor(spec: NapcatWebuiManagementDescriptor): ApiOperationContract {
   const mutation = spec.effects === "configuration-mutation";
   return { operationId: `agent.qq.webui.management.${spec.id}`, contractVersion: "1.0.0", method: "POST",
     pathTemplate: `/api/agent/qq/webui-management/${spec.id}`, exposure: "public", transport: "http", description: spec.description,
@@ -293,3 +315,6 @@ export function createNapcatWebuiManagementReceiptOperation(context: NapcatWebui
     } catch (error) { return napcatApiFailure(error); }
   } };
 }
+
+// Shared typed WebUI owners retain one authority/bootstrap/response-quota implementation.
+export { ManagementError, call as callNapcatWebuiManagement, bootstrap as checkNapcatWebuiManagementAccount, digest as napcatWebuiDigest };

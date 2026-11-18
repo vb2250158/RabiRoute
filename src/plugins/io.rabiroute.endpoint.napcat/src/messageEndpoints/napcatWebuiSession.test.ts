@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import {createHash} from "node:crypto";
 import test from "node:test";
 import { NapcatWebuiSessions } from "./napcatWebuiSession.js";
 
@@ -24,6 +25,43 @@ async function serverFor(t: test.TestContext, handler: http.RequestListener): Pr
   }
   throw new Error("No Fetch-compatible test listener was assigned after 16 attempts");
 }
+
+test("extended typed GET encodes only declared query fields under original credential and reverse-proxy prefix", async t => {
+  const seen: string[] = [];
+  const base = await serverFor(t, (request, response) => {
+    seen.push(request.url!);response.setHeader("content-type", "application/json");
+    if(request.url === "/prefix/api/auth/login")response.end(JSON.stringify({code:0,data:{Credential:"PRIVATE_FIXTURE"}}));
+    else {assert.equal(request.headers.authorization,"Bearer PRIVATE_FIXTURE");response.end(JSON.stringify({code:0,data:{versions:[],pagination:{page:1,pageSize:20,total:0,totalPages:0}}}));}
+  });
+  const session=await new NapcatWebuiSessions().open(base+"/prefix","PRIVATE_FIXTURE_TOKEN");assert.ok(session);
+  await session.requestManagement("GET","/api/base/getAllReleases",{page:1,search:"a & b"},AbortSignal.timeout(1000));
+  assert.equal(seen[1],"/prefix/api/base/getAllReleases?page=1&search=a+%26+b");
+  assert.throws(()=>session.requestManagement("GET","/api/base/getAllReleases",{url:"https://outside.example"},AbortSignal.timeout(1000)));
+  assert.throws(()=>session.requestManagement("GET","/api/base/getAllReleases?search=x",{},AbortSignal.timeout(1000)));
+  assert.equal(seen.length,2);
+});
+
+test("session auth owners retain credentials internally, reuse login and invalidate only the logged-out credential",async t=>{
+ let logins=0;const paths:string[]=[];
+ const base=await serverFor(t,(request,response)=>{paths.push(request.url!);response.setHeader("content-type","application/json");if(request.url==="/api/auth/login"){logins++;response.end(JSON.stringify({code:0,data:{Credential:"PRIVATE_FIXTURE_CREDENTIAL_"+logins}}));}else response.end(JSON.stringify({code:0,data:null}));});
+ const sessions=new NapcatWebuiSessions(),session=await sessions.open(base,"PRIVATE_FIXTURE_TOKEN");assert.ok(session);
+ const login=await session.requestManagement("POST","/api/auth/login",{},AbortSignal.timeout(1000));assert.deepEqual(await login.json(),{code:0,data:{authenticated:true}});assert.equal(logins,1);
+ const check=await session.requestManagement("POST","/api/auth/check",{},AbortSignal.timeout(1000));assert.deepEqual(await check.json(),{code:0,data:{authenticated:true}});
+ const logout=await session.requestManagement("POST","/api/auth/logout",{},AbortSignal.timeout(1000));assert.deepEqual(await logout.json(),{code:0,data:{authenticated:false}});assert.equal(logins,1);
+ await sessions.open(base,"PRIVATE_FIXTURE_TOKEN");assert.equal(logins,2);assert(paths.includes("/api/auth/logout"));
+ assert.throws(()=>session.requestManagement("POST","/api/auth/login",{hash:"PRIVATE_FIXTURE"},AbortSignal.timeout(1000)));
+});
+
+test("native passkey Credential is consumed only by the original session cache and token rotation injects the original secret privately",async t=>{
+ let auth=0,expected="ORIGINAL_TOKEN_123",rotations=0;const assertions:Record<string,unknown>[]=[];
+ const base=await serverFor(t,(request,response)=>{response.setHeader("content-type","application/json");let text="";request.on("data",b=>text+=b);request.on("end",()=>{const body=JSON.parse(text||"{}");if(request.url==="/api/auth/login"){auth++;assert.equal(body.hash,createHash("sha256").update(expected+".napcat").digest("hex"));response.end(JSON.stringify({code:0,data:{Credential:"PRIVATE_SESSION_"+auth}}));}
+ else if(request.url==="/api/auth/passkey/verify-authentication"){assertions.push(body);response.end(JSON.stringify({code:0,data:{Credential:"PRIVATE_PASSKEY_SESSION"}}));}
+ else if(request.url==="/api/auth/update_token"){rotations++;assert.equal(body.oldToken,expected);expected=body.newToken;response.end(JSON.stringify({code:0,data:"Token updated"}));}
+ else{assert.equal(request.headers.authorization,"Bearer PRIVATE_PASSKEY_SESSION");response.end(JSON.stringify({code:0,data:null}));}});});
+ const session=await new NapcatWebuiSessions().open(base,expected);assert.ok(session);const native=await session.requestManagement("POST","/api/auth/passkey/verify-authentication",{response:{id:"id",rawId:"YQ",type:"public-key",response:{clientDataJSON:"YQ",signature:"YQ",authenticatorData:"YQ"}}},AbortSignal.timeout(1000));assert.deepEqual(await native.json(),{code:0,data:{authenticated:true}});assert.equal(assertions.length,1);await session.requestManagement("POST","/api/auth/check",{},AbortSignal.timeout(1000));
+ const rotated=await session.requestManagement("POST","/api/auth/update_token",{newToken:"REPLACED_TOKEN_456"},AbortSignal.timeout(1000));assert.deepEqual(await rotated.json(),{code:0,data:{changed:true}});assert.equal(rotations,1);assert.equal(auth,2);
+ assert.throws(()=>session.requestManagement("POST","/api/auth/update_token",{oldToken:"guess",newToken:"VALID_TOKEN_123"},AbortSignal.timeout(1000)));
+});
 
 test("parallel panels and repeated status reads reuse one authentication request under login rate limiting", async t => {
   let logins = 0;

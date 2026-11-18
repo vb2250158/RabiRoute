@@ -100,14 +100,18 @@ test('generation exit verification accepts exited processes and refuses live one
   const finished = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2000)'], { windowsHide: true, stdio: 'ignore' });
   const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { windowsHide: true, stdio: 'ignore' });
   try {
-    const result = run(`${extract(stop, ['Wait-GenerationProcessExit'])}
-$completed = Get-Process -Id ${finished.pid} -ErrorAction Stop
-$stillRunning = Get-Process -Id ${live.pid} -ErrorAction Stop
-$null = $completed.Handle; $null = $stillRunning.Handle
-Wait-GenerationProcessExit @($completed) 8000
+    const result = run(`${extract(stop, ['Wait-OriginalHostProcesses'])}
+$completedInfo = Get-CimInstance Win32_Process -Filter 'ProcessId=${finished.pid}' -ErrorAction Stop
+$stillRunningInfo = Get-CimInstance Win32_Process -Filter 'ProcessId=${live.pid}' -ErrorAction Stop
+if (-not $completedInfo -or -not $stillRunningInfo) { throw 'Owned fixture process exited before identity capture.' }
+$completed = [pscustomobject]@{ processId=${finished.pid}; creationDate=([datetime]$completedInfo.CreationDate).ToUniversalTime().Ticks }
+$stillRunning = [pscustomobject]@{ processId=${live.pid}; creationDate=([datetime]$stillRunningInfo.CreationDate).ToUniversalTime().Ticks }
+Wait-OriginalHostProcesses @($completed) 8000
 $blocked = $false
-try { Wait-GenerationProcessExit @($stillRunning) 100 } catch { $blocked = $_.Exception.Message -match 'did not fully exit' }
-@{ completed=$completed.HasExited; rejectedLive=$blocked; stillRunning=(-not $stillRunning.HasExited) } | ConvertTo-Json -Compress`);
+try { Wait-OriginalHostProcesses @($stillRunning) 100 } catch { $blocked = $_.Exception.Message -match 'did not exit after fenced quit' }
+$completedAfter = Get-CimInstance Win32_Process -Filter 'ProcessId=${finished.pid}' -ErrorAction Stop
+$stillRunningAfter = Get-CimInstance Win32_Process -Filter 'ProcessId=${live.pid}' -ErrorAction Stop
+@{ completed=($null -eq $completedAfter); rejectedLive=$blocked; stillRunning=($null -ne $stillRunningAfter) } | ConvertTo-Json -Compress`);
     assert.deepEqual(result, { completed: true, rejectedLive: true, stillRunning: true });
   } finally { if (finished.exitCode === null) finished.kill(); if (live.exitCode === null) live.kill(); }
 });

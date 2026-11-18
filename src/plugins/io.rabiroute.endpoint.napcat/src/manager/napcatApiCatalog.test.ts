@@ -10,6 +10,15 @@ import type { GatewayDefinition } from "@rabiroute/host-api/shared/gatewayConfig
 import { createNapcatApiDescriptors, type NapcatApiManifest } from "./napcatApiCatalog.js";
 import { createNapcatApiOperations, projectNapcatApiResponse } from "./napcatApiOperations.js";
 import { napcatResultProfileFixtures } from "./napcatApiResultProfiles.fixture.js";
+import { createNapcatArtifactOperations } from "../native/artifactOperations.js";
+import { memoryResourceObjects } from "../native/artifactObjects.fixture.js";
+import { createNapcatDownloadStreamOperations } from "../native/downloadStreams.js";
+import { createNapcatNativeEgressOperations } from "../native/egressOperations.js";
+import { createNapcatEmojiLikesOperation } from "../native/emojiLikes.js";
+import { createNapcatFileResourceOperations } from "../native/fileResourceOperations.js";
+import { createNapcatShareLinkOperation } from "../native/shareLink.js";
+import { createNapcatStopOperation } from "../native/stopInstance.js";
+import { createNapcatTestStreamOperation } from "../native/testStream.js";
 
 const manifest = JSON.parse(await fs.readFile(new URL("../../contracts/napcat-4.18.4.json", import.meta.url), "utf8")) as NapcatApiManifest;
 const descriptors = createNapcatApiDescriptors(manifest);
@@ -71,7 +80,7 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       const action = new URL(String(url)).pathname.slice(1);
       const descriptor = direct.find(row => row.action === selectedAction)!;
       if (descriptor.resultProfile && action === selectedAction) return Response.json({ status: "ok", retcode: 0, data: napcatResultProfileFixtures[selectedAction] });
-      if (action === "get_msg" && descriptor.attachmentInput) return Response.json({ status: "ok", retcode: 0, data: {
+      if (action === "get_msg" && (descriptor.attachmentInput || descriptor.sourceInput)) return Response.json({ status: "ok", retcode: 0, data: {
         post_type: "message", message_type: "group", group_id: 12345, self_id: 12345, user_id: 45678, message_id: 12345,
         message: Array.from({ length: 2 }, () => ({ type: descriptor.attachmentInput === "audio-message" ? "record" : "image",
           data: { file: "fixture-resource", url: "https://fixture-media.invalid/image" } }))
@@ -79,6 +88,7 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       const data = action === "get_login_info" && selectedAction !== "get_login_info" ? { user_id: 12345 }
         : action === "get_online_clients" ? []
           : ["ocr_image", ".ocr_image"].includes(action) ? { texts: [{ text: "fixture OCR", coordinates: [], token: "private" }] }
+        : action === "download_fileset" ? { result: 0 }
           : action === "get_login_info" ? { ...sample(descriptor.nativeResponse as Record<string, unknown>) as object, user_id: 12345 }
           : sample(descriptor.nativeResponse as Record<string, unknown>);
       return Response.json({ status: "ok", retcode: 0, data });
@@ -89,7 +99,7 @@ test("all directly callable declarations use mocked identity and schema-shaped p
       ...(descriptor.mode === "mutation" ? { deliveryId: `fixture-${descriptor.action}` } : {}) }));
     assert.equal(result.status, 200, `${descriptor.action}: ${JSON.stringify(result.body)}`);
   }
-  assert.equal(direct.length, 110);
+  assert.equal(direct.length, 117);
 });
 
 test("file, event-context and test actions retain explicit owners while credentials expose summary views", () => {
@@ -139,7 +149,23 @@ test("source-file owners replace two native slots and add one independent hash o
   assert.equal(new Set(operations.flatMap(value => [value.contract.operationId, ...(value.contract.aliases ?? [])])).size, 502);
   const coverage = JSON.parse(await fs.readFile(new URL("../../contracts/rabi-coverage-4.18.4.json", import.meta.url), "utf8"));
   const counts = coverage.counts;
-  assert.equal(counts.read + counts.mutation + counts.existingOwnerReference + counts.ownerDependency + counts.sourceBoundBinaryViews, 167);
+  assert.equal(counts.read + counts.mutation + counts.existingOwnerReference + counts.ownerDependency + counts.sourceBoundBinaryViews + counts.sourceBoundArtifactViews + counts.sourceBoundStreamViews + counts.managedOutboundViews + counts.sourceBoundPageViews
+    + counts.managedNativeFileViews + counts.sourceBoundShareViews + counts.nativeLifecycleViews + counts.nativeDiagnosticStreams + counts.upstreamTestOnly + counts.policyExcludedRawProtocol, 167);
   assert.equal(coverage.actions.filter((row: { status: string }) => row.status === "source-bound-binary-view").length, 2);
   assert.equal(coverage.rabiOnlyOperations[0].nativeCoverageContribution, 0);
+});
+
+test("native artifact replacements retain167 fixed native slots and add only their independent resource read", () => {
+  const store = memoryResourceObjects();
+  const context = { rootDir: ".", local: () => true, route: () => definition, readOnly: () => false, resourceObjects: store.resources, protectedResourceObjects: store.protectedResources };
+  const egressContext = { ...context, submitAgentSendVariant: async () => ({ statusCode: 503, body: { code: -1 } }) };
+  const replacements = [...createSourceFileOperations(context), ...createNapcatArtifactOperations(context), ...createNapcatDownloadStreamOperations(context),
+    ...createNapcatNativeEgressOperations(egressContext), createNapcatEmojiLikesOperation(context), createNapcatShareLinkOperation(context),
+    createNapcatTestStreamOperation(context), createNapcatStopOperation({ ...context, stopOwnedNapcat: async () => ({ ok: true }) }),
+    ...createNapcatFileResourceOperations({ ...context, withManagedAttachment: async () => { throw Error("contract capture does not open a file"); } })];
+  const ids = new Set(replacements.map(row => row.contract.operationId));
+  const operations = [...createNapcatApiOperations(context, descriptors).filter(row => !ids.has(row.contract.operationId)), ...replacements];
+  assert.equal(operations.length, 169);
+  const names = operations.flatMap(row => [row.contract.operationId, ...(row.contract.aliases ?? [])]);
+  assert.equal(names.length, 503); assert.equal(new Set(names).size, 503);
 });

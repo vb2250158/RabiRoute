@@ -109,6 +109,7 @@ test("real Webhook and Heartbeat packages disable, update and fail independently
     const webhookPackage = path.join(built.packagesRoot, "io.rabiroute.endpoint.webhook", versions.webhook!);
     assert.equal(initialReport?.packageHash, await hashPluginPackage(webhookPackage));
     assert.ok(webhookActivation, JSON.stringify(runtime.current().records));
+    assert.equal(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.identity.managerInstanceId, initialRoute.id);
     assert.equal(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.status, "active", JSON.stringify(runtime.current().records));
     assert.equal(runtime.current().records.find(record => record.identity.instanceId === "endpoint:webhook")?.error, undefined, JSON.stringify(runtime.current().records));
     assert.ok(activation("heartbeat"));

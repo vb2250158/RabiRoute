@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.endpoint.napcat",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "ws": "^8.18.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "yauzl": "3.4.0"
   }
 }

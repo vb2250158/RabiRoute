@@ -21,7 +21,7 @@ type GroupInput = { routeId: string; instanceId: string; group: { groupId: strin
 export type SourceFileInput = SourceInput | GroupInput;
 export type SourceFileResult = { bytes: Buffer; name: string; sha256: string; nativeContractEquivalent: false };
 
-function groupPolicy(context: NapcatApiTransportContext, selection: NapcatApiSelection, groupId: string) {
+export function assertSourceGroupFileAccess(context: NapcatApiTransportContext, selection: NapcatApiSelection, groupId: string) {
   selection.assertCurrent();
   const configured = context.route(selection.routeId)?.messageAdapterPolicies?.napcat?.readableGroupFileIds;
   if (configured !== undefined && !normalizeReadableGroupFileIds(configured).includes(groupId)) throw new NapcatApiError(403, "QQ_GROUP_FILES_GROUP_NOT_ALLOWED");
@@ -40,7 +40,7 @@ async function resolveSourceFile(context: NapcatApiTransportContext, request: In
     media = qqMessageMedia(message.message)[input.source.attachmentIndex];
     if (input.source.kind === "group") groupId = input.source.targetId;
   } else {
-    groupPolicy(context, selection, input.group.groupId);
+    assertSourceGroupFileAccess(context, selection, input.group.groupId);
     groupId = input.group.groupId;
     // Native owns this expiring GroupFS cache reference and group resource permission.
     // Re-listing would issue a different random key, not prove this key's identity.
@@ -60,7 +60,7 @@ async function verifyCompletedSource(context: NapcatApiTransportContext, selecti
   selection.assertCurrent();
   await verifyNapcatApiIdentity(context, selection, signal);
   selection.assertCurrent();
-  if ("group" in input) groupPolicy(context, selection, input.group.groupId);
+  if ("group" in input) assertSourceGroupFileAccess(context, selection, input.group.groupId);
 }
 
 export async function readSourceFile(context: NapcatApiTransportContext, request: IncomingMessage, input: SourceFileInput, signal: AbortSignal): Promise<SourceFileResult> {

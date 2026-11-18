@@ -67,22 +67,20 @@ export function createOwnedRuntime(ports) {
         createCodexHookOperations,
         jsonResponse: ports.jsonResponse,
         managerPluginRoutes: ports.managerPluginRoutes,
-        performAgentSend: (request, options = {}) => {
-            const source = options.remoteSource;
-            return ports.performAgentSend(request, {
-                remoteSource: source,
+        performAgentSend: ports.performOwnedAgentSend ?? ((request, options = {}) =>
+            ports.performAgentSend(request, {
+                remoteSource: options.remoteSource,
                 requestAuthority: options.requestAuthority,
                 withManagedGroupFile: (fileId, expectedSha256, send) => {
                     options.requestAuthority?.();
-                    return ports.agentUploadStore.withSharedFile(fileId, async (file) => {
+                    return ports.agentUploadStore.withSharedFile(fileId, file => {
                         options.requestAuthority?.();
                         if (file.sha256 !== expectedSha256)
                             throw new Error("Managed file content does not match the upload receipt.");
                         return send(file);
                     });
                 }
-            });
-        },
+            })),
         publishManagerEvent: ports.publishManagerEvent,
         readJsonBody: ports.readJsonBody,
         rootDir: ports.rootDir,

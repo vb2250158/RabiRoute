@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.diagnostics",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "displayName": "日志诊断",
   "description": "查看运行日志、Agent 调用记录与性能指标",
   "icon": "mdi-stethoscope",

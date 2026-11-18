@@ -88,6 +88,16 @@ export type PluginAcceptedWork = Readonly<{
 }>;
 export function ownPluginAcceptedWork(context: AcceptedWorkContext, label?: string, cleanup?: PluginDisposer): PluginAcceptedWork;
 export type MessageEndpointEgressLease = Readonly<{ snapshot: Readonly<Record<string, unknown>>; call<T>(operation: string, args: readonly unknown[]): Promise<T>; release(): void }>;
+export type MessageEndpointVariantReceiptMode = "message" | "ack-only";
+export type MessageEndpointVariantMediaKind = "image" | "voice" | "file";
+export type MessageEndpointVariantAttachment =
+  | Readonly<{ kind: MessageEndpointVariantMediaKind; fileId: string; fileSha256: string }>
+  | Readonly<{ kind: "image" | "file"; planAttachment: Readonly<{ roleId?: string; planId: string; attachmentId: string }> }>;
+export type MessageEndpointVariantMedia = Readonly<{
+  /** Output rules also cover already-authorized platform media which needs no local file. */
+  kinds?: readonly MessageEndpointVariantMediaKind[];
+  attachments?: readonly MessageEndpointVariantAttachment[];
+}>;
 export type MessageEndpointSendVariant = Readonly<{
   /** Use a channel-qualified type, for example napcat.group-forward. */
   type: string;
@@ -95,8 +105,14 @@ export type MessageEndpointSendVariant = Readonly<{
   description: string;
   dataSchema: Readonly<Record<string, unknown>>;
   paramsSchema: Readonly<Record<string, unknown>>;
+  /** Defaults to message. Ack-only producers return an explicit positive acknowledgement. */
+  receiptMode?: MessageEndpointVariantReceiptMode;
   /** Read the complete outgoing text for the unchanged host text policy. Must be pure. */
   readText(data: Readonly<Record<string, unknown>>): string;
+  /** Opt in only when the shape can send without any caller-authored text. */
+  allowEmptyText?: boolean;
+  /** Project media kinds and managed references from validated data without I/O. */
+  readMedia?(data: Readonly<Record<string, unknown>>): MessageEndpointVariantMedia;
   operation: string;
 }>;
 export type MessageEndpointVariantSendInput = Readonly<{
@@ -106,12 +122,56 @@ export type MessageEndpointVariantSendInput = Readonly<{
   target: Readonly<Record<string, unknown>>;
   data: Readonly<Record<string, unknown>>;
   sourceDataDirs: readonly string[];
+  /** Host-resolved in projected order. Paths are valid only for this operation's lease. */
+  attachments?: readonly Readonly<{ kind: MessageEndpointVariantMediaKind; path: string; fileName: string }>[];
 }>;
 export type MessageEndpointVariantSendResult = Readonly<{
   messageId: string;
   conversationKey?: string;
   target?: Readonly<{ targetType?: "group" | "private"; groupId?: string; userId?: string; instanceId?: string }>;
 }>;
+export type MessageEndpointVariantSendAckResult = Readonly<{
+  acknowledged: true;
+  messageId?: never;
+  target?: MessageEndpointVariantSendResult["target"];
+}>;
+export type MessageEndpointVariantSendOutcome = MessageEndpointVariantSendResult | MessageEndpointVariantSendAckResult;
+export type MessageEndpointManagedAttachmentReference =
+  | Readonly<{ fileId: string; fileSha256: string }>
+  | Readonly<{ planAttachment: Readonly<{ roleId: string; planId: string; attachmentId: string }> }>;
+export type MessageEndpointManagedAttachmentFile = Readonly<{
+  path: string;
+  fileName: string;
+  sha256: string;
+  bytes: number;
+}>;
+/** Manager port host.message-endpoints@4.manager.withManagedAttachment.
+ * Await the complete operation inside the callback. Do not retain its path after settlement. */
+export type MessageEndpointManagedAttachmentPort = <T>(
+  request: import("./api-operation-contract.js").ApiOperationInput["request"],
+  reference: MessageEndpointManagedAttachmentReference,
+  assertCurrent: () => void,
+  operation: (file: MessageEndpointManagedAttachmentFile) => T | Promise<T>
+) => Promise<T>;
+export type MessageEndpointAgentSendRequest = Readonly<{
+  deliveryId: string;
+  sender: Readonly<{ agentType: string; sessionId: string }>;
+  routeId: string;
+  channel: string;
+  params: Readonly<Record<string, unknown>>;
+  payload: Readonly<{ type: string; data: Readonly<Record<string, unknown>> }>;
+  tracking?: Readonly<{ requirementId?: string }>;
+  styleValidation?: 0 | 1 | null;
+  messageLengthConfirmation?: string | null;
+  conversationContext?: Readonly<{ lastReadMessageIndex?: string; confirmationToken?: string }> | null;
+}>;
+/** Manager port host.message-endpoints@3.manager.submitAgentSendVariant.
+ * Pass the admitted request and native API invocation's current-authority check. */
+export type MessageEndpointAgentSendProducer = (
+  request: import("./api-operation-contract.js").ApiOperationInput["request"],
+  body: MessageEndpointAgentSendRequest,
+  assertCurrent: () => void
+) => Promise<{ statusCode: number; body: Readonly<Record<string, unknown>> }>;
 export type MessageEndpointEgressProvider = Readonly<{ identity: PluginIdentity; sendVariants?: Readonly<Record<string, MessageEndpointSendVariant>>; acquire(snapshot: Readonly<Record<string, unknown>>): MessageEndpointEgressLease; runAcceptedWork<T>(operation: () => T | Promise<T>): Promise<T>; inspect(): Readonly<{ accepting: boolean; activeLeases: number }> }>;
 export function ownMessageEndpointEgress(context: PluginContext, definition: Readonly<{ type: string; operations: Readonly<Record<string, (...args: any[]) => unknown>>; sendVariants?: readonly MessageEndpointSendVariant[]; dispose?: PluginDisposer }>): MessageEndpointEgressProvider;
 export type MessageEndpointCatalog = Readonly<{

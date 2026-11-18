@@ -24,9 +24,11 @@ import { AgentRequestRouteReconciliation } from "./agentRequestRouteReconciliati
 import { parseAgentChatHistoryQuery, projectAgentChatHistory } from "../shared/agentChatHistory.js";
 import type { ApiOperationDefinition } from "./apiOperationContract.js";
 import { ResourceCache, type ResourceCacheOptions } from "./resourceCache.js";
+import { createProtectedResourceObjects } from "./protectedResourceObjects.js";
+import { createAsyncLocalSecretProtector } from "../shared/localSecretProtection.js";
 import { readRecordingAudio, readRecordingObject } from "./recordingObjectReader.js";
 import { createResourceCacheOperations } from "../plugins/io.rabiroute.manager.core/src/manager/resourceCacheOperations.js";
-import { MOBILE_RECORDING_MAX_CHUNKS } from "./resourceCacheProtocol.js";
+import { MOBILE_RECORDING_MAX_CHUNKS, RESOURCE_OBJECT_MAX_BYTES } from "./resourceCacheProtocol.js";
 import { authenticatedResourceOwner } from "./resourceApiRequest.js";
 import { queryMessageHistory } from "./messageHistorySearchService.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -567,7 +569,7 @@ import { handleRemotePersonaResolutionApi, resolveRemotePersonaSnapshot, validat
 import { assertLocalPersonaOwner, localPersonaMessageDirectories, localPersonaRoleForAgentTask, localPersonaRuntimeForDelivery, routeOwnsLocalPersona } from "./localPersonaOwner.js";
 import { getPlan, getPublishedPlan, listPlans, publishedRolePlans, roleKnowledgeSnapshotFromPublishedCatalog, subscribePlanUpdates, type PlanItem } from "../roleKnowledge.js";
 
-import { resolvePlanAttachmentFile } from "../planAttachments.js";
+import { createManagedEndpointAttachmentPort, resolveManagedPlanAttachment, withManagedUpload } from "./managedEndpointAttachment.js";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 
 import { verifyCriticalProjectFactRecordInWorker as verifyCriticalProjectFactRecord } from "./criticalFactRead.js";
@@ -1286,6 +1288,11 @@ const companionActivityContext: PersonaCompanionContext = {
   last: roleId => lastCompanionSummary(roleDirForApi(roleId))
 };
 const resourceCache = new ResourceCache(path.join(rootDir, "data"));
+const protectedResourceObjects = createProtectedResourceObjects(
+  resourceCache,
+  createAsyncLocalSecretProtector(path.join(rootDir, "data")),
+  "message-endpoint-private-metadata@1"
+);
 /** Bound owners publish objects to the archive namespace; unbound owners keep the legacy cache. */
 const recordingChunk = (owner: string, id: string, authorize?: () => void) => readRecordingObject(
   owner, id,
@@ -5012,6 +5019,7 @@ async function performConversationAgentSend(
     rolesRoot: managerRolesRoot(),
     withManagedGroupFile: options.withManagedGroupFile,
     withManagedPlanAttachment: resolveSendManagedPlanAttachment,
+    assertVariantAuthority: options.requestAuthority,
     speechServiceUrl: speechServiceUrl,
     publishEvent: publishManagerEvent,
     appendRolePanelTimeline,
@@ -6841,22 +6849,8 @@ async function resolveSendManagedPlanAttachment<T>(
   reference: { roleId?: string; planId: string; attachmentId: string },
   send: (file: { path: string; fileName: string }) => Promise<T>
 ): Promise<T> {
-  const roleId = sanitizeRoleId(reference.roleId ?? "");
-  if (!roleId) throw new Error("A managed plan attachment requires the owning roleId.");
-  const roleDir = roleDirForApi(roleId);
-  const plan = getPlan(roleDir, reference.planId);
-  if (!plan) throw new Error(`Plan attachment plan was not found: ${reference.planId}.`);
-  const attachment = plan.attachments.find(item => item.id === reference.attachmentId);
-  if (!attachment) {
-    throw new Error(`Plan attachment was not found on plan ${reference.planId}: ${reference.attachmentId}.`);
-  }
-  if (attachment.kind !== "image" && attachment.kind !== "file") {
-    throw new Error(`Plan attachment ${reference.attachmentId} is not an image or file.`);
-  }
-  // The storage owner returns a canonical regular file contained in this plan's
-  // active/archive roots; do not repeat its filesystem checks in the parent.
-  const realFile = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
-  return await send({ path: realFile, fileName: attachment.name });
+  const { path: filePath, fileName } = resolveManagedPlanAttachment(roleDirForApi, reference);
+  return send({ path: filePath, fileName });
 }
 
 const roleKnowledgeCatalogRefreshes = new Map<string, Promise<void>>();
@@ -7593,9 +7587,33 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   });
   const lanAgentAuthority = new LanAgentAuthority({ resolveComputerDefinition: () => resolvePublishedPluginService("manager.computer-settings-definition@1") as ComputerSettingsDefinition | undefined, statePath: path.join(rootDir, "data", ".runtime", "lan-agent-authority.json") });
   const agentUploadStore = new AgentUploadStore({ rootDir: path.join(rootDir, "data", ".runtime", "agent-uploads"), maxFileBytes: rabiGlobalConfig.read().agentUploads.maxFileMiB * 1024 * 1024 });
+  const performOwnedAgentSend = (body: AgentSendRequest, options: Omit<NonNullable<Parameters<typeof performAgentSend>[1]>, "withManagedGroupFile"> = {}) =>
+    performAgentSend(body, { ...options, withManagedGroupFile: (fileId, fileSha256, send) =>
+      withManagedUpload(agentUploadStore, { fileId, fileSha256 }, () => {
+        options.requestAuthority?.();
+        if (options.remoteSource) assertUploadAuthorized(options.remoteSource);
+      }, send) });
+  const submitAgentSendVariant: import("@rabiroute/plugin-sdk").MessageEndpointAgentSendProducer = async (request, body, assertCurrent) => {
+    const requestAuthority = () => {
+      assertCurrent();
+      if (!hasAuthenticatedConnectionRequest(request) && !isLoopbackRemoteAddress(request.socket.remoteAddress)) {
+        throw new Error("Native sender requires the original authorized Manager request.");
+      }
+    };
+    requestAuthority();
+    validateLanAgentRequestBody(request, body);
+    if (!agentSendVariantType(body)) throw new Error("The native producer requires a registered channel send variant.");
+    const remoteSource = getTrustedLanAgentSource(request);
+    if (remoteSource?.provider && remoteSource.sessionId
+      && (body.sender.agentType !== remoteSource.provider || body.sender.sessionId !== remoteSource.sessionId)) {
+      throw new Error("The native producer's sender differs from the authorized Agent session.");
+    }
+    return performOwnedAgentSend(body, { remoteSource, requestAuthority });
+  };
   const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
     if (!lanAgentAuthority.getNodeAuthorization(source.nodeId)) throw new Error("Remote computer credential was revoked.");
   };
+  const withManagedAttachment = createManagedEndpointAttachmentPort(agentUploadStore, roleDirForApi, assertUploadAuthorized);
   const lanAgentReleaseStore = new LanAgentReleaseStore({ immutablePackage:Boolean(managerHostIdentity), rootDir, agentRoot: path.join(packageRoot, "apps", "rabi-agent"), pluginSourceRoot: packageRoot });
   // Rebuildable per-source display cache; settings and execution stay with each original Manager.
   const computerPeerRows = new Map<string, Record<string, unknown>[]>();
@@ -7825,6 +7843,28 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         appendRouteLog: (id: string, line: string) => { const runtime = runtimes.get(id); if (runtime) appendLog(runtime, line); },
         readGatewayStatus, normalizeDefinition,
         prepareSendVariant: prepareAgentSendVariant,
+        submitAgentSendVariant,
+        withManagedAttachment,
+        protectedResourceObjects: Object.freeze({
+          plaintextChunkBytes: 256 * 1024,
+          readProtected: protectedResourceObjects.readProtected,
+          findByOwner: protectedResourceObjects.findByOwner,
+          putProtected: (owner: string, bytes: Buffer, authorize: () => void, signal?: AbortSignal) => {
+            authorize();
+            if (managerReadOnly) throw new Error("Resource writes are disabled in a read-only Manager.");
+            return protectedResourceObjects.putProtected(owner, bytes, authorize, signal);
+          }
+        }),
+        resourceObjects: Object.freeze({
+          maxObjectBytes: RESOURCE_OBJECT_MAX_BYTES,
+          read: (owner: string, id: string) => resourceCache.read(owner, id),
+          findByOwner: (owner: string) => resourceCache.findByOwner(owner),
+          put: (owner: string, id: string, bytes: Uint8Array, authorize: () => void) => {
+            authorize();
+            if (managerReadOnly) throw new Error("Resource writes are disabled in a read-only Manager.");
+            return resourceCache.put(owner, id, Buffer.from(bytes), authorize);
+          }
+        }),
         readRoute: (routeId: string) => runtimes.get(routeId)?.definition,
         routeDataDir: (routeId: string) => {
           const runtime = runtimes.get(routeId);
@@ -7837,6 +7877,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readRoutes: () => structuredClone(readConfig().gateways),
         writeRoutes: (routes: GatewayDefinition[], revision: string, operationId: string) => writeConfig({gateways: routes}, revision, operationId),
         saveRoute: writeAdapterConfigFile,
+        writeRoute: writeGatewayConfig,
+        resolveRouteMutation,
         routeVersion: () => routeCatalogVersion().routeConfigHash,
         syncRoutes: syncRunningGateways, gatewayPayload: standaloneGatewayPayload,
         log: (event: string, detail: string) => managerOperationalLog.record("info", event, { result: detail }),
@@ -8308,6 +8350,7 @@ get runtimes() { return runtimes; },
 get readGatewayStatus() { return readGatewayStatus; },
 get isLoopbackRemoteAddress() { return isLoopbackRemoteAddress; },
 get performAgentSend() { return performAgentSend; },
+get performOwnedAgentSend() { return performOwnedAgentSend; },
 get listAgentSendVariants() { return listAgentSendVariants; },
 get publishManagerEvent() { return publishManagerEvent; },
 get readJsonBody() { return readJsonBody; },
@@ -8459,6 +8502,8 @@ get roleDirForApi() { return roleDirForApi; } }) }),
     hostServices: [...managerPluginHostServices, Object.freeze({ capability: "host.message-endpoints@2",
       value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value }),
       Object.freeze({ capability: "host.message-endpoints@3",
+        value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value }),
+      Object.freeze({ capability: "host.message-endpoints@4",
         value: managerPluginHostServices.find(service => service.capability === "host.message-endpoints@1")!.value })],
     applicationIdentity: {
       applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,

@@ -115,13 +115,16 @@ export function ownMessageEndpointEgress(context, definition) {
       || !/^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$/.test(variant.type) || Object.hasOwn(sendVariants, variant.type)
       || !Number.isSafeInteger(variant.contractVersion) || variant.contractVersion < 1
       || typeof variant.description !== "string" || !variant.description.trim()
+      || variant.receiptMode !== undefined && variant.receiptMode !== "message" && variant.receiptMode !== "ack-only"
+      || variant.allowEmptyText !== undefined && typeof variant.allowEmptyText !== "boolean"
+      || variant.readMedia !== undefined && typeof variant.readMedia !== "function"
       || variant.dataSchema?.type !== "object" || variant.dataSchema.additionalProperties !== false
       || variant.paramsSchema?.type !== "object" || variant.paramsSchema.additionalProperties !== false
       || typeof variant.readText !== "function" || typeof variant.operation !== "string" || !Object.hasOwn(definition.operations, variant.operation)
       || typeof definition.operations[variant.operation] !== "function") {
       throw new Error(`Invalid send variant for endpoint ${definition.type}.`);
     }
-    const owned = Object.freeze({ ...variant, dataSchema: immutableAgentMetadata(variant.dataSchema),
+    const owned = Object.freeze({ ...variant, receiptMode: variant.receiptMode ?? "message", dataSchema: immutableAgentMetadata(variant.dataSchema),
       paramsSchema: immutableAgentMetadata(variant.paramsSchema) });
     prepareVariant?.(owned);
     sendVariants[variant.type] = owned;

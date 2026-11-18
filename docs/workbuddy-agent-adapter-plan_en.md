@@ -6,11 +6,23 @@ English | <a href="./workbuddy-agent-adapter-plan.md">简体中文</a>
 
 # WorkBuddy as an Agent Endpoint
 
+
+## Current 0.1.11 implementation
+
+Ordinary desktop-chat creation, original-task continuation and `workbuddyDeliveryMode=steer` reuse the original desktop connector, request IDs and receipts. The connector verifies the full workspace path and stable ID registered by the native input component. Version 0.1.11 locates its worker from the actual plugin entry, accepts the packaged Runtime through release-path and digest checks, and decodes native guidance content blocks for receipt recovery.
+
+Cold start uses the same native client and connector. A running client retains its original connection. Startup after exit and exact-ID continuation have separate acceptance. Accepted or uncertain intents are queried by their original IDs. Native queue admission retains its actual stage. HTTP 200, readable history and immediate desktop rendering have separate evidence.
+
+Nine social-media tasks were migrated into ordinary desktop chats with user authorization, while their original Codex tasks remain available. Automatic ordinary-chat creation and the earlier GUI migration have separate records. Creation returns the native automatic title. Standalone API opening, renaming, actual tool approvals, image reading and live desktop refresh depend on their actual supported contracts and independent acceptance.
+
+The 0.1.6 installation, protocol and investigation sections below retain their historical date scope. Read the instance catalog and formal acceptance receipt for the actual running version and hash.
+
+
 > 2026-11-17: WorkBuddy plugin **0.1.6 / experimental** is formally adopted, retaining the Host 0.15.27 and Manager processes. A new message appears in the original task's native user record and its formal request returns the acceptance marker. This does not establish desktop live rendering or actual tool approval behavior.
 
 > Prerequisites: this plan follows [Standard Agent Endpoint Requirements](agent-adapter-standard-requirements.md) and is executed under `skills/create-rabiroute-agent-adapter/SKILL.md` and its [owner-first design gate](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md).
 
-## Current capabilities and acceptance
+## Historical 0.1.6 capabilities and acceptance
 
 | Capability | Evidence obtained | Current boundary |
 | --- | --- | --- |

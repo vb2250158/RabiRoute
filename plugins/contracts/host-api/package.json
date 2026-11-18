@@ -1,6 +1,6 @@
 {
   "name": "@rabiroute/host-api",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "type": "module",
   "license": "MIT",
   "description": "Public declarations and export signatures for RabiRoute shared host owners.",
@@ -293,6 +293,9 @@
     },
     "./manager/planPageCatalogLifecycle": {
       "types": "./types/src/manager/planPageCatalogLifecycle.d.ts"
+    },
+    "./manager/protectedResourceObjects": {
+      "types": "./types/src/manager/protectedResourceObjects.d.ts"
     },
     "./manager/rabiLinkAgentDevices": {
       "types": "./types/src/manager/rabiLinkAgentDevices.d.ts"

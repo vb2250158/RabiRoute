@@ -325,7 +325,7 @@ export function findAgentSendTraces(rootDir: string, query: AgentSendTraceQuery)
 }
 
 function statusCodeFor(result: AgentSendResult): number {
-  if (result.status === "sent") return 202;
+  if (result.status === "sent" || result.status === "acknowledged") return 202;
   if (result.status === "draft") return 200;
   if (result.status === "failed") return 502;
   return 403;
@@ -362,7 +362,10 @@ export async function executeIdempotentAgentSend(
 ): Promise<IdempotentAgentSendResponse> {
   const prepared = prepareAgentSendRequest(request);
   const deliveryId = normalizeDurableDeliveryId(request.deliveryId);
-  const replyTargetKey = recentReplyTargetKey(options.rootDir, prepared);
+  const variant = scopedAgentSendVariant(request);
+  const acknowledgementOnly = variant?.receipt.receiptMode === "ack-only";
+  // Acknowledgements are evidence for this operation only, never for a different delivery ID.
+  const replyTargetKey = acknowledgementOnly ? undefined : recentReplyTargetKey(options.rootDir, prepared);
   const contentFingerprint = sendContentFingerprint(request);
   const recentReply = prepared.allowAdditionalReply
     ? undefined
@@ -387,10 +390,9 @@ export async function executeIdempotentAgentSend(
       true
     );
   }
-  const contentKey = messageProcessingContentKey(options.rootDir, prepared, request);
+  const contentKey = acknowledgementOnly ? undefined : messageProcessingContentKey(options.rootDir, prepared, request);
   let contentDuplicate = false;
   const payload = agentSendIdempotencyPayload(request);
-  const variant = scopedAgentSendVariant(request);
   const outcome = await executeDurableDelivery({
     rootDir: options.rootDir,
     namespace: RECEIPT_NAMESPACE,
@@ -410,7 +412,7 @@ export async function executeIdempotentAgentSend(
         target: prepared.target
       };
     },
-    recover: options.recover,
+    recover: variant ? undefined : options.recover,
     waitForCompletionMs: options.waitForCompletionMs,
     requestAuthority: options.requestAuthority
   });

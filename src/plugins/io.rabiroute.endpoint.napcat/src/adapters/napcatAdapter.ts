@@ -201,6 +201,7 @@ function patchMessageAdapterStatus(
 }
 
 function textFromEvent(event: OneBotEvent): string {
+  if (event.post_type === "request") return "";
   if (typeof event.raw_message === "string") {
     return event.raw_message;
   }
@@ -332,6 +333,10 @@ async function resolveReplyChain(
 }
 
 function eventSummary(event: OneBotEvent): Record<string, unknown> {
+  if (event.post_type === "request") return {
+    postType: event.post_type, groupId: event.group_id, userId: event.user_id, selfId: event.self_id,
+    requestFlagPresent: typeof (event as Record<string, unknown>).flag === "string"
+  };
   return {
     postType: event.post_type,
     messageType: event.message_type,
@@ -646,6 +651,7 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
 export type NapCatAdapterDependencies = {
   routeId?: string;
   eventBotUserId?(instanceId: string): string | undefined;
+  captureQuickRequestContext?(event: OneBotEvent, instance: NapCatInstanceConfig, frame: NapCatFrameContext, authorize: () => void): Promise<string | undefined>;
   instances?: () => NapCatInstanceConfig[];
   dataDir?: () => string;
   now?: () => Date;
@@ -660,6 +666,7 @@ type NapCatLifecycle = {
   active: boolean;
   routeId?: string;
   eventBotUserId?(instanceId: string): string | undefined;
+  captureQuickRequestContext?: NapCatAdapterDependencies["captureQuickRequestContext"];
   configuredInstances: NapCatInstanceConfig[];
   instances: NapCatInstanceConfig[];
   servers: Array<{ instance: NapCatInstanceConfig; owner: NapCatWsOwner }>;
@@ -758,8 +765,10 @@ function setupNapCatSession(
   return async (frame) => {
     const { data } = frame;
     if (!lifecycle.active) return;
+    let requestFrame = false;
     try {
       const event = JSON.parse(data.toString()) as OneBotEvent;
+      requestFrame = event.post_type === "request";
       const currentMessageStatus = readGatewayStatus(lifecycle.dataDir()).napcatInstances?.[instance.id]
         ?? readGatewayStatus(lifecycle.dataDir()).napcat;
       const messagePatch = {
@@ -786,28 +795,41 @@ function setupNapCatSession(
       });
       if (lifecycle.routeId) {
         try {
+          const authorize = () => {
+            frame.signal.throwIfAborted();
+            if (!lifecycle.active) throw new Error("NapCat request source retired");
+          };
+          // Only genuine request ingress needs a protected provenance object. Failure to
+          // issue a ref does not suppress the original incoming event processing.
+          let requestEventRef: string | undefined;
+          if (requestFrame && lifecycle.captureQuickRequestContext) {
+            try { requestEventRef = await lifecycle.captureQuickRequestContext(event,instance,frame,authorize); }
+            catch { console.warn(`[NapCat] Request context unavailable for ${instance.id}`); }
+          }
+          authorize();
           appendNapcatApiEvent(readNapcatApiManifest(), {
             routeId: lifecycle.routeId, instanceId: instance.id,
             botUserId: String(lifecycle.eventBotUserId?.(instance.id) ?? currentMessageStatus?.botUserId ?? "")
-          }, event, lifecycle.dataDir());
+          }, event, lifecycle.dataDir(), requestEventRef);
         } catch (error) {
           console.warn(`[NapCat] Typed event archive failed for ${instance.id}`, error instanceof Error ? error.name : "Error");
         }
       }
+      if (!lifecycle.active || frame.signal.aborted) return;
       await lifecycle.handleEvent(event, instance, frame);
     } catch (error) {
       appendNapCatRuntimeLog(lifecycle, {
         level: "error",
         event: "inbound_error",
         instanceId: instance.id,
-        message: error instanceof Error ? error.message : String(error),
-        error,
+        message: requestFrame ? "NapCat request processing failed" : error instanceof Error ? error.message : String(error),
+        ...requestFrame ? {} : {error},
         data: {
           name: instance.name,
-          raw: data.toString().slice(0, 4000)
+          ...requestFrame ? {} : {raw: data.toString().slice(0, 4000)}
         }
       });
-      console.error(`[${instance.name}] Failed to handle event`, error);
+      console.error(`[${instance.name}] Failed to handle event`, requestFrame ? "Request processing failed" : error);
     }
   };
 }
@@ -824,6 +846,7 @@ export function createNapCatAdapter(
         active: true,
         routeId: dependencies.routeId,
         eventBotUserId: dependencies.eventBotUserId,
+        captureQuickRequestContext: dependencies.captureQuickRequestContext,
         configuredInstances,
         instances,
         servers: [],

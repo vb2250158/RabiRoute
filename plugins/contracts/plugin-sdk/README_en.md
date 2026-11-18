@@ -93,3 +93,17 @@ const result = await buildPluginWebPackage({
 ```
 
 Read `runtimeCatalog` from the target WebGUI's `assets/web-runtime.json`, or pass the parsed object. Declare custom resource MIME by extension in `rabi.webContentTypes` or `contentTypes`; it travels with the package. The output contains its entry, demand-loaded resources and `module.json`. Rebuilding an existing directory owned by the same plugin stages a replacement; a failed build retains the original directory. Source directories, their parents and paths containing input files cannot be cleared as output. Returned `inputs` contain absolute paths for private build verification, not fields in the public resource manifest. Candidate activation checks the shared exports actually required; ordinary API calls do not go through that check.
+
+## Native acknowledgements and managed media
+
+A send variant declares its receipt contract with `receiptMode`. The default `message` mode requires a real, nonzero message ID. In `ack-only` mode, the plugin verifies a positive platform acknowledgement and returns `{ acknowledged: true }`. The public result uses `status: "acknowledged"`; receipt verification records `acknowledgementOnly: true` and `platformVerification: "unknown"`. Message visibility, processing completion and business outcomes each retain their own verification owner.
+
+`readText` projects all caller-authored output text. `readMedia` projects media kinds and managed upload or plan-attachment references. The host applies the original output policy, source authorization and file leases. The plugin checks the exact Route, instance and account again before calling the platform. Variants with no caller-authored text may declare `allowEmptyText: true`. Timeouts and missing acknowledgements retain the original delivery ID for receipt recovery.
+
+Agents use `POST /api/agent/send`. An authorized native Manager HTTP operation can call `host.message-endpoints@4.manager.submitAgentSendVariant(request, body, assertCurrent)` with the original request identity, stable delivery ID and managed send policy. Public contracts are `agent.send` 1.2.0, `agent.send.capabilities` 2.2.0 and `agent.send.receipt.read` 1.1.0.
+
+## Message endpoint Host @4
+
+`host.message-endpoints@4` extends the existing service with `manager.resourceObjects`, backed by the original resource cache. It exposes content-SHA-256 `put`, `read` and owner-scoped enumeration. Objects retain the existing 1 MiB chunk bound; a plugin-owned final manifest links complete artifacts. Enumeration is read-only, and corrupt content or indexes retain their original errors.
+
+Configuration uses the single-Route CAS through `manager.writeRoute` and original-operation recovery through `manager.resolveRouteMutation`. A token-owning write transfers its binding authority after persisted readback and native account verification. Resource retirement waits for cancellation and cleanup. The native Gateway publishes its own active plugin identities, exposed through `GET /gateways?summary=1` at `data.manager[].gatewayEndpointPlugins`, including PID, generation, package hash and activation ID.

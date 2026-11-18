@@ -2,7 +2,7 @@ import { getTimeoutMs } from "./timeoutSettings.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type LocalSecretProtector = Readonly<{
@@ -35,19 +35,19 @@ function powerShellDpapi(script: string, input: string): string {
   return String(result.stdout).trim();
 }
 
-function windowsProtector(): LocalSecretProtector {
-  const protectScript = [
+const protectScript = [
     "Add-Type -AssemblyName System.Security",
     "$plain=[Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())",
     "$cipher=[Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
     "[Console]::Out.Write([Convert]::ToBase64String($cipher))"
   ].join(";");
-  const unprotectScript = [
+const unprotectScript = [
     "Add-Type -AssemblyName System.Security",
     "$cipher=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())",
     "$plain=[Security.Cryptography.ProtectedData]::Unprotect($cipher,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
     "[Console]::Out.Write([Convert]::ToBase64String($plain))"
   ].join(";");
+function windowsProtector(): LocalSecretProtector {
   return {
     scheme: "windows-dpapi-current-user",
     protect: plaintext => powerShellDpapi(protectScript, plaintext),
@@ -125,4 +125,63 @@ export function createLocalSecretProtector(
   keyFileName = ".local-secrets.key"
 ): LocalSecretProtector {
   return process.platform === "win32" ? windowsProtector() : localKeyProtector(dataDir, keyFileName);
+}
+
+export type AsyncLocalSecretProtector = Readonly<{
+  scheme: string;
+  protect(plaintext: string, signal?: AbortSignal): Promise<string>;
+  unprotect(protectedValue: string, signal?: AbortSignal): Promise<string>;
+}>;
+
+/** Owns the child until close, including cancellation and malformed output. */
+export function runDpapiChild(
+  child: ChildProcess, input: string, signal?: AbortSignal,
+  timeoutMs = getTimeoutMs("backend.shared.localSecretProtection.powerShellDpapi.spawnSync.timeout", 15_000),
+  maxBuffer = 4 * 1024 * 1024
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let failure: Error | undefined;
+    let size = 0;
+    const chunks: Buffer[] = [];
+    const stop = (error: Error) => {
+      failure ??= error;
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    };
+    const abort = () => stop(new Error("Windows DPAPI operation cancelled."));
+    const timer = setTimeout(() => stop(new Error("Windows DPAPI operation timed out.")), timeoutMs);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBuffer) stop(new Error("Windows DPAPI output exceeded its limit."));
+      else chunks.push(Buffer.from(chunk));
+    });
+    // Consume stderr without retaining or exposing potentially sensitive data.
+    child.stderr?.resume();
+    child.once("error", () => { failure ??= new Error("Windows DPAPI operation failed."); });
+    child.stdin?.on("error", () => { failure ??= new Error("Windows DPAPI operation failed."); });
+    child.once("close", code => {
+      clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      const output = Buffer.concat(chunks).toString("utf8").trim();
+      if (failure || code !== 0 || !output) reject(failure ?? new Error("Windows DPAPI operation failed."));
+      else resolve(output);
+    });
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    else child.stdin?.end(input);
+  });
+}
+
+export function createAsyncLocalSecretProtector(dataDir: string, keyFileName = ".local-secrets.key"): AsyncLocalSecretProtector {
+  if (process.platform !== "win32") {
+    const original = localKeyProtector(dataDir, keyFileName);
+    return { scheme: original.scheme, async protect(value, signal) { signal?.throwIfAborted(); return original.protect(value); },
+      async unprotect(value, signal) { signal?.throwIfAborted(); return original.unprotect(value); } };
+  }
+  const execute = (script: string, input: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const child = spawn(trustedWindowsPowerShellPath(), ["-NoProfile", "-NonInteractive", "-Command", script],
+      { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    return runDpapiChild(child, input, signal);
+  };
+  return { scheme: "windows-dpapi-current-user", protect: (value, signal) => execute(protectScript, value, signal),
+    async unprotect(value, signal) { return Buffer.from(await execute(unprotectScript, value, signal), "base64").toString("utf8"); } };
 }

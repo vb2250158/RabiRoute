@@ -30,50 +30,6 @@ function Resolve-HostQuitFence([object]$Status) {
     throw "Unsupported Host state '$state'; refusing fenced quit."
 }
 
-function Get-GenerationProcessHandles([object]$Status) {
-    $managerId = [int]$Status.managerPid
-    $trayId = [int]$Status.trayPid
-    if ($managerId -le 0 -or $trayId -le 0) { throw "Healthy Host status omitted Manager or Tray identity." }
-    $manager = Get-CimInstance Win32_Process -Filter "ProcessId=$managerId" -ErrorAction Stop
-    $tray = Get-CimInstance Win32_Process -Filter "ProcessId=$trayId" -ErrorAction Stop
-    if ($null -eq $manager -or $null -eq $tray -or $manager.ParentProcessId -le 0 -or $manager.ParentProcessId -ne $tray.ParentProcessId) {
-        throw "Manager and Tray do not share a provable Host parent."
-    }
-    $hostId = [int]$manager.ParentProcessId
-    $hostInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$hostId" -ErrorAction Stop
-    if ($null -eq $hostInfo -or $hostInfo.Name -ine "RabiRouteHost.exe") { throw "Generation Host process identity is unavailable." }
-    $members = @($Status.jobMemberPids | ForEach-Object { [int]$_ })
-    if ($managerId -notin $members -or $trayId -notin $members) { throw "Host job does not contain its READY Manager and Tray." }
-    $result = [Collections.Generic.List[object]]::new()
-    try {
-        foreach ($id in @(@($hostId) + $members | Select-Object -Unique)) {
-            $process = Get-Process -Id $id -ErrorAction SilentlyContinue
-            if ($null -eq $process) {
-                if ($id -in @($hostId, $managerId, $trayId)) { throw "A required generation process exited before its handle was captured." }
-                continue
-            }
-            $handle = $process.Handle
-            if ($handle -eq [IntPtr]::Zero) { throw "Could not retain an exact generation process handle." }
-            $result.Add($process)
-        }
-        return ,$result.ToArray()
-    } catch {
-        foreach ($process in $result) { $process.Dispose() }
-        throw
-    }
-}
-
-function Wait-GenerationProcessExit([object[]]$Processes, [int]$TimeoutMs = 30000) {
-    $elapsed = [Diagnostics.Stopwatch]::StartNew()
-    foreach ($process in $Processes) {
-        if ($process.HasExited) { continue }
-        $remaining = $TimeoutMs - [int]$elapsed.ElapsedMilliseconds
-        if ($remaining -le 0 -or -not $process.WaitForExit($remaining)) {
-            throw "The original Host generation did not fully exit before the deadline."
-        }
-    }
-}
-
 function Repair-ChildProcessEnvironment {
     # .NET Framework enumerates case-sensitive names, but Start-Process copies
     # them into a case-insensitive dictionary when redirecting output. Validate
@@ -128,6 +84,55 @@ function Invoke-HostJson([string]$HostPath, [string[]]$Arguments, [string]$Work)
     }
 }
 
+function Get-OriginalHostProcesses([object]$Status, [string]$HostPath) {
+    $children = @()
+    foreach ($name in @("managerPid", "trayPid")) {
+        $processId = [uint32]$Status.$name
+        if (-not $processId) { continue }
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+        if ($process) { $children += $process }
+    }
+    $parents = @($children | ForEach-Object { [uint32]$_.ParentProcessId } | Select-Object -Unique)
+    if ($parents.Count -ne 1) { throw "Cannot identify a shared original Host parent from the status-owned processes." }
+    $hostName = [IO.Path]::GetFileName($HostPath)
+    $hosts = @(Get-CimInstance Win32_Process -Filter "ProcessId = $($parents[0])" -ErrorAction Stop)
+    $hosts = @($hosts | Where-Object {
+        [string]::Equals($_.Name, $hostName, [StringComparison]::OrdinalIgnoreCase) -and
+        (-not $_.ExecutablePath -or
+            [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath), $HostPath, [StringComparison]::OrdinalIgnoreCase)) -and
+        $_.CommandLine -notmatch '(?i)(?:^|\s)--command(?:\s|$)'
+    })
+    if ($hosts.Count -ne 1) { throw "Cannot identify the original Host process before fenced quit." }
+    foreach ($process in @($hosts[0]) + $children) {
+        if (-not $process.CreationDate) { throw "Original process $($process.ProcessId) omitted CreationDate." }
+        [pscustomobject]@{
+            role = $(if ($process.ProcessId -eq $hosts[0].ProcessId) { "Host" }
+                elseif ($process.ProcessId -eq $Status.managerPid) { "Manager" } else { "Tray" })
+            processId = [uint32]$process.ProcessId
+            creationDate = ([datetime]$process.CreationDate).ToUniversalTime().Ticks
+            identityMethod = $(if ($process.ProcessId -eq $hosts[0].ProcessId -and $process.ExecutablePath) {
+                "status-child-parent-and-host-path"
+            } else { "status-child-parent-and-name" })
+        }
+    }
+}
+
+function Wait-OriginalHostProcesses([object[]]$Processes, [int]$TimeoutMilliseconds = 45000) {
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $remaining = @($Processes | Where-Object {
+            $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.processId)" -ErrorAction Stop
+            if ($current -and -not $current.CreationDate) { throw "Cannot confirm original process $($_.processId) exit without CreationDate." }
+            $current -and ([datetime]$current.CreationDate).ToUniversalTime().Ticks -eq $_.creationDate
+        })
+        if (-not $remaining.Count) { return }
+        if ($elapsed.ElapsedMilliseconds -ge $TimeoutMilliseconds) {
+            throw "Original Host generation processes did not exit after fenced quit: $($remaining.processId -join ', ')."
+        }
+        Start-Sleep -Milliseconds 250
+    } while ($true)
+}
+
 $install = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $hostPath = Join-Path $install "RabiRouteHost.exe"
 if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) {
@@ -142,28 +147,14 @@ if ([string]$status.state -eq "stopped") {
 }
 $fence = Resolve-HostQuitFence $status
 $generation = [string]$fence.generationId
-$handles = @()
-try {
-    if ([string]$status.state -in @("healthy", "degraded")) {
-        $handles = @(Get-GenerationProcessHandles $status)
-        $confirmed = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
-        if ([string]$confirmed.applicationGenerationId -ne $generation -or
-            [int]$confirmed.managerPid -ne [int]$status.managerPid -or [int]$confirmed.trayPid -ne [int]$status.trayPid) {
-            throw "Host generation changed while capturing process handles."
-        }
-    }
-    $quit = Invoke-HostJson $hostPath @("--command", "quit", "--application-generation-id", $generation, "--json") $WorkingRoot
-    if ([string]$quit.state -ne "stopped") { throw "Fenced quit did not reach state=stopped." }
-    if ($handles.Count -gt 0) {
-        # The bootstrap read-only status probe reports unknown after its pipe closes.
-        # Retained OS handles establish exit of the original processes without a PID-reuse race.
-        Wait-GenerationProcessExit $handles
-    } else {
-        # Keep the previous fail-closed behavior for faulted generations without READY children.
-        $after = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
-        if ([string]$after.state -ne "stopped") { throw "Host remained active after fenced quit." }
-    }
-} finally {
-    foreach ($process in $handles) { $process.Dispose() }
+$originalProcesses = @(Get-OriginalHostProcesses $status $hostPath)
+$confirmed = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
+$confirmedFence = Resolve-HostQuitFence $confirmed
+if ([string]$confirmedFence.generationId -ne $generation -or
+    [int]$confirmed.managerPid -ne [int]$status.managerPid -or [int]$confirmed.trayPid -ne [int]$status.trayPid) {
+    throw "Host generation changed while capturing process identities."
 }
-[pscustomobject]@{ ok = $true; state = "stopped"; applicationGenerationId = $generation; fenceSource = [string]$fence.source } | ConvertTo-Json -Compress
+$quit = Invoke-HostJson $hostPath @("--command", "quit", "--application-generation-id", $generation, "--json") $WorkingRoot
+if ([string]$quit.state -ne "stopped") { throw "Fenced quit did not reach state=stopped." }
+Wait-OriginalHostProcesses $originalProcesses
+[pscustomobject]@{ ok = $true; state = "stopped"; applicationGenerationId = $generation; fenceSource = [string]$fence.source; originalProcesses = $originalProcesses } | ConvertTo-Json -Depth 4 -Compress

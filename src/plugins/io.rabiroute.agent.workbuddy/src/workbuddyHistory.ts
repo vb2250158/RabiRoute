@@ -10,12 +10,23 @@ export function workbuddyRecordConfirmsDelivery(record: unknown, threadId: strin
   const message = record as {
     type?: string; role?: string; sessionId?: string;
     content?: string | Array<{ type?: string; text?: string }>;
-    providerData?: { startsNewUserRequest?: boolean; conversationRequestId?: string; rootRequestId?: string };
+    providerData?: {
+      startsNewUserRequest?: boolean;
+      conversationRequestId?: string;
+      rootRequestId?: string;
+      clientMeta?: { "codebuddy.ai"?: { queueOrigin?: string; contentBlocks?: Array<{ type?: string; text?: string }> } };
+    };
   };
   if (message?.type !== "message" || message.role !== "user" || (message.sessionId && message.sessionId !== threadId)) return false;
-  if (guidance) {
-    const data = message.providerData;
-    if (data?.startsNewUserRequest !== false || !data.rootRequestId || data.rootRequestId !== data.conversationRequestId) return false;
+  const data = message.providerData;
+  const sameTurnGuidance = data?.startsNewUserRequest === false && data.rootRequestId
+    && data.rootRequestId === data.conversationRequestId;
+  if (guidance && !sameTurnGuidance) return false;
+  const queued = data?.clientMeta?.["codebuddy.ai"];
+  if (sameTurnGuidance && queued?.queueOrigin === "steer" && Array.isArray(queued.contentBlocks)) {
+    const original = queued.contentBlocks.filter(part => part?.type === "text" && typeof part.text === "string")
+      .map(part => part.text).join("\n");
+    if (promptConfirmsDelivery(original, deliveryId)) return true;
   }
   const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
     ? message.content.filter(part => part?.type === "input_text" || part?.type === "text").map(part => part.text ?? "").join("\n")

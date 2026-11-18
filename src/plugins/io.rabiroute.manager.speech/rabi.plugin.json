@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.speech",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "entries": {
     "manager": {
       "execution": "in_process",

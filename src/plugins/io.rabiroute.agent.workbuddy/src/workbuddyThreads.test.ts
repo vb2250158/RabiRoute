@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeWorkbuddyWorkspace, workbuddyProjectId } from "./workbuddySessionStore.js";
-import { readWorkbuddyHistory } from "./workbuddyHistory.js";
+import { readWorkbuddyHistory, workbuddyRecordConfirmsDelivery } from "./workbuddyHistory.js";
 import { requestWorkbuddyDesktopCreation, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
 import { legacyWorkbuddyDesktopLayout, type WorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
 import { createManager } from "./agentAdapters/workbuddyManagerProvider.js";
@@ -144,6 +144,27 @@ test("the provider recovers steer only from the exact native injection record", 
       accepted: true, transport: "workbuddy_native_history", action: "steered"
     });
   });
+});
+
+test("native queued content confirms only exact same-turn WorkBuddy guidance", () => {
+  const threadId = "11111111-1111-4111-8111-111111111111";
+  const deliveryId = "agent-" + "a".repeat(64);
+  const prompt = '## 消息源\n- 类型：用户\n\n## 消息内容\n原引导\n\n[回传参数]\n'
+    + JSON.stringify({ deliveryId, responsePolicy: "none" });
+  const providerData = {
+    startsNewUserRequest: false, rootRequestId: "original-turn", conversationRequestId: "original-turn",
+    clientMeta: { "codebuddy.ai": { queueOrigin: "steer", contentBlocks: [{ type: "text", text: prompt }] } }
+  };
+  const record = { type: "message", role: "user", sessionId: threadId, content: "Native context prefix\n" + prompt, providerData };
+  assert.equal(workbuddyRecordConfirmsDelivery(record, threadId, deliveryId), true);
+  assert.equal(workbuddyRecordConfirmsDelivery(record, threadId, deliveryId, true), true);
+  assert.equal(workbuddyRecordConfirmsDelivery(record, "other-task", deliveryId, true), false);
+  assert.equal(workbuddyRecordConfirmsDelivery(record, threadId, "agent-" + "b".repeat(64), true), false);
+  assert.equal(workbuddyRecordConfirmsDelivery({ ...record, providerData: { ...providerData, startsNewUserRequest: true } },
+    threadId, deliveryId, true), false);
+  assert.equal(workbuddyRecordConfirmsDelivery({ ...record, providerData: {
+    ...providerData, clientMeta: { "codebuddy.ai": { ...providerData.clientMeta["codebuddy.ai"], queueOrigin: "queued" } }
+  } }, threadId, deliveryId), false);
 });
 
 type TaskRow = {
@@ -406,7 +427,9 @@ test("WorkBuddy reconciles an original creation while its desktop relay is offli
   }));
   await withHome(root, async () => {
     const retiring = new AbortController();
-    const manager = createManager({ host: { readOnly: () => false, packageRoot: root } } as AgentManagerImplementationOptions, {
+    const manager = createManager({
+      scannerEntry: path.join(root, "workers", "scan.mjs"), host: { readOnly: () => false, packageRoot: root }
+    } as AgentManagerImplementationOptions, {
       type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"), sessionBinding: {}
     }, retiring.signal);
     const create = manager.operations["threads.create"]!;

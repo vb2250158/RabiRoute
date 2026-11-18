@@ -34,7 +34,7 @@ test("request flags remain with the original request owner and outbound messages
   const request = projectNapcatApiEvent(manifest, source, { post_type: "request", request_type: "friend", self_id: 12345,
     user_id: 456, flag: "private-acceptance-capability", comment: "fixture request", message: "private-content" });
   assert.equal(request?.requestFlagPresent, true);
-  assert.equal(request?.fields.comment, "fixture request");
+  assert.equal(request?.fields.comment, undefined, "request bodies stay with their original private request owner");
   assert.equal(JSON.stringify(request).includes("private-"), false);
   const sent = projectNapcatApiEvent(manifest, source, { post_type: "message_sent", message_type: "group", self_id: 12345, group_id: 789,
     message_id: 12, message: [{ type: "image", data: { url: "https://private.invalid/?token=secret" } }], raw_message: "secret" });

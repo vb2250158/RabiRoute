@@ -123,6 +123,86 @@
     {
       "name": "createSourceFileOperations",
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiSourceFileOperations.ts"
+    },
+    {
+      "name": "createNapcatArtifactOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/artifactOperations.ts"
+    },
+    {
+      "name": "prepareNapcatWebuiTokenCommit",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiTokenCommit.ts"
+    },
+    {
+      "name": "verifyNapcatWebuiTokenCommitSource",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "stopNapcatInstance",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "createNapcatDownloadStreamOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/downloadStreams.ts"
+    },
+    {
+      "name": "createNapcatNativeEgressOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/egressOperations.ts"
+    },
+    {
+      "name": "createNapcatNativeEgressProducers",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/egressProducers.ts"
+    },
+    {
+      "name": "createNapcatFileResourceOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/fileResourceOperations.ts"
+    },
+    {
+      "name": "createNapcatEmojiLikesOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/emojiLikes.ts"
+    },
+    {
+      "name": "createNapcatShareLinkOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/shareLink.ts"
+    },
+    {
+      "name": "createNapcatTestStreamOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/testStream.ts"
+    },
+    {
+      "name": "createNapcatStopOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/stopInstance.ts"
+    },
+    {
+      "name": "createNapcatQuickOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/quickOperations.ts"
+    },
+    {
+      "name": "createNapcatQuickReplyProducer",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/quickOperations.ts"
+    },
+    {
+      "name": "resolveNapcatWebuiNativeDirectory",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiNativeDirectory.ts"
+    },
+    {
+      "name": "createNapcatWebuiExtendedOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiExtendedOperations.ts"
+    },
+    {
+      "name": "createNapcatWebuiFileOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiFileOperations.ts"
+    },
+    {
+      "name": "createNapcatWebuiAuthOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiAuthOperations.ts"
+    },
+    {
+      "name": "createNapcatWebuiReactiveOwner",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiReactiveOperations.ts"
+    },
+    {
+      "name": "readNapcatQuickRequestContext",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/quickOperationContexts.ts"
     }
   ],
   "ownedPrefixes": [

@@ -32,7 +32,10 @@ function observeWorkbuddyDelivery(
 }
 
 export function createManager(options: AgentManagerImplementationOptions, descriptor: AgentManagerDescriptor, signal: AbortSignal): AgentOwnedManager {
-  const ensureDesktopReady = createWorkbuddyDesktopBootstrap(options.host.packageRoot);
+  const ensureDesktopReady = createWorkbuddyDesktopBootstrap({
+    scannerEntry: options.scannerEntry,
+    applicationRoot: options.host.packageRoot
+  });
   return {
     operations: {
       "threads.list": (payload: Parameters<typeof threads.listWorkbuddyThreads>[0]) => threads.listWorkbuddyThreads(payload),

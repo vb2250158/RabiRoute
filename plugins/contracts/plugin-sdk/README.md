@@ -95,3 +95,17 @@ const result = await buildPluginWebPackage({
 ```
 
 `runtimeCatalog` 来自目标 WebGUI 的 `assets/web-runtime.json`，也可传已解析对象。自定义资源格式在 `rabi.webContentTypes` 或 `contentTypes` 按扩展名声明 MIME，随包生效。产物自带入口、按需资源与 `module.json`；已有同插件构建目录通过暂存/替换更新，构建失败保留原目录。输入源目录、其父目录和包含输入文件的路径不能被当作输出清空。返回的 `inputs` 是供私有构建核验使用的绝对路径，不写入公共资源清单。Web 依赖在候选激活时核对实际共享导出，正常 API 调用不经过该检查。
+
+## 原生动作应答与托管媒体
+
+发送形态通过 `receiptMode` 声明回执合同。默认 `message` 模式要求真实的非零消息 ID。`ack-only` 模式由插件核对平台肯定应答后返回 `{ acknowledged: true }`，公共结果为 `status: "acknowledged"`，原回执记录 `acknowledgementOnly: true` 与 `platformVerification: "unknown"`。原生消息可见性、处理完成和业务结果分别沿各自 owner 验证。
+
+`readText` 投影全部实际发出的调用方文字，`readMedia` 投影媒体类型和托管上传或计划附件引用。宿主沿原输出策略、来源授权和文件租约处理请求，插件在平台调用前再次核对 Route、实例及账号。确实没有调用方文字的形态可声明 `allowEmptyText: true`。超时或缺少肯定应答时保留原投递 ID 的待确认状态，后续查询原回执。
+
+Agent 使用 `POST /api/agent/send`。已授权的 Manager 原生 HTTP 操作可使用 `host.message-endpoints@4.manager.submitAgentSendVariant(request, body, assertCurrent)`，原请求身份、稳定投递 ID 和受管发送策略贯穿同一条链。对应公开合同为 `agent.send` 1.2.0、`agent.send.capabilities` 2.2.0 和 `agent.send.receipt.read` 1.1.0。
+
+## 消息端 Host @4
+
+`host.message-endpoints@4` 在既有服务上追加原资源缓存端口 `manager.resourceObjects`，提供内容 SHA-256 身份的 `put`、`read` 与按 owner 枚举。每个对象沿原 1 MiB 分块限制存储，完整产物由插件持有的最后提交清单关联。枚举只读，内容与索引损坏沿原错误返回。
+
+管理配置沿 `manager.writeRoute` 的单 Route CAS 及 `manager.resolveRouteMutation` 的原操作 ID 回读。token 自有写入在持久回读和原生账号验证后交接本次绑定 authority，原资源释放会等待取消及清理完成。原生 Gateway 的活动插件证明由同一子进程发布，并通过 `GET /gateways?summary=1` 的 `data.manager[].gatewayEndpointPlugins` 读取 PID、generation、包 hash 与 activation ID。

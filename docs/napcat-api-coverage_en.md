@@ -1,57 +1,49 @@
-# NapCat API coverage and calls
+# NapCat API coverage and invocation
 
 [简体中文](napcat-api-coverage.md)
 
-## Scope
+## Version and coverage
 
-The baseline is the NapCat 4.18.4 distribution with SHA-256 `66dfaa1b9e7530d493089c70d24810f4e23c31d129e1662949558ce30ce52a92`. The upstream repository currently retains its README only. Later releases require a new distribution audit.
+The baseline is the NapCat 4.18.4 release, SHA-256 `66dfaa1b9e7530d493089c70d24810f4e23c31d129e1662949558ce30ce52a92`. Recheck the release artifact when the upstream version changes.
 
-[Native declarations](../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-4.18.4.json) describe 167 registered base actions, 501 names including aliases, 112 WebUI method/path pairs, 25 instantiated events and 6 event base classes. The [Rabi coverage matrix](../src/plugins/io.rabiroute.endpoint.napcat/contracts/rabi-coverage-4.18.4.json) records execution status, parameters, public response fields and exact dependencies.
+The [native contract matrix](../src/plugins/io.rabiroute.endpoint.napcat/contracts/napcat-4.18.4.json) lists 167 base actions, 501 names including aliases, 112 WebUI method/path pairs, 25 instantiated events and six event base classes. The [Rabi coverage matrix](../src/plugins/io.rabiroute.endpoint.napcat/contracts/rabi-coverage-4.18.4.json) records each execution contract, parameters, response scope and remaining reason.
 
-| Area | This version |
+| Area | Invocation and boundary |
 | --- | --- |
-| OneBot actions | 55 reads, including 23 limited views, 2 source-bound file byte views, and 55 mutations using the original durable ledger |
-| Existing operations | 20 supported shapes under their original contracts |
-| Outstanding implementation or native-host boundary | 35 individually documented items |
-| WebUI | 17 reads/summaries plus 21 management operations (18 reads, 3 preference writes), 13 legacy entries, 53 dependencies and 8 host boundaries |
-| Events | Typed metadata archiving is implemented; the Gateway adopted version and hash require independent runtime evidence |
+| OneBot | Fixed reads, writes through the original ledger, existing-owner compatibility references and source-bound resources. The matrix records each status. |
+| Outgoing messages | Twelve native send variants, plain-text group forwards and source-message quick replies use the unified `agent.send` policies, Outbox and receipts. |
+| Files and streams | Managed attachments, original-message files and selected-native file references retain their respective source owners. Download frames become SSE with incremental digests and backpressure. |
+| WebUI | 104 fixed invocation shapes and eight host-boundary mappings, covering configuration, authentication, files, Reactive lifecycle and maintenance. Each contract states its execution conditions. |
+| Events | The original WebSocket ingress emits typed metadata. A local protector seals original request flags, and callers use opaque references. |
 
-All base actions are discoverable. Missing execution owners return `QQ_API_OWNER_DEPENDENCY_UNAVAILABLE`. Compatible operations return `QQ_API_USE_EXISTING_OWNER`, with the original operation named in their contract. Discovery and actual execution coverage are counted separately.
+Arbitrary `send_packet` forwarding and actions explicitly marked test-only upstream retain precise unavailable reasons. Restricted views, including Ark getters, expose their declared projection. Full native shapes require separate acceptance. The upstream `send_group_ark_share` and `send_ark_share` handlers obtain cards, and their contracts retain that behavior.
 
-The 23 limited views provide 3 handler-derived metadata views, 5 strict example profiles, 4 diagnostics, 7 credential summaries and 4 Rabi-declared Ark projections. `view` and `evidence` identify their scope. Example-shape mismatches return errors. Diagnostics exclude complete file, message and group data. Credential summaries expose presence, scope, type and expiry metadata.
+## Discovery and calls
 
-Four Ark getters expose a Rabi-declared metadata projection of `app`, `view` and `ver`. Complete native return shapes remain unverified. The installed `send_group_ark_share` and `send_ark_share` handlers obtain cards. Additional WebUI reads cover global/current-account configuration, font availability and mirror metadata with explicit provenance and display limits.
-
-## Calls
-
-Discover an operation through `/api/search`, then read its help contract. Fixed actions use `POST /api/agent/qq/onebot/<action>`.
+Find an operation with `GET /api/search`, then read its help contract. Fixed native actions use `POST /api/agent/qq/onebot/<action>`. A read example follows.
 
 ```json
 {"routeId":"example-route","instanceId":"example-napcat","params":{"group_id":"100000001"}}
 ```
 
-Mutations also require a stable `deliveryId`. The same ID and parameters consult the original durable record. Conflicting parameters return 409. A 202 leaves the original result uncertain. Query `GET /api/agent/qq/onebot-receipts/<deliveryId>?routeId=example-route&instanceId=example-napcat` and retain the original payload. `_async` and `_rate_limited` are discovery aliases for the same synchronous Rabi contract.
+Side effects require a stable `deliveryId`. Identical IDs and parameters read the original durable record, while conflicts return 409. Keep 202 results uncertain and query `GET /api/agent/qq/onebot-receipts/<deliveryId>?routeId=example-route&instanceId=example-napcat`. `_async` and `_rate_limited` are discovery aliases for the same synchronous Rabi contract. Read the actual contract because compatibility parameters can differ from raw upstream JSON.
 
-Actual calls bind a enabled Route, an explicit instance and the configured QQ account, verified with `get_login_info`. Existing connection authority, cancellation, deadlines, quotas and conversation scopes apply. Multiple configured instances still require an explicit `instanceId`.
+Each call binds an enabled Route, an explicit instance and the configured QQ account, with native identity verification. Existing connection authority, cancellation, deadlines and read quotas apply. Outgoing calls provide the real Agent identity for unified language, length, media and receipt handling. Native acknowledgement-only operations return `acknowledged`; platform visibility is verified separately.
 
-Avatar, group portrait, OCR and voice transcription inputs use the original message-attachment owner. Supply `attachment={kind,targetId,messageId,attachmentIndex}` to identify an exact conversation and message. Caller URLs, host paths and arbitrary base64 cannot replace attachment identity.
+Managed files use original upload or plan-attachment references. Message media uses the exact conversation, message ID and attachment index. Native files and directories use opaque references issued by their original owner. Caller paths, URLs, base64 or fabricated resource manifests cannot replace source evidence. Public resources contain reviewed content. A local protector seals internal paths, request flags and sensitive provenance manifests.
 
-Fixed WebUI reads use `POST /api/agent/qq/webui/<id>` with `routeId`, `instanceId` and `params`. The original WebUI session owner retains credentials and independently checks that its logged-in QQ matches the OneBot account. Certificates expose safe status summaries. Logs, pages and icons expose bounded summaries. SSE readers return bounded samples. This read interface excludes private keys, credentials, arbitrary proxies, host paths and plugin execution.
+Quick operations use an exact original message or captured request-event reference. Replies enter `agent.send`; delete, kick, ban and request handling use their existing native owners. Child effects retain stable IDs and original receipts. Partial or uncertain execution is never automatically repeated. Ban duration is supplied explicitly.
 
-Management calls use `POST /api/agent/qq/webui-management/<id>`. Preference writes also require a stable `deliveryId`, with original receipts at `GET /api/agent/qq/webui-management-receipts/<deliveryId>`. They reuse the original login target and credential owner. Explicit logged-out state permits initialization under its contract. An observed native account must match the configured account. Unbound instances can use the original login panel to establish that binding. Theme updates preserve untouched fields, and automatic-login preferences do not submit a login. The native API lacks atomic CAS across clients, so readback and the original receipt determine the reported result.
+## WebUI and lifecycle
 
-The two `get_group_file_url` / `get_private_file_url` entries return source-bound bytes with `nativeContractEquivalent=false`. Their closed input uses an exact message source or an original group-file cache reference. Native signed URLs remain request-local. Cache references can expire or disappear after a native restart. An expired reference returns a native error and requires a fresh reference from its original source. The Rabi-only `agent.qq.file.verify-sha256` operation hashes the selected resource incrementally with an explicit size, expected digest and optional timeout. Streaming uses constant memory and retains a separate verification result.
+Fixed reads use `POST /api/agent/qq/webui/<id>`, and management uses `POST /api/agent/qq/webui-management/<id>`. Both carry `routeId`, `instanceId` and contract parameters. Writes also require a stable `deliveryId`. Query the original management receipt at `GET /api/agent/qq/webui-management-receipts/<deliveryId>`.
 
-Use `POST /api/agent/qq/webui-management/mirror-custom.set` with `routeId`, `instanceId`, `params.mirror` and a stable `deliveryId`. The complete HTTP/S prefix is passed unchanged, including path and query. An empty value clears the preference. Existing configuration authority and account checks apply. The fixed native endpoint updates the selected NapCat process-memory preference and cache. Results and receipts expose exact-readback digest and limited metadata. The original value stays in request memory and the native configuration owner.
+The original WebUI session owner handles authentication and verifies the selected account. Sensitive values enter their specific native configuration or authentication owner, and responses follow the public projection. File operations bind the selected native source. Reactive open, close and retirement remain owned by the same plugin version and await cleanup. Token rotation uses the original persisted Route CAS and its original-operation recovery contract.
 
-Configuration writes are verified in independent fixtures. Post-adoption production acceptance reads instance, contract, resource and health evidence. A real mirror change requires separate user authorization for that specific change. Process-memory completion, disk persistence, cross-client atomic CAS and later caller network choices retain separate evidence.
+The `mirror-custom.set` preference accepts a full HTTP/S prefix or an empty value to clear it. Request memory and the native configuration owner retain the original value, while public receipts contain digests. The preference affects native process memory. Persistence and subsequent choices by other callers are verified separately.
 
-## Joining groups
+## Joining groups and acceptance
 
-The 4.18.4 registration table contains no action for actively requesting membership in a specified group. `set_group_add_request` handles an already received application or invitation and needs its original event flag. `set_group_add_option` changes an existing group's admission settings. These findings cover this release's registered API. Other releases and client UI require separate verification.
+The 4.18.4 registry has no action to apply proactively to join a specified group. `set_group_add_request` handles an existing application or invitation using its original ingress flag. `set_group_add_option` changes an existing group's admission settings.
 
-## Verification and outstanding scope
-
-Verification uses private ports, test configuration and mocks. In-use QQ accounts, player groups and NapCat services do not participate. Existing operations retain their supported shapes. Forwarding, cards, flash images and online folders with missing outbound producers remain outstanding. Credentials, host files, plugin management and native protocol execution stay with their respective owners, with per-item reasons in the matrix.
-
-The plugin supports independent builds and rollback against a stable host contract. Publication requires the native/Web closure, cold start, interfaces and normal exit to pass against the installed host. The original plugin-catalog CAS selects the package, followed by an actual running-version readback. Source version, package hash, installation and real platform effects retain separate evidence.
+Implementation checks use private ports, test configuration and mocks. Matrix coverage, builds, isolated runtime, installed adoption and real platform operations have separate evidence. Real QQ accounts, player groups and active NapCat services are excluded from action tests. Installed verification checks the Manager and the same Gateway PID, generation, plugin hash and activation ID. Real messaging, media and management changes require their specific authorized acceptance.

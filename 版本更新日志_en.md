@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.41 - 2026-11-19
+
+- NapCat 0.1.20 extends fixed native actions, source-bound file streams and WebUI management operations. Send variants retain the original Outbox and receipts. A local protector seals request-event flags and internal file provenance, while public resources contain reviewed content.
+- Host API 1.17.0 and plugin SDK 1.6.0 expose existing upload/plan attachment leases and protected resources. Native acknowledgement-only actions return acknowledged with platform visibility recorded separately.
+- WorkBuddy 0.1.11 resolves its connector from the actual plugin entry, accepts the packaged Runtime executable and decodes native guidance receipt content blocks. Original intent IDs and uncertain receipts remain intact.
+- Windows installation verifies normal fenced shutdown using the original generation process IDs, creation times and Host lineage. Retain the pre-quit generation recheck and skip identical rollback writes. Local plugin versions advance with their shared SDK closure; remote nodes retain their original maintenance owners.
+
 ## 0.15.40 - 2026-11-19
 
 - Verify fenced Host shutdown using retained generation process handles and avoid redundant writes when rollback files already match their backups.

@@ -3,8 +3,11 @@ import { executeDurableDelivery } from "@rabiroute/host-api/manager/durableDeliv
 import { qqReadSettings } from "@rabiroute/host-api/shared/qqReadSettings";
 import { prepareNapcatApiAttachmentParams, type NapcatApiAttachmentInput } from "./napcatApiAttachments.js";
 import { projectNapcatApiResultProfile } from "./napcatApiResultProfiles.js";
-import { callNapcatApi, NapcatApiError, napcatApiFailure, selectNapcatApiInstance,
-  type NapcatApiTransportContext } from "./napcatApiTransport.js";
+import { prepareInlineKeyboard } from "../native/inlineKeyboard.js";
+import type { QuickRequestContext } from "../native/quickOperationContexts.js";
+import { createHash } from "node:crypto";
+import { callNapcatApi, NapcatApiError, napcatApiFailure, selectNapcatApiInstance, verifyNapcatApiIdentity,
+  type NapcatApiTransportContext, type NapcatApiSelection } from "./napcatApiTransport.js";
 
 /** Static, version-pinned protocol declarations. This is never constructed from an HTTP request. */
 export type NapcatApiDescriptor = Readonly<{
@@ -23,11 +26,15 @@ export type NapcatApiDescriptor = Readonly<{
   unavailableReason?: string;
   attachmentInput?: NapcatApiAttachmentInput;
   resultProfile?: string;
+  sourceInput?: "inline-keyboard" | "request-event";
+  nativeParameters?: ApiSchema;
+  nativeAcknowledgement?: "result-zero";
 }>;
 
 export type NapcatApiOperationsContext = NapcatApiTransportContext & {
   rootDir: string;
   readOnly(): boolean;
+  resolveQuickRequest?(selection: NapcatApiSelection, eventRef: string, signal: AbortSignal): Promise<QuickRequestContext>;
 };
 
 const empty = { type: "object", additionalProperties: false } as const;
@@ -176,9 +183,30 @@ export function createNapcatApiOperations(context: NapcatApiOperationsContext,
         const timeout = setTimeout(() => controller.abort(), qqReadSettings.readTimeoutMs);
         let nativeParameters = body.params;
         let attachmentDigest: unknown;
+        const sealedApproval = descriptor.sourceInput === "request-event" && typeof (body.params as Record<string, unknown>).eventRef === "string";
         const invoke = async () => {
           selection.assertCurrent();
+          if (sealedApproval) {
+            if (!context.resolveQuickRequest) throw new NapcatApiError(503, "QQ_REQUEST_CONTEXT_OWNER_UNAVAILABLE");
+            const params = body.params as Record<string, unknown>;
+            const source = await context.resolveQuickRequest(selection, String(params.eventRef), controller.signal);
+            selection.assertCurrent();
+            const expectedKind = descriptor.action === "set_friend_add_request" ? "friend" : "group";
+            if (source.post_type !== "request" || source.request_type !== expectedKind || source.self_id !== selection.botUserId
+              || typeof source.flag !== "string" || !source.flag || /[\x00-\x1f\x7f]/.test(source.flag)) {
+              throw new NapcatApiError(409, "QQ_REQUEST_CONTEXT_MISMATCH");
+            }
+            if (params.sub_type !== undefined && params.sub_type !== source.sub_type) throw new NapcatApiError(409, "QQ_REQUEST_CONTEXT_MISMATCH");
+            nativeParameters = expectedKind === "friend" ? { flag: source.flag, approve: params.approve, ...(params.remark !== undefined ? { remark: params.remark } : {}) }
+              : { flag: source.flag, approve: params.approve, ...(params.reason !== undefined ? { reason: params.reason } : {}), ...(params.count !== undefined ? { count: params.count } : {}) };
+            if (!descriptor.nativeParameters || !napcatApiResponseValidator(descriptor.nativeParameters)(nativeParameters)) {
+              throw new NapcatApiError(503, "QQ_REQUEST_NATIVE_CONTRACT_MISMATCH");
+            }
+          }
           const data = await callNapcatApi(context, selection, descriptor.action, nativeParameters, known, controller.signal);
+          if (descriptor.nativeAcknowledgement === "result-zero" && (!data || typeof data !== "object"
+            || (data as { result?: unknown }).result !== 0)) throw new NapcatApiError(503, "QQ_API_NATIVE_ACK_REJECTED");
+          if (descriptor.sourceInput === "inline-keyboard" || sealedApproval) await verifyNapcatApiIdentity(context, selection, controller.signal);
           if (!responseMatches(nativeSchema, data ?? null)) throw new NapcatApiError(503, "QQ_API_RESPONSE_CONTRACT_MISMATCH");
           const profiled = descriptor.resultProfile
             ? projectNapcatApiResultProfile(descriptor.resultProfile, data ?? null, body.params as Record<string, unknown>) : data ?? null;
@@ -189,6 +217,11 @@ export function createNapcatApiOperations(context: NapcatApiOperationsContext,
           return projected;
         };
         try {
+          if (descriptor.sourceInput === "inline-keyboard") {
+            const prepared = await prepareInlineKeyboard(context, selection, body.params as Record<string, unknown>, controller.signal);
+            nativeParameters = prepared.parameters;
+            attachmentDigest = prepared.digest;
+          }
           if (descriptor.attachmentInput) {
             const prepared = await prepareNapcatApiAttachmentParams(context, selection, body.params as Record<string, unknown>, descriptor.attachmentInput, controller.signal);
             nativeParameters = prepared.parameters;
@@ -197,7 +230,8 @@ export function createNapcatApiOperations(context: NapcatApiOperationsContext,
           if (descriptor.mode === "read") return { status: 200, body: { code: 0, data: await invoke() }, headers: { "cache-control": "private, no-store" } };
           const outcome = await executeDurableDelivery({ rootDir: context.rootDir, namespace: "napcat-onebot-actions", deliveryId: body.deliveryId,
             payload: { action: descriptor.action, routeId: selection.routeId, instanceId: selection.instanceId, botUserId: selection.botUserId, params: body.params,
-              ...(attachmentDigest ? { attachmentDigest } : {}) },
+              ...(attachmentDigest ? { attachmentDigest } : {}), ...(sealedApproval ? { sourceDigest: createHash("sha256")
+                .update(JSON.stringify([selection.routeId, selection.instanceId, selection.botUserId, (body.params as Record<string, unknown>).eventRef])).digest("hex") } : {}) },
             audit: { routeId: selection.routeId, instanceId: selection.instanceId, botUserId: selection.botUserId, action: descriptor.action },
             requestAuthority: selection.assertCurrent, deliver: invoke });
           selection.assertCurrent();

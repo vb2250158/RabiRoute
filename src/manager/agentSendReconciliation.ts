@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { agentSendIdempotencyPayload, prepareAgentSendRequest, type AgentSendRequest, type AgentSendResult } from "../agentSend.js";
-import { agentSendVariantType } from "../agentSendVariant.js";
+import { agentSendVariantType, variantNativeMessageId } from "../agentSendVariant.js";
 import {
   durableDeliveryReceiptPath,
   durableDeliveryRequestDigest,
@@ -206,20 +206,26 @@ function readOriginalVariantResult(deliveryId: unknown, request: AgentSendReques
   if (receipt.requestDigest !== durableDeliveryRequestDigest(agentSendIdempotencyPayload(request))) {
     return response(id, 409, { state: "conflict", code: "DIGEST_CONFLICT" });
   }
-  const audit = receipt.audit as { sendVariant?: { type?: unknown }; routeId?: unknown; channel?: unknown;
+  const audit = receipt.audit as { sendVariant?: { type?: unknown; receiptMode?: unknown }; routeId?: unknown; channel?: unknown;
     sender?: AgentSendResult["sender"]; target?: unknown } | undefined;
   if (audit?.sendVariant?.type !== variant) return response(id, 409, { state: "conflict", code: "RECEIPT_CORRUPT" });
+  const mode = audit.sendVariant.receiptMode === undefined ? "message" : audit.sendVariant.receiptMode;
+  if (mode !== "message" && mode !== "ack-only") return response(id, 409, { state: "conflict", code: "RECEIPT_CORRUPT" });
   const result = receipt.result;
   if (receipt.state === "completed") {
     const digest = (value: unknown) => durableDeliveryRequestDigest(JSON.parse(JSON.stringify(value ?? null)));
+    const acknowledged = result?.status === "acknowledged";
     if (!result || result.deliveryId !== id || result.channel !== audit.channel || result.routeId !== audit.routeId
       || digest(result.sender) !== digest(audit.sender) || digest(result.target) !== digest(audit.target)
-      || !["sent", "draft", "blocked", "failed"].includes(result.status)
-      || (result.status === "sent" && (!result.ok || !result.sentMessageId))) {
+      || !["sent", "acknowledged", "draft", "blocked", "failed"].includes(result.status)
+      || (result.status === "sent" && (mode !== "message" || !result.ok || !variantNativeMessageId(result.sentMessageId)))
+      || (acknowledged && (mode !== "ack-only" || !result.ok || result.receiptMode !== "ack-only"
+        || Object.hasOwn(result, "sentMessageId") || Object.hasOwn(result, "sentFileId")))) {
       return response(id, 409, { state: "conflict", code: "RECEIPT_CORRUPT" });
     }
     return response(id, 200, { state: settle ? "completed" : "verified", originalResult: result,
-      evidence: { reason: "original_variant_receipt", historicalTerminalProven: true } });
+      evidence: { reason: acknowledged ? "original_variant_acknowledgement" : "original_variant_receipt",
+        historicalTerminalProven: true, ...(acknowledged ? { acknowledgementOnly: true } : {}) } });
   }
   const state = receiptExecutionActive(receipt) ? "in_progress" : "uncertain";
   return response(id, settle ? 409 : 200, { state: settle ? state : "verified",

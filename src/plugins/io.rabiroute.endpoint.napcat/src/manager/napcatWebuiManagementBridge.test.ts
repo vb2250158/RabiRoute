@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { openNapcatWebuiManagementSession, type NapcatManagerContext } from "../messageEndpoints/napcatManager.js";
+import { openNapcatWebuiManagementSession, verifyNapcatWebuiTokenCommitSource, type NapcatManagerContext } from "../messageEndpoints/napcatManager.js";
 import type { NapcatWebuiManagementSelection } from "./napcatWebuiManagementOperations.js";
 
 let fixtureNumber = 1000;
@@ -83,4 +83,19 @@ test("changed WebUI credentials during authentication stop first-login managemen
   f.setAfterAuthentication(() => { f.instance.webuiToken = "changed"; });
   await assert.rejects(() => openNapcatWebuiManagementSession(f.context, f.selection, AbortSignal.timeout(2000)), /QQ_WEBUI_BINDING_CHANGED/);
   assert.equal(f.requests.length, 1);
+});
+
+test("token source proof reuses the exact original private config and never discloses token or path",async t=>{
+ const f=fixture(t),configPath=path.join(f.context.rootDir,"webui.json");
+ const before=await verifyNapcatWebuiTokenCommitSource(f.context,f.selection,f.instance.webuiToken);
+ assert.deepEqual(before,{credentialSource:"provided",nativeConfigMatches:true,configuredValueMatches:true,explicitTokenSource:"instance"});
+ fs.writeFileSync(configPath,JSON.stringify({token:"NEW_PRIVATE_TOKEN",port:6099}));
+ const nativeWritten=await verifyNapcatWebuiTokenCommitSource(f.context,f.selection,"NEW_PRIVATE_TOKEN");assert.equal(nativeWritten.nativeConfigMatches,true);assert.equal(nativeWritten.configuredValueMatches,false);
+ f.instance.webuiToken="";const fileSource=await verifyNapcatWebuiTokenCommitSource(f.context,f.selection,"NEW_PRIVATE_TOKEN");assert.deepEqual(fileSource,{credentialSource:"config",nativeConfigMatches:true,configuredValueMatches:true});assert(!JSON.stringify(fileSource).includes("PRIVATE"));assert(!JSON.stringify(fileSource).includes(configPath));
+});
+
+test("only the typed token rotation runner delegates replacement authority while ordinary bindings retain their original tail fence",async t=>{
+ const f=fixture(t),session=await openNapcatWebuiManagementSession(f.context,f.selection,AbortSignal.timeout(2000));
+ assert.ok(session.runTokenRotation);assert.equal(await session.runTokenRotation(async()=>{f.instance.webuiToken="expected-own-write";return "replacement-will-be-verified-by-token-owner";}),"replacement-will-be-verified-by-token-owner");
+ assert.throws(session.assertCurrent,/QQ_WEBUI_BINDING_CHANGED/);await assert.rejects(session.runBindingOperation(async()=>true),/QQ_WEBUI_BINDING_CHANGED/);
 });

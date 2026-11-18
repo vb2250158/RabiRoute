@@ -6,6 +6,18 @@
 
 # WorkBuddy 作为 Agent 端的接入方案
 
+
+## 当前 0.1.11 实现
+
+普通桌面聊天创建、原任务续投和 `workbuddyDeliveryMode=steer` 复用原桌面连接器、原请求编号与回执。连接器按原输入组件登记的完整工作区及稳定 ID 核对目标。0.1.11 从实际插件入口定位 worker，按发行包路径及摘要接受封装 Runtime，并读取原生引导记录的内容块恢复回执。
+
+冷启动使用同一原生客户端和连接器。原客户端仍在运行时沿原连接，退出后的启动和同 ID 续投分别验收。请求已受理或状态不确定时只读原编号；Native 仅排队成功时保留其真实接收阶段。200、历史可读和桌面即时渲染分别留证。
+
+九项社媒任务已按用户授权迁入普通桌面聊天，原 Codex 任务保留。普通桌面自动创建能力与早期 GUI 迁移分开记录。创建使用原生自动标题；单独的 API 打开、改名、真实工具审批、图片读取和桌面 live 刷新按实际支持合同与独立验收判断。
+
+后文 0.1.6 的安装、协议与调查描述保留其历史时间范围，当前运行版本和 hash 以实例目录及正式验收回执为准。
+
+
 > 2026-11-17：WorkBuddy 插件 **0.1.6 / experimental** 已正式采用，Host 0.15.27 与 Manager 保持原进程。原任务的新消息在原生 user 记录中出现，并通过正式请求回传验收标记；这项证据不替代桌面实时显示或真实工具审批。
 
 > 阅读前置：本文按 [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) 编写，执行流程受 `skills/create-rabiroute-agent-adapter/SKILL.md` 和其 [owner-first 设计门](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md) 约束。

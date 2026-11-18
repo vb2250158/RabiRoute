@@ -14,14 +14,21 @@ const empty = { type: "object", properties: {}, additionalProperties: false } as
 const deliveryId = { type: "string", maxLength: 200, pattern: "^[A-Za-z0-9._:-]+$" } as const;
 const json = (schema: Readonly<Record<string, unknown>>) => ({ mediaType: "application/json", schema });
 const sendResult = json({ type: "object", required: ["code", "ok", "status"], properties: {
-  code: { enum: [0, -1] }, ok: { type: "boolean" }, status: { enum: ["sent", "draft", "blocked", "failed",
+  code: { enum: [0, -1] }, ok: { type: "boolean" }, status: { enum: ["sent", "acknowledged", "draft", "blocked", "failed",
     "conversation_context_confirmation_required", "message_length_confirmation_required", "style_confirmation_required"] },
   reason: { type: "string" }, deliveryId, sender: { type: "object", required: ["agentType", "sessionId"], additionalProperties: false,
     properties: { agentType: { type: "string" }, sessionId: { type: "string" } } },
   routeId: { type: "string" }, channel: { type: "string" }, target: { type: "object" },
+  sentMessageId: {}, sentFileId: {}, receiptMode: { const: "ack-only" },
   idempotency: { type: "object", required: ["deliveryId", "state", "duplicate"], additionalProperties: false,
     properties: { deliveryId, state: { enum: ["completed", "missing", "in_progress", "uncertain", "conflict"] }, duplicate: { type: "boolean" } } }
-}, additionalProperties: true });
+}, additionalProperties: true, allOf: [{
+  if: { properties: { status: { const: "acknowledged" } }, required: ["status"] },
+  then: { properties: { receiptMode: { const: "ack-only" } }, required: ["receiptMode"], not: { anyOf: [
+    { properties: { sentMessageId: {} }, required: ["sentMessageId"] },
+    { properties: { sentFileId: {} }, required: ["sentFileId"] }
+  ] } }
+}] });
 const blocked = json({ type: "object", required: ["code", "ok", "status", "message", "contract"], properties: {
   code: { const: -1 }, ok: { const: false }, status: { const: "blocked" }, message: { type: "string" },
   errorCode: { type: "string" }, supportedChannels: { type: "array", items: { type: "string" } },
@@ -29,7 +36,7 @@ const blocked = json({ type: "object", required: ["code", "ok", "status", "messa
 }, additionalProperties: false });
 
 export const agentSendOperationContract: ApiOperationContract = {
-  operationId: "agent.send", contractVersion: "1.1.0", method: "POST", pathTemplate: "/api/agent/send",
+  operationId: "agent.send", contractVersion: "1.2.0", method: "POST", pathTemplate: "/api/agent/send",
   aliases: ["agent:POST:/api/agent/send"],
   description: "Send through an explicitly selected channel, using a durable delivery ID and the existing provider rules.",
   exposure: "public", transport: "http",
@@ -39,7 +46,7 @@ export const agentSendOperationContract: ApiOperationContract = {
     body: { kind: "json", schema: AGENT_SEND_WIRE_SCHEMA, maxBytes: Number.MAX_SAFE_INTEGER } },
   responses: { "200": sendResult, "202": sendResult, "400": blocked, "403": sendResult,
     "409": sendResult, "502": sendResult, "503": sendResult },
-  effects: { mode: "external-send", description: "May deliver to an external provider, create a draft, or retain a blocked/failed/uncertain durable receipt. A response alone does not prove platform delivery." },
+  effects: { mode: "external-send", description: "May deliver to an external provider, create a draft, or retain a blocked/failed/uncertain durable receipt. An acknowledged ack-only action records the platform response; it omits a native message ID and provides no visibility evidence." },
   recovery: { strategy: "receipt-first", receiptPath: "/api/agent/send/receipts/:deliveryId",
     description: "Keep the same deliveryId (body.deliveryId) and original request. On timeout, generation/contract mismatch or uncertainty query the original receipt; never automatically replay or change the target/channel." },
   validators: AGENT_SEND_BUSINESS_VALIDATORS
@@ -86,6 +93,8 @@ export function agentSendCapabilities(variants: readonly Readonly<Record<string,
     generatedAt: new Date().toISOString(), channels: AGENT_SEND_CHANNEL_HELP,
     ...(variants.length ? { variants, variantsDigest: apiDigest(variants) } : {}),
     contract: { deliveryId: "stable caller-generated ID", retryRule: agentSendOperationContract.recovery.description,
+      variantReceipts: { message: "A successful message variant requires a genuine native message ID.",
+        "ack-only": 'Status "acknowledged" confirms the originally dispatched platform action returned a positive reply; platform visibility is unverified.' },
       qq: "QQ/NapCat uses channel=napcat, params.target=group|private. Managed fileId supports group files only; private managed-file upload is not implemented." }
   } } };
 }
@@ -98,7 +107,7 @@ export function createAgentSendOperations(context: SendContext): readonly ApiOpe
       relatedOperations: ['agent.send.capabilities', 'agent.qq.contacts.read', 'agent.send.receipt.read']
     }, handler: input => runAgentSend(input.request, input.body as AgentSendRequest, context) },
     { discovery: { title: '查询渠道发送能力与参数', summary: '读取可用渠道、请求字段、校验规则和回执查询方式。', category: { id: 'messages', title: '消息' }, keywords: ['发送能力', '发送配置', 'send capabilities', 'message schema'], relatedOperations: ['agent.send'] }, contract: {
-      operationId: "agent.send.capabilities", contractVersion: "2.1.0", method: "GET", pathTemplate: "/api/agent/send/capabilities",
+      operationId: "agent.send.capabilities", contractVersion: "2.2.0", method: "GET", pathTemplate: "/api/agent/send/capabilities",
       aliases: ["agent:GET:/api/agent/send/capabilities"],
       description: "Read the same channel definitions, wire schema and named business validators used by the send operation.",
       exposure: "public", transport: "http", request: { path: empty, query: empty, headers: { type: "object" }, body: { kind: "none" } },
@@ -113,7 +122,7 @@ export function createAgentSendOperations(context: SendContext): readonly ApiOpe
       recovery: { strategy: "repeatable-read", description: "Refresh after the API catalog identity changes; discovery does not grant additional permissions." }, validators: []
     }, handler: () => agentSendCapabilities(context.listSendVariants?.()) },
     { discovery: { title: '读取原消息发送回执', summary: '使用原 deliveryId 查询渠道实际发送结果和待确认状态。', category: { id: 'messages', title: '消息' }, keywords: ['消息回执', '投递结果', 'send receipt', 'delivery status'], relatedOperations: ['agent.send.capabilities'] }, contract: {
-      operationId: "agent.send.receipt.read", contractVersion: "1.0.0", method: "GET", pathTemplate: "/api/agent/send/receipts/:deliveryId",
+      operationId: "agent.send.receipt.read", contractVersion: "1.1.0", method: "GET", pathTemplate: "/api/agent/send/receipts/:deliveryId",
       aliases: ["agent:GET:/api/agent/send/receipts/:deliveryId"],
       description: "Read the original durable send receipt without creating or retrying a delivery.", exposure: "public", transport: "http",
       request: { path: { type: "object", required: ["deliveryId"], properties: { deliveryId }, additionalProperties: false },

@@ -35,6 +35,10 @@
     {
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts",
       "name": "napcatStickerMessage"
+    },
+    {
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/native/quickOperationContexts.ts",
+      "name": "captureNapcatQuickRequestContext"
     }
   ],
   "ownedSources": [
