@@ -229,3 +229,5 @@ Archived material is under [`archive/`](../archive/README_en.md). Buildable clie
 ## Startup and plugin management
 
 [Startup window and plugin lifecycle](startup-and-plugin-lifecycle_en.md): required initialization, background plugins, installation and theme animation.
+
+- [NapCat API coverage and calls](napcat-api-coverage_en.md)

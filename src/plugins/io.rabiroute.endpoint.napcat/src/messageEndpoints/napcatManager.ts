@@ -10,6 +10,8 @@ import QRCode from "qrcode";
 import { NapcatState, NapcatLifecycleError, type NapcatLoginInfo, type NapcatHealthSnapshot, type NapcatLoginPanelData } from "@rabiroute/host-api/shared/napcatStateContract";
 import { KeyedAsyncLock } from "@rabiroute/host-api/shared/keyedAsyncLock";
 import { NapcatWebuiSessions, type NapcatWebuiSession } from "./napcatWebuiSession.js";
+import { NapcatApiError, type NapcatApiSelection } from "../manager/napcatApiTransport.js";
+import type { NapcatWebuiApiSession } from "../manager/napcatWebuiApiOperations.js";
 import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataMutationAudit";
 import { atomicWriteFileSync } from "@rabiroute/host-api/shared/filePersistence";
 import { adaptLinuxNapcatLaunch, filterLinuxNapcatProcesses, LINUX_NAPCAT_APP_DIR, type LinuxProcessEntry } from "./napcatPlatform.js";
@@ -1479,6 +1481,41 @@ async function requireNapcatWebuiSession(
     throw new Error(target.tokenInfo.message || "NapCat 管理服务暂时无法认证；请确认后台已启动并能读取 WebUI 登录密钥。");
   }
   return { instance: target.instance, session };
+}
+
+/** Bridge fixed reads to this instance's original token lookup and shared credential cache. */
+export async function openNapcatWebuiApiSession(
+  ctx: NapcatManagerContext,
+  selection: NapcatApiSelection,
+  signal: AbortSignal
+): Promise<NapcatWebuiApiSession> {
+  selection.assertCurrent(); signal.throwIfAborted();
+  const runtime = [...ctx.getRuntimes()].find(item => item.definition.id === selection.routeId);
+  const definition = runtime?.definition;
+  const instances = runtime ? napcatInstancesFor(ctx, runtime).filter(item => item.id === selection.instanceId && item.enabled !== false) : [];
+  if (!definition || instances.length !== 1) throw new NapcatApiError(409, "QQ_WEBUI_INSTANCE_UNAVAILABLE");
+  const webuiSnapshot = (instance: NapCatInstanceDefinition) => JSON.stringify({ webuiUrl: instance.webuiUrl ?? "",
+    webuiToken: instance.webuiToken ?? "", workingDir: instance.workingDir ?? "", launchCommand: instance.launchCommand ?? "" });
+  const snapshot = webuiSnapshot(instances[0]!);
+  const assertCurrent = () => {
+    selection.assertCurrent(); signal.throwIfAborted();
+    const currentRuntime = [...ctx.getRuntimes()].find(item => item.definition.id === selection.routeId);
+    const current = currentRuntime ? napcatInstancesFor(ctx, currentRuntime).filter(item => item.id === selection.instanceId && item.enabled !== false) : [];
+    if (currentRuntime?.definition !== definition || current.length !== 1 || webuiSnapshot(current[0]!) !== snapshot) {
+      throw new NapcatApiError(409, "QQ_WEBUI_BINDING_CHANGED");
+    }
+  };
+  const { session } = await requireNapcatWebuiSession(ctx, { gatewayId: selection.routeId, instanceId: selection.instanceId });
+  assertCurrent();
+  return {
+    assertCurrent,
+    requestFixed: async (method, pathname, requestSignal) => {
+      assertCurrent(); requestSignal.throwIfAborted();
+      const response = await session.requestFixed(method, pathname, requestSignal);
+      assertCurrent();
+      return response;
+    }
+  };
 }
 
 async function callNapcatWebui<T>(

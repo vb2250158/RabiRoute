@@ -115,7 +115,24 @@ export const activate = definePlugin({ async activate(context) {
       implementation.createAgentGroupFilesOperation({ route: host.manager.readRoute, jsonResponse: host.manager.jsonResponse }),
       ...implementation.createQqMessageOperations(qq), ...implementation.createQqStickerOperations(qq)
     ];
-    registration = await host.operations.registerOperationsAsync(context.identity.instanceId, [...operations, ...qqOperations], context.lifecycle.signal);
+    const apiContext = {
+      rootDir: host.manager.rootDir,
+      readOnly: () => host.manager.readOnly,
+      local: host.manager.requestIsLoopback,
+      route: id => host.manager.routeRunning(id) ? host.manager.readRoute(id) : undefined,
+      assertCurrent: assertAccepting
+    };
+    const manifest = implementation.readNapcatApiManifest();
+    const protocolOperations = [
+      ...implementation.createNapcatApiOperations(apiContext, implementation.createNapcatApiDescriptors(manifest)),
+      implementation.createNapcatApiReceiptOperation(apiContext),
+      implementation.createNapcatApiEventCatalogOperation(manifest),
+      ...implementation.createNapcatWebuiApiOperations({
+        ...apiContext,
+        openWebuiSession: (selection, signal) => implementation.openNapcatWebuiApiSession(controlContext, selection, signal)
+      })
+    ];
+    registration = await host.operations.registerOperationsAsync(context.identity.instanceId, [...operations, ...qqOperations, ...protocolOperations], context.lifecycle.signal);
     return dispose;
   }, "prepare NapCat endpoint API operations");
   context.publication.add({

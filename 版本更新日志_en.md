@@ -10,6 +10,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Adding a message rule or scheduled task opens the rule editor directly. Choose Notify Agent, Run script, or a delivery template under Type, and save the message text and trigger type as a custom template for the role.
 
+## 0.15.32 - 2026-11-18
+
+- Add versioned NapCat operation and event contracts, 87 fixed actions, 17 protected WebUI reads, exact-account checks and original-ledger idempotency receipts, with per-item compatibility and outstanding execution boundaries.
+
 ## 0.15.31 - 2026-11-18
 
 - Upgrade WorkBuddy to 0.1.8 and create ordinary desktop chats through the managed thread API, reconciling repeated requests with the original intent and native receipt.

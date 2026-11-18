@@ -238,3 +238,33 @@ test("NapCat activation preserves its original failure after joining failed list
   await close(probe);
   assert.equal(readStatus(dataDir).messageAdapters.napcat.status, "error");
 });
+
+
+test("typed archive write failure preserves the original real WS message handler", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "napcat-typed-write-failure-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const saved = instance("typed-failure", 0), registry = new ManagerPluginRouteRegistry();
+  const append = fs.appendFileSync;
+  let injected = false, handled!: () => void;
+  const received = new Promise<void>(resolve => { handled = resolve; });
+  t.mock.method(fs, "appendFileSync", (...args: Parameters<typeof append>) => {
+    if (String(args[0]).endsWith("napcat-adapter.log.jsonl") && String(args[1]).includes('"event":"typed_event"')) {
+      injected = true;
+      throw Object.assign(new Error("fixture archive write failure"), { code: "EIO" });
+    }
+    return append(...args);
+  });
+  const adapter = createNapCatAdapter({ routeId: "fixture-route", eventBotUserId: () => "12345",
+    instances: () => [saved], dataDir: () => dataDir, refreshProfile() {}, apiOperations: registry,
+    async handleEvent() { handled(); } });
+  const dispose = await adapter.start();
+  t.after(async () => { await dispose?.(); });
+  const port = registry.catalogSnapshot().listeners[0]!.binding.address.port;
+  const socket = await connect(port);
+  socket.send(JSON.stringify({ post_type: "message", message_type: "private", self_id: 12345, user_id: 67890, message: "fixture" }));
+  await Promise.race([received, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("original handler timed out")), 2000).unref())]);
+  assert.equal(injected, true);
+  const records = fs.readFileSync(path.join(dataDir, "napcat-adapter.log.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(records.some(record => record.event === "inbound_event"));
+  const closed = waitForClose(socket); await dispose?.(); await closed;
+});

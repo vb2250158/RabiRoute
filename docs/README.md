@@ -226,3 +226,5 @@
 ## 启动与插件装卸
 
 [启动窗口与插件生命周期](startup-and-plugin-lifecycle.md)：必要初始化、后台插件、安装卸载与主题动画。
+
+- [NapCat 接口覆盖与调用](napcat-api-coverage.md)

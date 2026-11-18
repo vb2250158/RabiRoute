@@ -79,6 +79,34 @@
     {
       "name": "createQqStickerOperations",
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerRoutes.ts"
+    },
+    {
+      "name": "readNapcatApiManifest",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiManifest.ts"
+    },
+    {
+      "name": "createNapcatApiDescriptors",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiCatalog.ts"
+    },
+    {
+      "name": "createNapcatApiOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiOperations.ts"
+    },
+    {
+      "name": "createNapcatApiReceiptOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiReceipts.ts"
+    },
+    {
+      "name": "createNapcatApiEventCatalogOperation",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiEvents.ts"
+    },
+    {
+      "name": "openNapcatWebuiApiSession",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts"
+    },
+    {
+      "name": "createNapcatWebuiApiOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
     }
   ],
   "ownedPrefixes": [
@@ -95,7 +123,14 @@
     "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqMessageMedia.ts",
     "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqReadContract.ts",
     "src/plugins/io.rabiroute.endpoint.napcat/src/manager/qqStickerContract.ts",
-    "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts"
+    "src/plugins/io.rabiroute.endpoint.napcat/src/napcatStickers.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiManifest.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiCatalog.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiOperations.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiReceipts.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatApiEvents.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/messageEndpoints/napcatManager.ts",
+    "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
   ],
   "packageId": "io.rabiroute.endpoint.napcat"
 }

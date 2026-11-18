@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { readNapcatApiManifest } from "../manager/napcatApiManifest.js";
+import { appendNapcatApiEvent } from "../manager/napcatApiEvents.js";
 import type http from "node:http";
 import { startNapCatWsOwner, type NapCatWsOwner, type NapCatTaskLease, type NapCatFrameContext } from "./napcatWsOwner.js";
 import type { ManagerApiOperationsService } from "@rabiroute/host-api/manager/apiOperationContract";
@@ -642,6 +644,8 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
 }
 
 export type NapCatAdapterDependencies = {
+  routeId?: string;
+  eventBotUserId?(instanceId: string): string | undefined;
   instances?: () => NapCatInstanceConfig[];
   dataDir?: () => string;
   now?: () => Date;
@@ -654,6 +658,8 @@ export type NapCatAdapterDependencies = {
 
 type NapCatLifecycle = {
   active: boolean;
+  routeId?: string;
+  eventBotUserId?(instanceId: string): string | undefined;
   configuredInstances: NapCatInstanceConfig[];
   instances: NapCatInstanceConfig[];
   servers: Array<{ instance: NapCatInstanceConfig; owner: NapCatWsOwner }>;
@@ -778,6 +784,16 @@ function setupNapCatSession(
           ...eventSummary(event)
         }
       });
+      if (lifecycle.routeId) {
+        try {
+          appendNapcatApiEvent(readNapcatApiManifest(), {
+            routeId: lifecycle.routeId, instanceId: instance.id,
+            botUserId: String(lifecycle.eventBotUserId?.(instance.id) ?? currentMessageStatus?.botUserId ?? "")
+          }, event, lifecycle.dataDir());
+        } catch (error) {
+          console.warn(`[NapCat] Typed event archive failed for ${instance.id}`, error instanceof Error ? error.name : "Error");
+        }
+      }
       await lifecycle.handleEvent(event, instance, frame);
     } catch (error) {
       appendNapCatRuntimeLog(lifecycle, {
@@ -806,6 +822,8 @@ export function createNapCatAdapter(
       const instances = configuredInstances.filter((instance) => instance.enabled);
       const lifecycle: NapCatLifecycle = {
         active: true,
+        routeId: dependencies.routeId,
+        eventBotUserId: dependencies.eventBotUserId,
         configuredInstances,
         instances,
         servers: [],

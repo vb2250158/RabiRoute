@@ -1,0 +1,5326 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "version": "4.18.4",
+    "bundleSha256": "66dfaa1b9e7530d493089c70d24810f4e23c31d129e1662949558ce30ce52a92",
+    "upstream": {
+      "repository": "https://github.com/NapNeko/NapCatQQ",
+      "currentMainCommit": "105f38e3ecb1428c147e0f9165f65f854233d988",
+      "currentMainStatus": "README-only",
+      "currentMainTree": "https://api.github.com/repos/NapNeko/NapCatQQ/git/trees/105f38e3ecb1428c147e0f9165f65f854233d988?recursive=1",
+      "standardRepository": "https://github.com/botuniverse/onebot-11",
+      "standardCommit": "d4456ee706f9ada9c2dfde56a2bcfc69752600e4"
+    }
+  },
+  "scope": "112 fixed native WebUI API method/path pairs. This manifest records source implementation and exact dependencies; metadata alone is not execution or runtime acceptance.",
+  "counts": {
+    "total": 112,
+    "byState": {
+      "owner-dependency": 74,
+      "typed-summary": 17,
+      "host-owner-boundary": 8,
+      "existing-native-owner": 13
+    },
+    "byInventoryGroup": {
+      "protected-typed-owner": 75,
+      "typed-read-and-resource": 16,
+      "existing-host-permission-boundary": 8,
+      "existing-login-lifecycle-compatibility": 13
+    },
+    "implementedSourceRows": 30,
+    "pendingProtectedOwnerRows": 74,
+    "hostOwnerBoundaryRows": 8,
+    "duplicateMethodPaths": 0
+  },
+  "owners": {
+    "webuiSession": {
+      "purpose": "WebUI认证、登出、token轮换和WebAuthn passkey",
+      "minimumContract": "凭据只由现有WebUI session/secret store owner保管。公开结果返回session handle/认证状态。passkey challenge与rpId/origin沿真实浏览器WebAuthn会话。",
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId."
+    },
+    "loginLifecycle": {
+      "purpose": "QQ登录、自动登录偏好及NapCat进程重启",
+      "minimumContract": "复用NapCat login action与正式启动/重启owner，保Route/instance/QQ身份及原operation回执。登录密码摘要/验证码作为受保护输入。",
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative."
+    },
+    "deviceIdentity": {
+      "purpose": "Windows GUID与Linux MAC/machine-id及定向备份恢复",
+      "minimumContract": "按实际平台的device identity owner操作，显式backupId、目标身份与受保护读取结果。变更前备份、变更后回读，不自动重置已配置身份。",
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership."
+    },
+    "typedMetadata": {
+      "purpose": "版本、hash、平台、主题读取、消息端诊断、日志与插件只读目录",
+      "minimumContract": "关闭参数与结果字段、日志脱敏、有界读取；SSE使用具名订阅handle并在取消/断开时释放。图标/页面通过已拥有资源handle与MIME返回。",
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary."
+    },
+    "endpointConfig": {
+      "purpose": "OneBot/WebUI/NapCat配置、主题与TLS证书",
+      "minimumContract": "原配置owner读取/补丁/CAS写入。secret refs与普通字段分离，TLS私钥保存在secret owner，只公开存在/指纹/状态。",
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references."
+    },
+    "ownedFiles": {
+      "purpose": "文件和目录、字体资源及配置归档导入导出",
+      "minimumContract": "复用正式文件owner的授权路径/文件handle，解析绝对路径和链接归属。二进制流存受保护artifact，不把内容或宿主路径当通用JSON。批量变化保逐项原结果。",
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles."
+    },
+    "diagnosticRuntime": {
+      "purpose": "终端与调试adapter创建/关闭/调用",
+      "minimumContract": "终端沿已有computer/terminal权限、job/seq与连接owner。Debug call映射已注册typed OneBot能力并复用发送/文件/敏感结果owner，adapter token只保内部。",
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner."
+    },
+    "pluginManagement": {
+      "purpose": "NapCat插件配置、配置控制器、启停、卸载、注册、商店安装",
+      "minimumContract": "按真实NapCat插件ID/来源/包digest与用户插件权限操作。每插件配置schema/secret metadata归插件owner。安装与启停有原operation/CAS或幂等回执。",
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks."
+    },
+    "releaseMirrors": {
+      "purpose": "上游发行目录、镜像设置/探测与NapCat更新",
+      "minimumContract": "镜像URL与认证由已配置资源owner解析。网络探测有超时/有界结果。更新复用维护owner的不可变候选、任务排空、回退和实际版本回读。",
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation."
+    },
+    "networkFetch": {
+      "purpose": "WebUI任意URL文本代理",
+      "minimumContract": "归已有网络请求权限与目标资源owner，固定用户目标、协议、大小/超时和结果类型。当前NapCat本身只检查URL是字符串。",
+      "permission": "Existing network-target/resource authority and explicit request/result contract."
+    }
+  },
+  "rows": [
+    {
+      "method": "POST",
+      "path": "/api/auth/check",
+      "routeLine": 89277,
+      "handlerLines": [
+        89132
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "headers",
+          "name": "authorization",
+          "line": 89133
+        }
+      ],
+      "nativeValidationLines": [
+        89137,
+        89141,
+        89145
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "routeLine": 89276,
+      "handlerLines": [
+        89097
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "hash",
+          "line": 89099
+        }
+      ],
+      "nativeValidationLines": [
+        89101,
+        89104,
+        89108,
+        89111
+      ],
+      "knownNativeResultFields": [
+        "Credential"
+      ],
+      "sensitiveNativeResultFields": [
+        "Credential"
+      ],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "routeLine": 89278,
+      "handlerLines": [
+        89121
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "headers",
+          "name": "authorization",
+          "line": 89122
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/passkey/generate-authentication-options",
+      "routeLine": 89282,
+      "handlerLines": [
+        89226
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "headers",
+          "name": "host",
+          "line": 89232
+        }
+      ],
+      "nativeValidationLines": [
+        89229
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/passkey/generate-registration-options",
+      "routeLine": 89280,
+      "handlerLines": [
+        89192
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "headers",
+          "name": "host",
+          "line": 89196
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/passkey/verify-authentication",
+      "routeLine": 89283,
+      "handlerLines": [
+        89241
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "response",
+          "line": 89243
+        },
+        {
+          "source": "headers",
+          "name": "origin",
+          "line": 89252
+        },
+        {
+          "source": "headers",
+          "name": "host",
+          "line": 89253
+        }
+      ],
+      "nativeValidationLines": [
+        89244,
+        89249,
+        89258,
+        89260
+      ],
+      "knownNativeResultFields": [
+        "Credential"
+      ],
+      "sensitiveNativeResultFields": [
+        "Credential"
+      ],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/passkey/verify-registration",
+      "routeLine": 89281,
+      "handlerLines": [
+        89205
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "response",
+          "line": 89207
+        },
+        {
+          "source": "headers",
+          "name": "origin",
+          "line": 89211
+        },
+        {
+          "source": "headers",
+          "name": "host",
+          "line": 89212
+        }
+      ],
+      "nativeValidationLines": [
+        89208,
+        89217
+      ],
+      "knownNativeResultFields": [
+        "verified"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/update_token",
+      "routeLine": 89279,
+      "handlerLines": [
+        89151
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "webuiSession",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "oldToken",
+          "line": 89152
+        },
+        {
+          "source": "body",
+          "name": "newToken",
+          "line": 89152
+        },
+        {
+          "source": "headers",
+          "name": "authorization",
+          "line": 89153
+        }
+      ],
+      "nativeValidationLines": [
+        89154,
+        89157,
+        89160,
+        89163,
+        89166,
+        89169,
+        89173,
+        89179,
+        89182
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native WebUI credential-store authority. Passkey challenge/response uses the original interactive origin/rpId.",
+      "callShape": {
+        "owner": "webuiSession",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed登录/检查/登出/轮换及passkey challenge-response合同，避免将Credential/token写入通用结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/getAllReleases",
+      "routeLine": 90533,
+      "handlerLines": [
+        90385
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "page",
+          "line": 90387
+        },
+        {
+          "source": "query",
+          "name": "pageSize",
+          "line": 90388
+        },
+        {
+          "source": "query",
+          "name": "type",
+          "line": 90389
+        },
+        {
+          "source": "query",
+          "name": "search",
+          "line": 90390
+        },
+        {
+          "source": "query",
+          "name": "mirror",
+          "line": 90391
+        }
+      ],
+      "nativeValidationLines": [
+        90395,
+        90400,
+        90403,
+        90418,
+        90423,
+        90443
+      ],
+      "knownNativeResultFields": [
+        "mirror",
+        "pagination",
+        "versions"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/getLatestTag",
+      "routeLine": 90532,
+      "handlerLines": [
+        90377
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/getMirrors",
+      "routeLine": 90534,
+      "handlerLines": [
+        90484
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.mirrors",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "mirrors"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/mirrors",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/GetNapCatFileHash",
+      "routeLine": 90539,
+      "handlerLines": [
+        90488
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.file-hash",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "algorithm",
+        "file",
+        "hash"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/file-hash",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/GetNapCatVersion",
+      "routeLine": 90531,
+      "handlerLines": [
+        90373
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.version",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "version"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/version",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/GetSysStatusRealTime",
+      "routeLine": 90535,
+      "handlerLines": [
+        90499
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.system-events",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/system-events",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "bounded event sample with invalidEvents/ended/timedOut"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/proxy",
+      "routeLine": 90536,
+      "handlerLines": [
+        90518
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "networkFetch",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "url",
+          "line": 90519
+        }
+      ],
+      "nativeValidationLines": [
+        90520
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing network-target/resource authority and explicit request/result contract.",
+      "callShape": {
+        "owner": "networkFetch",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补正式网络owner合同与目标权限证据，不作为NapCat任意URL/action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/QQVersion",
+      "routeLine": 90530,
+      "handlerLines": [
+        90471
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.qq-version",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/qq-version",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/base/SetTheme",
+      "routeLine": 90538,
+      "handlerLines": [
+        90479
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "theme",
+          "line": 90480
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/base/Theme",
+      "routeLine": 90537,
+      "handlerLines": [
+        90475
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.theme",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/theme",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Debug/call",
+      "routeLine": 94361,
+      "handlerLines": [
+        94342
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "adapterName",
+          "line": 94344
+        },
+        {
+          "source": "body",
+          "name": "adapterName",
+          "line": 94344
+        },
+        {
+          "source": "body",
+          "name": "action",
+          "line": 94352
+        },
+        {
+          "source": "body",
+          "name": "params",
+          "line": 94352
+        }
+      ],
+      "nativeValidationLines": [
+        94346,
+        94349
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "可根据缺省adapterName自动创建调试adapter，随后任意action/params调用。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/Debug/call/:adapterName",
+      "routeLine": 94360,
+      "handlerLines": [
+        94342
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "adapterName",
+          "line": 94344
+        },
+        {
+          "source": "body",
+          "name": "adapterName",
+          "line": 94344
+        },
+        {
+          "source": "body",
+          "name": "action",
+          "line": 94352
+        },
+        {
+          "source": "body",
+          "name": "params",
+          "line": 94352
+        }
+      ],
+      "nativeValidationLines": [
+        94346,
+        94349
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "path adapterName优先于body，再用缺省adapter；不把这种选择规则当已授权任意adapter。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/Debug/close/:adapterName",
+      "routeLine": 94362,
+      "handlerLines": [
+        94362
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "adapterName",
+          "line": 94364
+        }
+      ],
+      "nativeValidationLines": [
+        94365,
+        94369,
+        94374
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Debug/create",
+      "routeLine": 94329,
+      "handlerLines": [
+        94329
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "adapterName",
+        "message",
+        "token"
+      ],
+      "sensitiveNativeResultFields": [
+        "token"
+      ],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Debug/schemas",
+      "routeLine": 94100,
+      "handlerLines": [
+        94100
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.schemas",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        94103,
+        94109,
+        94111
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/schemas",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/batchDelete",
+      "routeLine": 91996,
+      "handlerLines": [
+        91681
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "paths",
+          "line": 91683
+        }
+      ],
+      "nativeValidationLines": [
+        91691,
+        91695
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/batchDownload",
+      "routeLine": 92001,
+      "handlerLines": [
+        91876
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "paths",
+          "line": 91878
+        }
+      ],
+      "nativeValidationLines": [
+        91879,
+        91892,
+        91896
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/batchMove",
+      "routeLine": 91999,
+      "handlerLines": [
+        91818
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "items",
+          "line": 91820
+        }
+      ],
+      "nativeValidationLines": [
+        91830
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/create",
+      "routeLine": 91995,
+      "handlerLines": [
+        91757
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "path",
+          "line": 91759
+        }
+      ],
+      "nativeValidationLines": [
+        91766,
+        91769
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/delete",
+      "routeLine": 91992,
+      "handlerLines": [
+        91658
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "path",
+          "line": 91660
+        }
+      ],
+      "nativeValidationLines": [
+        91667,
+        91671
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/download",
+      "routeLine": 92000,
+      "handlerLines": [
+        91840
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "path",
+          "line": 91844
+        }
+      ],
+      "nativeValidationLines": [
+        91848,
+        91851,
+        91857
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/font/delete/webui",
+      "routeLine": 92004,
+      "handlerLines": [
+        91957
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        91961
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/File/font/exists/webui",
+      "routeLine": 92005,
+      "handlerLines": [
+        91970
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/font/upload/webui",
+      "routeLine": 92003,
+      "handlerLines": [
+        91934
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "multipart",
+          "name": "file",
+          "line": 91378
+        }
+      ],
+      "nativeValidationLines": [
+        91940,
+        91951
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "写固定字体目录，先清理旧字体，再写新资源。失败时需保原字体或明确结果。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/File/list",
+      "routeLine": 91990,
+      "handlerLines": [
+        91577
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "path",
+          "line": 91579
+        },
+        {
+          "source": "query",
+          "name": "onlyDirectory",
+          "line": 91586
+        }
+      ],
+      "nativeValidationLines": [
+        91587,
+        91614,
+        91628
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/mkdir",
+      "routeLine": 91991,
+      "handlerLines": [
+        91637
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "path",
+          "line": 91639
+        }
+      ],
+      "nativeValidationLines": [
+        91646,
+        91649
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/move",
+      "routeLine": 91998,
+      "handlerLines": [
+        91798
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "sourcePath",
+          "line": 91800
+        },
+        {
+          "source": "body",
+          "name": "targetPath",
+          "line": 91800
+        }
+      ],
+      "nativeValidationLines": [
+        91809
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/File/read",
+      "routeLine": 91993,
+      "handlerLines": [
+        91706
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "path",
+          "line": 91710
+        }
+      ],
+      "nativeValidationLines": [
+        91714,
+        91718
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/rename",
+      "routeLine": 91997,
+      "handlerLines": [
+        91778
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "oldPath",
+          "line": 91780
+        },
+        {
+          "source": "body",
+          "name": "newPath",
+          "line": 91780
+        }
+      ],
+      "nativeValidationLines": [
+        91789
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/upload",
+      "routeLine": 92002,
+      "handlerLines": [
+        91911
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "path",
+          "line": 91455
+        },
+        {
+          "source": "multipart",
+          "name": "files[]",
+          "line": 91451
+        }
+      ],
+      "nativeValidationLines": [
+        91917,
+        91928
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "Handler错误分支文字提到40MB，实际createDiskUpload配置是100MiB/file，应以实际limit为准。",
+        "originalname可以含子目录，原helper会mkdir；owned file入口需处理规范化、链接和目录归属。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/File/write",
+      "routeLine": 91994,
+      "handlerLines": [
+        91726
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "path",
+          "line": 91728
+        },
+        {
+          "source": "body",
+          "name": "content",
+          "line": 91728
+        }
+      ],
+      "nativeValidationLines": [
+        91735,
+        91739,
+        91743
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Log/GetLog",
+      "routeLine": 90366,
+      "handlerLines": [
+        90305
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.log",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "id",
+          "line": 90306
+        }
+      ],
+      "nativeValidationLines": [
+        90307,
+        90310
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/log",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "bytes/lines/sha256 summary"
+      },
+      "dependencies": [],
+      "notes": [
+        "上游sanitizeLog仅匹配/token=[\\w\\d]+/gi。JSON字段、Bearer、连接URL和其它敏感值未由该正则覆盖。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/Log/GetLogList",
+      "routeLine": 90367,
+      "handlerLines": [
+        90317
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.log-files",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/log-files",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Log/GetLogRealTime",
+      "routeLine": 90368,
+      "handlerLines": [
+        90321
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.log-events",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/log-events",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "bounded event sample with invalidEvents/ended/timedOut"
+      },
+      "dependencies": [],
+      "notes": [
+        "SSE日志也只用相同token=正则。需有界订阅、完整脱敏和取消释放。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/Log/terminal/:id/close",
+      "routeLine": 90371,
+      "handlerLines": [
+        90356
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "id",
+          "line": 90357
+        }
+      ],
+      "nativeValidationLines": [
+        90358
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "关闭原生终端可终止pty子进程。只关闭调用者拥有且明确选定的终端。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/Log/terminal/create",
+      "routeLine": 90370,
+      "handlerLines": [
+        90339
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "cols",
+          "line": 90344
+        },
+        {
+          "source": "body",
+          "name": "rows",
+          "line": 90344
+        }
+      ],
+      "nativeValidationLines": [
+        90340
+      ],
+      "knownNativeResultFields": [
+        "id"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Log/terminal/list",
+      "routeLine": 90369,
+      "handlerLines": [
+        90352
+      ],
+      "inventoryGroup": "existing-host-permission-boundary",
+      "state": "host-owner-boundary",
+      "implementation": {
+        "owner": "diagnosticRuntime",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing terminal/job or registered action authority. Native pty input, sequence and adapter lifetime belong to that owner.",
+      "callShape": {
+        "owner": "diagnosticRuntime",
+        "conditions": "Existing terminal/job or registered action owner, original id/sequence retained",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "HTTP terminal三接口未包含后续WS输入/resize/断开生命周期，需整套终端owner。Debug call不具逐action合同，需替换通用action代理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "只读列出原生终端元数据，继续受原终端owner可见性约束。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/Mirror/List",
+      "routeLine": 96429,
+      "handlerLines": [
+        96318
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "customMirror",
+        "fileMirrors",
+        "rawMirrors",
+        "timeout"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Mirror/SetCustom",
+      "routeLine": 96430,
+      "handlerLines": [
+        96331
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "mirror",
+          "line": 96333
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Mirror/Test",
+      "routeLine": 96432,
+      "handlerLines": [
+        96412
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "mirror",
+          "line": 96414
+        },
+        {
+          "source": "body",
+          "name": "type",
+          "line": 96414
+        }
+      ],
+      "nativeValidationLines": [
+        96416
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Mirror/Test/SSE",
+      "routeLine": 96431,
+      "handlerLines": [
+        96341
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "type",
+          "line": 96342
+        }
+      ],
+      "nativeValidationLines": [
+        96355,
+        96362
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Bounded subscription/job handle with cancellation and disconnect cleanup",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/NapCatConfig/GetConfig",
+      "routeLine": 96535,
+      "handlerLines": [
+        96457
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [
+        "configuration fields need versioned sensitive classification"
+      ],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/NapCatConfig/GetUinConfig",
+      "routeLine": 96537,
+      "handlerLines": [
+        96506
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        96509
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [
+        "account configuration fields need sensitive classification"
+      ],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/NapCatConfig/SetConfig",
+      "routeLine": 96536,
+      "handlerLines": [
+        96465
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "*configuration patch",
+          "line": 96467
+        }
+      ],
+      "nativeValidationLines": [
+        96468,
+        96473,
+        96477
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/NapCatConfig/SetUinConfig",
+      "routeLine": 96538,
+      "handlerLines": [
+        96516
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "*account configuration patch",
+          "line": 96517
+        }
+      ],
+      "nativeValidationLines": [
+        96519,
+        96522
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/OB11Config/ExportConfig",
+      "routeLine": 70853,
+      "handlerLines": [
+        70740
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        70742,
+        70747,
+        70759,
+        70767,
+        70774
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [
+        "all config files including tokens and possibly credentials"
+      ],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/OB11Config/GetConfig",
+      "routeLine": 70851,
+      "handlerLines": [
+        70708
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        70710
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [
+        "OneBot network tokens/secret-bearing config"
+      ],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/OB11Config/ImportConfig",
+      "routeLine": 70854,
+      "handlerLines": [
+        70807
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "ownedFiles",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "multipart",
+          "name": "file",
+          "line": 70813
+        },
+        {
+          "source": "multipart",
+          "name": "configFile",
+          "line": 70854
+        }
+      ],
+      "nativeValidationLines": [
+        70808,
+        70814,
+        70818,
+        70821,
+        70830
+      ],
+      "knownNativeResultFields": [
+        "filesBackedUp",
+        "filesImported",
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-file authority for the selected owned artifact/scope and operation. Binary/config archives use protected handles.",
+      "callShape": {
+        "owner": "ownedFiles",
+        "conditions": "Owned file/artifact handle or authorized exact path, binary/multipart transfer",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补文件scope/handle、多部分上传与下载artifact合同，导入压缩包的分段路径边界/恢复和写入回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "上游backupFiles只在内存收集，未观察到失败回滚写回。startsWith目录前缀检查需Rabi file owner按路径段处理，不能据此宣称事务安全。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/OB11Config/SetConfig",
+      "routeLine": 70852,
+      "handlerLines": [
+        70723
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.configure-onebot",
+          "manager.napcat.ensure-ready"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "config",
+          "line": 70732
+        }
+      ],
+      "nativeValidationLines": [
+        70725,
+        70728
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.configure-onebot",
+          "manager.napcat.ensure-ready"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Config",
+      "routeLine": 96190,
+      "handlerLines": [
+        95499
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "id",
+          "line": 95500
+        }
+      ],
+      "nativeValidationLines": [
+        95501,
+        95503,
+        95505,
+        95507,
+        95515
+      ],
+      "knownNativeResultFields": [
+        "config",
+        "schema",
+        "supportReactive"
+      ],
+      "sensitiveNativeResultFields": [
+        "plugin-defined secret-bearing config/schema defaults"
+      ],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/Config",
+      "routeLine": 96191,
+      "handlerLines": [
+        95695
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "id",
+          "line": 95696
+        },
+        {
+          "source": "body",
+          "name": "config",
+          "line": 95696
+        }
+      ],
+      "nativeValidationLines": [
+        95697,
+        95699,
+        95701,
+        95702,
+        95709,
+        95713
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [
+        "plugin-defined secret-bearing config/schema defaults"
+      ],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/Config/Change",
+      "routeLine": 96193,
+      "handlerLines": [
+        95622
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "id",
+          "line": 95623
+        },
+        {
+          "source": "body",
+          "name": "sessionId",
+          "line": 95623
+        },
+        {
+          "source": "body",
+          "name": "key",
+          "line": 95623
+        },
+        {
+          "source": "body",
+          "name": "value",
+          "line": 95623
+        },
+        {
+          "source": "body",
+          "name": "currentConfig",
+          "line": 95623
+        }
+      ],
+      "nativeValidationLines": [
+        95624,
+        95628,
+        95630,
+        95632,
+        95636,
+        95677
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "sessionId定位activeConfigSessions，需由Rabi owner额外绑定原pluginId与发起方；上游未见sessionId与id的逐字段归属核对。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Config/SSE",
+      "routeLine": 96192,
+      "handlerLines": [
+        95526
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "id",
+          "line": 95527
+        },
+        {
+          "source": "query",
+          "name": "config",
+          "line": 95528
+        }
+      ],
+      "nativeValidationLines": [
+        95529,
+        95534,
+        95539,
+        95550,
+        95588,
+        95595,
+        95603,
+        95613
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [
+        "plugin-defined schema/config SSE"
+      ],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Bounded subscription/job handle with cancellation and disconnect cleanup",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "GET会调用第三方plugin_config_controller；cleanup在关闭连接时调用。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Icon/:pluginId",
+      "routeLine": 96195,
+      "handlerLines": [
+        95726
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.plugin-icon",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "pluginId",
+          "line": 95727
+        }
+      ],
+      "nativeValidationLines": [
+        95728,
+        95730,
+        95732,
+        95734
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/plugin-icon",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "bytes/sha256/MIME summary"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/List",
+      "routeLine": 96187,
+      "handlerLines": [
+        95415
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.plugins",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        95417,
+        95425,
+        95427,
+        95449
+      ],
+      "knownNativeResultFields": [
+        "extensionPages",
+        "pluginManagerNotFound",
+        "plugins"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/plugins",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/page/:pluginId/:pagePath",
+      "routeLine": 96224,
+      "handlerLines": [
+        96224
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.plugin-page",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "pluginId",
+          "line": 96225
+        },
+        {
+          "source": "params",
+          "name": "pagePath",
+          "line": 96225
+        }
+      ],
+      "nativeValidationLines": [
+        96226,
+        96231,
+        96236,
+        96241,
+        96247,
+        96252,
+        96257
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/plugin-page",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "bytes/sha256/MIME summary"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/RegisterManager",
+      "routeLine": 96194,
+      "handlerLines": [
+        95389
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        95391,
+        95395,
+        95400
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/SetStatus",
+      "routeLine": 96188,
+      "handlerLines": [
+        95465
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "enable",
+          "line": 95466
+        },
+        {
+          "source": "body",
+          "name": "id",
+          "line": 95466
+        }
+      ],
+      "nativeValidationLines": [
+        95467,
+        95469,
+        95474,
+        95476
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Store/Detail/:id",
+      "routeLine": 96197,
+      "handlerLines": [
+        95999
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.store-plugin",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "params",
+          "name": "id",
+          "line": 96001
+        }
+      ],
+      "nativeValidationLines": [
+        96004
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/store-plugin",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/Store/Install",
+      "routeLine": 96198,
+      "handlerLines": [
+        96012
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "id",
+          "line": 96014
+        },
+        {
+          "source": "body",
+          "name": "mirror",
+          "line": 96014
+        }
+      ],
+      "nativeValidationLines": [
+        96015,
+        96021,
+        96025,
+        96027,
+        96038,
+        96039,
+        96056
+      ],
+      "knownNativeResultFields": [
+        "installPath",
+        "message",
+        "plugin"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Store/Install/SSE",
+      "routeLine": 96199,
+      "handlerLines": [
+        96065
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "id",
+          "line": 96066
+        },
+        {
+          "source": "query",
+          "name": "mirror",
+          "line": 96066
+        }
+      ],
+      "nativeValidationLines": [
+        96067,
+        96091,
+        96100,
+        96102,
+        96113,
+        96141,
+        96142,
+        96164
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Bounded subscription/job handle with cancellation and disconnect cleanup",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": [
+        "GET会download/extract/reload或load插件，是mutating job。"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/Plugin/Store/List",
+      "routeLine": 96196,
+      "handlerLines": [
+        95990
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.store-plugins",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "query",
+          "name": "forceRefresh",
+          "line": 95992
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/store-plugins",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Plugin/Uninstall",
+      "routeLine": 96189,
+      "handlerLines": [
+        95485
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "pluginManagement",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "id",
+          "line": 95486
+        },
+        {
+          "source": "body",
+          "name": "cleanData",
+          "line": 95486
+        }
+      ],
+      "nativeValidationLines": [
+        95487,
+        95489
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing native plugin lifecycle/configuration authority for the exact plugin ID, selected package and declared plugin hooks.",
+      "callShape": {
+        "owner": "pluginManagement",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补NapCat插件typed owner及插件声明合同。GET Config/SSE可执行第三方hook，GET Store/Install/SSE会安装并加载代码，应按mutation/job处理。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/Process/Restart",
+      "routeLine": 94442,
+      "handlerLines": [
+        94428
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.restart"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        94431
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.restart"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/CaptchaLogin",
+      "routeLine": 71656,
+      "handlerLines": [
+        71374
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71375
+        },
+        {
+          "source": "body",
+          "name": "passwordMd5",
+          "line": 71375
+        },
+        {
+          "source": "body",
+          "name": "ticket",
+          "line": 71375
+        },
+        {
+          "source": "body",
+          "name": "randstr",
+          "line": 71375
+        },
+        {
+          "source": "body",
+          "name": "sid",
+          "line": 71375
+        }
+      ],
+      "nativeValidationLines": [
+        71377,
+        71380,
+        71383,
+        71387,
+        71388
+      ],
+      "knownNativeResultFields": [
+        "jumpUrl",
+        "needNewDevice",
+        "newDevicePullQrCodeSig"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "captcha-login",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/CheckLoginStatus",
+      "routeLine": 71648,
+      "handlerLines": [
+        71283
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.health",
+          "manager.napcat.login-panel",
+          "manager.napcat.ensure-ready"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "loginError",
+        "qrcodeurl"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.health",
+          "manager.napcat.login-panel",
+          "manager.napcat.ensure-ready"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/ComputeLinuxGUID",
+      "routeLine": 71671,
+      "handlerLines": [
+        71535
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "mac",
+          "line": 71536
+        },
+        {
+          "source": "body",
+          "name": "machineId",
+          "line": 71536
+        }
+      ],
+      "nativeValidationLines": [
+        71539,
+        71547
+      ],
+      "knownNativeResultFields": [
+        "guid",
+        "mac",
+        "machineId"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/CreateGUIDBackup",
+      "routeLine": 71666,
+      "handlerLines": [
+        71477
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message",
+        "path"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/CreateLinuxMachineInfoBackup",
+      "routeLine": 71673,
+      "handlerLines": [
+        71570
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message",
+        "path"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetDeviceGUID",
+      "routeLine": 71662,
+      "handlerLines": [
+        71429
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "guid"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetGUIDBackups",
+      "routeLine": 71664,
+      "handlerLines": [
+        71455
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetLinuxMAC",
+      "routeLine": 71668,
+      "handlerLines": [
+        71501
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "mac"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetLinuxMachineId",
+      "routeLine": 71670,
+      "handlerLines": [
+        71527
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "machineId"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetLinuxMachineInfoBackups",
+      "routeLine": 71672,
+      "handlerLines": [
+        71561
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetNewDeviceQRCode",
+      "routeLine": 71658,
+      "handlerLines": [
+        71605
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71606
+        },
+        {
+          "source": "body",
+          "name": "jumpUrl",
+          "line": 71606
+        }
+      ],
+      "nativeValidationLines": [
+        71607,
+        71613
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "new-device-qr",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetPlatformInfo",
+      "routeLine": 71667,
+      "handlerLines": [
+        71498
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "loginLifecycle",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "platform"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "owner": "loginLifecycle",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "原13路径兼容映射已列。其余登录偏好/二维码读取需补原owner动作与typed输出，重启只经原生命周期。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetQQLoginInfo",
+      "routeLine": 71651,
+      "handlerLines": [
+        71321
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.health",
+          "manager.napcat.login-panel"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.health",
+          "manager.napcat.login-panel"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetQQLoginQrcode",
+      "routeLine": 71649,
+      "handlerLines": [
+        71270
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "loginLifecycle",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        71271,
+        71275
+      ],
+      "knownNativeResultFields": [
+        "qrcode"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "owner": "loginLifecycle",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "原13路径兼容映射已列。其余登录偏好/二维码读取需补原owner动作与typed输出，重启只经原生命周期。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "ALL",
+      "path": "/api/QQLogin/GetQuickLoginList",
+      "routeLine": 71646,
+      "handlerLines": [
+        71313
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "loginLifecycle",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "owner": "loginLifecycle",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "原13路径兼容映射已列。其余登录偏好/二维码读取需补原owner动作与typed输出，重启只经原生命周期。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "ALL",
+      "path": "/api/QQLogin/GetQuickLoginListNew",
+      "routeLine": 71647,
+      "handlerLines": [
+        71317
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-panel"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-panel"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/GetQuickLoginQQ",
+      "routeLine": 71652,
+      "handlerLines": [
+        71334
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "loginLifecycle",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "owner": "loginLifecycle",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "原13路径兼容映射已列。其余登录偏好/二维码读取需补原owner动作与typed输出，重启只经原生命周期。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/NewDeviceLogin",
+      "routeLine": 71657,
+      "handlerLines": [
+        71395
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71396
+        },
+        {
+          "source": "body",
+          "name": "passwordMd5",
+          "line": 71396
+        },
+        {
+          "source": "body",
+          "name": "newDevicePullQrCodeSig",
+          "line": 71396
+        }
+      ],
+      "nativeValidationLines": [
+        71398,
+        71401,
+        71404,
+        71408,
+        71409
+      ],
+      "knownNativeResultFields": [
+        "jumpUrl",
+        "needNewDevice",
+        "newDevicePullQrCodeSig"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "new-device-login",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/PasswordLogin",
+      "routeLine": 71655,
+      "handlerLines": [
+        71350
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71351
+        },
+        {
+          "source": "body",
+          "name": "passwordMd5",
+          "line": 71351
+        }
+      ],
+      "nativeValidationLines": [
+        71353,
+        71356,
+        71359,
+        71363,
+        71364,
+        71367
+      ],
+      "knownNativeResultFields": [
+        "jumpUrl",
+        "needCaptcha",
+        "needNewDevice",
+        "newDevicePullQrCodeSig",
+        "proofWaterUrl"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "password-login",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/PollNewDeviceQR",
+      "routeLine": 71659,
+      "handlerLines": [
+        71627
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71628
+        },
+        {
+          "source": "body",
+          "name": "bytesToken",
+          "line": 71628
+        }
+      ],
+      "nativeValidationLines": [
+        71629
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "new-device-poll",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/RefreshQRcode",
+      "routeLine": 71654,
+      "handlerLines": [
+        71343
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        71344
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "refresh-qr",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/ResetDeviceID",
+      "routeLine": 71660,
+      "handlerLines": [
+        71416
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/ResetLinuxDeviceID",
+      "routeLine": 71675,
+      "handlerLines": [
+        71592
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/RestartNapCat",
+      "routeLine": 71661,
+      "handlerLines": [
+        71486
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.restart"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        71489
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.restart"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/RestoreGUIDBackup",
+      "routeLine": 71665,
+      "handlerLines": [
+        71464
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "backupName",
+          "line": 71465
+        }
+      ],
+      "nativeValidationLines": [
+        71466
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/RestoreLinuxMachineInfoBackup",
+      "routeLine": 71674,
+      "handlerLines": [
+        71579
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "backupName",
+          "line": 71580
+        }
+      ],
+      "nativeValidationLines": [
+        71581
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/SetDeviceGUID",
+      "routeLine": 71663,
+      "handlerLines": [
+        71438
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "guid",
+          "line": 71439
+        }
+      ],
+      "nativeValidationLines": [
+        71440
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/SetLinuxMAC",
+      "routeLine": 71669,
+      "handlerLines": [
+        71510
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "deviceIdentity",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "mac",
+          "line": 71511
+        }
+      ],
+      "nativeValidationLines": [
+        71512
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing host-device identity/configuration authority, platform match and exact backup ownership.",
+      "callShape": {
+        "owner": "deviceIdentity",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "新增typed设备身份/备份owner，接平台前置条件、精确备份归属与原操作回执。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/SetQuickLogin",
+      "routeLine": 71650,
+      "handlerLines": [
+        71298
+      ],
+      "inventoryGroup": "existing-login-lifecycle-compatibility",
+      "state": "existing-native-owner",
+      "implementation": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "owner": "napcatManager",
+        "mode": "original-owner-compatibility"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71299
+        }
+      ],
+      "nativeValidationLines": [
+        71301,
+        71304,
+        71308
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "operationIds": [
+          "manager.napcat.login-action"
+        ],
+        "conditions": "Read the original operation contract and pass its gatewayId/instanceId selectors; native raw payload is not interchangeable.",
+        "loginAction": "quick-login",
+        "result": "original owner contract"
+      },
+      "dependencies": [
+        {
+          "kind": "original-owner-contract",
+          "reason": "Use the existing operation input, permission, receipt and result contract."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/QQLogin/SetQuickLoginQQ",
+      "routeLine": 71653,
+      "handlerLines": [
+        71338
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "loginLifecycle",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "uin",
+          "line": 71339
+        }
+      ],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact instance lifecycle/login owner. Original request and admission decisions remain authoritative.",
+      "callShape": {
+        "owner": "loginLifecycle",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "原13路径兼容映射已列。其余登录偏好/二维码读取需补原owner动作与typed输出，重启只经原生命周期。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "ALL",
+      "path": "/api/test",
+      "routeLine": 96542,
+      "handlerLines": [
+        96542
+      ],
+      "inventoryGroup": "typed-read-and-resource",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.health",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "POST",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing authenticated connection and exact Route/instance/QQ binding. Results follow a bounded reviewed DTO or content summary.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/health",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "reviewed closed DTO"
+      },
+      "dependencies": [],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/UpdateNapCat/update",
+      "routeLine": 92468,
+      "handlerLines": [
+        92276
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "releaseMirrors",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "targetVersion",
+          "line": 92278
+        },
+        {
+          "source": "body",
+          "name": "force",
+          "line": 92278
+        },
+        {
+          "source": "body",
+          "name": "mirror",
+          "line": 92278
+        }
+      ],
+      "nativeValidationLines": [
+        92285,
+        92287,
+        92315,
+        92331,
+        92334,
+        92340,
+        92346,
+        92365,
+        92370,
+        92374,
+        92380,
+        92383,
+        92395
+      ],
+      "knownNativeResultFields": [
+        "failedFilesCount",
+        "message",
+        "newVersion",
+        "status"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configured mirror/resource and maintenance lifecycle authority. Update progress, digest and rollback belong to the original operation.",
+      "callShape": {
+        "owner": "releaseMirrors",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补typed release/mirror元数据和进度handle，更新不得直接走裸文件覆盖。当前官方Git tags/releases为空，版本目录可能暂不可用需保真实错误。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/WebUIConfig/DeleteSSLCert",
+      "routeLine": 92208,
+      "handlerLines": [
+        92183
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        92187,
+        92190
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/WebUIConfig/GetClientIP",
+      "routeLine": 92205,
+      "handlerLines": [
+        92047
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "headers",
+          "name": "x-forwarded-for",
+          "line": 92052
+        }
+      ],
+      "nativeValidationLines": [
+        92051,
+        92053,
+        92055,
+        92064,
+        92066
+      ],
+      "knownNativeResultFields": [
+        "ip"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/WebUIConfig/GetConfig",
+      "routeLine": 92201,
+      "handlerLines": [
+        92007
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [
+        "accessControlMode",
+        "disableWebUI",
+        "enableXForwardedFor",
+        "host",
+        "ipBlacklist",
+        "ipWhitelist",
+        "loginRate",
+        "port"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/WebUIConfig/GetDisableWebUI",
+      "routeLine": 92203,
+      "handlerLines": [
+        92025
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/WebUIConfig/GetSSLStatus",
+      "routeLine": 92206,
+      "handlerLines": [
+        92135
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "typed-summary",
+      "implementation": {
+        "operationId": "agent.qq.webui.ssl-status",
+        "owner": "napcatWebuiApiOperations",
+        "selectedCallMethod": "GET",
+        "mode": "read-summary",
+        "source": "src/plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiApiOperations.ts"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [],
+      "nativeValidationLines": [
+        92143,
+        92146
+      ],
+      "knownNativeResultFields": [
+        "certContent",
+        "certExists",
+        "enabled",
+        "keyContent",
+        "keyExists"
+      ],
+      "sensitiveNativeResultFields": [
+        "keyContent",
+        "certContent"
+      ],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "method": "POST",
+        "path": "/api/agent/qq/webui/ssl-status",
+        "body": [
+          "routeId",
+          "instanceId",
+          "params"
+        ],
+        "conditions": "Closed per-operation parameters. The original session injects credentials, verifies OneBot and WebUI QQ identities, and retains its binding snapshot.",
+        "result": "enabled/presence/certificate metadata without certificate or key content"
+      },
+      "dependencies": [],
+      "notes": [
+        "原生成功返回enabled/certExists/keyExists/certContent/keyContent。TLS私钥不进入通用结果。"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/WebUIConfig/UpdateConfig",
+      "routeLine": 92202,
+      "handlerLines": [
+        92076
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "host",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "port",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "loginRate",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "disableWebUI",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "accessControlMode",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "ipWhitelist",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "ipBlacklist",
+          "line": 92078
+        },
+        {
+          "source": "body",
+          "name": "enableXForwardedFor",
+          "line": 92078
+        }
+      ],
+      "nativeValidationLines": [
+        92080,
+        92081,
+        92086,
+        92087,
+        92092,
+        92093,
+        92098,
+        92099,
+        92104,
+        92105,
+        92110,
+        92111,
+        92116,
+        92117,
+        92122,
+        92123
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/WebUIConfig/UpdateDisableWebUI",
+      "routeLine": 92204,
+      "handlerLines": [
+        92034
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "disable",
+          "line": 92036
+        }
+      ],
+      "nativeValidationLines": [
+        92037
+      ],
+      "knownNativeResultFields": [],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/WebUIConfig/UploadSSLCert",
+      "routeLine": 92207,
+      "handlerLines": [
+        92161
+      ],
+      "inventoryGroup": "protected-typed-owner",
+      "state": "owner-dependency",
+      "implementation": {
+        "owner": "endpointConfig",
+        "mode": "metadata-dependency"
+      },
+      "runtimeAcceptance": "not-asserted-by-this-static-manifest",
+      "nativeInputs": [
+        {
+          "source": "body",
+          "name": "cert",
+          "line": 92163
+        },
+        {
+          "source": "body",
+          "name": "key",
+          "line": 92163
+        }
+      ],
+      "nativeValidationLines": [
+        92164,
+        92167,
+        92170
+      ],
+      "knownNativeResultFields": [
+        "message"
+      ],
+      "sensitiveNativeResultFields": [],
+      "permission": "Existing configuration-edit and secret-store authority for this exact instance. Secret material uses protected references.",
+      "callShape": {
+        "owner": "endpointConfig",
+        "conditions": "Fixed method/path typed call with stored WebUI credential and Route/instance identity",
+        "result": "owner-defined typed/protected DTO or owned artifact"
+      },
+      "dependencies": [
+        {
+          "kind": "typed-owner-contract",
+          "reason": "补各配置版本schema、写入差量/兼容迁移及敏感字段投影。GetSSLStatus原响应含完整keyContent，必须改为受保护结果。"
+        },
+        {
+          "kind": "request-response-schema",
+          "reason": "Native handlers expose the listed fields/checks without a versioned public WebUI schema. Declare closed input and reviewed result fields before execution."
+        }
+      ],
+      "notes": []
+    }
+  ]
+}

@@ -1,9 +1,13 @@
 import { getTimeoutMs } from "@rabiroute/host-api/shared/timeoutSettings";
 import { createHash } from "node:crypto";
+import { qqReadSettings } from "@rabiroute/host-api/shared/qqReadSettings";
+import { boundedBytes } from "../manager/qqMessageMedia.js";
+import { assertNapcatWebuiFixedRead } from "../manager/napcatWebuiApiRoutes.js";
 
 export type NapcatWebuiSession = {
   baseUrl: string;
   request(pathname: string, body?: Record<string, unknown>): Promise<Response>;
+  requestFixed(method: "GET" | "POST", pathname: string, signal: AbortSignal): Promise<Response>;
 };
 type Credential = { value: string; expiresAt: number };
 
@@ -15,6 +19,11 @@ export class NapcatWebuiSessions {
   constructor(private readonly ttlMs = 5 * 60_000) {}
 
   async open(baseUrl: string, token: string): Promise<NapcatWebuiSession | null> {
+    const base = new URL(baseUrl);
+    if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
+      throw new Error("NAPCAT_WEBUI_BASE_URL_INVALID");
+    }
+    baseUrl = base.origin;
     const hash = createHash("sha256").update(`${token}.napcat`).digest("hex");
     const key = JSON.stringify([baseUrl, hash]);
     const authorize = (): Promise<Credential | null> => {
@@ -24,11 +33,14 @@ export class NapcatWebuiSessions {
       if (pending) return pending;
       const flight = (async () => {
         const response = await fetch(`${baseUrl}/api/auth/login`, {
-          method: "POST", headers: { "content-type": "application/json; charset=utf-8" },
+          method: "POST", redirect: "error", headers: { "content-type": "application/json; charset=utf-8" },
           body: JSON.stringify({ hash }), signal: AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatWebuiSession.authorize.AbortSignal.timeout.request", 5000))
         });
-        const result = await response.json().catch(() => ({})) as { code?: number; data?: { Credential?: string } };
-        const value = String(result.data?.Credential || "").trim();
+        if (!response.ok) { await response.body?.cancel().catch(() => undefined); return null; }
+        const bytes = await boundedBytes(response, qqReadSettings.jsonBytes, "RABIROUTE_QQ_JSON_MAX_BYTES");
+        let result: { code?: number; data?: { Credential?: string } };
+        try { result = JSON.parse(bytes.toString("utf8")); } catch { return null; }
+        const value = typeof result?.data?.Credential === "string" ? result.data.Credential.trim() : "";
         if (!response.ok || result.code !== 0 || !value) return null;
         for (const [oldKey, item] of this.credentials) if (item.expiresAt <= Date.now()) this.credentials.delete(oldKey);
         if (this.credentials.size >= 64) this.credentials.delete(this.credentials.keys().next().value!);
@@ -43,27 +55,44 @@ export class NapcatWebuiSessions {
       if (this.credentials.get(key) === credential) this.credentials.delete(key);
     };
     if (!await authorize()) return null;
-    return {
-      baseUrl,
-      request: async (pathname, body = {}) => {
+    const perform = async (method: "GET" | "POST", pathname: string, body: Record<string, unknown> | undefined, signal?: AbortSignal): Promise<Response> => {
+        const target = new URL(pathname, baseUrl);
+        if (!pathname.startsWith("/api/") || pathname.includes("\\") || target.origin !== baseUrl || target.hash
+          || target.pathname !== pathname.split("?")[0]) throw new Error("NAPCAT_WEBUI_PATH_INVALID");
         for (let attempt = 0; attempt < 2; attempt++) {
+          signal?.throwIfAborted();
           const credential = await authorize();
+          signal?.throwIfAborted();
           if (!credential) throw new Error("NapCat 管理服务暂时无法认证；请确认后台已启动并能读取 WebUI 登录密钥。");
-          let response: Response;
-          try {
-            response = await fetch(`${baseUrl}${pathname}`, {
-              method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${credential.value}` },
-              body: JSON.stringify(body), signal: AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatWebuiSession.request.AbortSignal.timeout.request", 5000))
-            });
-          } catch (error) { invalidate(credential); throw error; }
-          const result = await response.clone().json().catch(() => ({})) as { code?: number; message?: string };
-          const unauthorized = response.status === 401 || (result.code !== 0 && /unauthorized|credential.*(?:invalid|expired)/i.test(String(result.message || "")));
+          const deadline = AbortSignal.timeout(getTimeoutMs("backend.messageEndpoints.napcatWebuiSession.request.AbortSignal.timeout.request", 5000));
+          let response = await fetch(target, {
+            method, redirect: "error", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${credential.value}` },
+            ...(method === "POST" ? { body: JSON.stringify(body ?? {}) } : {}), signal: signal ? AbortSignal.any([signal, deadline]) : deadline
+          });
+          let unauthorized = response.status === 401;
+          if (unauthorized) await response.body?.cancel().catch(() => undefined);
+          else if (response.headers.get("content-type")?.toLowerCase().includes("json") && response.body) {
+            const bytes = await boundedBytes(response, qqReadSettings.jsonBytes, "RABIROUTE_QQ_JSON_MAX_BYTES");
+            let result: { code?: unknown; message?: unknown } = {};
+            try { result = JSON.parse(bytes.toString("utf8")); } catch { /* The typed caller reports malformed JSON. */ }
+            unauthorized = result?.code === -1 && /^(?:Unauthorized|Authorization Failed)$/i.test(String(result?.message ?? "").trim());
+            const headers = new Headers(response.headers);
+            headers.delete("content-encoding"); headers.set("content-length", String(bytes.length));
+            response = new Response(Uint8Array.from(bytes), { status: response.status, statusText: response.statusText, headers });
+          }
           if (!unauthorized) return response;
           invalidate(credential);
           // Authentication rejection precedes execution; ordinary action failures are never retried.
           if (attempt === 1) return response;
         }
         throw new Error("NapCat management authentication failed.");
+    };
+    return {
+      baseUrl,
+      request: (pathname, body = {}) => perform("POST", pathname, body),
+      requestFixed: (method, pathname, signal) => {
+        assertNapcatWebuiFixedRead(method, pathname);
+        return perform(method, pathname, undefined, signal);
       }
     };
   }

@@ -22,7 +22,7 @@ export class QqReadError extends Error {
   constructor(public readonly status: number, public readonly code: string, detail?: string, public readonly upstreamRetcode?: number) { super(detail ? `${code}: ${detail}` : code); }
 }
 
-async function boundedBytes(response: Response, max: number, limitSetting?: string): Promise<Buffer> {
+export async function boundedBytes(response: Response, max: number, limitSetting?: string): Promise<Buffer> {
   if (!response.ok || !response.body) throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
