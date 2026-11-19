@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { requestWorkbuddyDesktopMessage, requestWorkbuddyDesktopSteer, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
-import { workbuddyDesktopMessageExpression } from "./workbuddyDesktopSteer.js";
+import { workbuddyDesktopContinuationReadinessExpression, workbuddyDesktopMessageExpression } from "./workbuddyDesktopSteer.js";
 import { workbuddyRecordConfirmsDelivery } from "./workbuddyHistory.js";
 import { RABI_MESSAGE_CONTENT_HEADER, RABI_MESSAGE_SOURCE_HEADER } from "@rabiroute/host-api/shared/rabiMessage";
 
@@ -92,6 +92,47 @@ test("only the original native injected user record can recover a steer receipt"
   assert.equal(confirms({ ...record, content: record.content.replace(input.deliveryId, "other") }), false);
 });
 
+test("cold continuation waits for the desktop lookup and original workspace without exposing or sending the prompt", async () => {
+  const window: { wb?: unknown } = {};
+  const readiness = workbuddyDesktopContinuationReadinessExpression(input);
+  assert.ok(!readiness.includes("Keep working"));
+  assert.ok(!readiness.includes(input.deliveryId));
+  const lookup = () => runInNewContext(readiness, { window });
+  assert.equal(await lookup(), "loading");
+
+  let sends = 0;
+  let visible = false;
+  const info = { id: input.threadId, transport: "local", state: "idle", space: { cwd: "" } };
+  window.wb = { conversations: { get: async (id: string) => {
+    assert.equal(id, input.threadId);
+    return visible ? { info, sendPrompt: async (_text: unknown, options: { clientRequestId: string }) => {
+      sends++;
+      assert.equal(options.clientRequestId, input.deliveryId);
+      return { disposition: "queued", item: { id: "native-item", clientRequestId: input.deliveryId } };
+    } } : undefined;
+  } } };
+  assert.equal(await lookup(), "loading");
+  visible = true;
+  assert.equal(await lookup(), "loading");
+  info.space.cwd = "C:/Unrelated/One";
+  assert.equal(await lookup(), "unavailable");
+  info.space.cwd = input.workspace;
+  assert.equal(await lookup(), "ready");
+  assert.equal(sends, 0);
+
+  const send = () => runInNewContext(workbuddyDesktopMessageExpression(input, "continue"), { window });
+  info.space.cwd = "C:/Unrelated/One";
+  assert.equal((await send()).state, "unavailable");
+  info.space.cwd = input.workspace;
+  info.transport = "cloud";
+  assert.equal((await send()).state, "unavailable");
+  assert.equal(sends, 0);
+
+  info.transport = "local";
+  assert.equal((await send()).state, "accepted");
+  assert.equal(sends, 1);
+});
+
 test("the relay declines steer on an old connector and sends the typed action only to a compatible connector", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "rabi-workbuddy-steer-"));
   const descriptor = path.join(dir, "relay.json");
@@ -113,7 +154,12 @@ test("the relay declines steer on an old connector and sends the typed action on
     });
     await assert.rejects(requestWorkbuddyDesktopSteer(input, () => { throw new Error("authorization changed"); }, descriptor), /authorization changed/);
     assert.equal(calls, 0);
+    const updated = JSON.parse(await readFile(descriptor, "utf8"));
+    await writeFile(descriptor, JSON.stringify({ ...updated, continuationContract: 1 }));
+    await assert.rejects(requestWorkbuddyDesktopMessage(input, "continue", undefined, descriptor), /不支持本版后台唤起原会话/);
+    assert.equal(calls, 0);
     await requestWorkbuddyDesktopSteer(input, undefined, descriptor);
+    await writeFile(descriptor, JSON.stringify(updated));
     await requestWorkbuddyDesktopMessage(input, "continue", undefined, descriptor);
     assert.equal(calls, 2);
     assert.deepEqual(modes, ["steer", "continue"]);

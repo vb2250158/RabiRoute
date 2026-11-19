@@ -11,7 +11,7 @@ const pipePrefix = "\\\\.\\pipe\\RabiRoute.WorkBuddy.Desktop.";
 const frameLimit = 2 * 1024 * 1024;
 const composerLayoutContract = 1;
 const steerContract = 2;
-const continuationContract = 1;
+const continuationContract = 2;
 const descriptorPath = () => path.join(workbuddyHomeDir(), "rabiroute-desktop-relay.json");
 type DesktopRelay = { pipe: string; token: string; composerLayoutContract?: number; steerContract?: number; continuationContract?: number };
 

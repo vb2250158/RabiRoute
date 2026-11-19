@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createWorkbuddyDesktopCreator } from "./workbuddyDesktopCreation.js";
 import { clearClosedWorkbuddyDesktopRelay, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
-import { workbuddyDesktopMessageExpression, type WorkbuddyDesktopMessageResult } from "./workbuddyDesktopSteer.js";
+import { workbuddyDesktopContinuationReadinessExpression, workbuddyDesktopMessageExpression,
+  type WorkbuddyDesktopContinuationReadiness, type WorkbuddyDesktopMessageResult } from "./workbuddyDesktopSteer.js";
 import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 
 const execute = promisify(execFile);
@@ -90,9 +91,9 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
     }
     if (!targetId) throw new Error("WorkBuddy main renderer is unavailable.");
     const { sessionId } = await call<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
-    const run = async (expression: string, returnByValue: boolean, awaitPromise = false) => {
+    const run = async (expression: string, returnByValue: boolean, awaitPromise = false, timeoutMs = awaitPromise ? 20_000 : undefined) => {
       const reply = await call<{ exceptionDetails?: unknown; result: { value?: unknown; objectId?: string } }>(
-        "Runtime.evaluate", { expression, returnByValue, awaitPromise }, sessionId, awaitPromise ? 20_000 : undefined);
+        "Runtime.evaluate", { expression, returnByValue, awaitPromise }, sessionId, timeoutMs);
       if (reply.exceptionDetails) throw new Error("WorkBuddy renderer did not apply the desktop action.");
       return reply.result;
     };
@@ -111,6 +112,18 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
       observeWindow: () => observe(),
     }, path.join(workbuddyHomeDir(), "rabiroute-desktop-intents"));
     const stopRelay = await serveWorkbuddyDesktopRelay(create, undefined, async (input, signal, mode) => {
+      signal.throwIfAborted();
+      if (mode === "continue") {
+        const expression = workbuddyDesktopContinuationReadinessExpression(input);
+        const deadline = performance.now() + 6_000;
+        let readiness: WorkbuddyDesktopContinuationReadiness = "loading";
+        while (readiness === "loading" && performance.now() < deadline) {
+          readiness = (await run(expression, true, true, Math.max(1, deadline - performance.now()))).value as WorkbuddyDesktopContinuationReadiness;
+          signal.throwIfAborted();
+          if (readiness === "loading") await delay(200, undefined, { signal });
+        }
+        if (readiness !== "ready") return { state: "unavailable", threadId: input.threadId, deliveryId: input.deliveryId };
+      }
       signal.throwIfAborted();
       return (await run(workbuddyDesktopMessageExpression(input, mode), true, true)).value as WorkbuddyDesktopMessageResult;
     });

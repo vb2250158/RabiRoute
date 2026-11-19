@@ -14,6 +14,31 @@ export type WorkbuddyDesktopMessageResult = {
 };
 
 export type WorkbuddyDesktopMessageMode = "steer" | "continue";
+export type WorkbuddyDesktopContinuationReadiness = "ready" | "loading" | "unavailable";
+
+const desktopConversationLookup = `
+    const workspaceKey = (${normalizeWorkbuddyWorkspace.toString()});
+    const expectedWorkspace = workspaceKey(workspace);
+    const conversations = window.wb?.conversations;
+    const thread = typeof conversations?.get === 'function' ? await conversations.get(threadId) : undefined;
+    const info = thread?.info;
+    const actualWorkspace = workspaceKey(info?.space?.cwd);
+    let readiness = 'loading';
+    if (!expectedWorkspace || (info?.id && info.id !== threadId)
+      || (info?.transport && info.transport !== 'local') || (actualWorkspace && actualWorkspace !== expectedWorkspace)) {
+      readiness = 'unavailable';
+    } else if (info?.id === threadId && info.transport === 'local' && actualWorkspace && typeof thread.sendPrompt === 'function') {
+      readiness = 'ready';
+    }`;
+
+/** The desktop lookup loads the original owner's view without submitting a prompt. */
+export function workbuddyDesktopContinuationReadinessExpression({ threadId, workspace }: Pick<WorkbuddyDesktopMessageInput, "threadId" | "workspace">): string {
+  return `(async () => {
+    const { threadId, workspace } = ${JSON.stringify({ threadId, workspace })};
+    ${desktopConversationLookup}
+    return readiness;
+  })()`;
+}
 
 /** Use the desktop’s native send operation with the requested queue behavior. */
 export function workbuddyDesktopMessageExpression(input: WorkbuddyDesktopMessageInput, mode: WorkbuddyDesktopMessageMode = "steer"): string {
@@ -21,14 +46,9 @@ export function workbuddyDesktopMessageExpression(input: WorkbuddyDesktopMessage
     const { threadId, workspace, text, deliveryId } = ${JSON.stringify(input)};
     const steer = ${mode === "steer"};
     const reply = state => ({ state, threadId, deliveryId });
-    const workspaceKey = (${normalizeWorkbuddyWorkspace.toString()});
-    const conversations = window.wb?.conversations;
-    if (typeof conversations?.get !== 'function') return reply('unavailable');
-    const thread = await conversations.get(threadId);
-    if (thread?.info?.id !== threadId || thread.info.transport !== 'local'
-      || workspaceKey(thread.info.space?.cwd) !== workspaceKey(workspace)
-      || typeof thread.sendPrompt !== 'function') return reply('unavailable');
-    if (steer && thread.info.state !== 'planning' && thread.info.state !== 'working') return reply('inactive');
+    ${desktopConversationLookup}
+    if (readiness !== 'ready') return reply('unavailable');
+    if (steer && info.state !== 'planning' && info.state !== 'working') return reply('inactive');
     const result = await thread.sendPrompt([{ type: 'text', text }], {
       clientRequestId: deliveryId, clientTimestamp: Date.now(),
       emitUserMessage: true, _expectQueueReceipt: true, ...(steer ? { queueDelivery: 'steer' } : {})

@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.41 - 2026-11-19
 
+- `io.rabiroute.agent.workbuddy 0.1.12` waits for the original native conversation after a cold start, then continues it with exact session and workspace checks while preserving delivery IDs, receipts and steering semantics.
+
 - NapCat 0.1.20 extends fixed native actions, source-bound file streams and WebUI management operations. Send variants retain the original Outbox and receipts. A local protector seals request-event flags and internal file provenance, while public resources contain reviewed content.
 - Host API 1.17.0 and plugin SDK 1.6.0 expose existing upload/plan attachment leases and protected resources. Native acknowledgement-only actions return acknowledged with platform visibility recorded separately.
 - WorkBuddy 0.1.11 resolves its connector from the actual plugin entry, accepts the packaged Runtime executable and decodes native guidance receipt content blocks. Original intent IDs and uncertain receipts remain intact.
