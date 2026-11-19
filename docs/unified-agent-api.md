@@ -135,6 +135,8 @@ MCP 的流式调用返回 `sessionId`，后续通过 `rabi_session` 读取帧、
 | DSH | `/api/agent/providers/dsh/sessions` 与对应详情、历史，历史转接原 `session/events` |
 | DSH 插件 | 同 provider 下的 `/plugins`、`/bundles`、`/plugin-market`、市场 search、插件 install/update/remove 转接 DSH 原 PluginManager / PluginMarket |
 
+`GET /api/agent/providers/dsh/sessions/:sessionId` 在选定的 DSH 连接可读取且目录中没有该完整 ID 时返回 `404 DSH_SESSION_NOT_FOUND`。无法可靠读取目录时返回 `503 DSH_NATIVE_UNAVAILABLE`。`404` 仅描述当前连接的可见范围，原投递状态仍由原回执决定。
+
 Codex 历史保留原事件、工具 ID、物理序号和返回游标，普通 JSONL 后续页按位置续读。DSH 历史保留原 seq、cursor 与覆盖字段。Rabi 的投递与回复记录保存另一类业务事实，查询时按目录说明选择数据来源。
 
 ## Skill 与自动化模板

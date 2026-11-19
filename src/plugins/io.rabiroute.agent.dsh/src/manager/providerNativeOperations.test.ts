@@ -85,6 +85,8 @@ test("DSH actual loopback native RPC retains cookie, rpcId, method, result and c
   const previous = process.env.RABI_DSH_AUTH_FILE, previousState = process.env.RABIROUTE_STATE_ROOT;
   process.env.RABIROUTE_STATE_ROOT = root;
   const calls: Array<{ method: string; args: unknown }> = [];
+  const existingSessionId = "session-00000000-0000-0000-0000-000000000001";
+  const missingSessionId = "session-00000000-0000-0000-0000-000000000002";
   let rpcMismatch = false, failWrite = false, holdRead = false;
   let began!: () => void, cancelled!: () => void;
   const started = new Promise<void>(resolve => { began = resolve; }), closed = new Promise<void>(resolve => { cancelled = resolve; });
@@ -100,7 +102,13 @@ test("DSH actual loopback native RPC retains cookie, rpcId, method, result and c
     calls.push({ method: body.method, args: body.payload.args });
     if (failWrite) { res.destroy(); return; }
     if (holdRead) { res.once("close", cancelled); began(); return; }
-    const value = body.method === "session/events" ? { records: [{ type: "event", seq: 11, event: { id: "kept-native" } }], hasMore: false, cursor: 11 } : { nativeOperation: body.method, saved: true };
+    let value: unknown = { nativeOperation: body.method, saved: true };
+    if (body.method === "session/events") {
+      value = { records: [{ type: "event", seq: 11, event: { id: "kept-native" } }], hasMore: false, cursor: 11 };
+    }
+    if (body.method === "session/list") {
+      value = { items: [{ sessionId: existingSessionId, running: false }] };
+    }
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ type: "server-response", rpcId: rpcMismatch ? "wrong-reply" : body.rpcId, result: { ok: true, value } }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -132,6 +140,12 @@ test("DSH actual loopback native RPC retains cookie, rpcId, method, result and c
     await new Promise<void>(resolve => manager.close(() => resolve()));
   });
   const publicRoot = `http://127.0.0.1:${(manager.address() as { port: number }).port}/api/agent/providers/dsh`;
+  const existing = await requestHttp(publicRoot + "/sessions/" + existingSessionId);
+  assert.equal(existing.status, 200);
+  assert.equal((await existing.json()).data.id, existingSessionId);
+  const missing = await requestHttp(publicRoot + "/sessions/" + missingSessionId);
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).errorCode, "DSH_SESSION_NOT_FOUND");
   const install = await requestHttp(publicRoot + "/plugins/install", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -149,6 +163,9 @@ test("DSH actual loopback native RPC retains cookie, rpcId, method, result and c
   rpcMismatch = true;
   const mismatch = await operation(operations, "plugins.list").handler(input("/"));
   assert.equal(mismatch.status, 503);
+  const unavailable = await requestHttp(publicRoot + "/sessions/" + missingSessionId);
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).errorCode, "DSH_NATIVE_UNAVAILABLE");
   rpcMismatch = false;
   failWrite = true;
   const failed = await operation(operations, "plugins.install").handler(input("/", {}, { spec: "@fixture/example", options: { requestId: "keep-original" } }));

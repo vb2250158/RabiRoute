@@ -135,6 +135,8 @@ MCP streaming calls return `sessionId`. Use `rabi_session` to read frames, send 
 | DSH | `/api/agent/providers/dsh/sessions` and its detail/history paths. History delegates to native `session/events` |
 | DSH plugins | Provider paths for `/plugins`, `/bundles`, `/plugin-market`, market search and plugin install/update/remove delegate to DSH's PluginManager / PluginMarket |
 
+`GET /api/agent/providers/dsh/sessions/:sessionId` returns `404 DSH_SESSION_NOT_FOUND` when the selected DSH connection's catalog is readable and does not contain the full ID. It returns `503 DSH_NATIVE_UNAVAILABLE` when it cannot reliably read that catalog. The `404` describes visibility on the selected connection. The original delivery status still depends on its receipt.
+
 Codex history retains native events, tool IDs, physical sequence and returned cursors. Later plain-JSONL pages seek to their returned position. DSH retains native sequence, cursor and coverage fields. Rabi delivery/reply records describe their own business facts. Choose the documented source for the requested history.
 
 ## Skills and automation templates

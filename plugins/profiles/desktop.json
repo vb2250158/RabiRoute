@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.15",
+      "version": "0.2.16",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -345,7 +345,7 @@
     {
       "id": "agent:dsh",
       "package": "io.rabiroute.agent.dsh",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "enabled": true,
       "config": {},
       "grants": []

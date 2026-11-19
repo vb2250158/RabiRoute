@@ -1,6 +1,6 @@
 import { normalizeDsBotConnectionOrigin } from "@rabiroute/host-api/shared/agentDeliveryTarget";
 import type { ApiOperationDefinition, ApiOperationInput } from "@rabiroute/host-api/manager/apiOperationContract";
-import { dshRpc, listDshSessions, readDshSession, requestDshBotAutomation } from "../dshSessionBridge.js";
+import { DshSessionNotFoundError, dshRpc, listDshSessions, readDshSession, requestDshBotAutomation } from "../dshSessionBridge.js";
 import { resolveDshBaseUrl } from "../dshDiscovery.js";
 
 type NativeRpc = (method: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
@@ -342,13 +342,16 @@ export function createDshNativeOperations(dependencies: DshNativeOperationDepend
           return { status: 200, body: { code: 0, data } };
         } catch (error) {
           if (input.signal?.aborted) throw error;
+          const failure = error instanceof DshSessionNotFoundError
+            ? new DshNativeError(404, "DSH_SESSION_NOT_FOUND", "The session was not found in the selected DSH connection.")
+            : error;
           return {
-            status: error instanceof DshNativeError ? error.status : 503,
+            status: failure instanceof DshNativeError ? failure.status : 503,
             ...(mutation ? { mutationOutcome: "unknown" as const } : {}),
             body: {
               code: -1,
-              errorCode: error instanceof DshNativeError ? error.code : "DSH_NATIVE_UNAVAILABLE",
-              message: error instanceof DshNativeError ? error.message : "The DSH native operation did not return a confirmed result.",
+              errorCode: failure instanceof DshNativeError ? failure.code : "DSH_NATIVE_UNAVAILABLE",
+              message: failure instanceof DshNativeError ? failure.message : "The DSH native operation did not return a confirmed result.",
               ...(mutation ? { uncertain: true, mutationOutcome: "unknown" } : {}),
               repair: `Read the current contract for agent.providers.dsh.${spec.id}; preserve the original target and native request identifiers.`
             }

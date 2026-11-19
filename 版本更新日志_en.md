@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.48 - 2026-11-20
+
+- Open workbench artifacts from their run nodes and report missing DSH sessions accurately while preserving unconfirmed deliveries.
+
 ## 0.15.47 - 2026-11-20
 
 - Summarize workbench run warnings, preserve canvas and run evidence, and fix downloads with non-ASCII filenames and Markdown previews.

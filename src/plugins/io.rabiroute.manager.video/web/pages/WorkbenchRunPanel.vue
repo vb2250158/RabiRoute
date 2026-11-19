@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import {computed,onBeforeUnmount,onMounted,ref} from "vue";
+import {computed,onBeforeUnmount,onMounted,ref,watch} from "vue";
 import {browserUuid} from "../../../../../ribiwebgui/src/browserUuid";
 import {managerEventSource} from "../../../../../ribiwebgui/src/managerApi";
 import {mergePage, type TextPreview} from "./workbenchEditor";
 const props=defineProps<{projectId:string;canvasId:string;revision:number;dirty:boolean;nodeId?:string;canRun?:boolean;saveBeforeRun?:()=>Promise<number>;saveResult?:(result:TextPreview)=>Promise<void>;states?:Record<string,{label:string}>;runStates?:Record<string,{label:string}>}>();
-const emit=defineEmits<{edition:[canvasId:string,runId:string]}>();
+const emit=defineEmits<{edition:[canvasId:string,runId:string];runSelected:[runId:string]}>();
 type Attempt={id:string;nodeId:string;title?:string;state:string;reason?:string;outputText?:string;reusedFromAttemptId?:string;artifacts?:{artifactId:string;key:string;bytes:number}[]};
 type Run={id:string;projectId:string;canvasId:string;state:string;reason?:string;attempts:Record<string,Attempt>;snapshot?:{graph:{nodes:{id:string;config:{instructions?:string}}[]}}};
 type Request={id:string;revision:number;concurrency?:number;resumeRunId?:string;nodeId?:string};
 type EditionRequest={id:string;date:string;label?:string;concurrency?:number};
 type EditionResult={trigger:{id:string;projectId:string;templateId:string;canvasId:string;date:string;runId:string;phase:string};run:Run};
 const run=ref<Run>(),request=ref<Request>(),error=ref(""),busy=ref(false),identity=ref(""),evidence=ref("{}");
+watch(() => run.value?.id, id => { if (id && !props.nodeId) emit("runSelected", id); });
 const entries=ref<{sequence:number;stream:string;text:string}[]>([]),concurrency=ref(1);
 const history=ref<{id:string;state:string;createdAt:string;canvasRevision:number}[]>([]),historyCursor=ref<string|null>(null);
 const logsLoading=ref(false),logsAtEnd=ref(false),runLabel=computed(()=>run.value?(props.runStates?.[run.value.state]?.label||run.value.state):"");

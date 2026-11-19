@@ -73,9 +73,10 @@
         "0.1.5",
         "0.1.6",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.10"
     },
     {
       "packageId": "io.rabiroute.agent.grok-bot",
@@ -536,9 +537,10 @@
         "0.2.11",
         "0.2.12",
         "0.2.13",
-        "0.2.14"
+        "0.2.14",
+        "0.2.15"
       ],
-      "toVersion": "0.2.15"
+      "toVersion": "0.2.16"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",

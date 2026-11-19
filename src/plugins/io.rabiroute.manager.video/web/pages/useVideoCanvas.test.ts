@@ -4,7 +4,24 @@ import test from "node:test";
 import { createSSRApp } from "vue";
 import { renderToString } from "vue/server-renderer";
 import { useVideoCanvas } from "./useVideoCanvas";
-import { canvasGraphThumbnail, connectWorkflowInput, rebaseWorkflowInputs, workflowInputLinks, type FlowNode } from "./workbenchEditor";
+import { canvasGraphThumbnail, connectWorkflowInput, rebaseWorkflowInputs, workflowInputLinks, workflowRunArtifacts, type FlowNode } from "./workbenchEditor";
+
+test("validated files stay with the selected node and exact run", () => {
+  const scope = { projectId: "project", canvasId: "canvas", runId: "run-2", nodeId: "review" };
+  const run = {
+    id: scope.runId, projectId: scope.projectId, canvasId: scope.canvasId,
+    attempts: {
+      prepare: { nodeId: "prepare", artifacts: [{ artifactId: "source", key: "checklist", path: "checklist.json" }] },
+      review: { nodeId: "review", artifacts: [{ artifactId: "report", key: "warnings", path: "reports/警告（审稿前）.md" }] }
+    }
+  };
+  assert.deepEqual(workflowRunArtifacts(run, scope), [{
+    id: "report", name: "警告（审稿前）.md", path: "reports/警告（审稿前）.md", href: "/api/video/v2/runs/run-2/artifacts?artifact=report"
+  }]);
+  assert.deepEqual(workflowRunArtifacts(run, { ...scope, runId: "run-1" }), []);
+  assert.deepEqual(workflowRunArtifacts(run, { ...scope, canvasId: "other" }), []);
+  assert.deepEqual(workflowRunArtifacts(run, { ...scope, nodeId: "never-ran" }), []);
+});
 
 type CardRect = { id: string; left: number; top: number; width: number; height: number };
 async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {

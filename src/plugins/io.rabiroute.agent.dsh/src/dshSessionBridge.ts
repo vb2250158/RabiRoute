@@ -576,6 +576,13 @@ export async function resolveDshSession(params: {
   };
 }
 
+export class DshSessionNotFoundError extends Error {
+  constructor(sessionId: string) {
+    super(`DSH session was not found: ${sessionId}`);
+    this.name = "DshSessionNotFoundError";
+  }
+}
+
 /**
  * Read one DSH session through the apiproxy. The result shape mirrors
  * Codex thread reads so existing consumers (agentThreads read, thread
@@ -589,7 +596,7 @@ export async function readDshSession(
 ): Promise<DshSessionSummary> {
   const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl), assertAuthorized, signal)).find(candidate => candidate.sessionId === sessionId);
   const summary = item ? dshSessionSummary(item) : null;
-  if (!summary) throw new Error(`DSH session was not found: ${sessionId}`);
+  if (!summary) throw new DshSessionNotFoundError(sessionId);
   return { ...summary, cwd: typeof item!.cwd === "string" && item!.cwd.trim() ? item!.cwd : undefined };
 }
 

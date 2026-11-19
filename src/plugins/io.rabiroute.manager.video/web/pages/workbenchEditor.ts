@@ -12,6 +12,28 @@ export type MediaLink = { from: string; to: string };
 export type WorkflowInputLink = MediaLink & { sourceTitle: string; artifactKeys: string[] };
 export type WorkbenchCanvas = { mediaLinks?: MediaLink[]; version:number; id:string; name:string; revision:number; workspaceBindingKey:string; variables:unknown[]; graph:FlowGraph; [key:string]:unknown };
 export type WorkbenchDefinition = { capabilities:Record<string,{label:string;ports:{in:string[];out:string[]}}>; edgeConditions:string[]; nodeStates:Record<string,{label:string}>; runStates?:Record<string,{label:string}>; [key:string]:unknown };
+export type WorkbenchRunReceipt = {
+  id: string;
+  projectId: string;
+  canvasId: string;
+  attempts: Record<string, { nodeId: string; artifacts?: { artifactId: string; key: string; path: string }[] }>;
+};
+
+export function workflowRunArtifacts(
+  receipt: WorkbenchRunReceipt,
+  scope: { runId: string; projectId: string; canvasId: string; nodeId: string }
+) {
+  if (receipt.id !== scope.runId || receipt.projectId !== scope.projectId || receipt.canvasId !== scope.canvasId) return [];
+  const attempt = receipt.attempts[scope.nodeId];
+  if (attempt?.nodeId !== scope.nodeId) return [];
+  return (attempt.artifacts ?? []).map(artifact => ({
+    id: artifact.artifactId,
+    name: artifact.path.split("/").at(-1) || artifact.key,
+    path: artifact.path,
+    href: `/api/video/v2/runs/${encodeURIComponent(receipt.id)}/artifacts?artifact=${encodeURIComponent(artifact.artifactId)}`
+  }));
+}
+
 export function initialFlowNodeConfig(kind: string): Record<string, unknown> {
   switch (kind) {
     case "command": return { toolKey: "", argv: [] };
