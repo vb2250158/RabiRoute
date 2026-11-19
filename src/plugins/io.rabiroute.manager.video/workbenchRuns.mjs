@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { prepareLinearRunEvidence } from "./workbenchRunEvidence.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -345,6 +346,23 @@ export class WorkbenchRuns {
     await this.atomic(file,data);attempt.parameterDocument={ref:sink.ref,...await fingerprint(run.binding.roots[sink.ref.root],sink.ref.path)};
     this.runtime.auditWorkbench?.('workbench_parameters_saved',attempt.id,'committed');
   }
+  async prepareCommandEvidence(run, nodeId) {
+    const earlierRuns = [];
+    const visited = new Set([run.id]);
+    let current = run;
+    while (current.resumedFromRunId && !visited.has(current.resumedFromRunId) &&
+        Object.values(current.attempts).some(attempt => attempt.reusedFromAttemptId)) {
+      const previous = await this.read(current.resumedFromRunId).catch(error => {
+        if (error.status === 404) return;
+        throw error;
+      });
+      if (!previous || previous.projectId !== run.projectId || previous.canvasId !== run.canvasId) break;
+      visited.add(previous.id);
+      earlierRuns.push(previous);
+      current = previous;
+    }
+    return prepareLinearRunEvidence(run, path.join(this.root, "runs", run.id + ".jsonl"), nodeId, run.binding.roots.runtime, earlierRuns);
+  }
   async command(run, node, attempt) {
     await this.applyCheckParameters(run,node,attempt);
     const tool = run.binding.tools?.[node.config.toolKey];
@@ -368,15 +386,27 @@ export class WorkbenchRuns {
     };
     const timeoutMs = node.config.timeoutMs ?? 600000;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86400000) throw new Error("命令超时参数无效。");
-    if (run.cancelRequested || this.closing) return;
-    const handle = this.runtime.launchWorkbenchProcess({ attemptId: attempt.id, executable: tool.executable, argv: [...(tool.argvPrefix || []), ...node.config.argv].map(arg=>expandRootReferences(arg,run.binding.roots)), cwd: run.binding.roots.runtime, env, timeoutMs }, output);
-    this.processes.set(attempt.id, handle); attempt.leaseId = handle.id; await this.persist(run);
+    const evidenceMode = node.config.runEvidence;
+    if (evidenceMode !== undefined && evidenceMode !== "linear") throw new Error("命令运行证据格式无效。");
+    const evidence = evidenceMode === "linear"
+      ? await this.prepareCommandEvidence(run, node.id)
+      : undefined;
     try {
+      if (run.cancelRequested || this.closing) return;
+      if (evidence) {
+        env.RABI_WORKBENCH_RUN_EVIDENCE = evidence.file;
+        this.runtime.auditWorkbench?.("workbench_run_evidence_prepared", attempt.id, "committed");
+      }
+      const handle = this.runtime.launchWorkbenchProcess({ attemptId: attempt.id, executable: tool.executable, argv: [...(tool.argvPrefix || []), ...node.config.argv].map(arg=>expandRootReferences(arg,run.binding.roots)), cwd: run.binding.roots.runtime, env, timeoutMs }, output);
+      this.processes.set(attempt.id, handle); attempt.leaseId = handle.id; await this.persist(run);
       const receipt = await handle.settled;delete attempt.uncertain;for (const [stream, text] of buffers) if (text) output(stream, "\n"); await logQueue;
       if(receipt.outputError)throw new Error("命令输出未能持久化。");
       if (receipt.exitCode !== 0 || receipt.timedOut) throw new Error(receipt.timedOut ? "命令超时。" : `命令退出码：${receipt.exitCode}`);
       return { ...receipt, completed: true, ...(node.config.validationOnly ? { validated: attempt.inputEvidence.filter(row => row.ref).map(row => ({ path: row.ref.path, sha256: row.sha256 })) } : {}) };
-    } finally { this.processes.delete(attempt.id); }
+    } finally {
+      this.processes.delete(attempt.id);
+      if (evidence) await evidence.dispose().catch(() => this.runtime.auditWorkbench?.("workbench_run_evidence_cleanup_failed", attempt.id, "failed"));
+    }
   }
   async agent(run,node,attempt) {
     await this.applyCheckParameters(run,node,attempt);
@@ -490,7 +520,7 @@ export class WorkbenchRuns {
     if(!artifact)throw new VideoError("产物不属于此运行。",404);
     const root=run.binding.roots[artifact.root],file=await ownedFile(root,artifact.path),current=await fingerprint(root,artifact.path);
     if(current.sha256!==artifact.sha256||current.bytes!==artifact.bytes)throw new VideoError("产物已变化，请核对原验证记录。",409);
-    const extension=path.extname(artifact.path).toLowerCase(),mime={".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".mp4":"video/mp4",".wav":"audio/wav",".mp3":"audio/mpeg",".txt":"text/plain; charset=utf-8",".json":"text/plain; charset=utf-8"}[extension]||"application/octet-stream";
+    const extension=path.extname(artifact.path).toLowerCase(),mime={".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".mp4":"video/mp4",".wav":"audio/wav",".mp3":"audio/mpeg",".txt":"text/plain; charset=utf-8",".json":"text/plain; charset=utf-8",".md":"text/plain; charset=utf-8"}[extension]||"application/octet-stream";
     access?.assert();return openMedia(request,file,mime,path.basename(artifact.path),access,{signal});
   }
   async completeHuman(id, body, access) {

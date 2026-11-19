@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { validateHeaderValue } from "node:http";
 import { VideoProjects } from "./projects.mjs";
 import { WorkbenchRuns } from "./workbenchRuns.mjs";
 
@@ -39,6 +40,44 @@ function deferred() {
   const promise=new Promise(done=>{resolve=done;});
   return{promise,resolve};
 }
+test("a declared command receives only this run's previous evidence and then releases the file", async t => {
+  const f = await fixture(t);
+  const check = { id: "check", kind: "command", config: { toolKey: "node", importedNodeId: "check", argv: ["-e", "console.log('[WARN] verified check')"] } };
+  const report = { id: "report", kind: "command", config: {
+    toolKey: "node", importedNodeId: "report", runEvidence: "linear",
+    argv: ["-e", "const fs=require('node:fs'),p=process.env.RABI_WORKBENCH_RUN_EVIDENCE; fs.writeFileSync(process.argv[1],JSON.stringify({path:p,evidence:JSON.parse(fs.readFileSync(p))}))", path.join(f.output, "report.txt")]
+  }, requirements: [{ key: "report", root: "output", path: "report.txt", type: "file", required: true, freshness: "produced" }] };
+  const result = await f.run([check, report], [f.edge("check", "report")]);
+  assert.equal(result.state, "succeeded");
+  const written = JSON.parse(await fs.readFile(path.join(f.output, "report.txt"), "utf8"));
+  assert.deepEqual(Object.keys(written.evidence.nodes), ["check"]);
+  assert.match(written.evidence.nodes.check.log, /verified check/);
+  await assert.rejects(fs.stat(written.path), { code: "ENOENT" });
+});
+
+test("Chinese warning reports are served with their original file name", async t => {
+  const f = await fixture(t);
+  const filename = "警告（审稿前）.md";
+  const text = "已核验的警告";
+  const node = {
+    id: "report", kind: "command",
+    config: { toolKey: "node", argv: ["-e", "require('node:fs').writeFileSync(process.argv[1], process.argv[2])", path.join(f.output, filename), text] },
+    requirements: [{ key: "report", root: "output", path: filename, type: "file", required: true, freshness: "produced" }]
+  };
+  const run = await f.run([node]);
+  assert.equal(run.state, "succeeded");
+  const artifact = run.attempts.report.artifacts[0];
+  const response = await f.owner.artifactContent(run.id, artifact.artifactId, { headers: {} });
+  const disposition = response.headers["content-disposition"];
+  assert.equal(response.status, 200);
+  assert.equal(response.headers["content-type"], "text/plain; charset=utf-8");
+  validateHeaderValue("content-disposition", disposition);
+  assert.equal(decodeURIComponent(disposition.split("filename*=UTF-8''")[1]), filename);
+  const chunks = [];
+  for await (const chunk of response.frames) chunks.push(chunk);
+  assert.equal(Buffer.concat(chunks).toString("utf8"), text);
+});
+
 test("real command completion requires every produced artifact, not exit zero or an old file",async t=>{
   const f=await fixture(t),node=f.command("a");
   let run=await f.run([node]);assert.equal(run.state,"succeeded");assert.equal(run.attempts.a.artifacts[0].bytes,1);

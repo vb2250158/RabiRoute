@@ -1,6 +1,16 @@
 import { checkedFs } from "./requestAccess.mjs";
 import { createReadStream } from "node:fs";
 
+function inlineDisposition(filename) {
+  const safeName = filename.replace(/[\x00-\x1f\x7f]/g, "_");
+  const asciiName = safeName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "\\$&");
+  const fallback = `inline; filename="${asciiName}"`;
+  if (/^[\x20-\x7e]+$/.test(safeName)) return fallback;
+  const utf8Name = Buffer.from(safeName, "utf8").toString("utf8");
+  const extended = encodeURIComponent(utf8Name).replace(/['()*]/g, character => "%" + character.charCodeAt(0).toString(16).toUpperCase());
+  return `${fallback}; filename*=UTF-8''${extended}`;
+}
+
 export async function openMedia(request, file, mime, filename, access, dependencies = {}) {
   const fs = dependencies.fs ?? checkedFs(access); access?.assert();
   const { size } = await fs.stat(file);
@@ -22,7 +32,7 @@ export async function openMedia(request, file, mime, filename, access, dependenc
   const headers = {
     "content-type": mime, "content-length": String(end - start + 1),
     "accept-ranges": "bytes", "cache-control": "private, no-store", "x-content-type-options": "nosniff",
-    ...(filename ? { "content-disposition": `inline; filename="${filename}"` } : {}),
+    ...(filename ? { "content-disposition": inlineDisposition(filename) } : {}),
     ...(range ? { "content-range": `bytes ${start}-${end}/${size}` } : {})
   };
   access?.assert();

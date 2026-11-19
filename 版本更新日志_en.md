@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.47 - 2026-11-20
+
+- Summarize workbench run warnings, preserve canvas and run evidence, and fix downloads with non-ASCII filenames and Markdown previews.
+
 ## 0.15.46 - 2026-11-20
 
 - RabiSpeech discovers FireRed ASR from the managed installation record and actual weights while preserving the default model and manual configuration.
