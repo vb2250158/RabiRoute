@@ -45,3 +45,11 @@ test("each persona page tab owns one coherent group of existing cards", () => {
   assert.doesNotMatch(routePage, /RouteVariablesEditor/);
   assert.match(pageSection("automation"), /默认消息规则[\s\S]*automationWorkspaceTab[\s\S]*可用模板变量/);
 });
+
+test("the role embeds the currently registered message route page", () => {
+  const component = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaMessages.vue", import.meta.url), "utf8");
+  assert.match(component, /routeConfigPageId = "route.adapters"/);
+  assert.match(component, /onTrustedWebPageRegistrationChange/);
+  assert.match(component, /defineAsyncComponent\(page\.value\.loader\)/);
+  assert.doesNotMatch(component, /import\([^)]*RouteConfigPage\.vue/);
+});

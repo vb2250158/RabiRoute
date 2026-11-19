@@ -1,5 +1,8 @@
 export const pluginTranslations = {
   "en": {
+    "手动填写": "Enter credentials",
+    "重新获取二维码": "Get a new QR code",
+    "用企业微信扫码授权机器人": "Scan with WeCom to authorize the bot.",
     "可留空使用 WECOM_BOT_ID": "Leave empty to use WECOM_BOT_ID",
     "可留空使用 WECOM_BOT_SECRET": "Leave empty to use WECOM_BOT_SECRET",
     "留空使用 SDK 默认地址；私有部署时填写": "Leave empty for the SDK default; set this for a private deployment",
@@ -9,6 +12,9 @@ export const pluginTranslations = {
     "暂无企业微信适配器日志": "No WeCom adapter log"
   },
   "ja": {
+    "手动填写": "認証情報を入力",
+    "重新获取二维码": "新しい QR コードを取得する",
+    "用企业微信扫码授权机器人": "WeCom で読み取り、ボットを認証します。",
     "可留空使用 WECOM_BOT_ID": "WECOM_BOT_ID を使用するには空のままにしてください",
     "可留空使用 WECOM_BOT_SECRET": "WECOM_BOT_SECRET を使用するには空のままにしてください",
     "留空使用 SDK 默认地址；私有部署时填写": "SDK のデフォルトの場合は空のままにします。これをプライベート展開用に設定します",

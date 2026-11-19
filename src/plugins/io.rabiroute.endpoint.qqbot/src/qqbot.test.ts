@@ -93,6 +93,9 @@ test("QQ Bot local callback verifies challenges and event signatures, deduplicat
   t.after(async () => { await dispose?.(); await listeners.dispose(); });
   const address = listeners.listenerAddress("qqbot.callback");
   assert.ok(address);
+  const readConnection = () => JSON.parse(fs.readFileSync(path.join(root, "gateway-status.json"), "utf8")).messageAdapters.qqbot;
+  assert.equal(readConnection().accountId, account.id);
+  assert.equal(readConnection().connected, true);
   const url = `http://127.0.0.1:${address.port}/qqbot`;
   const key = botSigningKey(credentials.appSecret);
   const timestamp = String(Math.floor(Date.now() / 1000));
@@ -122,6 +125,10 @@ test("QQ Bot local callback verifies challenges and event signatures, deduplicat
   assert.equal(fs.readFileSync(path.join(root, "qqbot-messages.jsonl"), "utf8").trim().split("\n").length, 2);
   accounts.update({ id: account.id, expected: account.revision, requestId: "fixture-logout" });
   assert.equal((await post(group)).status, 403);
+  for (let attempt = 0; attempt < 40 && readConnection().connected; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(readConnection().connected, false);
 });
 
 test("QQ Bot sends only the original group or user message through the selected account", async () => {

@@ -66,7 +66,7 @@ assert.ok(sessionInitialization.indexOf("await params.save()") < sessionInitiali
 assert.match(sessionInitialization, /角色文件/);
 assert.match(sessionInitialization, /记忆与计划/);
 assert.match(sessionInitialization, /Desktop owner/);
-assert.match(routeConfig, /onMounted\(\(\) => \{ scanAgentsOnEntry\(\);/);
+assert.match(routeConfig, /onMounted\(\(\) => \{\s*scanAgentsOnEntry\(\);/);
 assert.equal((routeConfig.match(/scanAgentsOnEntry\(\)/g) ?? []).length, 2,
   "Route settings enter the same scan owner once; card mounting must not start another scan.");
 assert.equal((codexCard.match(/runAgentScan\(\)/g) ?? []).length, 1,

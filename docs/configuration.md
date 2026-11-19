@@ -481,7 +481,7 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-rabiroute
 
 ## 聊天发送前索引核对
 
-每个聊天消息端设置两项返回数量，在 WebGUI“消息适配器 → 对应消息端 → 发送前聊天核对”编辑：
+每个聊天消息端设置两项返回数量，在 WebGUI 的「角色 → 自动化 → 消息规则」中打开对应消息端的设置：
 
 ```json
 { "conversationReview": { "initialMessageCount": 50, "maxIncrementalMessages": 100 } }

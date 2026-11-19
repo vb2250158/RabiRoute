@@ -536,6 +536,7 @@ import { DeveloperCandidateAdmission } from "./developerCandidateAdmission.js";
 import { readGatewayDiagnosticsStatuses } from "./gatewayDiagnosticsRead.js";
 import { buildIsolatedGatewayDiagnosticsSnapshot } from "./gatewayDiagnosticsSnapshotWorker.js";
 import { GatewayStatusSnapshotService, readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
+import { watchGatewayConnection } from "./gatewayConnectionEvents.js";
 import { createPersonaDirectoryOperation, createPersonaMessagingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaMessagingRoutes.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
 import { handleRoleContextProjectionRequest } from "./roleContextProjection.js";
@@ -3143,6 +3144,10 @@ function startGatewayRuntime(id: string): void {
     result: "started"
   });
 
+  let stopConnectionWatch: (() => void) | undefined;
+  const closeConnectionWatch = () => stopConnectionWatch?.();
+  child.once("close", closeConnectionWatch);
+  child.once("error", closeConnectionWatch);
   const stdoutLines = createGatewayOutputLineReader();
   child.stdout.on("data", (data) => {
     for (const line of stdoutLines(data)) {
@@ -3169,6 +3174,21 @@ function startGatewayRuntime(id: string): void {
           gatewayRouteActivations.attach(child, { gatewayId: runtime.definition.id, gatewayGenerationId: agentStateGeneration, pid: child.pid }, routeBoot.definition, routeBoot.revision, ready.unavailableInstances);
         }
         releaseRouteBoot();
+        stopConnectionWatch ??= watchGatewayConnection(dataDirFor(runtime.definition), {
+          load: (statusPath, signal) => managerReadWorkerPool.run<Record<string, unknown>>({
+            type: "gateway_status_snapshot", statusPath
+          }, { signal, timeoutMs: getTimeoutMs("backend.manager.controlPlaneRoutes.load.managerReadWorkerPool.run.timeoutMs", 12_000) }),
+          changed: async (signal) => {
+            const diagnostics = activeGatewayDiagnosticsSnapshotService();
+            if (diagnostics.read(true).state === "refreshing") await diagnostics.refresh();
+            if (signal.aborted || runtime.process !== child) return;
+            await diagnostics.refresh({ force: true });
+            if (!signal.aborted && runtime.process === child) publishManagerEvent("gateway_connection_changed", { gatewayId: id });
+          },
+          onError: (error) => managerOperationalLog.record("warn", "gateway_connection_status_observer_failed", {
+            routeId: id, error: managerOperationalError(error, rootDir)
+          })
+        });
         appendLog(runtime, `READY generation=${agentStateGeneration} endpoints=${ready.endpoints.length}`);
         continue;
       }
@@ -3187,8 +3207,10 @@ function startGatewayRuntime(id: string): void {
   });
 
   child.on("exit", (code, signal) => {
+    closeConnectionWatch();
     if (runtime.process !== child) return;
     runtime.process = null;
+    publishManagerEvent("gateway_connection_changed", { gatewayId: id });
     runtime.agentStateGeneration = undefined;
     agentStateByGateway.delete(runtime.definition.id);
     runtime.stoppedAt = new Date().toISOString();

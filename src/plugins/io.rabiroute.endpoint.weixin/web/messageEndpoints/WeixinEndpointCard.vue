@@ -1,131 +1,156 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
-import { useRouter } from "vue-router";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
-import { applyAdapterDefaults, configNameFor } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
-import { routeScopedRuntimePath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
-import MessageEndpointDependencyPanel from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
+import type { MessageEndpointCardContext } from "../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCardContext";
 
+const props = defineProps<{ context?: MessageEndpointCardContext }>();
 const store = useGatewayStore();
+const routeId = computed(() => props.context?.routeId ?? store.selectedGateway?.id);
+const active = computed(() => props.context?.active !== false);
+const loginRequested = computed(() => props.context?.loginRequested === true);
+const state = computed(() => store.selectedRuntime.gatewayStatus?.messageAdapters?.weixin);
+const qr = computed<string | undefined>(() => state.value?.qrCodeDataUrl || undefined);
+const status = computed<string>(() => state.value?.qrStatus || "");
+const needsPin = computed(() => status.value.includes("need_verifycode") && !!state.value?.loginAttemptId);
+const authorized = computed(() => state.value?.loggedIn || state.value?.credentialsRetained);
+const busy = ref(false);
+const error = ref("");
+const mode = ref<"owner" | "other">("owner");
+const pin = ref("");
+const pending = ref<"login" | "logout">();
+const qrHint = computed(() => {
+  if (needsPin.value) return "输入手机微信显示的验证码";
+  if (status.value === "real_name_required") return "用本人微信扫码完成实名授权";
+  if (status.value === "scaned" || status.value === "scanned" || status.value === "scaned_but_redirect") {
+    return "已扫码，请在手机微信确认";
+  }
+  return "用手机微信扫码并确认";
+});
 
-const router = useRouter();
+watch(routeId, () => {
+  error.value = "";
+  mode.value = "owner";
+  pin.value = "";
+  pending.value = undefined;
+});
 
-const runtime = computed(() => store.selectedRuntime);
+watch([routeId, active, loginRequested], async ([id, visible, requested], _, cleanup) => {
+  if (!id || !visible || !requested) return;
+  let current = true;
+  cleanup(() => { current = false; });
+  await store.ensureDiagnostics(true);
+  if (current && !authorized.value && !qr.value && !pending.value) {
+    mode.value = "owner";
+    await request("login");
+  }
+}, { immediate: true });
 
-const weixinLoginBusy = ref(false);
+watch([routeId, active, pending, qr], ([id, visible], _, cleanup) => {
+  if (!id || !visible) return;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const startedAt = Date.now();
+  async function refresh() {
+    await store.ensureDiagnostics(true);
+    if (stopped) return;
+    if (pending.value) {
+      if ((pending.value === "login" && (qr.value || authorized.value))
+        || (pending.value === "logout" && !authorized.value && state.value?.loginRequired)) {
+        pending.value = undefined;
+      } else if (Date.now() - startedAt >= 30_000) {
+        error.value = pending.value === "login" ? "暂未获取二维码，请重试。" : "暂未确认退出登录。";
+        pending.value = undefined;
+      }
+    }
+    if (pending.value || qr.value) timer = setTimeout(refresh, 2500);
+  }
+  void refresh();
+  cleanup(() => { stopped = true; clearTimeout(timer); });
+}, { immediate: true });
 
-const weixinLoginError = ref("");
-const bindingMode = ref<"owner" | "other">("owner");
-const verificationPin = ref("");
-
-const gateway = computed(() => store.selectedGateway);
-
-const weixinState = computed(() => runtime.value.gatewayStatus?.messageAdapters?.weixin || {} as Record<string, any>);
-
-async function requestWeixinAction(action: "login" | "pin" | "logout"): Promise<void> {
-  if (!gateway.value || weixinLoginBusy.value) return;
-  weixinLoginBusy.value = true;
-  weixinLoginError.value = "";
+async function request(action: "login" | "pin" | "logout"): Promise<void> {
+  const id = routeId.value;
+  if (!id || busy.value || pending.value) return;
+  busy.value = true;
+  error.value = "";
   try {
-    const body = action === "login" ? { mode: bindingMode.value }
-      : action === "pin" ? { pin: verificationPin.value.trim(), attemptId: weixinState.value.loginAttemptId } : {};
-    verificationPin.value = "";
-    const response = await fetch(`/api/message/weixin/routes/${encodeURIComponent(gateway.value.id)}/${action}`, {
+    const body = action === "login" ? { mode: mode.value }
+      : action === "pin" ? { pin: pin.value.trim(), attemptId: state.value?.loginAttemptId } : {};
+    const response = await fetch(`/api/message/weixin/routes/${encodeURIComponent(id)}/${action}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
     });
-    const payload = await response.json().catch(() => ({})) as { message?: string };
-    if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
-    await store.load();
-  } catch (error) {
-    weixinLoginError.value = userFacingError(error);
+    const result = await response.json().catch(() => ({})) as { message?: string };
+    if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    if (routeId.value !== id) return;
+    pin.value = "";
+    if (action !== "pin") pending.value = action;
+  } catch (cause) {
+    if (routeId.value === id) error.value = userFacingError(cause);
   } finally {
-    weixinLoginBusy.value = false;
+    busy.value = false;
   }
 }
-
-function weixinSessionPhaseLabel(value: unknown): string {
-  const labels: Record<string, string> = {
-    never_logged_in: "从未登录",
-    restoring: "正在恢复",
-    restored: "已恢复",
-    temporarily_unreachable: "暂时不可达（凭据保留）",
-    invalid: "会话已失效"
-  };
-  return labels[String(value || "")] || "未知";
-}
-
-function touch(): void { if (gateway.value) applyAdapterDefaults(gateway.value); store.touch(); }
-
-function openRuntimeLog(): void {
-  const name = store.selectedGateway ? configNameFor(store.selectedGateway) : "";
-  void router.push(routeScopedRuntimePath(name));
-}
-const endpointProps = defineProps<{ context?: import("../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCardContext").MessageEndpointCardContext }>();
-const context = computed(() => endpointProps.context);
-
 </script>
+
 <template>
-  <template v-if="gateway">
-    <MessageEndpointDependencyPanel :scan="context?.scan" :loading="context?.scanLoading" :error="context?.scanError" @refresh="context?.refreshScan?.()"  />
-<div class="catalog-param-grid">
-                    <v-expansion-panels class="full-span" variant="accordion">
-                      <v-expansion-panel>
-                        <v-expansion-panel-title>高级设置（通常无需修改）</v-expansion-panel-title>
-                        <v-expansion-panel-text>
-                          <div class="catalog-param-grid">
-                            <v-text-field v-model="gateway.weixinBaseUrl" class="full-span" label="微信机器人 iLink API" placeholder="https://ilinkai.weixin.qq.com" @update:model-value="touch" />
-                            <v-text-field v-model="gateway.weixinBotType" label="Bot Type" placeholder="3" @update:model-value="touch" />
-                          </div>
-                        </v-expansion-panel-text>
-                      </v-expansion-panel>
-                    </v-expansion-panels>
-                  </div>
-<template v-if="runtime.running !== undefined">
-                    <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>会话</span><b :class="weixinState.loggedIn ? 'text-success' : 'text-warning'">{{ weixinState.message || "状态未知" }}</b></div>
-                    <div class="status-row"><span>恢复状态</span><b>{{ weixinSessionPhaseLabel(weixinState.sessionPhase) }}</b></div>
-                    <div class="status-row"><span>凭据保留</span><b>{{ weixinState.credentialsRetained ? "是" : "否" }}</b></div>
-                    <div class="status-row"><span>扫码状态</span><b>{{ weixinState.qrStatus || "-" }}</b></div>
-                    <div class="status-row"><span>最近消息</span><b>{{ weixinState.lastMessageAt || "-" }}</b></div>
-                    <div class="status-row"><span>消息数</span><b>{{ weixinState.messageCount ?? 0 }}</b></div>
-                    <div v-if="!weixinState.loggedIn && weixinState.qrCodeDataUrl" class="full-span d-flex flex-column align-center ga-2 mt-2">
-                      <v-img :src="weixinState.qrCodeDataUrl" width="320" max-width="100%" aspect-ratio="1" alt="微信机器人二维码" />
-                      <span class="section-note">{{ weixinState.qrStatus === "real_name_required" ? "请用本人微信完成实名授权。" : "请使用手机微信扫码。" }}</span>
-                      <form v-if="String(weixinState.qrStatus || '').includes('need_verifycode')" class="d-flex ga-2 align-center"
-                        @submit.prevent="requestWeixinAction('pin')">
-                        <v-text-field v-model="verificationPin" label="手机微信验证码" type="password" inputmode="numeric" hide-details autocomplete="one-time-code" />
-                        <v-btn type="submit" :loading="weixinLoginBusy" :disabled="!verificationPin.trim()">提交</v-btn>
-                      </form>
-                    </div>
-                    <v-alert v-if="weixinState.lastError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
-                      {{ weixinState.lastError }}
-                    </v-alert>
-                    <v-alert v-if="weixinLoginError" type="error" variant="tonal" density="compact" class="mt-2 full-span">
-                      {{ weixinLoginError }}
-                    </v-alert>
-                    <div class="agent-action-bar full-span mt-2">
-                      <v-select v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl" v-model="bindingMode"
-                        :items="[{ title: '绑定本人微信', value: 'owner' }, { title: '邀请他人绑定', value: 'other' }]"
-                        label="绑定方式" density="compact" hide-details />
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn
-                          v-if="weixinState.loginRequired && !weixinState.qrCodeDataUrl"
-                          size="small"
-                          color="warning"
-                          variant="tonal"
-                          prepend-icon="mdi-qrcode"
-                          :loading="weixinLoginBusy"
-                          @click="requestWeixinAction('login')"
-                        >
-                          生成登录二维码
-                        </v-btn>
-                        <v-btn v-if="runtime.running && weixinState.credentialsRetained" size="small" variant="text"
-                          :loading="weixinLoginBusy" @click="requestWeixinAction('logout')">退出登录</v-btn>
-                        <v-btn size="small" variant="tonal" prepend-icon="mdi-refresh" @click="store.load">刷新状态</v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">打开日志</v-btn>
-                      </div>
-                    </div>
-                  </template>
-  </template>
+  <div v-if="routeId" class="weixin-login">
+    <div v-if="authorized" class="d-flex align-center flex-wrap ga-3">
+      <span class="text-body-2">{{ state?.loggedIn ? "已登录" : "已授权" }}</span>
+      <v-btn size="small" variant="text" :loading="busy || pending === 'logout'" @click="request('logout')">退出登录</v-btn>
+    </div>
+
+    <div v-else-if="qr" class="weixin-scan">
+      <p role="status" class="text-body-2 mb-0">{{ qrHint }}</p>
+      <img :src="qr" width="192" height="192" alt="微信机器人登录二维码" />
+      <div v-if="needsPin" class="weixin-scan-content">
+        <form class="d-flex align-start flex-wrap ga-2" @submit.prevent="request('pin')">
+          <v-text-field v-model="pin" label="验证码" type="password" inputmode="numeric" maxlength="16"
+            autocomplete="one-time-code" density="compact" hide-details />
+          <v-btn type="submit" color="primary" variant="tonal" :loading="busy" :disabled="!pin.trim()">确认</v-btn>
+        </form>
+      </div>
+      <v-btn v-if="loginRequested && mode === 'owner' && !needsPin && status !== 'real_name_required'"
+        variant="text" size="small" :disabled="busy || !!pending" @click="mode = 'other'; request('login')">邀请他人绑定</v-btn>
+    </div>
+
+    <div v-else-if="loginRequested && (busy || pending)" class="weixin-scan" role="status">
+      <v-progress-circular indeterminate color="primary" size="28" />
+      <span class="text-body-2">正在获取二维码</span>
+    </div>
+    <div v-else class="d-flex align-center justify-center flex-wrap ga-2">
+      <v-btn color="primary" variant="tonal" prepend-icon="mdi-qrcode-scan" size="small"
+        :loading="mode === 'owner' && (busy || pending === 'login')" :disabled="busy || !!pending"
+        @click="mode = 'owner'; request('login')">微信扫码登录</v-btn>
+      <v-btn variant="text" size="small" :loading="mode === 'other' && (busy || pending === 'login')"
+        :disabled="busy || !!pending" @click="mode = 'other'; request('login')">邀请他人绑定</v-btn>
+    </div>
+
+    <p v-if="error" role="alert" class="text-error text-body-2 mt-2 mb-0">{{ error }}</p>
+    <p v-else-if="!authorized && status === 'expired'" role="status" class="text-body-2 mt-2 mb-0">二维码已过期</p>
+    <p v-else-if="!authorized && !qr && state?.lastError" role="alert" class="text-error text-body-2 mt-2 mb-0">{{ state.lastError }}</p>
+  </div>
 </template>
+
+<style scoped>
+.weixin-scan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-block: 24px;
+  gap: 16px;
+}
+
+.weixin-scan img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: white;
+}
+
+.weixin-scan-content {
+  width: 100%;
+  min-width: 0;
+}
+</style>

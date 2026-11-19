@@ -1,12 +1,19 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, watch } from "vue";
+import { computed, defineAsyncComponent, onScopeDispose, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { useRoleStore } from "../../../../../ribiwebgui/src/stores/roleStore";
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
+import { registeredWebPages, onTrustedWebPageRegistrationChange } from "../../../../../ribiwebgui/src/pluginPages";
 import { routesForPersona } from "../persona/personaMessageRoutes";
 
-const RouteConfigPage = defineAsyncComponent(() => import("../../../io.rabiroute.manager.message-adapter-control/web/pages/RouteConfigPage.vue"));
+const routeConfigPageId = "route.adapters";
+const page = shallowRef(registeredWebPages().find(item => item.routeId === routeConfigPageId));
+onScopeDispose(onTrustedWebPageRegistrationChange(change => {
+  if (change.registration.routeId !== routeConfigPageId) return;
+  page.value = change.type === "registered" ? change.registration : undefined;
+}));
+const routeConfigPage = computed(() => page.value ? defineAsyncComponent(page.value.loader) : undefined);
 const store = useGatewayStore();
 const roles = useRoleStore();
 const route = useRoute();
@@ -60,6 +67,7 @@ function addRoute(): void {
         <v-btn size="small" variant="tonal" :disabled="!roles.ready || store.saving" @click="bindRoute(item.id)">关联到当前角色</v-btn>
       </div>
     </v-card>
-    <RouteConfigPage v-if="selected" embedded />
+    <component :is="routeConfigPage" v-if="selected && routeConfigPage" embedded />
+    <v-alert v-else-if="selected" type="warning" variant="tonal">消息路由组件暂不可用。</v-alert>
   </section>
 </template>

@@ -11,9 +11,9 @@ const label = (value?: boolean) => value === true ? "已满足" : value === fals
 const color = (value?: boolean) => value === true ? "success" : value === false ? "error" : "warning";
 </script>
 <template>
-  <div class="dependency-panel mb-3">
+  <details class="dependency-panel mt-3 mb-2">
+    <summary class="text-body-2">环境和依赖</summary>
     <div class="section-title-row compact-row">
-      <div><div class="section-title small-title">环境和依赖</div><div class="section-note">检查外部工具、服务和回调入口。</div></div>
       <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="$emit('refresh')">重新扫描</v-btn>
     </div>
     <v-alert v-if="error" type="warning" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
@@ -32,6 +32,5 @@ const color = (value?: boolean) => value === true ? "success" : value === false 
       <div v-if="scan.installCandidates?.length" class="dependency-actions mt-2"><v-btn v-for="candidate in scan.installCandidates" :key="candidate.label" size="small" variant="tonal" @click="openCandidate(candidate)">{{ candidate.label }}</v-btn></div>
       <v-alert v-for="warning in scan.warnings || []" :key="warning" type="warning" variant="tonal" density="compact" class="mt-2">{{ warning }}</v-alert>
     </template>
-    <div v-else class="section-note">尚未扫描，可手动刷新检查。</div>
-  </div>
+  </details>
 </template>

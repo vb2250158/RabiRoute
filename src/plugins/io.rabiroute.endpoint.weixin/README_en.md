@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-Enable and save **Route → Message endpoints → WeChat Bot**. Choose your own account or an invitation. Scan the QR code and follow mobile WeChat's identity or PIN prompts if shown. Sign out from the same card. RabiRoute protects credentials in local runtime storage.
+Open **Route → Message endpoints → WeChat Bot** and choose **Connect** to show the QR code. Confirm on your phone. The gear opens settings for this channel. To invite someone else, choose the invitation action and follow the identity or PIN prompt on the phone. Sign out from the same card.
 
 The Tencent iLink integration receives text, quotes, images, voice and transcripts, files, and video. The Route decides which messages to deliver to an Agent. Use `agent.send` for text, images, files, and native MP4 video, or find `manager.weixin.typing` to set or clear typing status.
 

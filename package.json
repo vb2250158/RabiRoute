@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.15.49",
+  "version": "0.15.50",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -91,6 +91,7 @@
     "@noble/hashes": "1.8.0",
     "@rabilink/assistant-runtime": "file:packages/assistant-runtime",
     "@rabilink/desktop-voice-service": "file:packages/desktop-voice-service",
+    "@tencent-connect/qqbot-connector": "1.2.0",
     "@types/node": "^22.10.7",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",

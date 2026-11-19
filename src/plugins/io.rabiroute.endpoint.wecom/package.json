@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.endpoint.wecom",
-  "version": "0.1.6",
+  "version": "0.1.12",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -35,6 +35,7 @@
     "build": "rabi-plugin-build"
   },
   "dependencies": {
-    "@wecom/aibot-node-sdk": "^1.0.7"
+    "@wecom/aibot-node-sdk": "^1.0.7",
+    "qrcode": "^1.5.4"
   }
 }

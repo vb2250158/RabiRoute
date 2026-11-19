@@ -3,6 +3,7 @@
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/accounts.ts", "name": "createBotAccounts" },
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/protocol.ts", "name": "createBotApi" },
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/manager.ts", "name": "createBotOperations" },
+    { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/qrBinding.ts", "name": "createBotQrOperations" },
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/manager.ts", "name": "createBotEgress" },
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/sourceReplySend.ts", "name": "createBotSourceReply" },
     { "source": "src/plugins/io.rabiroute.endpoint.qqbot/src/platform.ts", "name": "createBotPlatformOperations" }

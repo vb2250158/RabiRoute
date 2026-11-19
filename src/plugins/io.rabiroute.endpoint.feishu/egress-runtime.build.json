@@ -3,10 +3,15 @@
     {
       "source": "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts",
       "name": "sendFeishuText"
+    },
+    {
+      "name": "createQrOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.feishu/src/qrBinding.ts"
     }
   ],
   "ownedSources": [
-    "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts"
+    "src/plugins/io.rabiroute.endpoint.feishu/src/feishu.ts",
+    "src/plugins/io.rabiroute.endpoint.feishu/src/qrBinding.ts"
   ],
   "packageId": "io.rabiroute.endpoint.feishu",
   "ownedPrefixes": [

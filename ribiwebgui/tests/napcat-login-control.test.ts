@@ -25,6 +25,7 @@ test("NapCat login copy switches languages without changing account identities o
     ["QQ 10000 已登录。", "QQ 10000 is signed in."],
     ["QQ 10000 已离线，请重新登录。", "QQ 10000 is offline. Sign in again."],
     ["扫码登录", "QR sign-in"],
+    ["账号密码", "Account and password"],
     ["当前账号：QQ 10000 示例昵称", "Current account: QQ 10000 示例昵称"],
     ["此 Route 绑定 QQ 10000，但 OneBot HTTP 返回 QQ 20000 / 示例昵称；请检查此实例的 HTTP 地址。", "This Route is bound to QQ 10000, but OneBot HTTP returned QQ 20000 / 示例昵称. Check this instance's HTTP URL."],
     ["NapCat 管理服务未响应（http://127.0.0.1:6099/webui）；请启动此实例后刷新登录状态。", "NapCat management did not respond (http://127.0.0.1:6099/webui). Start this instance and refresh sign-in status."]
@@ -39,9 +40,10 @@ test("NapCat login copy switches languages without changing account identities o
 
 test("NapCat login stays inside the Route card and exposes the three supported login modes", () => {
   assert.match(pageSource, /QQ 登录控制/);
-  assert.match(pageSource, /<v-tab value="quick">快速登录<\/v-tab>/);
-  assert.match(pageSource, /<v-tab value="password">密码登录<\/v-tab>/);
-  assert.match(pageSource, /<v-tab value="qrcode">扫码登录<\/v-tab>/);
+  const tabs = [...pageSource.matchAll(/<v-tab value="([^"]+)">([^<]+)<\/v-tab>/g)]
+    .map(([, mode, label]) => [mode, label]);
+  assert.deepEqual(tabs, [["qrcode", "扫码登录"], ["quick", "快速登录"], ["password", "账号密码"]]);
+  assert.ok(pageSource.includes('ui.mode = "qrcode"'));
   assert.match(pageSource, /\/api\/message\/napcat-login-panel/);
   assert.match(pageSource, /\/api\/message\/napcat-login-action/);
   assert.match(pageSource, /action: "captcha-login"/);
@@ -53,8 +55,11 @@ test("NapCat login stays inside the Route card and exposes the three supported l
 });
 
 test("NapCat hides login forms after authentication and rejects conflicting account logs", () => {
-  assert.match(pageSource, /<v-tabs v-if="!napcatLoginUi\(instance\).panel\?\.loggedIn && napcatLoginUi\(instance\).panel\?\.managementAvailable"/);
-  assert.match(pageSource, /<v-window v-if="!napcatLoginUi\(instance\).panel\?\.loggedIn && napcatLoginUi\(instance\).panel\?\.managementAvailable"/);
+  const panelLoggedIn = "!napcatLoginUi(instance).panel?.loggedIn";
+  const tabs = pageSource.match(/<v-tabs v-if="([^"]+)"/)?.[1];
+  const window = pageSource.match(/<v-window v-if="([^"]+)"/)?.[1];
+  assert.equal(tabs, panelLoggedIn + " && (loginRequested || napcatLoginUi(instance).panel?.managementAvailable)");
+  assert.equal(window, "napcatLoginUi(instance).mode && " + panelLoggedIn + " && napcatLoginUi(instance).panel?.managementAvailable");
   const source = pageSource.match(/function napcatEntryMatchesInstance\([\s\S]*?\n\}/)?.[0];
   assert.ok(source);
   const compiled = ts.transpile(source, { target: ts.ScriptTarget.ES2022 });

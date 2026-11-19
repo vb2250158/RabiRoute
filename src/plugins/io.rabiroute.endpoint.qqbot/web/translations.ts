@@ -1,5 +1,8 @@
 export const pluginTranslations = {
   en: {
+    "手动填写": "Enter credentials",
+    "重新获取二维码": "Get a new QR code",
+    "用手机 QQ 扫码，选择要连接的机器人": "Scan with the QQ mobile app, then select a bot to connect.",
     "QQ 机器人账号": "QQ bot account",
     "无法读取 QQ 机器人账号。": "Unable to read QQ bot accounts.",
     "Manager 身份暂不可用，请刷新页面。": "Manager identity is temporarily unavailable. Refresh the page.",
@@ -26,6 +29,9 @@ export const pluginTranslations = {
     "保存 Route 后，RabiRoute 会使用所选账号连接腾讯网关。连接结果可在 Route 运行日志中查看。": "After saving the Route, RabiRoute connects to the Tencent gateway using the selected account. Check the Route runtime log for the connection result."
   },
   ja: {
+    "手动填写": "認証情報を入力",
+    "重新获取二维码": "新しい QR コードを取得する",
+    "用手机 QQ 扫码，选择要连接的机器人": "スマートフォンの QQ で読み取り、接続するボットを選択します。",
     "QQ 机器人账号": "QQ ボットアカウント",
     "无法读取 QQ 机器人账号。": "QQ ボットアカウントを読み込めません。",
     "Manager 身份暂不可用，请刷新页面。": "Manager の識別情報を取得できません。ページを更新してください。",

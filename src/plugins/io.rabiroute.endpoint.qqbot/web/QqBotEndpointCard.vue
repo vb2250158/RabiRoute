@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 import { browserUuid } from "../../../../ribiwebgui/src/browserUuid";
 import { useGatewayStore } from "../../../../ribiwebgui/src/stores/gatewayStore";
-import MessageEndpointDependencyPanel from "../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
 import type { MessageEndpointCardContext } from "../../../../ribiwebgui/src/messageEndpoints/messageEndpointCardContext";
 import type { AccountSnapshot } from "../src/accounts";
 
@@ -29,24 +28,111 @@ async function readAccounts() {
   try { accounts.value = await responseData<AccountSnapshot[]>(await fetch(root)); }
   catch (cause) { error.value = cause instanceof Error ? cause.message : "无法读取 QQ 机器人账号。"; }
 }
-watch(() => props.context?.routeId, () => { closeForm(); void readAccounts(); }, { immediate: true });
+
+type QrStatus = {
+  state: "waiting" | "ready" | "failed" | "cancelled";
+  qrCodeDataUrl?: string;
+  accounts?: AccountSnapshot[];
+  message?: string;
+};
+
+const qrMode = ref(false);
+const qrImage = ref("");
+let cancelQr: (() => void) | undefined;
+
+function stopScan(): void {
+  cancelQr?.();
+  cancelQr = undefined;
+  qrMode.value = false;
+  qrImage.value = "";
+}
+
+async function startScan(): Promise<void> {
+  stopScan();
+  closeForm();
+  const routeId = gateway.value?.id;
+  if (!routeId) return;
+  qrMode.value = true;
+  error.value = "";
+  const path = "/api/message/qqbot/qr/" + encodeURIComponent(browserUuid());
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let headers: Record<string, string> | undefined;
+  const remove = () => {
+    if (headers) void fetch(path, { method: "DELETE", headers }).catch(() => undefined);
+  };
+  cancelQr = () => {
+    active = false;
+    clearTimeout(timer);
+    remove();
+  };
+  function render(result: QrStatus): void {
+    if (!active || gateway.value?.id !== routeId) return;
+    if (result.state === "failed" || result.state === "cancelled") {
+      qrImage.value = "";
+      error.value = result.message || "扫码未完成，请重试。";
+      return;
+    }
+    if (result.state === "ready") {
+      const account = result.accounts?.[0];
+      if (!account) {
+        qrImage.value = "";
+        error.value = "没有收到机器人，请在手机 QQ 中选择后重试。";
+        return;
+      }
+      bind(account.id);
+      stopScan();
+      void readAccounts();
+      return;
+    }
+    qrImage.value = result.qrCodeDataUrl || "";
+    timer = setTimeout(() => void poll(), 1500);
+  }
+  function report(cause: unknown): void {
+    if (!active) return;
+    qrImage.value = "";
+    error.value = cause instanceof Error ? cause.message : "无法开始 QQ 扫码。";
+  }
+  async function poll(): Promise<void> {
+    if (!active) return;
+    try {
+      render(await responseData<QrStatus>(await fetch(path, { headers })));
+    } catch (cause) {
+      report(cause);
+    }
+  }
+  try {
+    const response = await fetch("/meta");
+    const identity = await response.json() as { applicationGenerationId?: string; managerInstanceId?: string };
+    if (!response.ok || !identity.applicationGenerationId || !identity.managerInstanceId) throw new Error("暂时无法确认当前服务。");
+    if (!active) return;
+    headers = {
+      "x-rabiroute-expected-application-generation-id": identity.applicationGenerationId,
+      "x-rabiroute-expected-manager-instance-id": identity.managerInstanceId };
+    const result = await responseData<QrStatus>(await fetch(path, { method: "POST", headers }));
+    if (active) render(result);
+    else remove();
+  } catch (cause) {
+    report(cause);
+  }
+}
+
+watch(() => props.context?.routeId, () => { stopScan(); closeForm(); error.value = ""; });
+watch(() => props.context?.active !== false, active => {
+  if (active) void readAccounts();
+  else stopScan();
+}, { immediate: true });
+watch([() => props.context?.routeId, () => props.context?.active !== false, () => props.context?.loginRequested],
+  ([, active, requested]) => {
+    if (active && requested && !gateway.value?.qqbotAccountId) void startScan();
+  }, { immediate: true });
+onScopeDispose(stopScan);
 
 function bind(id: string | null) {
   if (gateway.value) { gateway.value.qqbotAccountId = id ?? ""; store.touch(); }
 }
-function setPort(value: unknown) {
-  if (gateway.value) { gateway.value.qqbotCallbackPort = Number(value || 0); store.touch(); }
-}
-function setTransport(value: "webhook" | "websocket") {
-  if (gateway.value) { gateway.value.qqbotTransport = value; store.touch(); }
-}
-function setIntents(value: unknown) {
-  if (gateway.value) { gateway.value.qqbotIntents = Number(value || 0); store.touch(); }
-}
-function setManagement(value: boolean | null) {
-  if (gateway.value) { gateway.value.qqbotManagementEnabled = value !== false; store.touch(); }
-}
 function openForm(mode: "add" | "edit") {
+  stopScan();
   form.value = mode;
   appId.value = mode === "edit" ? selected.value?.appId ?? "" : "";
   sandbox.value = mode === "edit" ? selected.value?.sandbox ?? true : true;
@@ -54,31 +140,30 @@ function openForm(mode: "add" | "edit") {
 }
 function closeForm() { form.value = undefined; secret.value = ""; }
 
-async function mutate(action: "save" | "refresh" | "logout") {
+async function mutate(action: "save" | "logout") {
   if (busy.value) return;
   busy.value = true;
   error.value = "";
-  const routeId = props.context?.routeId;
+  const routeId = gateway.value?.id;
   const account = form.value === "add" ? undefined : selected.value;
   const suffix = account ? `/${account.id}/auth` : "";
   const requestId = browserUuid();
-  const submittedSecret = secret.value;
-  secret.value = "";
+  const credentials = { appId: appId.value.trim(), appSecret: secret.value, sandbox: sandbox.value };
   try {
     const response = await fetch("/meta");
     const meta = await response.json() as { applicationGenerationId?: string; managerInstanceId?: string };
     if (!response.ok || !meta.applicationGenerationId || !meta.managerInstanceId) throw new Error("Manager 身份暂不可用，请刷新页面。");
-    const data = await responseData<AccountSnapshot>(await fetch(root + suffix + (action === "refresh" ? "/refresh" : ""), {
+    const data = await responseData<AccountSnapshot>(await fetch(root + suffix, {
       method: action === "logout" ? "DELETE" : "POST",
       headers: { "content-type": "application/json", "idempotency-key": requestId,
         "x-rabiroute-expected-application-generation-id": meta.applicationGenerationId,
         "x-rabiroute-expected-manager-instance-id": meta.managerInstanceId },
       body: JSON.stringify({
         ...(account ? { revision: account.revision } : {}),
-        ...(action === "save" ? { appId: appId.value.trim(), appSecret: submittedSecret, sandbox: sandbox.value } : {})
+        ...(action === "save" ? credentials : {})
       })
     }));
-    if (routeId === props.context?.routeId) {
+    if (routeId === gateway.value?.id) {
       if (action === "save") bind(data.id);
       closeForm();
     }
@@ -86,50 +171,100 @@ async function mutate(action: "save" | "refresh" | "logout") {
     error.value = cause instanceof Error ? cause.message : "QQ 机器人操作失败。";
   } finally {
     await readAccounts();
-    void props.context?.refreshScan?.();
     busy.value = false;
   }
 }
 </script>
 
 <template>
-  <template v-if="gateway">
-    <MessageEndpointDependencyPanel :scan="context?.scan" :loading="context?.scanLoading"
-      :error="context?.scanError" @refresh="context?.refreshScan?.()" />
-    <div class="catalog-param-grid">
-      <v-select :model-value="gateway.qqbotAccountId || null" :items="accounts"
-        :item-title="(account: AccountSnapshot) => account.appId + (account.sandbox ? ' · 沙箱' : ' · 正式')"
-        item-value="id" label="QQ 机器人账号" clearable @update:model-value="bind" />
-      <v-select :model-value="gateway.qqbotTransport || 'webhook'" :items="['webhook', 'websocket']"
-        label="事件接收方式" @update:model-value="setTransport" />
-      <v-text-field v-if="gateway.qqbotTransport !== 'websocket'" :model-value="gateway.qqbotCallbackPort || 0" type="number" :min="0" :max="65535"
-        label="本机回调端口" hint="0 由系统分配。固定反向代理请填写固定端口。" persistent-hint
-        @update:model-value="setPort" />
-      <v-text-field v-else :model-value="gateway.qqbotIntents ?? 33554432" type="number" :min="0" :max="4294967295"
-        label="WebSocket 事件权限掩码" hint="使用开放平台已授予的 intents。默认订阅 QQ 群与单聊。"
-        persistent-hint @update:model-value="setIntents" />
-      <v-switch :model-value="gateway.qqbotManagementEnabled !== false" label="允许 QQ 频道管理操作"
-        density="compact" @update:model-value="setManagement" />
-      <div class="full-span d-flex flex-wrap ga-2 align-center">
-        <v-btn prepend-icon="mdi-plus" :disabled="busy" @click="openForm('add')">添加机器人</v-btn>
-        <v-btn v-if="selected" variant="text" :disabled="busy" @click="openForm('edit')">重新授权</v-btn>
-        <v-btn v-if="selected?.state === 'connected'" variant="text" :disabled="busy || !!form" @click="mutate('refresh')">检查授权</v-btn>
-        <v-btn v-if="selected?.state === 'connected'" variant="text" :disabled="busy || !!form" @click="mutate('logout')">解除授权</v-btn>
-        <v-btn variant="text" href="https://q.qq.com/" target="_blank" rel="noopener noreferrer">QQ 开放平台</v-btn>
-        <span v-if="selected">{{ selected.state === "connected" ? "凭据验证通过" : "待授权" }}</span>
-      </div>
-      <template v-if="form">
-        <v-text-field v-model="appId" label="AppID" :readonly="form === 'edit'" :disabled="busy" />
-        <v-text-field v-model="secret" label="AppSecret" type="password" autocomplete="new-password" :disabled="busy" />
-        <v-switch v-model="sandbox" label="使用 QQ 沙箱环境" density="compact" :disabled="busy" />
-        <div class="d-flex ga-2">
-          <v-btn color="primary" :loading="busy" :disabled="!appId.trim() || !secret.trim()" @click="mutate('save')">验证并保存</v-btn>
-          <v-btn variant="text" :disabled="busy" @click="closeForm">取消</v-btn>
-        </div>
+  <div v-if="gateway" class="qqbot-login">
+    <v-tabs v-if="props.context?.loginRequested && (qrMode || form === 'add')"
+      :model-value="qrMode ? 'qr' : 'manual'" class="mb-3" density="compact" color="primary" grow :disabled="busy"
+      @update:model-value="mode => mode === 'qr' ? startScan() : openForm('add')">
+      <v-tab value="qr">扫码登录</v-tab>
+      <v-tab value="manual">手动填写</v-tab>
+    </v-tabs>
+    <div v-if="qrMode" class="qqbot-scan">
+      <template v-if="qrImage">
+        <p class="text-body-2 mb-0">用手机 QQ 扫码，选择要连接的机器人</p>
+        <img :src="qrImage" width="192" height="192" alt="QQ 机器人绑定二维码" />
       </template>
-      <v-alert v-if="error" type="error" variant="tonal" density="compact" class="full-span">{{ error }}</v-alert>
-      <p v-if="gateway.qqbotTransport !== 'websocket'" class="full-span">保存 Route 后，将公开 HTTPS 地址反向代理到本机 <code>/qqbot</code>，在 QQ 开放平台选择事件订阅。</p>
-      <p v-else class="full-span">保存 Route 后，RabiRoute 会使用所选账号连接腾讯网关。连接结果可在 Route 运行日志中查看。</p>
+      <template v-else-if="!error">
+        <v-progress-circular indeterminate color="primary" size="28" />
+        <span class="text-body-2" role="status">正在获取二维码</span>
+      </template>
+      <v-btn v-else size="small" variant="tonal" @click="startScan">重新获取二维码</v-btn>
+      <v-btn v-if="!props.context?.loginRequested" size="small" variant="text" @click="openForm('add')">手动填写</v-btn>
     </div>
-  </template>
+    <template v-else-if="!form">
+      <div class="d-flex flex-wrap align-center ga-2">
+        <v-select v-if="accounts.length" class="qqbot-account" :model-value="gateway.qqbotAccountId || null"
+          :items="accounts" :item-title="(account: AccountSnapshot) => account.appId + (account.sandbox ? ' · 沙箱' : '')"
+          item-value="id" label="账号" density="compact" hide-details :disabled="busy" @update:model-value="bind" />
+        <span v-if="selected?.state === 'connected'" class="text-body-2">已登录</span>
+        <v-btn v-if="selected" size="small" variant="text" :disabled="busy" @click="openForm('edit')">
+          {{ selected.state === "connected" ? "重新授权" : "继续登录" }}
+        </v-btn>
+        <v-btn v-if="selected?.state === 'connected'" size="small" variant="text" :loading="busy" @click="mutate('logout')">退出登录</v-btn>
+        <v-btn color="primary" variant="tonal" size="small" :disabled="busy" @click="startScan">
+          {{ accounts.length ? "登录其他账号" : "登录 QQ 机器人" }}
+        </v-btn>
+      </div>
+    </template>
+
+    <form v-else class="qqbot-form" @submit.prevent="mutate('save')">
+      <v-select v-if="form === 'add' && accounts.length" :items="accounts"
+        :item-title="(account: AccountSnapshot) => account.appId + (account.sandbox ? ' · 沙箱' : '')"
+        item-value="id" label="选择已有账号" density="compact" hide-details :disabled="busy"
+        @update:model-value="id => { bind(id); closeForm(); }" />
+      <div class="qqbot-fields">
+        <v-text-field v-model="appId" label="AppID" :readonly="form === 'edit'" :disabled="busy" density="compact" hide-details />
+        <v-text-field v-model="secret" label="AppSecret" type="password" autocomplete="new-password"
+          :disabled="busy" density="compact" hide-details />
+      </div>
+      <div class="d-flex align-center flex-wrap ga-2">
+        <v-switch v-model="sandbox" label="沙箱" density="compact" hide-details :disabled="busy" />
+        <v-btn color="primary" variant="tonal" size="small" type="submit"
+          :loading="busy" :disabled="!appId.trim() || !secret.trim()">登录</v-btn>
+        <v-btn v-if="form === 'edit' || !props.context?.loginRequested" size="small" variant="text" :disabled="busy" @click="startScan">返回扫码</v-btn>
+        <v-btn size="small" variant="text" href="https://q.qq.com/" target="_blank" rel="noopener noreferrer">获取凭据</v-btn>
+      </div>
+    </form>
+
+    <p v-if="error" class="text-error text-body-2 mt-2 mb-0" role="alert">{{ error }}</p>
+  </div>
 </template>
+
+<style scoped>
+.qqbot-scan {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding-block: 24px;
+}
+
+.qqbot-scan img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  background: white;
+  border-radius: 8px;
+}
+.qqbot-account {
+  flex: 0 1 18rem;
+  min-width: min(100%, 12rem);
+}
+
+.qqbot-form {
+  display: grid;
+  gap: 8px;
+  max-width: 40rem;
+}
+
+.qqbot-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 8px;
+}
+</style>

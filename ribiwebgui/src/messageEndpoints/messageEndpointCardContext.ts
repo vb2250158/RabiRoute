@@ -4,6 +4,7 @@ export type MessageEndpointCardContext = Readonly<{
   messageEndpointType: string;
   routeId: string;
   active?: boolean;
+  loginRequested?: boolean;
   scan?: MessageAdapterScanResult;
   scanError?: string;
   scanLoading?: boolean;

@@ -528,7 +528,7 @@ Completion notifications resolve the current Codex task title by task ID and sho
 
 Persona-owned `codexHooks.completionDeliveries` stores project completion rules. After Stop checks pass, `agentCompletionDelivery.ts` matches all sessions by project: Git common directories unify worktrees, while ordinary folders use real absolute paths. Sending reuses `agentSend` / Outbox persistent receipts and stable delivery IDs; concurrent events are single-flight and uncertain outcomes stop resending. DSH events explicitly carry agentType and do not trigger Codex project rules.
 
-Role automation provides Receive messages, Custom tasks, and Agent Hook tabs. `configRepository` persists `codexHooks` in role `personaConfig.json`; the existing serialized name is shared by Codex and DSH. Legacy Route copies are removed on save or explicit migration. `agentAdapters/hookInstallation.ts` invokes official Agent plugin installers. `plugins/rabi-codex-context` and `plugins/rabi-dsh-context` are bundled under `dist/agent-hooks`; role policy remains in Manager.
+Role automation groups scheduled tasks under Message rules and groups completion delivery, announcements, and automatic follow-up by Agent under Agent rules. `configRepository` persists `codexHooks` in role `personaConfig.json`; the existing serialized name is shared by Codex and DSH. Legacy Route copies are removed on save or explicit migration. `agentAdapters/hookInstallation.ts` invokes official Agent plugin installers. `plugins/rabi-codex-context` and `plugins/rabi-dsh-context` are bundled under `dist/agent-hooks`; role policy remains in Manager.
 
 ## WebGUI single-route saves
 

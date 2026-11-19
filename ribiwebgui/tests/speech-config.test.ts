@@ -158,9 +158,12 @@ test("persona route variables hide speech settings owned by dedicated controls",
   const routeSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.endpoint.speech/web/messageEndpoints/SpeechEndpointCard.vue", import.meta.url), "utf8");
   assert.doesNotMatch(routeSource, /<SpeechParameterSlider/);
   assert.doesNotMatch(routeSource, /SpeechHostMonitor|运行日志与转写预览|实时电平/);
-  assert.match(routeSource, /label="热投递"/);
-  assert.match(routeSource, /Agent 回复自动排队播放/);
-  assert.match(routeSource, /ASR 模型、麦克风、VAD 与切句参数属于整台电脑/);
+  assert.match(routeSource, /角色语音设置/);
+  assert.match(routeSource, /:to="personaConfigRoute"/);
+  const settings = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/AutomationEndpointSettings.vue", import.meta.url), "utf8");
+  assert.match(settings, /v-if="endpoint === 'speech'"/);
+  assert.match(settings, /label="热投递"/);
+  assert.match(settings, /label="自动播放回复"/);
 });
 
 test("never presents an unsupported voiceprint capability as available or experimental", () => {

@@ -4,14 +4,14 @@ import XiaomiAccountLogin from "./XiaomiAccountLogin.vue";
 import type { WebRendererContribution } from "../../../../../ribiwebgui/src/pluginRenderers";
 import TrustedWebRendererHost from "../../../../../ribiwebgui/src/components/TrustedWebRendererHost.vue";
 
-defineProps<{
+const props = defineProps<{
   renderers: readonly WebRendererContribution[];
-  context?: unknown;
+  context?: { loginRequested?: boolean };
 }>();
 
-const activeTab = ref("setup");
+const activeTab = ref(props.context?.loginRequested ? "account" : "setup");
 const tabs = [
-  { value: "setup", title: "Setup", rendererId: "builtin.xiaomi-home-auth.v1" },
+  { value: "setup", title: "登录", rendererId: "builtin.xiaomi-home-auth.v1" },
   { value: "settings", title: "设置", rendererId: "builtin.xiaomi-home-message-endpoint.v1" },
   { value: "devices", title: "设备列表", rendererId: "builtin.xiaomi-home-devices.v1" },
   { value: "account", title: "小米账号", rendererId: "" }
@@ -29,7 +29,7 @@ const tabs = [
       :key="tab.value"
       :aria-label="tab.title"
     >
-      <XiaomiAccountLogin v-if="tab.value === 'account' && activeTab === 'account'" />
+      <XiaomiAccountLogin v-if="tab.value === 'account' && activeTab === 'account'" :auto-start="context?.loginRequested" />
       <TrustedWebRendererHost
         v-if="tab.value !== 'account' && (tab.value !== 'devices' || activeTab === 'devices')"
         :renderers="renderers.filter(renderer => renderer.rendererId === tab.rendererId)"

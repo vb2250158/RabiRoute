@@ -4,6 +4,7 @@ import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 
 type Login = { sessionId: string; state: "waiting" | "expired" | "connected"; expiresAt: string; imageDataUrl?: string };
 type CloudStatus = { connected: boolean; login?: Login };
+const props = defineProps<{ autoStart?: boolean }>();
 const cloud = "/api/agent/xiaomi-home/vacuum-cloud";
 const connected = ref(false);
 const login = ref<Login>();
@@ -81,7 +82,12 @@ async function begin(): Promise<void> {
     } catch { /* Preserve the original error. */ }
   } finally { busy.value = false; }
 }
-onMounted(() => void refresh());
+onMounted(async () => {
+  await refresh();
+  if (props.autoStart && !controller.signal.aborted && !error.value && !connected.value && login.value?.state !== "waiting") {
+    void begin();
+  }
+});
 onBeforeUnmount(() => controller.abort());
 </script>
 

@@ -1,5 +1,6 @@
 export const pluginTranslations = {
   "en": {
+    "账号密码": "Account and password",
     "等待监听就绪": "Waiting for the listener",
     "0 表示自动分配，监听就绪后显示实际地址。": "0 assigns a port automatically. The actual address appears when the listener is ready.",
     "WS 端口必须是 0-65535 的整数；0 表示自动分配": "WS port must be an integer from 0 to 65535; 0 assigns automatically",
@@ -116,6 +117,7 @@ export const pluginTranslations = {
     "NapCat 进程归属管理尚未就绪，不能停止实例。": "NapCat process ownership is not ready. The instance cannot be stopped."
   },
   "ja": {
+    "账号密码": "アカウントとパスワード",
     "等待监听就绪": "リスナーの準備を待っています",
     "0 表示自动分配，监听就绪后显示实际地址。": "0 は自動割り当てです。リスナーの準備ができると実際のアドレスが表示されます。",
     "WS 端口必须是 0-65535 的整数；0 表示自动分配": "WS ポートは 0〜65535 の整数にしてください。0 は自動割り当てです",

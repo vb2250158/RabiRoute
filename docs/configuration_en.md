@@ -362,7 +362,7 @@ The overview can edit multiple routes. Save submits each changed route in its ow
 
 ## Conversation index review before sending
 
-Each chat endpoint has two response budgets, editable under its message adapter settings:
+Each chat endpoint has two response budgets, editable in its endpoint settings under **Persona → Automation → Message rules**:
 
 ```json
 { "conversationReview": { "initialMessageCount": 50, "maxIncrementalMessages": 100 } }

@@ -59,6 +59,9 @@ function component(quick = false, overrides: Record<string, unknown> = {}, sourc
     if (name.endsWith("/utils/gatewayHelpers")) return helpers;
     if (name.endsWith("/napcatRuntimeEndpoint")) return endpoint;
     if (name.endsWith("/webhookRuntimeEndpoint")) return httpEndpoint;
+    if (name.endsWith("/useEndpointQrPairing")) return { useEndpointQrPairing: () => ({
+      showingQr: vue.ref(false), qrImage: vue.ref(""), error: vue.ref(""), ready: vue.ref(false), scan() {}, manual() {}
+    }) };
     if (name.endsWith("/i18n/index")) return { useI18n: () => ({ t: (key: string) => key }) };
     if (name.endsWith("/userFacingError")) return { userFacingError: (error: Error) => error.message };
     if (name === "@shared/napcatStateContract") return napcatContract;
@@ -173,17 +176,18 @@ function publishHttp(fixture: ReturnType<typeof component>, type: string) {
   snapshot.httpCallbacks = { ...snapshot.httpCallbacks, [type]: { url: `http://127.0.0.1:31416/${type}` } };
 }
 
-test("named HTTP cards retain automatic preferences and expose only the original live URL", async () => {
+test("named HTTP cards preserve saved port preferences and expose only the original live URL", async () => {
   for (const type of ["feishu", "rabilink"]) {
     const name = type === "feishu" ? "Feishu" : "Rabilink";
     const fixture = component(false, {}, `../../src/plugins/io.rabiroute.endpoint.${type}/web/messageEndpoints/${name}EndpointCard.vue`);
     try {
       fixture.store.selectedGateway.messageAdapters = [type];
       fixture.store.selectedGateway.messageAdapterType = type;
-      fixture.model.setWebhookPort?.(type, 0);
+      const portField = `${type}WebhookPort`;
+      (fixture.store.selectedGateway as Record<string, any>)[portField] = 23456;
       publishHttp(fixture, type);
-      assert.equal(fixture.model.webhookPortFor(type), 0);
       assert.equal(fixture.model.callbackUrl(), `http://127.0.0.1:31416/${type}`);
+      assert.equal((fixture.store.selectedGateway as Record<string, any>)[portField], 23456);
       (fixture.store.selectedRuntime.gatewayStatus.messageAdapters as Record<string, any>)[type].listenerReady = false;
       assert.equal(fixture.model.callbackUrl(), "");
       if (type === "rabilink") {

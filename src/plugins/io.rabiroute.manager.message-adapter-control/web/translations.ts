@@ -1,8 +1,10 @@
 export const pluginTranslations = {
   "en": {
+    "取消连接": "Disconnect",
+    "连接异常": "Connection issue",
     "插件不可用": "Plugin unavailable",
     "更新 Hook 到 Agent": "Update Hooks in Agent",
-    "首次配置或更新时安装事件埋点。日常开关在“角色 → 自动化 → Agent Hook”管理。": "Install lifecycle callbacks during setup or updates. Manage switches under Role → Automation → Agent Hook.",
+    "首次配置或更新时安装事件埋点。在「角色 → 自动化 → Agent 规则」中管理规则和开关。": "Install lifecycle callbacks during setup or updates. Manage rules and switches under Role → Automation → Agent rules.",
     "通道检查": "Channel check",
     "检查当前 Route 从消息端经过 Manager 到 Agent 端的完整链路。": "Check the complete path from message inputs through Manager to Agent handlers for the current Route.",
     "状态检查不会修改配置或触发登录。点击 Agent 节点的“投递测试”会发送一条带测试编号的真实消息，用于确认对应 Agent 是否收到。": "Status checks do not change configuration or trigger login. Click Delivery test on an Agent node to send a real message with a test ID and confirm that Agent receives it.",
@@ -112,9 +114,11 @@ export const pluginTranslations = {
     "已授权，正在订阅状态变化事件。": "Authorized; subscribing to state-change events."
   },
   "ja": {
+    "取消连接": "接続を解除",
+    "连接异常": "接続エラー",
     "插件不可用": "プラグインを利用できません",
     "更新 Hook 到 Agent": "Agentのフックを更新します",
-    "首次配置或更新时安装事件埋点。日常开关在“角色 → 自动化 → Agent Hook”管理。": "セットアップまたはアップデート中にライフサイクル コールバックをインストールします。 「ペルソナ」→「オートメーション」→「Agent フック」でスイッチを管理します。",
+    "首次配置或更新时安装事件埋点。在「角色 → 自动化 → Agent 规则」中管理规则和开关。": "セットアップまたはアップデート時にライフサイクルのコールバックをインストールします。「ペルソナ」→「オートメーション」→「Agent ルール」でルールとスイッチを管理します。",
     "通道检查": "チャンネルチェック",
     "检查当前 Route 从消息端经过 Manager 到 Agent 端的完整链路。": "現在のRouteについて、メッセージ入力からManagerを介してAgentハンドラまでの完全なパスをチェックする。",
     "状态检查不会修改配置或触发登录。点击 Agent 节点的“投递测试”会发送一条带测试编号的真实消息，用于确认对应 Agent 是否收到。": "ステータスチェックは、構成を変更したり、ログインをトリガしたりすることはない。 Agent ノードで [配信テスト] をクリックして、テスト ID を持つ実際のメッセージを送信し、Agent がそれを受信することを確認します。",

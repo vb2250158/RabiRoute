@@ -2,10 +2,10 @@
 
 # Official QQ Bot
 
-In RibiWebGUI, open **Route → Message endpoints → Official QQ Bot**. Add a bot with its AppID and AppSecret. Use Tencent's sandbox for verification. You can add separate sandbox and production accounts for the same AppID. RabiRoute protects the secret locally, and the Route stores the account reference and event settings.
+Add Official QQ Bot with **Add message endpoint** and choose **Connect** on its card. Scan with mobile QQ, choose a bot on your phone, then save the account binding in the browser. **More connection options** lets you choose a saved account or enter an AppID and AppSecret, including sandbox credentials. RabiRoute protects the credentials in local storage. Configure event transport in the automation settings opened by the gear.
 
-1. Select the account, transport and Agent, then save the Route. Use Tencent-authorized intents for WebSocket and check the Route log for `ready` or the platform's close code.
-2. For Webhook, reverse proxy a public HTTPS URL to the local `/qqbot` address shown on the card and preserve the original request body. Configure the callback and subscriptions in the [QQ Open Platform](https://q.qq.com/). Each bot's platform callback points to one receiving Route.
+1. The Route configuration controls the event transport. Use Tencent-authorized intents for WebSocket and check the Route log for `ready` or the platform's close code.
+2. For Webhook, reverse proxy a public HTTPS URL to the local `/qqbot` address configured for the Route and preserve the original request body. Configure the callback and subscriptions in the [QQ Open Platform](https://q.qq.com/). Each bot's platform callback points to one receiving Route.
 3. Use Tencent's sandbox to verify direct, group, channel and channel direct messages. Incoming messages retain their conversation identity, attachments and event data. Rules using the QQ Bot platform event trigger can forward membership, interaction and audit events to an Agent.
 
 ## Sending and administration

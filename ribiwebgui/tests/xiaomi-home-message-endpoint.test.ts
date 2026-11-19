@@ -109,7 +109,7 @@ test("Xiaomi Home diagnostics stay beside their owning settings instead of the t
   assert.doesNotMatch(routeConfigSource, /choice\.type === 'xiaomiHome'|choice\.type !== 'xiaomiHome'/);
   const cardSource = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.xiaomi-home/web/messageEndpoints/XiaomiHomeEndpointCard.vue", import.meta.url), "utf8");
   assert.match(cardSource, /XiaomiHomeRendererHost/);
-  assert.match(routeConfigSource, /scan: messageScanFor\(choice\.type\)/);
+  assert.match(routeConfigSource, /scan: messageScanFor\(openEndpoint\.type\)/);
   assert.match(endpointRendererSource, /item\.id === "event-monitor"/);
   assert.match(endpointRendererSource, /aria-label="监听设备事件"/);
   assert.match(endpointRendererSource, /aria-label="设备控制"/);

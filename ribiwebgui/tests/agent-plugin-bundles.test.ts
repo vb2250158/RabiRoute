@@ -65,7 +65,9 @@ test("Route renders contributed cards and retains the original target and primar
   assert.match(page, /manifest\.capabilities\.managedTasks\?\.\[feature\] === true/);
   assert.doesNotMatch(page, /gateway\.value\.(?:dshSessionId|workbuddySessionId|antigravityConversationId|astrbotPassword|copilotThreadName)/);
   assert.ok(page.indexOf("watch(() => [gateway.value?.id, agentDefs.value.map") > page.indexOf("const agentDefs ="), "the catalog watcher must not enter an uninitialized setup binding");
-  assert.match(page, /v-if="agentCardOpened\[agent\.type\] \|\| agentParamOpen\[agent\.type\]" v-show="agentParamOpen\[agent\.type\]"/);
+  assert.match(page, /<v-dialog v-if="agentCardOpened\[agent\.type\]" eager scrollable/);
+  assert.match(page, /:model-value="agentSettingsTarget === localAgentTargetKey\(agent\.type\)"/);
+  assert.match(page, /:model-value="agentSettingsTarget === target\.id"/);
 });
 
 test("each card retains its original saved fields and session selection handlers", () => {

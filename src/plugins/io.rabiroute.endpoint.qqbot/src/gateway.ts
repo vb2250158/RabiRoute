@@ -1,4 +1,7 @@
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { atomicWriteFileSync } from "@rabiroute/host-api/shared/filePersistence";
 import { once } from "node:events";
 import { config, runtimeLayout } from "@rabiroute/host-api/config";
 import { appendAdapterLogToDir, appendQqBotMessageToDir, type QqBotMessageRecord } from "@rabiroute/host-api/history";
@@ -17,6 +20,17 @@ type GatewayDependencies = {
   gatewayId: () => string;
 };
 
+function publishQqBotConnection(dataDir: string, accountId: string, connected: boolean): void {
+  const file = path.join(dataDir, "gateway-status.json");
+  try {
+    const snapshot = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+    snapshot.messageAdapters = { ...snapshot.messageAdapters, qqbot: { type: "qqbot", accountId, connected, updatedAt: new Date().toISOString() } };
+    atomicWriteFileSync(file, JSON.stringify(snapshot));
+  } catch (error) {
+    console.error("Failed to publish QQ bot connection", error);
+  }
+}
+
 export function createQqBotEndpoint(dependencies: GatewayDependencies = {
   settings: config,
   accounts: () => createBotAccounts(runtimeLayout.stateRoot),
@@ -32,11 +46,18 @@ export function createQqBotEndpoint(dependencies: GatewayDependencies = {
       const accounts = dependencies.accounts();
       const listeners = dependencies.listeners();
       const gatewayId = dependencies.gatewayId();
+      let currentConnection: boolean | undefined;
+      const publishConnection = (connected: boolean) => {
+        if (currentConnection === connected) return;
+        currentConnection = connected;
+        publishQqBotConnection(dataDir, qqbotAccountId, connected);
+      };
       const accept = (record: QqBotMessageRecord) => {
         if (appendQqBotMessageToDir(record, dataDir)) dependencies.deliver(qqbotRouteKind(record), record);
       };
       if (qqbotTransport === "websocket") {
         const socketScope = new AbortController();
+        publishConnection(false);
         let previousStatus = "";
         const done = runBotSocket({ account: () => accounts.credentials(qqbotAccountId), watchAccount: accounts.observe,
           api: createBotApi(), gatewayId, intents: qqbotIntents ?? 33554432, signal: socketScope.signal, accept,
@@ -44,11 +65,17 @@ export function createQqBotEndpoint(dependencies: GatewayDependencies = {
             const status = state + (code ? " " + code : "");
             if (status === previousStatus) return;
             previousStatus = status;
+            if (!socketScope.signal.aborted) publishConnection(state === "ready");
             appendAdapterLogToDir("qqbot", { event: "websocket_" + state, message: status }, dataDir);
           }
-        }).catch(() => { appendAdapterLogToDir("qqbot", { level: "error", event: "websocket_failed", message: "QQ 机器人 WebSocket 已退出。" }, dataDir); });
+        }).catch(() => {
+          if (socketScope.signal.aborted) return;
+          publishConnection(false);
+          appendAdapterLogToDir("qqbot", { level: "error", event: "websocket_failed", message: "QQ 机器人 WebSocket 已退出。" }, dataDir);
+        });
         return async () => { socketScope.abort(); await done; };
       }
+      publishConnection(false);
       let active = true;
       let key: ReturnType<typeof botSigningKey> | undefined;
       let revision: string | undefined;
@@ -90,7 +117,14 @@ export function createQqBotEndpoint(dependencies: GatewayDependencies = {
         try { appendAdapterLogToDir("qqbot", { level: "error", event, message }, dataDir); }
         catch { console.error(message); }
       };
-      const onError = () => logFailure("listener_failed", "QQ 机器人回调端口不可用。");
+      const onError = () => {
+        publishConnection(false);
+        logFailure("listener_failed", "QQ 机器人回调端口不可用。");
+      };
+      const publishCallbackAuthorization = () => {
+        if (active && server.listening) publishConnection(accounts.list().some(account => account.id === qqbotAccountId && account.state === "connected"));
+      };
+      const stopWatching = accounts.observe(publishCallbackAuthorization);
       try {
         server.listen(qqbotCallbackPort ?? 0, "127.0.0.1");
         await once(server, "listening");
@@ -102,14 +136,17 @@ export function createQqBotEndpoint(dependencies: GatewayDependencies = {
           authentication: { kind: "native", description: "QQ Bot AppID and Ed25519 platform event signatures." }
         });
         server.on("error", onError);
+        publishCallbackAuthorization();
         return async () => {
           active = false;
+          stopWatching();
           listener.stopAccepting();
           const closing = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
           server.closeAllConnections();
           await Promise.all([closing, listener.dispose()]);
         };
       } catch (error) {
+        stopWatching();
         if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
         throw error;
       }

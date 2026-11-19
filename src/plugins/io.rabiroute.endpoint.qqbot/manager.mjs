@@ -44,6 +44,7 @@ export const activate = definePlugin({ async activate(context) {
   context.effects.add(async () => {
     const registration = await manager.routes.registerOperationsAsync(context.identity.instanceId,
       [...implementation.createBotOperations(accounts, api, manager, context.lifecycle.signal),
+        ...implementation.createBotQrOperations(accounts, api, manager, context.lifecycle.signal),
         ...implementation.createBotPlatformOperations(accounts, api, manager, context.lifecycle.signal)], context.lifecycle.signal);
     return () => registration.dispose();
   }, "QQ bot account operations");

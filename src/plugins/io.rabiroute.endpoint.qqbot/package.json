@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.endpoint.qqbot",
-  "version": "0.1.2",
+  "version": "0.1.8",
   "type": "module",
   "license": "MIT",
   "files": [
@@ -14,6 +14,10 @@
   ],
   "peerDependencies": {
     "@rabiroute/plugin-sdk": "^1.1.0"
+  },
+  "dependencies": {
+    "@tencent-connect/qqbot-connector": "1.2.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@rabiroute/plugin-sdk": "^1.1.0",

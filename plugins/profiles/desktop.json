@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.28",
+      "version": "0.1.31",
       "enabled": true,
       "config": {},
       "grants": []
@@ -146,7 +146,7 @@
     {
       "id": "manager:message-adapter-control",
       "package": "io.rabiroute.manager.message-adapter-control",
-      "version": "0.1.5",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []
@@ -221,7 +221,7 @@
     {
       "id": "manager:xiaomi-home",
       "package": "io.rabiroute.manager.xiaomi-home",
-      "version": "0.1.11",
+      "version": "0.1.14",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.21",
+      "version": "0.1.26",
       "enabled": true,
       "config": {},
       "grants": []
@@ -257,7 +257,7 @@
     {
       "id": "endpoint:wecom",
       "package": "io.rabiroute.endpoint.wecom",
-      "version": "0.1.6",
+      "version": "0.1.12",
       "enabled": true,
       "config": {},
       "grants": []
@@ -265,7 +265,7 @@
     {
       "id": "endpoint:weixin",
       "package": "io.rabiroute.endpoint.weixin",
-      "version": "0.1.7",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []
@@ -273,7 +273,7 @@
     {
       "id": "endpoint:feishu",
       "package": "io.rabiroute.endpoint.feishu",
-      "version": "0.1.7",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []
@@ -281,7 +281,7 @@
     {
       "id": "endpoint:qqbot",
       "package": "io.rabiroute.endpoint.qqbot",
-      "version": "0.1.2",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []
@@ -289,7 +289,7 @@
     {
       "id": "endpoint:webhook",
       "package": "io.rabiroute.endpoint.webhook",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -297,7 +297,7 @@
     {
       "id": "endpoint:speech",
       "package": "io.rabiroute.endpoint.speech",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -305,7 +305,7 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
-      "version": "0.1.7",
+      "version": "0.1.9",
       "enabled": true,
       "config": {},
       "grants": []

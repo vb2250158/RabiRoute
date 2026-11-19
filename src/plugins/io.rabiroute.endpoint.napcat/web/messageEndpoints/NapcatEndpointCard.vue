@@ -43,7 +43,7 @@ type NapcatLoginUiState = {
   visible: boolean;
   loading: boolean;
   busy: boolean;
-  mode: NapcatLoginMode;
+  mode: NapcatLoginMode | null;
   quickUserId: string;
   userId: string;
   password: string;
@@ -899,7 +899,7 @@ function napcatLoginUi(instance: NapCatInstance): NapcatLoginUiState {
     newDevice: null
   };
   napcatLoginPanels.value = { ...napcatLoginPanels.value, [instance.id]: created };
-  return created;
+  return napcatLoginPanels.value[instance.id]!;
 }
 
 function napcatQuickLoginOptions(instance: NapCatInstance): Array<{ title: string; value: string }> {
@@ -934,7 +934,7 @@ async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
       ?? body.quickAccounts?.[0];
     if (!ui.quickUserId) ui.quickUserId = firstQuick?.userId || expected;
     if (!ui.userId) ui.userId = expected || firstQuick?.userId || "";
-    if (!body.loggedIn && ui.mode === "quick" && !body.quickAccounts?.length) ui.mode = "qrcode";
+    if (!loginRequested.value && !body.loggedIn && ui.mode === "quick" && !body.quickAccounts?.length) ui.mode = "qrcode";
     if (body.loggedIn) {
       ui.password = "";
       ui.captcha = null;
@@ -1217,7 +1217,8 @@ async function pollNapcatNewDevice(instance: NapCatInstance): Promise<void> {
 }
 
 async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
-  if (!gateway.value) return;
+  const gatewayId = gateway.value?.id;
+  if (!gatewayId) return;
   let target = resolveConfiguredNapcatInstance(instance);
   managingNapcatLogin.value = { ...managingNapcatLogin.value, [instance.id]: true };
   napcatLaunchResult.value = {
@@ -1226,24 +1227,28 @@ async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
   };
   try {
     await autofillNapcatInstance(target);
+    if (napcatPanelDisposed || gateway.value?.id !== gatewayId) return;
     autoAssignNapcatPortsForAllGateways();
     if (store.dirty) {
-      await store.save();
+      await store.save(gatewayId);
+      if (napcatPanelDisposed || gateway.value?.id !== gatewayId) return;
       target = resolveConfiguredNapcatInstance(target);
     }
-    const response = await fetch("/api/message/napcat-ensure-ready", {
+    const response = await fetch(loginRequested.value ? "/api/message/napcat-launch" : "/api/message/napcat-ensure-ready", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ gatewayId: gateway.value.id, instanceId: target.id })
+      body: JSON.stringify({ gatewayId, instanceId: target.id })
     });
     const body = await response.json().catch(() => ({}));
+    if (napcatPanelDisposed || gateway.value?.id !== gatewayId) return;
     if (body.health) {
       napcatInstanceHealthResult.value = {
         ...napcatInstanceHealthResult.value,
         [target.id]: { ok: Boolean(body.health.ok), ...body.health }
       };
       if (applyNapcatHealthToInstance(target, body.health) && store.dirty) {
-        await store.save();
+        await store.save(gatewayId);
+        if (napcatPanelDisposed || gateway.value?.id !== gatewayId) return;
         target = resolveConfiguredNapcatInstance(target);
       }
     }
@@ -1254,7 +1259,7 @@ async function startNapcatAndManage(instance: NapCatInstance): Promise<void> {
     napcatLaunchResult.value = {
       ...napcatLaunchResult.value,
       [target.id]: {
-        ok: response.ok && body.ok !== false,
+        ok: loginRequested.value && loginUi.panel?.managementAvailable === true || response.ok && body.ok !== false,
         message: body.message || (response.ok ? "NapCat 已启动，登录控制已加载。" : "NapCat 暂时无法启动，请再试一次。")
       }
     };
@@ -1644,9 +1649,13 @@ function napcatHealthPayload(instance?: NapCatInstance): Record<string, unknown>
   };
 }
 
+const endpointProps = defineProps<{ context?: import("../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCardContext").MessageEndpointCardContext }>();
+const context = computed(() => endpointProps.context);
+const loginRequested = computed(() => context.value?.loginRequested === true);
+
 async function refreshVisibleNapcatHealth(): Promise<void> {
   if (!gateway.value || !gatewayAdapterTypes(gateway.value).includes("napcat")) return;
-  if (store.dirty) return;
+  if (store.dirty || loginRequested.value) return;
   if (repairingNapcatAll.value) return;
   const instances = ensureNapcatInstances().filter(instance => instance.enabled !== false && !napcatHealthPausedAfterFix.value[instance.id]);
   if (instances.length === 0) return;
@@ -1682,49 +1691,52 @@ onBeforeUnmount(() => { for (const timer of napcatNewDevicePollTimers.values()) 
 
 watch(() => gateway.value?.id, () => { window.clearTimeout(napcatPanelPollTimer); napcatLoginPanels.value = {}; napcatInstanceHealthResult.value = {}; }, { immediate: true });
 
-onMounted(() => { void runMessageAdapterScan(); });
+onMounted(() => { if (!loginRequested.value) void runMessageAdapterScan(); });
 
-const endpointProps = defineProps<{ context?: import("../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCardContext").MessageEndpointCardContext }>();
-const context = computed(() => endpointProps.context);
+async function selectLoginMode(instance: NapCatInstance, mode: NapcatLoginMode): Promise<void> {
+  const target = resolveConfiguredNapcatInstance(instance);
+  const ui = napcatLoginUi(target);
+  const routeId = gateway.value?.id;
+  ui.mode = mode;
+  ui.error = "";
+  if (ui.panel?.managementAvailable !== true) {
+    await startNapcatAndManage(target);
+    if (napcatPanelDisposed || gateway.value?.id !== routeId) return;
+  }
+  if (mode === "qrcode" && ui.panel?.managementAvailable && !ui.panel.loggedIn && !ui.panel.qrCodeDataUrl) {
+    await refreshNapcatLoginQr(target);
+  }
+}
+
+watch([() => context.value?.routeId, () => gateway.value?.id, () => napcatAccountInstances()[0]?.id,
+  () => context.value?.active, loginRequested], ([, , , active, requested], _, cleanup) => {
+  if (!active || !requested) return;
+  const instance = napcatAccountInstances()[0];
+  if (!instance) return;
+  const ui = napcatLoginUi(instance);
+  ui.mode = "qrcode";
+  ui.visible = true;
+  void loadNapcatLoginPanel(instance).then(() => {
+    if (ui.visible && ui.panel && !ui.panel.loggedIn && ui.mode === "qrcode" && !ui.panel.qrCodeDataUrl) {
+      return selectLoginMode(instance, "qrcode");
+    }
+  });
+  cleanup(() => {
+    ui.visible = false;
+    ui.password = "";
+    window.clearTimeout(napcatPanelPollTimer);
+    cancelNapcatNewDevice(instance);
+  });
+}, { immediate: true });
 
 </script>
 <template>
   <template v-if="gateway">
-    <MessageEndpointDependencyPanel :scan="messageScanFor('napcat')" :loading="messageAdapterScan.loading" :error="messageAdapterScan.error" @refresh="runMessageAdapterScan" hide-endpoints />
-<div class="dependency-panel mb-3">
-                    <div class="section-title small-title">长消息确认</div>
-                    <div class="section-note">超过字数时提醒 Agent 先精简；一条说不清就按意思分条说。需要保留单条长消息时，再次调用确认后发送。</div>
-                    <v-text-field
-                      type="number"
-                      :min="0"
-                      :max="200000"
-                      :model-value="napcatTextConfirmationThreshold()"
-                      label="确认阈值（字）"
-                      hint="0 表示关闭。字数含数字、英文、标点和正文中的空格；引用与 @ 标记不计入。"
-                      persistent-hint
-                      class="mt-2"
-                      @update:model-value="setNapcatTextConfirmationThreshold"
-                    />
-                  </div>
+    <MessageEndpointDependencyPanel v-if="!loginRequested" :scan="messageScanFor('napcat')" :loading="messageAdapterScan.loading" :error="messageAdapterScan.error" @refresh="runMessageAdapterScan" hide-endpoints />
+    <p v-if="loginRequested && !napcatAccountInstances().length" class="text-body-2 mb-0">当前路线没有可用的 NapCat 实例。</p>
 <div class="catalog-param-grid napcat-manager-panel">
-                    <div class="full-span napcat-setup-strip">
-                      <div class="napcat-setup-main">
-                        <v-icon size="22">mdi-connection</v-icon>
-                        <div>
-                          <strong>NapCat 连接</strong>
-                          <span>{{ napcatSetupHint() }}</span>
-                        </div>
-                      </div>
-                      <div class="napcat-setup-stats">
-                        <div><b>1</b><span>每个 Route</span></div>
-                        <div><b>{{ napcatConnectedCount() }}</b><span>已连接</span></div>
-                      </div>
-                    </div>
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      当前 Route 只绑定一个 NapCat。需要连接另一个 QQ 时，请新建 Route，让账号的策略、日志和运行状态彼此隔离。
-                    </v-alert>
                     <v-alert
-                      v-for="(auto, key) in napcatAutoSteps"
+                      v-for="(auto, key) in loginRequested ? {} : napcatAutoSteps"
                       :key="key"
                       :type="auto.ok === false ? 'error' : auto.ok === true ? 'success' : 'info'"
                       variant="tonal"
@@ -1735,12 +1747,6 @@ const context = computed(() => endpointProps.context);
                       <div v-for="step in auto.steps" :key="step" class="section-note">{{ step }}</div>
                     </v-alert>
                     <div class="full-span">
-                      <div class="section-title-row mb-2">
-                        <div>
-                          <div class="section-title small-title">当前绑定</div>
-                          <div class="section-note">Rabi 直接管理这个 NapCat 的启动、登录、OneBot 配置和连接状态。</div>
-                        </div>
-                      </div>
                       <div class="napcat-account-grid">
                         <div
                           v-for="instance in napcatAccountInstances()"
@@ -1748,7 +1754,7 @@ const context = computed(() => endpointProps.context);
                           class="napcat-account-card"
                           :class="{ disabled: instance.enabled === false }"
                         >
-                          <div class="napcat-account-head">
+                          <div v-if="!loginRequested" class="napcat-account-head">
                             <div>
                               <div class="napcat-account-title">{{ napcatAccountTitle(instance) }}</div>
                               <div class="section-note">{{ napcatAccountSubtitle(instance) }}</div>
@@ -1759,7 +1765,7 @@ const context = computed(() => endpointProps.context);
                               </v-chip>
                             </div>
                           </div>
-                          <div class="napcat-card-summary">
+                          <div v-if="!loginRequested" class="napcat-card-summary">
                             <div><span>WS</span><b :class="napcatInstancePortError(instance) ? 'text-error' : ''">{{ napcatInstanceWsUrl(instance) || "等待监听就绪" }}</b></div>
                             <div><span>HTTP</span><b>{{ instance.httpUrl || "-" }}</b></div>
                             <div><span>管理接口</span><b :class="napcatWebuiStatusClass(instance)">{{ instance.webuiUrl || "-" }} · {{ napcatWebuiStatusLabel(instance) }}</b></div>
@@ -1792,7 +1798,7 @@ const context = computed(() => endpointProps.context);
                             </div>
                           </v-alert>
                           <v-alert
-                            v-if="[NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired].some(state => state === napcatLoginState(instance))"
+                            v-if="!loginRequested && [NapcatState.QuickLoginInvalid, NapcatState.QrLoginRequired].some(state => state === napcatLoginState(instance))"
                             type="error"
                             variant="tonal"
                             density="compact"
@@ -1801,7 +1807,7 @@ const context = computed(() => endpointProps.context);
                             {{ napcatLoginState(instance) === NapcatState.QrLoginRequired ? "这个 QQ 没有可用的快速登录身份，或当前二维码已经过期。" : "NapCat 保存的快速登录身份已经过期。" }}
                             请在下方登录控制中刷新二维码后扫码；扫码完成前 Rabi 不会误用其他 QQ，也不会反复重试旧身份。
                           </v-alert>
-                          <div class="agent-action-bar mt-2">
+                          <div v-if="!loginRequested" class="agent-action-bar mt-2">
                             <div class="agent-action-status">
                               <span class="section-note">一键启动并在当前卡片管理登录；只有 QQ 安全验证需要你确认</span>
                             </div>
@@ -1830,11 +1836,11 @@ const context = computed(() => endpointProps.context);
                             </div>
                           </div>
                           <v-card
-                            v-if="napcatLoginUi(instance).visible"
+                            v-if="loginRequested || napcatLoginUi(instance).visible"
                             class="napcat-login-control mt-3"
                             variant="flat"
                           >
-                            <div class="napcat-login-control-head">
+                            <div v-if="!loginRequested" class="napcat-login-control-head">
                               <div>
                                 <div class="section-title small-title">QQ 登录控制</div>
                                 <div class="section-note">登录请求由 Rabi 转交本机 NapCat；WebUI 密钥和密码不会显示在这里的结果中。</div>
@@ -1856,7 +1862,7 @@ const context = computed(() => endpointProps.context);
                               density="compact"
                               class="mb-3"
                             >
-                              {{ napcatLoginUi(instance).panel?.message }}
+                              {{ napcatLoginUi(instance).panel?.message || "QQ 已登录。" }}
                             </v-alert>
                             <v-alert
                               v-if="napcatLoginUi(instance).error"
@@ -1866,9 +1872,11 @@ const context = computed(() => endpointProps.context);
                               class="mb-3"
                             >
                               {{ napcatLoginUi(instance).error }}
+                              <v-btn v-if="loginRequested && !napcatLoginUi(instance).panel" size="small" variant="text"
+                                @click="selectLoginMode(instance, napcatLoginUi(instance).mode ?? 'qrcode')">重试</v-btn>
                             </v-alert>
                             <v-alert
-                              v-if="napcatLoginUi(instance).message && !napcatLoginUi(instance).panel?.loggedIn"
+                              v-if="!loginRequested && napcatLoginUi(instance).message && !napcatLoginUi(instance).panel?.loggedIn"
                               type="info"
                               variant="tonal"
                               density="compact"
@@ -1883,15 +1891,23 @@ const context = computed(() => endpointProps.context);
                                 此 Route 绑定：QQ {{ instance.botUserId }} {{ instance.botNickname || "" }}
                               </div>
                             </div>
-                            <v-alert v-if="napcatLoginUi(instance).panel?.managementAvailable === false" type="warning" variant="tonal" density="compact" class="mb-3">
+                            <v-alert v-if="!loginRequested && napcatLoginUi(instance).panel?.managementAvailable === false" type="warning" variant="tonal" density="compact" class="mb-3">
                               NapCat 管理服务未响应，登录操作暂不可用。请点击“启动并管理登录”查看启动结果。
                             </v-alert>
-                            <v-tabs v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" density="compact" color="primary" grow>
-                              <v-tab value="quick">快速登录</v-tab>
-                              <v-tab value="password">密码登录</v-tab>
+                            <v-tabs v-if="!napcatLoginUi(instance).panel?.loggedIn && (loginRequested || napcatLoginUi(instance).panel?.managementAvailable)"
+                              :model-value="napcatLoginUi(instance).mode" class="mb-3" density="compact" color="primary" grow
+                              :disabled="napcatLoginUi(instance).loading || napcatLoginUi(instance).busy || managingNapcatLogin[instance.id]"
+                              @update:model-value="mode => mode && selectLoginMode(instance, mode)">
                               <v-tab value="qrcode">扫码登录</v-tab>
+                              <v-tab value="quick">快速登录</v-tab>
+                              <v-tab value="password">账号密码</v-tab>
                             </v-tabs>
-                            <v-window v-if="!napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" v-model="napcatLoginUi(instance).mode" class="napcat-login-window">
+                            <p v-if="loginRequested && managingNapcatLogin[instance.id]" role="status" class="text-body-2">正在准备 QQ 登录</p>
+                            <div v-else-if="loginRequested && napcatLaunchResult[instance.id]?.ok === false" class="d-flex align-center flex-wrap ga-2">
+                              <p role="alert" class="text-error text-body-2 mb-0">{{ napcatLaunchResult[instance.id].message }}</p>
+                              <v-btn size="small" variant="tonal" @click="selectLoginMode(instance, napcatLoginUi(instance).mode ?? 'qrcode')">重试</v-btn>
+                            </div>
+                            <v-window v-if="napcatLoginUi(instance).mode && !napcatLoginUi(instance).panel?.loggedIn && napcatLoginUi(instance).panel?.managementAvailable" :model-value="napcatLoginUi(instance).mode" :touch="false" class="napcat-login-window">
                               <v-window-item value="quick">
                                 <div class="napcat-login-pane">
                                   <v-select
@@ -1902,14 +1918,14 @@ const context = computed(() => endpointProps.context);
                                     hide-details="auto"
                                   />
                                   <v-alert v-else type="info" variant="tonal" density="compact">
-                                    这个 NapCat 还没有可用的快速登录身份，请先扫码或使用密码登录一次。
+                                    没有已保存的账号，请扫码或使用密码登录。
                                   </v-alert>
                                   <v-btn
                                     color="primary"
                                     variant="tonal"
                                     prepend-icon="mdi-lightning-bolt-outline"
                                     :loading="napcatLoginUi(instance).busy"
-                                    :disabled="!napcatLoginUi(instance).quickUserId"
+                                    :disabled="!napcatQuickLoginOptions(instance).some(account => account.value === napcatLoginUi(instance).quickUserId)"
                                     @click="submitNapcatQuickLogin(instance)"
                                   >
                                     快速登录
@@ -1939,7 +1955,7 @@ const context = computed(() => endpointProps.context);
                                   </template>
                                   <template v-if="napcatLoginUi(instance).captcha">
                                     <v-alert type="warning" variant="tonal" density="compact">
-                                      QQ 要求完成安全验证码。验证码由腾讯页面处理，结果只用于本次登录。
+                                      请完成 QQ 安全验证。
                                     </v-alert>
                                     <v-btn
                                       color="warning"
@@ -1965,8 +1981,7 @@ const context = computed(() => endpointProps.context);
                                       label="QQ 密码"
                                       type="password"
                                       autocomplete="new-password"
-                                      hint="仅用于本次本机登录请求，不保存到 Route 配置。"
-                                      persistent-hint
+                                      hide-details="auto"
                                     />
                                     <v-btn
                                       color="primary"
@@ -1989,7 +2004,7 @@ const context = computed(() => endpointProps.context);
                                     alt="QQ 登录二维码"
                                   />
                                   <v-alert v-else type="info" variant="tonal" density="compact">
-                                    暂时没有可用二维码，请刷新；如果 NapCat 尚未启动，先点上方“启动并管理登录”。
+                                    暂未获取二维码。
                                   </v-alert>
                                   <div class="section-note">请使用手机 QQ 或 TIM 扫描二维码。</div>
                                   <v-btn
@@ -2005,7 +2020,7 @@ const context = computed(() => endpointProps.context);
                               </v-window-item>
                             </v-window>
                           </v-card>
-                          <v-expansion-panels class="napcat-detail-panel mt-2" variant="accordion">
+                          <v-expansion-panels v-if="!loginRequested" class="napcat-detail-panel mt-2" variant="accordion">
                             <v-expansion-panel>
                               <v-expansion-panel-title>更多详情</v-expansion-panel-title>
                               <v-expansion-panel-text>
@@ -2058,7 +2073,7 @@ const context = computed(() => endpointProps.context);
                           >
                             当前 NapCat 会话是 {{ napcatWebuiSessionLabel(instance) }}，但这个 Route 绑定的是 QQ {{ napcatExpectedUserId(instance) }}。它不会覆盖 Route 身份；修复 OneBot 前请先在上方登录卡片切到正确 QQ。
                           </v-alert>
-                          <v-expansion-panels class="napcat-detail-panel mt-2" variant="accordion">
+                          <v-expansion-panels v-if="!loginRequested" class="napcat-detail-panel mt-2" variant="accordion">
                             <v-expansion-panel>
                               <v-expansion-panel-title>自动分配详情</v-expansion-panel-title>
                               <v-expansion-panel-text>
@@ -2207,7 +2222,22 @@ const context = computed(() => endpointProps.context);
                       </div>
                     </div>
                   </div>
-<template v-if="runtime.running !== undefined">
+<details v-if="!loginRequested" class="mt-3">
+    <summary class="text-body-2">其他设置</summary>
+<div class="dependency-panel mb-3">
+                    <v-text-field
+                      type="number"
+                      :min="0"
+                      :max="200000"
+                      :model-value="napcatTextConfirmationThreshold()"
+                      label="确认阈值（字）"
+                      hint="0 表示关闭。字数含数字、英文、标点和正文中的空格；引用与 @ 标记不计入。"
+                      persistent-hint
+                      class="mt-2"
+                      @update:model-value="setNapcatTextConfirmationThreshold"
+                    />
+                  </div>
+    <template v-if="runtime.running !== undefined">
                     <v-alert v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel) && adapterErrors('napcat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
                       <div v-for="reason in adapterErrors('napcat')" :key="reason" class="text-body-2">{{ reason }}</div>
                     </v-alert>
@@ -2217,6 +2247,7 @@ const context = computed(() => endpointProps.context);
                     <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
                     <div v-if="!gateway.napcatInstances?.some(instance => napcatLoginPanels[instance.id]?.panel)" class="status-row"><span>登录资料</span><b :class="napcatState.loginInfoError ? 'text-error' : ''">{{ napcatState.loginInfoError || napcatState.lastLoginInfoAt || "-" }}</b></div>
-                  </template>
+    </template>
+    </details>
   </template>
 </template>

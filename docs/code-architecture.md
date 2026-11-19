@@ -892,7 +892,7 @@ src/messageEndpoints/
 
 `codexHooks.completionDeliveries` 由角色持有项目完成消息规则。`agentCompletionDelivery.ts` 在 Stop 完成门禁通过后按项目匹配所有会话：Git 项目使用 common directory 归并工作树，普通目录使用真实绝对路径。发送复用 `agentSend` / Outbox 的持久回执和稳定 deliveryId；并发事件 single-flight，结果不确定时停止重发。DSH 事件显式携带 agentType，不触发 Codex 项目规则。
 
-角色页自动化分为接收消息、定制任务、Agent Hook。`configRepository` 将 `codexHooks` 保存到角色 `personaConfig.json`；该字段沿用既有序列化名称，Codex 和 DSH 共用。旧 Route 字段在保存或显式迁移时移除。`agentAdapters/hookInstallation.ts` 通过 Agent 官方插件管理器安装埋点；`plugins/rabi-codex-context` 与 `plugins/rabi-dsh-context` 随构建进入 `dist/agent-hooks`，不在各 Agent 端维护角色业务规则。
+角色页自动化分为「消息规则」和「Agent 规则」。定时任务位于「消息规则」，任务完成后的投递、播报和自动追问在「Agent 规则」按 Agent 端配置。`configRepository` 将 `codexHooks` 保存到角色 `personaConfig.json`；该字段沿用既有序列化名称，Codex 和 DSH 共用。旧 Route 字段在保存或显式迁移时移除。`agentAdapters/hookInstallation.ts` 通过 Agent 官方插件管理器安装埋点；`plugins/rabi-codex-context` 与 `plugins/rabi-dsh-context` 随构建进入 `dist/agent-hooks`，不在各 Agent 端维护角色业务规则。
 
 ## WebGUI 单路线保存
 

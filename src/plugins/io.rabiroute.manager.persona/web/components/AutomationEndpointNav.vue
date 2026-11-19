@@ -2,11 +2,19 @@
 import { computed, watch } from "vue";
 import { automationEndpoints } from "../persona/automationEndpoints";
 
-const props = defineProps<{ modelValue: string; counts?: Record<string, number> }>();
+const props = defineProps<{
+  modelValue: string;
+  counts?: Record<string, number>;
+  configured?: readonly string[];
+  additional?: readonly { value: string; title: string; icon: string }[];
+  requestedEndpoint?: string;
+  options?: readonly { value: string; title: string; icon: string }[];
+  label?: string;
+}>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
-const visibleEndpoints = computed(() => props.counts
-  ? automationEndpoints.filter(option => (props.counts?.[option.value] ?? 0) > 0)
-  : automationEndpoints);
+const visibleEndpoints = computed(() => props.options ?? [...automationEndpoints, ...(props.additional ?? [])]
+  .filter(option => !props.counts || (props.counts[option.value] ?? 0) > 0
+    || props.configured?.includes(option.value) || props.requestedEndpoint === option.value));
 
 watch([visibleEndpoints, () => props.modelValue], ([options, selected]) => {
   if (!options.some(option => option.value === selected)) {
@@ -17,7 +25,7 @@ watch([visibleEndpoints, () => props.modelValue], ([options, selected]) => {
 </script>
 
 <template>
-  <nav v-if="visibleEndpoints.length" class="automation-endpoint-nav" aria-label="消息类型">
+  <nav v-if="visibleEndpoints.length" class="automation-endpoint-nav" :aria-label="label || '消息类型'">
     <button v-for="option in visibleEndpoints" :key="option.value" type="button"
       class="automation-endpoint-tab" :class="{ 'is-selected': modelValue === option.value }"
       :aria-pressed="modelValue === option.value" @click="$emit('update:modelValue', option.value)">

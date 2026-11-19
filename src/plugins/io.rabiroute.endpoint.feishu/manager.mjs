@@ -4,6 +4,11 @@ export const activate = definePlugin({ async activate(context) {
   const host = context.services.require("host.message-endpoints@1");
   await host.prepareModules(egressModules);
   const egress = createEgress(host);
+  context.effects.add(async () => {
+    const registration = await host.manager.routes.registerOperationsAsync(context.identity.instanceId,
+      egress.createQrOperations(host.manager, context.lifecycle.signal), context.lifecycle.signal);
+    return () => registration.dispose();
+  });
   ownMessageEndpointEgress(context, { type: "feishu", operations: egress });
   ownMessageEndpointScan(context, { type: "feishu", label: "飞书", maturity: "experimental", mode: "immediate", async scan() {
     const routes = host.routeSnapshots("feishu");

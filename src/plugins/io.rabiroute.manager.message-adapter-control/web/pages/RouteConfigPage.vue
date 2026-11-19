@@ -5,6 +5,7 @@ import RoleBindingEditor from "../components/RoleBindingEditor.vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpeechStore } from "../../../../../ribiwebgui/src/stores/speechStore";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import InstanceAgentSettings from "../../../../../ribiwebgui/src/components/InstanceAgentSettings.vue";
 import PeerRouteAgentSettings from "../components/PeerRouteAgentSettings.vue";
@@ -14,22 +15,24 @@ import { addRouteAgent, removeRouteAgent, selectRouteAgent, selectPeerRouteSessi
 import { postRouteAgentThreadAction } from "../../../../../ribiwebgui/src/routeAgentThreadClient";
 import { routeAgentOperationGuard } from "../../../../../ribiwebgui/src/routeAgentOperationGuard";
 import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInstance";
-import { managerAccessToken } from "../../../../../ribiwebgui/src/managerApi";
+import { managerAccessToken, managerEventSource } from "../../../../../ribiwebgui/src/managerApi";
 import { pluginCatalogStore } from "../../../../../ribiwebgui/src/pluginCatalogStore";
 import { webRenderersAt } from "../../../../../ribiwebgui/src/pluginRenderers";
 import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, MessageAdapterScanResult } from "../../../../../ribiwebgui/src/types";
-import { isNonMessageEndpoint, adapterLabel, applyAdapterDefaults, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
+import { isNonMessageEndpoint, adapterLabel, applyAdapterDefaults, isAdapterDisabled, setGatewayAdapters, toggleAdapterDisabled } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
-import { DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
+import { DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS } from "@shared/gatewayConfigModel";
 import { DEFAULT_CODEX_PLAN_ASSISTANT_MODEL, codexPlanAssistantInitializationPrompt, codexPlanAssistantSessionTitles, normalizeCodexPlanAssistantCount, filterCodexPlanAssistantSessionsForTarget, planAssistantSessionAgentAdapter } from "@shared/codexPlanAssistantSessions";
 import { copyTextToClipboard } from "../../../../../ribiwebgui/src/clipboard";
-import { routeScopedAdaptersPath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
+import { routeScopedAdaptersPath, routeScopedPersonaPath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
 import { createRouteAgentScanController } from "../../../../../ribiwebgui/src/agentAdapters/routeAgentScanController";
 import AgentAdapterCardHost from "../../../../../ribiwebgui/src/agentAdapters/AgentAdapterCardHost.vue";
 import { configuredAgentRows, agentLocationLabel } from "../../../../../ribiwebgui/src/agentAdapters/agentAdapterCatalog";
 import type { AgentAdapterCardContext } from "../../../../../ribiwebgui/src/agentAdapters/agentAdapterCardContext";
+import AutomationEndpointSettings from "../../../io.rabiroute.manager.persona/web/components/AutomationEndpointSettings.vue";
 import MessageEndpointCardHost from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointCardHost.vue";
 import { messageEndpointCatalog, messageEndpointGroups } from "../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCatalog";
+import { messageEndpointConnection } from "../messageEndpointConnection";
 
 function agentCardContext(type: AgentAdapterType, targetId = localAgentTargetKey(type)): AgentAdapterCardContext {
   const routeId = gateway.value!.id;
@@ -76,7 +79,6 @@ const agentDeliveryTest = ref<{ loading: string | null; result: AgentDeliveryTes
 
 const runtime = computed(() => store.selectedRuntime);
 
-const adapterQuery = ref("");
 
 const configNameError = ref("");
 
@@ -174,27 +176,81 @@ function refreshAgentScan(type: AgentAdapterType): void { void runAgentTypeScan(
 
 function scanAgentsOnEntry(): void { agentScanner.enter(); }
 
-onMounted(() => { scanAgentsOnEntry(); void refreshLanAgentNodes(); });
+let connectionEvents: EventSource | undefined;
+let connectionRefreshPending = false;
 
-onBeforeUnmount(() => { agentScanner.dispose(); agentDirectoryRequest?.abort(); agentDirectoryRequest = undefined; });
+function connectionViewVisible(): boolean {
+  return Boolean(connectionEvents && gateway.value && !document.hidden && (!props.embedded || route.query.tab === "messages"));
+}
 
-const agentParamOpen = ref<Record<string, boolean>>({});
+function flushConnectionRefresh(): void {
+  if (!connectionRefreshPending || !connectionViewVisible() || store.loading || store.diagnosticsLoading) return;
+  connectionRefreshPending = false;
+  void store.ensureDiagnostics(true);
+}
+
+function requestConnectionRefresh(): void {
+  if (!connectionViewVisible()) return;
+  connectionRefreshPending = true;
+  flushConnectionRefresh();
+}
+
+function onGatewayConnectionChanged(event: MessageEvent<string>): void {
+  try {
+    if (JSON.parse(event.data)?.gatewayId === gateway.value?.id) requestConnectionRefresh();
+  } catch { /* A malformed notification does not change the current Route state. */ }
+}
+
+onMounted(() => {
+  scanAgentsOnEntry();
+  void refreshLanAgentNodes();
+  connectionEvents = managerEventSource("/api/events");
+  connectionEvents.addEventListener("ready", requestConnectionRefresh);
+  connectionEvents.addEventListener("gateway_connection_changed", onGatewayConnectionChanged);
+  document.addEventListener("visibilitychange", requestConnectionRefresh);
+  requestConnectionRefresh();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", requestConnectionRefresh);
+  connectionEvents?.close();
+  connectionEvents = undefined;
+  connectionRefreshPending = false;
+  agentScanner.dispose();
+  agentDirectoryRequest?.abort();
+  agentDirectoryRequest = undefined;
+});
+
+const agentSettingsTarget = ref<string>();
 
 const agentCardOpened = ref<Record<string, boolean>>({});
 
-const adapterParamOpen = ref<Record<string, boolean>>({});
+const openEndpointType = ref<MessageAdapterType>();
+const endpointLoginRequested = ref(false);
+const endpointSettingsOpen = ref(false);
+const endpointSpeechChanged = ref(false);
+const endpointDialogError = ref("");
+const endpointPreparing = ref(false);
+const disconnectingEndpoint = ref<MessageAdapterType>();
+const messageTileError = ref("");
 
 const adapterLifecycleRevision = ref<Record<string, number>>({});
 
 const adapterActionBusy = ref<Record<string, boolean>>({});
 
-const addAdapterMenu = ref(false);
-
 const endpointCatalog = computed(() => messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value));
 
-const adapterGroups = computed(() => messageEndpointGroups(endpointCatalog.value, addedAdapters.value.filter(type => !isNonMessageEndpoint(type))));
+const endpointCards = computed(() => messageEndpointGroups(
+  endpointCatalog.value.filter(item => addedAdapters.value.includes(item.type)),
+  addedAdapters.value.filter(type => !isNonMessageEndpoint(type))
+).flatMap(group => group.choices));
+const availableEndpoints = computed(() => endpointCatalog.value.filter(item => !addedAdapters.value.includes(item.type)));
+const openEndpoint = computed(() => endpointCards.value.find(card => card.type === openEndpointType.value));
+const endpointConnections = computed(() => new Map(endpointCards.value.map(card => [card.type, messageEndpointConnection(gateway.value, runtime.value, card.type)])));
 
 const gateway = computed(() => store.selectedGateway);
+watch([() => gateway.value?.id, () => route.query.tab, () => store.loading], requestConnectionRefresh);
+watch(() => store.diagnosticsLoading, flushConnectionRefresh);
 
 function uniqueAdapters(types: MessageAdapterType[]): MessageAdapterType[] {
   return [...new Set(types.filter((type) => type !== "disabled" && type !== "rolePanel"))];
@@ -213,40 +269,11 @@ const addedAdapters = computed<MessageAdapterType[]>(() => {
   return configuredAdapterCatalog(gw);
 });
 
-const adapters = computed(() => gateway.value ? gatewayAdapterTypes(gateway.value) : []);
-
-const messageInputsDisabled = computed(() => gateway.value ? isMessageInputsDisabled(gateway.value) : false);
-
-const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value)
-  .filter(type => !isNonMessageEndpoint(type) && endpointCatalog.value.some(item => item.type === type)));
-
-const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
-
 const copyResult = ref("");
 
 const deletingGateway = ref(false);
 
 const deleteError = ref("");
-
-const visibleAdapterGroups = computed(() => {
-  const query = adapterQuery.value.trim().toLowerCase();
-  return adapterGroups.value
-    .map(group => ({
-      ...group,
-      choices: group.choices.filter(choice => {
-        if (!addedAdapters.value.includes(choice.type)) return false;
-        if (!query) return true;
-        return [
-          group.title,
-          group.note,
-          choice.type,
-          choice.title,
-          choice.note
-        ].join(" ").toLowerCase().includes(query);
-      })
-    }))
-    .filter(group => group.choices.length > 0);
-});
 
 async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Promise<void> {
   if (!gateway.value || (value === true) === !isAdapterDisabled(gateway.value, type)) return;
@@ -254,69 +281,86 @@ async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Prom
   store.touch();
 }
 
-function hasAdapterParams(type: MessageAdapterType): boolean {
-  return type !== "disabled";
+function closeEndpoint(): void {
+  if (openEndpointType.value) delete adapterLifecycleRevision.value[openEndpointType.value];
+  endpointSettingsOpen.value = false;
+  endpointSpeechChanged.value = false;
+  openEndpointType.value = undefined;
+  endpointLoginRequested.value = false;
+  endpointDialogError.value = "";
 }
 
-function messageGroupingPolicy(type: MessageAdapterType) {
-  if (!gateway.value || type === "disabled") return undefined;
-  return messageAdapterPolicyFor(gateway.value, type).messageGrouping;
+function openEndpointSettings(type: MessageAdapterType): void {
+  const target = gateway.value;
+  if (!target) return;
+  if (!target.agentRoleId) {
+    openEndpointType.value = type;
+    endpointSettingsOpen.value = true;
+    return;
+  }
+  void router.push({ path: routeScopedPersonaPath(target.configName || target.id),
+    query: { tab: "automation", endpoint: type, endpointSettings: "1", route: target.id } });
 }
 
-function conversationReviewPolicy(type: MessageAdapterType) {
-  if (!gateway.value || type === "disabled") return undefined;
-  return messageAdapterPolicyFor(gateway.value, type).conversationReview;
-}
-
-function setConversationReviewEnabled(type: MessageAdapterType, enabled: boolean | null): void {
-  if (!gateway.value) return;
-  setMessageAdapterPolicy(gateway.value, type, { conversationReview: { ...conversationReviewPolicy(type), enabled: enabled === true } });
-}
-
-function setConversationReviewPolicy(type: MessageAdapterType, field: "initialMessageCount" | "maxIncrementalMessages", raw: unknown): void {
-  const value = Number(raw);
-  if (!gateway.value || type === "disabled" || !Number.isInteger(value) || value < (field === "initialMessageCount" ? 1 : 2) || value > 500) return;
-  setMessageAdapterPolicy(gateway.value, type, { conversationReview: { ...conversationReviewPolicy(type), [field]: value } });
+function addEndpoint(type: MessageEndpointType): void {
+  const target = gateway.value;
+  if (!target || addedAdapters.value.includes(type)) return;
+  setGatewayAdapters(target, [...addedAdapters.value, type]);
+  applyAdapterDefaults(target);
+  adapterLifecycleRevision.value[type] = 1;
   store.touch();
 }
 
-function usesAutomaticMessageGrouping(type: MessageAdapterType): boolean {
-  return type !== "disabled" && messageAdapterUsesAutomaticGrouping(type);
+async function connectEndpoint(type: MessageAdapterType): Promise<void> {
+  const target = gateway.value;
+  if (!target || endpointPreparing.value) return;
+  openEndpointType.value = type;
+  endpointSettingsOpen.value = false;
+  endpointLoginRequested.value = false;
+  endpointDialogError.value = "";
+  endpointPreparing.value = true;
+  try {
+    const disabled = isAdapterDisabled(target, type);
+    if ((disabled && endpointConnections.value.get(type) !== "setup") || (type === "weixin" && (disabled || store.dirty))) {
+      if (disabled) await setAdapterEnabled(type, true);
+      await store.save(target.id);
+      if (gateway.value?.id !== target.id || openEndpointType.value !== type) return;
+    }
+    endpointLoginRequested.value = true;
+  } catch (cause) {
+    if (gateway.value?.id === target.id && openEndpointType.value === type) endpointDialogError.value = userFacingError(cause);
+  } finally {
+    endpointPreparing.value = false;
+  }
 }
 
-function setMessageGroupingPolicy(type: MessageAdapterType, patch: Record<string, unknown>): void {
-  if (!gateway.value || type === "disabled") return;
-  const current = messageAdapterPolicyFor(gateway.value, type);
-  setMessageAdapterPolicy(gateway.value, type, {
-    messageGrouping: { ...current.messageGrouping, ...patch }
-  });
-  store.touch();
+async function disconnectEndpoint(type: MessageAdapterType): Promise<void> {
+  const target = gateway.value;
+  if (!target || disconnectingEndpoint.value || endpointConnections.value.get(type) !== "connected") return;
+  disconnectingEndpoint.value = type;
+  messageTileError.value = "";
+  try {
+    await setAdapterEnabled(type, false);
+    await store.save(target.id);
+  } catch (cause) {
+    if (gateway.value?.id === target.id) messageTileError.value = userFacingError(cause);
+  } finally {
+    disconnectingEndpoint.value = undefined;
+  }
 }
 
-function toggleAdapterParams(type: MessageAdapterType): void {
-  adapterParamOpen.value[type] = !adapterParamOpen.value[type];
-  if (adapterParamOpen.value[type]) void runMessageAdapterScan();
-}
-
-function removeAdapter(type: MessageAdapterType): void {
-  if (!gateway.value) return;
-  const next = addedAdapters.value.filter(t => t !== type);
-  setGatewayAdapters(gateway.value, next as MessageAdapterType[]);
-  applyAdapterDefaults(gateway.value);
-  adapterParamOpen.value[type] = false;
-  store.touch();
-}
-
-const availableToAdd = computed(() => endpointCatalog.value.filter(item => !addedAdapters.value.includes(item.type)).map(item => item.type));
-
-function addAdapter(type: MessageAdapterType): void {
-  if (!gateway.value) return;
-  setGatewayAdapters(gateway.value, [...addedAdapters.value, type]);
-  applyAdapterDefaults(gateway.value);
-  adapterParamOpen.value[type] = true;
-  adapterLifecycleRevision.value[type] = (adapterLifecycleRevision.value[type] || 0) + 1;
-  void runMessageAdapterScan();
-  store.touch();
+async function saveEndpoint(): Promise<void> {
+  const id = gateway.value?.id;
+  if (!id) return;
+  const reconcileSpeech = endpointSpeechChanged.value;
+  endpointDialogError.value = "";
+  try {
+    await store.save(id);
+    if (reconcileSpeech) await useSpeechStore().reconcileMicrophone();
+    if (gateway.value?.id === id) closeEndpoint();
+  } catch (cause) {
+    endpointDialogError.value = userFacingError(cause);
+  }
 }
 
 function touch(): void {
@@ -333,7 +377,7 @@ function openExternalUrl(url: string | undefined): void {
 function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | undefined { return messageAdapterScan.value.adapters[type]; }
 
 const channelCheckItems = computed(() => {
-  const catalog = new Map(adapterGroups.value.flatMap(group => group.choices).map(choice => [choice.type, choice]));
+  const catalog = new Map(endpointCards.value.map(choice => [choice.type, choice]));
   return addedAdapters.value
     .filter((type): type is MessageEndpointType => type !== "disabled" && !isNonMessageEndpoint(type))
     .map(type => catalog.get(type) ?? {
@@ -356,13 +400,13 @@ function openChannelCheckDialog(): void {
 
 function openChannelCheckDetails(type: MessageAdapterType): void {
   channelCheckDialogOpen.value = false;
-  adapterQuery.value = "";
-  adapterParamOpen.value[type] = true;
+  openEndpointType.value = type;
+  endpointLoginRequested.value = false;
 }
 
 function openChannelCheckAgentDetails(type: AgentAdapterType): void {
   channelCheckDialogOpen.value = false;
-  agentParamOpen.value[type] = true;
+  openAgentSettings(type);
 }
 
 function agentDeliveryTestCompletedAt(value: string): string {
@@ -538,8 +582,6 @@ const primaryAgentType = computed(() => primaryAgent.value?.provider);
 
 const primaryLocalAgentType = computed(() => primaryAgent.value?.binding ? undefined : primaryAgent.value?.provider);
 
-const remoteAgentParamOpen = ref<Record<string, boolean>>({});
-
 const remoteAgentCardOpened = ref<Record<string, boolean>>({});
 
 const primaryAgentItems = computed(() => [
@@ -707,11 +749,11 @@ function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string, own
       const agent = agentInstances.value.find(item => item.instanceId === nodeId && item.ownerDeviceId === ownerDeviceId)?.agents.find(item => item.agentId === agentId);
       if (agent?.sessionId) selectPeerRouteSession(gateway.value, targetId, { sessionId: agent.sessionId, sessionName: agent.name, workspace: agent.workspace });
     }
-    remoteAgentParamOpen.value[targetId] = true;
+    openRemoteAgentSettings(targetId);
     store.touch();
     return;
   }
-  agentParamOpen.value[type] = true;
+  openAgentSettings(type);
   if (supportsManagedTaskFeature(type, "hooks") && !gateway.value.codexHooks) {
     gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
   }
@@ -880,18 +922,22 @@ async function initializePlanAssistants(): Promise<void> {
   }
 }
 
-function removeAgent(type: AgentAdapterType): void {
-  if (!gateway.value) return;
+async function removeAgent(type: AgentAdapterType): Promise<void> {
+  if (!gateway.value || store.saving) return;
   removeRouteAgent(gateway.value, localAgentTargetKey(type));
-  agentParamOpen.value[type] = false;
+  delete agentCardOpened.value[type];
+  closeAgentSettings();
   store.touch();
+  await saveAgentSettings();
 }
 
-function removeRemoteAgent(targetId: string): void {
-  if (!gateway.value) return;
+async function removeRemoteAgent(targetId: string): Promise<void> {
+  if (!gateway.value || store.saving) return;
   removeRouteAgent(gateway.value, targetId);
-  delete remoteAgentParamOpen.value[targetId];
+  delete remoteAgentCardOpened.value[targetId];
+  closeAgentSettings();
   store.touch();
+  await saveAgentSettings();
 }
 
 function selectPrimaryAgent(value: unknown): void {
@@ -900,14 +946,38 @@ function selectPrimaryAgent(value: unknown): void {
   store.touch();
 }
 
-function toggleAgentParams(type: AgentAdapterType): void {
+function openAgentSettings(type: AgentAdapterType): void {
   agentCardOpened.value[type] = true;
-  agentParamOpen.value[type] = !agentParamOpen.value[type];
+  agentSettingsTarget.value = localAgentTargetKey(type);
 }
 
-function toggleRemoteAgentParams(targetId: string): void {
+function openRemoteAgentSettings(targetId: string): void {
   remoteAgentCardOpened.value[targetId] = true;
-  remoteAgentParamOpen.value[targetId] = !remoteAgentParamOpen.value[targetId];
+  agentSettingsTarget.value = targetId;
+}
+
+async function saveAgentSettings(): Promise<void> {
+  const routeId = gateway.value?.id;
+  if (!routeId) return;
+  try {
+    await store.save(routeId);
+    if (gateway.value?.id === routeId) closeAgentSettings();
+  } catch (cause) {
+    if (gateway.value?.id === routeId) store.error = userFacingError(cause);
+  }
+}
+
+function closeAgentSettings(): void {
+  agentSettingsTarget.value = undefined;
+}
+
+function localAgentAction(type: AgentAdapterType): "connect" | "connected" | "issue" {
+  const scan = agentScanFor(type);
+  const runtime = agentStateFor(type);
+  if (scan?.auth?.required && scan.auth.loggedIn === false) return "connect";
+  if (runtime.lastNotificationError || scan?.installed === false || scan?.plugins?.some(plugin => !plugin.installed)
+    || (scan?.endpoints?.length && !scan.endpoints.some(endpoint => endpoint.healthy))) return "issue";
+  return runtime.deliveryHealthy === true || scan?.auth?.loggedIn === true || scan?.installed === true ? "connected" : "connect";
 }
 
 watch(() => [gateway.value?.id, agentDefs.value.map(provider => provider.renderer.key).join("\n")], scanAgentsOnEntry);
@@ -920,6 +990,11 @@ watch(() => gateway.value?.configName, (name, previousName) => {
 });
 
 watch(() => gateway.value?.id, () => {
+  closeEndpoint();
+  closeAgentSettings();
+  agentCardOpened.value = {};
+  remoteAgentCardOpened.value = {};
+  messageTileError.value = "";
   adapterLifecycleRevision.value = {};
   adapterActionBusy.value = {};
 
@@ -976,210 +1051,103 @@ watch(() => gateway.value?.id, () => {
         <div class="section-title-row">
           <div>
             <div class="section-title">消息端</div>
-            <div class="section-note">这里决定 RabiRoute 从哪些入口接收消息。多个入口可以并存，也可以分别停用或调整权限。</div>
           </div>
-          <div class="adapter-master-actions">
-            <v-chip color="secondary" variant="tonal">{{ activeAdapterCount }} 个入口启用</v-chip>
-          </div>
+          <v-menu location="bottom end">
+            <template #activator="{ props: menuProps }">
+              <v-btn v-bind="menuProps" variant="tonal" size="small" prepend-icon="mdi-plus"
+                :disabled="availableEndpoints.length === 0">添加消息端</v-btn>
+            </template>
+            <v-list density="compact">
+              <v-list-item v-for="item in availableEndpoints" :key="item.type" :title="item.title"
+                :prepend-icon="item.icon" @click="addEndpoint(item.type)" />
+            </v-list>
+          </v-menu>
         </div>
 
-        <div class="config-toolbar">
-          <v-text-field
-            v-model="adapterQuery"
-            density="compact"
-            prepend-inner-icon="mdi-magnify"
-            label="搜索入口"
-            hide-details
-            clearable
-          />
-          <div class="selected-pill-row">
-            <v-chip v-for="type in visibleActiveAdapters" :key="type" size="small" color="secondary" variant="tonal">
-              {{ adapterLabel(type) }}
-            </v-chip>
+        <div class="message-endpoint-grid">
+          <div v-for="card in endpointCards" :key="card.type" class="message-endpoint-tile">
+            <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">{{ card.icon }}</v-icon>
+            <strong class="message-endpoint-name">{{ card.title }}</strong>
+            <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="card.title + '设置'"
+              @click="openEndpointSettings(card.type)" />
+            <v-btn v-if="endpointConnections.get(card.type) === 'connected' || disconnectingEndpoint === card.type" variant="outlined" size="small"
+              :loading="disconnectingEndpoint === card.type" :disabled="disconnectingEndpoint !== undefined"
+              @click="disconnectEndpoint(card.type)">取消连接</v-btn>
+            <v-btn v-else variant="tonal" size="small" :disabled="!card.available || endpointPreparing || disconnectingEndpoint !== undefined"
+              :color="endpointConnections.get(card.type) === 'issue' ? 'warning' : undefined"
+              @click="connectEndpoint(card.type)">{{ !card.available ? "暂不可用" : endpointConnections.get(card.type) === "issue" ? "连接异常" : "连接" }}</v-btn>
           </div>
         </div>
+        <p v-if="!endpointCards.length" class="text-body-2 mb-0">尚未添加消息端</p>
+        <p v-if="messageTileError" role="alert" class="text-error text-body-2 mt-2 mb-0">{{ messageTileError }}</p>
 
-        <div class="catalog-list mb-2">
-          <section v-for="group in visibleAdapterGroups" :key="group.title" class="catalog-section">
-            <div class="catalog-section-head">
-              <div>
-                <div class="catalog-section-title">{{ group.title }}</div>
-                <div class="section-note">{{ group.note }}</div>
-              </div>
-            </div>
-            <div
-              v-for="choice in group.choices"
-              :key="choice.type"
-              class="catalog-item"
-            >
-              <div
-                class="catalog-row"
-                :class="{ active: adapters.includes(choice.type) }"
-                @click="toggleAdapterParams(choice.type)"
-              >
-                <v-icon class="catalog-row-icon" color="secondary">{{ choice.icon }}</v-icon>
-                <span class="catalog-row-main">
-                  <strong>{{ choice.title }}</strong>
-                  <small>{{ choice.note }}</small>
-                </span>
-                <div class="catalog-row-actions">
-                  <v-chip size="x-small" :color="maturityColor(messageScanFor(choice.type)?.maturity)" variant="tonal">
-                    {{ maturityLabel(messageScanFor(choice.type)?.maturity) }}
-                  </v-chip>
-                  <v-chip size="x-small" :color="scanConnectionColor(messageScanFor(choice.type))" variant="tonal">
-                    {{ scanConnectionLabel(messageScanFor(choice.type)) }}
-                  </v-chip>
-                  <v-btn
-                    v-if="hasAdapterParams(choice.type)"
-                    :icon="adapterParamOpen[choice.type] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                    size="small"
-                    variant="text"
-                    :title="adapterParamOpen[choice.type] ? '收起参数' : '展开参数'"
-                    @click.stop="toggleAdapterParams(choice.type)"
-                  />
-                  <div @click.stop>
-                    <v-switch
-                      class="catalog-row-toggle"
-                      color="success"
-                      density="compact"
-                      inset
-                      hide-details
-                      :model-value="!isAdapterDisabled(gateway, choice.type)"
-                      :loading="adapterActionBusy[choice.type]"
-                      :disabled="!choice.available || adapterActionBusy[choice.type]"
+        <v-dialog :model-value="!!openEndpoint" :max-width="openEndpoint?.type === 'weixin' ? 420 : 640"
+          @update:model-value="value => { if (!value) closeEndpoint(); }">
+          <v-card v-if="openEndpoint" :key="openEndpoint.type" rounded="xl">
+            <v-card-title class="d-flex align-center justify-space-between">
+              <span>{{ openEndpoint.title }}</span>
+              <v-btn variant="text" density="comfortable" icon="mdi-close" aria-label="关闭" @click="closeEndpoint" />
+            </v-card-title>
+            <v-card-text>
+              <v-progress-linear v-if="endpointPreparing" indeterminate color="primary" />
+              <p v-if="endpointDialogError" role="alert" class="text-error text-body-2 mt-2">{{ endpointDialogError }}</p>
+              <AutomationEndpointSettings v-if="endpointSettingsOpen" :gateway="gateway" :endpoint="openEndpoint.type" expanded @speech-changed="endpointSpeechChanged = true" />
+              <v-switch v-if="openEndpoint.type === 'rabilink' && !endpointSettingsOpen && !endpointPreparing"
+                label="启用消息端" density="compact" hide-details :model-value="!isAdapterDisabled(gateway, openEndpoint.type)"
+                :disabled="adapterActionBusy[openEndpoint.type]" @update:model-value="value => setAdapterEnabled('rabilink', value)" />
+              <MessageEndpointCardHost v-if="!endpointSettingsOpen && !endpointPreparing && openEndpoint.available"
+                :renderers="settingsRenderersForMessageEndpoint(openEndpoint.type)"
+                :context="{ messageEndpointType: openEndpoint.type, routeId: gateway.id, loginRequested: endpointLoginRequested, scan: messageScanFor(openEndpoint.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
+                :active="true"
+                :enabled="!isAdapterDisabled(gateway, openEndpoint.type)"
+                :lifecycle-revision="adapterLifecycleRevision[openEndpoint.type] || 0"
+                @busy="value => { if (openEndpoint) adapterActionBusy[openEndpoint.type] = value; }"
+              />
+            </v-card-text>
+            <v-card-actions v-if="endpointDialogError || (!endpointPreparing && (endpointSettingsOpen || openEndpoint.type !== 'weixin') && store.dirty)">
+              <v-spacer />
+              <v-btn v-if="endpointDialogError" color="primary" variant="tonal" @click="connectEndpoint(openEndpoint.type)">重试</v-btn>
+              <v-btn v-else color="primary" variant="tonal" :loading="store.saving" :disabled="adapterActionBusy[openEndpoint.type]" @click="saveEndpoint">保存</v-btn>
+            </v-card-actions>
+          </v-card>
+        </v-dialog>
+      </v-card>
 
-                      @update:model-value="value => void setAdapterEnabled(choice.type, value)"
-                    />
-                  </div>
-                  <v-btn
-                    icon="mdi-close"
-                    size="small"
-                    variant="text"
-                    color="error"
-                    title="移除此消息端"
-                    @click.stop="removeAdapter(choice.type)"
-                  />
-                </div>
-              </div>
-              <v-expand-transition>
-                <div v-show="adapterParamOpen[choice.type]" class="catalog-param-panel">
-
-                  <MessageEndpointCardHost
-                    :renderers="settingsRenderersForMessageEndpoint(choice.type)"
-                    :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '', scan: messageScanFor(choice.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
-                    :active="adapterParamOpen[choice.type]"
-                    :enabled="!isAdapterDisabled(gateway, choice.type)"
-                    :lifecycle-revision="adapterLifecycleRevision[choice.type] || 0"
-                    @busy="value => adapterActionBusy[choice.type] = value"
-                  />
-                  <div v-if="choice.available && usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
-                    <div class="section-title small-title">消息组等待</div>
-                    <div class="section-note">聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。</div>
-                    <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      主控选择 Codex 且开启消息处理模式后，聊天消息会先立即记录，再按这些参数合并。ASR、心跳和结构化事件不在这里等待。
-                    </v-alert>
-                    <div class="catalog-param-grid mt-2">
-                      <v-text-field
-                        type="number"
-                        :min="1"
-                        :max="300"
-                        :model-value="messageGroupingPolicy(choice.type)?.settleSeconds"
-                        label="普通停顿（秒）"
-                        hint="连续片段在这段时间内到达时先合并。"
-                        persistent-hint
-                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { settleSeconds: Number(value) })"
-                      />
-                      <v-text-field
-                        type="number"
-                        :min="1"
-                        :max="300"
-                        :model-value="messageGroupingPolicy(choice.type)?.incompleteSettleSeconds"
-                        label="未说完等待（秒）"
-                        hint="“还有、然后、这个”等明显未说完的片段使用更长等待。"
-                        persistent-hint
-                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { incompleteSettleSeconds: Number(value) })"
-                      />
-                      <v-text-field
-                        type="number"
-                        :min="1"
-                        :max="300"
-                        :model-value="messageGroupingPolicy(choice.type)?.maxWaitSeconds"
-                        label="最长等待（秒）"
-                        hint="达到上限后先形成消息组；半小时后的相关消息仍可依靠回复关系和历史摘要续接。"
-                        persistent-hint
-                        @update:model-value="value => setMessageGroupingPolicy(choice.type, { maxWaitSeconds: Number(value) })"
-                      />
-                    </div>
-                  </div>
-                  <div v-if="choice.available && !isNonMessageEndpoint(choice.type)" class="dependency-panel mb-3">
-                    <div class="section-title small-title">发送前聊天核对</div>
-                    <v-switch :model-value="conversationReviewPolicy(choice.type)?.enabled === true"
-                      label="发送前要求核对聊天记录" hide-details
-                      @update:model-value="value => setConversationReviewEnabled(choice.type, value)" />
-                    <div class="section-note">默认关闭，发送不等待聊天记录。开启后，已读索引落后或缺失时返回聊天记录供 Agent 确认；可随时关闭。</div>
-                    <div v-if="conversationReviewPolicy(choice.type)?.enabled" class="catalog-param-grid mt-2">
-                      <v-text-field type="number" :min="1" :max="500"
-                        :model-value="conversationReviewPolicy(choice.type)?.initialMessageCount"
-                        label="首次核对消息数" hint="没有已读索引时返回最近消息，默认 50 条。" persistent-hint
-                        @update:model-value="value => setConversationReviewPolicy(choice.type, 'initialMessageCount', value)" />
-                      <v-text-field type="number" :min="2" :max="500"
-                        :model-value="conversationReviewPolicy(choice.type)?.maxIncrementalMessages"
-                        label="增量返回上限" hint="默认 100 条；超过时返回最早和最新各半，并提示省略数量和搜索范围。" persistent-hint
-                        @update:model-value="value => setConversationReviewPolicy(choice.type, 'maxIncrementalMessages', value)" />
-                    </div>
-                  </div>
-
-                </div>
-              </v-expand-transition>
-            </div>
-          </section>
-          <div v-if="visibleAdapterGroups.length === 0 && adapterQuery" class="empty-state compact-empty">
-            <div>
-              <strong>没有匹配的入口</strong>
-              <span>换个关键词，或先清空搜索。</span>
-            </div>
-          </div>
-          <div v-else-if="visibleAdapterGroups.length === 0" class="empty-state compact-empty">
-            <div>
-              <strong>尚未添加任何消息端</strong>
-              <span>点击下方按钮添加入口。</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="adapter-add-row">
-          <v-menu v-model="addAdapterMenu" location="bottom start">
+      <v-card class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div class="section-title">Agent 端</div>
+          <v-menu v-model="addAgentMenu" location="bottom end" :close-on-content-click="false">
             <template #activator="{ props }">
               <v-btn
                 v-bind="props"
                 prepend-icon="mdi-plus"
                 variant="tonal"
                 size="small"
-                :disabled="availableToAdd.length === 0"
+                :aria-label="translateText('添加 Agent')"
               >
-                添加消息端
+                添加 Agent
               </v-btn>
             </template>
             <v-list density="compact">
               <v-list-item
-                v-for="type in availableToAdd"
-                :key="type"
-                :title="endpointCatalog.find(item => item.type === type)?.title || type"
-                @click="addAdapter(type)"
+                v-for="agent in availableAgentsToAdd"
+                :key="agent.key"
+                :title="agent.title"
+                @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)"
               />
+              <v-list-item v-if="availableAgentsToAdd.length === 0" :title="translateText('暂无可添加的 Agent')" disabled />
+              <v-divider />
+              <div class="pa-3">
+                <details v-if="agentDiscoveryDiagnostics.length" class="mb-2">
+                  <summary>{{ translateText('发现诊断') }} ({{ agentDiscoveryDiagnostics.length }})</summary>
+                  <v-alert v-for="(diagnostic, index) in agentDiscoveryDiagnostics" :key="`${diagnostic.source}:${diagnostic.ownerDeviceId || ''}:${index}`" type="warning" variant="tonal" density="compact" class="mt-2">
+                    <strong>{{ directoryDiagnosticTitle(diagnostic) }}</strong>：{{ userFacingError({ message: diagnostic.message }) }}
+                  </v-alert>
+                </details>
+                <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
+              </div>
             </v-list>
           </v-menu>
-        </div>
-
-        <v-alert v-if="messageInputsDisabled" type="info" variant="tonal">当前配置仍带有旧版全局消息禁用字段；请移除该字段，或分别关闭不需要的消息端。</v-alert>
-      </v-card>
-
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">Agent 端</div>
-            <div class="section-note">这里决定分诊后的消息送给哪个处理端，以及 Agent 在哪个项目目录里工作。</div>
-          </div>
         </div>
 
         <div v-if="primaryAgentItems.length" class="catalog-param-grid mb-4">
@@ -1191,53 +1159,36 @@ watch(() => gateway.value?.id, () => {
             item-value="value"
             label="主控 Agent"
             placeholder="请选择负责接收消息的 Agent"
-            hint="命中规则的消息只投递给主控 Agent；其他 Agent 保留配置，不会收到默认消息。"
-            persistent-hint
+            density="compact"
+            hide-details
             @update:model-value="selectPrimaryAgent"
           />
         </div>
 
-        <div class="catalog-list mb-2">
-          <div v-for="agent in visibleAgentItems" :key="agent.type" class="catalog-item">
-            <div
-              class="catalog-row active"
-              @click="toggleAgentParams(agent.type)"
-            >
-              <v-icon class="catalog-row-icon" color="secondary">{{ agent.icon }}</v-icon>
-              <span class="catalog-row-main">
-                <strong>{{ agent.title }}</strong>
-                <small>{{ agent.note }}</small>
-              </span>
-              <div class="catalog-row-actions">
-                <v-chip size="x-small" :color="maturityColor(agentScanFor(agent.type)?.maturity)" variant="tonal">
-                  {{ maturityLabel(agentScanFor(agent.type)?.maturity) }}
-                </v-chip>
-                <v-chip size="x-small" :color="agentConnectionColor(agent.type)" variant="tonal">
-                  {{ agentConnectionLabel(agent.type) }}
-                </v-chip>
-                <v-btn
-                  :icon="agentParamOpen[agent.type] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                  size="small"
-                  variant="text"
-                  :title="agentParamOpen[agent.type] ? '收起参数' : '展开参数'"
-                  @click.stop="toggleAgentParams(agent.type)"
-                />
-                <v-btn
-                  icon="mdi-close"
-                  size="small"
-                  variant="text"
-                  color="error"
-                  title="移除此 Agent"
-                  @click.stop="removeAgent(agent.type)"
-                />
-              </div>
+        <div class="message-endpoint-grid">
+          <template v-for="agent in visibleAgentItems" :key="agent.type">
+            <div class="message-endpoint-tile">
+              <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">{{ agent.icon }}</v-icon>
+              <strong class="message-endpoint-name">{{ agent.title }}</strong>
+              <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="agent.title + '设置'" @click="openAgentSettings(agent.type)" />
+              <v-btn v-if="localAgentAction(agent.type) === 'connected'" variant="outlined" size="small" @click="removeAgent(agent.type)">取消连接</v-btn>
+              <v-btn v-else variant="tonal" size="small" :color="localAgentAction(agent.type) === 'issue' ? 'warning' : undefined"
+                @click="openAgentSettings(agent.type)">{{ localAgentAction(agent.type) === "issue" ? "连接异常" : "连接" }}</v-btn>
             </div>
-            <v-expand-transition>
-              <div v-if="agentCardOpened[agent.type] || agentParamOpen[agent.type]" v-show="agentParamOpen[agent.type]" class="catalog-param-panel">
-                <div class="dependency-panel mb-3">
+            <v-dialog v-if="agentCardOpened[agent.type]" eager scrollable max-width="760"
+              :model-value="agentSettingsTarget === localAgentTargetKey(agent.type)" @update:model-value="open => { if (!open) closeAgentSettings(); }">
+              <v-card rounded="xl">
+                <v-card-title class="d-flex align-center justify-space-between">
+                  <span>{{ agent.title }}</span>
+                  <v-btn variant="text" density="comfortable" icon="mdi-close" aria-label="关闭" @click="closeAgentSettings" />
+                </v-card-title>
+                <v-card-text>
+                <v-btn v-if="agentScanFor(agent.type)?.auth?.loginUrl && agentScanFor(agent.type)?.auth?.loggedIn !== true"
+                  size="small" variant="tonal" class="mb-3" @click="openExternalUrl(agentScanFor(agent.type)?.auth?.loginUrl)">打开登录</v-btn>
+                <details class="dependency-panel mb-3">
+                  <summary>{{ translateText('环境和依赖') }}</summary>
                   <div class="section-title-row compact-row">
                     <div>
-                      <div class="section-title small-title">环境和依赖</div>
                       <div class="section-note">{{ agent.note }}</div>
                     </div>
                     <div class="d-flex ga-2 flex-wrap">
@@ -1308,7 +1259,7 @@ watch(() => gateway.value?.id, () => {
                   </div>
                   <div v-if="supportsManagedTaskFeature(agent.type, 'hooks')" class="mt-3">
                     <v-btn variant="tonal" prepend-icon="mdi-update" :loading="hookUpdate.loading" @click="updateHooksToAgent(agent.type)">更新 Hook 到 Agent</v-btn>
-                    <div class="section-note mt-2">首次配置或更新时安装事件埋点。日常开关在“角色 → 自动化 → Agent Hook”管理。</div>
+                    <div class="section-note mt-2">首次配置或更新时安装事件埋点。在「角色 → 自动化 → Agent 规则」中管理规则和开关。</div>
                     <v-alert v-if="hookUpdate.error" type="error" variant="tonal" density="compact">{{ hookUpdate.error }}</v-alert>
                     <v-alert v-else-if="hookUpdate.message" type="success" variant="tonal" density="compact">{{ hookUpdate.message }}</v-alert>
                   </div>
@@ -1324,7 +1275,7 @@ watch(() => gateway.value?.id, () => {
                       {{ candidate.label }}
                     </v-btn>
                   </div>
-                </div>
+                </details>
                 <v-alert
                   v-for="warning in agentWarnings(agent.type)"
                   :key="warning"
@@ -1499,25 +1450,32 @@ watch(() => gateway.value?.id, () => {
                     </v-alert>
                   </div>
 
-              </div>
-            </v-expand-transition>
-          </div>
+                </v-card-text>
+                <v-card-actions>
+                  <v-btn variant="text" size="small" @click="removeAgent(agent.type)">取消连接</v-btn>
+                  <v-spacer />
+                  <v-btn v-if="store.dirty" size="small" variant="tonal" color="primary" :loading="store.saving" @click="saveAgentSettings">保存</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
+          </template>
 
-          <div v-for="target in remoteAgentItems" :key="target.id" class="catalog-item">
-            <div class="catalog-row active" @click="toggleRemoteAgentParams(target.id)">
-              <v-icon class="catalog-row-icon" color="secondary">mdi-monitor-dashboard</v-icon>
-              <span class="catalog-row-main">
-                <strong>{{ target.title }}</strong>
-                <small>{{ target.provider === 'deviceAgent' ? '实验：由设备执行，所属电脑负责消息投递和回执' : '由这台远端电脑上的 Agent 处理消息' }}</small>
-              </span>
-              <div class="catalog-row-actions">
-                <v-chip size="x-small" :color="target.provider !== 'deviceAgent' && target.instance?.connected && target.agent ? 'success' : 'warning'" variant="tonal">{{ target.provider === 'deviceAgent' ? '实验设备' : target.instance?.connected && target.agent ? '实例在线' : '暂不可用' }}</v-chip>
-                <v-btn :icon="remoteAgentParamOpen[target.id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="small" variant="text" :title="remoteAgentParamOpen[target.id] ? '收起参数' : '展开参数'" @click.stop="toggleRemoteAgentParams(target.id)" />
-                <v-btn icon="mdi-close" size="small" variant="text" color="error" title="从此路线移除远端 Agent" @click.stop="removeRemoteAgent(target.id)" />
-              </div>
+          <template v-for="target in remoteAgentItems" :key="target.id">
+            <div class="message-endpoint-tile">
+              <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">mdi-monitor-dashboard</v-icon>
+              <strong class="message-endpoint-name">{{ target.title }}</strong>
+              <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="target.title + '设置'" @click="openRemoteAgentSettings(target.id)" />
+              <v-btn v-if="target.instance?.connected && target.agent" variant="outlined" size="small" @click="removeRemoteAgent(target.id)">取消连接</v-btn>
+              <v-btn v-else variant="tonal" size="small" color="warning" @click="openRemoteAgentSettings(target.id)">连接异常</v-btn>
             </div>
-            <v-expand-transition>
-              <div v-if="remoteAgentCardOpened[target.id] || remoteAgentParamOpen[target.id]" v-show="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
+            <v-dialog v-if="remoteAgentCardOpened[target.id]" eager scrollable max-width="760"
+              :model-value="agentSettingsTarget === target.id" @update:model-value="open => { if (!open) closeAgentSettings(); }">
+              <v-card rounded="xl">
+                <v-card-title class="d-flex align-center justify-space-between">
+                  <span>{{ target.title }}</span>
+                  <v-btn variant="text" density="comfortable" icon="mdi-close" aria-label="关闭" @click="closeAgentSettings" />
+                </v-card-title>
+                <v-card-text>
                 <v-alert v-for="(diagnostic, index) in target.diagnostics" :key="`${diagnostic.source}:${index}`" type="warning" variant="tonal" density="compact" class="mb-2">
                   <strong>{{ directoryDiagnosticTitle(diagnostic) }}</strong>：{{ userFacingError({ message: diagnostic.message }) }}
                 </v-alert>
@@ -1535,52 +1493,19 @@ watch(() => gateway.value?.id, () => {
                     </div>
                   </template>
                 </PrimaryAgentAdvancedSettings>
-              </div>
-            </v-expand-transition>
-          </div>
-          <v-alert v-if="primaryAgentItems.length && !primaryAgent" type="warning" variant="tonal">尚未选择主控 Agent。请选择并保存后再投递消息。</v-alert>
-          <div v-if="visibleAgentItems.length === 0 && remoteAgentItems.length === 0" class="empty-state compact-empty">
-            <div>
-              <strong>尚未添加任何 Agent 端</strong>
-              <span>点击下方按钮添加。</span>
-            </div>
-          </div>
+                </v-card-text>
+                <v-card-actions>
+                  <v-btn variant="text" size="small" @click="removeRemoteAgent(target.id)">取消连接</v-btn>
+                  <v-spacer />
+                  <v-btn v-if="store.dirty" variant="tonal" size="small" color="primary" :loading="store.saving" @click="saveAgentSettings">保存</v-btn>
+                </v-card-actions>
+              </v-card>
+            </v-dialog>
+          </template>
         </div>
+        <p v-if="!primaryAgentItems.length" class="text-body-2 mb-0">尚未添加 Agent 端</p>
 
-        <div class="adapter-add-row">
-          <v-menu v-model="addAgentMenu" location="bottom start" :close-on-content-click="false">
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                prepend-icon="mdi-plus"
-                variant="tonal"
-                size="small"
-                :aria-label="translateText('添加 Agent')"
-              >
-                添加 Agent
-              </v-btn>
-            </template>
-            <v-list density="compact">
-              <v-list-item
-                v-for="agent in availableAgentsToAdd"
-                :key="agent.key"
-                :title="agent.title"
-                @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)"
-              />
-              <v-list-item v-if="availableAgentsToAdd.length === 0" :title="translateText('暂无可添加的 Agent')" disabled />
-              <v-divider />
-              <div class="pa-3">
-                <details v-if="agentDiscoveryDiagnostics.length" class="mb-2">
-                  <summary>{{ translateText('发现诊断') }} ({{ agentDiscoveryDiagnostics.length }})</summary>
-                  <v-alert v-for="(diagnostic, index) in agentDiscoveryDiagnostics" :key="`${diagnostic.source}:${diagnostic.ownerDeviceId || ''}:${index}`" type="warning" variant="tonal" density="compact" class="mt-2">
-                    <strong>{{ directoryDiagnosticTitle(diagnostic) }}</strong>：{{ userFacingError({ message: diagnostic.message }) }}
-                  </v-alert>
-                </details>
-                <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
-              </div>
-            </v-list>
-          </v-menu>
-        </div>
+
       </v-card>
     </template>
 
@@ -1715,7 +1640,7 @@ watch(() => gateway.value?.id, () => {
                 <span class="channel-topology-node-status"><v-chip size="x-small" :color="gateway?.primaryAgentTarget === target.id ? 'primary' : 'secondary'" variant="tonal">{{ gateway?.primaryAgentTarget === target.id ? '主控' : '备用' }}</v-chip></span>
                 <span class="channel-topology-node-actions">
                   <v-btn size="x-small" color="secondary" variant="tonal" prepend-icon="mdi-send-check-outline" :loading="agentDeliveryTest.loading === target.id" :disabled="Boolean(agentDeliveryTest.loading) || store.dirty || !target.instance?.connected || !target.agent" @click="runAgentDeliveryTest(target.provider, target.id)">投递测试</v-btn>
-                  <button type="button" class="channel-topology-config-action" @click="channelCheckDialogOpen = false; remoteAgentParamOpen[target.id] = true">查看配置</button>
+                  <button type="button" class="channel-topology-config-action" @click="channelCheckDialogOpen = false; openRemoteAgentSettings(target.id)">查看配置</button>
                 </span>
               </div>
               <div v-if="channelCheckAgentItems.length === 0 && remoteAgentItems.length === 0" class="channel-topology-empty">
@@ -1771,3 +1696,34 @@ watch(() => gateway.value?.id, () => {
     </v-dialog>
   </div>
 </template>
+
+<style scoped>
+.message-endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  gap: 10px;
+}
+
+.message-endpoint-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 14px;
+  background: rgb(var(--v-theme-surface));
+}
+
+.message-endpoint-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(var(--v-theme-primary), 0.09);
+}
+
+.message-endpoint-name {
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+</style>

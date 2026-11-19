@@ -11,6 +11,8 @@ import { DEFAULT_AUTOMATION_TEMPLATES, BLANK_AUTOMATION_TEMPLATE_ID, loadAutomat
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import { normalizeAgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
+import AutomationEndpointSettings from "../components/AutomationEndpointSettings.vue";
+import { messageEndpointCatalog } from "../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCatalog";
 import AutomationMessageFilters from "../components/AutomationMessageFilters.vue";
 import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
@@ -75,6 +77,7 @@ import {
   defaultHeartbeatSchedule,
   gatewayAdapterTypes,
   isBuiltinRolePanelRule,
+  isNonMessageEndpoint,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
   routeKindLabels,
@@ -102,6 +105,7 @@ const invalidDsBotTarget = computed(() => hasIncompleteDsBotTargetDraft(store.se
 const invalidDailyTimes = computed(() => committedDailyTimeDrafts.value.some(([, timeOfDays]) => normalizeDailyScheduleTimes({ timeOfDays }) === null));
 watch(() => [store.selectedRoleId, store.sourceDeviceId, store.draft], () => { dailyTimeDrafts.value = {}; }, { flush: "sync" });
 const PersonaMessages = defineAsyncComponent(() => import("../components/PersonaMessages.vue"));
+let speechRouteChanged = false;
 const releaseRoleSave = registerPageSaveAction({
   dirty: computed(() => store.dirty || routeStore.dirty || committedDailyTimeDrafts.value.length > 0),
   ready: computed(() => store.ready && !routeStore.loading && !invalidDailyTimes.value && !invalidDsBotTarget.value),
@@ -112,6 +116,10 @@ const releaseRoleSave = registerPageSaveAction({
     // Role saves refresh Route data, so commit Route drafts first.
     const routesChanged = routeStore.dirty;
     if (routesChanged) await routeStore.saveChangedRoutes();
+    if (routesChanged && speechRouteChanged) {
+      await speech.reconcileMicrophone();
+      speechRouteChanged = false;
+    }
     if (store.dirty) await store.save();
     else if (routesChanged) await store.refreshLinkedRoutes();
     const id = automationPreview.value?.id;
@@ -147,15 +155,26 @@ const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
 type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
+function personaTabFromQuery(tab: unknown): PersonaPageTab | undefined {
+  return tab === "messages" || tab === "automation" ? tab : undefined;
+}
+
 watch(() => route.query.tab, tab => {
-  if (tab === "messages") activePersonaPageTab.value = "messages";
-  else if (activePersonaPageTab.value === "messages") activePersonaPageTab.value = "profile";
+  const linked = personaTabFromQuery(tab);
+  if (linked) activePersonaPageTab.value = linked;
+  else if (personaTabFromQuery(activePersonaPageTab.value)) activePersonaPageTab.value = "profile";
 }, { immediate: true });
 watch(activePersonaPageTab, tab => {
-  if ((tab === "messages") === (route.query.tab === "messages")) return;
+  const linked = personaTabFromQuery(tab);
+  if (linked === personaTabFromQuery(route.query.tab)) return;
   const query = { ...route.query };
-  if (tab === "messages") query.tab = "messages";
-  else { delete query.tab; delete query.route; }
+  if (linked) query.tab = linked;
+  else delete query.tab;
+  if (linked !== "automation") {
+    delete query.endpoint;
+    delete query.endpointSettings;
+  }
+  if (linked !== "messages" && linked !== "automation") delete query.route;
   void router.replace({ query });
 });
 const activeAutomationId = ref("");
@@ -394,6 +413,46 @@ const scheduleTypeOptions = [
   { title: "某一天指定时间", value: "once_at" }
 ];
 const selectedAutomationEndpoint = ref("napcat");
+const automationRouteId = ref("");
+const linkedAutomationRoutes = computed(() => routeStore.gateways.filter(item =>
+  item.agentRoleId === store.selectedRoleId && (item.agentRoleDeviceId || "") === store.sourceDeviceId
+));
+const automationRoute = computed(() => {
+  const routes = linkedAutomationRoutes.value;
+  const requested = automationRouteId.value || (typeof route.query.route === "string" ? route.query.route : "");
+  if (requested) return routes.find(item => item.id === requested || configNameFor(item) === requested);
+  return routes.find(item => item.id === routeStore.selectedGateway?.id) ?? routes[0];
+});
+watch(() => [route.params.roleId, route.query.route], () => { automationRouteId.value = ""; });
+
+const configurableAutomationEndpoints = computed(() => {
+  const target = automationRoute.value;
+  if (!target) return [];
+  const catalog = messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value);
+  const requested = route.query.endpoint;
+  const endpoints = new Set(target.messageAdapters ?? [target.messageAdapterType ?? "napcat"]);
+  const platformSettings = typeof requested === "string" && catalog.some(item => item.type === requested);
+  if (platformSettings) endpoints.add(requested);
+  return [...endpoints]
+    .filter(type => type !== "disabled" && !isNonMessageEndpoint(type))
+    .map(type => {
+      const entry = catalog.find(item => item.type === type);
+      const category = automationEndpoints.find(item => item.value === type);
+      return { value: type, title: entry?.title ?? category?.title ?? adapterLabel(type),
+        icon: entry?.icon ?? category?.icon ?? "mdi-connection" };
+    });
+});
+const extraAutomationEndpoints = computed(() => configurableAutomationEndpoints.value
+  .filter(entry => !automationEndpoints.some(option => option.value === entry.value)));
+const configurableAutomationEndpoint = computed(() => configurableAutomationEndpoints.value
+  .find(entry => entry.value === selectedAutomationEndpoint.value));
+const automationSettingsExpanded = computed(() => route.query.endpointSettings === "1"
+  && route.query.endpoint === selectedAutomationEndpoint.value);
+watch([() => route.query.tab, () => route.query.endpoint], ([tab, endpoint]) => {
+  if (tab !== "automation") return;
+  automationWorkspaceTab.value = "messages";
+  if (typeof endpoint === "string" && endpoint) selectedAutomationEndpoint.value = endpoint;
+}, { immediate: true });
 const automationEndpointGroups = computed(() => {
   const groups = new Map(automationEndpoints.map(option => [option.value, [] as PersonaAutomationRuleDefinition[]]));
   for (const rule of automations.value) groups.get(automationEndpoint(rule))!.push(rule);
@@ -403,7 +462,9 @@ const automationEndpointCounts = computed(() => Object.fromEntries(
   [...automationEndpointGroups.value].map(([endpoint, items]) => [endpoint, items.length])
 ));
 const visibleAutomations = computed(() => automationEndpointGroups.value.get(selectedAutomationEndpoint.value) ?? []);
-const selectedAutomationEndpointTitle = computed(() => automationEndpoints.find(option => option.value === selectedAutomationEndpoint.value)?.title ?? "消息规则");
+const selectedAutomationEndpointTitle = computed(() => configurableAutomationEndpoint.value?.title
+  ?? automationEndpoints.find(option => option.value === selectedAutomationEndpoint.value)?.title ?? "消息规则");
+const canCreateAutomationForEndpoint = computed(() => automationEndpoints.some(option => option.value === selectedAutomationEndpoint.value));
 const activeRuleHasHeartbeat = computed(() => activeRule.value?.routeKinds?.includes("heartbeat") === true);
 const visibleRouteKindDefinitions = computed(() => {
   const query = routeKindQuery.value.trim().toLowerCase();
@@ -2118,19 +2179,29 @@ onBeforeUnmount(() => {
       <v-card v-if="hasPersona" class="app-card glass-card section-card automation-workspace">
         <v-tabs v-model="automationWorkspaceTab" class="automation-tabs" color="secondary" grow>
           <v-tab value="messages" prepend-icon="mdi-message-processing-outline">消息规则</v-tab>
-          <v-tab value="hooks" prepend-icon="mdi-hook">Agent Hook</v-tab>
+          <v-tab value="hooks" prepend-icon="mdi-robot-outline">Agent 规则</v-tab>
         </v-tabs>
 
         <v-window v-model="automationWorkspaceTab" class="automation-window">
           <v-window-item value="messages">
             <div class="automation-rule-layout" :class="{ 'automation-rule-layout-empty': !automations.length }">
-              <AutomationEndpointNav v-model="selectedAutomationEndpoint" :counts="automationEndpointCounts" />
+              <AutomationEndpointNav v-model="selectedAutomationEndpoint" :counts="automationEndpointCounts"
+                :configured="configurableAutomationEndpoints.map(item => item.value)" :additional="extraAutomationEndpoints"
+                :requested-endpoint="typeof route.query.endpoint === 'string' ? route.query.endpoint : undefined" />
               <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
                 <div class="automation-toolbar">
                   <strong>{{ selectedAutomationEndpointTitle }}</strong>
-                  <v-btn color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationCreation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
+                  <v-btn v-if="canCreateAutomationForEndpoint" color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationCreation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
                 </div>
 
+                <v-select v-if="linkedAutomationRoutes.length > 1" :model-value="automationRoute?.id"
+                  :items="linkedAutomationRoutes" :item-title="configNameFor" item-value="id"
+                  label="Route" density="compact" hide-details class="mb-3"
+                  @update:model-value="value => automationRouteId = value || ''" />
+                <AutomationEndpointSettings v-if="automationRoute && configurableAutomationEndpoint"
+                  :key="`${automationRoute.id}:${configurableAutomationEndpoint.value}`"
+                  :gateway="automationRoute" :endpoint="configurableAutomationEndpoint.value"
+                  :expanded="automationSettingsExpanded" @speech-changed="speechRouteChanged = true" />
                 <div v-if="visibleAutomations.length === 0" class="empty-state">
                   <span>{{ automations.length ? '此类型还没有规则' : '还没有消息规则' }}</span>
                 </div>

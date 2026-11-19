@@ -6,6 +6,20 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.50 - 2026-11-20
+
+- Refresh the complete runtime closures for Core 0.1.15, Xiaomi Home 0.1.14, Weixin 0.1.9, QQ Bot 0.1.8, and the RabiLink endpoint 0.1.9.
+
+- Merge Workbench, speech and desktop pet updates on the same main branch. Persona 0.1.31 combines Agent rules and message endpoint settings; message adapter control 0.1.9 updates the rule entry. NapCat 0.1.26 retains published QR pairing and incorporates media read error classification fixes.
+
+- Agent rules use the same cards and editor dialogs as message rules. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules.
+
+- Message and Agent endpoints share the same card layout. Connected endpoints can be disconnected from their cards, and a dropped message connection shows an issue. Agent settings open from the gear, and the primary Agent is selected separately.
+
+- Show cards for added message endpoints and list the others under Add message endpoint. Connect opens sign-in or setup, and the gear opens automation settings. Official QQ Bot supports choosing a bot after scanning with mobile QQ and also supports manual credentials.
+
+- Start with QR pairing for NapCat QQ, QQ Bot, WeCom, Feishu, and Xiaomi Home. NapCat QQ has tabs for saved accounts and password sign-in. QQ Bot, WeCom, and Feishu have a manual credentials tab. Feishu authorization is followed by HTTPS event callback setup.
+
 ## 0.15.49 - 2026-11-20
 
 - Clear stale workbench waiting states and fail invalid agent results instead of holding a run indefinitely.

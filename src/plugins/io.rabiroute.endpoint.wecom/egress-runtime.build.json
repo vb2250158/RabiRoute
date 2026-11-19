@@ -7,10 +7,15 @@
     {
       "source": "src/plugins/io.rabiroute.endpoint.wecom/src/wecom.ts",
       "name": "disposeWeComClients"
+    },
+    {
+      "name": "createQrOperations",
+      "source": "src/plugins/io.rabiroute.endpoint.wecom/src/qrBinding.ts"
     }
   ],
   "ownedSources": [
-    "src/plugins/io.rabiroute.endpoint.wecom/src/wecom.ts"
+    "src/plugins/io.rabiroute.endpoint.wecom/src/wecom.ts",
+    "src/plugins/io.rabiroute.endpoint.wecom/src/qrBinding.ts"
   ],
   "packageId": "io.rabiroute.endpoint.wecom",
   "ownedPrefixes": [

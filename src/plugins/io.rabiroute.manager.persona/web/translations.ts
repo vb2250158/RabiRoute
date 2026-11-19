@@ -1,5 +1,13 @@
 export const pluginTranslations = {
   "en": {
+    "Agent 规则": "Agent rules",
+    "新增 Agent 规则": "Add Agent rule",
+    "还没有 Agent 规则": "No Agent rules yet",
+    "自动追问": "Automatic follow-up",
+    "事件投递": "Event delivery",
+    "计划任务结束": "Plan task ends",
+    "同时启用此 Agent 的自动追问": "Also enable automatic follow-up for this Agent",
+    "添加规则": "Add rule",
     "子 Agent": "Subagents",
     "刷新子 Agent": "Refresh subagents",
     "主会话": "Main session",
@@ -758,6 +766,14 @@ export const pluginTranslations = {
     "等待 QA 验收": "Awaiting QA acceptance"
   },
   "ja": {
+    "Agent 规则": "Agent ルール",
+    "新增 Agent 规则": "Agent ルールを追加",
+    "还没有 Agent 规则": "Agent ルールはまだありません",
+    "自动追问": "自動フォローアップ",
+    "事件投递": "イベント配信",
+    "计划任务结束": "計画タスクの終了",
+    "同时启用此 Agent 的自动追问": "この Agent の自動フォローアップも有効にする",
+    "添加规则": "ルールを追加",
     "子 Agent": "サブエージェント",
     "刷新子 Agent": "サブエージェントを更新",
     "主会话": "メインセッション",
