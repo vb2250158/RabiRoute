@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.49 - 2026-11-20
+
+- Clear stale workbench waiting states and fail invalid agent results instead of holding a run indefinitely.
+
 ## 0.15.48 - 2026-11-20
 
 - Open workbench artifacts from their run nodes and report missing DSH sessions accurately while preserving unconfirmed deliveries.

@@ -123,9 +123,59 @@ test("Agent delivery uncertainty queries the same request and requires a formal 
   }};
   const run=await f.run([{id:"agent",kind:"agent",config:{target:{threadId:"exact-task",agentAdapter:"test"},source:{sourceThreadId:"source",sourceAgentType:"codex",threadId:"must-not-override-target"},briefRef:{root:"output",path:"brief.txt"}}}]);
   assert.equal(run.state,"running");assert.equal(sends,1);
+  assert.equal(run.attempts.agent.reason,"original_agent_completion_pending");
   await f.owner.refresh(run.id);await f.owner.flights.get(run.id);assert.equal(sends,1);
   completed=true;await f.owner.refresh(run.id);await f.owner.flights.get(run.id);
-  assert.equal((await f.owner.read(run.id)).state,"succeeded");assert.equal(sends,1);
+  const finished=await f.owner.read(run.id);
+  assert.equal(finished.state,"succeeded");assert.equal(sends,1);
+  assert.equal(finished.attempts.agent.reason,undefined);
+});
+
+test("an invalid formal Agent result fails the gate and releases the run for retry", async t => {
+  for (const result of ["unstructured text", '{"status":"unknown"}']) {
+    await t.test(result, async t => {
+      const f = await fixture(t);
+      let response, sendCount = 0;
+      f.owner.runtime.agentTasks = {
+        async send(request) {
+          sendCount++;
+          assert.match(request.responseInstruction, /submit the result field for this request/);
+        },
+        async inspect(deliveryId) {
+          const request = response === undefined ? { status: "awaiting_response" } : {
+            id: deliveryId, status: "responded",
+            response: { by: { threadId: "target", agentAdapter: "test" }, result: response }
+          };
+          return { deliveryId, request };
+        }
+      };
+      const agent = { id: "agent", kind: "agent", gate: true, config: {
+        target: { threadId: "target", agentAdapter: "test" },
+        source: { sourceThreadId: "source", sourceAgentType: "codex" },
+        textPrompt: "Return the fixture result."
+      } };
+      const run = await f.run([agent, f.command("downstream")], [f.edge("agent", "downstream")]);
+      assert.equal(run.state, "running");
+
+      response = result;
+      await f.owner.refresh(run.id);
+      await f.owner.flights.get(run.id);
+      const failed = await f.owner.read(run.id);
+      assert.equal(failed.state, "failed");
+      assert.equal(failed.attempts.agent.state, "failed");
+      assert.equal(failed.attempts.agent.reason, "structured_completion_receipt_required");
+      assert.equal(failed.attempts.downstream.state, "blocked");
+      assert.equal(sendCount, 1);
+      await assert.rejects(fs.stat(path.join(f.output, "downstream.txt")), { code: "ENOENT" });
+
+      response = '{"status":"succeeded"}';
+      const retry = await f.owner.start(f.project.id, f.canvas.id, { id: randomUUID(), revision: run.canvasRevision });
+      await f.owner.flights.get(retry.id);
+      assert.equal((await f.owner.read(retry.id)).state, "succeeded");
+      assert.equal(sendCount, 2);
+      assert.equal(await fs.readFile(path.join(f.output, "downstream.txt"), "utf8"), "downstream");
+    });
+  }
 });
 test("cancellation waits for real command exit and keeps the durable result",async t=>{
   const f=await fixture(t),saved=await f.projects.saveCanvas(f.project.id,f.canvas.id,{...f.canvas,graph:{nodes:[{id:"long",kind:"command",config:{toolKey:"node",argv:["-e","setTimeout(()=>{},60000)"]}}],edges:[],groups:[]}});

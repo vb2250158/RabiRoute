@@ -439,7 +439,7 @@ export class WorkbenchRuns {
         const {threadId,agentAdapter,instanceBinding,agentTargetId,cwd}=target,{sourceThreadId,sourceAgentType,messageSource}=source;
         attempt.acceptance=await this.runtime.agentTasks.send({threadId,agentAdapter,instanceBinding,agentTargetId,cwd,sourceThreadId,sourceAgentType,messageSource,action:"send",createIfMissing:false,deliveryId:attempt.id,responsePolicy:"required",
           model:node.config.parameterValues?.model || node.config.parameterSchema?.find(row=>row.name==="model")?.default,
-          responseInstruction:'Return a formal JSON result with status succeeded|failed and reason. For validated requirements include validated:[{path,sha256}]; for unchanged produced files provide writes:[{root,path,sha256,attemptId}] only when this attempt actually wrote them. All required artifacts are independently checked.'+(node.config.textOutput === true ? ' Include the generated answer in a string field named "text" (up to 24,000 characters).' : ""),prompt:brief});
+          responseInstruction:'Use the original Agent reply contract to submit the result field for this request. A chat message does not complete the workflow node. Set result to a plain JSON string with status succeeded|failed and reason. For validated requirements include validated:[{path,sha256}]; for unchanged produced files provide writes:[{root,path,sha256,attemptId}] only when this attempt actually wrote them. All required artifacts are independently checked.'+(node.config.textOutput === true ? ' Include the generated answer in a string field named "text" (up to 24,000 characters).' : ""),prompt:brief});
       } catch {attempt.reason="delivery_outcome_unknown_query_original_request";}
     }
     const original=await this.runtime.agentTasks.inspect(attempt.id,target.threadId,target.agentAdapter);
@@ -448,13 +448,16 @@ export class WorkbenchRuns {
     attempt.completionConfirmed=true;delete attempt.uncertain;
     const responder=original.request.response?.by;
     if(responder?.threadId!==target.threadId || responder.agentAdapter && responder.agentAdapter!==target.agentAdapter) {attempt.state="failed";attempt.reason="completion_target_mismatch";return;}
-    let completion;try{completion=JSON.parse(original.request.response.result);}catch{attempt.reason="structured_completion_receipt_required";return;}
-    if(completion.status==="failed") {attempt.state="failed";attempt.reason=String(completion.reason||"Agent 执行失败。");return;}
-    if(completion.status!=="succeeded") {attempt.reason="structured_completion_receipt_required";return;}
+    let completion;
+    try { completion = JSON.parse(original.request.response.result); }
+    catch { /* The confirmed reply is immutable. Report an invalid result as a failure below. */ }
+    if (completion?.status === "failed") { attempt.state = "failed"; attempt.reason = String(completion.reason || "Agent 执行失败。"); return; }
+    if (completion?.status !== "succeeded") { attempt.state = "failed"; attempt.reason = "structured_completion_receipt_required"; return; }
     try {
       if (node.config.textOutput === true && (typeof completion.text !== "string" || !completion.text.trim() || completion.text.length > 24000)) throw new Error("Agent 没有返回有效的生成文本。");
       Object.assign(attempt,await validateArtifacts(node,run.binding.roots,attempt.baseline,completion,attempt.id,run.machineId));
       if (node.config.textOutput === true) attempt.outputText = completion.text;
+      delete attempt.reason;
       attempt.state="succeeded";attempt.receipt={requestId:original.request.id,deliveryId:original.deliveryId,response:original.request.response};
     }
     catch(error){attempt.state="failed";attempt.reason=error.message;}
