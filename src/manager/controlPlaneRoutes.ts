@@ -2998,6 +2998,10 @@ function envFor(
     FEISHU_EVENT_SUBSCRIPTION_ENABLED: definition.feishuEventSubscriptionEnabled === true ? "true" : "false",
     FEISHU_WEBHOOK_PORT: String(definition.feishuWebhookPort ?? definition.gatewayPort),
     FEISHU_WEBHOOK_PATH: definition.feishuWebhookPath ?? "/feishu",
+    QQBOT_ACCOUNT_ID: definition.qqbotAccountId === undefined ? process.env.QQBOT_ACCOUNT_ID || "" : definition.qqbotAccountId.trim(),
+    QQBOT_CALLBACK_PORT: String(definition.qqbotCallbackPort ?? 0),
+    QQBOT_TRANSPORT: definition.qqbotTransport === "websocket" ? "websocket" : "webhook",
+    QQBOT_INTENTS: String(definition.qqbotIntents ?? 33554432),
     CODEX_THREAD_ID: definition.primaryAgentAdapter === "dsh"
       ? (definition.dshSessionId?.trim() || definition.codexThreadId?.trim() || "")
       : (definition.codexThreadId?.trim() || ""),

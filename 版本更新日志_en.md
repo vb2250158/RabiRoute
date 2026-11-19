@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.44 - 2026-11-19
+
+- Merge the official QQ Bot Route configuration fix so the account, callback port, transport and intents reach the existing Gateway configuration entry, retaining the 0.15.43 public Relay migration fix.
+
 ## 0.15.43 - 2026-11-19
 
 - Fix migration order for multiple public Relay Caddy routes on Windows PowerShell 5.1 by replacing offsets from last to first, preserving custom routes; add a regression using the actual PowerShell runtime.
