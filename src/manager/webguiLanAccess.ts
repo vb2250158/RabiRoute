@@ -106,3 +106,23 @@ export function isWebguiLanRequestAuthorized(
   if (isLoopbackRemoteAddress(request.socket.remoteAddress)) return true;
   return webguiTokenMatches(webguiRequestToken(request, requestUrl), config.accessToken);
 }
+
+/** Direct account management uses the admitted WebGUI, never a peer or agent transport. */
+export function isWebguiLanAccountRequestAuthorized(
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  config: WebguiLanAccessConfig
+): boolean {
+  if (!config.enabled || !request.headers.host || isLoopbackRemoteAddress(request.socket.remoteAddress)) return false;
+  if (request.headers.forwarded !== undefined || request.headers["x-forwarded-for"] !== undefined) return false;
+  const site = request.headers["sec-fetch-site"];
+  if (site && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.origin;
+  if (origin && origin !== requestUrl.origin) return false;
+  const address = request.socket.localAddress;
+  const directLocalIp = Boolean(address
+    && Number(requestUrl.port || 80) === request.socket.localPort
+    && normalizedRemoteAddress(requestUrl.hostname.replace(/^\[|\]$/g, "")) === normalizedRemoteAddress(address)
+    && normalizedRemoteAddress(request.socket.remoteAddress) === normalizedRemoteAddress(address));
+  return directLocalIp || webguiTokenMatches(headerValue(request.headers[WEBGUI_TOKEN_HEADER]).trim(), config.accessToken);
+}

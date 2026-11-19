@@ -8,6 +8,7 @@ import {
   isLoopbackRemoteAddress,
   isLocalMachineRemoteAddress,
   isPublicWebguiStaticRequest,
+  isWebguiLanAccountRequestAuthorized,
   isWebguiLanRequestAuthorized,
   lanAddressPriority,
   managerListensOnLan,
@@ -22,6 +23,29 @@ function request(remoteAddress: string, token = ""): http.IncomingMessage {
     socket: { remoteAddress }
   } as unknown as http.IncomingMessage;
 }
+
+test("account operations accept the current direct WebGUI authorization and reject other origins", () => {
+  const url = new URL("http://192.168.1.10:3801/api/rabilink/host-account");
+  const config = { enabled: true, accessToken: "fixture-webgui-token" };
+  const req = request("192.168.1.20", config.accessToken);
+  Object.assign(req.socket, { localAddress: "192.168.1.10", localPort: 3801 });
+  Object.assign(req.headers, { host: url.host, origin: url.origin, "sec-fetch-site": "same-origin" });
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), true);
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, { ...config, enabled: false }), false);
+  req.headers.origin = "http://other.example";
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), false);
+  req.headers.origin = url.origin;
+  req.headers["sec-fetch-site"] = "cross-site";
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), false);
+  req.headers["sec-fetch-site"] = "same-origin";
+  req.headers.forwarded = "for=192.168.1.20";
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), false);
+  delete req.headers.forwarded;
+  delete req.headers[WEBGUI_TOKEN_HEADER];
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), false);
+  Object.assign(req.socket, { remoteAddress: "192.168.1.10" });
+  assert.equal(isWebguiLanAccountRequestAuthorized(req, url, config), true);
+});
 
 test("LAN WebGUI access defaults closed and normalizes persisted input", () => {
   assert.deepEqual(normalizeWebguiLanAccessConfig(undefined), { enabled: false, accessToken: "" });

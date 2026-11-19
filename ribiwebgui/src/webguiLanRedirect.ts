@@ -7,7 +7,7 @@ export type WebguiLanRedirectState = {
   urls: Array<{ url: string }>;
 };
 
-function isLoopbackHostname(value: string): boolean {
+export function isLoopbackHostname(value: string): boolean {
   const hostname = value.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
   return hostname === "localhost"
     || hostname === "::1"
@@ -19,6 +19,7 @@ export function lanWebguiRedirectUrl(currentHref: string, lanBaseUrl: string, to
   if (!lanBaseUrl || !token.trim()) return "";
   const current = new URL(currentHref);
   const target = new URL(lanBaseUrl);
+  if (current.searchParams.get("local") === "1") return "";
   if (!isLoopbackHostname(current.hostname) || isLoopbackHostname(target.hostname)) return "";
 
   target.pathname = current.pathname;
@@ -44,7 +45,7 @@ export function redirectCurrentWebguiToLan(state: WebguiLanRedirectState): boole
 }
 
 export async function redirectLoopbackWebguiToLan(): Promise<boolean> {
-  if (!isLoopbackHostname(window.location.hostname)) return false;
+  if (!isLoopbackHostname(window.location.hostname) || new URLSearchParams(window.location.search).get("local") === "1") return false;
   try {
     const response = await fetch("/api/webgui-access");
     const body = await response.json();

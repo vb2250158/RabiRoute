@@ -30,11 +30,6 @@ const computerVisited = ref(tab.value === "computer");
 watch(tab, value => { if (value === "computer") computerVisited.value = true; });
 const saving = ref(false);
 const account = ref<{ username: string } | null>(null);
-const accountAvailable = ref(false);
-const accountUsername = ref("");
-const accountPassword = ref("");
-const accountBusy = ref(false);
-const accountError = ref("");
 const refreshing = ref(false);
 const error = ref("");
 const refreshFence = createRabiLinkRefreshFence();
@@ -56,26 +51,9 @@ const devices = computed(() => home.value.phase === "ready" ? home.value.data.de
   };
 }) : []);
 const checkedAt = computed(() => home.value.phase === "ready" ? new Date(home.value.data.checkedAt).toLocaleString("zh-CN") : "");
-const serverConfigured = computed(() => Boolean(store.meta.rabiLinkRelay?.enabled && store.meta.rabiLinkRelay.url?.trim()));
 let managerEvents: EventSource | undefined;
 let metaRequest: AbortController | undefined;
 let disposed = false;
-async function changeAccount(action: "login" | "register" | "logout") {
-  if (accountBusy.value) return;
-  accountBusy.value = true;
-  accountError.value = "";
-  try {
-    const response = await fetch("/api/rabilink/host-account", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, ...(action === "logout" ? {} : { username: accountUsername.value.trim(), password: accountPassword.value }) })
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || "账号操作失败。");
-    account.value = data.account;
-    await refresh();
-  } catch (failure) { accountError.value = failure instanceof Error ? failure.message : "账号操作失败。"; }
-  finally { accountPassword.value = ""; accountBusy.value = false; }
-}
 function refreshHome() {
   if (!disposed && ready.value && connected.value && !saving.value && tab.value === "home") void homeLoader.refresh();
   else homeLoader.invalidate();
@@ -89,7 +67,8 @@ function onSaving(value: boolean) {
   if (!value) void refresh();
 }
 // No background polling. Navigation, saved configuration and status events invalidate the view.
-watch([tab, connected, () => store.meta.rabiLinkRelay?.url, () => store.meta.rabiLinkRelay?.deviceId], () => {
+watch([tab, connected, () => store.meta.rabiLinkRelay?.url, () => store.meta.rabiLinkRelay?.deviceId,
+  () => store.meta.applicationGenerationId, () => store.meta.managerInstanceId], () => {
   homeLoader.invalidate();
   refreshHome();
 }, { flush: "sync" });
@@ -101,7 +80,6 @@ async function refresh() {
   metaRequest = controller;
   refreshing.value = true;
   error.value = "";
-  homeLoader.invalidate();
   try {
     const [response, accountResponse] = await Promise.all([
       fetch("/meta", { cache: "no-store", signal: controller.signal }),
@@ -112,8 +90,8 @@ async function refresh() {
     const accountData = accountResponse?.ok ? await accountResponse.json() : null;
     if (disposed || !refreshFence.accepts(revision)) return;
     const { token: _token, ...relay } = meta.rabiLinkRelay || {};
+    if (account.value?.username !== accountData?.account?.username) homeLoader.invalidate();
     store.meta = { ...store.meta, ...meta, rabiLinkRelay: relay };
-    accountAvailable.value = Boolean(accountData);
     account.value = accountData?.account ?? null;
     ready.value = true;
     refreshHome();
@@ -129,21 +107,27 @@ async function refresh() {
 }
 onMounted(() => {
   managerEvents = managerEventSource("/api/events");
-  managerEvents.addEventListener("rabilink_account_changed", () => { if (!accountBusy.value) void refresh(); });
+  managerEvents.addEventListener("rabilink_account_changed", () => {
+    homeLoader.invalidate();
+    void refresh();
+  });
   managerEvents.addEventListener("rabilink_devices_changed", refreshHome);
   managerEvents.addEventListener("rabilink_status", raw => {
     if (disposed || saving.value) return;
     try {
       const status = JSON.parse((raw as MessageEvent).data);
       if (!status || !["disabled", "incomplete", "connecting", "online", "error"].includes(status.state)) return;
+      if (status.state === runtime.value?.state) {
+        store.meta.rabiLinkRelayRuntime = status;
+        return;
+      }
       // A status event is newer than any in-flight meta snapshot.
       refreshFence.setSaving(false);
       metaRequest?.abort();
+      const refreshMeta = refreshing.value || !ready.value;
       refreshing.value = false;
       store.meta.rabiLinkRelayRuntime = status;
-      homeLoader.invalidate();
-      if (!ready.value) void refresh();
-      else refreshHome();
+      if (refreshMeta) void refresh();
     } catch { /* An invalid event is not a new authoritative snapshot. */ }
   });
   void refresh();
@@ -168,33 +152,6 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       <v-tab value="config">配置</v-tab>
     </v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <v-card v-if="ready && (tab === 'home' || tab === 'config')" variant="outlined" class="mb-4">
-      <v-card-text>
-        <div v-if="account" class="d-flex flex-wrap align-center ga-3">
-          <strong>{{ account.username }}</strong>
-          <span class="section-note">另一台电脑登录同一服务器上的这个账号，即可出现在我的设备里。</span>
-          <v-btn class="ml-auto" size="small" variant="text" :loading="accountBusy" @click="changeAccount('logout')">退出登录</v-btn>
-        </div>
-        <form v-else class="rabilink-account" @submit.prevent="changeAccount('login')">
-          <h2 class="section-title">登录 Rabi 账号</h2>
-          <p v-if="!accountAvailable" class="section-note">请在本机打开 RabiRoute 登录。</p>
-          <template v-else-if="serverConfigured">
-            <p class="section-note">两台电脑登录同一服务器上的同一账号后会自动连接。</p>
-            <div class="rabilink-login-fields">
-              <v-text-field v-model="accountUsername" label="账号" autocomplete="username" density="compact" hide-details />
-              <v-text-field v-model="accountPassword" label="密码" type="password" autocomplete="current-password" density="compact" hide-details />
-              <v-btn type="submit" color="primary" :loading="accountBusy" :disabled="saving || !accountUsername.trim() || !accountPassword">登录</v-btn>
-              <v-btn variant="outlined" :disabled="saving || accountBusy || !accountUsername.trim() || !accountPassword" @click="changeAccount('register')">注册</v-btn>
-            </div>
-          </template>
-          <div v-else class="d-flex flex-wrap align-center ga-3">
-            <p class="section-note">先在配置中填写服务器地址，开启连接并保存。</p>
-            <v-btn v-if="tab !== 'config'" color="primary" variant="tonal" :to="{ path: '/rabilink', query: { ...route.query, tab: 'config' } }">前往配置</v-btn>
-          </div>
-        </form>
-        <v-alert v-if="accountError" type="error" variant="tonal" class="mt-3">{{ accountError }}</v-alert>
-      </v-card-text>
-    </v-card>
     <section v-if="tab === 'home'" aria-label="已授权设备" :aria-busy="home.phase === 'loading'">
       <template v-if="!ready">
         <p v-if="!error" role="status" class="section-note">正在读取连接状态…</p>
@@ -202,7 +159,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       <div v-else-if="!connected" class="rabilink-empty">
         <v-icon icon="mdi-lan-disconnect" size="32" />
         <h2 class="section-title">尚未连接服务器</h2>
-        <p class="section-note">{{ account ? '正在连接账号设备。连接失败时可检查服务器地址后刷新。' : '保存服务器地址并登录后，设备会显示在这里。' }}</p>
+        <p class="section-note">{{ account ? '正在连接账号设备。连接失败时可检查服务器地址后刷新。' : '配置服务器后，点击左下角登录账号。' }}</p>
       </div>
       <template v-else>
         <div class="rabilink-list-heading">
@@ -263,9 +220,6 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
 .rabilink-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
 .rabilink-toolbar .page-title { font-size: 1.5rem; }
 .rabilink-toolbar-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
-.rabilink-account { display: grid; gap: 10px; }
-.rabilink-login-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 720px; }
-.rabilink-login-fields :deep(.v-input) { flex: 1 1 170px; }
 .rabilink-list-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .rabilink-help { margin-top: 8px; max-width: 75ch; }
 .rabilink-help p { margin: 8px 0 0; line-height: 1.7; }

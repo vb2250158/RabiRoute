@@ -15,6 +15,7 @@ import PluginPageHost from "./components/PluginPageHost.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import RoleSourcePicker from "./components/RoleSourcePicker.vue";
 import RoleManagementActions from "./components/RoleManagementActions.vue";
+import RabiAccountDock from "./components/RabiAccountDock.vue";
 import { useI18n } from "./i18n/index";
 import { routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
 import { pluginCatalogStore } from "./pluginCatalogStore";
@@ -596,6 +597,7 @@ function selectGateway(id: string): void {
             <v-btn icon="mdi-github" aria-label="GitHub" title="GitHub" :href="store.meta.githubUrl" target="_blank" size="small" variant="text" />
           </div>
         </div>
+        <RabiAccountDock />
       </div>
     </v-navigation-drawer>
 

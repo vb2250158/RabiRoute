@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.42 - 2026-11-19
+
+- `io.rabiroute.manager.performance 0.1.10` updates the Host WebGUI authorization export closure while retaining performance collection behavior.
+
+- Authorized LAN WebGUI pages can open account login and registration using existing browser authentication and same-origin validation. The sidebar account entry and RabiLink list refresh preserve the current device display.
+- Core `io.rabiroute.manager.core 0.1.14` provides the updated RabiLink page. Host and Relay avatar endpoints are published separately, with server support reflected by actual responses.
+
 ## 0.15.41 - 2026-11-19
 
 - `io.rabiroute.agent.workbuddy 0.1.12` waits for the original native conversation after a cold start, then continues it with exact session and workspace checks while preserving delivery IDs, receipts and steering semantics.

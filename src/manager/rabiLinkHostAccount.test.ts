@@ -10,6 +10,9 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
 import { RabiLinkHostAccount } from "./rabiLinkHostAccount.js";
+import { isWebguiLanAccountRequestAuthorized } from "./webguiLanAccess.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { fetchAccountHost } from "./rabiLinkHostAccountProxy.js";
 import { readRabiLinkHome } from "./rabiLinkHome.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
@@ -22,6 +25,9 @@ const pairingHash = (value: string) => createHash("sha256").update(value).digest
 
 test("account-only hosts join automatically, call a legacy PC, and isolate other accounts", { timeout: 30000 }, async t => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rabi-host-accounts-"));
+  const lanAgentAuthority = new LanAgentAuthority({ statePath: path.join(root, "lan-agent-authority.json") });
+  const enrolledAgent = lanAgentAuthority.enroll(lanAgentAuthority.issueBootstrapTicket().ticket, "fixture-account-agent");
+  const agentAdmission: string[] = [];
   const child = spawn(process.execPath, [path.resolve("scripts/rabilink-relay-server.mjs")], {
     env: { ...process.env, HOST: "127.0.0.1", PORT: "0", RABILINK_RELAY_DATA_DIR: root }, stdio: ["ignore", "pipe", "ignore"]
   });
@@ -75,7 +81,23 @@ test("account-only hosts join automatically, call a legacy PC, and isolate other
     const tunnel = new RabiLinkAccountTunnel({ dataDir: path.join(root, name), generation, relay: () => account.relay(),
       discover: () => discoverRabiPeers({ ...account.relay()!, deviceGuid }), services: () => ({ manager: { baseUrl: url } }), onStatus: () => {} });
     const server = http.createServer(async (request, response) => {
-      if (await account.handle(request, new URL(request.url || "/", url), response, false)) return;
+      const fixtureLan = request.headers["x-fixture-transport"] === "lan";
+      const requestUrl = new URL(request.url || "/", fixtureLan ? "http://192.0.2.10:3801" : url);
+      if (fixtureLan) {
+        Object.defineProperties(request.socket, {
+          localAddress: { value: "192.0.2.10", configurable: true },
+          remoteAddress: { value: "192.0.2.20", configurable: true },
+          localPort: { value: 3801, configurable: true }
+        });
+      }
+      const access = evaluateLanAgentRequest(request, lanAgentAuthority, true);
+      if (access.kind === "agent") agentAdmission.push(request.method ?? "");
+      if (access.kind === "denied") {
+        response.writeHead(access.status).end();
+        return;
+      }
+      if (await account.handle(request, requestUrl, response, false,
+        () => isWebguiLanAccountRequestAuthorized(request, requestUrl, { enabled: true, accessToken: "fixture-authorized" }))) return;
       if (request.url === ACCOUNT_OFFER_PATH) {
         try {
           const chunks: Buffer[] = [];
@@ -132,7 +154,15 @@ test("account-only hosts join automatically, call a legacy PC, and isolate other
   const alpha = { username: "fixture-alpha", password: randomUUID() }, beta = { username: "fixture-beta", password: randomUUID() };
   const first = await host("pc-a"), second = await host("pc-b"), other = await host("other-b", "pc-b"), stranger = await host("other-c", "pc-c");
   assert.equal((await first.sign("register", alpha)).status, 200);
-  assert.equal((await second.sign("login", alpha)).status, 200);
+  const lanHeaders = { connection: "close", "x-fixture-transport": "lan", "sec-fetch-site": "same-origin", origin: "http://192.0.2.10:3801" };
+  const lanLogin = { action: "login", ...alpha };
+  assert.equal((await send(second.url, "/api/rabilink/host-account", lanLogin, lanHeaders)).status, 403);
+  assert.equal((await send(second.url, "/api/rabilink/host-account", lanLogin,
+    { ...lanHeaders, "x-rabiroute-webgui-token": "fixture-authorized", origin: "http://192.0.2.20:3801" })).status, 403);
+  assert.equal((await send(second.url, "/api/rabilink/host-account", lanLogin,
+    { ...lanHeaders, "x-rabiroute-webgui-token": "fixture-authorized", "x-rabilink-internal-hop": "fixture" })).status, 403);
+  assert.equal((await send(second.url, "/api/rabilink/host-account", lanLogin,
+    { ...lanHeaders, "x-rabiroute-webgui-token": "fixture-authorized" })).status, 200);
   assert.equal((await other.sign("register", beta)).status, 200);
   assert.equal((await stranger.sign("login", beta)).status, 200);
   assert.equal((await first.sign("login", { ...alpha, password: "wrong-password" })).status, 401);
@@ -141,8 +171,27 @@ test("account-only hosts join automatically, call a legacy PC, and isolate other
   assert.notEqual(first.account.relay()?.token, second.account.relay()?.token);
   const session = await send(second.url, "/api/rabilink/host-account");
   assert.equal((await session.json()).account.username, alpha.username);
+  const agentHeaders = { authorization: `Bearer ${enrolledAgent.token}` };
+  assert.equal((await send(second.url, "/api/rabilink/host-account", undefined, agentHeaders)).status, 403);
+  assert.equal((await send(second.url, "/api/rabilink/host-account", { action: "logout" }, agentHeaders)).status, 403);
+  const proxyHeaders = { "x-rabilink-tunnel-device-id": "fixture-proxy" };
+  assert.equal((await send(second.url, "/api/rabilink/host-account", undefined, proxyHeaders)).status, 403);
+  assert.equal((await send(second.url, "/api/rabilink/host-account", { action: "logout" }, proxyHeaders)).status, 403);
+  assert.deepEqual(agentAdmission, ["GET", "POST"]);
+  assert.equal(second.account.session()?.account.username, alpha.username);
   const spoof = await send(second.url, "/api/rabilink/host-account", undefined, { "sec-fetch-site": "cross-site" });
   assert.equal(spoof.status, 403);
+
+  const avatarPath = "/api/rabilink/host-account/avatar";
+  const avatar = "iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2ctAAABOklEQVR42u3SMREAMAgAsVIj1dQd/zZgQgNLIuHv4/2sA0uuBBgQA4IBMSAYEAOCATEgGBADggExIBgQA4IBMSAYEAOCATEgGBADggExIBgQA4IBMSAYEAOCATEgBgQDYkAwIAYEA2JAMCAGBANiQDAgBgQDYkAwIAYEA2JAMCAGBANiQDAgBgQDYkAwIAYEA2JAMCAGxIBgQAwIBsSAYEAMCAbEgGBADAgGxIBgQAwIBsSAYEAMCAbEgGBADAgGxIBgQAwIBsSAYEAMiAHBgBgQDIgBwYAYEAyIAcGAGBAMiAHBgBgQDIgBwYAYEAyIAcGAGBAMiAHBgBgQDIgBwYAYEAyIATEgGBADggExIBgQA4IBMSAYEAOCATEgGBADggExIBgQA4IBMSAYEAOCATEgGBADggExIIwGdoUDC2YzPgcAAAAASUVORK5CYII=";
+  assert.equal((await send(relay, avatarPath)).status, 401);
+  const avatarAccountId = first.account.session()?.account.id;
+  assert.equal((await send(first.url, avatarPath, { accountId: avatarAccountId, avatar: "invalid" })).status, 400);
+  assert.equal((await send(first.url, avatarPath, { avatar }, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await send(first.url, avatarPath, { accountId: avatarAccountId, avatar })).status, 200);
+  assert.equal((await send(other.url, avatarPath, { accountId: avatarAccountId, avatar })).status, 409);
+  assert.deepEqual(await (await send(second.url, avatarPath)).json(), { accountId: second.account.session()?.account.id, avatar });
+  assert.equal((await (await send(other.url, avatarPath)).json()).avatar, null);
 
   const consoleSession = await send(relay, "/manage/api/login", alpha);
   const cookie = consoleSession.headers.get("set-cookie")!.split(";")[0]!;

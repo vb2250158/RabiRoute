@@ -102,3 +102,14 @@ test("does not redirect an already-LAN WebGUI URL", () => {
     ""
   );
 });
+
+test("keeps an explicit local account sign-in URL on loopback", () => {
+  assert.equal(
+    lanWebguiRedirectUrl(
+      "http://127.0.0.1:8790/?local=1#/rabilink?tab=home",
+      "http://192.168.0.57:8790/#/overview",
+      "secret"
+    ),
+    ""
+  );
+});

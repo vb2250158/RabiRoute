@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { findPcCredential, pairingHash } from './rabilink-pc-pairing.mjs';
 
 export const isHostAccountScope = app => app?.kind === 'host-account-v1';
@@ -15,7 +17,7 @@ function validateDevice({ deviceId, deviceGuid, deviceName }) {
   return { deviceId, deviceGuid, deviceName: deviceName.trim() };
 }
 
-export function createHostAccountService({ readStore, writeStore, createAccount, loginAccount }) {
+export function createHostAccountService({ readStore, writeStore, createAccount, loginAccount, avatarDirectory }) {
   function result(account, legacyCompatible, receipt, token) {
     return { account: { id: account.id, username: account.username }, legacyCompatible, ...(receipt ? { receipt } : {}), ...(token ? { token } : {}) };
   }
@@ -67,6 +69,35 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
     }
   }
   return {
+    avatar(token, image) {
+      const store = readStore();
+      const match = findPcCredential(store, token);
+      if (!match || !isHostAccountScope(match.app)) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
+      const account = store.accounts.find(item => item.id === match.app.ownerAccountId);
+      if (!account) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
+      const file = path.join(avatarDirectory, createHash('sha256').update(account.id).digest('hex') + '.png');
+      if (image === undefined) {
+        try { return readFileSync(file).toString('base64'); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+      }
+      if (typeof image !== 'string' || image.length > 175000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+        fail(400, 'HOST_ACCOUNT_AVATAR_INVALID');
+      }
+      const png = Buffer.from(image, 'base64');
+      if (png.toString('base64') !== image || png.length < 33 || png.length > 131072
+        || png.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a'
+        || png.readUInt32BE(8) !== 13 || png.toString('ascii', 12, 16) !== 'IHDR'
+        || png.readUInt32BE(16) !== 160 || png.readUInt32BE(20) !== 160) {
+        fail(400, 'HOST_ACCOUNT_AVATAR_INVALID');
+      }
+      mkdirSync(avatarDirectory, { recursive: true });
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      try {
+        writeFileSync(temporary, png, { flag: 'wx', mode: 0o600 });
+        renameSync(temporary, file);
+      } finally { rmSync(temporary, { force: true }); }
+      return image;
+    },
     authenticate(action, body, legacyToken) {
       const device = validateDevice(body || {});
       const requested = body.requestId !== undefined || body.credentialHash !== undefined;

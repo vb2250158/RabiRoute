@@ -2,7 +2,9 @@
 
 English | [简体中文](rabilink-pc-pairing.md)
 
-When both the Rabi host and the Rabi server support account connections, open **RabiLink → Settings** on each PC, enable the connection, and save the same server address. Register if needed, then sign in with the same account on each PC. Online hosts appear under **My devices**. Older computers owned by the account remain reachable over the existing relay. A device-bound pairing credential can migrate automatically. Sign in once to confirm the account when the old setup uses a shared application token.
+Open RabiRoute for each PC and select **Sign in to your Rabi account** at the bottom of the left sidebar. If prompted, enter the same server address and select **Save and continue**. To create an account, choose **Register** from the sign-in dialog. Registration signs in the current host. Online hosts signed in to the same account appear under **My devices**. Older computers owned by the account remain reachable through the existing relay. A device-bound pairing credential can migrate automatically. Sign in once to confirm the account when the old setup uses a shared application token.
+
+The host saves its device credential so you stay signed in across page refreshes and restarts. When using an authorized LAN WebGUI, sign in from the current page to connect the host serving that page. Select your avatar at the bottom left, choose **Change avatar**, preview the image, and save it. A Rabi server that supports avatars stores the image with the account. Other computers load it when they reopen the interface.
 
 During device credential rotation, the host first saves the operation ID and candidate credential locally. The server keeps the existing credential active until confirmation. The host can recover the same operation after a connection interruption or a lost response.
 

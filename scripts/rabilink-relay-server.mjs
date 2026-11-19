@@ -835,7 +835,8 @@ const deviceApiService = createDeviceApiService({
 });
 const pcPairingService = createPcPairingService({ readStore: readAppStore, writeStore: writeAppStore,
   onEvent: (event, details) => writeEvent(event, details) });
-const hostAccountService = createHostAccountService({ readStore: readAppStore, writeStore: writeAppStore, createAccount, loginAccount });
+const hostAccountService = createHostAccountService({ readStore: readAppStore, writeStore: writeAppStore, createAccount, loginAccount,
+  avatarDirectory: path.join(dataDir, 'account-avatars') });
 const pcPairingRequestWindows = new Map();
 const hostAccountRequestWindows = new Map();
 
@@ -5430,6 +5431,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith("/manage/api/")) {
       return await handleAdminApi(req, url, res);
+    }
+    if (url.pathname === '/api/rabilink/host-account/avatar' && (req.method === 'GET' || req.method === 'POST')) {
+      const body = req.method === 'POST' ? await readBody(req, { maxBytes: 176000, label: 'Host account avatar' }) : undefined;
+      const token = String(req.headers['x-rabilink-token'] || '');
+      const avatar = hostAccountService.avatar(token, body === undefined ? undefined : body?.avatar ?? null);
+      return sendJson(res, 200, { code: 0, data: { avatar } }, { 'cache-control': 'no-store' });
     }
     const hostAccountAction = req.method === 'POST' && url.pathname.match(/^\/api\/rabilink\/host-account\/(login|register|migrate|logout|recover|confirm)$/)?.[1];
     if (hostAccountAction) {

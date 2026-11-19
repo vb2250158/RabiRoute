@@ -469,6 +469,7 @@ import {
   isLoopbackRemoteAddress,
   isLocalMachineRemoteAddress,
   isPublicWebguiStaticRequest,
+  isWebguiLanAccountRequestAuthorized,
   isWebguiLanRequestAuthorized,
   webguiTokenMatches,
   lanAddressPriority,
@@ -9140,7 +9141,8 @@ createManagerEventOperationDefinition
             && !webguiLanRequestAllowed(request, requestUrl)) throw new Error("Authenticated Manager connection was revoked.");
         });
       }
-      if (await rabiLinkHostAccount.handle(request, requestUrl, response, managerReadOnly)) return;
+      if (await rabiLinkHostAccount.handle(request, requestUrl, response, managerReadOnly, () =>
+        isWebguiLanAccountRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan))) return;
       if (pathname === ACCOUNT_OFFER_PATH && request.method === "POST") {
         try {
           const peer = activePeerRuntime;

@@ -12,26 +12,34 @@ export function createRabiLinkHomeLoader<T>(
   let epoch = 0;
   let disposed = false;
   let pending: AbortController | undefined;
+  let hasSnapshot = false;
   function invalidate() {
     epoch += 1;
     pending?.abort();
     pending = undefined;
+    hasSnapshot = false;
     if (!disposed) publish({ phase: "idle" });
   }
   return {
     invalidate,
     async refresh() {
       if (disposed) return;
-      invalidate();
-      const revision = epoch;
+      const revision = ++epoch;
+      pending?.abort();
       const controller = new AbortController();
       pending = controller;
-      publish({ phase: "loading" });
+      if (!hasSnapshot) publish({ phase: "loading" });
       try {
         const data = await load(controller.signal);
-        if (!disposed && revision === epoch) publish({ phase: "ready", data });
+        if (!disposed && revision === epoch) {
+          hasSnapshot = true;
+          publish({ phase: "ready", data });
+        }
       } catch (reason) {
-        if (!disposed && revision === epoch) publish({ phase: "error", error: errorMessage(reason) });
+        if (!disposed && revision === epoch) {
+          hasSnapshot = false;
+          publish({ phase: "error", error: errorMessage(reason) });
+        }
       } finally {
         if (revision === epoch) pending = undefined;
       }

@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []
@@ -46,7 +46,7 @@
     {
       "id": "manager:performance",
       "package": "io.rabiroute.manager.performance",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "enabled": true,
       "config": {},
       "grants": []

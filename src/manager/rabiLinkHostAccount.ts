@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { localIdentitySettingsRequest } from "./identityResetRoutes.js";
+import { hasTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
 
 type Account = { id: string; username: string };
@@ -72,6 +74,40 @@ export class RabiLinkHostAccount {
   }
 
   status() { return { account: this.session()?.account ?? null }; }
+
+  private async handleAvatar(request: IncomingMessage, json: (status: number, body: unknown) => void, readOnly: boolean, authorize: () => boolean) {
+    const method = request.method;
+    if (method !== "GET" && method !== "POST") return json(405, {});
+    if (method === "POST" && readOnly) return json(423, { message: "当前处于只读模式。" });
+    const session = this.session();
+    if (!session) return json(401, { message: "请先登录 Rabi 账号。" });
+    try {
+      const body = method === "POST" ? await this.options.readJson(request, 176000) as { accountId?: unknown; avatar?: unknown } | null : undefined;
+      if (!authorize()) return json(403, { message: "WebGUI 访问授权已失效，请重新打开界面。" });
+      if (this.session() !== session || (method === "POST" && body?.accountId !== session.account.id)) {
+        return json(409, { message: "账号已更改，请重试。" });
+      }
+      const upstream = await (this.options.request ?? fetch)(`${session.server}/api/rabilink/host-account/avatar`, {
+        method, redirect: "error", signal: AbortSignal.timeout(8000),
+        headers: { "content-type": "application/json", "x-rabilink-token": session.token },
+        ...(method === "POST" ? { body: JSON.stringify({ avatar: body?.avatar }) } : {})
+      });
+      if (!upstream.ok) {
+        await upstream.body?.cancel();
+        if (upstream.status === 404) return json(404, { code: "RABILINK_RELAY_AVATAR_UNAVAILABLE", message: "此服务器版本暂不支持头像。" });
+        if (upstream.status === 400) return json(400, { message: "头像图片无效，请重新选择。" });
+        if (upstream.status === 401) return json(401, { message: "登录已失效，请重新登录。" });
+        throw new Error("Relay avatar request failed");
+      }
+      const result = await upstream.json() as { code?: number; data?: { avatar?: string | null } };
+      if (this.session() !== session) return json(409, { message: "账号已更改，请重试。" });
+      const avatar = result.data?.avatar;
+      if (result.code !== 0 || (avatar !== null && (typeof avatar !== "string" || avatar.length > 175000))) throw new Error("Invalid Relay avatar response");
+      return json(200, { accountId: session.account.id, avatar });
+    } catch {
+      return json(502, { message: "暂时无法读取或保存头像，请稍后重试。" });
+    }
+  }
 
   private async exchange(server: string, action: Action, body: object, token?: string): Promise<Reply | undefined> {
     const response = await (this.options.request ?? fetch)(`${server}/api/rabilink/host-account/${action}`, {
@@ -200,11 +236,16 @@ export class RabiLinkHostAccount {
     finally { this.pending = false; }
   }
 
-  async handle(request: IncomingMessage, url: URL, response: ServerResponse, readOnly: boolean): Promise<boolean> {
-    if (url.pathname !== "/api/rabilink/host-account") return false;
+  async handle(request: IncomingMessage, url: URL, response: ServerResponse, readOnly: boolean, authorizeWebgui: () => boolean = () => false): Promise<boolean> {
+    const avatarRequest = url.pathname === "/api/rabilink/host-account/avatar";
+    if (!avatarRequest && url.pathname !== "/api/rabilink/host-account") return false;
     response.setHeader("cache-control", "no-store");
     const json = (status: number, body: unknown) => this.options.json(response, status, body);
-    if (!localIdentitySettingsRequest(request)) { json(403, { message: "请在本机的 RabiRoute 界面操作账号。" }); return true; }
+    const local = localIdentitySettingsRequest(request);
+    const authorize = () => !hasTrustedLanAgentPrincipal(request) && !rabiLinkTransportAssertionPresent(request)
+      && (local || authorizeWebgui());
+    if (!authorize()) { json(403, { message: "请使用已授权的 RabiRoute 界面操作账号。" }); return true; }
+    if (avatarRequest) { await this.handleAvatar(request, json, readOnly, authorize); return true; }
     if (request.method === "GET") { json(200, this.status()); return true; }
     if (request.method !== "POST") { json(405, {}); return true; }
     if (readOnly) { json(423, { message: "当前处于只读模式。" }); return true; }
@@ -212,6 +253,7 @@ export class RabiLinkHostAccount {
     this.pending = true;
     try {
       const body = await this.options.readJson(request, 4096) as { action?: unknown } | null;
+      if (!authorize()) { json(403, { message: "WebGUI 访问授权已失效，请重新打开界面。" }); return true; }
       if (body?.action === "login" || body?.action === "register") await this.connect(body.action, body);
       else if (body?.action === "logout") {
         const { session, rotation } = this.state;

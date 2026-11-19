@@ -304,9 +304,10 @@
         "0.1.4",
         "0.1.10",
         "0.1.11",
-        "0.1.12"
+        "0.1.12",
+        "0.1.13"
       ],
-      "toVersion": "0.1.13"
+      "toVersion": "0.1.14"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
@@ -409,9 +410,10 @@
         "0.1.3",
         "0.1.4",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.10"
     },
     {
       "packageId": "io.rabiroute.manager.persona",
