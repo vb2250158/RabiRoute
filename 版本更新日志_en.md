@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.43 - 2026-11-19
+
+- Fix migration order for multiple public Relay Caddy routes on Windows PowerShell 5.1 by replacing offsets from last to first, preserving custom routes; add a regression using the actual PowerShell runtime.
+
 ## 0.15.42 - 2026-11-19
 
 - `io.rabiroute.manager.performance 0.1.10` updates the Host WebGUI authorization export closure while retaining performance collection behavior.

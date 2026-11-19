@@ -287,7 +287,7 @@ function ConvertTo-RelayCaddyTemplate {
         $replacements += @{start=$start; length=$body.Length; value=$simple.Groups['before'].Value+'__RABILINK_RELAY_UPSTREAM__'+$simple.Groups['after'].Value}
     }
     $template = $Content
-    foreach ($replacement in ($replacements | Sort-Object start -Descending)) {
+    foreach ($replacement in ($replacements | Sort-Object { [int]$_.start } -Descending)) {
         $template = $template.Remove($replacement.start, $replacement.length).Insert($replacement.start, $replacement.value)
     }
     Assert-NoRelayLegacyUpstream $template

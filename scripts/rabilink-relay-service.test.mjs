@@ -79,6 +79,16 @@ test('RuntimeOnly retains original Caddy launcher and migrates only managed rout
  assert.equal(convert.status,0,convert.stderr);const migrated=await fs.readFile(output,'utf8');assert.equal(await fs.readFile(input,'utf8'),source);assert(migrated.includes('http://:18088'));assert(migrated.includes('reverse_proxy 127.0.0.1:5555'));assert(migrated.includes('__RABILINK_RELAY_UPSTREAM__'));assert(migrated.includes('admin off'));
 });
 
+test('Windows PowerShell migrates multiple legacy routes from the final offset without changing custom routes',{skip:process.platform!=='win32'},()=>{
+ const source='http://fixture.invalid {\n'+['health','api/rabilink/*','worker/*','manage*'].map(route=>` handle /${route} {\n  reverse_proxy 127.0.0.1:8788\n }`).join('\n')+'\n handle /custom/* {\n  reverse_proxy 127.0.0.1:5555\n }\n}\n';
+ const result=powershell(`$ErrorActionPreference='Stop';. ${quote(path.join(root,'scripts/lib/rabilink-relay-service.ps1'))};ConvertTo-RelayCaddyTemplate ${quote(source)}`);
+ assert.equal(result.status,0,result.stderr+result.stdout);
+ assert.equal((result.stdout.match(/__RABILINK_RELAY_UPSTREAM__/g)||[]).length,4);
+ assert(!result.stdout.includes(':8788'));
+ assert(result.stdout.includes('reverse_proxy 127.0.0.1:5555'));
+ for(const route of ['health','api/rabilink/*','worker/*','manage*'])assert(result.stdout.includes(`handle /${route} {`));
+});
+
 test('migration stops only exact service-root process handles and waits for exit',{skip:process.platform!=='win32',timeout:35000},async t=>{
  const a=await fixture(t),b=await fixture(t);const processes=[];t.after(async()=>{for(const p of processes)await stop(p);});
  for(const service of [a,b]){const child=spawn(process.execPath,[path.join(service,'scripts/rabilink-relay-server.mjs')],{cwd:service,env:{...process.env,PORT:'0',HOST:'127.0.0.1',RABILINK_RELAY_DATA_DIR:path.join(service,'data')},windowsHide:true,stdio:['ignore','pipe','pipe']});child.output='';child.stdout.on('data',v=>child.output+=v);child.stderr.on('data',v=>child.output+=v);processes.push(trackFixtureChild(service,child));}
