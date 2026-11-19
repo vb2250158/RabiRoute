@@ -328,9 +328,10 @@
         "0.1.1",
         "0.1.2",
         "0.1.3",
-        "0.1.4"
+        "0.1.4",
+        "0.1.5"
       ],
-      "toVersion": "0.1.5"
+      "toVersion": "0.1.6"
     },
     {
       "packageId": "io.rabiroute.manager.diagnostics",
@@ -427,9 +428,10 @@
         "0.1.7",
         "0.1.8",
         "0.1.25",
-        "0.1.26"
+        "0.1.26",
+        "0.1.27"
       ],
-      "toVersion": "0.1.27"
+      "toVersion": "0.1.28"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",
@@ -531,9 +533,10 @@
         "0.2.8",
         "0.2.9",
         "0.2.10",
-        "0.2.11"
+        "0.2.11",
+        "0.2.12"
       ],
-      "toVersion": "0.2.12"
+      "toVersion": "0.2.13"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",

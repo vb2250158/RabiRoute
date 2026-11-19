@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createSSRApp } from "vue";
 import { renderToString } from "vue/server-renderer";
 import { useVideoCanvas } from "./useVideoCanvas";
+import { canvasGraphThumbnail, connectWorkflowInput, rebaseWorkflowInputs, workflowInputLinks, type FlowNode } from "./workbenchEditor";
 
 type CardRect = { id: string; left: number; top: number; width: number; height: number };
 async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {
@@ -29,6 +31,71 @@ async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {
 function pointer(x: number, y: number, id = 1) {
   return { clientX: x, clientY: y, pointerId: id, button: 0, preventDefault() {} } as PointerEvent;
 }
+test("resizing tracks world size at zoom, keeps it during drag and restores it on cancel", async () => {
+  const canvas = await fixture();
+  canvas.add("text");
+  canvas.scale.value = 0.5;
+  const handle = (width: number, height: number) => ({
+    ...pointer(100, 100), currentTarget: { closest: () => ({ querySelector: () => ({ offsetWidth: width, offsetHeight: height }) }) }
+  }) as unknown as PointerEvent;
+  canvas.beginResize(handle(380, 214), "text");
+  canvas.move(pointer(160, 130));
+  assert.equal(canvas.end(pointer(160, 130)), true);
+  assert.deepEqual(canvas.positions.value.text, { x: 0, y: 0, width: 500, height: 274 });
+  const map = canvas.minimap.value;
+  assert.equal(map.cards[0]?.width, 500 * map.factor);
+  canvas.beginResize(handle(500, 274), "text");
+  canvas.move(pointer(120, 90));
+  canvas.cancel(pointer(120, 90));
+  assert.deepEqual(canvas.cardSize("text"), { width: 500, height: 274 });
+  canvas.begin(pointer(100, 100), "text");
+  canvas.move(pointer(110, 105));
+  canvas.end(pointer(110, 105));
+  assert.deepEqual(canvas.positions.value.text, { x: 20, y: 10, width: 500, height: 274 });
+});
+
+test("real workflow inputs fan in and out, grouping files from the same source", () => {
+  const node = (id: string, inputs: FlowNode["inputs"] = []): FlowNode => ({ id, kind: "command", title: id, config: {}, inputs });
+  const links = workflowInputLinks([
+    node("sources"), node("research"),
+    node("writing", [{producerNodeId:"sources",artifactKey:"news"}, {producerNodeId:"sources",artifactKey:"fact-check"}, {producerNodeId:"research",artifactKey:"background"}]),
+    node("review", [{producerNodeId:"sources",artifactKey:"news"}, {ref:{root:"canvas",path:"guide.md"}}, {producerNodeId:"missing",artifactKey:"skip"}])
+  ]);
+  assert.deepEqual(links.get("writing")?.map(({ from, artifactKeys }) => [from, artifactKeys]), [["sources", ["news", "fact-check"]], ["research", ["background"]]]);
+  assert.deepEqual(links.get("review")?.map(({ from }) => from), ["sources"]);
+  assert.equal(links.has("sources"), false);
+});
+
+test("grid thumbnails preserve resized media cards and their migrated canvas links", () => {
+  const source: FlowNode = { id: "node-a", kind: "asset", config: { legacyCardId: "text-a" }, layout: { x: 0, y: 0, width: 493, height: 139 } };
+  const target: FlowNode = { id: "node-b", kind: "asset", config: { legacyCardId: "video-b" }, layout: { x: 600, y: 25 } };
+  const thumbnail = canvasGraphThumbnail({ version: 2, id: "canvas", name: "Media", revision: 1, workspaceBindingKey: "", variables: [],
+    graph: { nodes: [source, target], edges: [], groups: [] }, mediaLinks: [{ from: "text-a", to: "video-b" }] });
+  assert.equal(thumbnail?.wires.length, 1);
+  assert.equal(thumbnail?.nodes[0]?.width, 493);
+  assert.equal(thumbnail?.nodes[0]?.height, 139);
+});
+
+test("a material connection is saved as an input and rejects cycles or undeclared outputs", () => {
+  const definition = JSON.parse(readFileSync(new URL("../../workbench-definition.json", import.meta.url), "utf8"));
+  const material = { key: "report", path: "report.json", root: "output", freshness: "produced" };
+  const nodes: FlowNode[] = ["first", "second"].map(id => ({ id, kind: "command", config: {}, requirements: [material] }));
+  const initial = { nodes, edges: [], groups: [] };
+  const graph = connectWorkflowInput(initial, definition, "first", "second", "report");
+  assert.deepEqual(graph.nodes[1]?.inputs, [{ producerNodeId: "first", artifactKey: "report" }]);
+  assert.equal(graph.edges.length, 0);
+  assert.equal(connectWorkflowInput(graph, definition, "first", "second", "report"), graph);
+  assert.throws(() => connectWorkflowInput(graph, definition, "second", "first", "report"), /循环依赖/);
+  assert.throws(() => connectWorkflowInput(graph, definition, "first", "second", "unknown"), /产物/);
+});
+
+test("upstream edits are reflected in the inspector without overwriting other draft inputs", () => {
+  const removed = { producerNodeId: "old", artifactKey: "report" };
+  const added = { producerNodeId: "new", artifactKey: "report" };
+  const draft = { ref: { root: "canvas", path: "notes.md" } };
+  assert.deepEqual(rebaseWorkflowInputs([removed, draft], [removed], [added]), [draft, added]);
+  assert.deepEqual(rebaseWorkflowInputs([draft], [], []), [draft]);
+});
 test("zoom preserves the world point under its anchor and clamps the supported range", async () => {
   const canvas = await fixture();
   const anchor = { x: 213, y: 117 }, before = canvas.world(anchor);

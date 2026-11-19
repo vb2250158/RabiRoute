@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.46 - 2026-11-20
+
+- RabiSpeech discovers FireRed ASR from the managed installation record and actual weights while preserving the default model and manual configuration.
+
+- Add Workbench canvas previews, input links, node resizing and run feedback while preserving existing canvases and history.
+
+- Desktop pets have separate switches for random idle actions and automatic rest. Right-click to rest or wake the pet immediately. Dragging wakes the pet, and regular animations hold their first frame during the fade.
+
 ## 0.15.45 - 2026-11-20
 
 - Preserve route-change and cancellation errors during NapCat media and protected resource reads.

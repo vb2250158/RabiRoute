@@ -6,7 +6,13 @@ export type DesktopPetPackSummary = {
   name: string;
   personaId: string;
   states: Record<string, DesktopPetAnimation>;
-  idleBehavior?: { randomStates: string[]; sleepState?: string };
+  idleBehavior?: {
+    randomStates: string[];
+    randomMinSeconds?: number;
+    randomMaxSeconds?: number;
+    sleepState?: string;
+    sleepAfterSeconds?: number;
+  };
   companionStates?: Record<string, string>;
   modeAnimationSets?: Record<string, DesktopPetModeAnimationSet>;
 };

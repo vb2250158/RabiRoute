@@ -87,6 +87,8 @@ class DesktopPetBinding:
     wander_corners: tuple[str, ...] = ("bottom-right", "bottom-left")
     wander_wait_min_seconds: float = 45.0
     wander_wait_max_seconds: float = 90.0
+    random_idle_enabled: bool = True
+    auto_sleep_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,8 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
         wander_wait_min_seconds=_bounded_number(row.get("wanderWaitMinSeconds"), 45, 5, 3600),
         wander_wait_max_seconds=_bounded_number(row.get("wanderWaitMaxSeconds"), 90,
                                                _bounded_number(row.get("wanderWaitMinSeconds"), 45, 5, 3600), 3600),
+        random_idle_enabled=row.get("randomIdleEnabled") is not False,
+        auto_sleep_enabled=row.get("autoSleepEnabled") is not False,
     )
 
 

@@ -259,6 +259,48 @@ class PetPlaybackTest(unittest.TestCase):
         self.assertEqual(self.window._travel_opacity.opacity(), 1)
         self.assertFalse(self.window._png_timer.isActive())
 
+    def test_transition_keeps_first_frame_until_fade_and_replay_starts_immediately(self):
+        action = self.animations["attention"]
+        self.assertTrue(self.window.play(self.pack, action))
+        self.assertTrue(self.window.animation_running)
+        self.assertFalse(self.window._png_timer.isActive())
+        self.window._transition.setCurrentTime(self.window._transition.duration())
+        self.assertTrue(self.window._png_timer.isActive())
+        self.assertEqual(self.window._png_index, 0)
+        self.assertTrue(self.window.play(self.pack, action))
+        self.assertTrue(self.window._previous_frame.isHidden())
+        self.assertTrue(self.window._png_timer.isActive())
+
+    def test_manual_rest_works_when_automatic_idle_actions_are_off(self):
+        self.animations["sleep"] = replace(
+            self.animations["idle"], state=replace(self.animations["idle"].state, name="sleep"))
+        self.pack = replace(
+            self.pack,
+            states={name: action.state for name, action in self.animations.items()},
+            idle_behavior=DesktopPetIdleBehavior(10, 20, ("attention",), 60, "sleep"),
+        )
+        self.controller._pack = self.pack
+        self.controller._animation_cache = self.animations.copy()
+        binding = replace(self.controller._binding_snapshot, auto_sleep_enabled=False, random_idle_enabled=False)
+        self.controller._apply_binding(binding)
+        scheduler = self.controller._idle_scheduler
+        self.assertFalse(scheduler._random_timer.isActive())
+        self.assertFalse(scheduler._sleep_timer.isActive())
+
+        self.controller._toggle_sleep()
+        self.assertEqual(self.window.active_state, "sleep")
+        self.controller._clicked()
+        self.assertEqual(self.window.active_state, "idle")
+        self.controller._toggle_sleep()
+        self.controller._drag_started()
+        self.assertEqual(self.window.active_state, "drag")
+        self.controller._drag_finished()
+        self.assertEqual(self.window.active_state, "idle")
+
+        self.controller._apply_binding(replace(binding, random_idle_enabled=True, auto_sleep_enabled=True))
+        self.assertTrue(scheduler._random_timer.isActive())
+        self.assertTrue(scheduler._sleep_timer.isActive())
+
     def test_gif_obeys_pack_loop_and_next_with_original_frame_durations(self):
         stream = io.BytesIO()
         Image.new("RGBA", (32, 32), "red").save(stream, format="GIF", save_all=True,

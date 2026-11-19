@@ -75,6 +75,8 @@ export type DesktopPetBinding = {
   bubbleEnabled: boolean;
   bubbleStyle: DesktopPetBubbleStyle;
   fpsCap: 6 | 12 | 15 | 24;
+  randomIdleEnabled: boolean;
+  autoSleepEnabled: boolean;
   wanderEnabled: boolean;
   wanderToActiveWindow: boolean;
   wanderCorners: DesktopPetCorner[];
@@ -132,6 +134,8 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
   bubbleEnabled: true,
   bubbleStyle: { ...DEFAULT_DESKTOP_PET_BUBBLE_STYLE },
   fpsCap: 15,
+  randomIdleEnabled: true,
+  autoSleepEnabled: true,
   wanderEnabled: false,
   wanderToActiveWindow: false,
   wanderCorners: ["bottom-right", "bottom-left"],
@@ -203,6 +207,8 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     bubbleEnabled: row.bubbleEnabled !== false,
     bubbleStyle: normalizeDesktopPetBubbleStyle(row.bubbleStyle),
     fpsCap: fps,
+    randomIdleEnabled: row.randomIdleEnabled !== false,
+    autoSleepEnabled: row.autoSleepEnabled !== false,
     wanderEnabled: row.wanderEnabled === true,
     wanderToActiveWindow: row.wanderToActiveWindow === true,
     wanderCorners: Array.isArray(row.wanderCorners)

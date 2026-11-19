@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 import wave
 from pathlib import Path
 
@@ -61,3 +63,88 @@ def test_http_asr_maps_word_timestamps_without_inventing_word_probabilities(tmp_
 def test_http_asr_unknown_and_invalid_observations_are_optional(tmp_path, monkeypatch, confidence):
     result = transcribe_response(tmp_path, monkeypatch, {"text": "你好", "confidence": confidence})
     assert result.recognition_metadata() == {}
+
+
+def fire_red_fixture(tmp_path, monkeypatch, arguments=()):
+    service = tmp_path / "service"
+    script = service / "scripts" / "local_asr_worker.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("# fixture, not executed", encoding="utf-8")
+    model_root = tmp_path / "models"
+    monkeypatch.setattr("rabispeech.providers.http_asr.SERVICE_ROOT", service)
+    command = (sys.executable, str(script), "--engine", "fireredasr2-aed", *arguments)
+    launch = WorkerLaunch(command=command, working_directory=tmp_path)
+    model = HttpAsrModelSettings("fireredasr2-aed", "FireRed", "FireRedASR2", "http://127.0.0.1:9999",
+                                 "", False, (), (), launch)
+    provider = LocalHttpAsrProvider(HttpAsrProviderSettings(
+        "fireredasr2", True, model.id, 10, (model,), managed_model_root=model_root,
+    ))
+    return provider, model_root, command
+
+
+def write_firered_fixture_weights(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename in ("model.pth.tar", "cmvn.ark", "dict.txt", "train_bpe1000.model"):
+        (directory / filename).write_bytes(b"fixture")
+
+
+def test_running_firered_provider_discovers_managed_install_and_uses_same_verified_launch(tmp_path, monkeypatch):
+    provider, model_root, command = fire_red_fixture(tmp_path, monkeypatch)
+    def status():
+        return provider.capabilities()["models"][0]["installed"]
+    weights = model_root / "asr" / "fireredasr2-aed"
+    write_firered_fixture_weights(weights)
+    manifest = model_root / "install-manifest.json"
+    row = {"alias": "asr-fireredasr2-aed", "repository": "FireRedTeam/FireRedASR2-AED",
+           "status": "installed", "command": ["ignored"]}
+    outside = tmp_path / "outside"
+    write_firered_fixture_weights(outside)
+    assert status() is False
+    manifest.write_text(json.dumps({"schema_version": 1, "models": [{**row, "target": str(outside)}]}), encoding="utf-8")
+    assert status() is False
+    manifest.write_text(json.dumps({"schema_version": 1, "models": [{**row, "target": str(weights)}]}), encoding="utf-8")
+    assert status() is True
+
+    calls = []
+    async def ensure(_key, _url, launch):
+        calls.append(launch)
+        return "http://127.0.0.1:9999"
+
+    base = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"text": "通过", "duration": 1}, request=request))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: base(transport=transport, **kwargs))
+    monkeypatch.setattr(provider.worker_supervisor, "ensure", ensure)
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"fixture")
+    result = asyncio.run(provider.transcribe(TranscriptionRequest(audio, "fireredasr2-aed")))
+    assert result.text == "通过"
+    assert [launch.command for launch in calls] == [(*command, "--model", str(weights))]
+    assert provider.settings.models[0].launch.command == command
+    (weights / "model.pth.tar").unlink()
+    assert status() is False
+    with pytest.raises(ValueError, match="not installed"):
+        asyncio.run(provider.transcribe(TranscriptionRequest(audio, "fireredasr2-aed")))
+    assert len(calls) == 1
+
+
+def test_firered_recognizes_existing_configured_path_without_replacing_it(tmp_path, monkeypatch):
+    source = tmp_path / "FireRedASR2S" / "fireredasr2s" / "fireredasr2"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text("# package fixture", encoding="utf-8")
+    provider, model_root, command = fire_red_fixture(
+        tmp_path, monkeypatch, ("--model", "existing", "--repository-root", "FireRedASR2S"),
+    )
+    configured = tmp_path / "existing"
+    alternate = model_root / "asr" / "fireredasr2-aed"
+    write_firered_fixture_weights(alternate)
+    (model_root / "install-manifest.json").write_text(json.dumps({"schema_version": 1, "models": [{
+        "alias": "asr-fireredasr2-aed", "repository": "FireRedTeam/FireRedASR2-AED",
+        "status": "installed", "target": str(alternate),
+    }]}), encoding="utf-8")
+    assert provider.capabilities()["models"][0]["installed"] is False
+    write_firered_fixture_weights(configured)
+    assert provider.capabilities()["models"][0]["installed"] is True
+    assert provider._launch_for_model(provider.settings.models[0]).command == command
+    # A same-name script is insufficient when it does not belong to this package.
+    monkeypatch.setattr("rabispeech.providers.http_asr.SERVICE_ROOT", tmp_path / "other")
+    assert provider.capabilities()["models"][0]["installed"] is False

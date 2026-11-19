@@ -129,6 +129,7 @@ class HttpAsrProviderSettings:
     timeout_seconds: float
     models: tuple[HttpAsrModelSettings, ...]
     idle_unload_seconds: float = 180.0
+    managed_model_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -271,7 +272,7 @@ def load_settings(path: str | Path | None = None) -> Settings:
     whisper_models = _whisper_models(base, whisper.get("models"), whisper_model_id, model_root)
     local_tts_model_id = _env("RABISPEECH_TTS_MODEL", local_tts.get("model", "onnx-vits")).strip()
     local_tts_models = _local_tts_models(base, local_tts.get("models"), local_tts_model_id, str(local_tts.get("default_worker_url") or ""))
-    http_asr = _http_asr_providers(base, asr.get("http_providers"))
+    http_asr = _http_asr_providers(base, asr.get("http_providers"), model_root)
     api_tts = _api_providers(tts.get("api_providers"), "tts")
     api_asr = _api_providers(asr.get("api_providers"), "asr")
 
@@ -483,7 +484,9 @@ def _local_tts_models(base: Path, value: object, default_model: str, default_wor
     return tuple(models)
 
 
-def _http_asr_providers(base: Path, value: object) -> tuple[HttpAsrProviderSettings, ...]:
+def _http_asr_providers(
+    base: Path, value: object, model_root: Path | None = None,
+) -> tuple[HttpAsrProviderSettings, ...]:
     rows = value if isinstance(value, list) else []
     providers: list[HttpAsrProviderSettings] = []
     for row in rows:
@@ -524,6 +527,7 @@ def _http_asr_providers(base: Path, value: object) -> tuple[HttpAsrProviderSetti
                     timeout_seconds=float(row.get("timeout_seconds", 180)),
                     models=tuple(models),
                     idle_unload_seconds=max(0.0, min(86400.0, float(row.get("idle_unload_seconds", 180)))),
+                    managed_model_root=model_root,
                 )
             )
     return tuple(providers)

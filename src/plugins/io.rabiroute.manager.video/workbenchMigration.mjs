@@ -16,7 +16,7 @@ export function resolveLinearWorkbench(source,definition,profile) {
    if(!toolKey||!Array.isArray(row.cmd)||row.cmd.some(arg=>typeof arg!=='string'))gaps.push({nodeId:node.id,code:'trusted_tool_and_argv_required'});
    node.config={...base,toolKey:toolKey||'',argv:Array.isArray(row.cmd)?row.cmd.slice(1).map(expand):[],timeoutMs:(row.timeout||600)*1000,...override.config};
   } else if(node.kind==='agent')node.config={...base,agentBindingKey:override.agentBindingKey||row.id,...override.config};
-  else node.config={...base,...override.config};
+  else node.config={...base,...(node.kind==='human'?{instructions:node.config.instructions}:{}),...override.config};
   if(node.kind==='agent'&&!node.config.briefRef)gaps.push({nodeId:node.id,code:'agent_brief_reference_required'});
   if(override.requirements)node.requirements=structuredClone(override.requirements);
   else node.requirements=node.requirements.map(requirement=>({...requirement,path:expand(requirement.path)}));

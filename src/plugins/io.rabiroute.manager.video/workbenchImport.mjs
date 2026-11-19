@@ -16,12 +16,16 @@ export function importWorkbench(source, definition) {
     ids.set(row.id, randomUUID());
   }
   for (const [index, row] of source.nodes.entries()) {
-    const kind = row.kind === "cli" || row.kind === "shell" && Array.isArray(row.cmd) ? "command" : row.kind;
+    const kind = row.kind === "manual" ? "human" : row.kind === "cli" || row.kind === "shell" && Array.isArray(row.cmd) ? "command" : row.kind;
     if (!definition.capabilities[kind]?.executable) throw new Error(`不支持的导入节点类型：${row.kind}`);
     const id = ids.get(row.id), stage = row.stage || "未分组"; stages[stage] = (stages[stage] || 0) + 1;
     // Shell command strings, private installation paths and Agent fallback chains need explicit resolution.
-    const config = { importedNodeId: row.id, unresolved: true, parameterSchema: structuredClone(row.params||[]), parameterValues: {}, legacy: structuredClone(row) };
-    gaps.push({ nodeId: id, code: kind === "agent" ? "exact_agent_target_required" : "trusted_tool_and_argv_required" });
+    const config = { importedNodeId: row.id, parameterSchema: structuredClone(row.params||[]), parameterValues: {}, legacy: structuredClone(row) };
+    if (kind === "human") config.instructions = row.hint || row.note || "";
+    else {
+      config.unresolved = true;
+      gaps.push({ nodeId: id, code: kind === "agent" ? "exact_agent_target_required" : "trusted_tool_and_argv_required" });
+    }
     const expected = Array.isArray(row.expect) ? row.expect : row.expect ? [row.expect] : [];
     const outputs = Array.isArray(row.outputs) ? row.outputs : [];
     const requirements = expected.map((entry, number) => {

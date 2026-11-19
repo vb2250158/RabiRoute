@@ -134,7 +134,8 @@ class DesktopPetIdleScheduler(QObject):
 
     def _arm_sleep_timer(self) -> None:
         behavior = self._behavior
-        if not behavior.sleep_state or behavior.sleep_after_seconds <= 0 or self._last_activity_at is None:
+        if (not behavior.sleep_state or self._current_state == behavior.sleep_state
+                or behavior.sleep_after_seconds <= 0 or self._last_activity_at is None):
             self._sleep_timer.stop()
             return
         remaining = self._last_activity_at + behavior.sleep_after_seconds - self._clock()

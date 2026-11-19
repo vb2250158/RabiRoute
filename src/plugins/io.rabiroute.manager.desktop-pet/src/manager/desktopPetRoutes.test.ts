@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
+import type { DesktopPetBinding } from "../../../../shared/desktopSettingsContract.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
 import { createDesktopPetOperations } from "./desktopPetOperations.js";
 import type { DesktopPetSettingsAccess, DesktopPetEventPublisher } from "./desktopPetRoutes.js";
@@ -369,16 +370,21 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   const bindingResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75, bubbleStyle: { maxVisible: 3, displaySeconds: 12 } })
+    body: JSON.stringify({
+      personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75,
+      randomIdleEnabled: false, bubbleStyle: { maxVisible: 3, displaySeconds: 12 }
+    })
   });
   assert.equal(bindingResponse.status, 200);
   const bindingPayload = await bindingResponse.json() as { data: { binding: { enabled: boolean; packId: string; scale: number } } };
   assert.equal(bindingPayload.data.binding.enabled, true);
   assert.equal(bindingPayload.data.binding.packId, "yeyu-library-default");
   assert.equal(bindingPayload.data.binding.scale, 0.75);
-  const savedBubble = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`)).json() as { data: { binding: { bubbleStyle: { maxVisible: number; displaySeconds: number } } } };
-  assert.equal(savedBubble.data.binding.bubbleStyle.maxVisible, 3);
-  assert.equal(savedBubble.data.binding.bubbleStyle.displaySeconds, 12);
+  const saved = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`)).json() as { data: { binding: DesktopPetBinding } };
+  assert.equal(saved.data.binding.bubbleStyle.maxVisible, 3);
+  assert.equal(saved.data.binding.bubbleStyle.displaySeconds, 12);
+  assert.equal(saved.data.binding.randomIdleEnabled, false);
+  assert.equal(saved.data.binding.autoSleepEnabled, true);
   assert.deepEqual(publishedEvents[0], {
     eventType: "desktop_settings_changed",
     data: { scope: "desktop-pet", personaId: "YeYu" }

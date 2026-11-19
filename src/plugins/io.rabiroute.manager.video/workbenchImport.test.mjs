@@ -16,3 +16,10 @@ test("complete graph import preserves extensions and remaps internal IDs",()=>{
   const {canvas}=importWorkbench(source,definition);assert.notEqual(canvas.graph.nodes[0].id,"a");assert.deepEqual(canvas.extension,source.extension);
   assert.throws(()=>importWorkbench({nodes:[{id:"a",kind:"unknown"}]},definition),/不支持/);
 });
+test("legacy manual instruction becomes a human checkpoint without a command gap", () => {
+  const source = { name: "复盘", nodes: [{ id: "apply", kind: "manual", hint: "在复盘末尾勾掉已落盘的改法" }] };
+  const { canvas, report } = importWorkbench(source, definition);
+  assert.equal(canvas.graph.nodes[0].kind, "human");
+  assert.equal(canvas.graph.nodes[0].config.instructions, source.nodes[0].hint);
+  assert.ok(!report.gaps.some(row => row.code === "trusted_tool_and_argv_required"));
+});

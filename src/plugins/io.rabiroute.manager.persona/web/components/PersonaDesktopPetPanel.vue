@@ -26,6 +26,9 @@ const importing = ref(false);
 const dirty = computed(() => store.dirty || petDirty.value);
 const ready = computed(() => !petDirty.value || loaded.value);
 const selectedPack = computed(() => packs.value.find(pack => pack.id === binding.value?.packId));
+const idleBehavior = computed(() => selectedPack.value?.idleBehavior);
+const hasRandomIdle = computed(() => Boolean(idleBehavior.value?.randomStates.length)
+  || Object.values(selectedPack.value?.modeAnimationSets || {}).some(group => group.randomStates.length));
 const actions = computed(() => selectedPack.value ? desktopPetActions(selectedPack.value) : []);
 const actionGroups = computed(() => [...new Set(actions.value.map(action => action.group))]);
 const staticCount = computed(() => actions.value.filter(action => action.staticImage).length);
@@ -297,6 +300,30 @@ onBeforeUnmount(() => {
         <v-btn-toggle v-model="binding.fpsCap" color="secondary" density="compact" mandatory divided :disabled="!binding.enabled">
           <v-btn v-for="fps in [6, 12, 15, 24]" :key="fps" :value="fps">{{ fps }} FPS</v-btn>
         </v-btn-toggle>
+        <div class="section-title small-title mt-6">待机行为</div>
+        <v-switch
+          v-model="binding.randomIdleEnabled"
+          label="随机播放待机动作"
+          color="secondary"
+          density="compact"
+          hide-details
+          :disabled="!binding.enabled || !hasRandomIdle"
+        />
+        <div v-if="idleBehavior?.randomMaxSeconds && idleBehavior.randomStates.length" class="section-note">
+          动作包间隔 {{ idleBehavior.randomMinSeconds }}–{{ idleBehavior.randomMaxSeconds }} 秒
+        </div>
+        <v-switch
+          v-model="binding.autoSleepEnabled"
+          label="长时间空闲后休息"
+          color="secondary"
+          density="compact"
+          hide-details
+          :disabled="!binding.enabled || !idleBehavior?.sleepAfterSeconds"
+        />
+        <div v-if="idleBehavior?.sleepState" class="section-note">
+          <template v-if="binding.autoSleepEnabled && idleBehavior.sleepAfterSeconds">空闲 {{ idleBehavior.sleepAfterSeconds }} 秒后休息。 </template>
+          可右键选择「现在休息」，点一下桌宠即可唤醒。
+        </div>
         <div class="section-title small-title mt-6">移动与传送</div>
         <v-switch v-model="binding.wanderEnabled" label="桌宠闲逛" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
         <div v-if="binding.wanderEnabled" class="pet-wander-settings">

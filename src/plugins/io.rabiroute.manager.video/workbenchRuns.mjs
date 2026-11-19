@@ -40,7 +40,8 @@ export class WorkbenchRuns {
     const operation=previous.then(async()=>{await this.atomic(this.file(run.id), run);
     await this.atomic(path.join(this.root,"history",`${run.id}.json`),{id:run.id,projectId:run.projectId,canvasId:run.canvasId,state:run.state,createdAt:run.createdAt,canvasRevision:run.canvasRevision});
     this.runtime.auditWorkbench?.("workbench_run_saved", run.id, "committed");
-    this.publish("workbench.changed", { runId: run.id, state: run.state, projectId: run.projectId, canvasId: run.canvasId });
+    const attemptStates = Object.fromEntries(Object.entries(run.attempts).map(([id, attempt]) => [id, attempt.state]));
+    this.publish("workbench.changed", { runId: run.id, state: run.state, projectId: run.projectId, canvasId: run.canvasId, attemptStates });
     });this.writes.set(run.id,operation);return operation.finally(()=>{if(this.writes.get(run.id)===operation)this.writes.delete(run.id);});
   }
   async initialize() {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "rabi-speech",
   "name": "RabiSpeech",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "kind": "local-service",
   "description": "Independent local TTS/ASR provider gateway for direct use through RabiLink Relay.",
   "runtime": {

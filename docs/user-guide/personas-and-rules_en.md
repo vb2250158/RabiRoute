@@ -134,6 +134,8 @@ Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for 
 
 Animation assets live under the current role's `desktop-pet/packs/` directory and are retained after synchronization retirement. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate are display preferences for this PC rather than role data.
 
+Under **Display on this PC → Idle behavior**, you can turn off random idle actions and automatic rest independently. The animation pack provides the action interval and inactivity timeout. If it includes a sleep animation, right-click the pet and choose **Rest now**. Click or drag the pet, or choose **Wake up**, to return it to idle. Task completion feedback for the current role can also wake it.
+
 After selecting a pack, the page lists the total number of actions, animation entries, and static images, grouped by idle and sleep, task and connection feedback, mouse interactions, random idle actions, and other actions. Each entry shows its trigger, format, and looping behavior; PNG sequences also show frame count and frame rate. Counts refer to available action entries. Single-frame PNG entries count as static images; GIF frame counts are not guessed.
 
 Click **Preview** beside an action, then **Play preview** to view, replay, or stop the asset on this page. PNG sequences follow the pack's frame rate and looping settings; GIF previews follow the file's own settings. Previewing never triggers the desktop pet or changes its binding, and closes when switching packs or personas. Actions without an automatic trigger are listed as manually played.

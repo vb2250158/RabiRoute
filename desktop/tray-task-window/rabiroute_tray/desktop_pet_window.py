@@ -36,6 +36,9 @@ class _TravelHalo(QWidget):
             painter.drawLine(round(x), round(y - 4), round(x), round(y + 4))
 
 
+_DIRECT_MOTION_STATES = frozenset({"move", "run", "lift", "drag", "throw", "airborne", "teleport-out", "teleport-in"})
+
+
 class DesktopPetWindow(QWidget):
     clicked = Signal()
     double_clicked = Signal()
@@ -186,7 +189,7 @@ class DesktopPetWindow(QWidget):
 
     @property
     def animation_running(self) -> bool:
-        return self._png_timer.isActive() or self.travelling
+        return self._png_timer.isActive() or not self._previous_frame.isHidden() or self.travelling
 
     def is_playing(self, pack: DesktopPetPack | None, state_name: str) -> bool:
         return (self._active_pack is pack and self._active_animation is not None
@@ -345,8 +348,9 @@ class DesktopPetWindow(QWidget):
         previous_state = self.active_state
         blend = (previous is not None and not previous.isNull() and self._active_pack is pack
                  and not self.travelling and not self.pointer_engaged and self._turn_scale is None
-                 and previous_state not in {"move", "run", "drag", "teleport-out", "teleport-in"}
-                 and animation.state.name not in {"move", "run", "drag", "teleport-out", "teleport-in"})
+                 and previous_state != animation.state.name
+                 and previous_state not in _DIRECT_MOTION_STATES
+                 and animation.state.name not in _DIRECT_MOTION_STATES)
         self.stop_animation()
         self._sprite_bounds = QRect()
         if self._active_pack is None or self._active_pack.pack_id != pack.pack_id:
@@ -360,7 +364,7 @@ class DesktopPetWindow(QWidget):
         self._label.setGeometry(self.rect())
         self._label.setText("")
         self._label.setStyleSheet("background: transparent;")
-        self._play_png_sequence(animation, target)
+        self._play_png_sequence(animation, target, start_clock=not blend)
         if blend:
             self._previous_frame.setGeometry(self.rect())
             self._previous_frame.setPixmap(previous)
@@ -378,11 +382,14 @@ class DesktopPetWindow(QWidget):
         self._previous_opacity.setOpacity(1 - progress)
         self._travel_opacity.setOpacity(progress)
 
-    def _finish_transition(self) -> None:
+    def _finish_transition(self, *, resume_playback: bool = True) -> None:
+        was_blending = not self._previous_frame.isHidden()
         self._transition.stop()
         self._previous_frame.hide()
         self._previous_frame.clear()
         self._travel_opacity.setOpacity(1)
+        if resume_playback and was_blending and self._active_animation:
+            self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
 
     def prepare_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
         """Pre-render an authorized action; GIF and PNG share one playback clock."""
@@ -429,7 +436,7 @@ class DesktopPetWindow(QWidget):
         self._prepared_gif_delays.clear()
 
     def stop_animation(self) -> None:
-        self._finish_transition()
+        self._finish_transition(resume_playback=False)
         self._png_timer.stop()
         self._png_frames = ()
         self._gait = None
@@ -727,7 +734,7 @@ class DesktopPetWindow(QWidget):
         if self._bubble.isVisible():
             self._place_bubble()
 
-    def _play_png_sequence(self, animation: LoadedDesktopPetAnimation, target: QSize) -> None:
+    def _play_png_sequence(self, animation: LoadedDesktopPetAnimation, target: QSize, *, start_clock: bool) -> None:
         cache_key = self._prepared_key(self._active_pack, animation, target)
         frames = self._prepared_png_frames.get(cache_key)
         if frames is None:
@@ -753,7 +760,7 @@ class DesktopPetWindow(QWidget):
         self._png_loop = animation.state.loop
         self._png_next_state = animation.state.next_state
         self._display_png_frame()
-        if self._travel_kind not in {"move", "run"}:
+        if start_clock and self._travel_kind not in {"move", "run"}:
             self._png_timer.start(self._frame_interval(animation.state.fps))
 
     def _frame_interval(self, fps: int) -> int:

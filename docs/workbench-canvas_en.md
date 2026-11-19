@@ -15,13 +15,17 @@ projects/<projectId>/
   .canvas-index/
 ```
 
-Each canvas has its own revision and CAS. Editing another canvas does not update the project revision. A conflict preserves unsaved edits. Lists show 50 summaries per page with server-side search and cursors; graph bodies load when opened.
+Each canvas has its own revision and CAS. Editing another canvas does not update the project revision. A conflict preserves unsaved edits. The canvas list is a responsive grid with server-side search and cursor pagination. A tile shows its media cover when available. Visible tiles without a cover load a thumbnail of the node layout on demand.
 
 Copying a canvas folder includes its definition and private materials. Copy/register operations allocate new identities and remap internal graph references. Junctions, escaping paths and broken references are rejected. Shared models, external assets, machine bindings and templates remain explicit dependencies. Copies do not inherit running processes or execution claims.
 
 ## Editing and execution
 
 The graph supports command, agent, human, generate and asset nodes, control edges, variables and group contracts. When a canvas contains media, the media editor shares its revision and stores its draft as a referenced material.
+
+Drag a card's bottom-right handle to resize its preview, or focus the handle and use the arrow keys. The canvas saves the size and updates its connections and minimap.
+
+Flow Next defines execution order. Material ports connect declared outputs to downstream inputs. A node can accept multiple sources. Select it to see, locate, or remove its sources below the card. Nodes and incoming links reflect the live run state.
 
 Control edges use success or completed, with AND joins. Mandatory gate failures stop further dispatch; ordinary failures remain visible in the run result. Default concurrency is one. The unified API accepts explicit concurrency from 1 to 16 and serializes nodes with the same resourceKey.
 

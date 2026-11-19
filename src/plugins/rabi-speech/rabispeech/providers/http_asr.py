@@ -5,6 +5,7 @@ from ..timeout_settings import get_timeout_seconds
 
 import asyncio
 import base64
+from dataclasses import replace
 import math
 import wave
 from typing import Callable
@@ -12,9 +13,10 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ..config import HttpAsrModelSettings, HttpAsrProviderSettings
+from ..config import SERVICE_ROOT, HttpAsrModelSettings, HttpAsrProviderSettings
 from ..contracts import TranscriptSegment, TranscriptionRequest, TranscriptionResult
-from ..worker_supervisor import WorkerSupervisor
+from ..worker_paths import discover_firered_command
+from ..worker_supervisor import WorkerLaunch, WorkerSupervisor
 
 
 class LocalHttpAsrProvider:
@@ -57,7 +59,7 @@ class LocalHttpAsrProvider:
                     "name": model.name,
                     "family": model.family,
                     "source": model.source,
-                    "installed": model.installed,
+                    "installed": self._launch_for_model(model) is not None,
                     "loaded": self._loaded_model == model.id and (
                         not self._managed_worker or self.worker_supervisor.managed_worker_is_running(self._worker_key(model.id))
                     ),
@@ -73,7 +75,8 @@ class LocalHttpAsrProvider:
         if not self.settings.enabled:
             raise RuntimeError(f"{self.provider_id} ASR provider is disabled.")
         model = self._resolve_model(request.model)
-        if not model.installed:
+        launch = self._launch_for_model(model)
+        if launch is None:
             raise ValueError(f"Local ASR model is not installed: {model.id}")
         payload = {
             "audio_base64": base64.b64encode(request.audio_path.read_bytes()).decode("ascii"),
@@ -85,7 +88,7 @@ class LocalHttpAsrProvider:
         timeout = httpx.Timeout(get_timeout_seconds("speech.httpAsr.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.httpAsr.connect", 10))
         key = self._worker_key(model.id)
         async with self._lock, self.worker_supervisor.use(
-            key, model.base_url, model.launch, idle_seconds=self.settings.idle_unload_seconds,
+            key, model.base_url, launch, idle_seconds=self.settings.idle_unload_seconds,
             on_unloaded=lambda: self._on_worker_unloaded(model.id),
         ) as worker_url, httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{worker_url}/transcribe", json=payload)
@@ -134,6 +137,16 @@ class LocalHttpAsrProvider:
             self._loaded_model = ""
             if self._on_capabilities_changed is not None:
                 self._on_capabilities_changed()
+
+    def _launch_for_model(self, model: HttpAsrModelSettings) -> WorkerLaunch | None:
+        if model.installed:
+            return model.launch
+        if self.provider_id != "fireredasr2" or model.id != "fireredasr2-aed":
+            return None
+        command = discover_firered_command(
+            model.launch.command, SERVICE_ROOT, model.launch.working_directory, self.settings.managed_model_root,
+        )
+        return replace(model.launch, command=command) if command else None
 
     def _resolve_model(self, requested: str) -> HttpAsrModelSettings:
         normalized = requested.strip().lower()

@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.27",
+      "version": "0.1.28",
       "enabled": true,
       "config": {},
       "grants": []
@@ -202,7 +202,7 @@
     {
       "id": "manager:desktop-pet",
       "package": "io.rabiroute.manager.desktop-pet",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
