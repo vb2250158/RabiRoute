@@ -19,6 +19,10 @@ export function initialFlowNodeConfig(kind: string): Record<string, unknown> {
     default: return {};
   }
 }
+export type CanvasPreview = { kind?: "image" | "video"; assetId?: string; jobId?: string };
+export type CanvasCover = { kind: "image" | "video"; url: string };
+export type CanvasSummary = { id: string; name: string; revision: number; nodeCount: number; preview?: CanvasPreview };
+
 export const NODE_WIDTH=320, NODE_HEIGHT=144, LIST_LIMIT=300;
 export const linkedText: (cards: readonly { id:string; kind:string; text:string; generated?:boolean }[], links: readonly MediaLink[], target:string) => string = resolveLinkedText;
 export function connectGraph(graph:FlowGraph,definition:WorkbenchDefinition,edge:FlowEdge) {

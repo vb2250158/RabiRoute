@@ -7,7 +7,7 @@ import type { PluginCandidate } from "../plugin-kernel/types.js";
 
 test("current NapCat requires its new host ports before activation while unrelated plugins remain usable", async () => {
   const manifest = parsePluginManifest(JSON.parse(await fs.readFile(new URL("../plugins/io.rabiroute.endpoint.napcat/rabi.plugin.json", import.meta.url), "utf8")));
-  assert.ok(manifest.requires.includes("host.message-endpoints@3"));
+  assert.ok(manifest.requires.includes("host.message-endpoints@4"));
   const candidate: PluginCandidate = { instanceId: "endpoint:napcat", revision: "current", manifest, config: {}, entry: { execution: "in_process", path: "controlled.mjs" } };
   const unrelated: PluginCandidate = { ...candidate, instanceId: "unrelated", manifest: { ...manifest, id: "io.test.unrelated", provides: ["test.unrelated@1"], requires: [] } };
   let prepared = 0;

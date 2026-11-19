@@ -6,3 +6,6 @@ export interface SpeechObservation {
  readonly estimates: Readonly<Record<string, string | number | boolean>>;
 }
 export function snapshotSpeechObservation(value: SpeechObservation | undefined): SpeechObservation | undefined;
+
+export type RecentSpeech = readonly {text: string; ageMs: number}[];
+export function snapshotRecentSpeech(value: RecentSpeech | undefined): RecentSpeech | undefined;

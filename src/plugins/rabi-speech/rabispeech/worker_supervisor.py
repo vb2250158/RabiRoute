@@ -4,15 +4,20 @@ from .timeout_settings import get_timeout_seconds
 
 
 import asyncio
+import logging
 import os
 import subprocess
 import tempfile
 import time
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import AsyncIterator, Callable
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,8 @@ class WorkerSupervisor:
         self._groups: dict[str, _ManagedProcess] = {}
         self._processes: dict[str, _ManagedProcess] = {}
         self._closed = False
+        self._use_locks: dict[str, asyncio.Lock] = {}
+        self._idle_timers: dict[str, asyncio.TimerHandle] = {}
 
     async def open(self) -> None:
         async with self._lock:
@@ -48,6 +55,9 @@ class WorkerSupervisor:
     async def close(self) -> None:
         async with self._lock:
             self._closed = True
+            for timer in self._idle_timers.values():
+                timer.cancel()
+            self._idle_timers.clear()
             owned = list(self._processes.values())
             results = await asyncio.gather(
                 *(asyncio.to_thread(self._terminate, managed) for managed in owned),
@@ -58,6 +68,53 @@ class WorkerSupervisor:
             if failed:
                 raise RuntimeError("Model worker shutdown remains unconfirmed: " +
                                    ", ".join(key for key, _ in failed)) from failed[0][1]
+
+    def managed_worker_is_running(self, key: str) -> bool:
+        worker = self._processes.get(key)
+        return worker is not None and worker.process.poll() is None
+
+    @asynccontextmanager
+    async def use(
+        self, key: str, base_url: str, launch: WorkerLaunch, *, idle_seconds: float,
+        on_unloaded: Callable[[], None] | None = None,
+    ) -> AsyncIterator[str]:
+        """Keep a managed ASR worker alive through inference and expire it after the last use."""
+        lock = self._use_locks.setdefault(launch.exclusive_group or key, asyncio.Lock())
+        async with lock:
+            timer = self._idle_timers.pop(key, None)
+            if timer is not None:
+                timer.cancel()
+            try:
+                yield await self.ensure(key, base_url, launch)
+            finally:
+                worker = self._processes.get(key)
+                if worker is not None and idle_seconds > 0 and not self._closed:
+                    loop = asyncio.get_running_loop()
+
+                    def expire() -> None:
+                        loop.create_task(self._expire_worker(key, timer, lock, worker, on_unloaded))
+
+                    timer = loop.call_later(idle_seconds, expire)
+                    self._idle_timers[key] = timer
+
+    async def _expire_worker(
+        self, key: str, timer: asyncio.TimerHandle, use_lock: asyncio.Lock, worker: _ManagedProcess,
+        on_unloaded: Callable[[], None] | None,
+    ) -> None:
+        async with use_lock, self._lock:
+            if self._idle_timers.get(key) is not timer:
+                return
+            self._idle_timers.pop(key)
+            if self._closed or self._processes.get(key) is not worker:
+                return
+            try:
+                await asyncio.to_thread(self._terminate, worker)
+            except Exception:
+                logger.exception("Idle ASR worker shutdown failed: %s", key)
+                return
+        logger.info("Released idle ASR worker: %s", key)
+        if on_unloaded is not None:
+            on_unloaded()
 
     async def ensure(self, key: str, base_url: str, launch: WorkerLaunch) -> str:
         if self._closed:

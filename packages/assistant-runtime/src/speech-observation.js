@@ -10,3 +10,19 @@ export function snapshotSpeechObservation(value){
  for(const key of ['provider','model'])if(value[key]!==undefined){if(typeof value[key]!=='string'||value[key].length>256)invalid();result[key]=value[key]}
  return result;
 }
+
+
+/** Bounded background speech is reference data for one turn, never a user instruction. */
+export function snapshotRecentSpeech(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 6) throw Error('ASSISTANT_RECENT_SPEECH_INVALID');
+  const result = [];
+  for (const row of value) {
+    if (!row || typeof row.text !== 'string' || row.text.length > 512 || !row.text.trim() || [...row.text].length > 256
+      || !Number.isSafeInteger(row.ageMs) || row.ageMs < 0 || row.ageMs > 90000) {
+      throw Error('ASSISTANT_RECENT_SPEECH_INVALID');
+    }
+    result.push({text:row.text,ageMs:row.ageMs});
+  }
+  return result.length ? result : undefined;
+}

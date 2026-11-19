@@ -40,6 +40,7 @@ export interface TurnOptions extends TurnLimits {
   inputScope?: string;
   speechCapabilities?: import('./speech-expression.js').SpeechExpressionPolicy;
     speechObservation?: import('./speech-observation.js').SpeechObservation;
+  recentSpeech?: import('./speech-observation.js').RecentSpeech;
   model: HostModel; protocol: AgentProtocol; toolPolicy: ToolPolicy;
   executeTool(event: ToolEvent): MaybePromise<unknown>;
   tools?: (ToolDeclaration | string)[]; turnId?: string;

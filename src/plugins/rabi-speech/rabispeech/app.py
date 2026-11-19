@@ -8,6 +8,7 @@ import base64
 import binascii
 import hashlib
 import ipaddress
+import json
 import logging
 import mimetypes
 import os
@@ -17,6 +18,7 @@ import time
 import wave
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
+from hmac import compare_digest
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
@@ -28,6 +30,7 @@ from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .assistant_wake import AssistantWakeSpotter
 from .audio import AudioTranscoder, subtitle_text
 from .all_day_capture import register_all_day_capture
 from .audio_stream_events import AudioStreamEventStore
@@ -111,6 +114,15 @@ class SpeakerIdentityBody(BaseModel):
     aliases: list[str] = Field(default_factory=list)
 
 
+class AssistantWakeBody(BaseModel):
+    aliases: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=1, max_length=64)
+
+
+class AssistantRealtimeBody(BaseModel):
+    captureId: Annotated[str, Field(pattern="^[a-f0-9]{32}$")]
+    enabled: bool
+
+
 class PlaybackSettingsBody(BaseModel):
     volume: int = Field(strict=True, ge=0, le=100)
 
@@ -169,7 +181,9 @@ def default_registry(settings: Settings, roles_root: Path | None = None) -> Prov
         registry.register_asr(FasterWhisperProvider(settings.faster_whisper))
     for http_asr in settings.http_asr:
         if http_asr.enabled:
-            registry.register_asr(LocalHttpAsrProvider(http_asr, registry.worker_supervisor))
+            registry.register_asr(LocalHttpAsrProvider(
+            http_asr, registry.worker_supervisor, on_capabilities_changed=registry.notify_capabilities_changed,
+        ))
     for api_asr in settings.api_asr:
         if api_asr.enabled:
             provider = DashScopeAsrProvider(api_asr) if api_asr.protocol == "dashscope" else ApiAsrProvider(api_asr)
@@ -188,6 +202,7 @@ def create_app(
     speaker_recognition: SpeakerRecognitionService | None = None,
 ) -> FastAPI:
     current = settings or load_settings()
+    assistant_audio_token = os.environ.pop("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "")
     persona_roles_root = (roles_root or current.config_path.parents[2] / "data" / "roles").expanduser().resolve()
     rabilink_audio_stale_timeout = get_timeout_seconds("speech.remoteAudio.stale", rabilink_audio_stale_timeout_seconds)
     if rabilink_audio_stale_timeout <= 0:
@@ -238,16 +253,17 @@ def create_app(
 
     pending_audio_ids: dict[str, str] = {}
 
-    async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig) -> TranscriptionResult:
+    async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig, *, assistant_local=False) -> TranscriptionResult:
         record_id = pending_audio_ids.get(str(audio_path)) or f"speech-{uuid4().hex}"
         remote = None
-        if os.environ.get("RABIROUTE_MANAGER_URL", "").strip() or os.environ.get("GATEWAY_MANAGER_URL", "").strip():
+        manager_configured = os.environ.get("RABIROUTE_MANAGER_URL", "").strip() or os.environ.get("GATEWAY_MANAGER_URL", "").strip()
+        if not assistant_local and manager_configured:
             remote = await selected_remote_transcription(_manager_loopback_url(), audio_path, model=config.asr_model, language=config.language, prompt=config.prompt)
         result = remote or await _transcribe(
             providers,
             audio_path,
-            model=config.asr_model,
-            provider=None,
+            model="fireredasr2-aed" if assistant_local else config.asr_model,
+            provider="fireredasr2" if assistant_local else None,
             language=config.language,
             prompt=config.prompt,
             # Hot-delivery quality decisions require auditable word confidence.
@@ -401,6 +417,7 @@ def create_app(
         temp_dir=current.server.temp_dir,
         transcriber=microphone_transcriber,
         submitter=microphone_submitter,
+        assistant_transcriber=lambda audio, config: microphone_transcriber(audio, config, assistant_local=True),
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
         stop_playback=lambda: playback_queue.stop(clear_pending=True),
         record_transcription=record_completed_audio,
@@ -1013,6 +1030,134 @@ def create_app(
             return binding
         except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
             raise _speaker_http_error(exc) from exc
+
+    def require_assistant_capture(request: Request) -> None:
+        _require_loopback(request)
+        supplied = request.headers.get("x-rabispeech-assistant-token", "")
+        if (not assistant_audio_token or not assistant_audio_token.isascii() or not supplied.isascii()
+                or not compare_digest(supplied, assistant_audio_token)):
+            raise HTTPException(status_code=403, detail="ASSISTANT_CAPTURE_ACCESS_DENIED")
+
+    @api.get("/v1/internal/assistant-capture", include_in_schema=False)
+    async def assistant_capture(request: Request, capture_id: str | None = None,
+                                from_sample: int | None = None) -> StreamingResponse:
+        require_assistant_capture(request)
+        try:
+            audio = microphone.assistant_audio(capture_id, from_sample)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return StreamingResponse(audio.chunks, media_type="application/octet-stream", headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-RabiSpeech-Capture-Id": audio.capture_id,
+            "X-RabiSpeech-Start-Sample": str(audio.start_sample),
+            "X-RabiSpeech-Sample-Rate": str(audio.sample_rate),
+        })
+
+    @api.post("/v1/internal/assistant-realtime", include_in_schema=False)
+    async def assistant_realtime(request: Request, body: AssistantRealtimeBody) -> dict[str, bool]:
+        require_assistant_capture(request)
+        try:
+            microphone.set_assistant_realtime(body.captureId, body.enabled)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"enabled": body.enabled}
+
+    @api.post("/v1/internal/assistant-transcribe", include_in_schema=False)
+    async def assistant_transcribe(request: Request) -> dict[str, object]:
+        require_assistant_capture(request)
+        if request.headers.get("content-type") != "audio/wav":
+            raise HTTPException(status_code=415, detail="ASSISTANT_LOCAL_WAV_REQUIRED")
+        maximum = min(current.server.max_upload_bytes, 44 + 35 * 16000 * 2)
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) > maximum - len(payload):
+                raise HTTPException(status_code=413, detail="ASSISTANT_LOCAL_AUDIO_TOO_LARGE")
+            payload.extend(chunk)
+        if len(payload) <= 44:
+            raise HTTPException(status_code=422, detail="ASSISTANT_LOCAL_AUDIO_EMPTY")
+        path = _store_bytes(payload, ".wav", current)
+        try:
+            try:
+                with wave.open(str(path), "rb") as source:
+                    if (source.getnchannels(), source.getsampwidth(), source.getframerate()) != (1, 2, 16000):
+                        raise HTTPException(status_code=422, detail="ASSISTANT_LOCAL_WAV_INVALID")
+                    frames = source.getnframes()
+                    if not frames or frames > 35 * 16000 or len(source.readframes(frames)) != frames * 2:
+                        raise HTTPException(status_code=422, detail="ASSISTANT_LOCAL_WAV_INVALID")
+            except (wave.Error, EOFError) as error:
+                raise HTTPException(status_code=422, detail="ASSISTANT_LOCAL_WAV_INVALID") from error
+            try:
+                result = await _transcribe(
+                    providers, path, model="fireredasr2-aed", provider="fireredasr2",
+                    language=microphone.config.language, prompt=microphone.config.prompt, word_timestamps=True,
+                )
+            except (RuntimeError, ValueError, httpx.HTTPError) as error:
+                logger.warning("Assistant local transcription failed: %s", type(error).__name__)
+                raise HTTPException(status_code=503, detail="ASSISTANT_LOCAL_ASR_UNAVAILABLE") from error
+            return {
+                "text": result.text, "language": result.language, "provider": result.provider,
+                "model": result.model, "segments": [asdict(segment) for segment in result.segments],
+                "additions": result.recognition_metadata(),
+            }
+        finally:
+            path.unlink(missing_ok=True)
+
+    wake_listener = asyncio.Lock()
+
+    @api.post("/v1/internal/assistant-wake", include_in_schema=False)
+    async def assistant_wake(request: Request, body: AssistantWakeBody) -> StreamingResponse:
+        require_assistant_capture(request)
+        directory = current.assistant_wake_model_dir
+        if directory is None:
+            raise HTTPException(status_code=503, detail="ASSISTANT_WAKE_MODEL_MISSING")
+        if wake_listener.locked():
+            raise HTTPException(status_code=409, detail="ASSISTANT_WAKE_ALREADY_LISTENING")
+        await wake_listener.acquire()
+        try:
+            sample_rate = microphone.config.sample_rate
+            spotter = await asyncio.to_thread(AssistantWakeSpotter, directory, body.aliases, sample_rate)
+            audio = microphone.assistant_audio(None, None)
+            if audio.sample_rate != sample_rate:
+                raise ValueError("ASSISTANT_WAKE_MICROPHONE_CHANGED")
+        except BaseException as error:
+            wake_listener.release()
+            if isinstance(error, ValueError):
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if isinstance(error, (RuntimeError, ImportError)):
+                detail = str(error) if str(error).startswith("ASSISTANT_WAKE_") else "ASSISTANT_WAKE_UNAVAILABLE"
+                raise HTTPException(status_code=503, detail=detail) from error
+            raise
+
+        # A client may disconnect just before the response begins streaming.
+        pending = asyncio.get_running_loop().call_later(5, wake_listener.release)
+
+        async def wake_events():
+            if pending.cancelled() or pending.when() <= asyncio.get_running_loop().time():
+                return
+            pending.cancel()
+            try:
+                yield json.dumps({"type": "ready", "captureId": audio.capture_id, "sampleRate": audio.sample_rate}) + "\n"
+                async for pcm in audio.chunks:
+                    hit = await asyncio.to_thread(spotter.feed, pcm, microphone.assistant_wake_threshold())
+                    if hit is not None:
+                        keyword_start = audio.start_sample + hit.keyword_start_sample
+                        background = microphone.recent_assistant_speech(audio.capture_id, audio.time_at(keyword_start))
+                        yield json.dumps({
+                            "type": "wake", "captureId": audio.capture_id, "sampleRate": audio.sample_rate,
+                            "aliasIndex": hit.alias_index, "utteranceStartSample": audio.start_sample + hit.utterance_start_sample,
+                            "observedThroughSample": audio.start_sample + hit.observed_through_sample,
+                            "keywordStartSample": keyword_start,
+                            "replayFromSample": audio.start_sample + hit.replay_from_sample,
+                            "recentSpeech": background,
+                        }, ensure_ascii=False) + "\n"
+            finally:
+                try:
+                    await audio.chunks.aclose()
+                finally:
+                    wake_listener.release()
+
+        return StreamingResponse(wake_events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
     @api.get("/v1/microphone/status")
     async def microphone_status() -> dict[str, object]:

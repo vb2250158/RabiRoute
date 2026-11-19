@@ -147,6 +147,89 @@ def fixture(
     )), tts, asr
 
 
+def test_private_assistant_audio_requires_owning_process_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "owned-fixture")
+    client, _, _ = fixture(tmp_path)
+    endpoint = "/v1/internal/assistant-capture"
+    assert client.get(endpoint).status_code == 403
+    assert client.get(endpoint, headers={"x-rabispeech-assistant-token": "stale"}).status_code == 403
+    response = client.get(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "ASSISTANT_CAPTURE_LOCAL_MICROPHONE_REQUIRED"
+    assert endpoint not in client.get("/openapi.json").json()["paths"]
+    assert "RABISPEECH_ASSISTANT_AUDIO_TOKEN" not in os.environ
+
+
+def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample_positions(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from rabispeech.assistant_capture import AssistantAudio
+    from rabispeech.assistant_wake import WakeDetection
+    from rabispeech.microphone import MicrophoneService
+
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "owned-fixture")
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_WAKE_MODEL", str(tmp_path))
+    chunk = bytes(3200)
+
+    def local_capture(_self, capture_id, from_sample):
+        assert (capture_id, from_sample) == (None, None)
+
+        async def chunks():
+            yield chunk
+
+        return AssistantAudio("capture-fixture", 1200, 16000, chunks())
+
+    class FixtureSpotter:
+        def __init__(self, directory, aliases, sample_rate):
+            assert (directory, aliases, sample_rate) == (tmp_path, ["夜雨", "大肥鱼"], 16000)
+
+        def feed(self, pcm, threshold):
+            assert pcm == chunk and threshold > 0
+            return WakeDetection(1, 20, 1600, 80, 400)
+
+    monkeypatch.setattr(MicrophoneService, "assistant_audio", local_capture)
+    monkeypatch.setattr("rabispeech.app.AssistantWakeSpotter", FixtureSpotter)
+    client, _, _ = fixture(tmp_path)
+    endpoint = "/v1/internal/assistant-wake"
+    body = {"aliases": ["夜雨", "大肥鱼"]}
+    assert client.post(endpoint, json=body).status_code == 403
+    for _ in range(2):
+        response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"}, json=body)
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/x-ndjson"
+        assert [json.loads(line) for line in response.text.splitlines()] == [
+            {"type": "ready", "captureId": "capture-fixture", "sampleRate": 16000},
+            {"type": "wake", "captureId": "capture-fixture", "sampleRate": 16000,
+             "aliasIndex": 1, "utteranceStartSample": 1220, "observedThroughSample": 2800,
+             "keywordStartSample": 1280, "replayFromSample": 1600, "recentSpeech": []},
+        ]
+
+
+def test_private_assistant_fallback_uses_only_firered_without_retaining_raw_audio(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    async def transcribe(_providers, path, **options):
+        calls.append((path, options))
+        assert path.is_file()
+        return TranscriptionResult(text="本机接着识别", language="zh", duration=0.01,
+                                   provider="fireredasr2", model="fireredasr2-aed")
+
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "owned-fixture")
+    monkeypatch.setattr("rabispeech.app._transcribe", transcribe)
+    client, _, _ = fixture(tmp_path)
+    audio = wav_file(tmp_path / "fallback.wav").read_bytes()
+    endpoint = "/v1/internal/assistant-transcribe"
+    headers = {"content-type": "audio/wav", "x-rabispeech-assistant-token": "owned-fixture"}
+    assert client.post(endpoint, content=audio, headers={"content-type": "audio/wav"}).status_code == 403
+    assert client.post(endpoint, content=b"a"*100, headers=headers).status_code == 422
+    response = client.post(endpoint, content=audio, headers=headers)
+    assert response.status_code == 200 and response.json()["text"] == "本机接着识别"
+    assert len(calls) == 1
+    path, selected = calls[0]
+    assert selected["model"] == "fireredasr2-aed" and selected["provider"] == "fireredasr2"
+    assert not path.exists()
+
+
 def auth() -> dict[str, str]:
     return {}
 

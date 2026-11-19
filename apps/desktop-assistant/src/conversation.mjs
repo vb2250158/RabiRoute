@@ -22,7 +22,7 @@ export function createStandaloneConversation({ settings, credentials, onError, o
   const projectMessages=values=>values.map(({details,...message})=>({...message,hasDetails:Boolean(details)}));
   const summaries=()=>projectMessages(messages.slice(-100));
   const mark=message=>{dirty.set(message.id,message);if(!checkpoint&&!closed)checkpoint=setTimeout(()=>{checkpoint=undefined;try{flush()}catch{}},500)};
-  const flush=()=>{clearTimeout(checkpoint);checkpoint=undefined;if(!dirty.size&&!contextDirty&&!saveError)return;try{store?.commit({id,messages:[...dirty.values()],...(contextDirty?{context:committedContext}:{})});dirty.clear();contextDirty=false;saveError=null;savedAt=new Date().toISOString()}catch(error){saveError='ASSISTANT_CONTEXT_SAVE_FAILED';try{onError(Error(saveError))}catch{}throw error}};
+  const flush=()=>{clearTimeout(checkpoint);checkpoint=undefined;if(!dirty.size&&!contextDirty&&!saveError)return;try{store?.commit({id,messages:[...dirty.values()],...(contextDirty?{context:committedContext}:{})});dirty.clear();contextDirty=false;saveError=null;savedAt=new Date().toISOString()}catch(error){saveError=error.code==='ASSISTANT_CONTEXT_STORAGE_FULL'?error.code:'ASSISTANT_CONTEXT_SAVE_FAILED';try{onError(Error(saveError))}catch{}throw error}};
   const publish = () => { for (const listener of listeners) listener(summaries()); };
   let visualOwner={};
   const visualCanvas=createVisualCanvas({initial:restored?.canvas||messages.filter(item=>item.canvas).at(-1)?.canvas,
@@ -102,7 +102,7 @@ export function createStandaloneConversation({ settings, credentials, onError, o
       if (JSON.stringify(next) === JSON.stringify(configuredProfile)) return { applied: false, deferred: false };
       const result = session.configure(next); configuredProfile = next; return result;
     },
-    async submit(text, requestId, {source='text',details,conversationId} = {}) {
+    async submit(text, requestId, {source='text',details,conversationId,recentSpeech} = {}) {
       if (closed) throw Error('ASSISTANT_CLOSED');
       if (typeof text !== 'string' || !text.trim() || text.length > 16000 || typeof requestId !== 'string' || requestId.length > 128) throw Error('ASSISTANT_INPUT_INVALID');
       if(conversationId!==undefined&&conversationId!==id)throw Error('ASSISTANT_CONTEXT_CHANGED');
@@ -142,7 +142,7 @@ export function createStandaloneConversation({ settings, credentials, onError, o
         if (observer?.voice.getState().phase === 'running') token = observer.voice.beginResponse({ id: response.id });
       };
       const work = conversation.run(text, {
-        speechCapabilities:policy,speechObservation,
+        speechCapabilities:policy,speechObservation,recentSpeech:source==='speech'?recentSpeech:undefined,
         assertCurrent() { if (closed) throw Error('ASSISTANT_CLOSED'); },
         onState(value) {
           if(closed)return;

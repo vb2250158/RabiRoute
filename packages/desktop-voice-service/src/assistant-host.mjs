@@ -13,10 +13,12 @@ import {asrMessageDetails} from './speech-details.mjs'
 import {projectCaptionText,projectCaptionPlayback} from './caption-progress.mjs'
 
 /** Native Host owns audio. Client and pet only issue commands and present state. */
-export function createResidentHost({ conversation, observeOutput, settings, saveSettings, previewSettings, saveSettingsBatch, credentials, openSettings = () => {}, deviceFactory, speech = () => undefined, pet, createProviders, supportsDynamicExpression=false, listModels=listProviderModels }) {
+export function createResidentHost({ conversation, observeOutput, settings, saveSettings, previewSettings, saveSettingsBatch, credentials, openSettings = () => {}, deviceFactory, speech = () => undefined, pet, createProviders, supportsDynamicExpression=false, listModels=listProviderModels, onCaptureActivity, onCaptureStopped }) {
   if (typeof deviceFactory !== 'function') throw Error('ASSISTANT_DEVICE_FACTORY_REQUIRED')
   let device, closed = false, diagnostic, diagnosticAbort, presentationTimer, error = null, revision = 0
   let inputPreview = null, levels=[],levelUpdatedAt=0
+  let borrowedCapture, localCaptureFallback, wakeBackground
+  let recognizing = 0
   let failedDiagnostic
   let deviceOpening, deviceOpeningAbort, deviceClosing, deviceUsers=0, presenterQueue=Promise.resolve(), captionTestTimer
   let caption = {status:'hidden',lastTestAt:null}
@@ -26,6 +28,11 @@ export function createResidentHost({ conversation, observeOutput, settings, save
   let presentation = { statusText: '语音已停止', text: '', outputEnabled: settings().outputEnabled, capturePaused: true }
   const changed = () => { revision++; pet?.present(settings(), presentation); publishPresentation() }
   const report = value => { error = /^[A-Z][A-Z0-9_]{1,100}$/.test(value?.message) ? value.message : 'ASSISTANT_OPERATION_FAILED'; changed() }
+  const trackRecognition = recognize => async (audio, signal) => {
+    recognizing++
+    try { return await recognize(audio, signal) }
+    finally { recognizing-- }
+  }
   const native = conversation({ onError: report })
   let latestRecognitionText='',recognitionSession=native.getSessionId?.()
   const recognitionContext=()=>{if(typeof native.recognitionContext==='function'){const values=native.recognitionContext();return Array.isArray(values)?values:[];}return native.getSessionId?.()===recognitionSession&&latestRecognitionText?[{role:'assistant',text:latestRecognitionText}]:[]}
@@ -153,15 +160,18 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       if (signal.aborted) { await opened.close(); signal.throwIfAborted() }
       try {
         await opened.configurePresenter(captionSettings(config))
-        const services = await openDesktopVoiceServices({ openDevice: async () => opened, signal, settings: { ...config, maxDurationMs: 30000 },
+        const fallbackCapture = localCaptureFallback && {
+          ...localCaptureFallback, recognize: trackRecognition(localCaptureFallback.recognize),
+        }
+        const services = await openDesktopVoiceServices({ openDevice: async () => opened, createRecording: borrowedCapture, fallbackCapture, signal, settings: { ...config, maxDurationMs: 30000 },
           synthesize: http.synthesize,
           createAsr: http.createAsr, openSpeechStream: http.openSpeechStream,streamSampleRate:http.streamSampleRate,
-          recognize: config.asrMode !== 'native' ? http.recognize : (audio, signal) => {
+          recognize: trackRecognition(config.asrMode !== 'native' ? http.recognize : (audio, signal) => {
             if (audio.byteLength > catalog.maxAudioBytes) throw Error('SPEECH_AUDIO_LIMIT')
             if (speech() !== nativeSpeech) throw Error('SPEECH_NATIVE_UNAVAILABLE')
             return nativeSpeech.transcribe({ audioBase64: Buffer.from(audio).toString('base64'),
               ...(config.asrProviderId ? { providerId: config.asrProviderId } : {}) }, signal)
-          }, onError: report,onSpeechRequest:event=>native.recordSpeechDetails?.(event.responseId,{type:'request',...event}),
+          }), onError: report,onSpeechRequest:event=>native.recordSpeechDetails?.(event.responseId,{type:'request',...event}),
         })
         return { runtime: services.runtime, async dispose() {
           await services.dispose()
@@ -170,7 +180,9 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     },
     async onInput(input) {
       const preview=inputPreview;
-      const receipt=await native.submit(input.text,randomUUID(),{source:input.source,...(input.source==='speech'?{details:asrMessageDetails(settings(),input.result)}:{})});
+      const recentSpeech = input.source === 'speech' ? wakeBackground : undefined;
+      if (recentSpeech !== undefined) wakeBackground = undefined;
+      const receipt=await native.submit(input.text,randomUUID(),{source:input.source,...(input.source==='speech'?{details:asrMessageDetails(settings(),input.result),recentSpeech}:{})});
       if(inputPreview===preview){inputPreview=null;changed()}
       return receipt;
     },
@@ -178,6 +190,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     onEvent(event) {
       if (event.type === 'state') {
         const s = event.state
+        if (['stopped','failed','disposed'].includes(s.phase)) onCaptureStopped?.()
         presentation = { ...presentation, outputEnabled: s.outputEnabled, capturePaused: s.capture !== 'listening',
           statusText: s.phase === 'failed' ? '语音故障' : s.phase === 'starting' ? '正在准备' : s.phase === 'stopped' ? '语音已停止' : s.capture === 'listening' ? '正在聆听' : '麦克风已暂停' }
       } else {
@@ -187,6 +200,8 @@ export function createResidentHost({ conversation, observeOutput, settings, save
           if(prior){const next=projectCaptionPlayback(prior,e.event);speechProgress.set(e.event.responseId,next);if(presentation.responseId===e.event.responseId)presentation={...presentation,...next}}
         }
         if(e.type==='playback'&&e.event?.responseId)native.recordSpeechDetails?.(e.event.responseId,{type:'playback',status:e.event.type,...(e.event.error?{error:'SPEECH_PLAYBACK_FAILED'}:{})})
+        if ((e.type === 'transcript' && e.text?.trim()) || (e.type === 'input' && e.input?.text?.trim())) onCaptureActivity?.(true)
+        if (e.type === 'speech-started') onCaptureActivity?.(false)
         if (e.type === 'speech-started') inputPreview = {text:'',final:false}
         if(e.type==='transcript'&&e.text?.trim()&&!inputPreview?.text)native.beginVisualInput?.()
         if (e.type === 'transcript') inputPreview = {text:e.text,final:false}
@@ -281,7 +296,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
         return native.messageDetails(request.messageId)
       }
       case 'text': return native.submit(request.text, request.requestId)
-      case 'start': await voice.start(); return state()
+      case 'start': await startVoice(); return state()
       case 'stop': diagnosticAbort?.abort(); await diagnostic?.catch(() => {}); await voice.stop(); inputPreview=null; return state()
       case 'interrupt-speech': voice.interruptSpeech('manual'); changed(); return state()
       case 'pause': voice.pauseCapture(); inputPreview=null; return state()
@@ -357,7 +372,22 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       credentials: { asr: await describe('asr'), tts: await describe('tts') },
       pet: pet?.state() ?? { available: false, reason: '未安装兼容桌宠', repository: 'https://github.com/vb2250158/dsh-pet', pets: [] } }
   }
-  return { state, command, initialize:()=>synchronizePresenter().catch(()=>{}), openSettings(url) {
+  async function startVoice(createRecording, {fallback, recentSpeech} = {}) {
+    const phase = voice.getState().phase
+    if (phase === 'running' || phase === 'starting') {
+      if (createRecording) throw Error('ASSISTANT_CAPTURE_ALREADY_ACTIVE')
+    } else {
+      borrowedCapture = createRecording
+      localCaptureFallback = fallback
+      wakeBackground = recentSpeech
+    }
+    await voice.start()
+  }
+  function captureHasWork() {
+    const activity = voice.getPresentationState()
+    return recognizing > 0 || Boolean(activity?.inputPending || activity?.outputActive || activity?.outputQueued)
+  }
+  return { state, command, startWithRecording: startVoice, captureState: () => voice.getState(), captureHasWork, initialize:()=>synchronizePresenter().catch(()=>{}), openSettings(url) {
     if (!device) throw Error('ASSISTANT_DEVICE_UNAVAILABLE')
     return device.request('presenter.open-settings', { url })
   }, async dispose() {

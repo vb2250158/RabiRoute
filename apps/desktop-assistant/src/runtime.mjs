@@ -15,7 +15,7 @@ import {openConversationStore} from './conversation-store.mjs';
 import {createWebSearchService} from '@rabilink/desktop-voice-service/web-search';
 
 /** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy }) {
+export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy, onCaptureActivity, onCaptureStopped }) {
   const store = await openSettingsStore(settingsDirectory);
   let options={};
   try {options=JSON.parse(await readFile(join(directory,'host-options.json'),'utf8'));}
@@ -50,7 +50,7 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
       onCompleted:config=>diagnostics?.recordModel(config) }),
     observeOutput: ({ conversation, ...observer }) => conversation.observe(observer),
     createProviders: providers,
-    openSettings: onOpenSettings,
+    openSettings: onOpenSettings, onCaptureActivity, onCaptureStopped,
   });
   diagnostics=await createAssistantDiagnostics({directory,settings:store.read,host,conversation,sampleUrl:recognitionSampleUrl,
     recognize:(audio,signal)=>{

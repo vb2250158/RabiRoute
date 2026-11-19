@@ -1,22 +1,25 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { SpeechRuntimeControl } from "./speechRuntimeControl.js";
 import type { SpeechRuntimeStatus } from "@rabiroute/host-api/shared/speechControlContract";
 
-function fixture(options: { nonceValid?: boolean; ownerMatches?: boolean; publish?: boolean; retire?: boolean } = {}) {
-  let clock = 0, launches = 0, probes = 0, killed = 0, nonce = "";
+function fixture(options: { nonceValid?: boolean; ownerMatches?: boolean; publish?: boolean; retire?: boolean; port?: number } = {}) {
+  const port = options.port ?? 31415;
+  let clock = 0, launches = 0, probes = 0, killed = 0, nonce = "", assistantAudioToken = "";
   const child = { pid: 123, exitCode: null as number | null, stdout: new PassThrough(), stderr: new PassThrough(), unref() {} };
-  const record = () => ({ schemaVersion: 1, nonce: options.nonceValid === false ? "stale-nonce" : nonce, pid: 456, host: "127.0.0.1", port: 31415 });
+  const record = () => ({ schemaVersion: 1, nonce: options.nonceValid === false ? "stale-nonce" : nonce, pid: 456, host: "127.0.0.1", port });
   const control = new SpeechRuntimeControl({
     rootDir: "C:/RabiRoute", platform: "win32", managedEndpoint: () => true,
     serviceUrl: () => "", existsSync: () => true,
     startTimeoutMs: 500, stopTimeoutMs: 500, now: () => clock,
     wait: async ms => { clock += ms; await new Promise(resolve => setImmediate(resolve)); },
-    inspectOwner: async port => { assert.equal(port, 31415); return child.exitCode !== null ? null : { pid: options.ownerMatches === false ? 999 : 456, owned: true }; },
-    inspect: async url => { probes++; assert.equal(url, "http://127.0.0.1:31415"); return { state: "online", checkedAt: "fixture", configuredUrl: url, service: "RabiSpeech", defaults: {}, providers: { tts: [], asr: [] } } satisfies SpeechRuntimeStatus; },
+    inspectOwner: async requestedPort => { assert.equal(requestedPort, port); return child.exitCode !== null ? null : { pid: options.ownerMatches === false ? 999 : 456, owned: true }; },
+    inspect: async url => { probes++; assert.equal(url, `http://127.0.0.1:${port}`); return { state: "online", checkedAt: "fixture", configuredUrl: url, service: "RabiSpeech", defaults: {}, providers: { tts: [], asr: [] } } satisfies SpeechRuntimeStatus; },
     spawnRuntime: (_command, _args, launch) => {
       launches++; nonce = String(launch!.env!.RABISPEECH_ENDPOINT_NONCE);
+      assistantAudioToken = String(launch!.env!.RABISPEECH_ASSISTANT_AUDIO_TOKEN);
       assert.equal(launch!.env!.RABISPEECH_PORT, "0"); assert.equal(launch!.env!.RABISPEECH_HOST, "127.0.0.1"); assert.equal(launch!.detached, false);
       if (options.publish !== false) queueMicrotask(() => {
         const line = "RABISPEECH_READY:" + JSON.stringify(record()) + "\n";
@@ -26,7 +29,7 @@ function fixture(options: { nonceValid?: boolean; ownerMatches?: boolean; publis
     },
     killProcessTree: async pid => { assert.equal(pid, 123, "only the launched tree may be terminated"); killed++; if (options.retire !== false) child.exitCode = 0; }
   });
-  return { control, child, record, counts: () => ({ launches, probes, killed }) };
+  return { control, child, record, assistantAudioToken: () => assistantAudioToken, counts: () => ({ launches, probes, killed }) };
 }
 
 test("managed Speech publishes only its verified actual descendant endpoint and coalesces starts", async () => {
@@ -120,4 +123,55 @@ test("configuration reconciliation never replaces an owner whose process retirem
   assert.equal(f.counts().launches, 1); assert.equal(f.child.exitCode, null);
   assert.throws(() => f.control.serviceUrl());
   f.child.exitCode = 0; await f.control.releaseOwnedRuntime();
+});
+
+
+test("assistant PCM reads are scoped to the owning managed process and carry the sample cursor", async () => {
+  const bytes = Buffer.from([1, 0, 2, 0]);
+  const requests: Array<{ path: string | undefined; token: unknown; aliases?: string[] }> = [];
+  const endpoint = createServer(async (request, response) => {
+    const entry: typeof requests[number] = { path: request.url, token: request.headers["x-rabispeech-assistant-token"] };
+    requests.push(entry);
+    if (request.method === "POST") {
+      const body = [];
+      for await (const chunk of request) body.push(chunk as Buffer);
+      entry.aliases = JSON.parse(Buffer.concat(body).toString()).aliases;
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.end('{"type":"ready"}\n');
+    } else {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(bytes);
+    }
+  });
+  try {
+    await new Promise<void>(resolve => endpoint.listen(0, "127.0.0.1", resolve));
+    const address = endpoint.address();
+    assert(address && typeof address === "object");
+    const f = fixture({ port: address.port }), signal = AbortSignal.timeout(3000);
+    assert.throws(() => f.control.openAssistantCapture(signal), /尚未发布/);
+    await f.control.start();
+    try {
+      const response = await f.control.openAssistantCapture(signal, { captureId: "window-a", sample: 1440 });
+      assert.equal(response.statusCode, 200);
+      const received = [];
+      for await (const chunk of response) received.push(chunk as Buffer);
+      assert.deepEqual(Buffer.concat(received), bytes);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].path, "/v1/internal/assistant-capture?capture_id=window-a&from_sample=1440");
+      assert(f.assistantAudioToken().length > 30);
+      assert.equal(requests[0].token, f.assistantAudioToken());
+      const wakes = await f.control.openAssistantWake(["夜雨", "大肥鱼"], signal);
+      const frames = [];
+      for await (const frame of wakes) frames.push(frame as Buffer);
+      assert.equal(JSON.parse(Buffer.concat(frames).toString()).type, "ready");
+      assert.equal(requests[1].path, "/v1/internal/assistant-wake");
+      assert.deepEqual(requests[1].aliases, ["夜雨", "大肥鱼"]);
+      assert.equal(requests[1].token, f.assistantAudioToken());
+    } finally {
+      await f.control.releaseOwnedRuntime();
+    }
+    assert.throws(() => f.control.openAssistantCapture(signal), /尚未发布/);
+  } finally {
+    await new Promise<void>(resolve => endpoint.close(() => resolve()));
+  }
 });

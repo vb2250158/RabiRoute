@@ -128,6 +128,7 @@ class HttpAsrProviderSettings:
     default_model: str
     timeout_seconds: float
     models: tuple[HttpAsrModelSettings, ...]
+    idle_unload_seconds: float = 180.0
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,7 @@ class Settings:
     api_asr: tuple[ApiProviderSettings, ...]
     provider_extensions: tuple[str, ...]
     config_path: Path
+    assistant_wake_model_dir: Path | None = None
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -180,6 +182,15 @@ def _resolve_path(base: Path, value: object, fallback: str) -> Path:
 def _model_root(base: Path) -> Path | None:
     configured = str(os.environ.get("RABISPEECH_MODEL_ROOT") or "").strip()
     return _resolve_path(base, configured, ".") if configured else None
+
+
+def _assistant_wake_model_dir(base: Path, model_root: Path | None) -> Path | None:
+    from .assistant_wake import WAKE_MODEL
+
+    configured = os.environ.get("RABISPEECH_ASSISTANT_WAKE_MODEL", "").strip()
+    if configured:
+        return _resolve_path(base, configured, ".")
+    return model_root / "asr" / "sherpa-onnx-kws" / WAKE_MODEL if model_root is not None else None
 
 
 def _model_path(base: Path, raw_path: str, model_root: Path | None) -> Path:
@@ -387,6 +398,7 @@ def load_settings(path: str | Path | None = None) -> Settings:
         api_asr=api_asr,
         provider_extensions=tuple(str(item).strip() for item in extensions if str(item).strip()),
         config_path=configured,
+        assistant_wake_model_dir=_assistant_wake_model_dir(base, model_root),
     )
 
 
@@ -511,6 +523,7 @@ def _http_asr_providers(base: Path, value: object) -> tuple[HttpAsrProviderSetti
                     default_model=default_model,
                     timeout_seconds=float(row.get("timeout_seconds", 180)),
                     models=tuple(models),
+                    idle_unload_seconds=max(0.0, min(86400.0, float(row.get("idle_unload_seconds", 180)))),
                 )
             )
     return tuple(providers)

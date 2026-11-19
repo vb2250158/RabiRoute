@@ -47,6 +47,41 @@ test('accepted speech automatically enters conversation once and clears the temp
  try{await host.command({action:'start'});handlers.onInterim({text:'临时转写'});assert.equal((await host.state()).inputPreview.text,'临时转写');handlers.onFinal({text:'确定的语音。'});await delay(0);assert.equal(received.length,1);assert.equal(received[0].text,'确定的语音。');assert.equal((await host.state()).inputPreview,null)}finally{await host.dispose()}
 });
 
+test('a cold local fallback keeps the wake session busy until recognition finishes', async () => {
+  const config = {...initialAssistantSettings(), electronExecutable:process.execPath,
+    asrMode:'volcengine', asrModel:'bigmodel', ttsModel:'fixture', ttsVoice:'fixture',
+    sampleMs:10, silenceDurationMs:30};
+  const entered = Promise.withResolvers(), result = Promise.withResolvers(), submitted = Promise.withResolvers();
+  const activity = [];
+  let frames = 0;
+  const host = createResidentHost({
+    settings:()=>config, saveSettings:async()=>{}, credentials:{describe:async()=>({configured:true})},
+    conversation:()=>({open:async()=>{},getSessionId:()=>null,close(){},
+      async submit(text){submitted.resolve(text);return {accepted:true};}}),
+    observeOutput:()=>()=>{}, onCaptureActivity:hasText=>activity.push(hasText),
+    createProviders:()=>({createAsr:()=>({createRound:()=>({}),start(){throw Error('REALTIME_DID_NOT_CONNECT');},stop(){}}),
+      synthesize:async()=>new Uint8Array(44)}),
+    deviceFactory:async()=>({close:async()=>{},configurePresenter:async()=>{},present:async()=>{}}),
+  });
+  try {
+    await host.startWithRecording(()=>{throw Error('UNEXPECTED_PRIMARY_CAPTURE');}, {fallback:{
+      createRecording:()=>({start:async()=>{}, amplitude:()=>++frames<3?.5:0,
+        take:async()=>new Uint8Array(44), dispose:async()=>{}}),
+      recognize:async()=>{entered.resolve();return result.promise;},
+    }});
+    await Promise.race([entered.promise, delay(1000).then(()=>{throw Error('NO_FALLBACK_RECOGNITION');})]);
+    assert.deepEqual(activity,[false]);
+    assert.equal(host.captureHasWork(),true);
+    result.resolve({text:'冷启动后完整转写'});
+    assert.equal(await submitted.promise,'冷启动后完整转写');
+    assert.deepEqual(activity,[false,true]);
+    assert.equal(host.captureHasWork(),false);
+  } finally {
+    result.resolve(null);
+    await host.dispose();
+  }
+});
+
 test('historical invalid endpoint stays readable and repairable while actual start still rejects it',async()=>{
  let config={...initialAssistantSettings(),electronExecutable:process.execPath,asrMode:'compatible',asrEndpoint:'https://example.test/asr',asrModel:'fixture',ttsEndpoint:'broken',ttsModel:'fixture',ttsVoice:'fixture'};
  let devices=0;

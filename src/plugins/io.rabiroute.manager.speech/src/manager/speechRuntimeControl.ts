@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
+import { request as requestDirect, type IncomingMessage } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -13,7 +14,7 @@ import type {
   SpeechRuntimeControlResult,
   SpeechRuntimeStatus
 } from "@rabiroute/host-api/shared/speechControlContract";
-import { normalizeLocalSpeechServiceUrl } from "@rabiroute/host-api/speech/localSpeechClient";
+import { localSpeechEndpoint, normalizeLocalSpeechServiceUrl } from "@rabiroute/host-api/speech/localSpeechClient";
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
 import { prepareStableSpeechExecutable } from "./speechStableExecutable.js";
 import { packagedSpeechPython, speechPackageRoot, speechCoreDependencyFiles } from "./speechDependencies.js";
@@ -200,6 +201,7 @@ export class SpeechRuntimeControl {
   private launchChild: RuntimeChild | null = null;
   private launchServiceUrl: string | null = null;
   private launchOutput = "";
+  private assistantAudioToken: string | null = null;
   private managedNonce: string | null = null;
   private managedCandidate: { pid: number; host: string; port: number } | null = null;
   private managedPublished = false;
@@ -214,6 +216,74 @@ export class SpeechRuntimeControl {
       throw new SpeechRuntimeControlError("RabiSpeech 托管服务尚未发布就绪地址。", 409);
     }
     return this.launchServiceUrl;
+  }
+
+  /** Only the owning Manager can borrow the running local microphone. */
+  openAssistantCapture(signal: AbortSignal, cursor?: Readonly<{ captureId: string; sample: number }>): Promise<IncomingMessage> {
+    const query = cursor ? "?" + new URLSearchParams({ capture_id: cursor.captureId, from_sample: String(cursor.sample) }) : "";
+    return this.requestAssistantAudio("/v1/internal/assistant-capture", signal, query);
+  }
+
+  openAssistantWake(aliases: readonly string[], signal: AbortSignal): Promise<IncomingMessage> {
+    return this.requestAssistantAudio("/v1/internal/assistant-wake", signal, "", JSON.stringify({ aliases }));
+  }
+
+  async setAssistantRealtime(captureId: string, enabled: boolean, signal: AbortSignal): Promise<void> {
+    const body = JSON.stringify({ captureId, enabled });
+    const response = await this.requestAssistantAudio("/v1/internal/assistant-realtime", signal, "", body);
+    try {
+      if (response.statusCode !== 200 && !(response.statusCode === 409 && !enabled)) {
+        throw new SpeechRuntimeControlError("被动转写状态切换未确认。", response.statusCode || 503);
+      }
+    } finally { response.destroy(); }
+  }
+
+  async transcribeAssistantAudio(audio: Uint8Array, signal: AbortSignal): Promise<{ text: string; [key: string]: unknown }> {
+    if (!(audio instanceof Uint8Array) || audio.byteLength <= 44 || audio.byteLength > 44 + 35 * 16000 * 2) {
+      throw new SpeechRuntimeControlError("本机回退音频长度无效。", 422);
+    }
+    const response = await this.requestAssistantAudio("/v1/internal/assistant-transcribe", signal, "", Buffer.from(audio));
+    try {
+      if (response.statusCode !== 200 || response.headers["content-type"] !== "application/json") {
+        throw new SpeechRuntimeControlError("本机识别未完成。", response.statusCode || 503);
+      }
+      let size = 0;
+      const chunks: Buffer[] = [];
+      for await (const chunk of response) {
+        size += chunk.length;
+        if (size > 256 * 1024) throw new SpeechRuntimeControlError("本机识别结果过长。", 502);
+        chunks.push(chunk);
+      }
+      const result: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string") {
+        throw new SpeechRuntimeControlError("本机识别结果格式无效。", 502);
+      }
+      return result as { text: string; [key: string]: unknown };
+    } finally {
+      response.destroy();
+    }
+  }
+
+  private requestAssistantAudio(pathname: string, signal: AbortSignal, query: string, body?: string | Buffer): Promise<IncomingMessage> {
+    signal.throwIfAborted();
+    const address = this.serviceUrl(), child = this.launchChild, token = this.assistantAudioToken;
+    if (!child || child.exitCode !== null || child.signalCode || !token || this.launchServiceUrl !== address) {
+      throw new SpeechRuntimeControlError("语音助手需要由当前 Manager 启动的本机语音服务。", 409);
+    }
+    const url = new URL(localSpeechEndpoint(address, pathname) + query);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") {
+      throw new SpeechRuntimeControlError("语音助手的麦克风通道仅支持本机连接。", 409);
+    }
+    return new Promise((resolve, reject) => {
+      // A per-request direct connection ignores proxy settings and never follows redirects.
+      const headers = {
+        "x-rabispeech-assistant-token": token,
+        ...(body === undefined ? {} : { "content-type": Buffer.isBuffer(body) ? "audio/wav" : "application/json", "content-length": Buffer.byteLength(body) })
+      };
+      const request = requestDirect(url, { signal, agent: false, headers, method: body === undefined ? "GET" : "POST" }, resolve);
+      request.once("error", reject);
+      request.end(body);
+    });
   }
 
   constructor(private readonly options: SpeechRuntimeControlOptions) {
@@ -552,6 +622,7 @@ export class SpeechRuntimeControl {
 
   private launchWindowsRuntime(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>, overrides: NodeJS.ProcessEnv = {}): RuntimeChild {
     const python = packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir);
+    const assistantAudioToken = overrides.RABISPEECH_ENDPOINT_NONCE ? randomUUID() : null;
     const environment: NodeJS.ProcessEnv = { ...process.env,
       RABIROUTE_TIMEOUT_OVERRIDES: JSON.stringify(readTimeoutOverrides()),
       PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1",
@@ -559,6 +630,8 @@ export class SpeechRuntimeControl {
       RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
       RABISPEECH_CONFIG: process.env.RABISPEECH_CONFIG?.trim() || this.userSpeechConfigPath(paths), ...overrides };
     if (!overrides.RABISPEECH_ENDPOINT_NONCE) delete environment.RABISPEECH_ENDPOINT_NONCE;
+    if (assistantAudioToken) environment.RABISPEECH_ASSISTANT_AUDIO_TOKEN = assistantAudioToken;
+    else delete environment.RABISPEECH_ASSISTANT_AUDIO_TOKEN;
     if (python) {
       const pythonHome = path.dirname(python), previousPath = process.env.PATH || "";
       for (const key of Object.keys(environment)) if (key.toUpperCase() === "PATH") delete environment[key];
@@ -568,6 +641,7 @@ export class SpeechRuntimeControl {
       python ? [paths.hostScript] : ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript],
       { cwd: paths.serviceRoot, detached: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env: environment });
     this.launchChild = child;
+    this.assistantAudioToken = assistantAudioToken;
     this.captureLaunchOutput(child);
     child.unref();
     return child;

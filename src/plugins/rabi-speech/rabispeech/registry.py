@@ -56,7 +56,7 @@ class ProviderRegistry:
     def set_capabilities_event_sink(self, sink: Callable[[str, object], None] | None) -> None:
         self._capabilities_event_sink = sink
 
-    def _publish_capabilities_changed(self) -> None:
+    def notify_capabilities_changed(self) -> None:
         if self._capabilities_event_sink is not None:
             try:
                 # A refresh hint only: provider errors, configuration and paths never enter SSE.
@@ -85,15 +85,15 @@ class ProviderRegistry:
         finally:
             after = await asyncio.to_thread(self._public_provider_snapshot, provider)
             if before != after:
-                self._publish_capabilities_changed()
+                self.notify_capabilities_changed()
 
     def register_tts(self, provider: TtsProvider) -> None:
         self._register(self._tts, provider.provider_id, provider)
-        self._publish_capabilities_changed()
+        self.notify_capabilities_changed()
 
     def register_asr(self, provider: AsrProvider) -> None:
         self._register(self._asr, provider.provider_id, provider)
-        self._publish_capabilities_changed()
+        self.notify_capabilities_changed()
 
     def tts(self, requested_provider: str | None, model: str) -> tuple[TtsProvider, ProviderSelection]:
         selection = self._selection(requested_provider, model, self.default_tts, self._tts)

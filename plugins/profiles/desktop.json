@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.9",
+      "version": "0.2.12",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -38,7 +38,7 @@
     {
       "id": "manager:speech",
       "package": "io.rabiroute.manager.speech",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "enabled": true,
       "config": {},
       "grants": []
@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.20",
+      "version": "0.1.21",
       "enabled": true,
       "config": {},
       "grants": []
@@ -385,7 +385,7 @@
     {
       "id": "manager:voice-assistant",
       "package": "io.rabiroute.manager.voice-assistant",
-      "version": "1.1.16",
+      "version": "1.1.17",
       "enabled": true,
       "config": {},
       "grants": []

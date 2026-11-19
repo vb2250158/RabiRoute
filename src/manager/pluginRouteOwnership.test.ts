@@ -306,7 +306,7 @@ test("Outbox no longer calls the retired FenneNote output implementation", () =>
 test("NapCat endpoint owns native process lifecycle and drains its own actions", () => {
   const plugin = source("src/plugins/io.rabiroute.endpoint.napcat/manager.mjs");
   assert.match(plugin, /owner\.context\(assertAccepting\)/);
-  assert.match(plugin, /supervisor\.stop\(\), retired, \.\.\.flights/);
+  assert.match(plugin, /supervisor\.stop\(\), retired, reactive\?\.dispose\(\), \.\.\.flights/);
   assert.match(plugin, /owner\.remove\(body\)/);
   assert.doesNotMatch(plugin, /runWindowsTaskkill|process\.kill/);
   assert.match(source("src/plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.ts"), /new NapcatLifecycleOwner/);

@@ -31,6 +31,7 @@ export interface AssistantSession {
     limits?: TurnLimits; turnId?: string; inputScope?: string; takeGuidance?(): string[];
     speechCapabilities?: import('./speech-expression.js').SpeechExpressionPolicy;
     speechObservation?: import('./speech-observation.js').SpeechObservation;
+  recentSpeech?: import('./speech-observation.js').RecentSpeech;
     onText?(value: { delta: string; text: string }): void;
     onState?(value: TurnStatus): void;
   }): Promise<TurnResult>;

@@ -58,10 +58,10 @@ onBeforeUnmount(() => { document.removeEventListener("fullscreenchange", syncFul
 </script>
 
 <template>
-  <div ref="player" class="media-video-player" @pointerdown.stop @click.stop @dblclick.stop>
+  <div ref="player" class="media-video-player" @click.stop @dblclick.stop>
     <video ref="video" :src="src" :loop="loop" playsinline preload="metadata" @click="togglePlayback" @play="sync" @pause="sync" @ended="sync" @loadedmetadata="sync" @durationchange="sync" @timeupdate="sync" @volumechange="sync" @emptied="sync" @error="failure = '视频加载失败，请重试。'" />
     <p v-if="failure" class="playback-error" role="alert">{{ failure }}</p>
-    <div class="playback-controls">
+    <div class="playback-controls" @pointerdown.stop>
       <input class="playback-seek" type="range" aria-label="视频播放进度" min="0" :max="canSeek ? duration : 0" step="0.01" :value="time" :disabled="!canSeek" @input="seek" />
       <div class="playback-buttons">
         <button type="button" :aria-label="playing ? '暂停' : '播放'" :title="playing ? '暂停' : '播放'" @click="togglePlayback"><v-icon :icon="playing ? 'mdi-pause' : 'mdi-play'" size="20" /></button>

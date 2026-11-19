@@ -11,12 +11,74 @@ import { napcatWebuiApiReadSpecs } from "../plugins/io.rabiroute.endpoint.napcat
 import { napcatWebuiManagementDescriptors } from "../plugins/io.rabiroute.endpoint.napcat/src/manager/napcatWebuiManagementContracts.js";
 import { napcatEndpointFixture } from "./napcatEndpointPlugin.fixture.js";
 
+// Additional native WebUI operations introduced by the current endpoint contract.
+const additionalWebuiOperations = [
+  "agent.qq.webui.management.account-config.set",
+  "agent.qq.webui.management.device.linux.backup",
+  "agent.qq.webui.management.device.linux.mac.set",
+  "agent.qq.webui.management.device.linux.reset",
+  "agent.qq.webui.management.device.linux.restore",
+  "agent.qq.webui.management.device.windows.backup",
+  "agent.qq.webui.management.device.windows.guid.set",
+  "agent.qq.webui.management.device.windows.reset",
+  "agent.qq.webui.management.device.windows.restore",
+  "agent.qq.webui.management.file.artifact.read",
+  "agent.qq.webui.management.file.artifact.stage",
+  "agent.qq.webui.management.file.batch-delete",
+  "agent.qq.webui.management.file.batch-download",
+  "agent.qq.webui.management.file.batch-move",
+  "agent.qq.webui.management.file.create",
+  "agent.qq.webui.management.file.delete",
+  "agent.qq.webui.management.file.download",
+  "agent.qq.webui.management.file.list",
+  "agent.qq.webui.management.file.mkdir",
+  "agent.qq.webui.management.file.move",
+  "agent.qq.webui.management.file.read",
+  "agent.qq.webui.management.file.rename",
+  "agent.qq.webui.management.file.upload",
+  "agent.qq.webui.management.file.write",
+  "agent.qq.webui.management.font.delete",
+  "agent.qq.webui.management.font.upload",
+  "agent.qq.webui.management.mirror.test",
+  "agent.qq.webui.management.mirror.tests",
+  "agent.qq.webui.management.native-config.set",
+  "agent.qq.webui.management.native.release.update",
+  "agent.qq.webui.management.onebot.config.export",
+  "agent.qq.webui.management.onebot.config.import",
+  "agent.qq.webui.management.passkey.authentication.options",
+  "agent.qq.webui.management.passkey.authentication.verify",
+  "agent.qq.webui.management.passkey.registration.options",
+  "agent.qq.webui.management.passkey.registration.verify",
+  "agent.qq.webui.management.plugin.config.change",
+  "agent.qq.webui.management.plugin.config.events.close",
+  "agent.qq.webui.management.plugin.config.events.open",
+  "agent.qq.webui.management.plugin.config.events.read",
+  "agent.qq.webui.management.plugin.config.set",
+  "agent.qq.webui.management.plugin.config.summary",
+  "agent.qq.webui.management.plugin.manager.register",
+  "agent.qq.webui.management.plugin.status.set",
+  "agent.qq.webui.management.plugin.store.install",
+  "agent.qq.webui.management.plugin.store.install.events",
+  "agent.qq.webui.management.plugin.uninstall",
+  "agent.qq.webui.management.releases.latest",
+  "agent.qq.webui.management.releases.list",
+  "agent.qq.webui.management.session.check",
+  "agent.qq.webui.management.session.login",
+  "agent.qq.webui.management.session.logout",
+  "agent.qq.webui.management.session.token.rotate",
+  "agent.qq.webui.management.ssl.delete",
+  "agent.qq.webui.management.ssl.install",
+  "agent.qq.webui.management.webui-config.set",
+  "agent.qq.webui.management.webui-disabled.set",
+];
+
 const expectedWebuiOperations = [
   ...napcatWebuiApiReadSpecs.map(spec => `agent.qq.webui.${spec.id}`),
   ...napcatWebuiManagementDescriptors.map(spec => `agent.qq.webui.management.${spec.id}`),
-  "agent.qq.webui.management.receipt.read"
+  "agent.qq.webui.management.receipt.read",
+  ...additionalWebuiOperations
 ].sort();
-const expectedOperationCount = 22 + readNapcatApiManifest().actions.length + 2 + expectedWebuiOperations.length + 1;
+const expectedOperationCount = 23 + readNapcatApiManifest().actions.length + 2 + expectedWebuiOperations.length + 1;
 
 function assertPublishedNapcatOperations(f: Awaited<ReturnType<typeof napcatEndpointFixture>>) {
   assert.equal(f.operations.snapshot().reduce((count, entry) => count + entry.routeCount, 0), expectedOperationCount);
@@ -26,7 +88,13 @@ function assertPublishedNapcatOperations(f: Awaited<ReturnType<typeof napcatEndp
   const egress = f.kernel.current().services.services.get("endpoint.napcat.egress@1")?.value as
     { sendVariants: Record<string, { type: string; operation: string }> } | undefined;
   assert.ok(egress);
-  assert.deepEqual(Object.keys(egress.sendVariants), ["napcat.group-forward"]);
+  assert.deepEqual(Object.keys(egress.sendVariants), [
+    "napcat.group-forward", "napcat.native-_send_group_notice", "napcat.native-send_group_ai_record",
+    "napcat.native-send_forward_msg", "napcat.native-send_private_forward_msg", "napcat.native-send_group_forward_msg",
+    "napcat.native-forward_friend_single_msg", "napcat.native-forward_group_single_msg", "napcat.native-send_flash_msg",
+    "napcat.native-do_group_album_comment", "napcat.native-send_online_file", "napcat.native-send_online_folder",
+    "napcat.native-upload_image_to_qun_album", "napcat.quick-reply"
+  ]);
   assert.equal(egress.sendVariants["napcat.group-forward"]?.operation, "sendGroupForwardVariant");
 }
 
@@ -155,7 +223,7 @@ test("NapCat disable preserves failed process retirement and fences a replacemen
     resources.processOwner = owner;
     await owner.reconcile([binding]); owner.prepareLaunch(binding); await owner.recordLaunch(binding, process.pid);
     const disabled = await f.kernel.switch([]);
-    assert.ok(disabled.generation.cleanupDiagnostics.some(item => /retirement failed/.test(item.message)));
+    assert.ok(disabled.generation.cleanupDiagnostics.some(item => /retirement remains unconfirmed/.test(item.message)));
     assert.equal(JSON.parse(await fs.readFile(statePath, "utf8")).records.length, 1);
     const replacement = await f.kernel.switch([f.candidate("next")]);
     assert.match(replacement.generation.records[0]?.error?.message ?? "", /retirement is unconfirmed/);
@@ -163,24 +231,24 @@ test("NapCat disable preserves failed process retirement and fences a replacemen
   } finally { await f.dispose().catch(error => { assert.match(String(error), /retirement|cleanup|dispos/i); }); }
 });
 
-test("the real NapCat SDK egress and scan helpers enforce their declared @1 dependency alongside direct @3", { timeout: 60000 }, async () => {
+test("the real NapCat SDK egress and scan helpers enforce their declared @1 dependency alongside direct @4", { timeout: 60000 }, async () => {
   const f = await napcatEndpointFixture();
   try {
-    await f.kernel.switch([f.candidate("undeclared-scan-service", undefined, ["host.message-endpoints@3"])]);
+    await f.kernel.switch([f.candidate("undeclared-scan-service", undefined, ["host.message-endpoints@4"])]);
     assert.equal(f.kernel.current().records[0]?.status, "failed");
-    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare optional capability: host\.message-endpoints@1/);
+    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@1/);
     assert.deepEqual(f.scanProviders.snapshot(), []);
     assert.deepEqual(f.operations.snapshot(), []);
     assert.equal(f.kernel.current().services.services.has("endpoint.napcat.egress@1"), false);
   } finally { await f.dispose(); }
 });
 
-test("the actual NapCat @1 and @3 dependencies share one host and retire both SDK publications", { timeout: 60000 }, async () => {
+test("the actual NapCat @1 and @4 dependencies share one host and retire both SDK publications", { timeout: 60000 }, async () => {
   const f = await napcatEndpointFixture();
   let sameOwner = false;
   try {
     await f.kernel.switch([f.candidate("declared-real-services", { activate(context) {
-      sameOwner = context.services.require("host.message-endpoints@1") === context.services.require("host.message-endpoints@3");
+      sameOwner = context.services.require("host.message-endpoints@1") === context.services.require("host.message-endpoints@4");
     } })]);
     assert.equal(f.kernel.current().records[0]?.status, "active", JSON.stringify(f.kernel.current()));
     assert.equal(sameOwner, true);
@@ -194,12 +262,12 @@ test("the actual NapCat @1 and @3 dependencies share one host and retire both SD
   } finally { await f.dispose(); }
 });
 
-test("NapCat still enforces the new @3 listener dependency", { timeout: 60000 }, async () => {
+test("NapCat still enforces the new @4 listener dependency", { timeout: 60000 }, async () => {
   const f = await napcatEndpointFixture();
   try {
     await f.kernel.switch([f.candidate("undeclared-listener-service", undefined, ["host.message-endpoints@1"])]);
     assert.equal(f.kernel.current().records[0]?.status, "failed");
-    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@3/);
+    assert.match(f.kernel.current().records[0]?.error?.message ?? "", /Plugin did not declare required capability: host\.message-endpoints@4/);
     assert.deepEqual(f.scanProviders.snapshot(), []);
     assert.deepEqual(f.operations.snapshot(), []);
   } finally { await f.dispose(); }

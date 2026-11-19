@@ -149,6 +149,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     ASSISTANT_CONTEXT_CHANGED:'会话已切换，请核对当前对话后再发送。',
     ASSISTANT_CONTEXT_BUSY:'助手仍在处理消息，完成后再清除上下文。',
     ASSISTANT_CONTEXT_SAVE_FAILED:'对话保存失败，请重试保存，暂时不要退出助手。',
+    ASSISTANT_CONTEXT_STORAGE_FULL:'对话所在磁盘已满。请释放该磁盘的空间，再重试连接或保存。',
     SPEECH_CREDENTIAL_TARGET_CHANGED:'提供商或接口地址已变化，请刷新设置后重新保存密钥。',
   }
   return function AssistantPanel({ adapter }) {
@@ -183,7 +184,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const pages=React.useRef(null)
     const mounted = React.useRef(false)
     const report = error => { if (mounted.current) setMessage(errors[error.message] || '操作未确认：' + error.message) }
-    const refresh = async () => { try{const next = await adapter.read(); if(mounted.current){setState(next);setConnectionError(false);setMessage(current=>current===errors['Failed to fetch']?'':current)}return next}catch(error){if(mounted.current)setConnectionError(true);throw error} }
+    const refresh = async () => { try{const next = await adapter.read(); if(mounted.current){setState(next);setConnectionError(false);setMessage(current=>current===errors['Failed to fetch']||(current===errors.ASSISTANT_CONTEXT_STORAGE_FULL&&!next.context?.error)?'':current)}return next}catch(error){if(mounted.current)setConnectionError(true);throw error} }
     const readDetails=async(id,quiet=false)=>{
       const version=++detailVersion.current,valid=()=>mounted.current&&detailSelected.current===id&&detailVersion.current===version
       if(!quiet)setDetailLoading(true)
@@ -535,7 +536,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':live.detail),
       message&&!editing&&h('p',{role:'status'},message),[...new Set([state?.voice?.error,state?.error].filter(Boolean))].map(code=>h('p',{key:code,role:'alert'},errors[code]||code)),
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
-      state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
+      state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,state.context.error==='ASSISTANT_CONTEXT_STORAGE_FULL'?'请释放对话所在磁盘的空间，再重试保存。成功前请保持助手运行。':'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
       state?.context?.interruptedCount>0&&h('p',{className:'va-note'},'上次有 '+state.context.interruptedCount+' 条消息未完成，已保留记录，没有自动重发。'),
       h('div',{'aria-label':'对话',className:'va-conversation',role:'log','aria-live':'polite','aria-relevant':'additions text',ref:chat,onScroll:()=>{const node=chat.current;follow.current=node.scrollHeight-node.scrollTop-node.clientHeight<60;if(follow.current)setUnseen(false)}},state?.capabilities?.messageHistory&&messages.length>0&&moreHistory!==false&&(moreHistory===true||state.context?.messageCount>messages.length)&&h(Button,{className:'va-history-more',disabled:historyBusy,onClick:()=>void loadHistory()},historyBusy?'正在加载…':'加载更早消息'),!messages.length&&!live.listening&&!live.working&&h('div',{className:'va-empty'},h('strong',null,preview?'请在实际助手中开始对话':conversationMissing?'先选择一个对话模型':'开启语音，直接说话'),h('p',null,preview?'本页只展示设置，语音功能不可用。':conversationMissing?'完成“对话”设置并保存后，即可开启语音。':'可以请助手查资料、处理任务，或画一张图。')),messages.map((item,index)=>renderMessage(item,index)),live.listening&&state?.inputPreview&&!state.inputPreview.final&&h('div',{className:'va-message va-message-live','data-role':'user',role:'status'},avatar(participants.user,'user'),h('div',{className:'va-message-main'},h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',null,participants.user.name),h('span',{className:'va-message-source'},'正在说话'))),h('div',{className:'va-live-input'},h('p',null,state.inputPreview.text||'正在聆听…'))))),
       h('style',null,visualCanvasStyles),state?.canvas?.visible&&state.canvas.persistent&&h(VisualCanvas,{value:state.canvas,pinned:true,onClose:()=>invoke({action:'canvas-close'})}),

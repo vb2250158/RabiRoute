@@ -39,6 +39,25 @@ test('storage has one owner, rejects unreadable data without resetting it and re
  }finally{await store?.close();await rm(dir,{recursive:true,force:true})}
 });
 
+test('full storage leaves encrypted history untouched and reports a recoverable storage error', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'assistant-context-'));
+  let store;
+  try {
+    store = await openConversationStore(dir, crypto);
+    store.commit({id:store.read().id, messages:[{id:'kept',role:'user',text:'保留这条消息'}]});
+    await store.close();
+    const database = join(dir, 'conversation.sqlite');
+    const before = await readFile(database);
+    const diskFull = Object.assign(new Error('no space'), {code:'ENOSPC'});
+    await assert.rejects(openConversationStore(dir,{...crypto,unprotect:()=>{throw diskFull}}),
+      {code:'ASSISTANT_CONTEXT_STORAGE_FULL'});
+    assert.deepEqual(await readFile(database), before);
+    store = await openConversationStore(dir, crypto);
+    assert.equal(store.count(),1);
+    assert.equal(store.find('kept').text,'保留这条消息');
+  } finally { await store?.close(); await rm(dir,{recursive:true,force:true}); }
+});
+
 test('failed admission save never dispatches a model request and can be retried visibly',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'assistant-context-'));let store,native,fail=true;const requests=[],errors=[];
  try{store=await openConversationStore(dir,crypto);native=fixture({...store,commit:value=>{if(fail)throw Error('DISK_FULL');return store.commit(value)}},requests,errors);

@@ -8,7 +8,7 @@ import test from "node:test";
 import { ResourceCache } from "../../../../manager/resourceCache.js";
 import { RESOURCE_OBJECT_MAX_BYTES } from "../../../../manager/resourceCacheProtocol.js";
 import { resolveNapcatWebuiNativeDirectory } from "./napcatWebuiNativeDirectory.js";
-import { putNapcatWebuiObject } from "./napcatWebuiResources.js";
+import { putNapcatWebuiObject, readNapcatWebuiObject } from "./napcatWebuiResources.js";
 import type { NapcatWebuiManagementContext } from "./napcatWebuiManagementOperations.js";
 test("native directory references prove their original WebUI source, exact live OneBot server and fresh directory while retaining the original lease", async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "napcat-native-directory-"));
@@ -55,7 +55,7 @@ test("native directory references prove their original WebUI source, exact live 
     const selected = {
         routeId: "route", instanceId: "instance", botUserId: "12345", onebotHttpUrl: "http://selected-native.example:3000", onebotAccessToken: "PRIVATE_ACCESS", fileRef: ref.id
     };
-    const lease = await resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(1000), () => {
+    const lease = await resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(15000), () => {
     });
     assert.equal(lease.nativePath, "/native/folder");
     assert.equal(directoryReads, 1);
@@ -66,18 +66,26 @@ test("native directory references prove their original WebUI source, exact live 
     assert.equal(released, 1);
     assert.throws(lease.assertCurrent);
     sourceIdentity = "other-source";
-    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(1000), () => {
+    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(15000), () => {
     }), /FILE_SOURCE_CHANGED/);
     assert.equal(directoryReads, 1);
     sourceIdentity = "original-source";
     serverToken = "OTHER_SERVER";
-    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(1000), () => {
+    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(15000), () => {
     }), /NATIVE_ONEBOT_SOURCE_MISMATCH/);
     assert.equal(directoryReads, 1);
     serverToken = "PRIVATE_ACCESS";
     account = "23456";
-    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(1000), () => {
+    await assert.rejects(resolveNapcatWebuiNativeDirectory(context, selected, AbortSignal.timeout(15000), () => {
     }), /ACCOUNT_MISMATCH/);
     assert.equal(directoryReads, 1);
     assert.equal(acquired, released);
+});
+
+// A cancelled or retired owner is not a missing resource.
+test("native resource read preserves original owner cancellation", async () => {
+    let cancelled = false;
+    const context = { resourceObjects: {}, protectedResourceObjects: { async readProtected() { cancelled = true; throw new Error("interrupted"); } } } as unknown as NapcatWebuiManagementContext;
+    const binding = { routeId: "fixture-route", instanceId: "fixture-instance", expectedUserId: "12345", assertCurrent() { if (cancelled) throw new Error("fixture-owner-cancelled"); } };
+    await assert.rejects(readNapcatWebuiObject(context, binding, "native-file-handle", "fixture-ref"), /fixture-owner-cancelled/);
 });

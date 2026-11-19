@@ -226,8 +226,9 @@ export async function consumeResolvedQqMediaBytes(result: Record<string, unknown
   const completeFile = media.kind === "file" && options.mode === "url-only";
   let response: Response;
   try { response = await transport(url, { signal, redirect: "follow" }); }
-  catch {
+  catch (error) {
     signal.throwIfAborted();
+    if (error instanceof QqReadError || error instanceof ReadSettingsError) throw error;
     throw new QqReadError(503, "QQ_UPSTREAM_UNAVAILABLE");
   }
   const size = await consumeBoundedQqBytes(response, QQ_MEDIA_MAX_BYTES, consume, signal, "RABIROUTE_QQ_MEDIA_MAX_BYTES", completeFile);

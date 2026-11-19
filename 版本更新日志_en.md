@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.45 - 2026-11-20
+
+- Preserve route-change and cancellation errors during NapCat media and protected resource reads.
+
+- Integrate Workbench 0.2.12 canvas and list improvements, and upgrade voice assistant and speech management plugins for wake detection, streaming handoff, and failure fallback.
+
 ## 0.15.44 - 2026-11-19
 
 - Merge the official QQ Bot Route configuration fix so the account, callback port, transport and intents reach the existing Gateway configuration entry, retaining the 0.15.43 public Relay migration fix.

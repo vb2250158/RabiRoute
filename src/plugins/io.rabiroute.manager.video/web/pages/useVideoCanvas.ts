@@ -1,6 +1,34 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 type Point = { x: number; y: number };
+type SelectionCard = { id: string; left: number; top: number; right: number; bottom: number };
+
+function measureSelectionCards(element: HTMLElement): SelectionCard[] {
+  return Array.from(element.querySelectorAll<HTMLElement>("[data-canvas-node]")).flatMap(node => {
+    const id = node.dataset.canvasNode;
+    const body = node.querySelector(":scope > [data-canvas-card-body]")?.getBoundingClientRect();
+    if (!id || !body?.width || !body.height) return [];
+    const header = node.querySelector(":scope > .canvas-drag-handle")?.getBoundingClientRect() ?? body;
+    return [{
+      id,
+      left: Math.min(body.left, header.left),
+      top: Math.min(body.top, header.top),
+      right: Math.max(body.right, header.right),
+      bottom: Math.max(body.bottom, header.bottom),
+    }];
+  });
+}
+type Gesture = {
+  pointer: number;
+  start: Point;
+  origin: Point;
+  threshold: number;
+  kind: "card" | "pan" | "selection";
+  id?: string;
+  select?: () => void;
+  started: boolean;
+  selection?: { viewport: DOMRect; cards: SelectionCard[] };
+};
 export function useVideoCanvas() {
   const viewport = ref<HTMLElement>();
   const scale = ref(1);
@@ -11,9 +39,10 @@ export function useVideoCanvas() {
   const dragging = ref(false);
   const selectedIds = ref<string[]>(["draft-1"]);
   const marquee = ref<{ x: number; y: number; width: number; height: number }>();
-  let selectionStart: Point | undefined;
   let origins: Record<string, Point> = {};
-  let gesture: { pointer: number; start: Point; origin: Point; id?: string } | undefined;
+  let gesture: Gesture | undefined;
+  let suppressClick = false;
+  let selectionBeforeDrag: string[] = [];
   let observer: ResizeObserver | undefined;
   let previousSize: Point | undefined;
   const transform = computed(() => ({ transform: `translate(${offset.value.x}px, ${offset.value.y}px) scale(${scale.value})` }));
@@ -66,54 +95,104 @@ export function useVideoCanvas() {
     scale.value = Math.max(0.25, Math.min(1, (element.clientWidth - 100) / width, (element.clientHeight - 100) / height));
     offset.value = { x: (element.clientWidth - width * scale.value) / 2 - left * scale.value, y: (element.clientHeight - height * scale.value) / 2 - top * scale.value };
   }
-  function begin(event: PointerEvent, id?: string) {
-    if (gesture || (event.button !== 0 && event.button !== 1)) return;
+  function begin(event: PointerEvent, id?: string, select?: () => void) {
+    if (event.isPrimary === false || gesture || (event.button !== 0 && event.button !== 1)) return;
     if (id) add(id);
-    const targetId = handMode.value || event.button === 1 ? undefined : id;
+    const pan = handMode.value || event.button === 1;
+    const kind = pan ? "pan" : id ? "card" : "selection";
     event.preventDefault();
-    viewport.value?.setPointerCapture(event.pointerId);
-    gesture = { pointer: event.pointerId, start: { x: event.clientX, y: event.clientY }, origin: { ...(targetId ? positions.value[targetId]! : offset.value) }, id: targetId };
-    origins = Object.fromEntries((targetId ? (selectedIds.value.includes(targetId) ? selectedIds.value : [targetId]) : []).map(key => [key, { ...positions.value[key]! }]));
-    dragging.value = true;
+    gesture = {
+      pointer: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      origin: { ...(kind === "card" ? positions.value[id!]! : offset.value) },
+      threshold: event.pointerType === "touch" ? 10 : 5,
+      kind, id, select, started: false,
+    };
   }
   function backgroundDown(event: PointerEvent) {
     const target = event.target as HTMLElement;
     if (target.closest(".canvas-minimap,.canvas-tools,.workspace-tools,.output-library,.canvas-menu,.v-overlay")) return;
     if (target.closest(".canvas-object") && event.button !== 1) return;
     begin(event);
-    if (event.button === 0 && !handMode.value && gesture) {
-      const bounds = viewport.value!.getBoundingClientRect();
-      selectionStart = world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-      selectedIds.value = []; dragging.value = false;
-      marquee.value = { ...selectionStart, width: 0, height: 0 };
-    }
   }
   function move(event: PointerEvent) {
-    if (!gesture || gesture.pointer !== event.pointerId) return;
-    if (selectionStart) {
-      const bounds = viewport.value!.getBoundingClientRect();
-      const end = world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-      const box = { x: Math.min(selectionStart.x, end.x), y: Math.min(selectionStart.y, end.y), width: Math.abs(end.x - selectionStart.x), height: Math.abs(end.y - selectionStart.y) };
-      marquee.value = box;
-      selectedIds.value = Object.entries(positions.value).filter(([,p]) => p.x + 130 < box.x + box.width && p.x + 510 > box.x && p.y + 34 < box.y + box.height && p.y + 248 > box.y).map(([id]) => id);
-      return;
+    const current = gesture;
+    if (!current || current.pointer !== event.pointerId) return;
+    const dx = event.clientX - current.start.x, dy = event.clientY - current.start.y;
+    if (!current.started) {
+      if (Math.hypot(dx, dy) < current.threshold) return;
+      current.started = true;
+      viewport.value?.setPointerCapture(event.pointerId);
+      selectionBeforeDrag = selectedIds.value.slice();
+      if (current.kind === "card") {
+        current.select?.();
+        const ids = selectedIds.value.includes(current.id!) ? selectedIds.value : [current.id!];
+        origins = Object.fromEntries(ids.map(id => [id, { ...positions.value[id]! }]));
+      }
+      if (current.kind === "selection" && viewport.value) {
+        current.selection = { viewport: viewport.value.getBoundingClientRect(), cards: measureSelectionCards(viewport.value) };
+      }
+      dragging.value = current.kind !== "selection";
     }
-    const divisor = gesture.id ? scale.value : 1;
-    const point = { x: gesture.origin.x + (event.clientX - gesture.start.x) / divisor, y: gesture.origin.y + (event.clientY - gesture.start.y) / divisor };
-    if (gesture.id) {
-      for (const [id, origin] of Object.entries(origins)) positions.value[id] = { x: origin.x + point.x - gesture.origin.x, y: origin.y + point.y - gesture.origin.y };
+    if (current.kind === "selection") {
+      const selection = current.selection;
+      if (!selection) return;
+      const left = Math.min(current.start.x, event.clientX), top = Math.min(current.start.y, event.clientY);
+      const right = Math.max(current.start.x, event.clientX), bottom = Math.max(current.start.y, event.clientY);
+      marquee.value = { x: left - selection.viewport.left, y: top - selection.viewport.top, width: right - left, height: bottom - top };
+      selectedIds.value = selection.cards
+        .filter(card => card.left < right && card.right > left && card.top < bottom && card.bottom > top)
+        .map(card => card.id);
+    } else if (current.kind === "card") {
+      for (const [id, origin] of Object.entries(origins)) positions.value[id] = { x: origin.x + dx / scale.value, y: origin.y + dy / scale.value };
+    } else {
+      offset.value = { x: current.origin.x + dx, y: current.origin.y + dy };
     }
-    else offset.value = point;
+  }
+  function finish(event: PointerEvent) {
+    const current = gesture;
+    if (!current || current.pointer !== event.pointerId) return;
+    gesture = undefined;
+    marquee.value = undefined;
+    dragging.value = false;
+    if (viewport.value?.hasPointerCapture(event.pointerId)) viewport.value.releasePointerCapture(event.pointerId);
+    return current;
   }
   function end(event: PointerEvent) {
-    if (!gesture || gesture.pointer !== event.pointerId) return;
-    gesture = undefined; selectionStart = undefined; marquee.value = undefined; origins = {}; dragging.value = false;
-    if (viewport.value?.hasPointerCapture(event.pointerId)) viewport.value.releasePointerCapture(event.pointerId);
+    if (gesture?.started && gesture.kind === "selection") move(event);
+    const current = finish(event);
+    if (!current) return false;
+    if (current.started) suppressClick = true;
+    else if (current.kind === "card") current.select?.();
+    else if (current.kind === "selection") selectedIds.value = [];
+    origins = {};
+    selectionBeforeDrag = [];
+    return current.started && current.kind === "card";
+  }
+  function cancel(event: PointerEvent) {
+    const current = finish(event);
+    if (!current?.started) return;
+    if (current.kind === "card") Object.assign(positions.value, origins);
+    if (current.kind === "pan") offset.value = current.origin;
+    if (current.kind !== "pan") selectedIds.value = selectionBeforeDrag;
+    origins = {};
+    selectionBeforeDrag = [];
+  }
+  function leave(event: PointerEvent) {
+    if (!gesture?.started) cancel(event);
+  }
+  function clearDragClick() { suppressClick = false; }
+  function preventDragClick(event: MouseEvent) {
+    if (!suppressClick || event.detail === 0) return;
+    suppressClick = false;
+    event.preventDefault();
+    event.stopPropagation();
   }
   function wheel(event: WheelEvent) {
     const target = event.target as HTMLElement;
     if (target.closest(".composer,.output-library,.canvas-minimap,.canvas-tools,.workspace-tools,.canvas-menu,textarea,.v-overlay")) return;
     event.preventDefault();
+    if (gesture?.started) return;
     const bounds = viewport.value!.getBoundingClientRect();
     zoom(scale.value * Math.exp(-event.deltaY * 0.0015), { x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   }
@@ -139,5 +218,5 @@ export function useVideoCanvas() {
   });
   onBeforeUnmount(() => observer?.disconnect());
   function world(point: Point) { return { x: (point.x - offset.value.x) / scale.value, y: (point.y - offset.value.y) / scale.value }; }
-  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, dragging, positions, transform, grid, add, position, zoom, center, fit, begin, backgroundDown, move, end, wheel, nudge, world };
+  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, dragging, positions, transform, grid, add, position, zoom, center, fit, begin, backgroundDown, move, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world };
 }

@@ -7,6 +7,7 @@ import asyncio
 import base64
 import math
 import wave
+from typing import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -17,12 +18,15 @@ from ..worker_supervisor import WorkerSupervisor
 
 
 class LocalHttpAsrProvider:
-    def __init__(self, settings: HttpAsrProviderSettings, supervisor: WorkerSupervisor | None = None) -> None:
+    def __init__(self, settings: HttpAsrProviderSettings, supervisor: WorkerSupervisor | None = None,
+                 *, on_capabilities_changed: Callable[[], None] | None = None) -> None:
         self.settings = settings
         self.worker_supervisor = supervisor or WorkerSupervisor()
         self._owns_supervisor = supervisor is None
         self.provider_id = settings.id
         self._loaded_model = ""
+        self._managed_worker = False
+        self._on_capabilities_changed = on_capabilities_changed
         for model in settings.models:
             parsed = urlparse(model.base_url)
             if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
@@ -54,7 +58,9 @@ class LocalHttpAsrProvider:
                     "family": model.family,
                     "source": model.source,
                     "installed": model.installed,
-                    "loaded": self._loaded_model == model.id,
+                    "loaded": self._loaded_model == model.id and (
+                        not self._managed_worker or self.worker_supervisor.managed_worker_is_running(self._worker_key(model.id))
+                    ),
                     "languages": list(model.languages),
                     "features": list(model.features),
                 }
@@ -77,13 +83,16 @@ class LocalHttpAsrProvider:
             "word_timestamps": request.word_timestamps,
         }
         timeout = httpx.Timeout(get_timeout_seconds("speech.httpAsr.request", self.settings.timeout_seconds), connect=get_timeout_seconds("speech.httpAsr.connect", 10))
-        async with self._lock:
-            worker_url = await self.worker_supervisor.ensure(f"asr:{self.provider_id}:{model.id}", model.base_url, model.launch)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        key = self._worker_key(model.id)
+        async with self._lock, self.worker_supervisor.use(
+            key, model.base_url, model.launch, idle_seconds=self.settings.idle_unload_seconds,
+            on_unloaded=lambda: self._on_worker_unloaded(model.id),
+        ) as worker_url, httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{worker_url}/transcribe", json=payload)
             response.raise_for_status()
             data = response.json()
             self._loaded_model = model.id
+            self._managed_worker = self.worker_supervisor.managed_worker_is_running(key)
         segments = [
             TranscriptSegment(
                 id=int(item.get("id", index)),
@@ -116,6 +125,15 @@ class LocalHttpAsrProvider:
             raw_tags=_labels(data.get("raw_tags")),
             confidence=_probability(data.get("confidence")),
         )
+
+    def _worker_key(self, model_id: str) -> str:
+        return f"asr:{self.provider_id}:{model_id}"
+
+    def _on_worker_unloaded(self, model_id: str) -> None:
+        if self._loaded_model == model_id:
+            self._loaded_model = ""
+            if self._on_capabilities_changed is not None:
+                self._on_capabilities_changed()
 
     def _resolve_model(self, requested: str) -> HttpAsrModelSettings:
         normalized = requested.strip().lower()

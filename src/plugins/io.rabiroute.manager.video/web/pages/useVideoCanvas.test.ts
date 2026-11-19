@@ -4,13 +4,22 @@ import { createSSRApp } from "vue";
 import { renderToString } from "vue/server-renderer";
 import { useVideoCanvas } from "./useVideoCanvas";
 
-async function fixture() {
+type CardRect = { id: string; left: number; top: number; width: number; height: number };
+async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {
   let canvas!: ReturnType<typeof useVideoCanvas>;
   await renderToString(createSSRApp({ setup() { canvas = useVideoCanvas(); return () => null; } }));
   let capture: number | undefined;
   canvas.viewport.value = {
     clientWidth: 1200, clientHeight: 900,
-    getBoundingClientRect() { return { left: 0, top: 0 }; },
+    getBoundingClientRect() { return offset; },
+    querySelectorAll() {
+      return cards.map(({ id, left, top, width, height }) => ({
+        dataset: { canvasNode: id },
+        querySelector: () => ({
+          getBoundingClientRect: () => ({ left, top, width, height, right: left + width, bottom: top + height }),
+        }),
+      }));
+    },
     setPointerCapture(id: number) { capture = id; },
     hasPointerCapture(id: number) { return capture === id; },
     releasePointerCapture() { capture = undefined; },
@@ -52,7 +61,10 @@ test("hand mode pans without moving cards; fit includes cards at negative coordi
 });
 
 test("left background drag selects cards without panning, then selected cards move together", async () => {
-  const canvas = await fixture(); canvas.add("a"); canvas.add("b");
+  const canvas = await fixture([
+    { id: "a", left: 130, top: 34, width: 380, height: 214 },
+    { id: "b", left: 850, top: 34, width: 380, height: 214 },
+  ]); canvas.add("a"); canvas.add("b");
   const down = { ...pointer(0, 0), target: { closest() { return null; } } } as unknown as PointerEvent;
   const before = canvas.world({x:0,y:0});
   canvas.backgroundDown(down); canvas.move(pointer(1300,300)); canvas.end(pointer(1300,300));
@@ -69,4 +81,64 @@ test("middle button pans without selecting or moving cards", async () => {
   assert.deepEqual(canvas.positions.value.a,{x:0,y:0});
   assert.deepEqual(canvas.world({x:0,y:0}),{x:-80,y:-40});
   assert.deepEqual(canvas.selectedIds.value,["a"]);
+});
+
+test("a small pointer wobble selects without moving and keeps the click", async () => {
+  const canvas = await fixture();
+  canvas.add("a");
+  let selections = 0;
+  canvas.begin(pointer(10, 20), "a", () => { selections++; });
+  canvas.move(pointer(13, 22));
+  assert.equal(selections, 0);
+  assert.equal(canvas.dragging.value, false);
+  assert.equal(canvas.end(pointer(13, 22)), false);
+  assert.equal(selections, 1);
+  assert.deepEqual(canvas.positions.value.a, { x: 0, y: 0 });
+  let clickPrevented = false;
+  canvas.preventDragClick({ detail: 1, preventDefault() { clickPrevented = true; } } as MouseEvent);
+  assert.equal(clickPrevented, false);
+});
+
+test("touch uses a larger drag threshold and a canceled drag restores the layout", async () => {
+  const canvas = await fixture();
+  canvas.add("a");
+  const touch = { ...pointer(10, 20), pointerType: "touch" } as PointerEvent;
+  canvas.begin(touch, "a", () => { canvas.selectedIds.value = ["a"]; });
+  canvas.move(pointer(18, 20));
+  assert.equal(canvas.dragging.value, false);
+  assert.deepEqual(canvas.positions.value.a, { x: 0, y: 0 });
+  canvas.move(pointer(23, 20));
+  assert.deepEqual(canvas.positions.value.a, { x: 13, y: 0 });
+  canvas.cancel(pointer(23, 20));
+  assert.deepEqual(canvas.positions.value.a, { x: 0, y: 0 });
+  assert.equal(canvas.dragging.value, false);
+});
+
+test("only a completed drag suppresses the following pointer click", async () => {
+  const canvas = await fixture();
+  canvas.begin(pointer(0, 0), "a");
+  canvas.move(pointer(10, 0));
+  assert.equal(canvas.end(pointer(10, 0)), true);
+  let stopped = false;
+  const click = { detail: 1, preventDefault() {}, stopPropagation() { stopped = true; } } as MouseEvent;
+  canvas.preventDragClick({ ...click, detail: 0 } as MouseEvent);
+  assert.equal(stopped, false);
+  canvas.preventDragClick(click);
+  assert.equal(stopped, true);
+});
+
+test("marquee uses the visible card rect and stays in screen pixels at low zoom", async () => {
+  const canvas = await fixture([
+    { id: "flow", left: 150, top: 80, width: 95, height: 19 },
+    { id: "media", left: 275, top: 80, width: 95, height: 54 },
+  ], { left: 100, top: 40 });
+  canvas.scale.value = 0.25;
+  canvas.add("flow"); canvas.add("media");
+  canvas.begin(pointer(140, 105));
+  canvas.move(pointer(260, 127));
+  assert.deepEqual(canvas.marquee.value, { x: 40, y: 65, width: 120, height: 22 });
+  assert.deepEqual(canvas.selectedIds.value, []);
+  canvas.end(pointer(290, 128));
+  assert.deepEqual(canvas.selectedIds.value, ["media"]);
+  assert.equal(canvas.marquee.value, undefined);
 });

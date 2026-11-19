@@ -10,16 +10,17 @@ import {createSpeechProviders} from '@rabilink/desktop-voice-service/speech-prov
 import {listProviderModels} from '@rabilink/desktop-voice-service/model-providers';
 import {openDesktopDevice} from '@rabilink/desktop-voice-service/node';
 import {createRabiOperationTools} from './operation-tools.mjs';
+import {createWakeListener} from './wake-listener.mjs';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.message||'RABI_OPERATION_FAILED'),{receipt:result});return result.data?.data??result.data};
 const validSource=value=>['host','custom'].includes(value);
 export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,recognitionSampleUrl,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent,readOnly=()=>false}){
   const directory=join(stateRoot,'data','voice-assistant');await mkdir(directory,{recursive:true});
-  let profile={personaId:'',asrSource:'host',ttsSource:'host'},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
+  let profile={personaId:'',asrSource:'host',ttsSource:'host',wakeEnabled:false},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
   const profilePath=join(directory,'host-profile.json');
   try{profile={...profile,...JSON.parse(await readFile(profilePath,'utf8'))}}catch(error){if(error.code!=='ENOENT')throw Error('ASSISTANT_HOST_PROFILE_INVALID')}
-  if(!validSource(profile.asrSource)||!validSource(profile.ttsSource))throw Error('ASSISTANT_HOST_PROFILE_INVALID');
+  if(!validSource(profile.asrSource)||!validSource(profile.ttsSource)||typeof profile.wakeEnabled!=='boolean')throw Error('ASSISTANT_HOST_PROFILE_INVALID');
   try{hostOptions={...JSON.parse(await readFile(join(directory,'host-options.json'),'utf8')),...hostOptions}}catch(error){if(error.code!=='ENOENT')throw Error('ASSISTANT_HOST_OPTIONS_INVALID')}
   const connectionDirectory=join(directory,'connection');await mkdir(connectionDirectory,{recursive:true});
   // Preserve the first installed connection profile; only conversation context is persona-scoped.
@@ -57,6 +58,104 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     const rows=[],seen=new Set();let cursor;
     do{const result=await call('manager.roles.list',{query:{...(cursor?{cursor}:{}),limit:200}});rows.push(...(Array.isArray(result)?result:result.roles||result.personas||[]));cursor=result.nextCursor;if(cursor&&seen.has(cursor))throw Error('ASSISTANT_PERSONA_CATALOG_INVALID');seen.add(cursor)}while(cursor);
     return rows.filter(item=>!item.archivedAt).map(item=>({id:item.roleId||item.personaId||item.id,label:item.title||item.name||item.roleId||item.personaId||item.id})).filter(item=>item.id)
+  }
+  let armedRevision, arming, wakeError, activeWake, idleTimer, localFallback = false;
+  const sleepAfterMs = 60000;
+  let activeCapture, handoffRequested = false, handoffWrites = Promise.resolve(), passiveError;
+  function setPassiveHandoff(capture, enabled) {
+    handoffWrites = handoffWrites.then(async () => {
+      await speech.speechRuntimeControl.setAssistantRealtime(capture, enabled, AbortSignal.timeout(2000));
+      if(activeCapture===capture)passiveError=undefined;
+    }).catch(() => { if(activeCapture===capture)passiveError='ASSISTANT_WAKE_HANDOFF_UNCONFIRMED'; });
+  }
+  function forgetActiveWake() {
+    clearTimeout(idleTimer);
+    if (activeCapture && handoffRequested) setPassiveHandoff(activeCapture, false);
+    activeWake = undefined;
+    activeCapture = undefined;
+    handoffRequested = false;
+    localFallback = false;
+    passiveError = undefined;
+  }
+  function renewActiveWake() {
+    const target = activeWake;
+    if (!target) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(async () => {
+      if (activeWake !== target || closed) return;
+      if (target.conversation.activity().pending || target.host.captureHasWork() || target.host.captureState().phase === 'starting') {
+        renewActiveWake();
+        return;
+      }
+      forgetActiveWake();
+      try { await target.host.command({action:'stop'}); }
+      catch (error) { wakeError = error.message || 'ASSISTANT_WAKE_STOP_FAILED'; }
+    }, sleepAfterMs);
+    idleTimer.unref?.();
+  }
+  function noteWakeSpeech(hasText) {
+    renewActiveWake();
+    if (hasText && activeCapture && !localFallback && !handoffRequested) {
+      handoffRequested = true;
+      setPassiveHandoff(activeCapture, true);
+    }
+  }
+  const wake = createWakeListener({speechRuntime:speech.speechRuntimeControl, async onWake({createRecording, createFallbackRecording, recentSpeech, cursor, signal: wakeSignal}) {
+    assertWritable(); wakeSignal.throwIfAborted();
+    const current = await open();
+    assertWritable(); wakeSignal.throwIfAborted();
+    if (['starting','running'].includes(current.host.captureState().phase)) return;
+    if (current.hostSources.asrIssue || current.hostSources.ttsIssue) throw Error('ASSISTANT_WAKE_CONFIGURATION_REQUIRED');
+    activeWake = current;
+    activeCapture = cursor.captureId;
+    renewActiveWake();
+    try {
+      const fallback = current.hostSources.asrSource === 'custom' ? {
+        createRecording: createFallbackRecording,
+        recognize: (audio, signal) => speech.speechRuntimeControl.transcribeAssistantAudio(audio, signal),
+        onFallback: () => {
+          if (activeWake !== current) return;
+          localFallback = true;
+          if(handoffRequested){setPassiveHandoff(activeCapture,false);handoffRequested=false;}
+        },
+      } : undefined;
+      await current.host.startWithRecording(createRecording, {fallback, recentSpeech});
+      wakeSignal.throwIfAborted();
+      renewActiveWake();
+    } catch (error) {
+      if (activeWake === current) forgetActiveWake();
+      throw error;
+    }
+  }});
+  function armWake() {
+    if (!profile.wakeEnabled || readOnly() || armedRevision === profileRevision || arming) return;
+    const epoch = profileRevision, personaId = profile.personaId;
+    armedRevision = epoch; wakeError = null;
+    arming = (async () => {
+      if (!personaId) throw Error('ASSISTANT_WAKE_PERSONA_REQUIRED');
+      const role = await call('manager.roles.detail', {pathParams:{roleId:personaId}});
+      assertWritable();
+      if (epoch !== profileRevision) return;
+      const value = role.config?.speechTriggerKeywords ?? role.personaConfig?.speechTriggerKeywords;
+      const aliases = Array.isArray(value) ? [...new Set(value.filter(item=>typeof item==='string')
+        .map(item=>item.normalize('NFKC').trim()).filter(Boolean))] : [];
+      if (aliases.length > 64) throw Error('ASSISTANT_WAKE_TOO_MANY_ALIASES');
+      wake.arm(aliases);
+    })().catch(error => {
+      if (epoch === profileRevision && !closed) wakeError = error.message || 'ASSISTANT_WAKE_CONFIGURATION_REQUIRED';
+    }).finally(() => { arming = undefined; });
+  }
+  function wakeSnapshot() {
+    return {...wake.snapshot(), ...(arming?{phase:'starting'}:{}),
+      ...(wakeError?{phase:'unavailable',error:wakeError}:{}), ...(passiveError?{passiveError}:{}), ...(activeWake&&['starting','running'].includes(activeWake.host.captureState().phase)?{phase:localFallback?'local-fallback':'active'}:{})};
+  }
+  async function retireWake() {
+    forgetActiveWake();
+    await wake.stop();
+    await handoffWrites;
+    await arming;
+    armedRevision = undefined;
+    wakeError = null;
   }
   async function open(){
     assertCurrent();if(runtime)return runtime;if(opening)return opening;
@@ -118,6 +217,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(models.find(item=>item.id===ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
+        onCaptureActivity:noteWakeSpeech, onCaptureStopped:forgetActiveWake,
         onSubmitted:(message,config)=>{if(config.petEnabled&&bound.personaId&&message.source==='speech')record({kind:'asr',source:'voice-assistant',id:message.id,text:message.text,time:Date.now()})},
         deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true},
         discoverTools:async()=>{const connection=await manager();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');return createRabiOperationTools({sdk:connection.operations,sendAgent:sendAgent?request=>sendAgent(request,runtime.conversation.getSessionId()):undefined,assertCurrent:()=>{assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED')}})} });
@@ -127,25 +227,30 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     })();try{return await opening}finally{opening=undefined}
   }
   return {
-    async state(){const current=await open(),state=await current.state();return {...state,hostSettings:{...current.hostSources,lastError:lastHostError,personas:await personas()},capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true}}},
+    startWake:armWake,
+    async state(){const current=await open(),state=await current.state();armWake();return {...state,hostSettings:{...current.hostSources,wake:wakeSnapshot(),lastError:lastHostError,personas:await personas()},capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true}}},
     async messages(){return (await open()).messages()},
     async command(request){
       assertWritable();const current=await open();assertWritable();
       if(request.action==='start'&&(current.hostSources.asrIssue||current.hostSources.ttsIssue))throw Error(current.hostSources.asrIssue?'HOST_ASR_CONFIGURATION_REQUIRED':'HOST_TTS_CONFIGURATION_REQUIRED');
       if(request.action==='host-settings'){
         if(current.conversation.activity().pending)throw Error('ASSISTANT_CONTEXT_BUSY');
-        const patch=request.patch||{};for(const key of Object.keys(patch))if(!['personaId','asrSource','ttsSource','asrModel','ttsModel'].includes(key)||typeof patch[key]!=='string')throw Error('ASSISTANT_HOST_PROFILE_INVALID');
+        const patch=request.patch||{};for(const key of Object.keys(patch))if(key==='wakeEnabled'?typeof patch[key]!=='boolean':!['personaId','asrSource','ttsSource','asrModel','ttsModel'].includes(key)||typeof patch[key]!=='string')throw Error('ASSISTANT_HOST_PROFILE_INVALID');
         const next={...profile,...patch};if(!validSource(next.asrSource)||!validSource(next.ttsSource))throw Error('ASSISTANT_HOST_PROFILE_INVALID');
         if(next.personaId&&!(await personas()).some(item=>item.id===next.personaId))throw Error('ASSISTANT_PERSONA_UNAVAILABLE');
-        await current.dispose();runtime=undefined;const old=profile;profile=next;profileRevision++;
-        try{await open();const pending=profilePath+'.'+randomUUID()+'.tmp';await writeFile(pending,JSON.stringify(profile),{mode:0o600});await rename(pending,profilePath)}catch(error){profile=old;profileRevision++;throw error}lastHostError=null;return {saved:true,settingsScopeChanged:true};
+        const old=profile;profileRevision++;
+        const retirement=retireWake();
+        await current.dispose();runtime=undefined;await retirement;profile=next;
+        try{await open();const pending=profilePath+'.'+randomUUID()+'.tmp';await writeFile(pending,JSON.stringify(profile),{mode:0o600});await rename(pending,profilePath)}catch(error){profile=old;profileRevision++;armWake();throw error}lastHostError=null;armWake();return {saved:true,settingsScopeChanged:true};
       }
-      if(request.action==='exit'){await current.host.command({action:'stop'});return {stopped:true}}
+      if(['stop','exit'].includes(request.action))forgetActiveWake();
+      if(request.action==='exit'){await current.host.command({action:'stop'});await handoffWrites;return {stopped:true}}
+      if(request.action==='stop'){const result=await current.command(request);await handoffWrites;return result}
       return current.command(request);
     },
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},
     async submit(text,requestId,expectedSession){assertWritable();const current=await open();assertWritable();if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
     async recover(requestId,text){assertWritable();const current=await open();assertWritable();return current.conversation.acceptedRequest(requestId,text)},
-    async dispose(){if(closed)return;closed=true;await opening?.catch(()=>{});await runtime?.dispose();await clientOpening?.catch(()=>{});await client?.close();runtime=undefined}
+    async dispose(){if(closed)return;closed=true;profileRevision++;await opening?.catch(()=>{});const retirement=retireWake();await runtime?.dispose();await retirement;await clientOpening?.catch(()=>{});await client?.close();runtime=undefined}
   };
 }

@@ -55,3 +55,49 @@ def test_managed_command_preserves_external_worker_configuration():
     command = WorkerSupervisor._dynamic_command(("python", "local_asr_worker.py", "--port=1234", "--host=localhost"))
     assert "--port=0" in command
     assert "--host=127.0.0.1" in command
+
+
+def test_local_asr_expires_only_after_inference_and_can_start_again(monkeypatch):
+    class FakeProcess:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    async def exercise():
+        from rabispeech.worker_supervisor import _ManagedProcess
+
+        supervisor = WorkerSupervisor()
+        started = []
+        unloaded = asyncio.Event()
+        key = "asr:test"
+
+        async def ensure(*_args):
+            if key not in supervisor._processes:
+                process = FakeProcess()
+                started.append(process)
+                supervisor._processes[key] = _ManagedProcess(key, process, None)
+            return "http://127.0.0.1:9999"
+
+        def terminate(worker):
+            worker.process.returncode = 0
+            supervisor._forget(worker)
+
+        monkeypatch.setattr(supervisor, "ensure", ensure)
+        monkeypatch.setattr(supervisor, "_terminate", terminate)
+        options = {"idle_seconds": 0.02, "on_unloaded": unloaded.set}
+        try:
+            for count in (1, 2):
+                unloaded.clear()
+                async with supervisor.use(key, "http://127.0.0.1:9999", WorkerLaunch(), **options) as url:
+                    assert url == "http://127.0.0.1:9999"
+                    await asyncio.sleep(0.05)
+                    assert supervisor.managed_worker_is_running(key)
+                    assert not unloaded.is_set()
+                await asyncio.wait_for(unloaded.wait(), timeout=2)
+                assert not supervisor.managed_worker_is_running(key)
+                assert len(started) == count
+        finally:
+            await supervisor.close()
+
+    asyncio.run(exercise())

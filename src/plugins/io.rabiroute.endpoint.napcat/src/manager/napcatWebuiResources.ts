@@ -95,6 +95,7 @@ export async function readNapcatWebuiObject(context: NapcatWebuiManagementContex
         manifest = JSON.parse(Buffer.from(await protectedStore.readProtected(owner, id, binding.assertCurrent)).toString("utf8"));
     }
     catch {
+        binding.assertCurrent();
         throw new ManagementError("RESOURCE_OBJECT_NOT_FOUND", 404);
     }
     if (manifest.kind !== "napcat-webui-object" || !Array.isArray(manifest.chunks) || !Number.isSafeInteger(manifest.bytes) || manifest.bytes < 0)

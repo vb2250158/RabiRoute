@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable
 
 import numpy as np
 
+from .assistant_capture import AssistantAudio, AssistantCaptureWindow
 from .contracts import TranscriptionResult
 
 
@@ -116,6 +117,7 @@ class SpeechInputSource:
     audio_format: str | None = None
     channels: int = 1
     sample_rate: int = 16_000
+    assistant_owned: bool = False
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,7 @@ class MicrophoneService:
         temp_dir: Path,
         transcriber: Transcriber,
         submitter: Submitter,
+        assistant_transcriber: Transcriber | None = None,
         playback_active: Callable[[], bool],
         stop_playback: PlaybackStopper | None = None,
         record_transcription: RecordTranscription | None = None,
@@ -173,6 +176,7 @@ class MicrophoneService:
         self.state_path = state_path.expanduser().resolve()
         self.temp_dir = temp_dir.expanduser().resolve()
         self._transcriber = transcriber
+        self._assistant_transcriber = assistant_transcriber
         self._submitter = submitter
         self._playback_active = playback_active
         self._stop_playback = stop_playback
@@ -185,6 +189,7 @@ class MicrophoneService:
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
+        self._assistant_capture: AssistantCaptureWindow | None = None
         self._delivery_consumer: asyncio.Task[None] | None = None
         self._deliveries: asyncio.Queue = asyncio.Queue(maxsize=32)
         self._consumer: asyncio.Task[None] | None = None
@@ -310,6 +315,9 @@ class MicrophoneService:
     async def stop(self, *, persist: bool = True) -> dict[str, object]:
         async with self._lock:
             self._running = False
+            if self._assistant_capture is not None:
+                self._assistant_capture.close()
+                self._assistant_capture = None
             stream, self._stream = self._stream, None
             if stream is not None:
                 try:
@@ -434,6 +442,43 @@ class MicrophoneService:
             )
         return rows
 
+    def recent_assistant_speech(self, capture_id: str, before: float | None) -> list[dict[str, str | int]]:
+        if before is None:
+            return []
+        result = []
+        for row in self._history:
+            if (row.get("captureId") != capture_id or row.get("source") != "pc_microphone"
+                    or row.get("processing_policy") != "record_only"):
+                continue
+            end = float(row["started_at"]) + float(row["duration"])
+            age_ms = round((before - end) * 1000)
+            if not 120 <= age_ms <= 90000:
+                continue
+            text = str(row["text"]).strip()[:256]
+            if text:
+                result.append({"text": text, "ageMs": age_ms})
+            if len(result) == 6:
+                break
+        return sorted(result, key=lambda item: int(item["ageMs"]), reverse=True)
+
+    def set_assistant_realtime(self, capture_id: str, enabled: bool) -> None:
+        capture = self._assistant_capture
+        if not self._running or capture is None or not capture.readers or capture.capture_id != capture_id:
+            raise ValueError("ASSISTANT_CAPTURE_CURSOR_EXPIRED")
+        capture.realtime = enabled
+
+    def assistant_wake_threshold(self) -> float:
+        return self._dynamic_threshold
+
+    def assistant_audio(self, capture_id: str | None, from_sample: int | None) -> AssistantAudio:
+        if not self._running or self._stream is None:
+            raise ValueError("ASSISTANT_CAPTURE_LOCAL_MICROPHONE_REQUIRED")
+        if self._assistant_capture is None or self._assistant_capture.readers == 0:
+            if capture_id is not None:
+                raise ValueError("ASSISTANT_CAPTURE_CURSOR_EXPIRED")
+            self._assistant_capture = AssistantCaptureWindow(self.config.sample_rate)
+        return self._assistant_capture.subscribe(capture_id, from_sample)
+
     def feed_for_test(self, samples: np.ndarray) -> None:
         """Deterministic segmentation hook; production audio enters through PortAudio."""
         self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
@@ -459,11 +504,11 @@ class MicrophoneService:
             chunk = chunk[:, 0]
         copied = chunk.copy()
         try:
-            loop.call_soon_threadsafe(self._ingest, copied, str(status or ""))
+            loop.call_soon_threadsafe(self._ingest, copied, str(status or ""), time.time())
         except RuntimeError:
             return
 
-    def _ingest(self, chunk: np.ndarray, status: str = "") -> None:
+    def _ingest(self, chunk: np.ndarray, status: str = "", captured_at: float | None = None) -> None:
         if not self._running or chunk.size == 0:
             return
         if status:
@@ -490,7 +535,10 @@ class MicrophoneService:
             and self._stop_playback is not None
             and not self._barge_in_failed
         )
-        if self.config.suppress_during_playback and playback_active and not barge_in_ready:
+        suppress = self.config.suppress_during_playback and playback_active and not barge_in_ready
+        if self._assistant_capture is not None:
+            self._assistant_capture.append(chunk, muted=suppress, captured_at=captured_at)
+        if suppress:
             if self._state != "playback_suppressed":
                 self._emit_event("microphone", "playback_suppressed", "检测到主机播放，暂时抑制麦克风触发")
             self._reset_segment()
@@ -625,6 +673,10 @@ class MicrophoneService:
         voiced_duration = round(voiced_samples / self.config.sample_rate, 3) if self.config.sample_rate else 0.0
         self._reset_segment()
         self._state = "listening"
+        capture = self._assistant_capture
+        if (input_source.assistant_owned and capture is not None
+                and input_source.capture_id == capture.capture_id and capture.realtime):
+            return
         if audio.size == 0 or peak < self.config.transcribe_threshold or voiced_samples < min_voiced_samples:
             self._emit_event(
                 "vad",
@@ -687,11 +739,16 @@ class MicrophoneService:
                 sample_rate=self.config.sample_rate,
             )
         device = str(self.config.device).strip() if self.config.device is not None else "system-default"
+        capture = self._assistant_capture
+        assistant_owned = bool(capture and capture.readers)
         return SpeechInputSource(
             source="pc_microphone",
             transport="rabispeech_local_audio",
             channel_type="speech.pc_microphone",
             message_adapter_type="speech",
+            assistant_owned=assistant_owned,
+            processing_policy="record_only" if assistant_owned else "agent",
+            capture_id=capture.capture_id if assistant_owned else "",
             device_id=device,
             device_name=device,
             device_kind="pc_microphone",
@@ -719,7 +776,12 @@ class MicrophoneService:
                 if self._record_audio_state is not None:
                     self._record_audio_state(self.config, started_at, target, input_source, "processing")
                     pending_record = True
-                result = await self._transcriber(target, self.config)
+                transcribe = self._transcriber
+                if input_source.assistant_owned:
+                    if self._assistant_transcriber is None:
+                        raise RuntimeError("ASSISTANT_LOCAL_TRANSCRIPTION_UNAVAILABLE")
+                    transcribe = self._assistant_transcriber
+                result = await transcribe(target, self.config)
                 text = result.text.strip()
                 if not text:
                     if self._record_audio_state is not None:
@@ -790,7 +852,10 @@ class MicrophoneService:
                             session_id=self.config.session_id,
                             error=f"{type(exc).__name__}: {exc}"[:500],
                         )
-                if self.config.auto_submit:
+                if input_source.assistant_owned:
+                    self._recorded += 1
+                    item["delivery_status"] = "recorded"
+                elif self.config.auto_submit:
                     try:
                         self._deliveries.put_nowait((result, input_source.session_id or self.config.session_id, utterance, input_source, item))
                     except asyncio.QueueFull:

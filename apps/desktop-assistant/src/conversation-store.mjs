@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {mkdir,open,readFile,unlink} from 'node:fs/promises';
+import {mkdir,open,readFile,statfs,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 import {transformWindowsSecret} from '@rabilink/desktop-voice-service/windows-secrets';
@@ -7,14 +7,17 @@ import {transformWindowsSecret} from '@rabilink/desktop-voice-service/windows-se
 const newId=()=> 'local-'+randomUUID().slice(0,30);
 const validId=id=>typeof id==='string'&&/^[A-Za-z0-9:._-]{1,40}$/.test(id);
 const failed=(code,cause)=>Object.assign(new Error(code,{cause}),{code});
+const storageFull=error=>error.code==='ENOSPC'||(Number.isInteger(error.errcode)&&(error.errcode&255)===13);
 
 /** One local owner. Content is AES-GCM encrypted; DPAPI CurrentUser wraps its key. */
 export async function openConversationStore(directory,{protect=value=>transformWindowsSecret(value),unprotect=value=>transformWindowsSecret(value,true),initialId}={}){
  if(initialId!==undefined&&!validId(initialId))throw failed('ASSISTANT_CONTEXT_FILE_INVALID');
- await mkdir(directory,{recursive:true});
  const lockPath=join(directory,'conversation.lock'),lease=JSON.stringify({pid:process.pid,token:randomUUID()});
  let lock,db,key;
  try{
+  await mkdir(directory,{recursive:true});
+  const space = await statfs(directory,{bigint:true}).catch(()=>undefined);
+  if(space?.bavail===0n)throw failed('ASSISTANT_CONTEXT_STORAGE_FULL');
   try{lock=await open(lockPath,'wx',0o600)}catch(error){
    if(error.code!=='EEXIST')throw error;
    const old=await readFile(lockPath,'utf8');let owner;try{owner=JSON.parse(old)}catch{throw failed('ASSISTANT_CONTEXT_IN_USE')}
@@ -28,7 +31,7 @@ export async function openConversationStore(directory,{protect=value=>transformW
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS metadata(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,role TEXT NOT NULL,status TEXT NOT NULL,payload BLOB NOT NULL);');
   const meta=name=>db.prepare('SELECT value FROM metadata WHERE name=?').get(name)?.value;
   const setMeta=(name,value)=>db.prepare('INSERT INTO metadata(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value').run(name,value);
-  const transaction=action=>{db.exec('BEGIN IMMEDIATE');try{const value=action();db.exec('COMMIT');return value}catch(e){db.exec('ROLLBACK');throw e}};
+  const transaction=action=>{db.exec('BEGIN IMMEDIATE');try{const value=action();db.exec('COMMIT');return value}catch(e){try{db.exec('ROLLBACK')}catch{}throw e}};
   if(!meta('version')){
    if(db.prepare('SELECT count(*) AS n FROM messages').get().n||db.prepare('SELECT count(*) AS n FROM metadata').get().n)throw failed('ASSISTANT_CONTEXT_FILE_INVALID');
    key=randomBytes(32);const wrapped=await protect(key.toString('base64'));
@@ -71,7 +74,7 @@ export async function openConversationStore(directory,{protect=value=>transformW
    },
    commit({id,messages=[],context:nextContext,canvas}){
     if(closed)throw failed('ASSISTANT_CONTEXT_CLOSED');
-    try{transaction(()=>{if(id!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');for(const message of messages)put(message);if(nextContext!==undefined)setMeta('context',encode(nextContext).toString('base64'));if(canvas!==undefined)setMeta('canvas',encode(canvas).toString('base64'));setMeta('savedAt',new Date().toISOString())})}catch(e){throw failed(e.code==='ASSISTANT_CONTEXT_CHANGED'?e.code:'ASSISTANT_CONTEXT_SAVE_FAILED',e)}
+    try{transaction(()=>{if(id!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');for(const message of messages)put(message);if(nextContext!==undefined)setMeta('context',encode(nextContext).toString('base64'));if(canvas!==undefined)setMeta('canvas',encode(canvas).toString('base64'));setMeta('savedAt',new Date().toISOString())})}catch(e){throw failed(storageFull(e)?'ASSISTANT_CONTEXT_STORAGE_FULL':e.code==='ASSISTANT_CONTEXT_CHANGED'?e.code:'ASSISTANT_CONTEXT_SAVE_FAILED',e)}
    },
    clear(expectedId){
     if(expectedId!==meta('id'))throw failed('ASSISTANT_CONTEXT_CHANGED');
@@ -79,5 +82,5 @@ export async function openConversationStore(directory,{protect=value=>transformW
    },
    async close(){if(closed)return;closed=true;try{db.close()}finally{key.fill(0);await lock.close();if(await readFile(lockPath,'utf8')===lease)await unlink(lockPath)}}
   };
- }catch(error){try{db?.close();key?.fill(0)}finally{if(lock){await lock.close();try{if(await readFile(lockPath,'utf8')===lease)await unlink(lockPath)}catch{}}}throw failed(error.code?.startsWith('ASSISTANT_CONTEXT_')?error.code:'ASSISTANT_CONTEXT_LOAD_FAILED',error)}
+ }catch(error){try{db?.close();key?.fill(0)}finally{if(lock){await lock.close();try{if(await readFile(lockPath,'utf8')===lease)await unlink(lockPath)}catch{}}}throw failed(storageFull(error)?'ASSISTANT_CONTEXT_STORAGE_FULL':error.code?.startsWith('ASSISTANT_CONTEXT_')?error.code:'ASSISTANT_CONTEXT_LOAD_FAILED',error)}
 }

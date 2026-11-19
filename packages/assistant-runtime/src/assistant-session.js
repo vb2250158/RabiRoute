@@ -1,4 +1,4 @@
-import {snapshotSpeechObservation} from './speech-observation.js';
+import {snapshotSpeechObservation,snapshotRecentSpeech} from './speech-observation.js';
 import { createAgentProtocol, snapshotTaskObservation } from './decision-protocol.js';
 import { createAgentTurnRuntime } from './turn-runtime.js';
 import { checkCurrent } from './assert-current.js';
@@ -171,7 +171,7 @@ export function createAssistantSession({ profile, createModel, discoverTools, pr
           || ['takeGuidance', 'onText', 'onState', 'assertCurrent'].some(key => runOptions[key] !== undefined && typeof runOptions[key] !== 'function')
           || (runOptions.inputScope !== undefined && (typeof runOptions.inputScope !== 'string' || !runOptions.inputScope.trim() || runOptions.inputScope.length > 512))
           || (runOptions.limits !== undefined && (!runOptions.limits || typeof runOptions.limits !== 'object' || Array.isArray(runOptions.limits)))) throw failure('ASSISTANT_RUN_OPTIONS_INVALID');
-      runOptions = { ...runOptions, speechObservation:snapshotSpeechObservation(runOptions.speechObservation), limits: { ...runOptions.limits } };
+      runOptions = { ...runOptions, speechObservation:snapshotSpeechObservation(runOptions.speechObservation), recentSpeech:snapshotRecentSpeech(runOptions.recentSpeech), limits: { ...runOptions.limits } };
       const assertCurrent = runOptions.assertCurrent;
       checkCurrent(assertCurrent);
       applyPending();
@@ -184,7 +184,7 @@ export function createAssistantSession({ profile, createModel, discoverTools, pr
         if (owner.cancelled || closed) return settle({ state: 'cancelled', text: '', toolResults: [] });
         checkCurrent(assertCurrent);
         owner.turn = createAgentTurnRuntime({ ...limits, ...runOptions.limits, model: session.model, protocol,
-          speechCapabilities:runOptions.speechCapabilities,speechObservation:runOptions.speechObservation,
+          speechCapabilities:runOptions.speechCapabilities,speechObservation:runOptions.speechObservation,recentSpeech:runOptions.recentSpeech,
           assertCurrent, inputScope: observation ? undefined : runOptions.inputScope,
           tools: session.tools, toolPolicy: session.backend.toolPolicy,
           turnId: runOptions.turnId || sessionId + ':' + (++turnSequence),

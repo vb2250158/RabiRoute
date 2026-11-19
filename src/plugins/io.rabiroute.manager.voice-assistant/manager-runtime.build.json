@@ -18,6 +18,7 @@
     "src/plugins/io.rabiroute.manager.voice-assistant/"
   ],
   "aliases": {
+    "@rabilink/assistant-runtime/canvas": "packages/assistant-runtime/src/visual-canvas.js",
     "@rabilink/assistant-runtime/protocol": "packages/assistant-runtime/src/decision-protocol.js",
     "@rabilink/assistant-runtime/turn": "packages/assistant-runtime/src/turn-runtime.js",
     "@rabilink/assistant-runtime/session": "packages/assistant-runtime/src/assistant-session.js",

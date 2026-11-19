@@ -1,11 +1,12 @@
 import {createAiuiAssistantRuntime} from '@rabilink/assistant-runtime/aiui'
 import {createDesktopAsr} from './desktop-asr.mjs'
+import {createAsrStartupFallback} from './asr-startup-fallback.mjs'
 import {ttsRequestEvent,notifySpeechObserver} from './speech-details.mjs'
 import {createPlaybackCueTracker} from './playback-cues.mjs'
 import {openPcmBuffer} from './pcm-buffer.mjs'
 
 /** One PC service adapter for every assistant; provider functions stay on the native Host. */
-export async function openDesktopVoiceServices({openDevice,recognize,synthesize,createAsr,openSpeechStream,streamSampleRate,settings,signal,onError=()=>{},onSpeechRequest}) {
+export async function openDesktopVoiceServices({openDevice,createRecording,fallbackCapture,recognize,synthesize,createAsr,openSpeechStream,streamSampleRate,settings,signal,onError=()=>{},onSpeechRequest}) {
   signal.throwIfAborted()
   const device=await openDevice({signal})
   if(signal.aborted){await device.close();signal.throwIfAborted()}
@@ -14,10 +15,16 @@ export async function openDesktopVoiceServices({openDevice,recognize,synthesize,
   const requestObserver=options=>{const group=++speechSequence;return event=>notifySpeechObserver(onSpeechRequest,{responseId:options.responseId,...ttsRequestEvent(settings,options.expression,event),requestId:group+':'+(event.requestId||1)})}
   const cleanups=new Set(), acquisitions=new Set(), failures=[]
   const track=promise=>{acquisitions.add(promise);void promise.then(()=>acquisitions.delete(promise),error=>{acquisitions.delete(promise);failures.push(error);onError(error)});return promise}
-  const recognizer=createAsr?createAsr({createRecording:()=>device.createRecording()}):createDesktopAsr({createRecording:()=>device.createRecording(),transcribe:recognize,
+  let currentRecording
+  const recording = () => currentRecording = createRecording ? createRecording() : device.createRecording()
+  const desktop = (capture, transcribe) => createDesktopAsr({createRecording:capture,transcribe,
     settings:()=>({threshold:settings.silenceThreshold,silenceMs:settings.silenceDurationMs,
       sampleMs:settings.sampleMs,maxDurationMs:settings.maxDurationMs}),
     clock:{now:()=>performance.now(),setTimeout,clearTimeout,setInterval,clearInterval}})
+  const primary=createAsr?createAsr({createRecording:recording}):desktop(recording,recognize)
+  const recognizer=fallbackCapture?createAsrStartupFallback(primary,
+    desktop(fallbackCapture.createRecording,fallbackCapture.recognize),
+    {releasePrimary:()=>currentRecording?.dispose(),onFallback:fallbackCapture.onFallback}):primary
   const rounds=new Set()
   const asr={...recognizer,
     createRound(handlers){const round=recognizer.createRound(handlers);rounds.add(round);return round},

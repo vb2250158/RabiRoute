@@ -1,4 +1,4 @@
-import {snapshotSpeechObservation} from './speech-observation.js';
+import {snapshotSpeechObservation,snapshotRecentSpeech} from './speech-observation.js';
 import { canonicalAgentIntent, snapshotTaskObservation, getAgentProtocolFailureReason } from './decision-protocol.js';
 import { checkCurrent } from './assert-current.js';
 import { captureInterjection, interjectionResult } from './interjection.js';
@@ -9,7 +9,7 @@ let sequence = 0;
  * Dispatched HTTP writes may finish after cancellation. Caller destroys a cancelled model. */
 export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolicy, tools = [], turnId = 'loop-' + (++sequence),
   takeGuidance = () => [], onText = () => {}, onState = () => {}, requestTimeoutMs = 30000,
-  turnTimeoutMs = 180000, maxToolCalls = 16, maxSteps = 32, interjectWhileWaiting = false, assertCurrent, inputScope, speechCapabilities, speechObservation } = {}) {
+  turnTimeoutMs = 180000, maxToolCalls = 16, maxSteps = 32, interjectWhileWaiting = false, assertCurrent, inputScope, speechCapabilities, speechObservation, recentSpeech } = {}) {
   if (!model || typeof executeTool !== 'function' || !/^[A-Za-z0-9:._-]{1,64}$/.test(turnId)
       || typeof protocol?.input !== 'function' || typeof protocol?.parseDecision !== 'function'
       || typeof toolPolicy?.classify !== 'function' || typeof toolPolicy?.inspectOutcome !== 'function') throw failure('TURN_DEPENDENCIES_REQUIRED');
@@ -265,7 +265,7 @@ export function createAgentTurnRuntime({ model, executeTool, protocol, toolPolic
   return Object.freeze({
     run(input) {
       if (typeof input !== 'string' || !input.trim() || input.length > 16000) return Promise.reject(failure('TURN_INPUT_INVALID'));
-      return runInput({ kind: 'user-input', text: input,...(speechObservation?{speechObservation:snapshotSpeechObservation(speechObservation)}:{}),...(speechCapabilities?.enabled?{speechCapabilities:JSON.parse(JSON.stringify(speechCapabilities))}:{}) });
+      return runInput({ kind: 'user-input', text: input,...(recentSpeech?.length?{recentSpeech:snapshotRecentSpeech(recentSpeech)}:{}),...(speechObservation?{speechObservation:snapshotSpeechObservation(speechObservation)}:{}),...(speechCapabilities?.enabled?{speechCapabilities:JSON.parse(JSON.stringify(speechCapabilities))}:{}) });
     },
     observe(value) {
       if (started || cancelled) return Promise.reject(failure('TURN_ALREADY_STARTED'));

@@ -164,9 +164,10 @@
         "0.1.16",
         "0.1.17",
         "0.1.18",
-        "0.1.19"
+        "0.1.19",
+        "0.1.20"
       ],
-      "toVersion": "0.1.20"
+      "toVersion": "0.1.21"
     },
     {
       "packageId": "io.rabiroute.endpoint.rabilink",
@@ -491,9 +492,10 @@
         "1.1.12",
         "1.1.13",
         "1.1.14",
-        "1.1.15"
+        "1.1.15",
+        "1.1.16"
       ],
-      "toVersion": "1.1.16"
+      "toVersion": "1.1.17"
     },
     {
       "packageId": "io.rabiroute.manager.speech",
@@ -506,9 +508,10 @@
         "0.1.5",
         "0.1.6",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.10"
     },
     {
       "packageId": "io.rabiroute.manager.video",
@@ -525,9 +528,12 @@
         "0.2.5",
         "0.2.6",
         "0.2.7",
-        "0.2.8"
+        "0.2.8",
+        "0.2.9",
+        "0.2.10",
+        "0.2.11"
       ],
-      "toVersion": "0.2.9"
+      "toVersion": "0.2.12"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",

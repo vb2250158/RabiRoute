@@ -1,4 +1,4 @@
-import {snapshotSpeechObservation} from './speech-observation.js';
+import {snapshotSpeechObservation,snapshotRecentSpeech} from './speech-observation.js';
 import { canonicalAgentIntent, snapshotTaskObservation } from './decision-protocol.js';
 import { checkCurrent } from './assert-current.js';
 import { unavailableInterjection } from './interjection.js';
@@ -100,7 +100,7 @@ export function createAssistantConversation({ session, scope, receipts, capacity
           || (options.limits !== undefined && (!options.limits || typeof options.limits !== 'object' || Array.isArray(options.limits)))) throw failure('ASSISTANT_RUN_OPTIONS_INVALID');
       if (options.assertCurrent !== undefined && session.supportsTurnGuard !== true) throw failure('ASSISTANT_TURN_GUARD_UNSUPPORTED');
       assertCapacity('user');
-      const entry = job('user', text, { ...options, speechObservation:snapshotSpeechObservation(options.speechObservation), limits: options.limits === undefined ? undefined : { ...options.limits } });
+      const entry = job('user', text, { ...options, speechObservation:snapshotSpeechObservation(options.speechObservation), recentSpeech:snapshotRecentSpeech(options.recentSpeech), limits: options.limits === undefined ? undefined : { ...options.limits } });
       users.push(entry);
       schedule();
       return entry.promise;
