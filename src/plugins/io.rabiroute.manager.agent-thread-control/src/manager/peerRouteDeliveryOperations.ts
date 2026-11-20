@@ -11,6 +11,7 @@ import { EndpointTransportReceipts } from "@rabiroute/host-api/agentRequests/end
 import { agentDeliveryPromptHash } from "@rabiroute/host-api/agentRequests/store";
 import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, type EndpointExecutionOptions } from "@rabiroute/host-api/agentRequests/executionOptions";
 import { EndpointDeliveryNotSentError } from "@rabiroute/host-api/agentRequests/deliveryFailure";
+import { renderPeerRouteSourceContext } from "@rabiroute/host-api/shared/rabiMessage";
 
 type Options = Pick<PeerAgentEndpointOptions, "managerInstanceId" | "localDeviceId" | "scope" | "principal" | "readLocal" | "localOptions" | "receiptDirectory" | "executeOwner" | "recoverOwner">;
 type RouteDeliveryInput = { instanceId: string; provider: AgentAdapterType; threadId: string; prompt?: string; deliveryId: string; cwd?: string; model?: string; reasoningEffort?: string; sandbox?: string; dshDeliveryMode?: string; codexDeliveryMode?: "queue"; workbuddyDeliveryMode?: "steer" | "direct" };
@@ -67,11 +68,7 @@ export function createPeerRouteDeliveryOperations(options: Options): readonly Ap
             delivery: { deliveryId: body.deliveryId, state: receipt ? "accepted" : current.notSent ? "missing" : current.found ? "uncertain" : "missing" }, ...(receipt ? { receipt } : {}) } };
         }
         if (typeof body.prompt !== "string") throw new Error("Native Route delivery requires its original rendered prompt.");
-        const sourceManager = `/api/rabilink/peer/http/${encodeURIComponent(principal.sourceDeviceId)}/manager`;
-        const prompt = body.prompt + "\n\n[来源主机与接口]\n"
-          + `本条消息所附的 Route、角色、计划及渠道回传接口归来源主机 ${principal.sourceDeviceId}。\n`
-          + `使用当前电脑 Manager 的 ${sourceManager} 前缀访问来源接口；例如 ${sourceManager}/meta 核对来源身份，${sourceManager}/api/roles/<roleId>/... 访问来源角色接口。\n`
-          + "Manager 地址使用当前主机的动态发现结果。文件、CLI 与任务工作目录仍归当前执行电脑；不要把来源主机的相对接口路径误用到当前电脑。";
+        const prompt = body.prompt + "\n\n" + renderPeerRouteSourceContext(principal.sourceDeviceId);
         const identity = { deliveryId: body.deliveryId, generation: digest([principal.sourceDeviceId, options.managerInstanceId, body.deliveryId]),
           target, promptHash: agentDeliveryPromptHash(prompt) };
         let originalOptions: EndpointExecutionOptions | undefined;

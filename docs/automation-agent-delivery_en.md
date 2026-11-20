@@ -87,9 +87,15 @@ Both PC and Relay need the sharing protocol update. An outdated Relay, missing c
 
 Deployment maintenance: forward the Relay `/share/*` page, handshake and WebSocket paths to the same Relay service. Full deployment templates include this route. `RuntimeOnly` preserves the existing Caddy configuration, so publish the matching route through the existing reverse-proxy deployment entry. One runtime manifest drives plugin asset copying, backup and recovery.
 
+Choose **Reply to original chat** to send the completed turn's text back to the chat that triggered it. The message rule must deliver to a selected Agent session, and the Agent hook must be able to verify the original delivery for that turn. LAN and Peer sessions use their existing authenticated endpoint. The reply keeps the original message route, account, and chat. Manually started turns and turns without a verifiable source are skipped. Fixed-destination notifications and automatic follow-ups still use their own rules.
+
 Open Role → Automation → Agent rules and click Add Agent rule. The preview sidebar lists supported Agents and shows which are configured for the role. Select a configured Agent, enter a rule name, and choose a rule type before creating it. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules. Open a rule card to edit, enable, or delete it, then click Save at the top of the role page. While editing a rule, use the left sidebar to switch its Agent. Select the session filters again for the new Agent.
 
 Under Delivery target, select a bound conversation or voice endpoint for the role. The selector fills in the endpoint, route, and conversation parameters. A listed trigger event must match along with all conditions. Under Message format, you can independently turn off the Agent type and task name. Both are included by default.
+
+**Task progress text** is available for local Codex Desktop and DSH. Codex subscribes to the original Desktop task and delivers completed public commentary. DSH delivers the previous committed public assistant text when the next step begins in the same turn. Each message is delivered once per original session, turn, and message ID. Existing chat history is skipped, and **Task completed** handles the final answer. With heartbeat exclusion selected, progress waits for a normal final response before delivery.
+
+Observation starts with a new turn after the update. Codex requires the original task to run in Desktop with the Rabi Hook enabled. Update the DSH Hook to use the event. If the native DSH Agent plugin owns Hook transport, the companion uses the same Manager connection. WorkBuddy and Antigravity currently expose **Task completed**.
 
 NapCat (QQ) event delivery rules provide **Include files in automatic delivery**, checked by default. Existing rules without `destination.params.includeFiles` also include files; the string `"false"` opts out and `"true"` enables it explicitly. This setting is saved with the role's Hook rules for each Agent.
 

@@ -138,6 +138,22 @@ test("Agent rule names persist through the role configuration API", async () => 
   assert.equal(hooks.planFollowup.rules[0].name, "Check release");
 }));
 
+test("the role API round-trips DSH progress and Stop together with unchanged delivery options", async () => fixture(async f => {
+  const before = await f.get();
+  const rule = { id: "progress", name: "Share progress", enabled: true, event: "task_progress",
+    events: ["task_progress", "task_completed"], conditions: [{ type: "bound_plan" }],
+    destination: { channel: "speech", gatewayId: "route", params: {
+      content: "excerpt", includeAgentType: "false", includeTaskName: "true"
+    } } };
+  const saved = await f.post("configuration", { expectedRevision: before.revision, config: { ...before.config, codexHooks: {
+    byAgent: { dsh: { completionDeliveries: [rule] } }
+  } } });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  const hooks = (await f.get()).config.codexHooks;
+  assert.deepEqual(agentHookSettingsFor(hooks, "dsh").completionDeliveries, [rule]);
+  assert.deepEqual(agentHookSettingsFor(hooks, "codex").completionDeliveries ?? [], []);
+}));
+
 test("switching an inherited Agent rule changes which producer can deliver after the role save", async () => fixture(async f => {
   const current = await f.get();
   const cwd = "C:/fixture/project";

@@ -14,8 +14,8 @@ function instanceHelper() {
 }
 
 /** Explicit endpoints and enrolled Agent instances retain their own transport. */
-export function hasConfiguredHookRoute() {
-  return Boolean(process.env.RABI_MANAGER_URL || process.env.RABIROUTE_HOST_EXE || fs.existsSync(instanceHelper()));
+export function hasConfiguredHookRoute(hostExecutable) {
+  return Boolean(hostExecutable || process.env.RABI_MANAGER_URL || process.env.RABIROUTE_HOST_EXE || fs.existsSync(instanceHelper()));
 }
 
 export async function requestHook(input, options = {}) {
@@ -31,7 +31,8 @@ export async function requestHook(input, options = {}) {
 
 async function runHook(input, options, markDispatched) {
   options.signal?.throwIfAborted();
-  if (!options.env) {
+  const hostExecutable = options.hostExecutable?.trim();
+  if (!hostExecutable && !options.env) {
     const helper = instanceHelper();
     if (fs.existsSync(helper)) {
       const { requestInstanceHook } = await import(pathToFileURL(helper).href);
@@ -48,9 +49,9 @@ async function runHook(input, options, markDispatched) {
   }
   const env = options.env ?? process.env;
   let descriptor;
-  let baseUrl = env.RABI_MANAGER_URL;
+  let baseUrl = hostExecutable ? undefined : env.RABI_MANAGER_URL;
   if (!baseUrl) {
-    const host = env.RABIROUTE_HOST_EXE || (env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'RabiRoute', 'RabiRouteHost.exe'));
+    const host = hostExecutable || env.RABIROUTE_HOST_EXE || (env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'RabiRoute', 'RabiRouteHost.exe'));
     if (!host) throw new Error('RabiRoute Host is unavailable.');
     const { stdout } = await (options.execute ?? execute)(host, ['--command', 'status', '--json'], { windowsHide: true, signal: options.signal, timeout: getTimeoutMs("hooks.dsh.discovery", 3000, env) });
     descriptor = JSON.parse(stdout);

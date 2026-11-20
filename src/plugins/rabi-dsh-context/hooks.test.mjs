@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
-import { apply } from './index.mjs';
+import { apply, Config } from './index.mjs';
 import { requestHook } from './manager-client.mjs';
 import { configureTimeouts } from './timeout-settings.mjs';
 
@@ -63,6 +65,57 @@ test('DSH keeps independent execution when Manager is absent', async t => {
   const result = await handlers.get('tools/pre-execute')({ agent: { id: 'unbound' } }, async () => ({ kind: 'allow' }));
   assert.equal(result.kind, 'allow');
   assert.equal(warning.mock.calls.at(-1).arguments[1], 'offline');
+});
+
+test('DSH publishes only committed public prose proven to precede another step', async t => {
+  const warning = t.mock.method(console, 'warn', () => {});
+  const handlers = new Map();
+  const requests = [];
+  const session = { id: 'original-session', header: { cwd: '/project' } };
+  const other = { id: 'another-session' };
+  apply({ on: (name, fn) => handlers.set(name, fn) }, {}, async input => {
+    requests.push(input);
+    if (input.messageId === 'reply-1') throw new Error('isolated network failure');
+    return {};
+  });
+  const emit = (type, data, subject = session, surfaceOp = 'append') =>
+    handlers.get('session/event')(subject, { type, data, surfaceOp });
+  const start = (turn, step, subject) => emit('step/start', { turn, step }, subject);
+  const assistant = (turn, step, id, content, interrupted = false, surfaceOp) =>
+    emit('assistant/message', { turn, step, interrupted, message: { id, role: 'assistant', content } }, session, surfaceOp);
+  const blocks = [
+    { type: 'reasoning', text: 'private' },
+    { type: 'tool-call', text: 'private command' },
+    { type: 'text', text: 'visible update' }
+  ];
+  assistant(1, 1, 'history', blocks);
+  start(1, 2);
+  emit('turn/start', { turn: 2 });
+  assistant(2, 0, 'replacement', blocks, false, 'replace');
+  assistant(2, 0, 'aborted', blocks, true);
+  assistant(2, 0, 'reasoning-only', blocks.slice(0, 2));
+  start(2, 1);
+  assistant(2, 1, 'reply-1', blocks);
+  start(2, 2, other);
+  assert.deepEqual(requests, []);
+  start(2, 2);
+  start(2, 2);
+  assistant(2, 2, 'reply-2', blocks);
+  start(2, 3);
+  assistant(2, 3, 'final', [{ type: 'text', text: 'final answer' }]);
+  await handlers.get('agent/turn-stopping')({ agent: session, turn: 2 });
+  emit('turn/end', { turn: 2 });
+  start(2, 4);
+  assert.deepEqual(requests.map(({ eventName, messageId, lastAssistantMessage }) => [eventName, messageId, lastAssistantMessage]), [
+    ['AssistantProgress', 'reply-1', 'visible update'],
+    ['AssistantProgress', 'reply-2', 'visible update'],
+    ['Stop', undefined, 'final answer']
+  ]);
+  assert.equal(requests[0].turnId, '2');
+  assert.equal(requests[0].sessionId, session.id);
+  assert.equal(requests[0].cwd, '/project');
+  assert.ok(Math.abs(Date.now() - requests[0].observedAt) < 1000);
+  assert.equal(warning.mock.calls.length, 1);
 });
 
 test('DSH rejects a stale Host generation before forwarding events', async () => {
@@ -144,6 +197,104 @@ test('the companion transport delegates each lifecycle event to the native owner
   services.delete('rabiAgentHooks');
   await handlers.get('agent/pre-step')({ agent, messages, turn: 2 }, next);
   assert.deepEqual(requested.map(event => event.eventName), ['UserPromptSubmit']);
+});
+
+test('DSH accepts only an absolute configured Host path and uses it for native transport and live progress', async () => {
+  const validate = input => Config['~standard'].validate(input);
+  const hostExecutable = path.resolve('RabiRouteHost fixture.exe');
+  assert.deepEqual(validate({}), { value: { hostExecutable: '' } });
+  assert.deepEqual(validate({ hostExecutable: '  ' }), { value: { hostExecutable: '' } });
+  for (const invalid of ['RabiRouteHost.exe', 3, null]) {
+    assert.deepEqual(validate({ hostExecutable: invalid }).issues[0].path, ['hostExecutable']);
+  }
+  const config = validate({ hostExecutable: `  ${hostExecutable}  ` }).value;
+  const handlers = new Map();
+  const services = new Map([['rabiAgentHooks', { supportsCompanionTransport: true }]]);
+  const requests = [];
+  apply({
+    on: (name, handler) => handlers.set(name, handler),
+    get: name => services.get(name),
+    effect: fn => fn(),
+    provide: (name, service) => services.set(name, service)
+  }, config, async (input, options) => { requests.push({ input, options }); return {}; });
+  const transport = services.get('rabiDshHookTransport');
+  assert.equal(transport.hasConfiguredRoute(), true);
+  await transport.request({ eventName: 'Stop' }, { hostExecutable: 'unrelated', fetch: 'fixture' });
+  const session = { id: 'fixture-session' };
+  const emit = (type, data) => handlers.get('session/event')(session, { type, data, surfaceOp: 'append' });
+  emit('turn/start', { turn: 1 });
+  emit('assistant/message', { turn: 1, step: 1, message: {
+    id: 'native-id', role: 'assistant', content: [{ type: 'text', text: 'Progress' }]
+  } });
+  emit('step/start', { turn: 1, step: 2 });
+  assert.deepEqual(requests.map(item => [item.input.eventName, item.options.hostExecutable]),
+    [['Stop', hostExecutable], ['AssistantProgress', hostExecutable]]);
+  assert.equal(requests[0].options.fetch, 'fixture');
+  assert.equal(requests[1].input.messageId, 'native-id');
+});
+
+test('an explicitly configured Host bypasses helper and environment and rediscovers Manager for every request', async t => {
+  const fsExists = fs.existsSync;
+  t.mock.method(fs, 'existsSync', file => {
+    assert.ok(!String(file).endsWith('hook-client.mjs'), 'explicit Host must not even probe the unrelated helper');
+    return fsExists(file);
+  });
+  t.after(() => configureTimeouts({}));
+  const hostExecutable = path.resolve('configured fixture.exe');
+  let generation = 0;
+  const calls = [];
+  const options = {
+    hostExecutable,
+    execute: async (file, args) => {
+      assert.equal(file, hostExecutable);
+      assert.deepEqual(args, ['--command', 'status', '--json']);
+      generation++;
+      calls.push('status');
+      return { stdout: JSON.stringify({ managerBaseUrl: `http://127.0.0.1:380${generation}`,
+        applicationGenerationId: `gen-${generation}`, managerInstanceId: 'id' }) };
+    },
+    fetch: async (url, init) => {
+      assert.ok(url.startsWith(`http://127.0.0.1:380${generation}/`));
+      if (url.endsWith('/meta')) {
+        calls.push('meta');
+        return Response.json({ applicationGenerationId: `gen-${generation}`, managerInstanceId: 'id',
+          health: { live: true, state: 'healthy' } });
+      }
+      calls.push('post');
+      assert.equal(init.headers['x-rabiroute-expected-application-generation-id'], `gen-${generation}`);
+      assert.equal(init.headers['x-rabiroute-expected-manager-instance-id'], 'id');
+      return Response.json({ code: 0, data: {} });
+    }
+  };
+  await requestHook({}, options);
+  await requestHook({}, { ...options, env: { RABI_MANAGER_URL: 'http://localhost:9999', RABIROUTE_HOST_EXE: 'other.exe' } });
+  assert.deepEqual(calls, ['status', 'meta', 'post', 'status', 'meta', 'post']);
+});
+
+test('configured Host failures stay on the chosen route and preserve uncertainty after dispatch', async () => {
+  const hostExecutable = path.resolve('configured fixture.exe');
+  for (const failure of ['status', 'identity', 'response']) {
+    const calls = [];
+    await assert.rejects(requestHook({}, {
+      hostExecutable, env: { RABI_MANAGER_URL: 'http://localhost:9999', RABIROUTE_HOST_EXE: 'other.exe' },
+      execute: async file => {
+        assert.equal(file, hostExecutable);
+        calls.push('status');
+        if (failure === 'status') throw new Error('Host status unavailable');
+        return { stdout: JSON.stringify({ managerBaseUrl: 'http://127.0.0.1:3801', applicationGenerationId: 'gen', managerInstanceId: 'id' }) };
+      },
+      fetch: async (url, init) => {
+        assert.ok(url.startsWith('http://127.0.0.1:3801/'));
+        calls.push(init.method ?? 'GET');
+        if (init.method === 'POST') throw new Error('lost original response');
+        return Response.json({ applicationGenerationId: failure === 'identity' ? 'other-generation' : 'gen',
+          managerInstanceId: 'id', health: { live: true, state: 'healthy' } });
+      }
+    }), failure === 'status' ? { message: 'Host status unavailable', uncertain: false }
+      : failure === 'identity' ? { message: 'RabiRoute Manager generation is not ready.', uncertain: false }
+      : { message: 'lost original response', uncertain: true });
+    assert.deepEqual(calls, failure === 'status' ? ['status'] : failure === 'identity' ? ['status', 'GET'] : ['status', 'GET', 'POST']);
+  }
 });
 
 test('cancelling explicit Manager discovery never dispatches the hook', async () => {

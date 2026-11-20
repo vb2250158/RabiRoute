@@ -236,7 +236,7 @@ async function recordFromInbound(
     adapterType: "weixin",
     sessionId,
     userId: sessionId,
-    identityNamespace: state.accountId ? `bot:${state.accountId}` : state.userId ? `user:${state.userId}` : undefined,
+    identityNamespace: weixinIdentityNamespace(state),
     senderName: sessionId,
     messageId,
     messageType: parsed.messageType,
@@ -246,6 +246,10 @@ async function recordFromInbound(
     attachments: attachments.length ? attachments : undefined,
     segments: Array.isArray(message.item_list) ? message.item_list.slice(0, 50) : undefined
   };
+}
+
+function weixinIdentityNamespace(state: WeixinOpenClawState): string | undefined {
+  return state.accountId ? `bot:${state.accountId}` : state.userId ? `user:${state.userId}` : undefined;
 }
 
 function statusPatch(status: WeixinSessionStatus): Record<string, unknown> {
@@ -264,6 +268,7 @@ function statusPatch(status: WeixinSessionStatus): Record<string, unknown> {
     loggedIn: status.loggedIn,
     credentialsRetained: status.credentialsRetained,
     loginRequired: status.loginRequired,
+    ...(status.loginRequired ? { identityNamespace: "" } : {}),
     polling: status.phase === "restored",
     lastError: status.error || "",
     message
@@ -474,6 +479,7 @@ async function runWeixinAdapter(lifecycle: WeixinLifecycle): Promise<void> {
             qrCodeDataUrl: "",
             loginAttemptId: "",
             accountId: state.accountId,
+            identityNamespace: weixinIdentityNamespace(state) ?? "",
             lastError: "",
             message: "微信机器人已登录，正在接收消息。"
           });
@@ -610,6 +616,7 @@ export function createWeixinAdapter(
       const state = lifecycle.readState(lifecycle.dataDir, lifecycle.baseUrl);
       patchWeixinStatus(lifecycle.dataDir, {
         ...statusPatch(describeWeixinStartup(state)),
+        identityNamespace: weixinIdentityNamespace(state) ?? "",
         maturity: "experimental"
       }, lifecycle.now());
       logoutWatcher = fs.watch(lifecycle.dataDir, { persistent: false }, (_, filename) => {

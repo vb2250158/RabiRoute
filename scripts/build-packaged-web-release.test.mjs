@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { createHash } from 'node:crypto';
+import { buildPackagedWebRelease } from './build-packaged-web-release.mjs';
+import { verifyWebPatch, webPatchBackend } from '../dist/manager/webPatchCatalog.js';
+
+test('the shipped Web manifest binds the final runtime and remains stable outside the source cache', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rabi-packaged-web-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const name of ['dist/plugins/packages', 'ribiwebgui/dist/assets', 'docs', 'assets']) await fs.mkdir(path.join(root, name), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'release-fixture', version: '1.0.0' }));
+  await fs.writeFile(path.join(root, 'dist/runtime.js'), 'export const version = 1;\n');
+  await fs.writeFile(path.join(root, 'ribiwebgui/dist/index.html'), '<!doctype html><script type="module" src="/assets/app.js"></script>');
+  await fs.writeFile(path.join(root, 'ribiwebgui/dist/assets/app.js'), 'console.log("fixture");');
+  await fs.writeFile(path.join(root, 'docs/README.md'), '# Fixture documentation\n');
+  const first = await buildPackagedWebRelease(root);
+  const raw = await fs.readFile(path.join(root, 'ribiwebgui/web-release.json'));
+  assert.equal(createHash('sha256').update(raw).digest('hex'), first.revision);
+  const manifest = await verifyWebPatch(first.candidateRoot, first.revision);
+  assert.equal(manifest.backend, await webPatchBackend(root));
+  assert.ok(manifest.files.some(item => item.path === 'web/assets/app.js'));
+  assert.ok(manifest.files.some(item => item.path === 'docs/README.md'));
+  assert.equal((await buildPackagedWebRelease(root)).revision, first.revision);
+  await fs.writeFile(path.join(root, 'dist/runtime.js'), 'export const version = 2;\n');
+  const next = await buildPackagedWebRelease(root);
+  assert.notEqual(next.backend, first.backend);
+  assert.notEqual(next.revision, first.revision);
+});

@@ -584,6 +584,23 @@ if ($rg) {
     }
 }
 
+Write-Step "Archiving the standard Web snapshot against the final packaged backend"
+$webSnapshotJson = & node.exe (Join-Path $repo "scripts/build-packaged-web-release.mjs") --package-root $payload
+if ($LASTEXITCODE -ne 0) { throw "Packaged Web snapshot construction failed." }
+$webSnapshot = ($webSnapshotJson -join "`n") | ConvertFrom-Json
+if ($webSnapshot.revision -notmatch '^[a-f0-9]{64}$' -or $webSnapshot.backend -notmatch '^[a-f0-9]{64}$') {
+    throw "Invalid packaged Web snapshot identity."
+}
+$webArchive = Join-Path $payload 'ribiwebgui/web-release.zip'
+New-PortableArchive -SourceRoot $webSnapshot.candidateRoot -DestinationPath $webArchive
+Assert-PortableArchiveRoundTrip -SourceRoot $webSnapshot.candidateRoot -ArchivePath $webArchive
+$webInfo = [ordered]@{ schemaVersion=1; revision=$webSnapshot.revision; backend=$webSnapshot.backend;
+    manifest='web-release.json'; archive='web-release.zip'; archiveSha256=(Get-FileHash -LiteralPath $webArchive -Algorithm SHA256).Hash.ToLowerInvariant() }
+[IO.File]::WriteAllText((Join-Path $payload 'ribiwebgui/web-release-info.json'), ($webInfo | ConvertTo-Json))
+# Keep the hashed source cache out of Setup's staging paths. The verified archive
+# above retains the standard manifest and every Web/docs byte at a short path.
+Get-ChildItem -LiteralPath (Join-Path $payload 'dist/web-patches') -Force | ForEach-Object { Remove-PayloadEntry $_.FullName }
+
 Write-Step "Creating the canonical release manifest"
 $releaseManifestPath = Join-Path $payload $canonicalManifestName
 if (Test-Path -LiteralPath $releaseManifestPath) {
@@ -629,6 +646,9 @@ foreach ($requiredManifestPath in @(
     "node.exe",
     "dist/manager.js",
     "ribiwebgui/dist/index.html",
+    "ribiwebgui/web-release.json",
+    "ribiwebgui/web-release.zip",
+    "ribiwebgui/web-release-info.json",
     "desktop-runtime/main.py",
     "desktop-runtime/python/python.exe"
 )) {

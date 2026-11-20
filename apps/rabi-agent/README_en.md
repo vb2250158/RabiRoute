@@ -80,6 +80,8 @@ Local native-shell, HTTP/WebSocket/SSE and input-receipt validation is covered. 
 
 Node version 0.4.8 supports multiple instances on one computer. Copy a separate enrollment prompt from **RabiLink → Node management → Connect a node** on each host. Additional hosts use configurations under `RabiAgent/instances/<host GUID>/config.json` for the current user. Reconnecting the same host reuses its original configuration.
 
+Node package 0.4.9 contains updated native Agent adapters and Hooks. Manager updates preserve enrolled nodes and their signed selections; each node adopts the new package through its own update flow.
+
 Windows shows a separate tray icon for each instance. Hover to check its host. Pause, reconnect, exit, and login startup apply to that instance. macOS and Linux register separate background startup entries. Pass the instance’s absolute configuration path to `--config` when starting, managing, or calling it manually.
 
 ## Windows tray (0.2.1, experimental)

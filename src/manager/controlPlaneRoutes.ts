@@ -167,6 +167,9 @@ import {
 import { readJsonlTail } from "./jsonlTail.js";
 
 
+import { assertOriginalChatRoute, bindOriginalChatTurn, bindPeerOriginalChatCompletion, originalChatPeerCompletion, readOriginalChat,
+  savePeerOriginalChatAdmission, type OriginalChat } from "../automation/originalChat.js";
+import { resolveAgentSendRoute } from "../agentSendRoute.js";
 import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules } from "./agentCompletionDelivery.js";
 import { inspectOriginalPlanFeedbackReceipt } from "./planFeedbackReceipt.js";
 import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
@@ -355,7 +358,7 @@ import { createGatewayControlOperations } from "../plugins/io.rabiroute.manager.
 import { createRemoteAgentOperations, type RemoteAgentOperationsContext } from "../plugins/io.rabiroute.manager.remote-agent/src/manager/remoteAgentRoutes.js";
 import { createAgentThreadControlOwner } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlRoutes.js";
 import { createAgentThreadControlOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
-import { createPeerAgentEndpointBridge } from "./peerAgentEndpointBridge.js";
+import { createPeerAgentEndpointBridge, peerOriginalChatCompletionPath } from "./peerAgentEndpointBridge.js";
 import { createPeerAgentOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerAgentOperations.js";
 import { createPeerRouteDeliveryOperations } from "../plugins/io.rabiroute.manager.agent-thread-control/src/manager/peerRouteDeliveryOperations.js";
 import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/agentCommunicationRoutes.js";
@@ -1720,17 +1723,42 @@ function remotePersonaReadContext(): RemotePersonaReadContext {
     }
   };
 }
+const originalChatRoot = path.join(rootDir, "data", "automation-original-chat");
+
+function currentOriginalChatAccount(chat: OriginalChat, definition: GatewayDefinition): string {
+  if (chat.channel === "qqbot") return definition.qqbotAccountId || "";
+  if (chat.channel === "wecom") return definition.wecomBotId ? `bot:${definition.wecomBotId}` : "";
+  if (chat.channel === "feishu") return definition.feishuAppId || "";
+  const status = readGatewayStatus(definition);
+  if (chat.channel === "weixin") {
+    const adapters = status.messageAdapters;
+    const endpoint = isRecord(adapters) && adapters.weixin;
+    if (!isRecord(endpoint)) return "";
+    if (typeof endpoint.identityNamespace === "string") return endpoint.identityNamespace;
+    return typeof endpoint.accountId === "string" && endpoint.accountId ? `bot:${endpoint.accountId}` : "";
+  }
+  const instances = status.napcatInstances;
+  const instance = isRecord(instances) && instances[chat.params.instanceId];
+  return isRecord(instance) ? String(instance.botUserId ?? "") : "";
+}
+
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
+  resolveOriginalChat: ({ roleId }, request) => readOriginalChat(originalChatRoot, request, roleId),
   rules: (request, roleIds) => {
     const roles = new Set<string>();
+    const progress = request.eventName === "AssistantProgress";
+    if (progress && managerReadOnly) return [];
+    const scopedRoles = progress && !request.sourceInstance ? undefined : roleIds;
+    const managed = progress && !scopedRoles ? gatewayIdsForManagedSession(request.sessionId, request.cwd, request) : undefined;
     return [...runtimes.values()].flatMap(runtime => {
       const roleId = sanitizeRoleId(runtime.definition.agentRoleId);
       if (!roleId || roles.has(roleId) || runtime.definition.enabled === false || runtime.definition.agentRoleDeviceId) return [];
-      if (roleIds && !roleIds.includes(roleId)) return [];
+      if (scopedRoles && !scopedRoles.includes(roleId)) return [];
+      if (managed && !managed.has(runtime.definition.id)) return [];
       roles.add(roleId);
       return [
         ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
-        ...planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId, request)
+        ...(request.eventName === "Stop" ? planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId, request) : [])
       ];
     });
   },
@@ -1744,7 +1772,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
       });
     }
     const context = completionTaskContextFromPlans(request.sessionId, plans, taskName, request);
-    if (!request.sourceInstance && rule.destination.channel === "napcat" && request.agentType === "codex" && request.turnId) {
+    if (request.eventName === "Stop" && !request.sourceInstance && rule.destination.channel === "napcat" && request.agentType === "codex" && request.turnId) {
       const imageError = (error: unknown) => {
         context.imageReadError = true;
         managerOperationalLog.record("warn", "completion_images_unavailable", {
@@ -1759,11 +1787,24 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
     return context;
   },
   deliver: async ({ rule }, hook, deliveryId, context) => {
-    const runtime = runtimes.get(rule.destination.gatewayId);
+    const original = context.originalChat;
+    const runtime = runtimes.get(original?.gatewayId ?? rule.destination.gatewayId);
     if (!runtime || runtime.definition.enabled === false) throw new Error("目标消息路线未启用。");
+    const assertOriginalChatCurrent = original ? () => {
+      const definition = runtimes.get(original.gatewayId)?.definition;
+      const route = definition && resolveAgentSendRoute([{ ...definition, napcatInstances: [] }], original.routeId);
+      const local = definition && route && !route.profile?.agentRoleDeviceId && !definition.agentRoleDeviceId;
+      assertOriginalChatRoute(original, local ? {
+        gatewayId: definition.id, routeId: route.profile?.id || original.routeId,
+        roleId: route.profile?.agentRoleId || roleIdForDefinition(definition), account: currentOriginalChatAccount(original, definition)
+      } : undefined);
+    } : undefined;
+    assertOriginalChatCurrent?.();
     const instances = runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition);
-    const instance = instances.find(item => item.id === rule.destination.params.instanceId && item.enabled !== false);
-    if (rule.destination.channel === "napcat" && !instance) throw new Error("目标 QQ 账号未启用或已被移除。");
+    const instanceId = (original?.params ?? rule.destination.params).instanceId;
+    const instance = instances.find(item => item.id === instanceId && item.enabled !== false
+      && !runtime.definition.ignoredNapcatInstanceIds?.includes(item.id));
+    if ((original?.channel ?? rule.destination.channel) === "napcat" && !instance) throw new Error("目标 QQ 账号未启用或已被移除。");
     const options = {
       endpointEgress: (capability: string) => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
       publishHtmlAttachment: (file: string, id: string) => {
@@ -1772,13 +1813,64 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         return shares.publish(file, id);
       },
       rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(), publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
+      ...(assertOriginalChatCurrent ? { assertEndpointCurrent: assertOriginalChatCurrent } : {}),
       runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
     };
     await deliverCompletionToEndpoint(rule, hook, deliveryId,
-      runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id, options, context);
+      original?.routeId ?? (runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id), options, context);
   }
 });
+async function deliverAgentRuleEvent(request: CodexHookContextRequest, roleIds?: readonly string[]) {
+  const results = await agentCompletionDelivery.handle(request, roleIds);
+  if (request.eventName === "Stop" && !managerReadOnly) {
+    try {
+      const original = originalChatPeerCompletion(originalChatRoot, request);
+      if (original) {
+        const reply = await requestPeerManagerApi(original.deviceId, "POST", peerOriginalChatCompletionPath, original.proof) as { data?: typeof results };
+        if (Array.isArray(reply.data)) results.push(...reply.data);
+      }
+    } catch (error) {
+      managerOperationalLog.record("warn", "completion_peer_original_chat_unavailable", {
+        action: request.sessionId, error: managerOperationalError(error, rootDir)
+      });
+    }
+  }
+  for (const result of results) {
+    managerOperationalLog.record(result.status === "failed" ? "warn" : "info", "agent_completion_delivery", {
+      action: result.ruleId, outcome: result.status, result: result.reason
+    });
+  }
+  return results;
+}
+function observeCodexProgress(request: CodexHookContextRequest): void {
+  const recordFailure = (error: unknown) => managerOperationalLog.record("warn", "codex_progress_subscription_unavailable", {
+    action: request.sessionId, error: managerOperationalError(error, rootDir)
+  });
+  // A progress observation never vetoes the original prompt or starts a second runtime.
+  const subscribe = async () => {
+    if (!agentCompletionDelivery.beginCodexProgress(request)) return;
+    const generation = publishedPluginGeneration();
+    const onProgress = (message: import("../plugins/io.rabiroute.agent.codex/src/codexDesktopProgress.js").CodexDesktopProgressMessage) => {
+      if (generation !== publishedPluginGeneration() || message.threadId !== request.sessionId || message.turnId !== request.turnId) return;
+      void deliverAgentRuleEvent({ agentType: "codex", sessionId: message.threadId, turnId: message.turnId, cwd: request.cwd,
+        eventName: "AssistantProgress", nativeProgress: true, messageId: message.messageId, observedAt: message.completedAtMs,
+        lastAssistantMessage: message.text }).catch(recordFailure);
+    };
+    await invokePublishedAgentOperation("codex", "progress.observe", { threadId: request.sessionId, turnId: request.turnId }, { onProgress });
+  };
+  void subscribe().catch(recordFailure);
+}
 const codexHookContextService = new CodexHookContextService({
+  observeCodexProgress,
+  recordOriginalChatTurn: async request => {
+    if (managerReadOnly) return;
+    try { await bindOriginalChatTurn(originalChatRoot, request, id => agentRequests.readEndpointDelivery(id)); }
+    catch (error) {
+      managerOperationalLog.record("warn", "completion_original_chat_unavailable", {
+        action: request.sessionId, error: managerOperationalError(error, rootDir)
+      });
+    }
+  },
   onHookStage: createStopStageObserver(managerOperationalLog),
   readContext: async input => {
     const options = { timeoutMs: getTimeoutMs("agent.codex.hookRead", Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000) };
@@ -1787,15 +1879,7 @@ const codexHookContextService = new CodexHookContextService({
     } : input;
     return managerKnowledgePageWorkerPool.run({ type: "codex_hook_context_read", input: current }, options);
   },
-  deliverAgentCompletion: async (request, roleIds) => {
-    const results = await agentCompletionDelivery.handle(request, roleIds);
-    for (const result of results) {
-      managerOperationalLog.record(result.status === "failed" ? "warn" : "info", "agent_completion_delivery", {
-        action: result.ruleId, outcome: result.status, result: result.reason
-      });
-    }
-    return results;
-  },
+  deliverAgentCompletion: deliverAgentRuleEvent,
   rolesRoot: () => managerRolesRoot(),
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,
@@ -2945,6 +3029,7 @@ function envFor(
     RABI_GUID: globalConfig.rabiGuid,
     GATEWAY_MANAGER_PORT: String(managerPort),
     GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
+    GATEWAY_MANAGER_DEVICE_ID: rabiLinkRelayConfigForMeta().deviceId,
     RABIROUTE_APPLICATION_GENERATION_ID: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     RABIROUTE_MANAGER_INSTANCE_ID: managerInstanceId,
     PERSONA_MESSAGING_CAPABILITY: currentPersonaMessageAuthority().issue(definition.id, roleIdForDefinition(definition)),
@@ -7731,7 +7816,20 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     receiptDirectory: path.join(rootDir, "data", ".runtime", "peer-endpoint-transport-receipts"),
     readLocal: (provider, sessionId) => readAgentEndpointSummary(provider, sessionId, agentThreadRequestOptions({ agentAdapter: provider, threadId: sessionId })),
     localOptions: request => agentThreadRequestOptions(request),
-    principal: request => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId) ?? undefined
+    principal: request => rabiLinkAgentDevicePrincipal(request, rabiLinkRelayConfigForMeta(), managerHostIdentity?.applicationGenerationId ?? managerInstanceId) ?? undefined,
+    recordOriginalChat: (sourceDeviceId, delivery) => {
+      if (managerReadOnly) return;
+      try { savePeerOriginalChatAdmission(originalChatRoot, sourceDeviceId, delivery); }
+      catch (error) { managerOperationalLog.record("warn", "completion_peer_origin_admission_unavailable", { error: managerOperationalError(error, rootDir) }); }
+    },
+    completeOriginalChat: async (deviceId, proof, guard) => {
+      if (managerReadOnly) return [];
+      const original = await bindPeerOriginalChatCompletion(originalChatRoot, deviceId, proof, id => agentRequests.readEndpointDelivery(id));
+      guard();
+      if (!original) return [];
+      return agentCompletionDelivery.handle({ ...original.turn, eventName: "Stop", cwd: proof.cwd,
+        lastAssistantMessage: proof.message }, [original.chat.roleId], true);
+    }
   };
   const peerAgentBridge = createPeerAgentEndpointBridge(peerAgentOptions);
   instanceThreadTransport = {

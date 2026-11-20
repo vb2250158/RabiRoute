@@ -13,14 +13,17 @@ import { handleAgentSend, inspectAgentSendDelivery, type AgentSendRequest } from
 import { completionConversationFields } from "../shared/agentHookAutomation.js";
 import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
-import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents } from "../shared/agentHookAutomation.js";
+import { agentHookEventsFor, agentHookRuleErrors, agentHookRuleEvents } from "../shared/agentHookAutomation.js";
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 import { mermaidDiagramSource, renderMarkdownFileToPngPages } from "../markdownImage.js";
 import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 
 const execute = promisify(execFile);
-export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
+import type { OriginalChat } from "../automation/originalChat.js";
+import { originalChatChannel } from "../shared/agentHookAutomation.js";
+
+export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed" | "skipped"; reason?: string };
 export type CompletionRuleOwner = { roleId: string; rule: AgentCompletionDeliveryRule };
 export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string, source?: PlanBindingSource): CompletionRuleOwner[] {
   return plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source)
@@ -29,7 +32,7 @@ export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick
       id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
     } })));
 }
-export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }>; images?: string[]; imageReadError?: boolean };
+export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }>; images?: string[]; imageReadError?: boolean; originalChat?: OriginalChat };
 
 /** Only a complete control envelope is interpreted; quoted examples and other XML remain content. */
 function completionNotification(text: string): { text: string; heartbeat: boolean } {
@@ -147,9 +150,11 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
   deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
   const agent = isAgentAdapterType(hook.agentType) ? agentAdapterManifest(hook.agentType).label : "Codex";
-  const { channel, params } = rule.destination;
+  const { params } = rule.destination;
+  const original = context.originalChat;
+  const channel = original?.channel ?? rule.destination.channel;
   const heading = [
-    params.includeAgentType !== "false" ? `${agent} 本轮结果` : "",
+    params.includeAgentType !== "false" ? `${agent} ${hook.eventName === "AssistantProgress" ? "任务过程" : "本轮结果"}` : "",
     params.includeTaskName !== "false" ? `任务：${taskName}` : ""
   ].filter(Boolean).join("\n");
   const conversation = completionConversationFields[channel];
@@ -159,8 +164,8 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
   const body = characters && characters.length > 500 ? characters.slice(0, 500).join("") + "…" : fullText;
   const text = heading ? heading + "\n\n" + body : body;
   const request: AgentSendRequest = {
-    deliveryId, sender: { agentType: "codex_hook", sessionId: hook.sessionId }, routeId,
-    channel, params: channel === "napcat"
+    deliveryId, sender: { agentType: original ? hook.agentType || "codex" : "codex_hook", sessionId: hook.sessionId }, routeId,
+    channel, params: original ? original.params : channel === "napcat"
       ? { target: params.target, ...(params.target === "group" ? { groupId: params.targetId } : { userId: params.targetId }), instanceId: params.instanceId, replyToMessageId: "" }
       : conversation ? { [conversation.field]: params[conversation.field] } : { sessionId: params.sessionId || "" },
     payload: { type: "text", text },
@@ -177,7 +182,7 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     }
     images = images.filter(image => !embedded.has(image));
   }
-  const payloads = channel === "napcat" ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false") : [{ type: "text", text }];
+  const payloads = channel === "napcat" && !original ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false") : [{ type: "text", text }];
   const displayedImageFiles = new Set(payloads.flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
     .filter((segment): segment is { type: "image"; path: string } => segment.type === "image" && typeof segment.path === "string")
     .map(segment => canonicalPath(segment.path)));
@@ -191,7 +196,7 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
     if (result.status !== "sent" || (channel === "napcat" && !result.sentMessageId)) throw new Error(result.reason || "完成消息未取得发送回执。");
   }
-  if (channel === "napcat" && params.includeFiles !== "false") {
+  if (channel === "napcat" && !original && params.includeFiles !== "false") {
     const failures: string[] = [];
     for (const file of completionLocalFiles(hook.lastAssistantMessage!)) {
       const part: AgentSendRequest = { ...request,
@@ -272,32 +277,110 @@ export async function completionProjectIdentity(directory: string): Promise<stri
   }
 }
 
+type ProgressTurn = {
+  turnId: string;
+  closed: boolean;
+  seen: Set<string>;
+  waiting: Array<{ request: CodexHookContextRequest; owners: CompletionRuleOwner[] }>;
+};
+
 export class AgentCompletionDeliveryService {
   private readonly pending = new Map<string, Promise<CompletionDeliveryResult[]>>();
+  private readonly progress = new Map<string, ProgressTurn>();
   constructor(private readonly options: {
     rules(request: CodexHookContextRequest, roleIds?: readonly string[]): CompletionRuleOwner[];
     projectIdentity?: typeof completionProjectIdentity;
+    resolveOriginalChat?(owner: CompletionRuleOwner, request: CodexHookContextRequest): OriginalChat | undefined;
     taskContext?(owner: CompletionRuleOwner, request: CodexHookContextRequest): CompletionTaskContext | Promise<CompletionTaskContext>;
     deliver(owner: CompletionRuleOwner, request: CodexHookContextRequest, deliveryId: string, context: CompletionTaskContext): Promise<void>;
   }) {}
 
-  handle(request: CodexHookContextRequest, roleIds?: readonly string[]): Promise<CompletionDeliveryResult[]> {
-    if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName) || !supportsHooks(request.agentType)
-      || !request.sessionId?.trim() || !request.turnId?.trim()
-      || !request.lastAssistantMessage?.trim()) return Promise.resolve([]);
-    const notification = completionNotification(request.lastAssistantMessage);
-    if (!notification.text.trim()) return Promise.resolve([]);
-    request = { ...request, lastAssistantMessage: notification.text };
-    const key = JSON.stringify([planBindingSourceKey(request), request.turnId]);
+  private observesProgress(request: CodexHookContextRequest, roleIds?: readonly string[]): boolean {
+    return this.options.rules({ ...request, eventName: "AssistantProgress" }, roleIds)
+      .some(({ rule }) => rule.enabled && agentHookRuleEvents(rule).includes("task_progress"));
+  }
+
+  beginCodexProgress(request: CodexHookContextRequest): boolean {
+    if (request.agentType !== "codex" || request.sourceInstance || !request.turnId?.trim() || !this.observesProgress(request)) return false;
+    const source = this.progressSource(request);
+    const existing = this.progress.get(source);
+    if (existing?.turnId === request.turnId) return !existing.closed;
+    this.progress.set(source, { turnId: request.turnId, closed: false, seen: new Set(), waiting: [] });
+    return true;
+  }
+
+  private progressSource(request: CodexHookContextRequest): string {
+    return JSON.stringify([request.agentType || "codex", planBindingSourceKey(request)]);
+  }
+
+  handle(request: CodexHookContextRequest, roleIds?: readonly string[], originalOnly = false): Promise<CompletionDeliveryResult[]> {
+    const agent = request.agentType || "codex";
+    const event = agentHookEventsFor(agent).find(item => item.hookEvent === request.eventName);
+    if (!event || !supportsHooks(agent) || !request.sessionId?.trim() || !request.turnId?.trim()) return Promise.resolve([]);
+    if (request.eventName === "AssistantProgress" && agent === "codex" && !request.nativeProgress) return Promise.resolve([]);
+    const notification = completionNotification(request.lastAssistantMessage ?? "");
+    const supportedProgress = !originalOnly && agentHookEventsFor(agent).some(item => item.hookEvent === "AssistantProgress");
+    const source = this.progressSource(request);
+    const key = JSON.stringify([source, request.turnId, event.value, request.eventName === "AssistantProgress" ? request.messageId : null, originalOnly]);
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const operation = this.deliverMatches(request, roleIds, notification.heartbeat).finally(() => this.pending.delete(key));
+    const matches = () => this.options.rules(request, roleIds).filter(({ rule }) => rule.enabled && agentHookRuleEvents(rule).includes(event.value)
+      && (!originalOnly || rule.destination.channel === originalChatChannel));
+    const received = async () => {
+      if (request.eventName === "AssistantProgress") {
+        if (!notification.text.trim() || !request.messageId?.trim()) return [];
+        const owners = matches();
+        if (!owners.length) return [];
+        const turn = this.progressTurn(request, source);
+        if (!turn || turn.seen.has(request.messageId)) return [];
+        turn.seen.add(request.messageId);
+        const message = { ...request, lastAssistantMessage: notification.text };
+        const guarded = owners.filter(({ rule }) => rule.conditions.some(item => item.type === "exclude_heartbeat"));
+        if (guarded.length && !notification.heartbeat) turn.waiting.push({ request: message, owners: guarded });
+        return this.deliverMatches(message, owners.filter(owner => !guarded.includes(owner)), false);
+      }
+
+      const results: CompletionDeliveryResult[] = [];
+      if (supportedProgress && (this.progress.has(source) || agent === "dsh" && this.observesProgress(request, roleIds))) {
+        const turn = this.progressTurn(request, source);
+        if (turn) {
+          const waiting = turn.waiting.splice(0);
+          turn.seen.clear();
+          turn.closed = true;
+          if (waiting.length && !notification.heartbeat && notification.text.trim()) {
+            // A removed, disabled or changed rule must not send staged text.
+            const current = this.options.rules({ ...request, eventName: "AssistantProgress" }, roleIds);
+            for (const item of waiting) {
+              const active = item.owners.filter(owner => current.some(candidate => candidate.rule.enabled
+                && candidate.roleId === owner.roleId && JSON.stringify(candidate.rule) === JSON.stringify(owner.rule)));
+              results.push(...await this.deliverMatches(item.request, active, false));
+            }
+          }
+        }
+      }
+      if (notification.text.trim()) results.push(...await this.deliverMatches(
+        { ...request, lastAssistantMessage: notification.text }, matches(), notification.heartbeat));
+      return results;
+    };
+    const operation = received().finally(() => this.pending.delete(key));
     this.pending.set(key, operation);
     return operation;
   }
 
-  private async deliverMatches(request: CodexHookContextRequest, roleIds?: readonly string[], heartbeat = false): Promise<CompletionDeliveryResult[]> {
-    const owners = this.options.rules(request, roleIds).filter(({ rule }) => rule.enabled);
+  private progressTurn(request: CodexHookContextRequest, source: string) {
+    const turnId = request.turnId!;
+    const previous = this.progress.get(source);
+    if (request.agentType !== "dsh") return previous?.turnId === turnId && !previous.closed ? previous : undefined;
+    // DSH's native turn number is monotonic within its original session, including across machines.
+    const turn = Number(turnId);
+    if (!Number.isSafeInteger(turn) || turn < 1 || previous && Number(previous.turnId) > turn) return;
+    if (previous?.turnId === turnId) return previous.closed ? undefined : previous;
+    const entry: ProgressTurn = { turnId, closed: false, seen: new Set(), waiting: [] };
+    this.progress.set(source, entry);
+    return entry;
+  }
+
+  private async deliverMatches(request: CodexHookContextRequest, owners: CompletionRuleOwner[], heartbeat: boolean): Promise<CompletionDeliveryResult[]> {
     if (!owners.length) return [];
     const identify = this.options.projectIdentity ?? completionProjectIdentity;
     const results: CompletionDeliveryResult[] = [];
@@ -308,8 +391,6 @@ export class AgentCompletionDeliveryService {
       try {
         const errors = agentHookRuleErrors(rule);
         if (errors.length) throw new Error(errors.join(" "));
-        const events = agentHookRuleEvents(rule);
-        if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName && events.includes(event.value))) continue;
         if (heartbeat && rule.conditions.some(condition => condition.type === "exclude_heartbeat")) continue;
         if (rule.conditions.some(condition =>
           (condition.type === "include_sessions" && !condition.sessions?.some(session => session.id === request.sessionId))
@@ -323,18 +404,30 @@ export class AgentCompletionDeliveryService {
           project ??= await identify(request.cwd);
           if (await identify(projectCondition.path!) !== project) continue;
         }
-        const context = await this.options.taskContext?.(owner, request) ?? { plans: [] };
+        let context = await this.options.taskContext?.(owner, request) ?? { plans: [] };
         if (rule.conditions.some(condition => condition.type === "bound_plan") && context.plans.length === 0) continue;
-        const { channel, gatewayId, params } = rule.destination;
+        let { channel, gatewayId, params } = rule.destination;
+        if (channel === originalChatChannel) {
+          const original = this.options.resolveOriginalChat?.(owner, request);
+          if (!original) {
+            results.push({ ruleId: rule.id, status: "skipped", reason: "本轮没有可核对的原聊天来源。" });
+            continue;
+          }
+          context = { ...context, originalChat: original };
+          ({ channel, gatewayId, params } = original);
+          if (channel === "napcat") params = { ...params, targetId: params.groupId || params.userId };
+        }
         // Preserve group delivery identities when migrating existing rules.
         const target = JSON.stringify(channel === "napcat" && params.target === "group"
           ? [gatewayId, params.instanceId, params.targetId]
           : [gatewayId, channel, params.target || "", params.instanceId || "", params.targetId || params.sessionId || params.chatId || params.sourceMessageId || ""]);
         if (targets.has(target)) continue;
         targets.add(target);
-        const deliveryId = `agent-completion-${createHash("sha256").update(JSON.stringify([
-          planBindingDeliveryIdentity(request), request.turnId, target
-        ])).digest("hex")}`;
+        const identity = request.eventName === "AssistantProgress"
+          ? [request.agentType, planBindingDeliveryIdentity(request), request.turnId, request.messageId, target]
+          : [planBindingDeliveryIdentity(request), request.turnId, target];
+        const kind = request.eventName === "AssistantProgress" ? "progress" : "completion";
+        const deliveryId = `agent-${kind}-${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
         await this.options.deliver(owner, request, deliveryId, context);
         results.push({ ruleId: rule.id, status: "sent" });
       } catch (error) {

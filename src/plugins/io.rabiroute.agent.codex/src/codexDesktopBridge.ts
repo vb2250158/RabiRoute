@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { deliveryIdFromPrompt, deliveryUserMessagesFromRollout } from "@rabiroute/host-api/shared/deliveryIdentity";
 import { findRolloutDeliveryReceipt } from "./agentRequests/rolloutReceipt.js";
+import { CodexDesktopProgress, type CodexDesktopProgressMessage } from "./codexDesktopProgress.js";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -71,6 +72,8 @@ type IpcResponse = {
 type IpcMessage = IpcResponse | {
   type: "broadcast";
   method: string;
+  version?: number;
+  sourceClientId?: string;
   params?: unknown;
 } | {
   type: "client-discovery-request";
@@ -658,6 +661,10 @@ export class CodexDesktopBridge {
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
   private readonly receiptObservers = new Set<AbortController>();
   private readonly lateRolloutWatches = new Map<string, AbortController>();
+  private readonly progressWatchers = new Map<string, {
+    reader: CodexDesktopProgress;
+    onMessage: (message: CodexDesktopProgressMessage) => void;
+  }>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
     this.options = {
@@ -723,6 +730,21 @@ export class CodexDesktopBridge {
       if (message.method === "thread-stream-state-changed" && message.params && typeof message.params === "object") {
         const params = message.params as { conversationId?: unknown; threadId?: unknown; change?: unknown };
         const threadId = nonEmptyString(params.conversationId) || nonEmptyString(params.threadId);
+        const watcher = this.progressWatchers.get(threadId);
+        if (watcher) {
+          try {
+            const result = watcher.reader.read(message);
+            for (const item of result.messages) watcher.onMessage(item);
+            if (result.closed) this.unfollowProgress(threadId);
+            else if (result.resubscribe) {
+              this.setProgressFollowing(threadId, false);
+              this.setProgressFollowing(threadId, true);
+            }
+          } catch {
+            // Observation cannot affect the existing Desktop session, transport or delivery.
+            this.progressWatchers.delete(threadId);
+          }
+        }
         const change = JSON.stringify(params.change ?? params);
         if (threadId && (change.includes('"threadRuntimeStatus":{"type":"active"') || change.includes('"status":"inProgress"'))) {
           this.activeThreads.add(threadId);
@@ -853,6 +875,7 @@ export class CodexDesktopBridge {
           this.clientId = "initializing-client";
           this.activeThreads.clear();
           this.activeThreadSinceMs.clear();
+          this.progressWatchers.clear();
           this.rejectPending(new Error("Codex Desktop IPC connection closed"));
         });
         resolve();
@@ -929,6 +952,25 @@ export class CodexDesktopBridge {
 
   isThreadActive(threadId: string): boolean {
     return this.activeThreads.has(threadId);
+  }
+
+  private setProgressFollowing(threadId: string, following: boolean): void {
+    this.write({ type: "broadcast", sourceClientId: this.clientId, version: 1,
+      method: "thread-stream-following-changed", params: { conversationId: threadId, hostId: "local", following } });
+  }
+
+  private unfollowProgress(threadId: string): void {
+    this.progressWatchers.delete(threadId);
+    if (this.socket?.writable) this.setProgressFollowing(threadId, false);
+  }
+
+  async watchProgress(threadId: string, turnId: string, onMessage: (message: CodexDesktopProgressMessage) => void): Promise<void> {
+    await this.connect();
+    if (this.progressWatchers.get(threadId)?.reader.turnId === turnId) return;
+    if (this.progressWatchers.has(threadId)) this.unfollowProgress(threadId);
+    this.progressWatchers.set(threadId, { reader: new CodexDesktopProgress(threadId, turnId), onMessage });
+    try { this.setProgressFollowing(threadId, true); }
+    catch (error) { this.progressWatchers.delete(threadId); throw error; }
   }
 
   threadActiveSince(threadId: string): number | null {
@@ -1310,6 +1352,7 @@ export class CodexDesktopBridge {
     this.clientId = "initializing-client";
     this.activeThreads.clear();
     this.activeThreadSinceMs.clear();
+    this.progressWatchers.clear();
     this.rejectPending(new Error("Codex Desktop bridge closed"));
   }
 }

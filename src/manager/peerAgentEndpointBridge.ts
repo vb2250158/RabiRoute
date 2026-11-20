@@ -13,6 +13,9 @@ import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "../agent
 import type { RabiLinkAgentPrincipal } from "./rabiLinkAgentDevices.js";
 import { EndpointDeliveryNotSentError, validateEndpointDeliveryNoFrameProof } from "../agentRequests/deliveryFailure.js";
 
+import type { PeerOriginalChatCompletion } from "../automation/originalChat.js";
+
+export const peerOriginalChatCompletionPath = "/api/agent/prepared-deliveries/original-chat";
 export type PeerAgentRequest = (deviceId: string, method: "GET" | "POST", pathname: string, body?: unknown) => Promise<unknown>;
 export type PeerCallerSource = Pick<AgentThreadRequest, "sourceThreadId" | "sourceAgentType" | "messageSource" | "ledgerOwnerDeviceId" | "inReplyToRequestId">;
 export type PeerAgentEndpointOptions = {
@@ -31,6 +34,8 @@ export type PeerAgentEndpointOptions = {
   assertCurrent?(): void;
   executeOwner?: typeof executeEndpointOnOwner;
   recoverOwner?: typeof recoverEndpointOwnerReceipt;
+  recordOriginalChat?: (sourceDeviceId: string, delivery: import("../agentRequests/nativeOwnerDelivery.js").NativeOwnerDelivery) => void;
+  completeOriginalChat?: (sourceDeviceId: string, proof: PeerOriginalChatCompletion, guard: () => void) => Promise<unknown>;
 };
 
 type PeerAgentResponse = Record<string, unknown> & { instances?: AgentInstance[]; thread?: AgentThreadSummary;
@@ -155,7 +160,7 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
     const body = result as Record<string, unknown>;
     return { status: body.code === -1 ? body.errorCode === "DELIVERY_NOT_RESERVED" ? 404 : 409 : 200, body };
   }
-  function prepareExecution(request: IncomingMessage, signal?: AbortSignal) {
+  function preparePeerRequest(request: IncomingMessage, signal?: AbortSignal) {
     const current = fence(), principal = options.principal(request);
     if (!principal?.deviceOwner || principal.scope !== options.scope()) throw new Error("An authenticated peer Manager connection is required.");
     const guard = () => {
@@ -164,6 +169,19 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
       if (!now?.deviceOwner || now.scope !== principal.scope || now.sourceDeviceId !== principal.sourceDeviceId) throw new Error("Original peer caller changed.");
     };
     guard();
+    return { principal, guard };
+  }
+  function prepareOriginalChatCompletion(request: IncomingMessage, signal?: AbortSignal) {
+    const { principal, guard } = preparePeerRequest(request, signal);
+    return async (proof: PeerOriginalChatCompletion) => {
+      guard();
+      const result = await options.completeOriginalChat?.(principal.sourceDeviceId, proof, guard);
+      guard();
+      return result ?? [];
+    };
+  }
+  function prepareExecution(request: IncomingMessage, signal?: AbortSignal) {
+    const { principal, guard } = preparePeerRequest(request, signal);
     return async (input: { ledgerOwnerDeviceId: string; delivery: PreparedEndpointDelivery }, reconcile: boolean) => {
       guard(); const delivery = input.delivery;
       if (!delivery?.target || delivery.target.ownerDeviceId !== options.localDeviceId()
@@ -174,12 +192,15 @@ export function createPeerAgentEndpointBridge(options: PeerAgentEndpointOptions)
         readReceipt: value => receipts.readReceipt(value), writeReceipt: (value, receipt) => receipts.writeReceipt(value, receipt),
         readNotSent: value => receipts.readNotSentProof(value), writeNotSent: (value, error) => receipts.writeNotSent(value, error),
         beginAttempt: value => receipts.beginAttempt(value), recoverReceipt: options.recoverOwner ?? recoverEndpointOwnerReceipt,
-        send: (value, authorized) => (options.executeOwner ?? executeEndpointOnOwner)(value,
-          options.localOptions({ agentAdapter: value.target.provider as AgentAdapterType, threadId: value.target.sessionId }), authorized) }, reconcile);
+        send: (value, authorized) => {
+          if (input.ledgerOwnerDeviceId === principal.sourceDeviceId) options.recordOriginalChat?.(principal.sourceDeviceId, value);
+          return (options.executeOwner ?? executeEndpointOnOwner)(value,
+            options.localOptions({ agentAdapter: value.target.provider as AgentAdapterType, threadId: value.target.sessionId }), authorized);
+        } }, reconcile);
       guard(); return result;
     };
   }
-  return { owns, authorize, resolveTarget, resolveSource, transport, forwardReply, forwardCallerLookup, prepareExecution, routeThread,
+  return { owns, authorize, resolveTarget, resolveSource, transport, forwardReply, forwardCallerLookup, prepareExecution, prepareOriginalChatCompletion, routeThread,
     localDeviceId: options.localDeviceId, resolveStoredTarget, refresh: async (value: AgentRequestEndpoint) => { await readRemote(value); } };
 }
 export type PeerAgentEndpointBridge = ReturnType<typeof createPeerAgentEndpointBridge>;

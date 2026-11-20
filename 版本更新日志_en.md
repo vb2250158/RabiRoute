@@ -8,6 +8,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.56 - 2026-11-20
+
+- Agent rules consume visible process messages from local Codex Desktop and DSH while retaining task-completion events. Original session, turn and message identities deduplicate delivery without replaying history or hidden reasoning.
+- The DSH Hook accepts a live configurable Host path, discovers and verifies the same Manager on each call, and preserves the existing process, sessions and other plugins.
+- Full Windows packages include the standard Web manifest and archive bound to the final backend. Short archive paths retain the complete Web and documentation snapshot for installation and rollback verification.
+- Completion notifications can return to the original chat using the admitted delivery as proof of its Route, account, conversation and message. Local, LAN and matching-protocol Peer paths reject endpoint/account changes and turns without proven origins.
+- Update the independent Persona, Codex, Agent Communication, Thread Control, Weixin and DSH Hook packages. Increment node SDK source to 0.4.9 so new native adapters and Hooks do not overwrite 0.4.8 assets; node adoption retains its separate publication flow.
+
 ## 0.15.55 - 2026-11-20
 
 - Switch an existing Agent rule from the sidebar while retaining its name, destination and common conditions. Saving moves the rule; session restrictions must be selected for the new Agent. Persona 0.1.33 updates independently on the 0.15.54 full-application baseline.

@@ -1,4 +1,4 @@
-import { AGENT_HOOK_DESTINATIONS, agentHookRuleErrors, completionConversationFields, type AgentHookDestination } from "@shared/agentHookAutomation";
+import { AGENT_HOOK_DESTINATIONS, agentHookRuleErrors, completionConversationFields, originalChatChannel, type AgentHookDestination } from "@shared/agentHookAutomation";
 import { messageAdapterOutputEnabled, type CodexHookSettings, type GatewayDefinition, type PersonaAutomationRuleDefinition } from "@shared/gatewayConfigModel";
 import { automationEndpoint } from "./automationEndpoints";
 import { automationQqTarget, type AutomationQqDirectory } from "./automationRuleConversation";
@@ -69,6 +69,8 @@ export function completionTargetChoices(gateway: GatewayDefinition, gateways: re
   for (const scope of [hooks, ...Object.values(hooks?.byAgent ?? {})]) {
     for (const rule of scope?.completionDeliveries ?? []) add(rule.destination);
   }
-  return [...targets].map(([value, destination]) => ({ value, destination, title: completionTargetLabel(destination, routes, directories) }))
+  const original = { channel: originalChatChannel, gatewayId: "", params: {} };
+  const fixed = [...targets].map(([value, destination]) => ({ value, destination, title: completionTargetLabel(destination, routes, directories) }))
     .sort((left, right) => left.title.localeCompare(right.title));
+  return [{ value: completionTargetKey(original), destination: original, title: completionTargetLabel(original, routes, directories) }, ...fixed];
 }

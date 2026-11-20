@@ -1,5 +1,22 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { hasConfiguredHookRoute, requestHook } from './manager-client.mjs';
+
+// Cordis accepts Standard Schema directly, including for a Hook linked from the RabiRoute install.
+export const Config = {
+  '~standard': {
+    version: 1,
+    vendor: 'rabi-dsh-context',
+    validate(input) {
+      const value = input?.hostExecutable;
+      const hostExecutable = typeof value === 'string' ? value.trim() : '';
+      if ((value !== undefined && typeof value !== 'string') || (hostExecutable && !path.isAbsolute(hostExecutable))) {
+        return { issues: [{ path: ['hostExecutable'], message: 'hostExecutable must be an absolute path or empty.' }] };
+      }
+      return { value: { hostExecutable } };
+    }
+  }
+};
 
 function textContent(message) {
   // DSH messages may contain non-text blocks; only forward readable text.
@@ -15,16 +32,24 @@ function contextMessage(text) {
 /** Thin lifecycle adapter: all decisions and context remain owned by Manager. */
 export function apply(ctx, config = {}, request = requestHook) {
   const nativeOwnsEvents = () => ctx.get?.('rabiAgentHooks')?.supportsCompanionTransport === true;
-  ctx.effect?.(() => ctx.provide('rabiDshHookTransport', { hasConfiguredRoute: hasConfiguredHookRoute, request }));
+  const hostExecutable = config.hostExecutable?.trim();
+  const hasConfiguredRoute = () => hasConfiguredHookRoute(hostExecutable);
+  const sendHook = hostExecutable
+    ? (input, options) => request(input, { ...options, hostExecutable })
+    : request;
+  ctx.effect?.(() => ctx.provide('rabiDshHookTransport', { hasConfiguredRoute, request: sendHook }));
   const starts = new Map();
   const finals = new Map();
   const turns = new Map();
+  const progress = new WeakMap();
+  const shutdown = new AbortController();
+  ctx.effect?.(() => () => shutdown.abort());
   const status = { version: '0.1.3', lastError: '' };
   const invoke = async (agent, eventName, fields = {}) => {
     // Every lifecycle decision is delegated to Manager; this adapter only
     // translates DSH event fields and keeps the host usable on failures.
     try {
-      const result = await request({ agentType: 'dsh', sessionId: agent.id, eventName, turnId: turns.get(agent.id), ...fields });
+      const result = await sendHook({ agentType: 'dsh', sessionId: agent.id, eventName, turnId: turns.get(agent.id), ...fields });
       status.lastError = '';
       return result;
     } catch (error) {
@@ -40,6 +65,40 @@ export function apply(ctx, config = {}, request = requestHook) {
     if (event.type === 'assistant/message' && !event.data.interrupted) {
       finals.set(session.id, { turn: event.data.turn, text: textContent(event.data.message) });
     }
+    if (event.type === 'turn/start') {
+      progress.set(session, { turn: event.data.turn, message: null });
+      return;
+    }
+    const active = progress.get(session);
+    if (!active || active.turn !== event.data?.turn) return;
+    if (event.type === 'turn/end') {
+      progress.delete(session);
+      return;
+    }
+    if (event.type === 'assistant/message' && event.surfaceOp === 'append' && !event.data.interrupted) {
+      const { step, message } = event.data;
+      const text = message?.role === 'assistant' ? textContent(message) : '';
+      if (Number.isSafeInteger(step) && typeof message?.id === 'string' && message.id.trim() && text.trim()) {
+        active.message = { step, id: message.id, text };
+      }
+      return;
+    }
+    const message = active.message;
+    if (event.type !== 'step/start' || !message || event.data.step <= message.step) return;
+    active.message = null;
+    // A subsequent native step proves the previous public text was not the final answer.
+    // When the native Hook owns routing, use its companion route only if it actually selected one.
+    if (shutdown.signal.aborted || nativeOwnsEvents() && !hasConfiguredRoute()) return;
+    const input = { agentType: 'dsh', sessionId: session.id, eventName: 'AssistantProgress', turnId: String(active.turn),
+      messageId: message.id, observedAt: Date.now(), cwd: ctx.workingDirectory?.get(session) ?? session.header?.cwd,
+      lastAssistantMessage: message.text };
+    void sendHook(input, { signal: shutdown.signal }).then(result => {
+      if (result?.completionDeliveries?.some(item => item.status === 'failed')) {
+        console.warn('[rabi-dsh-context] Progress delivery failed; review the Manager receipt.');
+      }
+    }).catch(() => {
+      if (!shutdown.signal.aborted) console.warn('[rabi-dsh-context] Progress delivery was not confirmed.');
+    });
   }, { global: true });
   ctx.on('agent/pre-step', async ({ agent, messages, turn }, next) => {
     // Inject SessionStart and user-prompt context immediately before a turn.

@@ -14,7 +14,8 @@ import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../../../../manager/lanAgentRequestAccess.js";
 import { captureTrustedLanAgentSource, registerLanAgentBodyGuard } from "../../../../manager/lanAgentBodyAuthority.js";
 
-async function fixture(beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean) {
+async function fixture(beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean,
+  deliverAgentCompletion?: ConstructorParameters<typeof CodexHookContextService>[0]["deliverAgentCompletion"]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
   fs.mkdirSync(roleDir, { recursive: true });
@@ -22,6 +23,7 @@ async function fixture(beforeRequest?: (request: http.IncomingMessage, response:
   const service = new CodexHookContextService({
     rolesRoot: () => path.join(root, "roles"),
     storePath: path.join(root, "data", "codex-hook", "sessions.json"),
+    deliverAgentCompletion
   });
   const registry = new ManagerPluginRouteRegistry();
   const registration = registry.registerOperations("hook-test", createCodexHookOperations(service));
@@ -43,6 +45,27 @@ async function fixture(beforeRequest?: (request: http.IncomingMessage, response:
     close: async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   };
 }
+
+test("progress Hook HTTP ingress uses the selected session and message ID without changing lifecycle state", async t => {
+  const forwarded: unknown[] = [];
+  const app = await fixture(undefined, async (request, roles) => {
+    forwarded.push([request.agentType, request.sessionId, request.turnId, request.messageId, request.observedAt, request.lastAssistantMessage, roles]);
+    return [];
+  });
+  t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); });
+  const before = app.service.bindSession("live", "YeYu", undefined, "dsh");
+  const now = Date.now();
+  const response = await fetch(`${app.baseUrl}/api/codex-hook/context`, { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agentType: "dsh", sessionId: "live", turnId: "2", eventName: "AssistantProgress",
+      messageId: "native-message", observedAt: now, lastAssistantMessage: "Public prose" }) });
+  assert.equal(response.status, 200);
+  const data = (await response.json()).data;
+  assert.equal(data.additionalContext, "");
+  assert.deepEqual(data.binding, before);
+  assert.deepEqual(app.service.getBinding("live", undefined, "dsh"), before);
+  assert.deepEqual(forwarded, [["dsh", "live", "2", "native-message", now, "Public prose", ["YeYu"]]]);
+});
 
 test("authenticated remote Hook management needs no binding; source events and delayed writes retain authority", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-hook-authority-"));

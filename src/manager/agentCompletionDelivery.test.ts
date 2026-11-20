@@ -16,6 +16,81 @@ const owner: CompletionRuleOwner = { roleId: "test", rule: { id: "rule", enabled
   destination: { channel: "napcat", gatewayId: "route", params: { target: "group", instanceId: "qq", targetId: "12345" } } } };
 const event = { eventName: "Stop" as const, sessionId: "agent-1", turnId: "turn-1", cwd: "/project", lastAssistantMessage: "Done" };
 
+test("DSH progress follows native turn order across clock skew and never reuses the Stop receipt", async () => {
+  const progressRule = { ...owner, rule: { ...owner.rule, events: ["task_progress", "task_completed"],
+    conditions: [...owner.rule.conditions, { type: "bound_plan" },
+      { type: "include_sessions", sessions: [{ id: "agent-1", name: "Task" }] }] } };
+  const sent: Array<{ id: string; request: CodexHookContextRequest }> = [];
+  const service = new AgentCompletionDeliveryService({
+    rules: () => [progressRule, progressRule],
+    projectIdentity: async value => value,
+    taskContext: (_, request) => ({ plans: request.sourceInstance?.instanceId === "unbound" ? [] : [{ id: "p", title: "Plan" }] }),
+    deliver: async (_, request, id) => {
+      sent.push({ id, request });
+      if (request.messageId === "failed") throw new Error("fixture send failed");
+    }
+  });
+  const progress = { ...event, agentType: "dsh", eventName: "AssistantProgress" as const,
+    turnId: "2", messageId: "first", observedAt: Date.now(), lastAssistantMessage: "Same public update" };
+  for (const [index, patch] of [{ messageId: "" }, { agentType: "workbuddy" }, { agentType: "codex" }, { sessionId: "elsewhere" },
+    { cwd: "/other" }, { sourceInstance: { instanceId: "unbound" } }].entries()) {
+    await service.handle({ ...progress, messageId: `excluded-${index}`, ...patch });
+  }
+  assert.equal(sent.length, 0);
+  await Promise.all([service.handle({ ...progress, observedAt: Date.now() - 240_000 }), service.handle(progress)]);
+  await service.handle({ ...progress, messageId: "second", observedAt: Date.now() + 240_000, sourceInstance: { instanceId: "isolated-node" } });
+  const failed = { ...progress, messageId: "failed" };
+  assert.deepEqual(await service.handle(failed), [{ ruleId: "rule", status: "failed", reason: "fixture send failed" }]);
+  assert.deepEqual(await service.handle(failed), []);
+  await service.handle({ ...event, agentType: "dsh", turnId: "2" });
+  await service.handle({ ...progress, messageId: "late" });
+  await service.handle({ ...progress, turnId: "1", messageId: "old" });
+  assert.deepEqual(sent.map(item => [item.request.eventName, item.request.messageId]), [
+    ["AssistantProgress", "first"], ["AssistantProgress", "second"], ["AssistantProgress", "failed"], ["Stop", undefined]
+  ]);
+  assert.equal(new Set(sent.map(item => item.id)).size, 4);
+  assert.match(sent[0].id, /^agent-progress-/);
+  assert.match(sent[3].id, /^agent-completion-/);
+});
+
+test("Codex delivery requires the original live Desktop turn and stops accepting it after final Stop", async () => {
+  const rule = { ...owner, rule: { ...owner.rule, conditions: [], events: ["task_progress", "task_completed"] } };
+  const sent: string[] = [];
+  const service = new AgentCompletionDeliveryService({ rules: () => [rule],
+    deliver: async (_, request) => { sent.push(request.lastAssistantMessage!); } });
+  const open = { ...event, agentType: "codex", eventName: "UserPromptSubmit" as const };
+  const progress = { ...open, eventName: "AssistantProgress" as const, messageId: "native-id", lastAssistantMessage: "Live progress" };
+  assert.deepEqual(await service.handle({ ...progress, nativeProgress: true }), []);
+  assert.equal(service.beginCodexProgress(open), true);
+  assert.deepEqual(await service.handle(progress), [], "HTTP JSON cannot supply the internal observer's authority");
+  assert.deepEqual(await service.handle({ ...progress, turnId: "different-turn", nativeProgress: true }), []);
+  await service.handle({ ...progress, nativeProgress: true });
+  await service.handle({ ...progress, nativeProgress: true });
+  await service.handle({ ...open, eventName: "Stop", turnId: "older-turn", lastAssistantMessage: "Older Stop" });
+  await service.handle({ ...open, eventName: "Stop" });
+  assert.equal(service.beginCodexProgress(open), false);
+  assert.deepEqual(await service.handle({ ...progress, messageId: "late", nativeProgress: true }), []);
+  assert.deepEqual(sent, ["Live progress", "Older Stop", "Done"]);
+});
+
+test("heartbeat exclusion waits for a normal Stop, discards silent and notifying heartbeats, and rechecks the staged rule", async () => {
+  let rules = [{ ...owner, rule: { ...owner.rule, events: ["task_progress"], conditions: [{ type: "exclude_heartbeat" }] } }];
+  const sent: string[] = [];
+  const service = new AgentCompletionDeliveryService({
+    rules: () => rules, deliver: async (_, request) => { sent.push(request.lastAssistantMessage!); }
+  });
+  const stop = { ...event, agentType: "dsh" };
+  for (const [index, decision] of ["DONT_NOTIFY", "NOTIFY", "ordinary", "changed"].entries()) {
+    const turnId = String(index + 1);
+    assert.deepEqual(await service.handle({ ...stop, turnId, eventName: "AssistantProgress", messageId: decision,
+      observedAt: Date.now(), lastAssistantMessage: "update-" + decision }), []);
+    if (decision === "changed") rules = [{ ...rules[0], rule: { ...rules[0].rule, enabled: false } }];
+    const final = index < 2 ? `<heartbeat><automation_id>a</automation_id><decision>${decision}</decision><message>Test</message></heartbeat>` : "Done";
+    await service.handle({ ...stop, turnId, lastAssistantMessage: final });
+  }
+  assert.deepEqual(sent, ["update-ordinary"]);
+});
+
 test("plan completion discovery and pending sends separate same-ID local and remote owners", async () => {
   const base = { agentType: "codex" as const, sessionId: event.sessionId };
   const plans = [{ id: "local", title: "Local", taskBinding: base, messageChannels: [owner.rule.destination] },

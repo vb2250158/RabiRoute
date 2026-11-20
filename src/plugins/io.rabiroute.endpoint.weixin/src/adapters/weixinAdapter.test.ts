@@ -308,7 +308,7 @@ test("the built Weixin package reloads in the same Gateway with its stored login
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const baseUrl = `http://127.0.0.1:${address.port}`;
-    writeWeixinState(root, { ...recoverableState(), baseUrl, syncBuf: "original-cursor" });
+    writeWeixinState(root, { ...recoverableState(), baseUrl, syncBuf: "original-cursor", accountId: "fixture-weixin-bot" });
     // @ts-expect-error The production builder is JavaScript outside src.
     const { buildPluginPackages } = await import("../../../../../scripts/build-plugin-packages.mjs");
     const packageId = "io.rabiroute.endpoint.weixin";
@@ -333,6 +333,7 @@ test("the built Weixin package reloads in the same Gateway with its stored login
         return shared.module<T>(id);
       } } });
     await waitFor(() => polls.length === 2 && forwarded.length === 1);
+    assert.equal(readStatus(root).messageAdapters.weixin.identityNamespace, "bot:fixture-weixin-bot");
     const active = () => runtime.current().records.find(record => record.identity.instanceId === instanceId)!.identity;
     const original = active();
     await settings.update(instanceId, { expectedRevision: (await settings.snapshot()).revision, config: { fixtureRevision: 2 } });

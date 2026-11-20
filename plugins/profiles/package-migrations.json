@@ -36,9 +36,10 @@
         "0.1.10",
         "0.1.11",
         "0.1.12",
-        "0.1.13"
+        "0.1.13",
+        "0.1.14"
       ],
-      "toVersion": "0.1.14"
+      "toVersion": "0.1.15"
     },
     {
       "packageId": "io.rabiroute.agent.copilot-cli",
@@ -255,9 +256,10 @@
         "0.1.5",
         "0.1.6",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.10"
     },
     {
       "packageId": "io.rabiroute.manager.agent-adapter-catalog",
@@ -284,9 +286,10 @@
         "0.1.5",
         "0.1.6",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.10"
     },
     {
       "packageId": "io.rabiroute.manager.agent-state-control",
@@ -311,9 +314,10 @@
         "0.1.8",
         "0.1.7",
         "0.1.9",
-        "0.1.10"
+        "0.1.10",
+        "0.1.11"
       ],
-      "toVersion": "0.1.11"
+      "toVersion": "0.1.12"
     },
     {
       "packageId": "io.rabiroute.manager.bilibili-history",
@@ -473,9 +477,10 @@
         "0.1.29",
         "0.1.30",
         "0.1.31",
-        "0.1.32"
+        "0.1.32",
+        "0.1.33"
       ],
-      "toVersion": "0.1.33"
+      "toVersion": "0.1.34"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",

@@ -170,6 +170,7 @@ export type AgentPlanFeedbackSubmitPort = (
 export type AgentReplyOptions = {
   /** Trusted quoted-source guard; recheck immediately before each QQ provider call. */
   assertReplySourceCurrent?: () => void;
+  assertEndpointCurrent?: () => void;
   /** Original Manager call authority. Rechecked after resolving any managed variant attachment. */
   assertVariantAuthority?: () => void;
   /** Published HTML feature owner; ordinary replies have no dependency on it. */
@@ -1716,6 +1717,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const captured = structuredClone(request);
   const snapshotOptions = { ...options, runtimes: structuredClone(options.runtimes) };
   const bind = <T extends (...args: any[]) => any>(type: string, operation: string): T => ((...args: unknown[]) => {
+    options.assertEndpointCurrent?.();
     if (type === "napcat") options.assertReplySourceCurrent?.();
     let lease = leases.get(type);
     if (!lease) {
@@ -1858,6 +1860,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
         return resolveManagedPlanAttachment(options, reference, next);
       }
       options.assertVariantAuthority?.();
+      options.assertEndpointCurrent?.();
       options.assertReplySourceCurrent?.();
       const sent = await variant.send({ deliveryId: variant.deliveryId, gatewayId: route.runtime.id, routeId: selectedRouteId, target,
         sourceDataDirs: agentReplyDataDirsForRoute(options, route), ...(attachments.length ? { attachments } : {}) });

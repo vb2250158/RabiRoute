@@ -1,11 +1,11 @@
-import type { PeerAgentEndpointBridge } from "@rabiroute/host-api/manager/peerAgentEndpointBridge";
+import { peerOriginalChatCompletionPath, type PeerAgentEndpointBridge } from "@rabiroute/host-api/manager/peerAgentEndpointBridge";
 import type { PreparedEndpointDelivery } from "@rabiroute/host-api/agentRequests/endpointDelivery";
 import { EndpointDeliveryNotSentError } from "@rabiroute/host-api/agentRequests/deliveryFailure";
 import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
 
 /** Receiver records execution evidence only; the originating Manager keeps the business reservation. */
 export function createPeerAgentOperations(owner: PeerAgentEndpointBridge): readonly ApiOperationDefinition[] {
-  return [false, true].map(reconcile => {
+  const native = [false, true].map((reconcile): ApiOperationDefinition => {
     const prepare = (input: Omit<ApiOperationInput, "body">) => {
       const execute = owner.prepareExecution(input.request, input.signal);
       return async (parsed: ApiOperationInput): Promise<ApiOperationResult> => {
@@ -31,4 +31,26 @@ export function createPeerAgentOperations(owner: PeerAgentEndpointBridge): reado
         { id: "native-prepared-execution", description: "The shared prepared executor validates exact target, original preparation, hashes and durable attempt receipts. No Agent registration or extra feature authorization is required." }]
     }, prepare, handler: input => prepare(input)(input) };
   });
+  const proofType = { type: "string" as const, minLength: 1, maxLength: 200 };
+  const prepare = (input: Omit<ApiOperationInput, "body">) => {
+    const complete = owner.prepareOriginalChatCompletion(input.request, input.signal);
+    return async (parsed: ApiOperationInput): Promise<ApiOperationResult> => ({
+      status: 200, body: { code: 0, data: await complete(parsed.body as Parameters<typeof complete>[0]) }
+    });
+  };
+  return [...native, { contract: {
+    operationId: "manager.agent.prepared-deliveries.original-chat", contractVersion: "1.0.0", method: "POST",
+    pathTemplate: peerOriginalChatCompletionPath, exposure: "public", transport: "http",
+    description: "Returns a completed native turn to the Manager that admitted its original chat delivery.",
+    request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" },
+      body: { kind: "json", maxBytes: 0, schema: { type: "object", additionalProperties: false,
+        required: ["receiptId", "generation", "promptHash", "turnId", "message"], properties: {
+          receiptId: proofType, generation: proofType, promptHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          turnId: proofType, message: { type: "string", minLength: 1 }, cwd: { type: "string" }
+        } } } },
+    responses: { "200": { mediaType: "application/json", schema: { type: "object" } } },
+    effects: { mode: "original-chat-completion", description: "The original Manager alone may send to the original chat through an enabled completion rule." },
+    recovery: { strategy: "original-completion-receipt", description: "Duplicate completions reuse the original outbound receipt without repeating an uncertain send." },
+    validators: [{ id: "peer-native-original-turn", description: "The authenticated target device, prepared delivery identity and native input proof must agree." }]
+  }, prepare, handler: input => prepare(input)(input) }];
 }

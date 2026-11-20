@@ -4,7 +4,7 @@ import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, ref, watch } from "vue";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
-import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, agentHookRuleErrors, agentHookRuleEvents,
+import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, agentHookEventsFor, agentHookRuleErrors, agentHookRuleEvents,
   type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookSession } from "@shared/agentHookAutomation";
 import AgentHookConditionDialog from "./AgentHookConditionDialog.vue";
 import { usePersonaService } from "../persona/personaServiceClient";
@@ -13,7 +13,7 @@ import type { AutomationQqDirectory } from "../persona/automationRuleConversatio
 const fetch = usePersonaService().fetch;
 
 const props = defineProps<{ rule: AgentCompletionDeliveryRule; gateways: GatewayDefinition[]; agentType: AgentAdapterType;
-  targets: ReturnType<typeof completionTargetChoices>; qqDirectories: readonly AutomationQqDirectory[]; settingsPath: string }>();
+  targets: ReturnType<typeof completionTargetChoices>; qqDirectories: readonly AutomationQqDirectory[] }>();
 const emit = defineEmits<{ "update:rule": [value: AgentCompletionDeliveryRule] }>();
 const projects = ref<string[]>([]);
 const loading = ref(false);
@@ -64,11 +64,14 @@ async function scanSessions(more = false) {
   finally { sessionLoading.value = false; }
 }
 const events = computed(() => agentHookRuleEvents(props.rule));
+const supportedEvents = computed(() => agentHookEventsFor(props.agentType));
+const eventChoices = computed(() => AGENT_HOOK_EVENTS.filter(event => supportedEvents.value.includes(event) || events.value.includes(event.value)));
 function toggleEvent(event: string, selected: boolean) {
   const next = selected ? [...events.value, event] : events.value.filter(value => value !== event);
   update({ events: next, event: next[0] ?? "" });
 }
-const targetKey = computed(() => props.rule.destination.gatewayId ? completionTargetKey(props.rule.destination) : null);
+const targetKey = computed(() => props.rule.destination.gatewayId || props.rule.destination.channel === "original_chat"
+  ? completionTargetKey(props.rule.destination) : null);
 const targetOptions = computed(() => {
   if (!targetKey.value || props.targets.some(item => item.value === targetKey.value)) return props.targets;
   const title = completionTargetLabel(props.rule.destination, props.gateways, props.qqDirectories);
@@ -112,9 +115,13 @@ async function scanProjects() {
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <div class="hook-rule-section">
       <div class="hook-rule-label">触发事件</div>
-      <v-checkbox v-for="event in AGENT_HOOK_EVENTS" :key="event.value" :label="event.title"
+      <v-checkbox v-for="event in eventChoices" :key="event.value" :label="event.title"
         :model-value="events.includes(event.value)" density="compact" hide-details
         @update:model-value="value => toggleEvent(event.value, value === true)" />
+      <p v-if="supportedEvents.length === 1" class="section-note">此 Agent 端目前提供任务完成事件。</p>
+      <p v-else-if="events.includes('task_progress') && rule.conditions.some(item => item.type === 'exclude_heartbeat')" class="section-note">
+        已排除心跳任务。过程文本会等到本轮结束并确认不是心跳后投递。
+      </p>
     </div>
     <div class="hook-rule-section">
       <div class="d-flex align-center justify-space-between mb-2">
@@ -135,13 +142,16 @@ async function scanProjects() {
       </div>
     </div>
     <div class="hook-rule-section">
-      <div class="hook-rule-label">投递至消息端</div>
-      <v-autocomplete v-if="targetOptions.length" :model-value="targetKey" :items="targetOptions" label="投递目标"
-        placeholder="选择已绑定的消息端会话" variant="outlined" hide-details @update:model-value="chooseTarget" />
-      <p v-else class="section-note">
-        当前角色还没有可选的投递目标。
-        <router-link :to="settingsPath">前往消息端设置</router-link>
-      </p>
+      <div class="hook-rule-label">
+        投递至消息端
+        <v-tooltip text="回原聊天仅用于任务完成。由消息规则送进本轮的聊天消息会收到回复，手动发起的轮次会跳过。">
+          <template #activator="{ props: hint }">
+            <v-icon v-bind="hint" tabindex="0" aria-label="投递目标说明" icon="mdi-help-circle-outline" size="small" />
+          </template>
+        </v-tooltip>
+      </div>
+      <v-autocomplete :model-value="targetKey" :items="targetOptions" label="投递目标"
+        variant="outlined" hide-details @update:model-value="chooseTarget" />
     </div>
     <div class="hook-rule-section">
       <div class="hook-rule-label">消息格式</div>

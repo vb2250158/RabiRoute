@@ -31,7 +31,7 @@ const contextResult = { type: "object", required: ["action", "binding", "additio
     toolDecision: { type: "object", required: ["permissionDecision", "reason"], properties: { permissionDecision: { const: "deny" }, reason: text }, additionalProperties: false } } };
 const response = (data: ApiSchema) => ({ mediaType: "application/json", schema: { type: "object", required: ["code", "data"],
   properties: { code: { const: 0 }, data }, additionalProperties: false } });
-const bodyFields = "agentType session_id sessionId hook_event_name eventName prompt source cwd turn_id turnId tool_name toolName tool_use_id toolUseId tool_input toolInput tool_response toolResponse stop_hook_active stopHookActive last_assistant_message lastAssistantMessage";
+const bodyFields = "agentType session_id sessionId hook_event_name eventName prompt source cwd turn_id turnId messageId observedAt tool_name toolName tool_use_id toolUseId tool_input toolInput tool_response toolResponse stop_hook_active stopHookActive last_assistant_message lastAssistantMessage";
 const error = { mediaType: "application/json", schema: { type: "object", required: ["code", "message"],
   properties: { code: { const: -1 }, message: text, reason: text, errorMessages: { type: "object" }, error: text, commitState: text }, additionalProperties: true } };
 export function codexHookOperationContract(definition: typeof CODEX_HOOK_OPERATIONS[number]): ApiOperationContract {
@@ -57,7 +57,7 @@ export function codexHookOperationContract(definition: typeof CODEX_HOOK_OPERATI
       ] } } : { kind: "none" } },
     responses: { "200": response(data), "400": error, ...(key === "context" ? { "503": error } : {}) },
     effects: { mode: key === "context" ? "owner-event" : method === "GET" ? "owner-read" : "binding-write",
-      description: key === "context" ? "The existing Hook owner may change the original binding, plan/follow-up state and completion deliveries. Stop and tool events retain their real session, provider and turn identity. This contract creates no execution Runtime."
+      description: key === "context" ? "The existing Hook owner may change the original binding, plan/follow-up state and event deliveries. AssistantProgress carries a live public assistant message with its original session, provider, turn and message ID and observedAt in Unix milliseconds. It does not write plan or request state. This contract creates no execution Runtime."
         : method === "GET" ? "Reads the current Hook owner. Existing cold-store initialization may persist its empty store; no prompt or completion is delivered." : "Changes only the original session's persona binding through the existing owner. It does not create a session or execute a prompt." },
     recovery: { strategy: method === "GET" ? "owner-read" : "inspect-original-owner", description: "Never replay automatically. Inspect the original session binding and, for Hook events, the original turn/plan/delivery records before repeating an uncertain event. Retain original IDs; no replacement session or Runtime." },
     validators: [{ id: "agent.hook.owner-normalization", description: "The Hook owner normalizes aliases and supported events and resolves the explicitly addressed session and role. Tool input/output JSON remains unchanged. Additional JSON fields remain compatible." },

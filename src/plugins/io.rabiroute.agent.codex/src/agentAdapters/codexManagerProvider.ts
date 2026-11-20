@@ -1,5 +1,6 @@
 import { CodexNativeHistoryReader, createCodexNativeOperations } from "../manager/providerNativeOperations.js";
 import { CodexRemoteTaskOwner } from "./codexRemoteTask.js";
+import type { CodexDesktopProgressMessage } from "../codexDesktopProgress.js";
 import * as endpointOwner from "./codexOwnerExecution.js";
 import { createCodexRuntime } from '../codexRuntime.js';
 import { resolveCodexSession } from '../codexSessionResolver.js';
@@ -31,6 +32,13 @@ export function createManager(options: AgentManagerImplementationOptions, descri
       }),
       "threads.metadata": payload => readCodexDesktopThreadsByIds(payload.sessionIds).map(task => ({ id: task.id, title: task.title, url: codexDesktopDeepLinkForTest(task.id) })),
       "remote.task": (payload, invocation) => remoteTasks.execute(payload, invocation),
+      "progress.observe": async (payload, invocation) => {
+        const observe = invocation?.onProgress as ((message: CodexDesktopProgressMessage) => void) | undefined;
+        if (!observe || signal.aborted || options.host.readOnly()) return;
+        await runtime.watchCodexProgress(payload.threadId, payload.turnId, message => {
+          if (!signal.aborted) observe(message);
+        });
+      },
       "endpoint.execute": (_payload, invocation) => {
         const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.executeEndpointOnOwner> | undefined;
         if (!args) throw new Error("Original native endpoint arguments are required.");

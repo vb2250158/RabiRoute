@@ -315,6 +315,46 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   }
 }
 
+test("Desktop follows the original turn and emits only a live completed commentary item", async t => {
+  const router = await createMockDesktopRouter(request => ({ type: "response", requestId: request.requestId,
+    resultType: "success", result: { clientId: "test-client" } }), null);
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  t.after(async () => { bridge.close(); await router.close(); });
+  const sent: string[] = [];
+  await bridge.watchProgress("thread", "turn", message => { sent.push(`${message.turnId}:${message.messageId}:${message.text}`); });
+  const key = "tail:0:local:active";
+  const entityPath = ["turnHistory", "history", "entitiesByKey", key];
+  const state = (change: unknown, options: { source?: string; conversation?: string; host?: string } = {}) => router.broadcast({
+    type: "broadcast", method: "thread-stream-state-changed", version: 13, sourceClientId: options.source || "real-owner",
+    params: { conversationId: options.conversation || "thread", hostId: options.host || "local", change }
+  });
+  const text = (id: string, completedAtMs: number | null, phase = "commentary") =>
+    ({ id, type: "agentMessage", phase, text: "Public text", completedAtMs });
+  const snapshot = (revision: number, items: unknown[]) => state({
+    type: "snapshot", revision, conversationState: { id: "thread", turnHistory: { history: { entitiesByKey: {
+      [key]: { turnId: "turn", status: "inProgress", items }, other: { turnId: "old", status: "completed", items: [text("old", 5)] }
+    } } } }
+  });
+  const patch = (baseRevision: number, revision: number, ...patches: unknown[]) => ({
+    type: "patches", baseRevision, revision, patches
+  });
+  const item = (index: number, value: unknown, op = "replace") => ({ op, path: [...entityPath, "items", index], value });
+  snapshot(3, [text("snapshot-already-complete", 12)]);
+  state(patch(3, 4, item(1, text("real-native-id", null), "add"), item(2, text("final", null, "final_answer"), "add")));
+  state(patch(4, 5, item(1, text("real-native-id", 40))), { source: "another-owner" });
+  state(patch(4, 5, item(1, text("real-native-id", 40))), { host: "remote-device" });
+  state(patch(4, 5, item(1, text("real-native-id", 40)), item(2, text("final", 41, "final_answer"))));
+  await waitFor(() => sent.length === 1);
+  state(patch(5, 6, item(1, text("real-native-id", 40)), item(3, text("unproven-replay", 35), "add")));
+  state(patch(9, 10, item(4, text("gap", null), "add"), item(4, text("gap", 50))));
+  snapshot(11, [text("real-native-id", 40), text("gap", 50)]);
+  state(patch(11, 12, { op: "replace", path: [...entityPath, "status"], value: "completed" }));
+  state(patch(12, 13, item(5, text("late", null), "add"), item(5, text("late", 60))));
+  await wait(35);
+  assert.deepEqual(sent, ["turn:real-native-id:Public text"]);
+  assert.deepEqual(router.methods, ["initialize"]);
+});
+
 test("Desktop thread discovery uses exact id while displaying title and latest time", () => {
   const result = listCodexDesktopThreadsFromRowsForTest([
     {

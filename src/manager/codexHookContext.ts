@@ -26,7 +26,7 @@ const CONSOLIDATION_RUN_LINE = /^runId：([^\s\r\n]{1,240})\s*$/gm;
 /** Role dirs already reported as having no published plan catalog, so a cold role logs once. */
 const coldPlanCatalogRoles = new Set<string>();
 
-export type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
+export type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "AssistantProgress" | "Stop";
 
 export type PlanTaskCompletionDelivery = {
   roleId: string;
@@ -136,6 +136,8 @@ export type CodexHookContextRequest = {
   sourceInstance?: PlanBindingSourceInstance;
   /** Current authenticated ingress attribution; never accepted from request JSON. */
   trustedRemoteSource?: AgentThreadRemoteSource;
+  /** Reconstructed by the original Manager from an authenticated Peer completion. */
+  peerEndpoint?: import("../agentRequests/endpoint.js").AgentRequestEndpoint;
   sessionId: string;
   eventName: CodexHookEventName;
   prompt?: string;
@@ -143,6 +145,10 @@ export type CodexHookContextRequest = {
   cwd?: string;
   managerBaseUrl?: string;
   turnId?: string;
+  messageId?: string;
+  observedAt?: number;
+  /** Set only by the local Desktop owner's live subscription. Never read from HTTP JSON. */
+  nativeProgress?: true;
   toolName?: string;
   toolUseId?: string;
   toolInput?: unknown;
@@ -176,6 +182,8 @@ export type CodexHookContextServiceOptions = {
   onHookStage?: (request: CodexHookContextRequest, stage: {
     name: string; phase: "started" | "completed" | "failed"; startMs: number; durationMs?: number;
   }) => void;
+  recordOriginalChatTurn?: (request: CodexHookContextRequest) => Promise<void>;
+  observeCodexProgress?: (request: CodexHookContextRequest) => void;
   readContext?: (input: CodexHookContextReadRequest) => Promise<CodexHookContextReadReply>;
   deliverAgentCompletion?: (request: CodexHookContextRequest, roleIds?: readonly string[]) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
   rolesRoot: () => string;
@@ -476,6 +484,8 @@ function freezeHookStore<T>(value: T): T {
 }
 
 export class CodexHookContextService {
+  private readonly recordOriginalChatTurn?: CodexHookContextServiceOptions["recordOriginalChatTurn"];
+  private readonly observeCodexProgress?: CodexHookContextServiceOptions["observeCodexProgress"];
   private readonly onHookStage?: CodexHookContextServiceOptions["onHookStage"];
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
   private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
@@ -492,6 +502,8 @@ export class CodexHookContextService {
   private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
 
   constructor(options: CodexHookContextServiceOptions) {
+    this.recordOriginalChatTurn = options.recordOriginalChatTurn;
+    this.observeCodexProgress = options.observeCodexProgress;
     this.onHookStage = options.onHookStage;
     this.readContext = options.readContext;
     this.deliverAgentCompletion = options.deliverAgentCompletion;
@@ -614,6 +626,9 @@ export class CodexHookContextService {
         report(phase, durationMs);
       }
     };
+    if (request.eventName === "UserPromptSubmit" && this.recordOriginalChatTurn) {
+      await measure("original-chat-turn", () => this.recordOriginalChatTurn!(request));
+    }
     const result = await this.handleMeasuredHook(request, measure);
     return { ...result, timings };
   }
@@ -622,6 +637,16 @@ export class CodexHookContextService {
     request: CodexHookContextRequest,
     measure: <T>(name: string, task: () => T | Promise<T>) => Promise<T>
   ): Promise<CodexHookContextResult> {
+    if (request.eventName === "UserPromptSubmit" && request.agentType === "codex" && !request.sourceInstance) {
+      this.observeCodexProgress?.(request);
+    }
+    if (request.eventName === "AssistantProgress") {
+      if (!request.sessionId?.trim()) return { action: "none", binding: null, additionalContext: "" };
+      const binding = fs.existsSync(this.storePath) ? this.getBinding(request.sessionId, request.sourceInstance, request.agentType) : null;
+      return { action: "none", binding, additionalContext: "", completionDeliveries: this.deliverAgentCompletion
+        ? await measure("progress-delivery", () => this.deliverAgentCompletion!(request, binding ? [binding.roleId] : undefined))
+        : [] };
+    }
     const planRoleIds = request.eventName === "Stop" ? this.sessionPlanRoleIds(request.sessionId, request.sourceInstance, request.agentType) : undefined;
     const enabled = !this.hookEnabled || this.hookEnabled(request);
     if (request.eventName === "Stop") {

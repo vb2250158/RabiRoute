@@ -155,6 +155,8 @@ test("cancelled stream reads settle and release the original stream", async () =
 test("a read deadline retains received events as an explicitly timed-out sample", async () => {
   const previous = process.env.RABIROUTE_QQ_READ_TIMEOUT_MS;
   process.env.RABIROUTE_QQ_READ_TIMEOUT_MS = "50";
+  // A real HTTP socket keeps the provider alive; this synthetic stream has no referenced I/O.
+  const providerLifetime = setTimeout(() => {}, 1000);
   try {
     const f = setup(() => new Response(new ReadableStream({ start(controller) {
       controller.enqueue(new TextEncoder().encode("data: PRIVATE_FIXTURE\n\n"));
@@ -165,6 +167,7 @@ test("a read deadline retains received events as an explicitly timed-out sample"
     assert.equal(data.timedOut, true); assert.equal(data.ended, false); assert.equal(data.events.length, 1);
     assert.doesNotMatch(JSON.stringify(result.body), /PRIVATE_FIXTURE/);
   } finally {
+    clearTimeout(providerLifetime);
     if (previous === undefined) delete process.env.RABIROUTE_QQ_READ_TIMEOUT_MS;
     else process.env.RABIROUTE_QQ_READ_TIMEOUT_MS = previous;
   }

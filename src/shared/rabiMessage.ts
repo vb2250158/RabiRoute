@@ -181,6 +181,14 @@ export function normalizeRabiMessageContent(value: unknown, escapeReservedHeader
     .join("\n");
 }
 
+export function renderPeerRouteSourceContext(sourceDeviceId: string): string {
+  const sourceManager = `/api/rabilink/peer/http/${encodeURIComponent(sourceDeviceId)}/manager`;
+  return "[来源主机与接口]\n"
+    + `本条消息所附的 Route、角色、计划及渠道回传接口归来源主机 ${sourceDeviceId}。\n`
+    + `使用当前电脑 Manager 的 ${sourceManager} 前缀访问来源接口；例如 ${sourceManager}/meta 核对来源身份，${sourceManager}/api/roles/<roleId>/... 访问来源角色接口。\n`
+    + "Manager 地址使用当前主机的动态发现结果。文件、CLI 与任务工作目录仍归当前执行电脑；不要把来源主机的相对接口路径误用到当前电脑。";
+}
+
 export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
   const messageSource = normalizeRabiMessageSource(envelope.messageSource);
   const sentAt = deliverySentAt(envelope.sentAt);

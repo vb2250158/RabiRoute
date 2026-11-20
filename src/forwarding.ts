@@ -11,14 +11,16 @@ import { resolvePrimaryAgentTarget, peerRouteAgentSession, type RouteAgentTarget
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
-import { isPlanAssistantAgentType, type PlanAssistantAgentType } from "./shared/agentAdapterCapabilities.js";
+import { agentAdapterSupportsLifecycleHooks, isPlanAssistantAgentType, type PlanAssistantAgentType } from "./shared/agentAdapterCapabilities.js";
 import {
   measurePerformanceOperation,
   measureSyncPerformanceOperation
 } from "./performance/performanceInstrumentation.js";
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
 import { currentAgentAdapterGeneration, publishedAgentAdapterProviders } from "./runtime/agentAdapterProviders.js";
-import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
+import { config, rolePathsForRoute, runtimeLayout, type RouteProfile } from "./config.js";
+import { originalChatFromIngress, registerOriginalChat, type OriginalChat } from "./automation/originalChat.js";
+import { renderPeerRouteSourceContext } from "./shared/rabiMessage.js";
 import {
   appendAgentPacketToDir,
   appendFeishuMessageToDir,
@@ -697,15 +699,28 @@ export async function deliverPacketToPrimaryAgentAdapter(
 
 async function deliverPacketToSession(
   routeId: string, ruleId: string, target: AgentSessionDestination | AgentDsBotDestination,
-  envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string
+  envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string, originalChat?: OriginalChat, replay = false
 ): Promise<ForwardAdapterOutcome[]> {
   const configuredRemote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
   if (target.kind !== "ds_bot" && (configuredRemote ? configuredRemote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
     || !config.agentAdapters.includes(target.agentAdapter))) throw new Error("The selected Agent instance is unavailable or mismatched.");
   const remote = target.kind === "ds_bot" ? target.instanceBinding : configuredRemote;
   const deliveryId = `automation-${createHash("sha256").update(JSON.stringify([routeId, ruleId, envelope.deliveryId ?? messageId, target])).digest("hex")}`;
-  await deliverSessionOnce(path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`), target, envelope, deliveryId,
-    payload => remote ? requestInstanceThread(remote, payload) : requestMessageAgentManager(managerBaseUrl(), payload),
+  const statePath = path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`);
+  const instance = remote ? { instanceId: remote.instanceId, agentId: remote.agentId,
+    ...(remote.ownerDeviceId ? { ownerDeviceId: remote.ownerDeviceId } : {}) } : undefined;
+  const originalBlock = target.kind === "session" && agentAdapterSupportsLifecycleHooks(target.agentAdapter)
+    ? registerOriginalChat(path.join(runtimeLayout.stateRoot, "data", "automation-original-chat"), deliveryId,
+      originalChat, { agentType: target.agentAdapter, sessionId: target.sessionId, instance }, replay || fs.existsSync(statePath))
+    : undefined;
+  const sourceDeviceId = instance?.ownerDeviceId && process.env.GATEWAY_MANAGER_DEVICE_ID;
+  const delivery = originalBlock ? { ...envelope, controlBlocks: [
+    ...(envelope.controlBlocks ?? []), originalBlock,
+    ...(sourceDeviceId ? [renderPeerRouteSourceContext(sourceDeviceId)] : [])
+  ] } : envelope;
+  await deliverSessionOnce(statePath, target, delivery, deliveryId,
+    payload => remote && !originalBlock ? requestInstanceThread(remote, payload)
+      : requestMessageAgentManager(managerBaseUrl(), instance ? { ...payload, instanceBinding: instance } : payload),
     { remote: Boolean(remote), imagePaths, model });
   appendAdapterLogToDir("router", { event: "automation_agent_delivered", message: `Automation delivered to ${target.kind === "ds_bot" ? target.botId : target.sessionId}`,
     data: { routeId, ruleId, deliveryId, agentTargetId: target.agentTargetId, ...(target.kind === "ds_bot" ? { botScopeId: target.botScopeId, botId: target.botId } : { sessionId: target.sessionId }) } }, config.dataDir);
@@ -1252,7 +1267,10 @@ async function forwardMessageToRouteInternal(
           options.messageGroup ?? immediateMessageAgentGroup(routeKind, record, extraValues)),
         ds_bot: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths),
         session: target => deliverPacketToSession(route.id, rule.id, target, packet.delivery, recordId(record), imagePaths,
-          replayPacket.model),
+          replayPacket.model, !route.agentRoleDeviceId
+            ? originalChatFromIngress({ ...JSON.parse(String(packet.templateValues.replyContextJson || "{}")), roleId: roleContext.roleId },
+              "identityNamespace" in record ? record.identityNamespace : undefined)
+            : undefined, Boolean(original)),
         plan_secretary: async () => { throw new Error("The original secretary target was not resolved; replay cannot choose a different secretary."); }
       }));
     } catch (error) {

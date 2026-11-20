@@ -95,17 +95,17 @@ function ruleSummary(rule: Rule) {
   const destination = rule.value.destination.gatewayId ? completionTargetLabel(rule.value.destination, props.gateways, props.qqDirectories) : "";
   return [...events, destination].filter(Boolean).join(" · ");
 }
-function ruleErrors(rule: Rule): string[] {
-  if (rule.kind === "delivery") return agentHookRuleErrors(rule.value);
+function ruleErrors(rule: Rule, agentType?: AgentAdapterType): string[] {
+  if (rule.kind === "delivery") return agentHookRuleErrors(rule.value, agentType);
   return rule.value.statusKeys.length && rule.value.prompt.trim() ? [] : ["选择状态并填写内容后，这条规则才会生效。"];
 }
-const draftErrors = computed(() => draft.value ? ruleErrors(draft.value) : []);
+const draftErrors = computed(() => draft.value ? ruleErrors(draft.value, editorAgent.value?.value) : []);
 const needsSessions = computed(() => moving.value && draft.value?.kind === "delivery"
   && draft.value.value.conditions.some(item => (item.type === "include_sessions" || item.type === "exclude_sessions") && !item.sessions?.length));
 const saveDisabled = computed(() => !editorAgent.value?.configured
   || ((moving.value || (creating.value && draft.value?.kind === "delivery")) && draftErrors.value.length > 0));
 const cards = computed(() => rules.value.map(rule => {
-  const errors = ruleErrors(rule);
+  const errors = ruleErrors(rule, selectedAgent.value?.value);
   return { rule, errors, enabled: rule.value.enabled && !errors.length && (rule.kind !== "followup" || followup.value.enabled) };
 }));
 
@@ -275,7 +275,7 @@ function saveRule(remove = false) {
                 <div v-for="error in draftErrors" :key="error">{{ error }}</div>
               </v-alert>
               <AgentCompletionDeliveryRules :key="draft.value.id" :rule="draft.value" :targets="targets" :gateways="gateways"
-                :qq-directories="qqDirectories" :settings-path="adaptersPath"
+                :qq-directories="qqDirectories"
                 :agent-type="editorAgent.value" @update:rule="value => draft = { kind: 'delivery', value }" />
             </template>
             <template v-else>

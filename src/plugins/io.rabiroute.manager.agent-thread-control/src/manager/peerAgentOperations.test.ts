@@ -9,7 +9,7 @@ import { executeEndpointAgentDelivery } from "../../../../agentRequests/endpoint
 import { agentReplyRequest } from "../../../../agentRequests/replyParameters.js";
 import { agentThreadRequestFailureData, type AgentThreadRequest } from "../../../../agentThreads.js";
 import { createAgentEndpointDelivery, type AgentEndpointDeliveryContext } from "../../../../manager/agentEndpointDelivery.js";
-import { createPeerAgentEndpointBridge, type PeerAgentEndpointBridge, type PeerAgentRequest } from "../../../../manager/peerAgentEndpointBridge.js";
+import { createPeerAgentEndpointBridge, peerOriginalChatCompletionPath, type PeerAgentEndpointBridge, type PeerAgentRequest } from "../../../../manager/peerAgentEndpointBridge.js";
 import { createPeerAgentOperations } from "./peerAgentOperations.js";
 import { createAgentThreadControlOwner } from "./agentThreadControlRoutes.js";
 import { createAgentThreadControlOperations } from "./agentThreadControlOperations.js";
@@ -27,6 +27,7 @@ test("registered HTTP prepared operations preserve one intent through lost accep
   const owners = new Map<string, ReturnType<typeof createAgentEndpointDelivery>>();
   const servers = new Map<string, { base: string; server: http.Server; registration: { dispose(): Promise<void> } }>();
   let bSends = 0, aReplies = 0, loseResponse = true;
+  const completionSources: string[] = [];
   t.after(async () => {
     for (const { server, registration } of servers.values()) { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); }
     for (const store of stores.values()) await store.close();
@@ -51,7 +52,12 @@ test("registered HTTP prepared operations preserve one intent through lost accep
       receiptDirectory: path.join(directory, deviceId + "-receipts"), readLocal,
       localOptions: () => ({ allowedWorkspaces: [directory] }), principal: request => principals.get(request),
       executeOwner: async delivery => { bSends++; return { threadId: delivery.target.sessionId, action: "started", transport: "test-native-owner" }; },
-      recoverOwner: async () => undefined });
+      recoverOwner: async () => undefined,
+      completeOriginalChat: async (sourceDeviceId, proof, guard) => {
+        guard();
+        completionSources.push(sourceDeviceId);
+        return [{ status: "sent", ruleId: proof.receiptId }];
+      } });
     bridges.set(deviceId, bridge);
     const owner = createAgentEndpointDelivery({ store, registry: { localInstanceId: instanceId }, authority: {}, config: {},
       receiptDirectory: path.join(directory, deviceId + "-local-receipts"), readLocal, localOptions: () => ({ allowedWorkspaces: [directory] }), peer: bridge } as unknown as AgentEndpointDeliveryContext);
@@ -106,6 +112,17 @@ test("registered HTTP prepared operations preserve one intent through lost accep
   assert.equal(confirmed.body.status, "delivered"); assert.equal(bSends, 1);
   const delivery = stores.get("pc-a")!.getEndpointDelivery(confirmed.body.delivery.deliveryId)!;
   assert.equal(stores.get("pc-b")!.get(delivery.preparation.requestId!), undefined);
+  const completion = {
+    receiptId: delivery.deliveryId, generation: delivery.generation, promptHash: delivery.promptHash, turnId: "exact-native-turn", message: "Done"
+  };
+  const unsigned = await call("pc-a", peerOriginalChatCompletionPath, completion);
+  assert.ok(unsigned.status >= 400);
+  assert.deepEqual(completionSources, []);
+  const peer = await fetch(servers.get("pc-a")!.base + peerOriginalChatCompletionPath, { method: "POST",
+    headers: { "content-type": "application/json", "x-fixture-source-pc": "pc-b" }, body: JSON.stringify(completion) });
+  assert.equal(peer.status, 200);
+  assert.deepEqual(await peer.json(), { code: 0, data: [{ status: "sent", ruleId: delivery.deliveryId }] });
+  assert.deepEqual(completionSources, ["pc-b"]);
   const reply = { ...agentReplyRequest(delivery.preparation), deliveryId: "http-reply", result: "Done", nextAction: "Review" } as AgentThreadRequest;
   assert.equal((await call("pc-b", "/api/agent/threads", reply)).body.status, "delivered"); assert.equal(aReplies, 1);
   const query = new URLSearchParams({ sourceThreadId: "target-b", sourceAgentType: "agent", agentAdapter: "codex", ledgerOwnerDeviceId: "pc-a", inReplyToRequestId: delivery.preparation.requestId! });

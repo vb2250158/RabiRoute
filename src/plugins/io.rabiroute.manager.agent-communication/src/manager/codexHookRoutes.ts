@@ -31,6 +31,8 @@ export function hookContextRequest(body: Record<string, unknown>, request: http.
     source: typeof body.source === "string" ? body.source : undefined,
     cwd: typeof body.cwd === "string" ? body.cwd : undefined,
     turnId: typeof body.turn_id === "string" ? body.turn_id : typeof body.turnId === "string" ? body.turnId : undefined,
+    messageId: typeof body.messageId === "string" ? body.messageId : undefined,
+    observedAt: typeof body.observedAt === "number" ? body.observedAt : undefined,
     toolName: typeof body.tool_name === "string" ? body.tool_name : typeof body.toolName === "string" ? body.toolName : undefined,
     toolUseId: typeof body.tool_use_id === "string" ? body.tool_use_id : typeof body.toolUseId === "string" ? body.toolUseId : undefined,
     toolInput: body.tool_input ?? body.toolInput,

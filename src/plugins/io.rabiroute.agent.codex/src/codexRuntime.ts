@@ -76,7 +76,8 @@ type CodexTaskBootstrap = {
   threadId: string;
 };
 
-export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDesktopBridgeOptions; createDesktopBridge?: (options: CodexDesktopBridgeOptions) => Pick<CodexDesktopBridge, "close" | "deliver" | "isReady" | "threadActiveSince"> } = {}) {
+export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDesktopBridgeOptions; createDesktopBridge?: (options: CodexDesktopBridgeOptions) =>
+  Pick<CodexDesktopBridge, "close" | "deliver" | "isReady" | "threadActiveSince"> & Partial<Pick<CodexDesktopBridge, "watchProgress">> } = {}) {
 
   function resolvePrimaryCodexTurnOptions(settings: {
     agentModel?: string;
@@ -877,5 +878,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
     notificationQueue = result;
     return result;
   }
-  return Object.freeze({ resolvePrimaryCodexTurnOptions, disposeCodexAdapterTransport, codexThreadMatchesConfiguredTargetForTest, codexThreadDeliveryTargetIsStaleForTest, normalizeCodexModelListForTest, listCodexModels, mergeCodexDesktopThreadsWithMetadataForTest, buildCodexBootstrapEnv, ensureCodexDesktopDeliveryMarkerForTest, listCodexThreads, readCodexThread, codexThreadRuntimeStatusFromSourcesForTest, codexThreadIsActiveFromSourcesForTest, renameCodexThread, createCodexThread, waitForCodexDesktopThreadForTest, sendCodexThreadMessage, isCodexMonitorThreadActive, notifyCodex, notifyCodexWhenIdle, isCodexDesktopReady: () => desktopBridge.isReady() });
+  return Object.freeze({ resolvePrimaryCodexTurnOptions, disposeCodexAdapterTransport, codexThreadMatchesConfiguredTargetForTest, codexThreadDeliveryTargetIsStaleForTest, normalizeCodexModelListForTest, listCodexModels, mergeCodexDesktopThreadsWithMetadataForTest, buildCodexBootstrapEnv, ensureCodexDesktopDeliveryMarkerForTest, listCodexThreads, readCodexThread, codexThreadRuntimeStatusFromSourcesForTest, codexThreadIsActiveFromSourcesForTest, renameCodexThread, createCodexThread, waitForCodexDesktopThreadForTest, sendCodexThreadMessage, isCodexMonitorThreadActive, notifyCodex, notifyCodexWhenIdle, isCodexDesktopReady: () => desktopBridge.isReady(),
+    watchCodexProgress: (...args: Parameters<CodexDesktopBridge["watchProgress"]>) => desktopBridge.watchProgress?.(...args)
+  });
 }
