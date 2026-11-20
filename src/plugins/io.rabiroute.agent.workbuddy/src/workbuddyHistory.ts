@@ -2,8 +2,30 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readWorkbuddyTask, workbuddyHomeDir, workbuddyProjectId } from "./workbuddySessionStore.js";
-import { promptConfirmsDelivery } from "@rabiroute/host-api/shared/deliveryIdentity";
+import { currentEnvelopeDeliveryId, promptConfirmsDelivery } from "@rabiroute/host-api/shared/deliveryIdentity";
 import { RABI_MESSAGE_CONTENT_HEADER, RABI_MESSAGE_SOURCE_HEADER } from "@rabiroute/host-api/shared/rabiMessage";
+
+const workbuddyWrapperTag = /<\/?(?:system-reminder|user_query)[\s/>]/i;
+
+function unwrapWorkbuddyUserQuery(text: string): string | undefined {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const reminderClose = "\n</system-reminder>\n";
+  let offset = 0;
+  // WorkBuddy prepends its own context before the single original user query.
+  for (const role of ["user-context", "additional-data"]) {
+    const open = `<system-reminder data-role="${role}">\n`;
+    if (!normalized.startsWith(open, offset)) return undefined;
+    const bodyStart = offset + open.length;
+    const bodyEnd = normalized.indexOf(reminderClose, bodyStart);
+    if (bodyEnd < 0 || workbuddyWrapperTag.test(normalized.slice(bodyStart, bodyEnd))) return undefined;
+    offset = bodyEnd + reminderClose.length;
+  }
+  const queryOpen = "<user_query>";
+  const queryClose = "</user_query>";
+  if (!normalized.startsWith(queryOpen, offset) || !normalized.endsWith(queryClose)) return undefined;
+  const query = normalized.slice(offset + queryOpen.length, -queryClose.length);
+  return workbuddyWrapperTag.test(query) ? undefined : query;
+}
 
 /** Only original native user records can confirm the reserved delivery. */
 export function workbuddyRecordConfirmsDelivery(record: unknown, threadId: string, deliveryId: string, guidance = false): boolean {
@@ -31,6 +53,11 @@ export function workbuddyRecordConfirmsDelivery(record: unknown, threadId: strin
   const text = typeof message.content === "string" ? message.content : Array.isArray(message.content)
     ? message.content.filter(part => part?.type === "input_text" || part?.type === "text").map(part => part.text ?? "").join("\n")
     : "";
+  if (text.startsWith("<system-reminder ")) {
+    const query = unwrapWorkbuddyUserQuery(text);
+    return message.sessionId === threadId && query !== undefined && Boolean(deliveryId)
+      && currentEnvelopeDeliveryId(query) === deliveryId;
+  }
   if (promptConfirmsDelivery(text, deliveryId)) return true;
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const contentStart = lines.indexOf(RABI_MESSAGE_CONTENT_HEADER);

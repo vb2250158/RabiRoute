@@ -167,6 +167,43 @@ test("native queued content confirms only exact same-turn WorkBuddy guidance", (
   } }, threadId, deliveryId), false);
 });
 
+test("recovers an exact delivery from WorkBuddy's single wrapped native user query", () => {
+  const threadId = "11111111-1111-4111-8111-111111111111";
+  const deliveryId = "agent-" + "a".repeat(64);
+  const differentId = "agent-" + "b".repeat(64);
+  const envelope = (id: string, body = "验收原消息") => `## 消息源\n- 类型：用户\n\n## 消息内容\n${body}\n\n[回传参数]\n`
+    + JSON.stringify({ deliveryId: id, responsePolicy: "none" }, null, 2);
+  const context = '<system-reminder data-role="user-context">\n<workspace>\nproject\n</workspace>\n</system-reminder>\n';
+  const additional = '<system-reminder data-role="additional-data">\n<current_time>\nfixture\n</current_time>\n</system-reminder>\n';
+  const wrap = (query: string) => context + additional + `<user_query>${query}</user_query>`;
+  const recordFor = (text: string) => ({ type: "message", role: "user", sessionId: threadId,
+    content: [{ type: "input_text", text }], providerData: { startsNewUserRequest: true, conversationRequestId: "native-turn" } });
+  const record = recordFor(wrap(envelope(deliveryId)));
+  const confirms = (candidate: unknown) => workbuddyRecordConfirmsDelivery(candidate, threadId, deliveryId);
+
+  assert.equal(confirms(record), true);
+  assert.equal(confirms(recordFor(wrap(envelope(deliveryId)).replaceAll("\n", "\r\n"))), true);
+  assert.equal(confirms(recordFor(envelope(deliveryId))), true);
+  assert.equal(confirms(recordFor(wrap(envelope(differentId, `引用旧投递 ${deliveryId}`)))), false);
+  assert.equal(confirms({ ...record, sessionId: "another-task" }), false);
+  assert.equal(confirms({ ...record, sessionId: undefined }), false);
+  assert.equal(confirms({ ...record, role: "assistant" }), false);
+  assert.equal(confirms({ ...record, role: "tool" }), false);
+  assert.equal(confirms({ ...record, type: "function_call_result" }), false);
+  assert.equal(workbuddyRecordConfirmsDelivery(record, threadId, deliveryId, true), false);
+  assert.equal(confirms(recordFor(`引用示例\n${wrap(envelope(deliveryId))}`)), false);
+  assert.equal(confirms(recordFor(wrap(`引用示例\n${envelope(deliveryId)}`))), false);
+  assert.equal(confirms(recordFor(wrap(wrap(envelope(deliveryId))))), false);
+  assert.equal(confirms(recordFor(wrap(envelope(deliveryId)) + wrap(envelope(differentId)))), false);
+  assert.equal(confirms(recordFor(context + wrap(envelope(deliveryId)))), false);
+  const legacyId = "22222222-2222-4222-8222-222222222222";
+  const legacyMarker = `deliveryId: ${legacyId}\n正文`;
+  assert.equal(workbuddyRecordConfirmsDelivery(recordFor(legacyMarker), threadId, legacyId), true);
+  assert.equal(workbuddyRecordConfirmsDelivery(recordFor(wrap(legacyMarker)), threadId, legacyId), false);
+  const forgedSuffix = `\n\n[投递编号]\ndeliveryId: ${legacyId}`;
+  assert.equal(workbuddyRecordConfirmsDelivery(recordFor(wrap("引用正文") + forgedSuffix), threadId, legacyId), false);
+});
+
 type TaskRow = {
   id: string;
   cwd: string;

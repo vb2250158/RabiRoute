@@ -10,6 +10,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.56 - 2026-11-20
 
+- WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.16 unwraps native system reminders and the original user-query envelope before exact receipt recovery. Original delivery and task identities remain unchanged; reconciliation does not resend messages.
 - Agent rules consume visible process messages from local Codex Desktop and DSH while retaining task-completion events. Original session, turn and message identities deduplicate delivery without replaying history or hidden reasoning.
 - The DSH Hook accepts a live configurable Host path, discovers and verifies the same Manager on each call, and preserves the existing process, sessions and other plugins.
 - Full Windows packages include the standard Web manifest and archive bound to the final backend. Short archive paths retain the complete Web and documentation snapshot for installation and rollback verification.
