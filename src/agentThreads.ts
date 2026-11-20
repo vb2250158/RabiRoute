@@ -109,7 +109,8 @@ export type AgentThreadRequest = {
   dshBaseUrl?: string;
   dshAgentPreset?: string;
   dshDeliveryMode?: "queue" | "steer";
-  workbuddyDeliveryMode?: "steer";
+  codexDeliveryMode?: "queue";
+  workbuddyDeliveryMode?: "steer" | "direct";
   messageSource?: RabiMessageSource;
   contextBlocks?: string[];
   controlBlocks?: string[];
@@ -960,6 +961,9 @@ async function executeAgentThreadRequest(
   driver: AgentThreadDriver = defaultDriver
 ): Promise<AgentThreadRequestResult> {
   const action = request.action;
+  if (request.codexDeliveryMode !== undefined && (action !== "send" || request.agentAdapter !== "codex" || !options.endpointDelivery)) {
+    throw new Error("Codex queued delivery requires the original desktop endpoint.");
+  }
   if (request.workbuddyDeliveryMode !== undefined && (action !== "send" || !options.endpointDelivery)) {
     throw agentThreadUnsupported("action", "WorkBuddy 引导使用受跟踪的 Agent 会话发送入口。");
   }

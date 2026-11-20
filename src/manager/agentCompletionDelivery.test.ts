@@ -39,6 +39,28 @@ test("plan completion discovery and pending sends separate same-ID local and rem
   assert.deepEqual((await Promise.all(pending)).map(rows => rows[0].status), ["sent", "sent", "sent"]);
 });
 
+test("completion notices retain independent receipts per destination and source message", async () => {
+  const destinations = [
+    { channel: "weixin", params: { sessionId: "wx-a" } },
+    { channel: "wecom", params: { chatId: "corp-a" } },
+    { channel: "feishu", params: { chatId: "room-a" } },
+    { channel: "feishu", params: { chatId: "room-b" } },
+    { channel: "qqbot", params: { sourceMessageId: "qqbot-topic-a" } },
+    { channel: "qqbot", params: { sourceMessageId: "qqbot-topic-b" } }
+  ];
+  const delivered: string[] = [];
+  const service = new AgentCompletionDeliveryService({
+    rules: () => destinations.map((destination, index) => ({ roleId: "test", rule: {
+      ...owner.rule, id: "rule-" + index, conditions: [], destination: {
+        ...destination, gatewayId: "route", params: Object.fromEntries(Object.entries(destination.params))
+      }
+    } })),
+    deliver: async (_owner, _request, id) => { delivered.push(id); }
+  });
+  assert.deepEqual((await service.handle(event)).map(item => item.status), Array(destinations.length).fill("sent"));
+  assert.equal(new Set(delivered).size, destinations.length);
+});
+
 test("remote project conditions do not inspect a same-named Manager filesystem path", async () => {
   const service = new AgentCompletionDeliveryService({ rules: () => [owner], deliver: async () => { assert.fail("unverified remote project must not send"); } });
   const result = await service.handle({ ...event, sourceInstance: { instanceId: "remote-node" } });
@@ -314,8 +336,9 @@ test("endpoint selection delivers to private QQ or speech with independent param
       napcatInstances: [{ id: "qq", httpUrl: url, accessToken: "", enabled: true }],
       messageAdapterPolicies: { speech: { outputEnabled: true, supportedOutputs: ["text" as const] } } }] };
   const privateRule = { ...owner.rule, destination: { channel: "napcat", gatewayId: "route",
-    params: { target: "private", targetId: "67890", instanceId: "qq" } } };
-  const speechRule = { ...owner.rule, id: "speech", conditions: [], destination: { channel: "speech", gatewayId: "route", params: {} } };
+    params: { target: "private", targetId: "67890", instanceId: "qq", includeAgentType: "false", includeTaskName: "false" } } };
+  const speechRule = { ...owner.rule, id: "speech", events: ["task_completed"], conditions: [],
+    destination: { channel: "speech", gatewayId: "route", params: {} } };
   const create = () => new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: privateRule }, { ...owner, rule: speechRule }],
     projectIdentity: async value => value,
     deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", withTestEndpointEgress(options), context) });
@@ -328,6 +351,7 @@ test("endpoint selection delivers to private QQ or speech with independent param
     assert.equal(received[0].url, "/send_private_msg");
     assert.equal(received[0].body.user_id, 67890);
     assert.equal(received[0].body.group_id, undefined);
+    assert.equal(received[0].body.message, "Done");
     assert.equal(received[1].url, "/v1/audio/speech");
     assert.equal(received[1].body.user_id, undefined);
     assert.equal(received[1].body.voice, "announcer");

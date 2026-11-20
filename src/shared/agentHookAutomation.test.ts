@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeAgentCompletionDeliveries, agentHookRuleErrors, agentHookConditionErrors } from "./agentHookAutomation.js";
+import { normalizeAgentCompletionDeliveries, agentHookRuleErrors, agentHookConditionErrors, agentHookRuleEvents } from "./agentHookAutomation.js";
 
 test("heartbeat exclusion persists without parameters and uses the same condition validation as the dialog", () => {
   const [rule] = normalizeAgentCompletionDeliveries([{ id: "heartbeat-filter", enabled: true, event: "task_completed",
@@ -12,6 +12,25 @@ test("heartbeat exclusion persists without parameters and uses the same conditio
   assert.deepEqual(agentHookConditionErrors({ type: "exclude_heartbeat" }), []);
   assert.ok(agentHookConditionErrors({ type: "project", path: "relative" }).length);
   assert.ok(agentHookConditionErrors({ type: "include_sessions", sessions: [] }).length);
+});
+
+test("event selections and formatting survive normalization across output channels", () => {
+  for (const destination of [
+    { channel: "speech", gatewayId: "route", params: {} },
+    { channel: "napcat", gatewayId: "route", params: { instanceId: "qq", target: "group", targetId: "12345" } },
+    { channel: "wecom", gatewayId: "route", params: { chatId: "room" } }
+  ]) {
+    const [rule] = normalizeAgentCompletionDeliveries([{ id: "list", enabled: true, event: "old",
+      events: ["task_completed", "task_completed"], conditions: [],
+      destination: { ...destination, params: { ...destination.params, includeAgentType: false, includeTaskName: "false" } } }]);
+    assert.deepEqual(agentHookRuleEvents(rule), ["task_completed"]);
+    assert.equal(rule.event, "task_completed");
+    assert.equal(rule.destination.params.includeAgentType, "false");
+    assert.equal(rule.destination.params.includeTaskName, "false");
+    assert.deepEqual(agentHookRuleErrors(rule), []);
+    assert.notEqual(agentHookRuleErrors({ ...rule, events: [] }).length, 0);
+    assert.deepEqual(normalizeAgentCompletionDeliveries([rule]), [rule]);
+  }
 });
 
 test("session condition normalization retains IDs and display names and rejects empty selections", () => {

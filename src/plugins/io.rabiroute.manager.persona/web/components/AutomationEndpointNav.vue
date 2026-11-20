@@ -10,6 +10,7 @@ const props = defineProps<{
   requestedEndpoint?: string;
   options?: readonly { value: string; title: string; icon: string }[];
   label?: string;
+  statuses?: Record<string, string>;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 const visibleEndpoints = computed(() => props.options ?? [...automationEndpoints, ...(props.additional ?? [])]
@@ -30,7 +31,9 @@ watch([visibleEndpoints, () => props.modelValue], ([options, selected]) => {
       class="automation-endpoint-tab" :class="{ 'is-selected': modelValue === option.value }"
       :aria-pressed="modelValue === option.value" @click="$emit('update:modelValue', option.value)">
       <v-icon :icon="option.icon" size="20" />
-      <span>{{ option.title }}</span>
+      <span class="automation-endpoint-caption">{{ option.title }}
+        <small v-if="statuses?.[option.value]">{{ statuses[option.value] }}</small>
+      </span>
       <span v-if="counts" class="automation-endpoint-count">{{ counts[option.value] || 0 }}</span>
     </button>
   </nav>
@@ -39,7 +42,8 @@ watch([visibleEndpoints, () => props.modelValue], ([options, selected]) => {
 <style scoped>
 .automation-endpoint-nav { display: grid; gap: 8px; align-content: start; }
 .automation-endpoint-tab { display: flex; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--rr-border-faint); border-radius: 12px; text-align: left; color: rgb(var(--v-theme-on-surface)); background: rgb(var(--v-theme-surface)); cursor: pointer; min-width: 0; }
-.automation-endpoint-tab > span:not(.automation-endpoint-count) { flex: 1; overflow-wrap: anywhere; }
+.automation-endpoint-caption { flex: 1; overflow-wrap: anywhere; }
+.automation-endpoint-caption small { display: block; margin-top: 2px; color: var(--rr-muted); }
 .automation-endpoint-tab:hover { background: rgba(var(--v-theme-secondary), .05); }
 .automation-endpoint-tab.is-selected { border-color: rgb(var(--v-theme-secondary)); background: rgba(var(--v-theme-secondary), .08); color: rgb(var(--v-theme-secondary)); }
 .automation-endpoint-tab:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }

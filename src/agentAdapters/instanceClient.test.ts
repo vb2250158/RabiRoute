@@ -40,8 +40,8 @@ test("Peer worker sends use native Route receipts and preserve exact IDs through
     }
     response.writeHead(conflict ? 409 : 200, { "content-type": "application/json" });
     response.end(JSON.stringify(conflict ? { code: -1, commitState: "not_started", message: "Original ID has another payload" }
-      : request.url?.endsWith("/reconcile") ? { code: 0, delivery: { state: "accepted" }, result: { status: "delivered" } }
-      : { code: 0, result: { status: "delivered" } }));
+      : request.url?.endsWith("/reconcile") ? { code: 0, delivery: { state: "accepted" }, result: { status: "delivered" }, receipt: { deliveryId: body.deliveryId, endpoint: { sessionId: body.threadId } } }
+      : { code: 0, result: { status: "delivered" }, receipt: { deliveryId: body.deliveryId, endpoint: { sessionId: body.threadId } } }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const binding = { ownerDeviceId: "pc-b", instanceId: "instance-b", agentId: "not-registered" };

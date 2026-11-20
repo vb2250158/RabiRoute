@@ -125,3 +125,50 @@ test('DSH accepts a live degraded Manager with exact identity and fences its hoo
   });
   assert.equal(value.additionalContext,'healthy feature');assert.equal(calls.length,2);
 });
+
+test('the companion transport delegates each lifecycle event to the native owner', async () => {
+  const handlers = new Map(), requested = [], services = new Map();
+  const ctx = { on: (point, fn) => handlers.set(point, fn), get: name => services.get(name),
+    effect: fn => fn(), provide: (name, service) => services.set(name, service) };
+  apply(ctx, {}, async input => { requested.push(input); return {}; });
+  services.set('rabiAgentHooks', { supportsCompanionTransport: true });
+  const agent = { id: 'session' }, messages = [{ content: [{ type: 'text', text: 'hello' }] }];
+  handlers.get('agent/created')({ agent, source: 'new' });
+  const next = async () => ({ kind: 'enter', messages });
+  assert.deepEqual(await handlers.get('agent/pre-step')({ agent, messages, turn: 1 }, next), await next());
+  await handlers.get('tools/pre-execute')({ agent }, next);
+  await handlers.get('tools/post-execute')({ agent }, {}, next);
+  await handlers.get('agent/turn-stopping')({ agent, turn: 1 });
+  assert.equal(requested.length, 0);
+  assert.equal(typeof services.get('rabiDshHookTransport').request, 'function');
+  services.delete('rabiAgentHooks');
+  await handlers.get('agent/pre-step')({ agent, messages, turn: 2 }, next);
+  assert.deepEqual(requested.map(event => event.eventName), ['UserPromptSubmit']);
+});
+
+test('cancelling explicit Manager discovery never dispatches the hook', async () => {
+  const abort = new AbortController(), requests = [];
+  await assert.rejects(requestHook({ eventName: 'Stop' }, {
+    env: { RABI_MANAGER_URL: 'http://localhost:12345' }, signal: abort.signal,
+    fetch: async (url, { signal }) => {
+      requests.push(url);
+      abort.abort();
+      signal.throwIfAborted();
+    },
+  }), { name: 'AbortError', uncertain: false });
+  assert.deepEqual(requests, ['http://localhost:12345/meta']);
+});
+
+test('losing the Manager response after POST retains an uncertain outcome without replay', async () => {
+  const calls = [];
+  await assert.rejects(requestHook({ eventName: 'Stop' }, {
+    env: { RABI_MANAGER_URL: 'http://localhost:12345' },
+    fetch: async (url, options) => {
+      calls.push(options.method ?? 'GET');
+      if (url.endsWith('/meta')) return Response.json({ applicationGenerationId: 'gen', managerInstanceId: 'id',
+        health: { live: true, state: 'healthy' } });
+      throw new Error('lost response');
+    },
+  }), { message: 'lost response', uncertain: true });
+  assert.deepEqual(calls, ['GET', 'POST']);
+});

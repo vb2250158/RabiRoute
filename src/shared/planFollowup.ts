@@ -1,6 +1,7 @@
 /** Persona-owned Stop rules. Status keys come from the persona's workflow catalog. */
 export type PlanFollowupRule = {
   id: string;
+  name?: string;
   enabled: boolean;
   statusKeys: string[];
   prompt: string;
@@ -17,7 +18,8 @@ export function normalizePlanFollowup(value: unknown): PlanFollowupSettings {
   const rules = (Array.isArray(raw.rules) ? raw.rules : []).flatMap(rule => {
     if (!rule || typeof rule.id !== "string" || !rule.id.trim() || ids.has(rule.id.trim())) return [];
     ids.add(rule.id.trim());
-    return [{ id: rule.id.trim(), enabled: rule.enabled === true,
+    const name = typeof rule.name === "string" ? rule.name.trim() : "";
+    return [{ id: rule.id.trim(), ...(name ? { name } : {}), enabled: rule.enabled === true,
       statusKeys: [...new Set((Array.isArray(rule.statusKeys) ? rule.statusKeys : [])
         .filter((key): key is string => typeof key === "string" && Boolean(key.trim())).map(key => key.trim()))],
       prompt: typeof rule.prompt === "string" ? rule.prompt.trim().slice(0, 4000) : "" }];

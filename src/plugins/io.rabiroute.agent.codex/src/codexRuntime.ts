@@ -430,6 +430,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
   async function deliverDesktopMessage(params: {
     assertAuthorized?: () => void | Promise<void>;
     thread: CodexDesktopThread;
+    deliveryMode?: "queue";
     prompt: string;
     cwd: string;
     sandbox: CodexTurnSandbox;
@@ -443,6 +444,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
     const delivery = await desktopBridge.deliver({
       assertAuthorized: params.assertAuthorized,
       threadId: params.thread.id,
+      ...(params.deliveryMode === "queue" ? { readActiveForQueue: () => codexDesktopThreadIsActive(params.thread), queueActivityPath: params.thread.rolloutPath } : {}),
       prompt: prepared.prompt,
       cwd: params.cwd,
       sandbox: params.sandbox,
@@ -623,6 +625,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
   }
 
   async function sendCodexThreadMessage(params: {
+    deliveryMode?: "queue";
     assertAuthorized?: () => void | Promise<void>;
     threadId: string;
     prompt: string;
@@ -638,6 +641,7 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
     return deliverDesktopMessage({
       assertAuthorized: params.assertAuthorized,
       thread,
+      deliveryMode: params.deliveryMode,
       prompt: params.prompt,
       cwd: params.cwd,
       sandbox: params.sandbox,

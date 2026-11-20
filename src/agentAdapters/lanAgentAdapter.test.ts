@@ -56,8 +56,8 @@ test("Route Peer delivery uses the connected target Manager and preserves non-Ag
     const body = JSON.parse(raw); assert.equal(body.deliveryId, envelope.deliveryId); assert.equal(body.prompt, renderRabiDelivery(envelope));
     assert.equal(body.instanceId, "instance-b"); assert.equal(body.threadId, "full-session-b"); assert.equal(body.provider, "codex");
     assert.equal(body.sourceThreadId, undefined); assert.equal(body.messageSource, undefined);
-    response.writeHead(++calls === 1 ? 200 : 202, { "content-type": "application/json" });
-    response.end(JSON.stringify({ code: 0, result: { taskId: body.deliveryId, status: calls === 1 ? "delivered" : "awaiting_confirmation" } }));
+    response.writeHead(++calls === 2 ? 202 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ code: 0, result: { taskId: body.deliveryId, status: calls !== 2 ? "delivered" : "awaiting_confirmation" }, ...(calls !== 2 ? { receipt: { deliveryId: body.deliveryId, endpoint: { sessionId: calls === 1 ? body.threadId : "another-session" } } } : {}) }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -66,7 +66,8 @@ test("Route Peer delivery uses the connected target Manager and preserves non-Ag
     const binding = { ownerDeviceId: "pc-b", instanceId: "instance-b", agentId: "not-registered" };
     await notifyInstanceAgent("codex", binding, envelope, { threadId: "full-session-b" });
     await assert.rejects(notifyInstanceAgent("codex", binding, envelope, { threadId: "full-session-b" }), /unconfirmed/);
-    assert.equal(calls, 2, "uncertain result must not cause an automatic retransmission");
+    await assert.rejects(notifyInstanceAgent("codex", binding, envelope, { threadId: "full-session-b" }), /unconfirmed/);
+    assert.equal(calls, 3, "uncertain and mismatched receipts are not automatically replayed");
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); keys.forEach((key, index) => {
     if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index];
   }); }

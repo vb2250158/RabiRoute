@@ -39,6 +39,40 @@ test("remote calls omit local target identity and wrong-session receipts fail", 
   await assert.rejects(sendAutomationSession(target, envelope, "delivery-one", async () => ({ delivery: { ...receipt("delivery-one").delivery, targetThreadId: "other" } })), /no confirmed receipt/);
 });
 
+test("DSH direct, steer and queue send into the same selected session", async () => {
+  const dsh: AgentSessionDestination = { ...target, agentAdapter: "dsh", agentTargetId: "local:dsh" };
+  const modes = [undefined, "steer", "queue"] as const;
+  for (const mode of modes) {
+    await sendAutomationSession({ ...dsh, ...(mode ? { dshDeliveryMode: mode } : {}) }, envelope, "dsh-message", async payload => {
+      assert.equal(payload.action, "send");
+      assert.equal(payload.threadId, dsh.sessionId);
+      assert.equal(payload.createIfMissing, false);
+      assert.equal(payload.dshDeliveryMode, mode);
+      return receipt("dsh-message");
+    });
+  }
+});
+
+test("Codex, DSH and WorkBuddy timing reaches each native transport without changing the session", async () => {
+  const modes = {
+    codex: { direct: {}, queue: { codexDeliveryMode: "queue" } },
+    dsh: { direct: { dshDeliveryMode: "steer" }, queue: { dshDeliveryMode: "queue" } },
+    workbuddy: { direct: { workbuddyDeliveryMode: "direct" }, queue: {} }
+  } as const;
+  for (const agentAdapter of ["codex", "dsh", "workbuddy"] as const) {
+    for (const sendTiming of ["direct", "queue"] as const) {
+      const session: AgentSessionDestination = { ...target, agentAdapter, sendTiming, agentTargetId: "local:" + agentAdapter };
+      await sendAutomationSession(session, envelope, "automation-send", async payload => {
+        assert.equal(payload.threadId, session.sessionId);
+        assert.equal(payload.createIfMissing, false);
+        const sentModes = Object.fromEntries(Object.entries(payload).filter(([key]) => key.endsWith("DeliveryMode")));
+        assert.deepEqual(sentModes, modes[agentAdapter][sendTiming]);
+        return receipt("automation-send");
+      });
+    }
+  }
+});
+
 test("Grok direct delivery freezes the group and identity without PC execution options", async () => {
   const group: AgentSessionDestination = { ...target, agentAdapter: "grokBot", agentTargetId: "local:grokBot",
     deliveryType: "group", sendMode: "identity", senderAgentId: "example-bot", senderAgentName: "Example" };

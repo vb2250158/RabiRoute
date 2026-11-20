@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AutomationParameterHelp from "./AutomationParameterHelp.vue";
 import { computed, ref, useId, watch } from "vue";
 import { AGENT_HOOK_CONDITIONS, agentHookConditionErrors, type AgentHookCondition, type AgentHookSession } from "@shared/agentHookAutomation";
 
@@ -41,18 +42,24 @@ function save() {
     <v-card>
       <v-card-title :id="titleId">{{ condition ? '编辑条件' : '添加条件' }}</v-card-title>
       <v-card-text class="condition-dialog-content">
-        <v-select :model-value="draft.type" :items="types" label="条件类型" hide-details @update:model-value="changeType($event || '')" />
+        <v-select :model-value="draft.type" :items="types" label="条件类型" hide-details @update:model-value="changeType($event || '')" >
+          <template #append-inner><AutomationParameterHelp text="选择一项限制。多项限制需要同时满足。" /></template>
+        </v-select>
         <div v-if="description" class="condition-explanation" role="note">
           <div class="font-weight-bold mb-2">条件说明</div>
           <p>{{ description }}</p>
         </div>
         <template v-if="draft.type === 'project'">
-          <v-combobox :model-value="draft.path" :items="projects" label="项目目录" hide-details @update:model-value="draft.path = String($event || '')" />
+          <v-combobox :model-value="draft.path" :items="projects" label="项目目录" hide-details @update:model-value="draft.path = String($event || '')" >
+            <template #append-inner><AutomationParameterHelp text="按实际项目目录判断是否发送结果。" /></template>
+          </v-combobox>
           <v-btn variant="text" :loading="loading" @click="emit('scanProjects')">读取项目目录</v-btn>
         </template>
         <template v-else-if="draft.type === 'include_sessions' || draft.type === 'exclude_sessions'">
           <v-autocomplete :model-value="(draft.sessions ?? []).map(session => session.id)" :items="sessionOptions"
-            :label="draft.type === 'include_sessions' ? '限定的聊天会话' : '排除的聊天会话'" multiple chips closable-chips hide-details @update:model-value="selectSessions($event)" />
+            :label="draft.type === 'include_sessions' ? '限定的聊天会话' : '排除的聊天会话'" multiple chips closable-chips hide-details @update:model-value="selectSessions($event)" >
+            <template #append-inner><AutomationParameterHelp text="使用所选 Agent 会话的稳定 ID 判断通知是否满足本条件。" /></template>
+          </v-autocomplete>
           <div class="d-flex flex-wrap ga-2">
             <v-btn variant="text" :loading="sessionLoading" @click="emit('scanSessions', false)">读取聊天会话</v-btn>
             <v-btn v-if="hasMoreSessions" variant="text" :loading="sessionLoading" @click="emit('scanSessions', true)">加载更多会话</v-btn>

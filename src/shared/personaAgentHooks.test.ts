@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { agentHookSettingsFor, normalizeCodexHookSettings, type GatewayDefinition } from "./gatewayConfigModel.js";
-import { configuredPersonaHookAgents } from "./personaAgentHooks.js";
+import { agentAdapterTypes, agentAdapterSupportsLifecycleHooks } from "./agentAdapterCapabilities.js";
+import { configuredPersonaHookAgents, personaHookAgentOptions } from "./personaAgentHooks.js";
 
 test("Hook choices come from configured local ends, excluding disabled routes and other owners", () => {
   const routes = [
@@ -12,6 +13,13 @@ test("Hook choices come from configured local ends, excluding disabled routes an
     { id: "e", agentRoleId: "Example", agentRoleDeviceId: "remote", agentAdapters: ["workbuddy"] }
   ] as GatewayDefinition[];
   assert.deepEqual(configuredPersonaHookAgents(routes, "Example"), ["dsh", "codex"]);
+  const supported = agentAdapterTypes.filter(agentAdapterSupportsLifecycleHooks);
+  const preview = personaHookAgentOptions(routes.slice(1), "Example");
+  assert.deepEqual(new Set(preview.map(item => item.value)), new Set(supported));
+  assert.equal(preview[0].value, "dsh");
+  assert.equal(preview[0].configured, true);
+  assert.equal(preview.find(item => item.value === "codex")?.configured, false);
+  assert.ok(personaHookAgentOptions([], "Example").every(item => !item.configured));
   assert.deepEqual(configuredPersonaHookAgents(routes, ""), []);
   assert.deepEqual(configuredPersonaHookAgents([{ id: "legacy", gatewayPort: 24001, agentRoleId: "Example" }], "Example"), ["codex"]);
   assert.deepEqual(configuredPersonaHookAgents([{ id: "empty", gatewayPort: 24002, agentRoleId: "Example", agentAdapters: [] }], "Example"), []);
@@ -19,7 +27,11 @@ test("Hook choices come from configured local ends, excluding disabled routes an
 
 test("per-Agent overrides round-trip independently and old persona settings stay the default", () => {
   const legacy = { sessionContextEnabled: false, planFollowup: { enabled: true, cooldownSeconds: 45, rules: [] } };
-  const dsh = { sessionContextEnabled: true, reasoningContextEnabled: false, completionDeliveries: [] };
+  const dsh = {
+    sessionContextEnabled: true, reasoningContextEnabled: false,
+    completionDeliveries: [{ id: "event", name: "  Completion notice  " }],
+    planFollowup: { rules: [{ id: "followup", name: "  Check release  " }] }
+  };
   const saved = normalizeCodexHookSettings({ ...legacy, byAgent: { dsh, unknown: dsh } });
   const loaded = normalizeCodexHookSettings(JSON.parse(JSON.stringify(saved)));
   assert.deepEqual(saved, loaded);
@@ -28,5 +40,7 @@ test("per-Agent overrides round-trip independently and old persona settings stay
   assert.equal(agentHookSettingsFor(loaded, "dsh").sessionContextEnabled, true);
   assert.equal(agentHookSettingsFor(loaded, "dsh").reasoningContextEnabled, false);
   assert.equal(agentHookSettingsFor(loaded, "dsh").planFollowup?.enabled, false);
+  assert.equal(loaded.byAgent?.dsh?.completionDeliveries?.[0]?.name, "Completion notice");
+  assert.equal(loaded.byAgent?.dsh?.planFollowup?.rules[0]?.name, "Check release");
   assert.deepEqual(Object.keys(loaded.byAgent!), ["dsh"]);
 });

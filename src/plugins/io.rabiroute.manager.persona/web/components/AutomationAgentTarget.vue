@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import AutomationParameterHelp from "./AutomationParameterHelp.vue";
 import { createDshConnectionClient, type DshConnection } from "../../../../../ribiwebgui/src/dshConnectionClient";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import type { RoleConfigurationRoute } from "@shared/roleConfiguration";
-import { normalizeAgentRecipients, normalizeAgentDeliveryTarget, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
+import { agentSessionSendTiming, agentSessionSupportsSendTiming, normalizeAgentRecipients, normalizeAgentDeliveryTarget, primaryDeliveryTarget, type AgentDeliveryTarget } from "@shared/agentDeliveryTarget";
 import { postRouteAgentThreadAction } from "../../../../../ribiwebgui/src/routeAgentThreadClient";
 import { usePersonaService } from "../persona/personaServiceClient";
 const personaService = usePersonaService();
@@ -249,6 +250,16 @@ async function scan(more = false) {
 }
 const selectedSession = computed<SessionTarget | undefined>(() => target.value.kind === "session" ? target.value : undefined);
 const isGrok = computed(() => selectedSession.value?.agentAdapter === "grokBot");
+const sendTimingChoices = [
+  { title: "直接发送", value: "direct" },
+  { title: "排队发送", value: "queue" }
+];
+function updateSendTiming(mode: string): void {
+  const selected = selectedSession.value;
+  if (!selected || !agentSessionSupportsSendTiming(selected.agentAdapter) || (mode !== "direct" && mode !== "queue")) return;
+  const { dshDeliveryMode: _previous, ...target } = selected;
+  emit("update:modelValue", { ...target, sendTiming: mode });
+}
 const selectedRoom = computed(() => sessions.value.find(item => item.id === selectedSession.value?.sessionId && isGroupSession(item))
   ?? (roomSnapshot.value?.id === selectedSession.value?.sessionId ? roomSnapshot.value : undefined));
 const identityItems = computed(() => senderIdentities(identitySessions.value, selectedRoom.value, selectedSession.value?.deliveryType === "group").map(item => ({ title: `${item.nativeAgentName || item.name || item.title || item.nativeAgentId} · ${item.nativeAgentId}`, value: item.nativeAgentId })));
@@ -287,7 +298,8 @@ function openSessions(open: boolean) {
   <section class="delivery-target" :aria-label="t('投递目标')">
     <v-select :model-value="target.kind === 'recipient' ? target.recipientId : '$session'" :items="choices"
       :label="t('投递目标')" density="compact" variant="outlined" hide-details @update:model-value="selectRecipient">
-      <template #item="{ props: itemProps, item }">
+      <template #append-inner><AutomationParameterHelp text="选择主控 Agent、其他角色接收者，或指定一个已有 Agent 会话。" /></template>
+                    <template #item="{ props: itemProps, item }">
         <v-list-item v-bind="itemProps">
           <template v-if="item.raw.description" #subtitle><span data-no-i18n>{{ item.raw.description }}</span></template>
         </v-list-item>
@@ -305,26 +317,42 @@ function openSessions(open: boolean) {
       <div class="delivery-fields">
         <v-select :model-value="selectedAgentId" :items="agentItems" item-title="title" item-value="id"
           :label="t('Agent 端')" :placeholder="t('选择 Agent')" density="compact" variant="outlined" hide-details
-          :no-data-text="t('暂无可用 Agent，请先在 Agent 设置中配置。')" @update:model-value="selectAgent" />
+          :no-data-text="t('暂无可用 Agent，请先在 Agent 设置中配置。')" @update:model-value="selectAgent" >
+          <template #append-inner><AutomationParameterHelp text="选择实际处理消息的 Agent 及其所在电脑。" /></template>
+        </v-select>
         <v-select v-if="isDsh" :model-value="destinationMode" :items="[{ title: t('DSH 会话'), value: 'session' }, { title: 'DSBot', value: 'ds_bot' }]"
-          :label="t('接收对象')" density="compact" variant="outlined" hide-details @update:model-value="selectDestinationMode" />
+          :label="t('接收对象')" density="compact" variant="outlined" hide-details @update:model-value="selectDestinationMode" >
+          <template #append-inner><AutomationParameterHelp text="选择 DSH 会话或 DSBot，后续操作使用对应的原有入口。" /></template>
+        </v-select>
         <v-select v-if="destinationMode === 'ds_bot' && localDshSelected && connectionItems.length" :model-value="selectedDshOrigin" :items="connectionItems"
-          :label="t('DSH 连接')" density="compact" variant="outlined" hide-details @update:model-value="selectDshConnection" />
+          :label="t('DSH 连接')" density="compact" variant="outlined" hide-details @update:model-value="selectDshConnection" >
+          <template #append-inner><AutomationParameterHelp text="选择托管此 DSBot 的 DSH 连接。" /></template>
+        </v-select>
         <v-autocomplete v-if="destinationMode === 'ds_bot'" :disabled="!selectedAgentId" :model-value="botSelectionValue"
           :items="botItems" :label="t('指定 DSBot')" :loading="loading" :placeholder="t('输入名称或 ID 搜索')" density="compact" variant="outlined" hide-details no-filter
           @update:model-value="selectBot" @update:search="value => { query = value || ''; }" @update:menu="openSessions">
-          <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps"><template #subtitle><span class="delivery-session-id">{{ item.raw.botId }}</span></template></v-list-item></template>
+          <template #append-inner><AutomationParameterHelp text="将命中的消息投给这个 DSBot。" /></template>
+                    <template #item="{ props: itemProps, item }"><v-list-item v-bind="itemProps"><template #subtitle><span class="delivery-session-id">{{ item.raw.botId }}</span></template></v-list-item></template>
           <template #no-data><div class="delivery-empty" role="status">{{ t(loading ? '正在加载 DSBot…' : error ? 'DSBot 暂时无法加载，请重试。' : '未找到 DSBot，请在所选 DSH 中检查 DSBot 插件。') }}</div></template>
         </v-autocomplete>
         <template v-if="selectedSession">
+        <v-select v-if="agentSessionSupportsSendTiming(selectedSession.agentAdapter)" :model-value="agentSessionSendTiming(selectedSession)"
+          :items="sendTimingChoices" label="发送方式" density="compact" hide-details @update:model-value="updateSendTiming">
+          <template #append-inner>
+            <AutomationParameterHelp text="直接发送会立即把消息交给当前会话，运行中可作为补充。排队发送等当前轮结束再处理。" />
+          </template>
+        </v-select>
         <v-select v-if="isGrok" :model-value="selectedSession.deliveryType || 'private'"
           :items="[{ title: t('私聊'), value: 'private' }, { title: t('群'), value: 'group' }]"
-          :label="t('会话类型')" density="compact" variant="outlined" hide-details @update:model-value="selectDeliveryType" />
+          :label="t('会话类型')" density="compact" variant="outlined" hide-details @update:model-value="selectDeliveryType" >
+          <template #append-inner><AutomationParameterHelp text="选择 Grok 私聊或群聊。" /></template>
+        </v-select>
         <v-autocomplete :disabled="!selectedAgentId" :model-value="selectedSession.sessionId || null"
           :items="sessionItems" item-title="title" item-value="id" :label="t(isGrok && selectedSession?.deliveryType === 'group' ? '目标群' : '指定会话')" :loading="loading"
           :placeholder="t('输入名称或 ID 搜索')" density="compact" variant="outlined" hide-details no-filter
           @update:model-value="selectSession" @update:search="searchSessions" @update:menu="openSessions">
-          <template #item="{ props: itemProps, item }">
+          <template #append-inner><AutomationParameterHelp text="选择现有会话；后续消息继续发给这个会话。" /></template>
+                    <template #item="{ props: itemProps, item }">
             <v-list-item v-bind="itemProps" class="delivery-session-option">
               <template #subtitle><span class="delivery-session-id">{{ item.raw.id }}</span><span v-if="item.raw.projectPath || item.raw.cwd" class="delivery-session-path">{{ item.raw.projectPath || item.raw.cwd }}</span></template>
             </v-list-item>
@@ -340,12 +368,14 @@ function openSessions(open: boolean) {
           :title="t('刷新会话')" :loading="loading" :disabled="!selectedAgentId" @click="scan()" />
         <v-select v-if="isGrok" :model-value="selectedSession.sendMode || 'direct'"
           :items="[{ title: t('直接发送'), value: 'direct' }, { title: t('指定身份'), value: 'identity' }]"
-          :label="t('发送方式')" density="compact" variant="outlined" hide-details @update:model-value="selectSendMode" />
+          :label="t('发送方式')" density="compact" variant="outlined" hide-details @update:model-value="selectSendMode" >
+          <template #append-inner><AutomationParameterHelp text="选择以当前连接直接发送，或使用已配置的群成员身份。" /></template>
+        </v-select>
         <v-select v-if="isGrok && selectedSession?.sendMode === 'identity'"
           :model-value="selectedSession.senderAgentId || null" :items="identityItems" :disabled="selectedSession.deliveryType === 'group' && !selectedRoom" :loading="identityLoading"
           :label="t('发送身份')" :no-data-text="t('未找到群成员身份，请刷新或加载更多。')" density="compact" variant="outlined" hide-details
           @update:model-value="selectIdentity" @update:menu="open => { if (open && !identitySessions.length) void loadIdentities(); }">
-          <template #append-item><v-btn v-if="identityOffset !== undefined" block variant="text" :loading="identityLoading" @click.stop="loadIdentities(true)">{{ t('加载更多') }}</v-btn></template>
+          <template #append-inner><AutomationParameterHelp text="选择这个群聊实际支持的发言身份。" /></template><template #append-item><v-btn v-if="identityOffset !== undefined" block variant="text" :loading="identityLoading" @click.stop="loadIdentities(true)">{{ t('加载更多') }}</v-btn></template>
         </v-select>
         </template>
         <v-btn v-if="destinationMode === 'ds_bot'" class="delivery-refresh" variant="text" size="small" icon="mdi-refresh" :aria-label="t('刷新 DSBot')" :title="t('刷新 DSBot')" :loading="loading" @click="scan()" />

@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.31",
+      "version": "0.1.32",
       "enabled": true,
       "config": {},
       "grants": []
@@ -38,7 +38,7 @@
     {
       "id": "manager:speech",
       "package": "io.rabiroute.manager.speech",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -146,7 +146,7 @@
     {
       "id": "manager:message-adapter-control",
       "package": "io.rabiroute.manager.message-adapter-control",
-      "version": "0.1.9",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -170,7 +170,7 @@
     {
       "id": "manager:agent-thread-control",
       "package": "io.rabiroute.manager.agent-thread-control",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -313,7 +313,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []
@@ -345,7 +345,7 @@
     {
       "id": "agent:dsh",
       "package": "io.rabiroute.agent.dsh",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -353,7 +353,7 @@
     {
       "id": "agent:workbuddy",
       "package": "io.rabiroute.agent.workbuddy",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "enabled": true,
       "config": {},
       "grants": []

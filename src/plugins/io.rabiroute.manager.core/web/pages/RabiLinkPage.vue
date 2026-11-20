@@ -29,14 +29,12 @@ const ready = ref(false);
 const computerVisited = ref(tab.value === "computer");
 watch(tab, value => { if (value === "computer") computerVisited.value = true; });
 const saving = ref(false);
-const account = ref<{ username: string } | null>(null);
 const refreshing = ref(false);
 const error = ref("");
 const refreshFence = createRabiLinkRefreshFence();
 const runtime = computed(() => store.meta.rabiLinkRelayRuntime);
 const connected = computed(() => runtime.value?.state === "online");
 const managementUrl = computed(() => rabiLinkManagementUrl(store.meta.rabiLinkRelay?.url));
-const statusLabel = computed(() => !ready.value ? "读取状态中" : ({ disabled: "已关闭", incomplete: "配置不完整", connecting: "连接中", online: "已连接", error: "连接失败" }[runtime.value?.state || "disabled"]));
 const home = ref<RabiLinkHomeState<RabiLinkHomeData>>({ phase: "idle" });
 const homeLoader = createRabiLinkHomeLoader(readRabiLinkHome, value => { home.value = value; }, () => "暂时无法读取已授权设备，请检查服务器连接后重试。");
 const devices = computed(() => home.value.phase === "ready" ? home.value.data.devices.map(device => {
@@ -81,18 +79,12 @@ async function refresh() {
   refreshing.value = true;
   error.value = "";
   try {
-    const [response, accountResponse] = await Promise.all([
-      fetch("/meta", { cache: "no-store", signal: controller.signal }),
-      fetch("/api/rabilink/host-account", { cache: "no-store", signal: controller.signal }).catch(() => undefined)
-    ]);
+    const response = await fetch("/meta", { cache: "no-store", signal: controller.signal });
     if (!response.ok) throw new Error("读取状态失败");
     const meta = await response.json();
-    const accountData = accountResponse?.ok ? await accountResponse.json() : null;
     if (disposed || !refreshFence.accepts(revision)) return;
     const { token: _token, ...relay } = meta.rabiLinkRelay || {};
-    if (account.value?.username !== accountData?.account?.username) homeLoader.invalidate();
     store.meta = { ...store.meta, ...meta, rabiLinkRelay: relay };
-    account.value = accountData?.account ?? null;
     ready.value = true;
     refreshHome();
   } catch {
@@ -139,7 +131,6 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
   <div class="page-shell rabilink-page">
     <header class="rabilink-toolbar">
       <h1 class="page-title">RabiLink</h1>
-      <v-chip size="small" :color="connected && ready ? 'success' : 'default'" variant="tonal">{{ connected && account ? '账号已连接' : statusLabel }}</v-chip>
       <div class="rabilink-toolbar-actions">
         <v-btn size="small" prepend-icon="mdi-refresh" variant="text" :disabled="saving" :loading="refreshing || home.phase === 'loading'" @click="refresh">刷新</v-btn>
         <v-btn v-if="managementUrl" size="small" :href="managementUrl" target="_blank" rel="noopener noreferrer" variant="outlined" prepend-icon="mdi-open-in-new">服务器管理</v-btn>
@@ -159,14 +150,14 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       <div v-else-if="!connected" class="rabilink-empty">
         <v-icon icon="mdi-lan-disconnect" size="32" />
         <h2 class="section-title">尚未连接服务器</h2>
-        <p class="section-note">{{ account ? '正在连接账号设备。连接失败时可检查服务器地址后刷新。' : '配置服务器后，点击左下角登录账号。' }}</p>
+        <p class="section-note">配置服务器后刷新；连接失败时检查服务器地址。</p>
       </div>
       <template v-else>
         <div class="rabilink-list-heading">
-          <h2 class="section-title">{{ account ? '我的设备' : '已授权设备' }}</h2>
+          <h2 class="section-title">已授权设备</h2>
           <span v-if="home.phase === 'ready'" class="section-note">{{ devices.length }} 台设备 · 更新于 {{ checkedAt }}</span>
         </div>
-        <details v-if="!account" class="rabilink-help section-note">
+        <details class="rabilink-help section-note">
           <summary>查看范围与服务器管理</summary>
           <p>这里只显示当前应用已授权的设备（包括电脑、手机与眼镜等端侧设备）。服务标签表示设备声明支持的能力，不代表服务正在运行。服务器管理在新窗口打开，需要使用服务器账号独立登录；应用令牌不能代替网页登录。</p>
         </details>
@@ -179,7 +170,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
         <p v-else-if="saving" role="status" class="section-note py-4">正在保存连接设置…</p>
         <div v-else-if="home.phase === 'ready' && !devices.length" class="rabilink-empty">
           <v-icon icon="mdi-devices" size="32" />
-          <h3 class="section-title">{{ account ? '等待设备上线' : '当前应用尚无已授权设备' }}</h3>
+          <h3 class="section-title">当前应用尚无已授权设备</h3>
         </div>
         <ul v-else-if="home.phase === 'ready'" class="rabilink-devices">
           <li v-for="device in devices" :key="device.id" class="rabilink-device">

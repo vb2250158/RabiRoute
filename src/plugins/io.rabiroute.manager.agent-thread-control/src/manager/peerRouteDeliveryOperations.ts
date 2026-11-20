@@ -13,7 +13,7 @@ import { endpointExecutionOptionsHash, normalizeEndpointExecutionOptions, type E
 import { EndpointDeliveryNotSentError } from "@rabiroute/host-api/agentRequests/deliveryFailure";
 
 type Options = Pick<PeerAgentEndpointOptions, "managerInstanceId" | "localDeviceId" | "scope" | "principal" | "readLocal" | "localOptions" | "receiptDirectory" | "executeOwner" | "recoverOwner">;
-type RouteDeliveryInput = { instanceId: string; provider: AgentAdapterType; threadId: string; prompt?: string; deliveryId: string; cwd?: string; model?: string; reasoningEffort?: string; sandbox?: string; dshDeliveryMode?: string };
+type RouteDeliveryInput = { instanceId: string; provider: AgentAdapterType; threadId: string; prompt?: string; deliveryId: string; cwd?: string; model?: string; reasoningEffort?: string; sandbox?: string; dshDeliveryMode?: string; codexDeliveryMode?: "queue"; workbuddyDeliveryMode?: "steer" | "direct" };
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 /** Route envelopes are native execution, not Agent-to-Agent messages or a second business intent. */
@@ -85,7 +85,9 @@ export function createPeerRouteDeliveryOperations(options: Options): readonly Ap
         const summary = !originalOptions && !body.cwd ? await options.readLocal(body.provider, body.threadId) : undefined; guard();
         const executionOptions = normalizeEndpointExecutionOptions({ ...originalOptions, cwd: body.cwd ?? originalOptions?.cwd ?? summary?.cwd,
           ...(body.model !== undefined ? { model: body.model } : {}), ...(body.reasoningEffort !== undefined ? { reasoningEffort: body.reasoningEffort } : {}),
-          ...(body.sandbox !== undefined ? { sandbox: body.sandbox } : {}), ...(body.dshDeliveryMode !== undefined ? { dshDeliveryMode: body.dshDeliveryMode } : {}) });
+          ...(body.sandbox !== undefined ? { sandbox: body.sandbox } : {}), ...(body.dshDeliveryMode !== undefined ? { dshDeliveryMode: body.dshDeliveryMode } : {}),
+          ...(body.codexDeliveryMode !== undefined ? { codexDeliveryMode: body.codexDeliveryMode } : {}),
+          ...(body.workbuddyDeliveryMode !== undefined ? { workbuddyDeliveryMode: body.workbuddyDeliveryMode } : {}) });
         const delivery: NativeOwnerDelivery = { deliveryId: body.deliveryId,
           generation: digest([principal.sourceDeviceId, options.managerInstanceId, body.deliveryId]), target,
           prompt, promptHash: agentDeliveryPromptHash(prompt), executionOptions,
@@ -121,7 +123,7 @@ export function createPeerRouteDeliveryOperations(options: Options): readonly Ap
       request: { path: { type: "object" }, query: { type: "object" }, headers: { type: "object" }, body: { kind: "json", maxBytes: 0,
         schema: { type: "object", required: ["instanceId", "provider", "threadId", "deliveryId", ...(reconcile ? [] : ["prompt"])], additionalProperties: false, properties: {
           instanceId: { type: "string", minLength: 1 }, provider: { type: "string", minLength: 1 }, threadId: { type: "string", minLength: 1 },
-          prompt: { type: "string", minLength: 1 }, deliveryId: { type: "string", minLength: 1 }, cwd: { type: "string" }, model: { type: "string" }, reasoningEffort: { type: "string" }, sandbox: { type: "string" }, dshDeliveryMode: { type: "string" }
+          prompt: { type: "string", minLength: 1 }, deliveryId: { type: "string", minLength: 1 }, cwd: { type: "string" }, model: { type: "string" }, reasoningEffort: { type: "string" }, sandbox: { type: "string" }, dshDeliveryMode: { type: "string" }, codexDeliveryMode: { const: "queue" }, workbuddyDeliveryMode: { enum: ["steer", "direct"] }
         } } } }, responses: { "200": { mediaType: "application/json", schema: { type: "object" } }, "202": { mediaType: "application/json", schema: { type: "object" } },
         "409": { mediaType: "application/json", schema: { type: "object", additionalProperties: false,
           required: ["code", "commitState", "deliveryId", "message"], properties: { code: { const: -1 }, commitState: { const: "not_started" },

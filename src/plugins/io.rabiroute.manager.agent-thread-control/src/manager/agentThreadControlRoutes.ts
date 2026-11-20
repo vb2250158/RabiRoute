@@ -77,7 +77,7 @@ async function handleAgentThreadBody(
   // Capture only caller-selected execution fields before Route defaults are applied.
   // The request body cannot supply this internal snapshot itself.
   const callerExecutionOptions = Object.freeze(Object.fromEntries(
-    (["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode"] as const)
+    (["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "codexDeliveryMode", "workbuddyDeliveryMode"] as const)
       .filter(field => Object.prototype.hasOwnProperty.call(body, field))
       .map(field => [field, body[field]])
   )) as NonNullable<AgentThreadRequestOptions["callerExecutionOptions"]>;

@@ -16,6 +16,7 @@ const descriptorPath = () => path.join(workbuddyHomeDir(), "rabiroute-desktop-re
 type DesktopRelay = { pipe: string; token: string; composerLayoutContract?: number; steerContract?: number; continuationContract?: number };
 
 export class WorkbuddyDesktopMessageNotSentError extends Error {}
+export class WorkbuddyDesktopInactiveError extends WorkbuddyDesktopMessageNotSentError {}
 
 function receiveFrame(socket: Socket): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -202,7 +203,7 @@ export async function requestWorkbuddyDesktopMessage(
   if (result.threadId !== input.threadId || result.deliveryId !== input.deliveryId) {
     throw new Error("WorkBuddy 桌面投递未返回匹配的接收回执。");
   }
-  if (result.state === "inactive") throw new WorkbuddyDesktopMessageNotSentError("WorkBuddy 目标会话当前没有可引导的执行轮次。");
+  if (result.state === "inactive") throw new WorkbuddyDesktopInactiveError("WorkBuddy 目标会话当前没有可引导的执行轮次。");
   if (result.state === "unavailable") throw new WorkbuddyDesktopMessageNotSentError("WorkBuddy 桌面端未确认目标会话或工作区。");
   if (result.state !== "accepted") throw new Error("WorkBuddy 桌面投递结果待确认，请查询原投递编号和目标会话历史。");
 }

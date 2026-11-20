@@ -193,6 +193,22 @@ test("account-only hosts join automatically, call a legacy PC, and isolate other
   assert.deepEqual(await (await send(second.url, avatarPath)).json(), { accountId: second.account.session()?.account.id, avatar });
   assert.equal((await (await send(other.url, avatarPath)).json()).avatar, null);
 
+  const profilePath = "/api/rabilink/host-account/profile";
+  assert.equal((await send(relay, profilePath)).status, 401);
+  const token = first.account.relay()!.token;
+  assert.deepEqual(await (await send(first.url, profilePath)).json(), { accountId: avatarAccountId, username: alpha.username });
+  assert.equal((await send(relay, profilePath, { username: "ab" }, { "x-rabilink-token": token })).status, 400);
+  assert.equal((await send(relay, profilePath, { username: beta.username }, { "x-rabilink-token": token })).status, 409);
+  assert.equal((await send(first.url, profilePath, { username: "third-name" }, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await send(other.url, profilePath, { accountId: avatarAccountId, username: "third-name" })).status, 409);
+  const renamed = await send(first.url, profilePath, { accountId: avatarAccountId, username: "fixture-renamed" });
+  assert.equal(renamed.status, 200);
+  assert.deepEqual(await renamed.json(), { accountId: avatarAccountId, username: "fixture-renamed" });
+  assert.equal(first.account.session()?.account.username, "fixture-renamed");
+  assert.equal(JSON.parse(readFileSync(first.file, "utf8")).session.account.username, "fixture-renamed");
+  assert.equal((await send(first.url, profilePath, { accountId: avatarAccountId, username: alpha.username })).status, 200);
+  assert.equal(first.account.session()?.account.username, alpha.username);
+
   const consoleSession = await send(relay, "/manage/api/login", alpha);
   const cookie = consoleSession.headers.get("set-cookie")!.split(";")[0]!;
   const created = await send(relay, "/manage/api/apps", { name: "Existing integration" }, { cookie });

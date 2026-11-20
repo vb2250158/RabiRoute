@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AutomationParameterHelp from "./AutomationParameterHelp.vue";
 import { computed, ref } from "vue";
 import type { PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
@@ -132,12 +133,15 @@ function updateQqTarget(key: "targetUserId" | "targetGroupId", value: unknown): 
         <li v-for="item in activeConditions" :key="item.key" class="filter-row" @focusin="addCondition(item.key)">
           <v-autocomplete v-if="item.key === 'targetUserId'" :model-value="trigger.targetUserId || null"
             :items="qqContacts" :loading="qqLoading" :label="t(item.title)"
-            :hint="t('选择联系人会限定为该 QQ 号的私聊；清空表示不限私聊对象。')" persistent-hint
-            clearable density="compact" variant="outlined" @update:model-value="value => updateQqTarget('targetUserId', value)" />
+            hide-details
+            clearable density="compact" variant="outlined" @update:model-value="value => updateQqTarget('targetUserId', value)" >
+            <template #append-inner><AutomationParameterHelp text="只处理该平台 ID 对应的私聊消息。" /></template>
+          </v-autocomplete>
           <v-combobox v-else-if="item.key === 'targetGroupId' && endpoint === 'napcat'" :model-value="trigger.targetGroupId || null"
             :items="qqGroups" :return-object="false" :loading="qqLoading" :label="t(item.title)"
             :placeholder="t('搜索群名或群号，也可输入群号')" clearable density="compact" variant="outlined" hide-details
             @update:model-value="value => updateQqTarget('targetGroupId', value)">
+            <template #append-inner><AutomationParameterHelp text="只处理该平台 ID 对应的群聊或频道消息。" /></template>
             <template #item="{ props: itemProps, item: contact }">
               <v-list-item v-bind="itemProps"><template #prepend><QqAvatar :id="String(contact.value || '')" kind="group" :name="contact.title" :size="32" class="mr-3" /></template></v-list-item>
             </template>
@@ -145,13 +149,19 @@ function updateQqTarget(key: "targetUserId" | "targetGroupId", value: unknown): 
           </v-combobox>
           <v-text-field v-else-if="item.key === 'targetGroupId'" :model-value="trigger.targetGroupId" :label="t(item.title)"
             :placeholder="t('留空表示不限群')" density="compact" variant="outlined" hide-details
-            @update:model-value="value => emit('patch', { targetGroupId: String(value || '') })" />
+            @update:model-value="value => emit('patch', { targetGroupId: String(value || '') })" >
+            <template #append-inner><AutomationParameterHelp text="只处理该平台 ID 对应的群聊或频道消息。" /></template>
+          </v-text-field>
           <v-combobox v-else-if="item.key === 'allowedSpeakerNames'" :model-value="trigger.allowedSpeakerNames || []" :label="t(item.title)"
             :placeholder="t('输入说话人并按回车')" chips multiple closable-chips density="compact" variant="outlined" hide-details
-            @update:model-value="value => emit('patch', { allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })" />
+            @update:model-value="value => emit('patch', { allowedSpeakerNames: Array.isArray(value) ? value.map(String) : [] })" >
+            <template #append-inner><AutomationParameterHelp text="只处理这些名称对应的语音发言。" /></template>
+          </v-combobox>
           <v-text-field v-else :model-value="trigger.regex" :label="t(item.title)"
             :placeholder="t('输入关键词或正则表达式')" density="compact" variant="outlined" hide-details
-            @update:model-value="value => emit('patch', { regex: String(value || '') })" />
+            @update:model-value="value => emit('patch', { regex: String(value || '') })" >
+            <template #append-inner><AutomationParameterHelp text="按表达式匹配正文。有引用消息时也匹配引用内容。" /></template>
+          </v-text-field>
           <v-btn icon="mdi-close" variant="text" size="small" :aria-label="t('删除条件')" :title="t('删除条件')" @click="removeCondition(item.key)" />
         </li>
       </ul>

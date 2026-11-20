@@ -59,7 +59,7 @@ export type EndpointDeliveryOptions = {
   resolveExecutionOptions: (request: AgentThreadRequest, target: AgentRequestParty) => EndpointExecutionOptions;
   storeWebChatAttachments?: (attachments: ReturnType<typeof decodeWebChatAttachments>) => Promise<string>;
   /** Captured from the original HTTP body before Manager defaults; never read as a body authority object. */
-  callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode" | "workbuddyDeliveryMode">;
+  callerExecutionOptions?: Pick<AgentThreadRequest, "cwd" | "model" | "reasoningEffort" | "sandbox" | "dshDeliveryMode" | "codexDeliveryMode" | "workbuddyDeliveryMode">;
   /** Original request-lifetime fence; background recovery has no HTTP request. */
   assertRequestCurrent?: () => void;
   authorize: (endpoint: AgentRequestEndpoint, role?: "source" | "target") => void;
@@ -161,7 +161,7 @@ function requestInputHash(request: AgentThreadRequest, source: AgentRequestParty
       targetAgentType: request.messageProcessing.targetAgentType, planId: request.messageProcessing.planId, planTitle: request.messageProcessing.planTitle } : undefined,
     // Unspecified defaults belong to the original frozen delivery, not the retry's current Route configuration.
     execution: { cwd: explicit.cwd, model: explicit.model, reasoningEffort: explicit.reasoningEffort, sandbox: explicit.sandbox, dshDeliveryMode: explicit.dshDeliveryMode,
-      workbuddyDeliveryMode: explicit.workbuddyDeliveryMode,
+      codexDeliveryMode: explicit.codexDeliveryMode, workbuddyDeliveryMode: explicit.workbuddyDeliveryMode,
       dshBaseUrl: request.dshBaseUrl?.trim().replace(/\/+$/, "") || undefined,
       ...(request.grokBotDelivery === undefined ? {} : { grokBotDelivery: request.grokBotDelivery }) }
   })).digest("hex");
@@ -249,7 +249,7 @@ function matchesLegacyReply(request: AgentThreadRequest, delivery: PreparedEndpo
     || request.messageProcessing?.requirementId !== preparation.messageProcessingRequirementId || request.messageProcessing?.planId !== preparation.planId) return false;
   const explicit = options.callerExecutionOptions ?? request;
   const execution = { ...delivery.executionOptions };
-  for (const key of ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode", "grokBotDelivery"] as const) {
+  for (const key of ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "codexDeliveryMode", "workbuddyDeliveryMode", "grokBotDelivery"] as const) {
     const value = key === "grokBotDelivery" ? request.grokBotDelivery : explicit[key];
     if (value !== undefined) Object.assign(execution, { [key]: value });
   }

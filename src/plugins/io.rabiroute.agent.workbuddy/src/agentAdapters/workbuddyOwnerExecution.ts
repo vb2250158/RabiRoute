@@ -1,6 +1,6 @@
 import { readWorkbuddyThread, sendWorkbuddyThreadMessage } from "../workbuddyThreads.js";
 import { prepareWorkbuddyReplyText } from "../workbuddySessionBridge.js";
-import { requestWorkbuddyDesktopMessage, WorkbuddyDesktopMessageNotSentError } from "../workbuddyDesktopRelay.js";
+import { requestWorkbuddyDesktopMessage, WorkbuddyDesktopInactiveError, WorkbuddyDesktopMessageNotSentError } from "../workbuddyDesktopRelay.js";
 import type { NativeOwnerDelivery, NativeOwnerDeliveryEvidence } from "@rabiroute/host-api/agentRequests/nativeOwnerDelivery";
 import type { EndpointDeliveryReceipt } from "@rabiroute/host-api/agentRequests/endpointDelivery";
 import { EndpointDeliveryNotSentError } from "@rabiroute/host-api/agentRequests/deliveryFailure";
@@ -28,13 +28,19 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, _opt
         deliveryId: delivery.deliveryId
       }, mode, assertAuthorized);
     } catch (error) {
+      if (error instanceof WorkbuddyDesktopInactiveError && workbuddyDeliveryMode === "direct") throw error;
       if (error instanceof WorkbuddyDesktopMessageNotSentError) throw new EndpointDeliveryNotSentError(error);
       throw error;
     }
   };
-  if (workbuddyDeliveryMode === "steer") {
-    await dispatchDesktop("steer");
-    return { threadId: endpoint.sessionId, action: "steer_requested", transport: "workbuddy_desktop" };
+  if (workbuddyDeliveryMode) {
+    try {
+      await dispatchDesktop("steer");
+      return { threadId: endpoint.sessionId, action: "steer_requested", transport: "workbuddy_desktop" };
+    } catch (error) {
+      // The native owner reports inactive before calling sendPrompt, so the same request can start a turn.
+      if (!(workbuddyDeliveryMode === "direct" && error instanceof WorkbuddyDesktopInactiveError)) throw error;
+    }
   }
   return sendWorkbuddyThreadMessage({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd, assertAuthorized, imagePaths,
     continueUnloaded: ensureDesktopReady && (async () => {
@@ -55,11 +61,17 @@ function missingNativeTranscript(error: unknown): undefined {
 export async function recoverWorkbuddyDeliveryReceipt(delivery: NativeOwnerDeliveryEvidence,
   assertAuthorized: () => void | Promise<void>): Promise<EndpointDeliveryReceipt | undefined> {
   if (delivery.target.provider !== "workbuddy" || !delivery.executionOptions) return undefined;
-  const steer = delivery.executionOptions.workbuddyDeliveryMode === "steer";
+  const mode = delivery.executionOptions.workbuddyDeliveryMode;
+  const steer = mode === "steer";
   const { target, deliveryId, generation, promptHash, executionOptionsHash } = delivery;
   const receipt: EndpointDeliveryReceipt = { deliveryId, generation, endpoint: target, promptHash, executionOptionsHash, accepted: true,
     action: steer ? "steered" : "started", transport: "workbuddy_native_history" };
   await assertAuthorized();
+  if (mode === "direct") {
+    const guided = await hasRecentWorkbuddyDelivery(target.sessionId, deliveryId, true).catch(missingNativeTranscript);
+    await assertAuthorized();
+    if (guided) return { ...receipt, action: "steered" };
+  }
   const recent = await hasRecentWorkbuddyDelivery(target.sessionId, deliveryId, steer).catch(missingNativeTranscript);
   await assertAuthorized();
   if (recent === undefined) return undefined;
@@ -70,6 +82,9 @@ export async function recoverWorkbuddyDeliveryReceipt(delivery: NativeOwnerDeliv
     const history = await readWorkbuddyHistory(target.sessionId, { cursor }).catch(missingNativeTranscript);
     await assertAuthorized();
     if (!history) return undefined;
+    if (mode === "direct" && history.entries.some(({ record }) => workbuddyRecordConfirmsDelivery(record, target.sessionId, deliveryId, true))) {
+      return { ...receipt, action: "steered" };
+    }
     if (history.entries.some(({ record }) => workbuddyRecordConfirmsDelivery(record, target.sessionId, deliveryId, steer))) {
       return receipt;
     }

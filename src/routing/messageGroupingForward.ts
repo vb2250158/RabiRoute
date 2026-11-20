@@ -5,10 +5,14 @@ import type {
   EnqueueMessageGroupInput,
   PendingMessageGroup
 } from "../messageGrouping.js";
-import type { MessageGroupingPolicy } from "../shared/gatewayConfigModel.js";
+import type { NormalizedMessageGroupingPolicy } from "../shared/gatewayConfigModel.js";
 import { identityEndpointsForForward } from "./identityContext.js";
 
 const conversationalRouteKinds = new Set<ForwardRouteKind>([
+  "qqbot_private",
+  "qqbot_group",
+  "qqbot_channel",
+  "qqbot_dm",
   "private",
   "group_message",
   "direct_at",
@@ -50,6 +54,12 @@ function stableIdentity(endpoint: string, conversationKey: string, record: Forwa
 }
 
 function stableSenderGroupingKey(routeKind: ForwardRouteKind, record: ForwardRecord, gatewayId?: string): string | undefined {
+  if ("adapterType" in record && record.adapterType === "qqbot") {
+    const account = record.instanceId?.trim();
+    const sender = "userId" in record ? String(record.userId || "").trim() : "";
+    if (!account || !sender) return undefined;
+    return createHash("sha256").update(JSON.stringify([account, sender])).digest("hex").slice(0, 24);
+  }
   const endpoints = identityEndpointsForForward(routeKind, record, { gatewayId })
     .map(item => `${item.platform}\0${item.endpointIdentityNamespace}\0${item.senderStableId}`)
     .sort();
@@ -61,7 +71,7 @@ export function messageGroupEnqueueInputForForward(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues,
-  policy: Required<MessageGroupingPolicy>,
+  policy: NormalizedMessageGroupingPolicy,
   gatewayId?: string
 ): EnqueueMessageGroupInput | undefined {
   if (!policy.enabled || !isConversationalRouteKind(routeKind)) return undefined;

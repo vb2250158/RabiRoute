@@ -4,7 +4,7 @@ import type { AgentCompletionDeliveryRule } from "@shared/gatewayConfigModel";
 export function createAgentCompletionRule(random: Pick<Crypto, "getRandomValues"> = globalThis.crypto): AgentCompletionDeliveryRule {
   const bytes = random.getRandomValues(new Uint8Array(16));
   const id = `completion-${Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("")}`;
-  return { id, enabled: false, event: "task_completed", conditions: [],
+  return { id, enabled: false, event: "task_completed", events: ["task_completed"], conditions: [],
     destination: { channel: "napcat", gatewayId: "", params: { target: "group", targetId: "", instanceId: "", includeFiles: "true", markdownFilesAsImages: "true", imageFilesAsImages: "true", htmlFilesAsLinks: "true", renderDiagrams: "true", renderTables: "true" } } };
 }
 

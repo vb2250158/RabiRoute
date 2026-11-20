@@ -5438,6 +5438,12 @@ const server = http.createServer(async (req, res) => {
       const avatar = hostAccountService.avatar(token, body === undefined ? undefined : body?.avatar ?? null);
       return sendJson(res, 200, { code: 0, data: { avatar } }, { 'cache-control': 'no-store' });
     }
+    if (url.pathname === '/api/rabilink/host-account/profile' && (req.method === 'GET' || req.method === 'POST')) {
+      const body = req.method === 'POST' ? await readBody(req, { maxBytes: 4096, label: 'Host account profile' }) : undefined;
+      const token = String(req.headers['x-rabilink-token'] || '');
+      const account = hostAccountService.profile(token, body === undefined ? undefined : body?.username);
+      return sendJson(res, 200, { code: 0, data: { account } }, { 'cache-control': 'no-store' });
+    }
     const hostAccountAction = req.method === 'POST' && url.pathname.match(/^\/api\/rabilink\/host-account\/(login|register|migrate|logout|recover|confirm)$/)?.[1];
     if (hostAccountAction) {
       if (hostAccountAction !== 'logout') {

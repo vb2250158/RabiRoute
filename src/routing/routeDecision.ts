@@ -17,7 +17,7 @@ import type {
   VoiceTranscriptEventRecord
 } from "../history.js";
 import { systemEventRuleForRouteKind } from "./systemEventRules.js";
-import { isCaptureEventRouteKind } from "../shared/personaEventTypes.js";
+import { notificationRuleMismatch, routeTextFromRawMessage } from "../shared/messageRuleMatch.js";
 
 export type RouteDecision = {
   route: RouteProfile;
@@ -29,25 +29,6 @@ export type RouteDecision = {
   routeText: string;
   repliedRouteText?: string;
 };
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function expandRouteVariables(pattern: string, variables: Record<string, string>): string {
-  let expanded = pattern;
-  const entries = Object.entries(variables)
-    .sort(([left], [right]) => right.length - left.length);
-
-  for (const [key, value] of entries) {
-    const escapedKey = escapeRegex(key);
-    expanded = expanded
-      .replace(new RegExp(`\\{${escapedKey}\\}`, "g"), escapeRegex(value))
-      .replace(new RegExp(`\\b${escapedKey}\\b`, "g"), escapeRegex(value));
-  }
-
-  return expanded;
-}
 
 export function isGroupRecord(record: ForwardRecord): record is GroupMessageRecord {
   return "groupId" in record && !isWeComRecord(record) && !isFeishuRecord(record) && !isQqBotRecord(record);
@@ -110,13 +91,7 @@ export function routeVariablesFor(record: ForwardRecord, extraValues: ForwardTem
   return variables;
 }
 
-export function routeTextFromRawMessage(rawMessage: string, variables: Record<string, string>): string {
-  return rawMessage
-    .replace(/\[CQ:reply,id=([^\],]+)[^\]]*\]/g, (_match, id: string) => `[Reply:${id}]`)
-    .replace(/\[CQ:at,qq=([^\],]+)[^\]]*\]/g, (_match, qq: string) => {
-      return `@${qq}`;
-    });
-}
+export { routeTextFromRawMessage } from "../shared/messageRuleMatch.js";
 
 function routeMatchText(record: ForwardRecord, variables: Record<string, string>, extraValues: ForwardTemplateValues): string {
   const parts = [routeTextFromRawMessage(record.rawMessage, variables)];
@@ -140,57 +115,23 @@ export function notificationRuleMatches(
   extraValues: ForwardTemplateValues,
   route: RouteProfile
 ): boolean {
-  if (!rule.enabled) {
-    return false;
-  }
-  if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id)) return false;
-  if (rule.triggerIds?.length && (!isManualTriggerRecord(record) || !rule.triggerIds.includes(String(record.triggerId)))) return false;
-
-  if (rule.routeKinds.length > 0 && !rule.routeKinds.includes(routeKind)) {
-    return false;
-  }
-  if (!rule.routeKinds.length && isCaptureEventRouteKind(routeKind)) return false;
-
-  if (typeof extraValues.triggerRouteId === "string" && extraValues.triggerRouteId.trim() && route.id !== extraValues.triggerRouteId.trim()) {
-    return false;
-  }
-
-  if (typeof extraValues.triggerRuleId === "string" && extraValues.triggerRuleId.trim() && rule.id !== extraValues.triggerRuleId.trim()) {
-    return false;
-  }
-
-  if (rule.targetGroupId?.trim()) {
-    const groupId = isGroupRecord(record) || isWeComRecord(record) || isFeishuRecord(record) || isQqBotRecord(record) ? record.groupId : undefined;
-    if (groupId == null || String(groupId) !== rule.targetGroupId.trim()) {
-      return false;
-    }
-  }
-
-  if ((routeKind === "private" || routeKind === "qqbot_private") && rule.targetUserId?.trim()) {
-    if (!("userId" in record) || String(record.userId) !== rule.targetUserId.trim()) return false;
-  }
-
-  if (rule.allowedSpeakerNames?.length) {
-    if (!isVoiceTranscriptRecord(record)) {
-      return false;
-    }
-    const speakerName = String(record.speakerName ?? "").trim();
-    if (!speakerName || !rule.allowedSpeakerNames.includes(speakerName)) {
-      return false;
-    }
-  }
-
-  if (!rule.regex?.trim()) {
-    return true;
-  }
-
-  try {
-    const variables = routeVariablesFor(record, extraValues, route);
-    return new RegExp(expandRouteVariables(rule.regex, variables)).test(routeMatchText(record, variables, extraValues));
-  } catch (error) {
-    console.error(`Invalid notification rule regex: ${rule.id}`, error);
-    return false;
-  }
+  const groupId = isGroupRecord(record) || isWeComRecord(record) || isFeishuRecord(record) || isQqBotRecord(record) ? record.groupId : undefined;
+  const variables = rule.regex?.trim() ? routeVariablesFor(record, extraValues, route) : {};
+  const mismatch = notificationRuleMismatch(rule, {
+    routeKind,
+    sourceRouteId: process.env.GATEWAY_ID || route.id,
+    text: rule.regex?.trim() ? routeMatchText(record, variables, extraValues) : "",
+    groupId: groupId == null ? undefined : String(groupId),
+    userId: "userId" in record ? String(record.userId) : undefined,
+    speakerName: isVoiceTranscriptRecord(record) ? String(record.speakerName ?? "").trim() : undefined,
+    triggerId: isManualTriggerRecord(record) ? String(record.triggerId) : undefined,
+    routeId: route.id,
+    selectedRouteId: typeof extraValues.triggerRouteId === "string" ? extraValues.triggerRouteId.trim() : undefined,
+    selectedRuleId: typeof extraValues.triggerRuleId === "string" ? extraValues.triggerRuleId.trim() : undefined,
+    variables
+  });
+  if (mismatch === "内容匹配表达式无效") console.error("Invalid notification rule regex: " + rule.id);
+  return mismatch === undefined;
 }
 
 export function createRouteDecision(

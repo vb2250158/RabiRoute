@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AutomationParameterHelp from "../components/AutomationParameterHelp.vue";
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -14,6 +15,7 @@ import AutomationEndpointNav from "../components/AutomationEndpointNav.vue";
 import AutomationEndpointSettings from "../components/AutomationEndpointSettings.vue";
 import { messageEndpointCatalog } from "../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCatalog";
 import AutomationMessageFilters from "../components/AutomationMessageFilters.vue";
+import AutomationRuleTest from "../components/AutomationRuleTest.vue";
 import { automationEndpoint, automationEndpoints } from "../persona/automationEndpoints";
 import PersonaAgentHooks from "../components/PersonaAgentHooks.vue";
 import QqAvatar from "../components/QqAvatar.vue";
@@ -98,6 +100,7 @@ const personaVoiceIdentityClient = createPersonaVoiceIdentityClient(personaServi
 const personaSpeech = createSpeechControlClient(personaService.fetch);
 const remoteVoiceProfiles = ref<SpeechPersona[]>([]);
 const automationPreview = ref<PersonaAutomationRuleDefinition | null>(null);
+const automationTestOpen = ref(false);
 const dailyTimeDrafts = ref<Record<string, string[]>>({});
 const committedDailyTimeDrafts = computed(() => Object.entries(dailyTimeDrafts.value)
   .filter(([id]) => id !== automationPreview.value?.id));
@@ -2191,6 +2194,7 @@ onBeforeUnmount(() => {
               <section class="automation-rule-content" :aria-label="selectedAutomationEndpointTitle">
                 <div class="automation-toolbar">
                   <strong>{{ selectedAutomationEndpointTitle }}</strong>
+                  <v-btn v-if="selectedAutomationEndpoint !== 'schedule' && automationRoute" variant="text" size="small" @click="automationTestOpen = true">试算规则</v-btn>
                   <v-btn v-if="canCreateAutomationForEndpoint" color="secondary" variant="tonal" prepend-icon="mdi-plus" @click="openAutomationCreation">{{ selectedAutomationEndpoint === 'schedule' ? '新增定时任务' : '新增消息规则' }}</v-btn>
                 </div>
 
@@ -2198,6 +2202,8 @@ onBeforeUnmount(() => {
                   :items="linkedAutomationRoutes" :item-title="configNameFor" item-value="id"
                   label="Route" density="compact" hide-details class="mb-3"
                   @update:model-value="value => automationRouteId = value || ''" />
+                <AutomationRuleTest v-if="automationTestOpen" v-model="automationTestOpen" :routes="linkedAutomationRoutes"
+                  :route-id="automationRoute?.id" :endpoint="selectedAutomationEndpoint" :rules="automations" />
                 <AutomationEndpointSettings v-if="automationRoute && configurableAutomationEndpoint"
                   :key="`${automationRoute.id}:${configurableAutomationEndpoint.value}`"
                   :gateway="automationRoute" :endpoint="configurableAutomationEndpoint.value"
@@ -2237,8 +2243,8 @@ onBeforeUnmount(() => {
             </div>
           </v-window-item>
           <v-window-item value="hooks">
-            <PersonaAgentHooks :model-value="gateway.codexHooks" :gateways="store.gateways" :gateway="gateway"
-              @update:model-value="setAgentHooks" />
+            <PersonaAgentHooks :model-value="gateway.codexHooks" :gateways="linkedAutomationRoutes" :gateway="gateway"
+              :message-rules="automations" :qq-directories="automationQqDirectories" @update:model-value="setAgentHooks" />
           </v-window-item>
         </v-window>
       </v-card>
@@ -2319,8 +2325,9 @@ onBeforeUnmount(() => {
               color="success"
               inset
               hide-details
-              @update:model-value="value => patchAutomation({ enabled: Boolean(value) })"
-            />
+              @update:model-value="value => patchAutomation({ enabled: Boolean(value) })">
+              <template #append><AutomationParameterHelp text="开启后，符合条件的事件会运行这条规则。关闭后仍保留设置。" /></template>
+            </v-switch>
             <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭')" @click="automationDialog = false" />
           </div>
         </v-card-title>
@@ -2339,7 +2346,9 @@ onBeforeUnmount(() => {
                     :model-value="activeAutomation.name"
                     label="规则名称"
                     @update:model-value="value => patchAutomation({ name: String(value || '') })"
-                  />
+                  >
+                    <template #append-inner><AutomationParameterHelp text="在自动化列表和试算结果中用此名称识别规则。" /></template>
+                  </v-text-field>
                 </div>
               </div>
 
@@ -2377,7 +2386,9 @@ onBeforeUnmount(() => {
                             hide-details
                             class="flex-grow-1"
                             @update:model-value="val => patchAutomationMessageTrigger({ targetEntityId: String(val || ''), regex: String(val || '') })"
-                          />
+                          >
+                            <template #append-inner><AutomationParameterHelp text="只匹配这个设备或传感器的事件。" /></template>
+                          </v-text-field>
                           <v-btn
                             size="small"
                             variant="tonal"
@@ -2556,15 +2567,16 @@ onBeforeUnmount(() => {
                       :model-value="activeAutomation.sourceRouteIds || []"
                       :items="automationSourceRouteOptions"
                       label="执行路由"
-                      hint="留空表示此角色的全部路由。可限定由哪些路由执行，避免在其他路由重复运行。"
-                      persistent-hint
+                      hide-details
                       multiple
                       chips
                       clearable
                       density="compact"
                       variant="outlined"
                       @update:model-value="value => patchAutomation({ sourceRouteIds: Array.isArray(value) ? value.map(String) : [] })"
-                    />
+                    >
+                      <template #append-inner><AutomationParameterHelp text="留空时适用于角色的全部路线。可选择具体路线，限定任务在哪里运行。" /></template>
+                    </v-select>
                     <div class="form-grid mt-2">
                       <v-select
                         :model-value="activeScheduleTrigger?.schedule?.type || 'interval'"
@@ -2573,7 +2585,9 @@ onBeforeUnmount(() => {
                         density="compact"
                         variant="outlined"
                         @update:model-value="value => setAutomationScheduleType(String(value || 'interval'))"
-                      />
+                      >
+                        <template #append-inner><AutomationParameterHelp text="选择按间隔、每天定点或指定日期运行。" /></template>
+                      </v-select>
                       <template v-if="activeScheduleTrigger?.schedule?.type === 'interval'">
                         <v-text-field
                           :model-value="activeScheduleTrigger?.schedule?.intervalSeconds || 900"
@@ -2584,7 +2598,9 @@ onBeforeUnmount(() => {
                           density="compact"
                           variant="outlined"
                           @update:model-value="value => patchAutomationSchedule({ intervalSeconds: Number(value || 900) })"
-                        />
+                        >
+                          <template #append-inner><AutomationParameterHelp text="相邻两次定时触发之间的间隔。" /></template>
+                        </v-text-field>
                         <v-text-field
                           :model-value="activeScheduleTrigger?.schedule?.windowStartTime || ''"
                           label="每天从几点开始（可选）"
@@ -2592,7 +2608,9 @@ onBeforeUnmount(() => {
                           density="compact"
                           variant="outlined"
                           @update:model-value="value => patchAutomationSchedule({ windowStartTime: String(value || '') })"
-                        />
+                        >
+                          <template #append-inner><AutomationParameterHelp text="可将重复触发限制在每天这个时间之后。" /></template>
+                        </v-text-field>
                         <v-text-field
                           :model-value="activeScheduleTrigger?.schedule?.windowEndTime || ''"
                           label="每天到几点结束（可选）"
@@ -2600,7 +2618,9 @@ onBeforeUnmount(() => {
                           density="compact"
                           variant="outlined"
                           @update:model-value="value => patchAutomationSchedule({ windowEndTime: String(value || '') })"
-                        />
+                        >
+                          <template #append-inner><AutomationParameterHelp text="可将重复触发限制在每天这个时间之前。" /></template>
+                        </v-text-field>
                       </template>
                       <div v-else-if="activeScheduleTrigger?.schedule?.type === 'daily_time'" class="persona-daily-times">
                         <p class="text-caption text-medium-emphasis">同一条规则会在每天的这些时间运行，共用启停开关。</p>
@@ -2614,7 +2634,9 @@ onBeforeUnmount(() => {
                             :disabled="store.saving"
                             :error-messages="normalizeDailyScheduleTimes({ timeOfDay: time }) ? [] : [translateText('请输入有效时间（HH:mm 或 HH:mm:ss）。')]"
                             @update:model-value="value => updateDailyAutomationTime(index, value)"
-                          />
+                          >
+                            <template #append-inner><AutomationParameterHelp text="同一天可以设置多个执行时间。" /></template>
+                          </v-text-field>
                           <v-btn variant="text" size="small" :disabled="store.saving || dailyAutomationTimes().length <= 1" @click="removeDailyAutomationTime(index)">移除时间点</v-btn>
                         </div>
                         <v-btn variant="text" size="small" :disabled="store.saving" @click="updateDailyAutomationTimes([...dailyAutomationTimes(), ''])">添加时间点</v-btn>
@@ -2627,7 +2649,9 @@ onBeforeUnmount(() => {
                         density="compact"
                         variant="outlined"
                         @update:model-value="value => patchAutomationSchedule({ onceAt: String(value || '') })"
-                      />
+                      >
+                        <template #append-inner><AutomationParameterHelp text="任务执行一次的日期和时间。" /></template>
+                      </v-text-field>
                     </div>
 
                   </template>
@@ -2662,6 +2686,7 @@ onBeforeUnmount(() => {
                     @update:menu="openAutomationActionMenu"
                     @update:model-value="selectAutomationAction"
                   >
+                    <template #append-inner><AutomationParameterHelp text="选择这条规则触发后执行的动作。" /></template>
                     <template #item="{ props: itemProps, item }">
                       <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
                     </template>
@@ -2683,7 +2708,9 @@ onBeforeUnmount(() => {
                         color="secondary"
                         hide-details
                         @update:model-value="value => setAutomationRecentMessageLimit(value ? DEFAULT_RECENT_MESSAGE_LIMIT : 0)"
-                      />
+                      >
+                        <template #append><AutomationParameterHelp text="把同一聊天的近期上下文附给目标 Agent。" /></template>
+                      </v-switch>
                       <SpeechParameterSlider
                         v-if="automationRecentMessageLimit > 0"
                         label="最近消息条数"
@@ -2691,11 +2718,10 @@ onBeforeUnmount(() => {
                         :max="MAX_RECENT_MESSAGE_LIMIT"
                         :step="1"
                         suffix="条"
-                        hint="携带当前会话最近 N 条消息，最多 200 条。"
                         :model-value="automationRecentMessageLimit"
-                        @update:model-value="setAutomationRecentMessageLimit"
-                      />
-                      <div class="section-note mt-2">仅影响本条规则交给 Agent 的历史消息，聊天记录仍会保留。</div>
+                        @update:model-value="setAutomationRecentMessageLimit">
+                        <template #label-end><AutomationParameterHelp text="限制该规则附带的近期消息条数。完整聊天记录仍会保留。" /></template>
+                      </SpeechParameterSlider>
                     </div>
                     <v-select
                       v-if="activeAutomation.trigger.type === 'schedule'"
@@ -2708,7 +2734,9 @@ onBeforeUnmount(() => {
                       density="compact"
                       variant="outlined"
                       @update:model-value="value => patchAutomationSchedule({ skipWhenAgentBusy: value === 'inherit' ? undefined : value === 'skip' })"
-                    />
+                    >
+                      <template #append-inner><AutomationParameterHelp text="选择定时触发遇到 Agent 正在工作时按规则执行或跳过。" /></template>
+                    </v-select>
                     <v-textarea
                       v-if="activeAutomation.trigger.type === 'schedule'"
                       class="mt-4"
@@ -2718,7 +2746,9 @@ onBeforeUnmount(() => {
                       rows="4"
                       auto-grow
                       @update:model-value="value => patchAutomationAction({ message: String(value || '') })"
-                    />
+                    >
+                      <template #append-inner><AutomationParameterHelp text="定时触发时发送给 Agent 的任务正文。" /></template>
+                    </v-textarea>
                     <v-textarea
                       class="mt-4"
                       :model-value="activeAutomation.action.template"
@@ -2728,10 +2758,14 @@ onBeforeUnmount(() => {
                       auto-grow
                       spellcheck="false"
                       @update:model-value="value => patchAutomationAction({ template: String(value || '') })"
-                    />
+                    >
+                      <template #append-inner><AutomationParameterHelp text="在发送给 Agent 的正文后附加处理要求。" /></template>
+                    </v-textarea>
                     <div v-if="!automationPreview && editingAutomationTemplateName" class="d-flex flex-wrap align-center ga-2">
                       <v-text-field v-model="automationTemplateName" :label="t('模板名称')" density="compact" hide-details
-                        class="flex-grow-1" @keydown.enter.prevent="saveCustomAutomationTemplate" />
+                        class="flex-grow-1" @keydown.enter.prevent="saveCustomAutomationTemplate" >
+                        <template #append-inner><AutomationParameterHelp text="保存为模板后，可在其他规则里选择此名称复用设置。" /></template>
+                      </v-text-field>
                       <v-btn variant="text" @click="editingAutomationTemplateName = false">{{ t('取消') }}</v-btn>
                       <v-btn color="secondary" variant="tonal" :disabled="!automationTemplateName.trim()" @click="saveCustomAutomationTemplate">{{ t('保存模板') }}</v-btn>
                       <v-btn v-if="selectedCustomAutomationTemplate" color="error" variant="text" @click="removeCustomAutomationTemplate">{{ t('删除模板') }}</v-btn>
@@ -2751,7 +2785,9 @@ onBeforeUnmount(() => {
                         label="脚本相对路径"
                         placeholder="daily-check.py 或 scripts/daily-check.py"
                         @update:model-value="value => patchAutomationAction({ scriptPath: String(value || '') })"
-                      />
+                      >
+                        <template #append-inner><AutomationParameterHelp text="从此路线配置的工作目录定位要运行的脚本。" /></template>
+                      </v-text-field>
                       <v-text-field
                         :model-value="activeAutomation.action.timeoutSeconds"
                         type="number"
@@ -2759,14 +2795,18 @@ onBeforeUnmount(() => {
                         max="3600"
                         label="最长运行秒数"
                         @update:model-value="value => patchAutomationAction({ timeoutSeconds: Number(value || 300) })"
-                      />
+                      >
+                        <template #append-inner><AutomationParameterHelp text="脚本超过此时长时结束本次运行。" /></template>
+                      </v-text-field>
                       <v-textarea
                         class="full-span"
                         :model-value="scriptArgumentsText(activeAutomation)"
                         label="脚本参数（每行一个）"
                         rows="3"
                         @update:model-value="setScriptArguments"
-                      />
+                      >
+                        <template #append-inner><AutomationParameterHelp text="每行作为一个独立参数传给脚本。" /></template>
+                      </v-textarea>
                     </div>
                   </template>
                 </div>

@@ -120,6 +120,22 @@ test("unbound roles are listed and save without creating a Route; clearing role 
   assert.equal(stale.response.status, 412);
 }));
 
+test("Agent rule names persist through the role configuration API", async () => fixture(async f => {
+  const before = await f.get();
+  const delivery = { id: "delivery", name: "Completion announcement", enabled: true, event: "task_completed",
+    conditions: [], destination: { channel: "speech", gatewayId: "route", params: {} } };
+  const followup = { id: "followup", name: "Check release", enabled: true, statusKeys: ["working"], prompt: "Continue." };
+  const saved = await f.post("configuration", { expectedRevision: before.revision, config: { ...before.config, codexHooks: {
+    byAgent: { codex: { completionDeliveries: [delivery, { ...delivery, id: "legacy", name: undefined }],
+      planFollowup: { enabled: true, rules: [followup] } } }
+  } } });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  const hooks = (await f.get()).config.codexHooks.byAgent.codex;
+  assert.equal(hooks.completionDeliveries[0].name, "Completion announcement");
+  assert.equal(hooks.completionDeliveries[1].name, undefined);
+  assert.equal(hooks.planFollowup.rules[0].name, "Check release");
+}));
+
 test("role detail exposes primary destination labels only for its own Routes", async () => fixture(async f => {
   f.routes.push(
     { id: "codex-route", name: "Design route", gatewayPort: 0, agentRoleId: "Example", codexThreadName: "Design review" },

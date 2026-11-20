@@ -9,6 +9,7 @@ import { resolvePipeline } from "../pipelines.js";
 import { buildAgentPacket as buildPublishedAgentPacket, type AgentPacket, type AgentRoleContext } from "./agentPacket.js";
 import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
 import { createRouteDecision, type RouteDecision } from "./routeDecision.js";
+import { notificationRuleMismatch, routeTextFromRawMessage } from "../shared/messageRuleMatch.js";
 
 function buildAgentPacket(
   decision: RouteDecision,
@@ -20,6 +21,23 @@ function buildAgentPacket(
   }
   return buildPublishedAgentPacket(decision, rule, roleContext, { contextDetail: "full" });
 }
+
+test("preview and route dispatch match the same multiple rules for different Agent recipients", () => {
+  const source = groupMessage();
+  const rules: RouteProfile["notificationRules"] = [
+    { id: "primary", name: "Primary Agent", enabled: true, routeKinds: ["direct_at"], targetGroupId: "10001", regex: "hello", template: "" },
+    { id: "assistant", name: "Analysis Agent", enabled: true, routeKinds: ["direct_at"], targetGroupId: "10001", regex: "hello", template: "",
+      agentTarget: { kind: "session", agentAdapter: "dsh", agentTargetId: "local:dsh", sessionId: "dsh-already-open", sessionName: "Analysis", workspace: "demo" } },
+    { id: "different-chat", name: "Different chat", enabled: true, routeKinds: ["direct_at"], targetGroupId: "10002", regex: "hello", template: "" }
+  ];
+  const route = routeProfile({ notificationRules: rules });
+  const sample = { sourceRouteId: route.id, routeKind: "direct_at", groupId: "10001", text: routeTextFromRawMessage(source.rawMessage), variables: {} };
+  const preview = rules.filter(rule => !notificationRuleMismatch(rule, sample));
+  const present = createRouteDecision(route, "direct_at", source);
+  assert.deepEqual(preview.map(rule => rule.id), ["primary", "assistant"]);
+  assert.deepEqual(present?.matchedRules.map(rule => rule.id), preview.map(rule => rule.id));
+  assert.equal(notificationRuleMismatch(rules[2], sample), "群聊或频道不匹配");
+});
 
 function routeProfile(patch: Partial<RouteProfile> = {}): RouteProfile {
   return {

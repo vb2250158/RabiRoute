@@ -6,6 +6,20 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased
+
+
+## 0.15.54 - 2026-11-20
+
+- Rename AgentHoot to Agent rules, with per-adapter previews, persistent names, selectable events, existing message destinations, and agent-type/task-name formatting controls. Message rules gain parameter help and local match previews.
+- Unify direct and queued delivery for existing Codex, DSH and WorkBuddy chats while retaining frozen execution options and original receipts.
+- Add account profile editing and in-window sign-in and registration, improve failure feedback and connection display, and show connector icons with existing message bindings.
+- Install Manager, Persona and affected Agent plugins together while retaining roles, plans, accounts and node versions.
+
+- Agent rules use a trigger checklist and reuse existing delivery targets for the role. The Agent type and task name can be included or hidden independently.
+
+- The Agent rule preview lists supported Agents and shows their configuration status. Saved rule names appear on rule cards.
+
 ## 0.15.53 - 2026-11-20
 
 - WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.14 separates a prompt-free preflight timeout from a timeout after message dispatch. Preflight failure is definitively unsent and can resume under the original ID; errors after dispatch stay uncertain without automatic resend. The isolated build, 149 regressions and packaged connector acceptance passed. Production Rabi remains closed at the user's request; this version has not been formally adopted.

@@ -77,6 +77,7 @@ export type CodexNativeOperations = {
 }): Promise<CodexThreadSummary>;
   createCodexThread(params: CodexThreadCreateParams): Promise<CodexThreadCreateResult>;
   sendCodexThreadMessage(params: {
+  deliveryMode?: "queue";
   assertAuthorized?: () => void | Promise<void>;
   threadId: string;
   prompt: string;

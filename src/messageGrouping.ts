@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
-import type { MessageGroupingPolicy } from "./shared/gatewayConfigModel.js";
+import type { NormalizedMessageGroupingPolicy } from "./shared/gatewayConfigModel.js";
 
 export const MESSAGE_GROUP_STATE_SCHEMA_VERSION = 1;
 export const DEFAULT_MESSAGE_GROUP_RETRY_SECONDS = 5;
@@ -63,7 +63,7 @@ export type EnqueueMessageGroupInput = {
   replyToMessageId?: string;
   identity: string;
   text: string;
-  policy: Required<MessageGroupingPolicy>;
+  policy: NormalizedMessageGroupingPolicy;
   payload: MessageGroupPayload;
 };
 
@@ -72,7 +72,7 @@ function normalizedSeconds(value: unknown, fallback: number): number {
   return Number.isFinite(number) && number > 0 ? Math.max(1, Math.min(300, number)) : fallback;
 }
 
-function normalizedPolicy(policy: Required<MessageGroupingPolicy>): Required<MessageGroupingPolicy> {
+function normalizedPolicy(policy: NormalizedMessageGroupingPolicy): NormalizedMessageGroupingPolicy {
   const settleSeconds = normalizedSeconds(policy.settleSeconds, 6);
   const incompleteSettleSeconds = Math.max(settleSeconds, normalizedSeconds(policy.incompleteSettleSeconds, 12));
   return {

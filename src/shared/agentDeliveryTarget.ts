@@ -4,6 +4,10 @@ import { isAgentAdapterType, type AgentAdapterType } from "./agentAdapterCapabil
 
 export type AgentDeliveryExecutor = "primary" | "plan_secretary" | "message_pool" | "memory_consolidation";
 export type AgentRecipientDefinition = { id: string; name: string; executor: AgentDeliveryExecutor };
+export type AgentSessionSendTiming = "direct" | "queue";
+export function agentSessionSupportsSendTiming(adapter: AgentAdapterType): boolean {
+  return adapter === "codex" || adapter === "dsh" || adapter === "workbuddy";
+}
 export type AgentSessionDestination = {
   kind: "session";
   agentTargetId: string;
@@ -11,11 +15,17 @@ export type AgentSessionDestination = {
   sessionId: string;
   sessionName: string;
   workspace: string;
+  sendTiming?: AgentSessionSendTiming;
+  dshDeliveryMode?: "queue" | "steer";
   deliveryType?: "private" | "group";
   sendMode?: "direct" | "identity";
   senderAgentId?: string;
   senderAgentName?: string;
 };
+export function agentSessionSendTiming(target: AgentSessionDestination): AgentSessionSendTiming {
+  return target.sendTiming ?? (target.dshDeliveryMode === "queue" || target.agentAdapter === "workbuddy" ? "queue" : "direct");
+}
+
 export type AgentDsBotDestination = {
   kind: "ds_bot";
   agentAdapter: "dsh";
@@ -73,6 +83,18 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
   if (raw.kind === "recipient" && text("recipientId")) return { kind: "recipient", recipientId: text("recipientId") };
   if (raw.kind === "session" && isAgentAdapterType(raw.agentAdapter)) {
     const delivery: Partial<AgentSessionDestination> = {};
+    if (raw.sendTiming !== undefined) {
+      if (!agentSessionSupportsSendTiming(raw.agentAdapter) || (raw.sendTiming !== "direct" && raw.sendTiming !== "queue")) {
+        throw new Error("This Agent session does not support the selected delivery timing.");
+      }
+      delivery.sendTiming = raw.sendTiming;
+    }
+    if (raw.dshDeliveryMode !== undefined) {
+      if (raw.agentAdapter !== "dsh" || (raw.dshDeliveryMode !== "queue" && raw.dshDeliveryMode !== "steer")) {
+        throw new Error("DSH delivery mode requires a DSH session and queue or steer.");
+      }
+      delivery.dshDeliveryMode = raw.dshDeliveryMode;
+    }
     if (raw.deliveryType !== undefined || raw.sendMode !== undefined || raw.senderAgentId !== undefined || raw.senderAgentName !== undefined) {
       if (raw.agentAdapter !== "grokBot" || !["private", "group"].includes(String(raw.deliveryType))
         || !["direct", "identity"].includes(String(raw.sendMode))) throw new Error("Invalid Grok delivery type or send mode.");

@@ -6,6 +6,8 @@ import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
 import { computed, ref } from "vue";
 import type { PersonaAutomationRuleDefinition } from "../src/types";
+import type { GatewayDefinition } from "../../src/shared/gatewayConfigModel";
+import { completionTargetChoices } from "../../src/plugins/io.rabiroute.manager.persona/web/persona/agentCompletionTargets";
 
 const route = { routeId: "route-a", instanceId: "napcat-a", name: "A" };
 function rule(kinds: string[], fields: Record<string, unknown> = {}): PersonaAutomationRuleDefinition {
@@ -25,6 +27,26 @@ test("only one explicit QQ conversation is eligible for an avatar", () => {
     rule(["wecom_message"], { targetGroupId: "20001" }), rule(["private"], { allowedSpeakerNames: ["30001"] }),
     rule(["private"], { regex: "30001" }), rule(["private"], { targetUserId: "Friend A" }),
     rule(["private"], { targetUserId: "30001", targetGroupId: "20001" })]) assert.equal(automationQqTarget(value), undefined);
+});
+
+test("Agent delivery selects bound conversations on the owning role and enabled account", () => {
+  const gateway: GatewayDefinition = { id: route.routeId, name: "A", gatewayPort: 32000, agentRoleId: "Role",
+    messageAdapters: ["napcat", "speech"],
+    napcatInstances: [{ id: "napcat-a", gatewayPort: 32001, httpUrl: "http://127.0.0.1" }] };
+  const known = { ...rule(["group_message"], { targetGroupId: "20001" }), sourceRouteIds: [gateway.id] };
+  const other = { ...gateway, id: "other", agentRoleId: "Other" };
+  const choices = completionTargetChoices(gateway, [gateway, other], [known, { ...known, id: "duplicate" },
+    { ...rule(["group_message"], { targetGroupId: "20002" }), sourceRouteIds: ["other"] }], [directory()]);
+  assert.equal(choices.length, 2);
+  const qq = choices.find(choice => choice.destination.channel === "napcat");
+  assert.deepEqual(qq?.destination, { gatewayId: "route-a", channel: "napcat",
+    params: { instanceId: "napcat-a", target: "group", targetId: "20001" } });
+  assert.match(qq?.title ?? "", /Group A/);
+  assert.equal(completionTargetChoices(gateway, [{ ...gateway, ignoredNapcatInstanceIds: ["napcat-a"] }], [known], [directory()])
+    .some(choice => choice.destination.channel === "napcat"), false);
+  const twoAccounts = { ...gateway, napcatInstances: [...gateway.napcatInstances!, { ...gateway.napcatInstances![0], id: "second" }] };
+  assert.equal(completionTargetChoices(gateway, [twoAccounts], [known], [directory()])
+    .some(choice => choice.destination.channel === "napcat"), false);
 });
 
 test("directory ownership requires the requested instance and a verified account", () => {

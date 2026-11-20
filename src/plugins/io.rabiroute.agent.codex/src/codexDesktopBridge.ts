@@ -144,6 +144,8 @@ export type CodexDesktopBridgeOptions = {
 };
 
 type CodexDesktopTurnDelivery = {
+  readActiveForQueue?: () => Promise<boolean>;
+  queueActivityPath?: string;
   assertAuthorized?: () => void | Promise<void>;
   threadId: string;
   prompt: string;
@@ -651,6 +653,7 @@ export class CodexDesktopBridge {
   private lateWatchGeneration = 0;
   private readonly lateStartKeys = new Set<string>();
   private readonly activeThreads = new Set<string>();
+  private readonly queuedIdleWaiters = new Map<string, (error?: Error) => void>();
   private readonly activeThreadSinceMs = new Map<string, number>();
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
   private readonly receiptObservers = new Set<AbortController>();
@@ -732,6 +735,7 @@ export class CodexDesktopBridge {
         )) {
           this.activeThreads.delete(threadId);
           this.activeThreadSinceMs.delete(threadId);
+          this.queuedIdleWaiters.get(threadId)?.();
         }
       }
       this.options.onBroadcast?.(message);
@@ -754,6 +758,7 @@ export class CodexDesktopBridge {
   }
 
   private rejectPending(error: Error): void {
+    for (const finish of this.queuedIdleWaiters.values()) finish(error);
     for (const [requestId, pending] of this.pending) {
       this.pending.delete(requestId);
       clearTimeout(pending.timer);
@@ -1185,20 +1190,58 @@ export class CodexDesktopBridge {
     }
   }
 
+  private waitForOriginalTurn(threadId: string, readActive: () => Promise<boolean>, activityPath?: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let watcher: fs.FSWatcher | undefined;
+      const finish = (error?: Error) => {
+        if (this.queuedIdleWaiters.get(threadId) !== finish) return;
+        this.queuedIdleWaiters.delete(threadId);
+        watcher?.close();
+        clearTimeout(deadline);
+        if (error) reject(error);
+        else resolve();
+      };
+      const deadline = setTimeout(() => finish(new Error("Codex 排队等待当前轮结束超时。")), getTimeoutMs("codex.desktop.queuedTurn", 600_000));
+      this.queuedIdleWaiters.set(threadId, finish);
+      let reading = false, refreshRequested = false;
+      const refresh = () => {
+        if (reading) { refreshRequested = true; return; }
+        reading = true;
+        void readActive().then(active => { if (!active) finish(); }, error => finish(error instanceof Error ? error : new Error(String(error)))).finally(() => {
+          reading = false;
+          if (refreshRequested && this.queuedIdleWaiters.get(threadId) === finish) {
+            refreshRequested = false;
+            refresh();
+          }
+        });
+      };
+      if (activityPath && fs.existsSync(activityPath)) {
+        try { watcher = fs.watch(activityPath, { persistent: false }, refresh); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); return; }
+        watcher.on("error", finish);
+      }
+      refresh();
+    });
+  }
+
   private async deliverToOwner(params: CodexDesktopTurnDelivery, attempt: PromptWriteAttempt): Promise<"started" | "steered"> {
-    try {
-      const steerReceiptConfirmed = await this.steer(params, attempt);
-      if (steerReceiptConfirmed || await this.deliveryReceiptConfirmed(params)) return "steered";
-      // A delayed rollout is not proof of non-delivery. Starting again can duplicate accepted input.
-      this.watchLateRollout(params, attempt.requestId, "thread-follower-steer-turn", "steered", attempt.observerGeneration);
-      throw this.unconfirmedDelivery(params, "thread-follower-steer-turn");
-    } catch (error) {
-      if (error instanceof Error && error.name === "CodexDesktopDeliveryUnconfirmedError") throw error;
-      if (!isInactiveTurn(error)) throw error;
-      this.deliveryEvent(params, "start_fallback", {
-        method: "thread-follower-steer-turn",
-        error: diagnosticErrorMessage(error)
-      });
+    if (params.readActiveForQueue) {
+      await this.waitForOriginalTurn(params.threadId, params.readActiveForQueue, params.queueActivityPath);
+    } else {
+      try {
+        const steerReceiptConfirmed = await this.steer(params, attempt);
+        if (steerReceiptConfirmed || await this.deliveryReceiptConfirmed(params)) return "steered";
+        // A delayed rollout is not proof of non-delivery. Starting again can duplicate accepted input.
+        this.watchLateRollout(params, attempt.requestId, "thread-follower-steer-turn", "steered", attempt.observerGeneration);
+        throw this.unconfirmedDelivery(params, "thread-follower-steer-turn");
+      } catch (error) {
+        if (error instanceof Error && error.name === "CodexDesktopDeliveryUnconfirmedError") throw error;
+        if (!isInactiveTurn(error)) throw error;
+        this.deliveryEvent(params, "start_fallback", {
+          method: "thread-follower-steer-turn",
+          error: diagnosticErrorMessage(error)
+        });
+      }
     }
     const startReceiptConfirmed = await this.start(params, attempt);
     if (!startReceiptConfirmed && !await this.deliveryReceiptConfirmed(params)) {

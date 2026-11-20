@@ -139,12 +139,16 @@ export const DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT: CodexReasoningEf
 export const DEFAULT_MESSAGE_PROCESSING_AGENT_MAX_AGENTS = 1;
 export const MAX_MESSAGE_PROCESSING_AGENTS = 32;
 
+export type MessageGroupingMode = "off" | "pool" | "all";
 export type MessageGroupingPolicy = {
+  mode?: MessageGroupingMode;
   enabled?: boolean;
   settleSeconds?: number;
   incompleteSettleSeconds?: number;
   maxWaitSeconds?: number;
 };
+
+export type NormalizedMessageGroupingPolicy = Required<Omit<MessageGroupingPolicy, "mode">> & Pick<MessageGroupingPolicy, "mode">;
 
 export type MessageAdapterPolicy = {
   inputEnabled?: boolean;
@@ -578,7 +582,7 @@ export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEff
 }
 
 export function messageAdapterUsesAutomaticGrouping(adapterType: MessageEndpointType): boolean {
-  return adapterType === "napcat"
+  return adapterType === "qqbot" || adapterType === "napcat"
     || adapterType === "rolePanel"
     || adapterType === "rabilink"
     || adapterType === "wecom"
@@ -586,11 +590,11 @@ export function messageAdapterUsesAutomaticGrouping(adapterType: MessageEndpoint
     || adapterType === "feishu";
 }
 
-function defaultMessageGroupingPolicy(adapterType: MessageEndpointType): Required<MessageGroupingPolicy> {
+function defaultMessageGroupingPolicy(adapterType: MessageEndpointType): NormalizedMessageGroupingPolicy {
   const speechLike = adapterType === "speech"
     || adapterType === "fennenote"
     || adapterType === "xiaoai";
-  const conversational = messageAdapterUsesAutomaticGrouping(adapterType);
+  const conversational = adapterType !== "qqbot" && messageAdapterUsesAutomaticGrouping(adapterType);
   return speechLike
     ? { enabled: conversational, settleSeconds: 3, incompleteSettleSeconds: 8, maxWaitSeconds: 15 }
     : { enabled: conversational, settleSeconds: 6, incompleteSettleSeconds: 12, maxWaitSeconds: 20 };
@@ -599,7 +603,7 @@ function defaultMessageGroupingPolicy(adapterType: MessageEndpointType): Require
 export function normalizeMessageGroupingPolicy(
   value: unknown,
   adapterType: MessageEndpointType
-): Required<MessageGroupingPolicy> {
+): NormalizedMessageGroupingPolicy {
   const defaults = defaultMessageGroupingPolicy(adapterType);
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as MessageGroupingPolicy
@@ -617,11 +621,12 @@ export function normalizeMessageGroupingPolicy(
     incompleteSettleSeconds,
     positive(raw.maxWaitSeconds, defaults.maxWaitSeconds)
   );
+  const mode = messageAdapterUsesAutomaticGrouping(adapterType)
+    && (raw.mode === "all" || raw.mode === "pool" || raw.mode === "off") ? raw.mode : undefined;
   return {
-    // Kept in the normalized shape for compatibility with existing config files.
-    // Endpoint classification owns this value; an old per-endpoint switch cannot
-    // disable grouping for chat or enable extra settling for ASR/system events.
-    enabled: defaults.enabled,
+    // Existing files without a mode keep endpoint defaults and the message-pool scope.
+    ...(mode ? { mode } : {}),
+    enabled: mode ? mode !== "off" : defaults.enabled,
     settleSeconds,
     incompleteSettleSeconds,
     maxWaitSeconds

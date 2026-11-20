@@ -7,7 +7,9 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { useRoute, useRouter } from "vue-router";
 import { useSpeechStore } from "../../../../../ribiwebgui/src/stores/speechStore";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
+import AgentAvatar from "../../../../../ribiwebgui/src/components/AgentAvatar.vue";
 import InstanceAgentSettings from "../../../../../ribiwebgui/src/components/InstanceAgentSettings.vue";
+import MessageConnectorIcon from "../components/MessageConnectorIcon.vue";
 import PeerRouteAgentSettings from "../components/PeerRouteAgentSettings.vue";
 import PrimaryAgentAdvancedSettings from "../components/PrimaryAgentAdvancedSettings.vue";
 import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } from "@shared/routeAgentTargets";
@@ -1047,7 +1049,7 @@ watch(() => gateway.value?.id, () => {
         />
       </div>
 
-      <v-card class="app-card glass-card section-card">
+      <v-card class="app-card glass-card section-card connector-section">
         <div class="section-title-row">
           <div>
             <div class="section-title">消息端</div>
@@ -1059,14 +1061,16 @@ watch(() => gateway.value?.id, () => {
             </template>
             <v-list density="compact">
               <v-list-item v-for="item in availableEndpoints" :key="item.type" :title="item.title"
-                :prepend-icon="item.icon" @click="addEndpoint(item.type)" />
+                @click="addEndpoint(item.type)">
+                <template #prepend><MessageConnectorIcon :endpoint="item.type" :fallback="item.icon" :size="28" class="me-3" /></template>
+              </v-list-item>
             </v-list>
           </v-menu>
         </div>
 
         <div class="message-endpoint-grid">
           <div v-for="card in endpointCards" :key="card.type" class="message-endpoint-tile">
-            <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">{{ card.icon }}</v-icon>
+            <MessageConnectorIcon :endpoint="card.type" :fallback="card.icon" />
             <strong class="message-endpoint-name">{{ card.title }}</strong>
             <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="card.title + '设置'"
               @click="openEndpointSettings(card.type)" />
@@ -1113,7 +1117,7 @@ watch(() => gateway.value?.id, () => {
         </v-dialog>
       </v-card>
 
-      <v-card class="app-card glass-card section-card">
+      <v-card class="app-card glass-card section-card connector-section">
         <div class="section-title-row">
           <div class="section-title">Agent 端</div>
           <v-menu v-model="addAgentMenu" location="bottom end" :close-on-content-click="false">
@@ -1133,8 +1137,9 @@ watch(() => gateway.value?.id, () => {
                 v-for="agent in availableAgentsToAdd"
                 :key="agent.key"
                 :title="agent.title"
-                @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)"
-              />
+                @click="addAgent(agent.type, agent.nodeId, agent.agentId, agent.ownerDeviceId)">
+                <template #prepend><AgentAvatar :provider="agent.type" :size="28" class="me-3" aria-hidden="true" /></template>
+              </v-list-item>
               <v-list-item v-if="availableAgentsToAdd.length === 0" :title="translateText('暂无可添加的 Agent')" disabled />
               <v-divider />
               <div class="pa-3">
@@ -1168,7 +1173,7 @@ watch(() => gateway.value?.id, () => {
         <div class="message-endpoint-grid">
           <template v-for="agent in visibleAgentItems" :key="agent.type">
             <div class="message-endpoint-tile">
-              <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">{{ agent.icon }}</v-icon>
+              <AgentAvatar :provider="agent.type" :size="34" aria-hidden="true" />
               <strong class="message-endpoint-name">{{ agent.title }}</strong>
               <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="agent.title + '设置'" @click="openAgentSettings(agent.type)" />
               <v-btn v-if="localAgentAction(agent.type) === 'connected'" variant="outlined" size="small" @click="removeAgent(agent.type)">取消连接</v-btn>
@@ -1462,7 +1467,7 @@ watch(() => gateway.value?.id, () => {
 
           <template v-for="target in remoteAgentItems" :key="target.id">
             <div class="message-endpoint-tile">
-              <v-icon class="message-endpoint-icon" color="primary" aria-hidden="true">mdi-monitor-dashboard</v-icon>
+              <AgentAvatar :provider="target.provider" :size="34" aria-hidden="true" />
               <strong class="message-endpoint-name">{{ target.title }}</strong>
               <v-btn variant="text" size="small" icon="mdi-cog-outline" :aria-label="target.title + '设置'" @click="openRemoteAgentSettings(target.id)" />
               <v-btn v-if="target.instance?.connected && target.agent" variant="outlined" size="small" @click="removeRemoteAgent(target.id)">取消连接</v-btn>
@@ -1698,10 +1703,26 @@ watch(() => gateway.value?.id, () => {
 </template>
 
 <style scoped>
+.connector-section {
+  container: connectors / inline-size;
+}
+
 .message-endpoint-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+@container connectors (max-width: 54rem) {
+  .message-endpoint-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container connectors (max-width: 36rem) {
+  .message-endpoint-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .message-endpoint-tile {
@@ -1713,13 +1734,6 @@ watch(() => gateway.value?.id, () => {
   border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 14px;
   background: rgb(var(--v-theme-surface));
-}
-
-.message-endpoint-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-primary), 0.09);
 }
 
 .message-endpoint-name {

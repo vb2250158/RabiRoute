@@ -13,7 +13,8 @@ export type EndpointExecutionOptions = {
   /** Compatibility input only: Desktop retains its own sandbox and approval policy. */
   sandbox?: CodexTurnSandbox;
   dshDeliveryMode?: "queue" | "steer";
-  workbuddyDeliveryMode?: "steer";
+  codexDeliveryMode?: "queue";
+  workbuddyDeliveryMode?: "steer" | "direct";
   /** Local DSH owner address captured when the delivery is prepared. */
   dshBaseUrl?: string;
   grokBotDelivery?: AgentThreadRequest["grokBotDelivery"];
@@ -30,7 +31,7 @@ function boundedText(value: unknown, name: string, max: number): string {
 export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecutionOptions {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Endpoint execution options are required.");
   const input = value as Record<string, unknown>;
-  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "workbuddyDeliveryMode", "dshBaseUrl", "grokBotDelivery", "localImages"];
+  const fields = ["cwd", "model", "reasoningEffort", "sandbox", "dshDeliveryMode", "codexDeliveryMode", "workbuddyDeliveryMode", "dshBaseUrl", "grokBotDelivery", "localImages"];
   if (Object.keys(input).some(key => !fields.includes(key))) throw new Error("Unsupported endpoint execution option.");
   const result: EndpointExecutionOptions = input.cwd === undefined ? {} : { cwd: boundedText(input.cwd, "cwd", 32_768) };
   if (input.model !== undefined) result.model = boundedText(input.model, "model", 500);
@@ -48,8 +49,12 @@ export function normalizeEndpointExecutionOptions(value: unknown): EndpointExecu
     if (input.dshDeliveryMode !== "queue" && input.dshDeliveryMode !== "steer") throw new Error("Invalid endpoint execution dshDeliveryMode.");
     result.dshDeliveryMode = input.dshDeliveryMode;
   }
+  if (input.codexDeliveryMode !== undefined) {
+    if (input.codexDeliveryMode !== "queue") throw new Error("Invalid endpoint execution codexDeliveryMode.");
+    result.codexDeliveryMode = input.codexDeliveryMode;
+  }
   if (input.workbuddyDeliveryMode !== undefined) {
-    if (input.workbuddyDeliveryMode !== "steer") throw new Error("Invalid endpoint execution workbuddyDeliveryMode.");
+    if (input.workbuddyDeliveryMode !== "steer" && input.workbuddyDeliveryMode !== "direct") throw new Error("Invalid endpoint execution workbuddyDeliveryMode.");
     result.workbuddyDeliveryMode = input.workbuddyDeliveryMode;
   }
   if (input.dshBaseUrl !== undefined) {
@@ -80,7 +85,7 @@ export function endpointExecutionOptionsHash(value: unknown): string {
 export function resolveEndpointExecutionOptions(request: AgentThreadRequest, ownerWorkspace: string | undefined,
   defaults: AgentThreadRequestOptions["codexDefaults"]): EndpointExecutionOptions {
   if (request.agentAdapter === "deviceAgent") {
-    if (request.cwd !== undefined || request.model !== undefined || request.reasoningEffort !== undefined || request.sandbox !== undefined || request.dshDeliveryMode !== undefined || request.workbuddyDeliveryMode !== undefined) {
+    if (request.cwd !== undefined || request.model !== undefined || request.reasoningEffort !== undefined || request.sandbox !== undefined || request.dshDeliveryMode !== undefined || request.codexDeliveryMode !== undefined || request.workbuddyDeliveryMode !== undefined) {
       throw new Error("Device endpoint uses its own runtime and cannot apply PC execution options.");
     }
     return {};
@@ -93,6 +98,7 @@ export function resolveEndpointExecutionOptions(request: AgentThreadRequest, own
     ...(model !== undefined ? { model } : {}), ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(request.sandbox !== undefined ? { sandbox: request.sandbox } : {}),
     ...(request.dshDeliveryMode !== undefined ? { dshDeliveryMode: request.dshDeliveryMode } : {}),
+    ...(request.codexDeliveryMode !== undefined ? { codexDeliveryMode: request.codexDeliveryMode } : {}),
     ...(request.workbuddyDeliveryMode !== undefined ? { workbuddyDeliveryMode: request.workbuddyDeliveryMode } : {}),
     ...(request.agentAdapter === "dsh" && request.dshBaseUrl?.trim() ? { dshBaseUrl: request.dshBaseUrl } : {}) });
   if (!options.cwd) throw new Error("This PC endpoint requires its actual owner execution directory.");
@@ -101,6 +107,7 @@ export function resolveEndpointExecutionOptions(request: AgentThreadRequest, own
   }
   if (options.reasoningEffort && !options.model) throw new Error("Reasoning effort requires an explicit or target Route model; owner settings were not changed.");
   if (request.agentAdapter !== "dsh" && options.dshDeliveryMode !== undefined) throw new Error("dshDeliveryMode is only supported by DSH.");
+  if (request.agentAdapter !== "codex" && options.codexDeliveryMode !== undefined) throw new Error("codexDeliveryMode is only supported by Codex.");
   if (request.agentAdapter !== "workbuddy" && options.workbuddyDeliveryMode !== undefined) throw new Error("workbuddyDeliveryMode is only supported by WorkBuddy.");
   return options;
 }

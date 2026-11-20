@@ -35,9 +35,10 @@
         "0.1.5",
         "0.1.10",
         "0.1.11",
-        "0.1.12"
+        "0.1.12",
+        "0.1.13"
       ],
-      "toVersion": "0.1.13"
+      "toVersion": "0.1.14"
     },
     {
       "packageId": "io.rabiroute.agent.copilot-cli",
@@ -74,9 +75,10 @@
         "0.1.6",
         "0.1.7",
         "0.1.8",
-        "0.1.9"
+        "0.1.9",
+        "0.1.10"
       ],
-      "toVersion": "0.1.10"
+      "toVersion": "0.1.11"
     },
     {
       "packageId": "io.rabiroute.agent.grok-bot",
@@ -116,9 +118,10 @@
         "0.1.10",
         "0.1.11",
         "0.1.12",
-        "0.1.13"
+        "0.1.13",
+        "0.1.14"
       ],
-      "toVersion": "0.1.14"
+      "toVersion": "0.1.15"
     },
     {
       "packageId": "io.rabiroute.endpoint.feishu",
@@ -307,9 +310,10 @@
         "0.1.4",
         "0.1.8",
         "0.1.7",
-        "0.1.9"
+        "0.1.9",
+        "0.1.10"
       ],
-      "toVersion": "0.1.10"
+      "toVersion": "0.1.11"
     },
     {
       "packageId": "io.rabiroute.manager.bilibili-history",
@@ -334,9 +338,10 @@
         "0.1.11",
         "0.1.12",
         "0.1.13",
-        "0.1.14"
+        "0.1.14",
+        "0.1.15"
       ],
-      "toVersion": "0.1.15"
+      "toVersion": "0.1.16"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
@@ -407,9 +412,11 @@
         "0.1.5",
         "0.1.6",
         "0.1.7",
-        "0.1.8"
+        "0.1.8",
+        "0.1.9",
+        "0.1.10"
       ],
-      "toVersion": "0.1.9"
+      "toVersion": "0.1.11"
     },
     {
       "packageId": "io.rabiroute.manager.message-processing-automation",
@@ -464,9 +471,10 @@
         "0.1.27",
         "0.1.28",
         "0.1.29",
-        "0.1.30"
+        "0.1.30",
+        "0.1.31"
       ],
-      "toVersion": "0.1.31"
+      "toVersion": "0.1.32"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",
@@ -546,9 +554,10 @@
         "0.1.6",
         "0.1.7",
         "0.1.8",
-        "0.1.9"
+        "0.1.9",
+        "0.1.10"
       ],
-      "toVersion": "0.1.10"
+      "toVersion": "0.1.11"
     },
     {
       "packageId": "io.rabiroute.manager.video",

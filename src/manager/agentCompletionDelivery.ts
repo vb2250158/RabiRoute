@@ -10,9 +10,10 @@ import { promisify } from "node:util";
 import type { AgentCompletionDeliveryRule } from "../shared/gatewayConfigModel.js";
 import type { CodexHookContextRequest } from "./codexHookContext.js";
 import { handleAgentSend, inspectAgentSendDelivery, type AgentSendRequest } from "../agentSend.js";
+import { completionConversationFields } from "../shared/agentHookAutomation.js";
 import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
-import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutomation.js";
+import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents } from "../shared/agentHookAutomation.js";
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 import { mermaidDiagramSource, renderMarkdownFileToPngPages } from "../markdownImage.js";
@@ -146,18 +147,25 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
   deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
   const agent = isAgentAdapterType(hook.agentType) ? agentAdapterManifest(hook.agentType).label : "Codex";
-  const heading = [`${agent} 本轮结果`, `任务：${taskName}`].join("\n");
   const { channel, params } = rule.destination;
-  if (channel !== "napcat" && channel !== "speech") throw new Error("不支持的消息端。");
+  const heading = [
+    params.includeAgentType !== "false" ? `${agent} 本轮结果` : "",
+    params.includeTaskName !== "false" ? `任务：${taskName}` : ""
+  ].filter(Boolean).join("\n");
+  const conversation = completionConversationFields[channel];
+  if (channel !== "napcat" && channel !== "speech" && !conversation) throw new Error("不支持的消息端。");
+  const fullText = hook.lastAssistantMessage!.trim();
+  const characters = params.content === "excerpt" ? Array.from(fullText) : undefined;
+  const body = characters && characters.length > 500 ? characters.slice(0, 500).join("") + "…" : fullText;
+  const text = heading ? heading + "\n\n" + body : body;
   const request: AgentSendRequest = {
     deliveryId, sender: { agentType: "codex_hook", sessionId: hook.sessionId }, routeId,
     channel, params: channel === "napcat"
       ? { target: params.target, ...(params.target === "group" ? { groupId: params.targetId } : { userId: params.targetId }), instanceId: params.instanceId, replyToMessageId: "" }
-      : { sessionId: params.sessionId || "" },
-    payload: { type: "text", text: `${heading}\n\n${hook.lastAssistantMessage!.trim()}` },
+      : conversation ? { [conversation.field]: params[conversation.field] } : { sessionId: params.sessionId || "" },
+    payload: { type: "text", text },
     styleValidation: 0
   };
-  const text = `${heading}\n\n${hook.lastAssistantMessage!.trim()}`;
   let images = context.images ?? [];
   if (channel === "napcat" && images.length) {
     const linked = completionMessagePayloads(text, false, hook.cwd).flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
@@ -300,7 +308,8 @@ export class AgentCompletionDeliveryService {
       try {
         const errors = agentHookRuleErrors(rule);
         if (errors.length) throw new Error(errors.join(" "));
-        if (AGENT_HOOK_EVENTS.find(event => event.value === rule.event)?.hookEvent !== request.eventName) continue;
+        const events = agentHookRuleEvents(rule);
+        if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName && events.includes(event.value))) continue;
         if (heartbeat && rule.conditions.some(condition => condition.type === "exclude_heartbeat")) continue;
         if (rule.conditions.some(condition =>
           (condition.type === "include_sessions" && !condition.sessions?.some(session => session.id === request.sessionId))
@@ -320,7 +329,7 @@ export class AgentCompletionDeliveryService {
         // Preserve group delivery identities when migrating existing rules.
         const target = JSON.stringify(channel === "napcat" && params.target === "group"
           ? [gatewayId, params.instanceId, params.targetId]
-          : [gatewayId, channel, params.target || "", params.instanceId || "", params.targetId || params.sessionId || ""]);
+          : [gatewayId, channel, params.target || "", params.instanceId || "", params.targetId || params.sessionId || params.chatId || params.sourceMessageId || ""]);
         if (targets.has(target)) continue;
         targets.add(target);
         const deliveryId = `agent-completion-${createHash("sha256").update(JSON.stringify([

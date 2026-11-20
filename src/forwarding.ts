@@ -97,7 +97,7 @@ import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
   primaryMessageProcessingAgentAdapter,
   normalizeMessageGroupingPolicy,
-  type MessageGroupingPolicy,
+  type NormalizedMessageGroupingPolicy,
   type RecentMessageEndpoint
 } from "./shared/gatewayConfigModel.js";
 
@@ -504,6 +504,10 @@ function activeMessageGroupingQueue(): MessageGroupingQueue {
 }
 
 const automaticMessageGroupingRouteKinds = new Set<ForwardRouteKind>([
+  "qqbot_private",
+  "qqbot_group",
+  "qqbot_channel",
+  "qqbot_dm",
   "private",
   "group_message",
   "direct_at",
@@ -520,7 +524,7 @@ export function routeKindUsesAutomaticMessageGrouping(routeKind: ForwardRouteKin
   return automaticMessageGroupingRouteKinds.has(routeKind);
 }
 
-function groupingPolicyForRecord(routeKind: ForwardRouteKind, record: ForwardRecord): Required<MessageGroupingPolicy> | undefined {
+function groupingPolicyForRecord(routeKind: ForwardRouteKind, record: ForwardRecord): NormalizedMessageGroupingPolicy | undefined {
   if (!routeKindUsesAutomaticMessageGrouping(routeKind)) {
     return undefined;
   }
@@ -1406,10 +1410,10 @@ export function forwardMessageWithCompletion(
 ): Promise<void> {
   const groupingPolicy = groupingPolicyForRecord(routeKind, record);
   const matchingRules = routeProfilesForRecord(record).flatMap(route => createRouteDecision(route, routeKind, record, extraValues)?.matchedRules ?? []);
-  const groupSelected = matchingRules.length > 0 && matchingRules.every(rule => {
+  const groupSelected = groupingPolicy?.mode === "all" || (matchingRules.length > 0 && matchingRules.every(rule => {
     try { return rule.agentTarget && resolveAgentDeliveryExecutor(rule.agentTarget, config.agentRecipients) === "message_pool"; }
     catch { return false; }
-  });
+  }));
   if (groupingPolicy && groupSelected) {
     const input = messageGroupEnqueueInputForForward(
       routeKind,

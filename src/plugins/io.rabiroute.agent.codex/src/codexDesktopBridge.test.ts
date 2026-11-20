@@ -259,7 +259,7 @@ function encodeFrame(value: unknown): Buffer {
 async function createMockDesktopRouter(
   handler: (request: IpcRequest, methods: string[]) => Record<string, unknown> | Promise<Record<string, unknown>>,
   snapshot: Record<string, unknown> | null = { latestModel: "test-owner-model" }
-): Promise<{ pipePath: string; methods: string[]; close: () => Promise<void> }> {
+): Promise<{ pipePath: string; methods: string[]; broadcast: (message: unknown) => void; close: () => Promise<void> }> {
   const pipePath = testPipePath("rabiroute-codex-desktop");
   const methods: string[] = [];
   const sockets = new Set<net.Socket>();
@@ -295,6 +295,7 @@ async function createMockDesktopRouter(
   return {
     pipePath,
     methods,
+    broadcast: message => { for (const socket of sockets) socket.write(encodeFrame(message)); },
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -402,6 +403,40 @@ test("Desktop bridge steers an active task instead of starting a concurrent turn
 
     assert.equal(result.action, "steered");
     assert.deepEqual(router.methods, ["initialize", "thread-follower-steer-turn"]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+for (const wake of ["owner event", "log event"] as const) test("Codex queued delivery waits for its original turn via " + wake, async t => {
+  const router = await createMockDesktopRouter(request => request.method === "initialize"
+    ? { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } }
+    : { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} });
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
+  const threadId = "019f0000-0000-7000-8000-000000000050";
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-queued-codex-"));
+  const activity = path.join(temp, "activity.jsonl");
+  fs.writeFileSync(activity, "active");
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  try {
+    assert.equal(await bridge.isReady(), true);
+    let read = false;
+    const result = bridge.deliver({
+      threadId, prompt: "queued message", cwd: process.cwd(), sandbox: "workspace-write",
+      queueActivityPath: wake === "log event" ? activity : undefined,
+      readActiveForQueue: async () => { read = true; return fs.readFileSync(activity, "utf8") === "active"; }
+    });
+    await waitFor(() => read);
+    const idle = (conversationId: string) => ({ type: "broadcast", method: "thread-stream-state-changed",
+      params: { conversationId, change: { threadRuntimeStatus: { type: "idle" } } } });
+    router.broadcast(idle("another-task"));
+    await wait(20);
+    assert.deepEqual(router.methods, ["initialize"]);
+    if (wake === "owner event") router.broadcast(idle(threadId));
+    else fs.writeFileSync(activity, "idle");
+    assert.equal((await result).action, "started");
+    assert.deepEqual(router.methods, ["initialize", "thread-follower-start-turn"]);
   } finally {
     bridge.close();
     await router.close();

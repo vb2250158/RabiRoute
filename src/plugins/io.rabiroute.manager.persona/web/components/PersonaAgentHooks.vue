@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { agentHookSettingsFor, type CodexHookSettings, type GatewayDefinition } from "@shared/gatewayConfigModel";
-import { AGENT_HOOK_DESTINATIONS, AGENT_HOOK_EVENTS, agentHookRuleErrors, type AgentCompletionDeliveryRule } from "@shared/agentHookAutomation";
+import { agentHookSettingsFor, type CodexHookSettings, type GatewayDefinition, type PersonaAutomationRuleDefinition } from "@shared/gatewayConfigModel";
+import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents, type AgentCompletionDeliveryRule } from "@shared/agentHookAutomation";
 import { normalizePlanFollowup, type PlanFollowupRule, type PlanFollowupSettings as FollowupSettings } from "@shared/planFollowup";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import { personaHookAgentOptions } from "@shared/personaAgentHooks";
@@ -9,37 +9,50 @@ import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import { routeScopedAdaptersPath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
 import { createAgentCompletionRule, createTtsCompletionRule } from "../persona/agentCompletionRules";
+import { completionTargetChoices, completionTargetLabel } from "../persona/agentCompletionTargets";
+import type { AutomationQqDirectory } from "../persona/automationRuleConversation";
 import AutomationEndpointNav from "./AutomationEndpointNav.vue";
 import PlanFollowupSettings from "./PlanFollowupSettings.vue";
 import AgentCompletionDeliveryRules from "./AgentCompletionDeliveryRules.vue";
 
-const props = defineProps<{ modelValue?: CodexHookSettings; gateways: GatewayDefinition[]; gateway: GatewayDefinition }>();
+const props = defineProps<{ modelValue?: CodexHookSettings; gateways: GatewayDefinition[]; gateway: GatewayDefinition;
+  messageRules: readonly PersonaAutomationRuleDefinition[]; qqDirectories: readonly AutomationQqDirectory[] }>();
+const defaultRoute = computed(() => props.gateways[0] ?? props.gateway);
+const adaptersPath = computed(() => routeScopedAdaptersPath(defaultRoute.value.configName || defaultRoute.value.id));
+const targets = computed(() => completionTargetChoices(props.gateway, props.gateways, props.messageRules, props.qqDirectories, props.modelValue));
 const emit = defineEmits<{ "update:modelValue": [value: CodexHookSettings] }>();
 type Rule = { kind: "followup"; value: PlanFollowupRule } | { kind: "delivery"; value: AgentCompletionDeliveryRule };
 const { t } = useI18n();
 const selected = ref("");
 const contextDialog = ref(false);
-const creationDialog = ref(false);
 const editorDialog = ref(false);
 const creating = ref(false);
 const draft = ref<Rule>();
 const enableFollowup = ref(false);
-const options = computed(() => personaHookAgentOptions(props.gateways, props.gateway.agentRoleId || "")
+const previewAgent = ref("");
+const previewDrafts = new Map<AgentAdapterType, { rule: Rule; enableFollowup: boolean }>();
+const supportedOptions = computed(() => personaHookAgentOptions(props.gateways, props.gateway.agentRoleId || "")
   .map(option => ({ ...option, icon: "mdi-robot-outline" })));
+const options = computed(() => supportedOptions.value.filter(item => item.configured));
 const selectedAgent = computed(() => options.value.find(item => item.value === selected.value));
+const editorAgent = computed(() => supportedOptions.value.find(item => item.value === previewAgent.value));
+const previewStatuses = computed(() => Object.fromEntries(supportedOptions.value.map(option =>
+  [option.value, t(option.configured ? "已配置" : "未配置")])));
 watch([() => props.gateway.agentRoleId, options], ([role, available], previous) => {
   if (role !== previous?.[0] || !available.some(item => item.value === selected.value)) {
-    selected.value = available.find(item => item.value === props.gateway.primaryAgentAdapter)?.value ?? available[0]?.value ?? "";
+    selected.value = available.find(item => item.value === defaultRoute.value.primaryAgentAdapter)?.value ?? available[0]?.value ?? "";
   }
 }, { immediate: true });
 watch([() => props.gateway.agentRoleId, () => props.gateway.id, selected], () => {
-  contextDialog.value = creationDialog.value = editorDialog.value = false;
+  contextDialog.value = editorDialog.value = false;
 });
 function settingsFor(agent: AgentAdapterType) {
   return props.modelValue?.byAgent?.[agent] ?? props.modelValue ?? agentHookSettingsFor(undefined);
 }
 const settings = computed(() => selectedAgent.value ? settingsFor(selectedAgent.value.value) : agentHookSettingsFor(undefined));
 const followup = computed(() => settings.value.planFollowup ?? normalizePlanFollowup(undefined));
+const previewFollowupEnabled = computed(() => editorAgent.value?.configured
+  && settingsFor(editorAgent.value.value).planFollowup?.enabled === true);
 const rules = computed<Rule[]>(() => [
   ...(settings.value.completionDeliveries ?? []).map(value => ({ kind: "delivery" as const, value })),
   ...followup.value.rules.map(value => ({ kind: "followup" as const, value }))
@@ -54,10 +67,9 @@ const fields = [
   { key: "planTaskCompletionEnabled", title: "计划任务完成通知", note: "绑定计划的任务结束后，通知该角色的消息路线。", events: "Stop" },
 ] as const;
 
-function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>) {
-  const agent = selectedAgent.value?.value;
+function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>, agent = selectedAgent.value?.value) {
   if (!agent) return;
-  const { byAgent: _scopes, ...current }: CodexHookSettings = settings.value;
+  const { byAgent: _scopes, ...current }: CodexHookSettings = settingsFor(agent);
   emit("update:modelValue", { ...props.modelValue, ...agentHookSettingsFor({ ...props.modelValue, byAgent: undefined }),
     byAgent: { ...props.modelValue?.byAgent, [agent]: { ...current, ...patch } } });
 }
@@ -69,16 +81,17 @@ function ruleLabel(rule: Rule) {
   return rule.value.destination.channel === "speech" ? "TTS 播报" : "事件投递";
 }
 function ruleTitle(rule: Rule) {
+  if (rule.value.name?.trim()) return rule.value.name.trim();
   if (rule.kind === "followup") return rule.value.prompt.trim().split(/\r?\n/, 1)[0] || ruleLabel(rule);
-  const destination = rule.value.destination;
-  const route = props.gateways.find(item => item.id === destination.gatewayId);
-  return destination.params.targetId || route?.name || ruleLabel(rule);
+  return rule.value.destination.gatewayId
+    ? completionTargetLabel(rule.value.destination, props.gateways, props.qqDirectories)
+    : ruleLabel(rule);
 }
 function ruleSummary(rule: Rule) {
   if (rule.kind === "followup") return "计划任务结束";
-  const event = AGENT_HOOK_EVENTS.find(item => item.value === rule.value.event)?.title ?? rule.value.event;
-  const destination = AGENT_HOOK_DESTINATIONS.find(item => item.value === rule.value.destination.channel)?.title;
-  return destination ? `${t(event)} · ${t(destination)}` : event;
+  const events = agentHookRuleEvents(rule.value).map(value => t(AGENT_HOOK_EVENTS.find(event => event.value === value)?.title ?? value));
+  const destination = rule.value.destination.gatewayId ? completionTargetLabel(rule.value.destination, props.gateways, props.qqDirectories) : "";
+  return [...events, destination].filter(Boolean).join(" · ");
 }
 function ruleErrors(rule: Rule): string[] {
   if (rule.kind === "delivery") return agentHookRuleErrors(rule.value);
@@ -90,19 +103,58 @@ const cards = computed(() => rules.value.map(rule => {
   return { rule, errors, enabled: rule.value.enabled && !errors.length && (rule.kind !== "followup" || followup.value.enabled) };
 }));
 
-function openEditor(rule: Rule, isNew = false) {
-  creationDialog.value = false;
-  creating.value = isNew;
+const ruleTypes = [
+  { value: "delivery", title: "事件投递" },
+  { value: "speech", title: "TTS 播报" },
+  { value: "followup", title: "自动追问" }
+] as const;
+type RuleType = typeof ruleTypes[number]["value"];
+const draftType = computed<RuleType>(() => draft.value?.kind === "followup" ? "followup"
+  : draft.value?.value.destination.channel === "speech" ? "speech" : "delivery");
+
+function newRule(type: RuleType, name?: string): Rule {
+  if (type === "followup") {
+    return { kind: "followup", value: { id: browserUuid(), name, enabled: false, statusKeys: [], prompt: "" } };
+  }
+  const value = type === "speech" ? createTtsCompletionRule("") : createAgentCompletionRule();
+  return { kind: "delivery", value: { ...value, name } };
+}
+function openEditor(rule?: Rule) {
+  previewDrafts.clear();
+  creating.value = !rule;
+  previewAgent.value = selectedAgent.value?.value ?? supportedOptions.value[0]?.value ?? "";
   enableFollowup.value = false;
-  draft.value = { ...rule };
+  draft.value = rule ? { ...rule } : newRule("delivery");
   editorDialog.value = true;
 }
-function createRule(type: "delivery" | "speech" | "followup") {
-  if (type === "followup") {
-    openEditor({ kind: "followup", value: { id: browserUuid(), enabled: false, statusKeys: [], prompt: "" } }, true);
-  } else {
-    openEditor({ kind: "delivery", value: type === "speech" ? createTtsCompletionRule(props.gateway.id) : createAgentCompletionRule() }, true);
+function switchPreview(agent: AgentAdapterType) {
+  if (agent === previewAgent.value) return;
+  const current = draft.value;
+  if (current) previewDrafts.set(previewAgent.value, { rule: current, enableFollowup: enableFollowup.value });
+  const previous = previewDrafts.get(agent);
+  draft.value = previous?.rule ?? newRule(draftType.value);
+  enableFollowup.value = previous?.enableFollowup ?? false;
+  previewAgent.value = agent;
+}
+function changeRuleType(type: RuleType | null) {
+  if (!type || type === draftType.value) return;
+  const current = draft.value;
+  const next = newRule(type, current?.value.name);
+  if (current?.kind === "delivery" && next.kind === "delivery") {
+    const { content, includeAgentType, includeTaskName } = current.value.destination.params;
+    next.value = { ...current.value, destination: { ...next.value.destination, params: {
+      ...next.value.destination.params,
+      ...(content ? { content } : {}),
+      ...(includeAgentType ? { includeAgentType } : {}),
+      ...(includeTaskName ? { includeTaskName } : {}),
+    } } };
   }
+  draft.value = next;
+  enableFollowup.value = false;
+}
+function setDraftName(name: string) {
+  const rule = draft.value;
+  if (rule) rule.value = { ...rule.value, name };
 }
 function setDraftEnabled(enabled: boolean) {
   const rule = draft.value;
@@ -111,27 +163,42 @@ function setDraftEnabled(enabled: boolean) {
 }
 function saveRule(remove = false) {
   const rule = draft.value;
-  if (!rule) return;
+  const agent = editorAgent.value;
+  if (!rule || !agent?.configured) return;
+  if (!remove) {
+    const name = rule.value.name?.trim() || (creating.value ? t(ruleLabel(rule)) : undefined);
+    rule.value = { ...rule.value, name };
+  }
+  const agentSettings = settingsFor(agent.value);
   const apply = <T extends { id: string }>(items: T[], value: T) => remove
     ? items.filter(item => item.id !== value.id)
     : creating.value ? [...items, value] : items.map(item => item.id === value.id ? value : item);
   if (rule.kind === "delivery") {
-    update({ completionDeliveries: apply(settings.value.completionDeliveries ?? [], rule.value) });
+    update({ completionDeliveries: apply(agentSettings.completionDeliveries ?? [], rule.value) }, agent.value);
   } else {
-    updateFollowup({
-      enabled: followup.value.enabled || (!remove && rule.value.enabled && enableFollowup.value && !draftErrors.value.length),
-      rules: apply(followup.value.rules, rule.value)
-    });
+    const current = agentSettings.planFollowup ?? normalizePlanFollowup(undefined);
+    update({ planFollowup: {
+      ...current,
+      enabled: current.enabled || (!remove && rule.value.enabled && enableFollowup.value && !draftErrors.value.length),
+      rules: apply(current.rules, rule.value)
+    } }, agent.value);
   }
   editorDialog.value = false;
+  selected.value = agent.value;
 }
 </script>
 
 <template>
-  <v-alert v-if="!selectedAgent" type="info" variant="tonal" density="compact">
-    当前角色尚未添加支持钩子的 Agent 端。
-    <router-link :to="routeScopedAdaptersPath(gateway.configName || gateway.id)">前往 Agent 端设置</router-link>
-  </v-alert>
+  <div v-if="!selectedAgent">
+    <div class="automation-toolbar justify-end">
+      <v-btn v-if="supportedOptions.length" color="secondary" variant="tonal" class="text-none" prepend-icon="mdi-plus"
+        @click="openEditor()">新增 Agent 规则</v-btn>
+    </div>
+    <v-alert type="info" variant="tonal" density="compact">
+      当前角色尚未添加支持钩子的 Agent 端。
+      <router-link :to="adaptersPath">前往 Agent 端设置</router-link>
+    </v-alert>
+  </div>
   <div v-else class="automation-rule-layout">
     <AutomationEndpointNav v-model="selected" :options="options" :counts="counts" :label="t('Agent 端')" />
     <section class="automation-rule-content" :aria-label="selectedAgent.title">
@@ -139,7 +206,7 @@ function saveRule(remove = false) {
         <strong>{{ selectedAgent.title }}</strong>
         <div class="d-flex align-center flex-wrap ga-2">
           <v-btn variant="text" prepend-icon="mdi-tune-variant" @click="contextDialog = true">触发与上下文</v-btn>
-          <v-btn color="secondary" variant="tonal" class="text-none" prepend-icon="mdi-plus" @click="creationDialog = true">新增 Agent 规则</v-btn>
+          <v-btn color="secondary" variant="tonal" class="text-none" prepend-icon="mdi-plus" @click="openEditor()">新增 Agent 规则</v-btn>
         </div>
       </div>
       <div v-if="!cards.length" class="empty-state"><span>还没有 Agent 规则</span></div>
@@ -148,7 +215,7 @@ function saveRule(remove = false) {
           class="automation-card" :class="{ disabled: !enabled, warning: errors.length > 0 }"
           :title="errors[0] || ruleTitle(rule)" @click="openEditor(rule)">
           <span class="automation-card-topline">
-            <strong>{{ ruleTitle(rule) }}</strong>
+            <strong :data-no-i18n="rule.value.name ? '' : undefined">{{ ruleTitle(rule) }}</strong>
             <v-chip size="x-small" :color="rule.kind === 'followup' ? 'primary' : 'secondary'" variant="tonal">{{ ruleLabel(rule) }}</v-chip>
           </span>
           <span class="automation-card-bottomline">
@@ -164,51 +231,56 @@ function saveRule(remove = false) {
     </section>
   </div>
 
-  <v-dialog v-model="creationDialog" max-width="480" :aria-label="t('新增 Agent 规则')">
-    <v-card class="app-card">
-      <v-card-title>新增 Agent 规则</v-card-title>
-      <v-card-text class="d-grid ga-2">
-        <v-btn block variant="tonal" color="secondary" prepend-icon="mdi-send-outline" @click="createRule('delivery')">事件投递</v-btn>
-        <v-btn block variant="outlined" prepend-icon="mdi-account-voice" @click="createRule('speech')">TTS 播报</v-btn>
-        <v-btn block variant="outlined" prepend-icon="mdi-message-question-outline" @click="createRule('followup')">自动追问</v-btn>
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="creationDialog = false">取消</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <v-dialog v-model="editorDialog" max-width="760" scrollable class="editor-dialog" :aria-label="t('Agent 规则')">
-    <v-card v-if="draft && selectedAgent" class="app-card editor-dialog-card">
+  <v-dialog v-model="editorDialog" max-width="1200" scrollable class="editor-dialog"
+    :aria-label="t(creating ? '规则预览' : 'Agent 规则')">
+    <v-card v-if="draft && editorAgent" class="app-card editor-dialog-card automation-editor">
       <v-card-title class="automation-editor-head flex-wrap">
         <div>
-          <div class="section-title">{{ ruleLabel(draft) }}</div>
-          <div class="section-note">{{ selectedAgent.title }}</div>
+          <div class="section-title">{{ t(creating ? '规则预览' : 'Agent 规则') }}</div>
+          <div v-if="!creating" class="section-note">{{ editorAgent.title }}</div>
         </div>
-        <v-switch :model-value="draft.value.enabled && !draftErrors.length" :disabled="draftErrors.length > 0"
-          label="启用" color="success" inset hide-details @update:model-value="value => setDraftEnabled(value === true)" />
+        <div class="rule-dialog-actions">
+          <v-switch :model-value="draft.value.enabled && !draftErrors.length" :disabled="!editorAgent.configured || draftErrors.length > 0"
+            label="启用" color="success" inset hide-details @update:model-value="value => setDraftEnabled(value === true)" />
+          <v-btn icon="mdi-close" variant="text" :aria-label="t('关闭')" @click="editorDialog = false" />
+        </div>
       </v-card-title>
       <v-card-text>
-        <template v-if="draft.kind === 'delivery'">
-          <v-alert v-if="draftErrors.length" type="warning" variant="tonal" density="compact" class="mb-4">
-            <div v-for="error in draftErrors" :key="error">{{ error }}</div>
-          </v-alert>
-          <AgentCompletionDeliveryRules :key="draft.value.id" :rule="draft.value" :gateways="gateways"
-            :agent-type="selectedAgent.value" @update:rule="value => draft = { kind: 'delivery', value }" />
-        </template>
-        <template v-else>
-          <PlanFollowupSettings :key="draft.value.id" :rule="draft.value" :role-id="gateway.agentRoleId || ''"
-            @update:rule="value => draft = { kind: 'followup', value }" />
-          <v-checkbox v-if="!followup.enabled" v-model="enableFollowup" :disabled="!draft.value.enabled || draftErrors.length > 0"
-            label="同时启用此 Agent 的自动追问" density="compact" hide-details />
-        </template>
+        <div class="automation-editor-layout" :class="{ 'automation-rule-layout': creating }">
+          <AutomationEndpointNav v-if="creating" :model-value="previewAgent" :options="supportedOptions"
+            :statuses="previewStatuses" :label="t('Agent 端')" @update:model-value="switchPreview" />
+          <div class="automation-rule-content">
+            <v-alert v-if="!editorAgent.configured" type="info" variant="tonal" density="compact" class="mb-4">
+              此 Agent 端尚未为当前角色配置。
+              <router-link :to="adaptersPath" @click="editorDialog = false">前往 Agent 端设置</router-link>
+            </v-alert>
+            <v-text-field :model-value="draft.value.name || ''" :placeholder="t(ruleLabel(draft))" label="规则名称" class="mb-3"
+              @update:model-value="setDraftName" />
+            <v-select v-if="creating" :model-value="draftType" :items="ruleTypes" label="规则类型" class="mb-4"
+              @update:model-value="changeRuleType" />
+            <template v-if="draft.kind === 'delivery'">
+              <v-alert v-if="!creating && editorAgent.configured && draftErrors.length" type="warning" variant="tonal" density="compact" class="mb-4">
+                <div v-for="error in draftErrors" :key="error">{{ error }}</div>
+              </v-alert>
+              <AgentCompletionDeliveryRules :key="draft.value.id" :rule="draft.value" :targets="targets" :gateways="gateways"
+                :qq-directories="qqDirectories" :settings-path="adaptersPath"
+                :agent-type="editorAgent.value" @update:rule="value => draft = { kind: 'delivery', value }" />
+            </template>
+            <template v-else>
+              <PlanFollowupSettings :key="draft.value.id" :rule="draft.value" :role-id="gateway.agentRoleId || ''"
+                @update:rule="value => draft = { kind: 'followup', value }" />
+              <v-checkbox v-if="editorAgent.configured && !previewFollowupEnabled" v-model="enableFollowup"
+                :disabled="!draft.value.enabled || draftErrors.length > 0"
+                label="同时启用此 Agent 的自动追问" density="compact" hide-details />
+            </template>
+          </div>
+        </div>
       </v-card-text>
       <v-card-actions class="pa-4 flex-wrap">
         <v-btn v-if="!creating" variant="text" color="error" prepend-icon="mdi-delete-outline" @click="saveRule(true)">删除规则</v-btn>
         <v-spacer />
         <v-btn variant="text" @click="editorDialog = false">取消</v-btn>
-        <v-btn color="primary" variant="tonal" @click="saveRule()">{{ creating ? '添加规则' : '确定' }}</v-btn>
+        <v-btn color="primary" variant="tonal" :disabled="!editorAgent.configured || (creating && draft.kind === 'delivery' && draftErrors.length > 0)" @click="saveRule()">{{ creating ? '新建' : '确定' }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

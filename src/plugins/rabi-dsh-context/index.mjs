@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { requestHook } from './manager-client.mjs';
+import { hasConfiguredHookRoute, requestHook } from './manager-client.mjs';
 
 function textContent(message) {
   // DSH messages may contain non-text blocks; only forward readable text.
@@ -14,6 +14,8 @@ function contextMessage(text) {
 
 /** Thin lifecycle adapter: all decisions and context remain owned by Manager. */
 export function apply(ctx, config = {}, request = requestHook) {
+  const nativeOwnsEvents = () => ctx.get?.('rabiAgentHooks')?.supportsCompanionTransport === true;
+  ctx.effect?.(() => ctx.provide('rabiDshHookTransport', { hasConfiguredRoute: hasConfiguredHookRoute, request }));
   const starts = new Map();
   const finals = new Map();
   const turns = new Map();
@@ -43,6 +45,10 @@ export function apply(ctx, config = {}, request = requestHook) {
     // Inject SessionStart and user-prompt context immediately before a turn.
     turns.set(agent.id, String(turn));
     const decision = await next();
+    if (nativeOwnsEvents()) {
+      starts.delete(agent.id);
+      return decision;
+    }
     if (decision.kind !== 'enter') return decision;
     const contexts = [];
     if (starts.has(agent.id)) {
@@ -60,7 +66,7 @@ export function apply(ctx, config = {}, request = requestHook) {
   }, { global: true });
   ctx.on('tools/pre-execute', async (exec, next) => {
     // Ask Manager for permission before a tool runs; a denial prevents next().
-    if (!exec.agent) return next();
+    if (!exec.agent || nativeOwnsEvents()) return next();
     const data = await invoke(exec.agent, 'PreToolUse', { toolName: exec.name, toolInput: exec.arguments, toolUseId: exec.callId });
     if (data.toolDecision?.permissionDecision === 'deny') return { kind: 'deny', reason: data.toolDecision.reason };
     if (data.additionalContext) exec.agent.inject(contextMessage(data.additionalContext));
@@ -68,7 +74,7 @@ export function apply(ctx, config = {}, request = requestHook) {
   }, { global: true });
   ctx.on('tools/post-execute', async (exec, result, next) => {
     // Give Manager the tool result and allow it to add follow-up context.
-    if (exec.agent) {
+    if (exec.agent && !nativeOwnsEvents()) {
       const data = await invoke(exec.agent, 'PostToolUse', { toolName: exec.name, toolUseId: exec.callId, toolInput: exec.arguments, toolResponse: result });
       if (data.additionalContext) exec.agent.inject(contextMessage(data.additionalContext));
     }
@@ -77,7 +83,7 @@ export function apply(ctx, config = {}, request = requestHook) {
   ctx.on('agent/turn-stopping', async ({ agent, turn }) => {
     // Close the lifecycle with the final assistant text, then release it.
     const final = finals.get(agent.id);
-    await invoke(agent, 'Stop', { turnId: String(turn), lastAssistantMessage: final?.turn === turn ? final.text : '' });
+    if (!nativeOwnsEvents()) await invoke(agent, 'Stop', { turnId: String(turn), lastAssistantMessage: final?.turn === turn ? final.text : '' });
     finals.delete(agent.id);
   }, { global: true });
   // Remove all per-session state when DSH disposes the agent.

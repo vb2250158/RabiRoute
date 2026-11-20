@@ -56,6 +56,17 @@ test("message grouping keeps one stable QQ account together after its display na
   assert.equal(first?.baseKey, second?.baseKey);
 });
 
+test("QQ official bot grouping isolates accounts and senders in the same chat", () => {
+  const record = { adapterType: "qqbot" as const, gatewayId: "route", instanceId: "bot-a", accountRevision: "v1",
+    groupId: "group", userId: "sender-a", platformMessageId: "platform-id", messageId: "qqbot-message", rawMessage: "hello", time: 1 };
+  const group = (updated: Partial<typeof record>) => messageGroupEnqueueInputForForward("qqbot_group", { ...record, ...updated }, {}, policy, "route");
+  const first = group({});
+  assert.equal(first?.endpoint, "qqbot");
+  assert.equal(first?.key, group({ messageId: "qqbot-second" })?.key);
+  assert.notEqual(first?.key, group({ instanceId: "bot-b" })?.key);
+  assert.notEqual(first?.key, group({ userId: "sender-b" })?.key);
+});
+
 test("message-group merge keeps every fragment, attachment, message id, and strongest route", () => {
   const group: PendingMessageGroup = {
     groupId: "message-group-test",

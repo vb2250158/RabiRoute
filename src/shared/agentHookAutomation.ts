@@ -8,8 +8,19 @@ export const AGENT_HOOK_CONDITIONS = [
 ] as const;
 export const AGENT_HOOK_DESTINATIONS = [
   { value: "napcat", title: "NapCat（QQ）" },
+  { value: "qqbot", title: "QQ 官方机器人" },
+  { value: "weixin", title: "微信机器人" },
+  { value: "wecom", title: "企业微信" },
+  { value: "feishu", title: "飞书" },
   { value: "speech", title: "TTS 播报" }
 ] as const;
+
+export const completionConversationFields: Readonly<Record<string, { field: string; label: string }>> = {
+  qqbot: { field: "sourceMessageId", label: "原 QQ 消息 ID" },
+  weixin: { field: "sessionId", label: "微信会话 ID" },
+  wecom: { field: "chatId", label: "企业微信会话 ID" },
+  feishu: { field: "chatId", label: "飞书会话 ID" }
+};
 
 export type AgentHookSession = { id: string; name: string };
 export type AgentHookCondition = { type: string; path?: string; sessions?: AgentHookSession[] };
@@ -32,11 +43,17 @@ export function validatePlanMessageChannels(value: unknown): void {
 }
 export type AgentCompletionDeliveryRule = {
   id: string;
+  name?: string;
   enabled: boolean;
   event: string;
+  events?: string[];
   conditions: AgentHookCondition[];
   destination: AgentHookDestination;
 };
+
+export function agentHookRuleEvents(rule: Pick<AgentCompletionDeliveryRule, "event" | "events">): readonly string[] {
+  return rule.events ?? (rule.event ? [rule.event] : []);
+}
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -62,6 +79,10 @@ export function normalizeAgentCompletionDeliveries(value: unknown): AgentComplet
       : channel === "speech" ? (text(params.sessionId) ? { sessionId: text(params.sessionId) } : {})
       : Object.fromEntries(Object.entries(params).map(([key, value]) => [key, text(value)]));
     if (channel === "napcat") Object.assign(normalizedParams, fileConversions);
+    if (params.content === "excerpt") normalizedParams.content = "excerpt";
+    for (const key of ["includeAgentType", "includeTaskName"]) {
+      if (params[key] !== undefined) normalizedParams[key] = params[key] === false || params[key] === "false" ? "false" : "true";
+    }
     const conditions: AgentHookCondition[] = legacy
       ? [{ type: "project", path: text(raw.projectPath) }, ...(raw.requireBoundPlan === true ? [{ type: "bound_plan" }] : [])]
       : Array.isArray(raw.conditions) ? raw.conditions.map(item => {
@@ -73,7 +94,10 @@ export function normalizeAgentCompletionDeliveries(value: unknown): AgentComplet
         return { type: text(condition.type), ...(condition.path !== undefined ? { path: text(condition.path) } : {}),
           ...(condition.sessions !== undefined ? { sessions } : {}) };
       }) : [{ type: "invalid" }];
-    return [{ id, enabled: raw.enabled === true, event: legacy ? "task_completed" : text(raw.event), conditions,
+    const name = text(raw.name);
+    const events = Array.isArray(raw.events) ? [...new Set(raw.events.map(text).filter(Boolean))] : undefined;
+    const event = events ? events[0] ?? "" : legacy ? "task_completed" : text(raw.event);
+    return [{ id, ...(name ? { name } : {}), enabled: raw.enabled === true, event, ...(events ? { events } : {}), conditions,
       destination: legacy
         ? { channel: "napcat", gatewayId: text(raw.gatewayId), params: { target: "group", targetId: text(raw.groupId), instanceId: text(raw.instanceId) } }
         : { channel, gatewayId: text(destination.gatewayId), params: normalizedParams } }];
@@ -91,7 +115,10 @@ export function agentHookConditionErrors(condition: AgentHookCondition): string[
 
 export function agentHookRuleErrors(rule: AgentCompletionDeliveryRule): string[] {
   const errors: string[] = [];
-  if (!AGENT_HOOK_EVENTS.some(event => event.value === rule.event)) errors.push("请选择支持的事件。");
+  const events = agentHookRuleEvents(rule);
+  if (!events.length || events.some(value => !AGENT_HOOK_EVENTS.some(event => event.value === value))) {
+    errors.push("请选择支持的事件。");
+  }
   const seen = new Set<string>();
   for (const condition of rule.conditions) {
     errors.push(...agentHookConditionErrors(condition));
@@ -101,6 +128,11 @@ export function agentHookRuleErrors(rule: AgentCompletionDeliveryRule): string[]
   const destination = rule.destination;
   if (!destination.gatewayId) errors.push("请选择消息路线。");
   if (!AGENT_HOOK_DESTINATIONS.some(item => item.value === destination.channel)) errors.push("请选择支持的消息端。");
+  const conversation = completionConversationFields[destination.channel];
+  if (conversation && !destination.params[conversation.field]?.trim()) errors.push("请填写" + conversation.label + "。");
+  if (destination.channel === "qqbot" && destination.params.sourceMessageId && !/^qqbot-\S+$/.test(destination.params.sourceMessageId)) {
+    errors.push("请填写聊天记录里的原 QQ 消息 ID。");
+  }
   if (destination.channel === "napcat") {
     if (!destination.params.instanceId) errors.push("请选择 QQ 账号。");
     if (!["group", "private"].includes(destination.params.target)) errors.push("请选择群或个人 QQ。");

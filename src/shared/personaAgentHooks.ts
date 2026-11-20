@@ -1,4 +1,4 @@
-import { agentAdapterManifest, agentAdapterSupportsLifecycleHooks, type AgentAdapterType } from "./agentAdapterCapabilities.js";
+import { agentAdapterManifest, agentAdapterSupportsLifecycleHooks, agentAdapterTypes, type AgentAdapterType } from "./agentAdapterCapabilities.js";
 import type { GatewayDefinition } from "./gatewayConfigModel.js";
 
 /** Configuration is the source of availability; discovery does not add an Agent end. */
@@ -9,5 +9,8 @@ export function configuredPersonaHookAgents(gateways: readonly GatewayDefinition
 }
 
 export function personaHookAgentOptions(gateways: readonly GatewayDefinition[], roleId: string) {
-  return configuredPersonaHookAgents(gateways, roleId).map(value => ({ value, title: agentAdapterManifest(value).label }));
+  const configured = new Set(configuredPersonaHookAgents(gateways, roleId));
+  return agentAdapterTypes.filter(agentAdapterSupportsLifecycleHooks)
+    .map(value => ({ value, title: agentAdapterManifest(value).label, configured: configured.has(value) }))
+    .sort((left, right) => Number(right.configured) - Number(left.configured));
 }

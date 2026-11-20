@@ -38,7 +38,7 @@ function update(value: unknown): void {
 <template>
   <div class="speech-parameter-slider">
     <div class="speech-parameter-copy">
-      <strong>{{ label }}</strong>
+      <strong>{{ label }} <slot name="label-end" /></strong>
       <span v-if="hint">{{ hint }}</span>
     </div>
     <v-slider

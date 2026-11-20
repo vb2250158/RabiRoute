@@ -1,4 +1,4 @@
-import { validateAgentDeliveryTarget, type AgentSessionDestination, type AgentDsBotDestination } from "../shared/agentDeliveryTarget.js";
+import { agentSessionSendTiming, validateAgentDeliveryTarget, type AgentSessionDestination, type AgentDsBotDestination } from "../shared/agentDeliveryTarget.js";
 import type { RabiDeliveryEnvelope } from "../shared/rabiMessage.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -117,6 +117,11 @@ export async function sendAutomationSession(
     && result.delivery.targetThreadId === target.sessionId && result.delivery.deliveryId === deliveryId;
   try {
     const result = await request({ ...identity, action: "send", ...(target.agentAdapter === "grokBot" ? {} : { cwd: target.workspace }), createIfMissing: false,
+      ...(target.agentAdapter === "dsh" && target.sendTiming
+        ? { dshDeliveryMode: agentSessionSendTiming(target) === "queue" ? "queue" : "steer" }
+        : target.dshDeliveryMode ? { dshDeliveryMode: target.dshDeliveryMode } : {}),
+      ...(target.agentAdapter === "codex" && agentSessionSendTiming(target) === "queue" ? { codexDeliveryMode: "queue" } : {}),
+      ...(target.agentAdapter === "workbuddy" && agentSessionSendTiming(target) === "direct" ? { workbuddyDeliveryMode: "direct" } : {}),
       prompt: envelope.messageContent, messageSource: envelope.messageSource,
       contextBlocks: envelope.contextBlocks, controlBlocks: envelope.controlBlocks,
       imagePaths: options.imagePaths ?? [], ...(target.agentAdapter === "grokBot" ? {} : { model: options.model }), responsePolicy: "none" });

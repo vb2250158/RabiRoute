@@ -68,7 +68,29 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
       if (device) return { app, device, receipt: active?.hostAccountReceipt || staged.receipt };
     }
   }
+  function ownerAccount(store, token) {
+    const match = findPcCredential(store, token);
+    if (!match || !isHostAccountScope(match.app)) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
+    const account = store.accounts.find(item => item.id === match.app.ownerAccountId);
+    if (!account) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
+    return { store, account };
+  }
   return {
+    profile(token, username) {
+      const { store, account } = ownerAccount(readStore(), token);
+      if (username === undefined) return { id: account.id, username: account.username };
+      const name = typeof username === 'string' ? username.trim() : '';
+      if (!/^[\p{L}\p{N}_@.-]{3,48}$/u.test(name)) fail(400, 'HOST_ACCOUNT_USERNAME_INVALID');
+      if (store.accounts.some(item => item.id !== account.id && item.username.toLowerCase() === name.toLowerCase())) {
+        fail(409, 'HOST_ACCOUNT_USERNAME_TAKEN');
+      }
+      if (account.username !== name) {
+        account.username = name;
+        account.updatedAt = new Date().toISOString();
+        writeStore(store);
+      }
+      return { id: account.id, username: account.username };
+    },
     avatar(token, image) {
       const store = readStore();
       const match = findPcCredential(store, token);

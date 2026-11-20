@@ -1,15 +1,19 @@
 <script setup lang="ts">
+import AutomationParameterHelp from "./AutomationParameterHelp.vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, ref, watch } from "vue";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
-import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
-  type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookDestination, type AgentHookSession } from "@shared/agentHookAutomation";
+import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, agentHookRuleErrors, agentHookRuleEvents,
+  type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookSession } from "@shared/agentHookAutomation";
 import AgentHookConditionDialog from "./AgentHookConditionDialog.vue";
 import { usePersonaService } from "../persona/personaServiceClient";
+import { completionTargetKey, completionTargetLabel, type completionTargetChoices } from "../persona/agentCompletionTargets";
+import type { AutomationQqDirectory } from "../persona/automationRuleConversation";
 const fetch = usePersonaService().fetch;
 
-const props = defineProps<{ rule: AgentCompletionDeliveryRule; gateways: GatewayDefinition[]; agentType: AgentAdapterType }>();
+const props = defineProps<{ rule: AgentCompletionDeliveryRule; gateways: GatewayDefinition[]; agentType: AgentAdapterType;
+  targets: ReturnType<typeof completionTargetChoices>; qqDirectories: readonly AutomationQqDirectory[]; settingsPath: string }>();
 const emit = defineEmits<{ "update:rule": [value: AgentCompletionDeliveryRule] }>();
 const projects = ref<string[]>([]);
 const loading = ref(false);
@@ -59,22 +63,33 @@ async function scanSessions(more = false) {
   } catch (cause) { error.value = userFacingError(cause); }
   finally { sessionLoading.value = false; }
 }
-const routes = computed(() => props.gateways.map(item => ({ title: item.name || item.id, value: item.id })));
-const qqTypes = [{ title: "群", value: "group" }, { title: "个人 QQ", value: "private" }];
-function instances(rule: AgentCompletionDeliveryRule) {
-  return (props.gateways.find(item => item.id === rule.destination.gatewayId)?.napcatInstances ?? [])
-    .filter(item => item.enabled !== false).map(item => ({ title: item.name || item.id, value: item.id }));
+const events = computed(() => agentHookRuleEvents(props.rule));
+function toggleEvent(event: string, selected: boolean) {
+  const next = selected ? [...events.value, event] : events.value.filter(value => value !== event);
+  update({ events: next, event: next[0] ?? "" });
+}
+const targetKey = computed(() => props.rule.destination.gatewayId ? completionTargetKey(props.rule.destination) : null);
+const targetOptions = computed(() => {
+  if (!targetKey.value || props.targets.some(item => item.value === targetKey.value)) return props.targets;
+  const title = completionTargetLabel(props.rule.destination, props.gateways, props.qqDirectories);
+  return [{ value: targetKey.value, title, destination: props.rule.destination }, ...props.targets];
+});
+const contentTypes = [{ title: "完整正文", value: "full" }, { title: "正文摘录（最多 500 字）", value: "excerpt" }];
+const formatKeys = ["content", "includeAgentType", "includeTaskName", "includeFiles", "renderTables", "renderDiagrams",
+  "markdownFilesAsImages", "imageFilesAsImages", "htmlFilesAsLinks"];
+function chooseTarget(key: string) {
+  const target = targetOptions.value.find(item => item.value === key)?.destination;
+  if (!target || key === targetKey.value) return;
+  const format = Object.fromEntries(Object.entries(props.rule.destination.params).filter(([name]) => formatKeys.includes(name)));
+  update({ destination: { ...target, params: { ...target.params, ...format } } });
 }
 function update(patch: Partial<AgentCompletionDeliveryRule>) {
   const next = { ...props.rule, ...patch };
   if (agentHookRuleErrors(next).length) next.enabled = false;
   emit("update:rule", next);
 }
-function destination(patch: Partial<AgentHookDestination>) {
-  update({ destination: { ...props.rule.destination, ...patch } });
-}
 function params(patch: Record<string, string>) {
-  destination({ params: { ...props.rule.destination.params, ...patch } });
+  update({ destination: { ...props.rule.destination, params: { ...props.rule.destination.params, ...patch } } });
 }
 async function scanProjects() {
   loading.value = true; error.value = "";
@@ -96,9 +111,10 @@ async function scanProjects() {
   <section class="hook-delivery-rules">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <div class="hook-rule-section">
-      <div class="hook-rule-label">事件</div>
-      <v-select :model-value="rule.event" :items="AGENT_HOOK_EVENTS" label="选择事件" hide-details
-        @update:model-value="value => update({ event: value || '' })" />
+      <div class="hook-rule-label">触发事件</div>
+      <v-checkbox v-for="event in AGENT_HOOK_EVENTS" :key="event.value" :label="event.title"
+        :model-value="events.includes(event.value)" density="compact" hide-details
+        @update:model-value="value => toggleEvent(event.value, value === true)" />
     </div>
     <div class="hook-rule-section">
       <div class="d-flex align-center justify-space-between mb-2">
@@ -120,41 +136,57 @@ async function scanProjects() {
     </div>
     <div class="hook-rule-section">
       <div class="hook-rule-label">投递至消息端</div>
-      <div class="hook-destination-grid">
-        <v-select :model-value="rule.destination.channel" :items="AGENT_HOOK_DESTINATIONS" label="消息端类型" hide-details
-          @update:model-value="value => destination({ channel: value || '', params: value === 'napcat' ? { target: 'group', targetId: '', instanceId: '', includeFiles: 'true', markdownFilesAsImages: 'true', imageFilesAsImages: 'true', htmlFilesAsLinks: 'true', renderDiagrams: 'true', renderTables: 'true' } : {} })" />
-        <v-select :model-value="rule.destination.gatewayId" :items="routes" label="消息路线" hide-details
-          @update:model-value="value => destination({ gatewayId: value || '', params: { ...rule.destination.params, instanceId: '' } })" />
-        <template v-if="rule.destination.channel === 'napcat'">
-          <v-select :model-value="rule.destination.params.instanceId" :items="instances(rule)" label="QQ 账号" hide-details
-            @update:model-value="value => params({ instanceId: value || '' })" />
-          <v-select :model-value="rule.destination.params.target" :items="qqTypes" label="类型" hide-details
-            @update:model-value="value => params({ target: value || '', targetId: '' })" />
-          <v-text-field :model-value="rule.destination.params.targetId" :label="rule.destination.params.target === 'private' ? 'QQ 号' : '群号'" inputmode="numeric" hide-details
-            @update:model-value="value => params({ targetId: value.trim() })" />
-        </template>
+      <v-autocomplete v-if="targetOptions.length" :model-value="targetKey" :items="targetOptions" label="投递目标"
+        placeholder="选择已绑定的消息端会话" variant="outlined" hide-details @update:model-value="chooseTarget" />
+      <p v-else class="section-note">
+        当前角色还没有可选的投递目标。
+        <router-link :to="settingsPath">前往消息端设置</router-link>
+      </p>
+    </div>
+    <div class="hook-rule-section">
+      <div class="hook-rule-label">消息格式</div>
+      <v-select :model-value="rule.destination.params.content || 'full'" :items="contentTypes" label="回复内容" hide-details
+        @update:model-value="value => params({ content: value || 'full' })" />
+      <div class="d-flex flex-wrap ga-4 mt-2">
+        <v-checkbox :model-value="rule.destination.params.includeAgentType !== 'false'" label="包含 Agent 类型" density="compact" hide-details
+          @update:model-value="value => params({ includeAgentType: value ? 'true' : 'false' })" />
+        <v-checkbox :model-value="rule.destination.params.includeTaskName !== 'false'" label="包含任务名称" density="compact" hide-details
+          @update:model-value="value => params({ includeTaskName: value ? 'true' : 'false' })" />
       </div>
-      <v-checkbox v-if="rule.destination.channel === 'napcat'"
-        :model-value="rule.destination.params.renderTables !== 'false'" label="自动渲染表格" hide-details
-        @update:model-value="value => params({ renderTables: value ? 'true' : 'false' })" />
-      <p v-if="rule.destination.channel === 'napcat'" class="section-note">将 Markdown 表格转换为图片，按原文顺序与正文混排发送。</p>
-      <v-checkbox v-if="rule.destination.channel === 'napcat'"
-        :model-value="rule.destination.params.renderDiagrams !== 'false'" label="自动识别流程图/架构图" hide-details
-        @update:model-value="value => params({ renderDiagrams: value ? 'true' : 'false' })" />
-      <p v-if="rule.destination.channel === 'napcat'" class="section-note">将 Mermaid 图表转换为图片，按原文顺序图文混排；转换失败时保留源码。</p>
-      <v-checkbox v-if="rule.destination.channel === 'napcat'"
-        :model-value="rule.destination.params.includeFiles !== 'false'" label="自动投递包括文件" hide-details
-        @update:model-value="value => params({ includeFiles: value ? 'true' : 'false' })" />
-      <p v-if="rule.destination.channel === 'napcat'" class="section-note">投递回复中链接的本地文件；按下方选项处理，同一文件只投递一次。</p>
-      <div v-if="rule.destination.channel === 'napcat' && rule.destination.params.includeFiles !== 'false'" class="ms-6">
-        <v-checkbox :model-value="rule.destination.params.markdownFilesAsImages !== 'false'" label="MD附件自动转换为图片" hide-details
-          @update:model-value="value => params({ markdownFilesAsImages: value ? 'true' : 'false' })" />
-        <v-checkbox :model-value="rule.destination.params.imageFilesAsImages !== 'false'" label="图片附件转换为图片" hide-details
-          @update:model-value="value => params({ imageFilesAsImages: value ? 'true' : 'false' })" />
-        <v-checkbox :model-value="rule.destination.params.htmlFilesAsLinks !== 'false'" label="HTML转换为链接" hide-details
-          @update:model-value="value => params({ htmlFilesAsLinks: value ? 'true' : 'false' })" />
-        <p class="section-note">HTML 保存在此电脑。浏览器通过 RabiLink 获取连接信息，再依次尝试局域网、P2P 和 Relay。服务器不缓存 HTML；持有完整链接的人可查看，电脑需保持在线。关闭对应选项时发送原文件。</p>
-      </div>
+      <details v-if="rule.destination.channel === 'napcat'" class="mt-3">
+        <summary>表格、图表与附件</summary>
+        <v-checkbox v-if="rule.destination.channel === 'napcat'"
+          :model-value="rule.destination.params.renderTables !== 'false'" label="自动渲染表格" hide-details
+          @update:model-value="value => params({ renderTables: value ? 'true' : 'false' })" >
+          <template #append><AutomationParameterHelp text="把 Markdown 表格渲染为图片，并按原文顺序发送。" /></template>
+        </v-checkbox>
+        <v-checkbox v-if="rule.destination.channel === 'napcat'"
+          :model-value="rule.destination.params.renderDiagrams !== 'false'" label="自动识别流程图/架构图" hide-details
+          @update:model-value="value => params({ renderDiagrams: value ? 'true' : 'false' })" >
+          <template #append><AutomationParameterHelp text="把支持的 Mermaid 图表渲染为图片。渲染失败时发送原文。" /></template>
+        </v-checkbox>
+        <p v-if="rule.destination.channel === 'napcat'" class="section-note">将 Mermaid 图表转换为图片，按原文顺序图文混排；转换失败时保留源码。</p>
+        <v-checkbox v-if="rule.destination.channel === 'napcat'"
+          :model-value="rule.destination.params.includeFiles !== 'false'" label="自动投递包括文件" hide-details
+          @update:model-value="value => params({ includeFiles: value ? 'true' : 'false' })" >
+          <template #append><AutomationParameterHelp text="发送回复中链接的本地文件。相同文件在同一轮只处理一次。" /></template>
+        </v-checkbox>
+        <div v-if="rule.destination.channel === 'napcat' && rule.destination.params.includeFiles !== 'false'" class="ms-6">
+          <v-checkbox :model-value="rule.destination.params.markdownFilesAsImages !== 'false'" label="MD附件自动转换为图片" hide-details
+            @update:model-value="value => params({ markdownFilesAsImages: value ? 'true' : 'false' })" >
+            <template #append><AutomationParameterHelp text="将 Markdown 附件渲染为图片，否则发送原文件。" /></template>
+          </v-checkbox>
+          <v-checkbox :model-value="rule.destination.params.imageFilesAsImages !== 'false'" label="图片附件转换为图片" hide-details
+            @update:model-value="value => params({ imageFilesAsImages: value ? 'true' : 'false' })" >
+            <template #append><AutomationParameterHelp text="让图片附件直接显示为图片。" /></template>
+          </v-checkbox>
+          <v-checkbox :model-value="rule.destination.params.htmlFilesAsLinks !== 'false'" label="HTML转换为链接" hide-details
+            @update:model-value="value => params({ htmlFilesAsLinks: value ? 'true' : 'false' })" >
+            <template #append><AutomationParameterHelp text="生成 RabiLink 可访问的链接。查看时需能连接保存文件的电脑。" /></template>
+          </v-checkbox>
+          <p class="section-note">HTML 保存在此电脑。浏览器通过 RabiLink 获取连接信息，再依次尝试局域网、P2P 和 Relay。服务器不缓存 HTML；持有完整链接的人可查看，电脑需保持在线。关闭对应选项时发送原文件。</p>
+        </div>
+      </details>
       <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的角色声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
     </div>
     <AgentHookConditionDialog v-model="conditionDialog" :condition="editedCondition" :used-types="usedConditionTypes"
@@ -171,6 +203,4 @@ async function scanProjects() {
 .hook-rule-label { font-weight: 600; margin-bottom: 12px; }
 .hook-condition { padding: 12px; margin-bottom: 8px; background: rgba(var(--v-theme-on-surface), 0.035); border-radius: 8px; }
 .condition-summary { overflow-wrap: anywhere; }
-.hook-destination-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 600px) { .hook-destination-grid { grid-template-columns: 1fr; } }
 </style>

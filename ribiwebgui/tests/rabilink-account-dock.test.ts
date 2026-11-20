@@ -92,3 +92,88 @@ test("the account dock opens login directly or saves a missing server before log
     scope.stop();
   }
 });
+
+function mountDock(fetchImpl: (path: string, init: any) => Promise<any>) {
+  const file = new URL("../src/components/RabiAccountDock.vue", import.meta.url);
+  const source = fs.readFileSync(file, "utf8");
+  const { descriptor } = parse(source);
+  const code = transformSync(compileScript(descriptor, { id: "account-dock" }).content,
+    { loader: "ts", format: "cjs" }).code;
+  const require = createRequire(file);
+  const vue = require("vue");
+  const store = { meta: vue.reactive({ rabiLinkRelay: { enabled: true, url: "https://relay.example.test/" } }) };
+  const module = { exports: {} as any };
+  vm.runInNewContext(code, {
+    module, exports: module.exports, URL, AbortController, AbortSignal,
+    require: (name: string) => {
+      if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
+      if (name.includes("gatewayStore")) return { useGatewayStore: () => store };
+      if (name.endsWith("managerApi")) return {};
+      if (name.endsWith("timeoutSettingsClient")) return { getTimeoutMs: () => 15000 };
+      if (name.endsWith("webguiLanRedirect")) return { isLoopbackHostname: () => false };
+      throw new Error(name);
+    },
+    fetch: fetchImpl
+  });
+  const scope = vue.effectScope();
+  const dock = scope.run(() => module.exports.default.setup({}, { expose() {} }));
+  return { dock, scope };
+}
+
+test("the profile dialog saves the username and a picked avatar together", async () => {
+  const writes: Array<{ path: string; method: string; body: any }> = [];
+  const { dock, scope } = mountDock(async (path: string, init: any) => {
+    const method = init?.method || "GET";
+    if (method === "GET" && path.endsWith("/profile")) {
+      return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "b2250158" }) };
+    }
+    if (method === "GET" && path.endsWith("/avatar")) {
+      return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: null }) };
+    }
+    if (method === "GET") return { ok: true, status: 200, json: async () => ({ account: { id: "fixture-id", username: "b2250158" } }) };
+    writes.push({ path, method, body: JSON.parse(String(init.body)) });
+    if (path.endsWith("/profile")) return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "夜雨" }) };
+    return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: "AAAA" }) };
+  });
+  try {
+    dock.account.value = { id: "fixture-id", username: "b2250158" };
+    dock.open("profile");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(dock.dialog.value, "profile");
+    assert.equal(dock.draftName.value, "b2250158");
+    assert.equal(dock.nameUnavailable.value, "");
+    assert.equal(dock.profileDirty.value, false);
+    dock.draftName.value = "夜雨";
+    dock.draft.value = "data:image/png;base64,AAAA";
+    assert.equal(dock.profileDirty.value, true);
+    await dock.saveProfile();
+    assert.deepEqual(writes, [
+      { path: "/api/rabilink/host-account/profile", method: "POST", body: { accountId: "fixture-id", username: "夜雨" } },
+      { path: "/api/rabilink/host-account/avatar", method: "POST", body: { accountId: "fixture-id", avatar: "AAAA" } }
+    ]);
+    assert.equal(dock.account.value.username, "夜雨");
+    assert.equal(dock.dialog.value, null);
+    assert.equal(dock.error.value, "");
+  } finally {
+    scope.stop();
+  }
+});
+
+test("the profile dialog keeps the name field disabled when the server cannot rename", async () => {
+  const { dock, scope } = mountDock(async (path: string) => {
+    if (path.endsWith("/profile")) {
+      return { ok: false, status: 404, json: async () => ({ code: "RABILINK_RELAY_PROFILE_UNAVAILABLE", message: "此服务器版本暂不支持修改用户名。" }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: null }) };
+  });
+  try {
+    dock.account.value = { id: "fixture-id", username: "b2250158" };
+    dock.open("profile");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(dock.nameUnavailable.value, "当前服务器版本暂不支持修改用户名。");
+    dock.draft.value = "data:image/png;base64,AAAA";
+    assert.equal(dock.profileDirty.value, true);
+  } finally {
+    scope.stop();
+  }
+});

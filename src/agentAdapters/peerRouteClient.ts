@@ -15,7 +15,7 @@ export async function requestPeerRouteDelivery(binding: AgentInstanceBinding, pa
   const token = process.env.LAN_AGENT_ACCESS_TOKEN?.trim();
   const body = { instanceId: binding.instanceId, provider: payload.agentAdapter, threadId: payload.threadId, deliveryId,
     ...(!receiptQuery ? { prompt: payload.prompt, cwd: payload.cwd, model: payload.model, reasoningEffort: payload.reasoningEffort,
-      sandbox: payload.sandbox, dshDeliveryMode: payload.dshDeliveryMode } : {}) };
+      sandbox: payload.sandbox, dshDeliveryMode: payload.dshDeliveryMode, codexDeliveryMode: payload.codexDeliveryMode, workbuddyDeliveryMode: payload.workbuddyDeliveryMode } : {}) };
   const responseReceipt = { action: payload.action || "send", agentAdapter: payload.agentAdapter, threadId: payload.threadId,
     ok: false, status: "delivery_unconfirmed", delivery: { deliveryId, state: "uncertain", status: "unconfirmed" } };
   try {
@@ -27,9 +27,11 @@ export async function requestPeerRouteDelivery(binding: AgentInstanceBinding, pa
     if (!response.ok || result.code !== 0) throw Object.assign(new Error(result.message || `Peer native operation failed: HTTP ${response.status}`), { statusCode: response.status,
       response: result.commitState === "not_started" ? { ...result, deliveryId, error: { commitState: "not_started", message: result.message } }
         : { ...result, delivery: responseReceipt.delivery } });
-    const accepted = result.result?.status === "delivered";
+    const receiptEvidence = (result as { receipt?: { endpoint?: { sessionId?: string }; deliveryId?: string } }).receipt;
+    const accepted = result.result?.status === "delivered" && receiptEvidence?.endpoint?.sessionId === payload.threadId && receiptEvidence?.deliveryId === deliveryId;
     const receipt = { ...responseReceipt, ok: accepted, status: accepted ? "delivered" : "delivery_unconfirmed",
-      delivery: { deliveryId, state: result.delivery?.state || (accepted ? "accepted" : "uncertain"), status: accepted ? "delivered" : "unconfirmed" } };
+      delivery: { deliveryId, state: result.delivery?.state || (accepted ? "accepted" : "uncertain"), status: accepted ? "delivered" : "unconfirmed",
+        ...(accepted ? { targetThreadId: receiptEvidence?.endpoint?.sessionId } : {}) } };
     if (receiptQuery) return receipt;
     if (!accepted) throw Object.assign(new Error("Native delivery is unconfirmed; query the original receipt before retry."), { response: receipt, statusCode: 202, code: PEER_NATIVE_DELIVERY_UNCONFIRMED });
     return receipt;

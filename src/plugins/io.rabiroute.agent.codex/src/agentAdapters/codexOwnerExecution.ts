@@ -46,7 +46,7 @@ export async function recoverEndpointOwnerReceipt(delivery: NativeOwnerDeliveryE
 export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, _options: Pick<AgentThreadRequestOptions, "dshBaseUrl">,
   assertAuthorized: () => void | Promise<void>, transport: { sendCodex: CodexNativeOperations["sendCodexThreadMessage"] }) {
   const endpoint = delivery.target;
-  const { cwd, model, reasoningEffort, sandbox } = delivery.executionOptions;
+  const { cwd, model, reasoningEffort, sandbox, codexDeliveryMode } = delivery.executionOptions;
   await assertAuthorized();
   const thread = readCodexDesktopThread(endpoint.sessionId);
   if (!thread || thread.id !== endpoint.sessionId || thread.archived) {
@@ -71,7 +71,8 @@ export async function executeEndpointOnOwner(delivery: NativeOwnerDelivery, _opt
     await assertAuthorized();
     return await transport.sendCodex({ threadId: endpoint.sessionId, prompt: delivery.prompt, cwd,
       imagePaths: delivery.executionOptions.localImages?.map(image => image.path),
-      sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized });
+      sandbox: sandbox ?? "workspace-write", model, reasoningEffort, assertAuthorized,
+      ...(codexDeliveryMode ? { deliveryMode: codexDeliveryMode } : {}) });
   } catch (error) {
     if (error instanceof CodexDesktopPromptNotSentError) throw new EndpointDeliveryNotSentError(error);
     throw error;

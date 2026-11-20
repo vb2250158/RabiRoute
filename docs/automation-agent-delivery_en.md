@@ -4,6 +4,16 @@ English | [简体中文](automation-agent-delivery.md)
 
 Agent settings define recipients and execution parameters. Persona automation rules select the recipient for each message. Configuring a primary Agent, secretary, or message pool does not redirect other rules.
 
+## Delivery modes and preview
+
+Select a message endpoint under Automation in the role configuration. Hover over or focus a question mark for field help. Preview evaluates a sample against the shared rule matcher and lists every matching rule, its Agent target, and candidate completion notifications. It sends no messages.
+
+An existing Codex, DSH, or WorkBuddy session supports direct or queued delivery. Direct delivery can add to an active turn and starts a turn when idle. Queued delivery waits until the current turn ends. Both modes use the original session.
+
+Consecutive messages can be handled separately, grouped only for the message-processing Agent, or grouped before applying all delivery rules. QQ Bot can opt into grouping. Existing configurations keep their prior defaults.
+
+Agent completion rules can send to WeChat, QQ Bot, WeCom, Feishu, NapCat, or speech. The newly available chat channels send text through their existing delivery interfaces. QQ Bot uses an original message ID and follows the platform's reply capabilities.
+
 ## Configure a rule
 
 Open **Persona → Automation**, edit a rule, and choose **Delivery target** under **Notify Agent**:
@@ -77,7 +87,9 @@ Both PC and Relay need the sharing protocol update. An outdated Relay, missing c
 
 Deployment maintenance: forward the Relay `/share/*` page, handshake and WebSocket paths to the same Relay service. Full deployment templates include this route. `RuntimeOnly` preserves the existing Caddy configuration, so publish the matching route through the existing reverse-proxy deployment entry. One runtime manifest drives plugin asset copying, backup and recovery.
 
-Open Role → Automation → Agent rules, select an Agent, and click Add Agent rule. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules. Open a rule card to edit, enable, or delete it, then click Save at the top of the role page.
+Open Role → Automation → Agent rules and click Add Agent rule. The preview sidebar lists supported Agents and shows which are configured for the role. Select a configured Agent, enter a rule name, and choose a rule type before creating it. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules. Open a rule card to edit, enable, or delete it, then click Save at the top of the role page.
+
+Under Delivery target, select a bound conversation or voice endpoint for the role. The selector fills in the endpoint, route, and conversation parameters. A listed trigger event must match along with all conditions. Under Message format, you can independently turn off the Agent type and task name. Both are included by default.
 
 NapCat (QQ) event delivery rules provide **Include files in automatic delivery**, checked by default. Existing rules without `destination.params.includeFiles` also include files; the string `"false"` opts out and `"true"` enables it explicitly. This setting is saved with the role's Hook rules for each Agent.
 
