@@ -8,6 +8,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.55 - 2026-11-20
+
+- Switch an existing Agent rule from the sidebar while retaining its name, destination and common conditions. Saving moves the rule; session restrictions must be selected for the new Agent. Persona 0.1.33 updates independently on the 0.15.54 full-application baseline.
 
 ## 0.15.54 - 2026-11-20
 

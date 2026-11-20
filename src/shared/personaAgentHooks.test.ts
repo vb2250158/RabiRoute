@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { agentHookSettingsFor, normalizeCodexHookSettings, type GatewayDefinition } from "./gatewayConfigModel.js";
 import { agentAdapterTypes, agentAdapterSupportsLifecycleHooks } from "./agentAdapterCapabilities.js";
-import { configuredPersonaHookAgents, personaHookAgentOptions } from "./personaAgentHooks.js";
+import { configuredPersonaHookAgents, editPersonaAgentRule, personaHookAgentOptions } from "./personaAgentHooks.js";
 
 test("Hook choices come from configured local ends, excluding disabled routes and other owners", () => {
   const routes = [
@@ -43,4 +43,22 @@ test("per-Agent overrides round-trip independently and old persona settings stay
   assert.equal(loaded.byAgent?.dsh?.completionDeliveries?.[0]?.name, "Completion notice");
   assert.equal(loaded.byAgent?.dsh?.planFollowup?.rules[0]?.name, "Check release");
   assert.deepEqual(Object.keys(loaded.byAgent!), ["dsh"]);
+});
+
+test("moving a follow-up keeps unrelated target rules and preserves both Agents' settings", () => {
+  const rule = { id: "same", enabled: true, statusKeys: ["active"], prompt: "Check the source" };
+  const targetRule = { ...rule, prompt: "Check the destination" };
+  const settings = normalizeCodexHookSettings({ byAgent: {
+    dsh: { sessionContextEnabled: false, planFollowup: { enabled: true, cooldownSeconds: 60, rules: [rule] } },
+    codex: { reasoningContextEnabled: false, planFollowup: { enabled: false, cooldownSeconds: 240, rules: [targetRule] } }
+  } });
+  const result = editPersonaAgentRule(settings, { targetAgent: "codex", sourceAgent: "dsh",
+    rule: { kind: "followup", value: rule }, createId: () => "moved" });
+  assert.equal(result.byAgent?.dsh?.sessionContextEnabled, false);
+  assert.deepEqual(result.byAgent?.dsh?.planFollowup, { enabled: true, cooldownSeconds: 60, rules: [] });
+  assert.equal(result.byAgent?.codex?.reasoningContextEnabled, false);
+  assert.deepEqual(result.byAgent?.codex?.planFollowup, {
+    enabled: false, cooldownSeconds: 240, rules: [targetRule, { ...rule, id: "moved" }]
+  });
+  assert.deepEqual(settings.byAgent?.dsh?.planFollowup?.rules, [rule]);
 });

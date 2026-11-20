@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { agentHookSettingsFor, type CodexHookSettings, type GatewayDefinition, type PersonaAutomationRuleDefinition } from "@shared/gatewayConfigModel";
-import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents, type AgentCompletionDeliveryRule } from "@shared/agentHookAutomation";
-import { normalizePlanFollowup, type PlanFollowupRule, type PlanFollowupSettings as FollowupSettings } from "@shared/planFollowup";
+import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents, type AgentHookSession } from "@shared/agentHookAutomation";
+import { normalizePlanFollowup, type PlanFollowupSettings as FollowupSettings } from "@shared/planFollowup";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
-import { personaHookAgentOptions } from "@shared/personaAgentHooks";
+import { editPersonaAgentRule, personaAgentHookDraft, personaHookAgentOptions, type PersonaAgentRule as Rule } from "@shared/personaAgentHooks";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import { routeScopedAdaptersPath } from "../../../../../ribiwebgui/src/routeScopedNavigation";
@@ -21,7 +21,6 @@ const defaultRoute = computed(() => props.gateways[0] ?? props.gateway);
 const adaptersPath = computed(() => routeScopedAdaptersPath(defaultRoute.value.configName || defaultRoute.value.id));
 const targets = computed(() => completionTargetChoices(props.gateway, props.gateways, props.messageRules, props.qqDirectories, props.modelValue));
 const emit = defineEmits<{ "update:modelValue": [value: CodexHookSettings] }>();
-type Rule = { kind: "followup"; value: PlanFollowupRule } | { kind: "delivery"; value: AgentCompletionDeliveryRule };
 const { t } = useI18n();
 const selected = ref("");
 const contextDialog = ref(false);
@@ -30,6 +29,9 @@ const creating = ref(false);
 const draft = ref<Rule>();
 const enableFollowup = ref(false);
 const previewAgent = ref("");
+const sourceAgent = ref<AgentAdapterType>();
+const moving = computed(() => Boolean(sourceAgent.value && sourceAgent.value !== previewAgent.value));
+const sessionSelections = new Map<AgentAdapterType, Map<string, AgentHookSession[] | undefined>>();
 const previewDrafts = new Map<AgentAdapterType, { rule: Rule; enableFollowup: boolean }>();
 const supportedOptions = computed(() => personaHookAgentOptions(props.gateways, props.gateway.agentRoleId || "")
   .map(option => ({ ...option, icon: "mdi-robot-outline" })));
@@ -47,7 +49,7 @@ watch([() => props.gateway.agentRoleId, () => props.gateway.id, selected], () =>
   contextDialog.value = editorDialog.value = false;
 });
 function settingsFor(agent: AgentAdapterType) {
-  return props.modelValue?.byAgent?.[agent] ?? props.modelValue ?? agentHookSettingsFor(undefined);
+  return personaAgentHookDraft(props.modelValue, agent);
 }
 const settings = computed(() => selectedAgent.value ? settingsFor(selectedAgent.value.value) : agentHookSettingsFor(undefined));
 const followup = computed(() => settings.value.planFollowup ?? normalizePlanFollowup(undefined));
@@ -69,7 +71,7 @@ const fields = [
 
 function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>, agent = selectedAgent.value?.value) {
   if (!agent) return;
-  const { byAgent: _scopes, ...current }: CodexHookSettings = settingsFor(agent);
+  const current = settingsFor(agent);
   emit("update:modelValue", { ...props.modelValue, ...agentHookSettingsFor({ ...props.modelValue, byAgent: undefined }),
     byAgent: { ...props.modelValue?.byAgent, [agent]: { ...current, ...patch } } });
 }
@@ -98,6 +100,10 @@ function ruleErrors(rule: Rule): string[] {
   return rule.value.statusKeys.length && rule.value.prompt.trim() ? [] : ["选择状态并填写内容后，这条规则才会生效。"];
 }
 const draftErrors = computed(() => draft.value ? ruleErrors(draft.value) : []);
+const needsSessions = computed(() => moving.value && draft.value?.kind === "delivery"
+  && draft.value.value.conditions.some(item => (item.type === "include_sessions" || item.type === "exclude_sessions") && !item.sessions?.length));
+const saveDisabled = computed(() => !editorAgent.value?.configured
+  || ((moving.value || (creating.value && draft.value?.kind === "delivery")) && draftErrors.value.length > 0));
 const cards = computed(() => rules.value.map(rule => {
   const errors = ruleErrors(rule);
   return { rule, errors, enabled: rule.value.enabled && !errors.length && (rule.kind !== "followup" || followup.value.enabled) };
@@ -121,6 +127,8 @@ function newRule(type: RuleType, name?: string): Rule {
 }
 function openEditor(rule?: Rule) {
   previewDrafts.clear();
+  sessionSelections.clear();
+  sourceAgent.value = rule ? selectedAgent.value?.value : undefined;
   creating.value = !rule;
   previewAgent.value = selectedAgent.value?.value ?? supportedOptions.value[0]?.value ?? "";
   enableFollowup.value = false;
@@ -130,10 +138,22 @@ function openEditor(rule?: Rule) {
 function switchPreview(agent: AgentAdapterType) {
   if (agent === previewAgent.value) return;
   const current = draft.value;
-  if (current) previewDrafts.set(previewAgent.value, { rule: current, enableFollowup: enableFollowup.value });
-  const previous = previewDrafts.get(agent);
-  draft.value = previous?.rule ?? newRule(draftType.value);
-  enableFollowup.value = previous?.enableFollowup ?? false;
+  if (creating.value) {
+    if (current) previewDrafts.set(previewAgent.value, { rule: current, enableFollowup: enableFollowup.value });
+    const previous = previewDrafts.get(agent);
+    draft.value = previous?.rule ?? newRule(draftType.value);
+    enableFollowup.value = previous?.enableFollowup ?? false;
+  } else {
+    if (current?.kind === "delivery") {
+      const conditions = current.value.conditions;
+      const sessionConditions = conditions.filter(item => item.type === "include_sessions" || item.type === "exclude_sessions");
+      sessionSelections.set(previewAgent.value, new Map(sessionConditions.map(item => [item.type, item.sessions])));
+      const targetSelections = sessionSelections.get(agent);
+      current.value = { ...current.value, conditions: conditions.map(item => sessionConditions.includes(item)
+        ? { ...item, sessions: targetSelections?.get(item.type) ?? [] } : item) };
+    }
+    enableFollowup.value = false;
+  }
   previewAgent.value = agent;
 }
 function changeRuleType(type: RuleType | null) {
@@ -164,25 +184,15 @@ function setDraftEnabled(enabled: boolean) {
 function saveRule(remove = false) {
   const rule = draft.value;
   const agent = editorAgent.value;
-  if (!rule || !agent?.configured) return;
+  if (!rule || !agent?.configured || (!remove && saveDisabled.value) || (remove && moving.value)) return;
   if (!remove) {
     const name = rule.value.name?.trim() || (creating.value ? t(ruleLabel(rule)) : undefined);
     rule.value = { ...rule.value, name };
   }
-  const agentSettings = settingsFor(agent.value);
-  const apply = <T extends { id: string }>(items: T[], value: T) => remove
-    ? items.filter(item => item.id !== value.id)
-    : creating.value ? [...items, value] : items.map(item => item.id === value.id ? value : item);
-  if (rule.kind === "delivery") {
-    update({ completionDeliveries: apply(agentSettings.completionDeliveries ?? [], rule.value) }, agent.value);
-  } else {
-    const current = agentSettings.planFollowup ?? normalizePlanFollowup(undefined);
-    update({ planFollowup: {
-      ...current,
-      enabled: current.enabled || (!remove && rule.value.enabled && enableFollowup.value && !draftErrors.value.length),
-      rules: apply(current.rules, rule.value)
-    } }, agent.value);
-  }
+  emit("update:modelValue", editPersonaAgentRule(props.modelValue, {
+    rule, targetAgent: agent.value, sourceAgent: sourceAgent.value, remove, createId: browserUuid,
+    enableFollowup: !remove && rule.value.enabled && enableFollowup.value && !draftErrors.value.length
+  }));
   editorDialog.value = false;
   selected.value = agent.value;
 }
@@ -246,20 +256,22 @@ function saveRule(remove = false) {
         </div>
       </v-card-title>
       <v-card-text>
-        <div class="automation-editor-layout" :class="{ 'automation-rule-layout': creating }">
-          <AutomationEndpointNav v-if="creating" :model-value="previewAgent" :options="supportedOptions"
+        <div class="automation-rule-layout automation-editor-layout">
+          <AutomationEndpointNav :model-value="previewAgent" :options="supportedOptions"
             :statuses="previewStatuses" :label="t('Agent 端')" @update:model-value="switchPreview" />
           <div class="automation-rule-content">
             <v-alert v-if="!editorAgent.configured" type="info" variant="tonal" density="compact" class="mb-4">
               此 Agent 端尚未为当前角色配置。
               <router-link :to="adaptersPath" @click="editorDialog = false">前往 Agent 端设置</router-link>
             </v-alert>
+            <p v-if="moving && editorAgent.configured" class="section-note mb-3">保存角色配置后，规则将由所选 Agent 触发。</p>
             <v-text-field :model-value="draft.value.name || ''" :placeholder="t(ruleLabel(draft))" label="规则名称" class="mb-3"
               @update:model-value="setDraftName" />
             <v-select v-if="creating" :model-value="draftType" :items="ruleTypes" label="规则类型" class="mb-4"
               @update:model-value="changeRuleType" />
             <template v-if="draft.kind === 'delivery'">
               <v-alert v-if="!creating && editorAgent.configured && draftErrors.length" type="warning" variant="tonal" density="compact" class="mb-4">
+                <div v-if="needsSessions">切换 Agent 后，请重新选择会话限定。</div>
                 <div v-for="error in draftErrors" :key="error">{{ error }}</div>
               </v-alert>
               <AgentCompletionDeliveryRules :key="draft.value.id" :rule="draft.value" :targets="targets" :gateways="gateways"
@@ -277,10 +289,10 @@ function saveRule(remove = false) {
         </div>
       </v-card-text>
       <v-card-actions class="pa-4 flex-wrap">
-        <v-btn v-if="!creating" variant="text" color="error" prepend-icon="mdi-delete-outline" @click="saveRule(true)">删除规则</v-btn>
+        <v-btn v-if="!creating && !moving" variant="text" color="error" prepend-icon="mdi-delete-outline" @click="saveRule(true)">删除规则</v-btn>
         <v-spacer />
         <v-btn variant="text" @click="editorDialog = false">取消</v-btn>
-        <v-btn color="primary" variant="tonal" :disabled="!editorAgent.configured || (creating && draft.kind === 'delivery' && draftErrors.length > 0)" @click="saveRule()">{{ creating ? '新建' : '确定' }}</v-btn>
+        <v-btn color="primary" variant="tonal" :disabled="saveDisabled" @click="saveRule()">{{ creating ? '新建' : '确定' }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

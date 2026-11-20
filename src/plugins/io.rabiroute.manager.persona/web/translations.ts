@@ -2,6 +2,8 @@ export const pluginTranslations = {
   "en": {
     "Agent 规则": "Agent rules",
     "规则类型": "Rule type",
+    "保存角色配置后，规则将由所选 Agent 触发。": "After saving the role configuration, this rule will run for the selected Agent.",
+    "切换 Agent 后，请重新选择会话限定。": "Choose the session filters again after changing Agents.",
     "消息格式": "Message format",
     "包含 Agent 类型": "Include Agent type",
     "包含任务名称": "Include task name",
@@ -777,6 +779,8 @@ export const pluginTranslations = {
   "ja": {
     "Agent 规则": "Agent ルール",
     "规则类型": "ルールの種類",
+    "保存角色配置后，规则将由所选 Agent 触发。": "ロール設定を保存すると、選択した Agent でこのルールが実行されます。",
+    "切换 Agent 后，请重新选择会话限定。": "Agent の切り替え後にセッション条件を選び直してください。",
     "消息格式": "メッセージ形式",
     "包含 Agent 类型": "Agent の種類を含める",
     "包含任务名称": "タスク名を含める",

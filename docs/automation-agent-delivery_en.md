@@ -87,7 +87,7 @@ Both PC and Relay need the sharing protocol update. An outdated Relay, missing c
 
 Deployment maintenance: forward the Relay `/share/*` page, handshake and WebSocket paths to the same Relay service. Full deployment templates include this route. `RuntimeOnly` preserves the existing Caddy configuration, so publish the matching route through the existing reverse-proxy deployment entry. One runtime manifest drives plugin asset copying, backup and recovery.
 
-Open Role → Automation → Agent rules and click Add Agent rule. The preview sidebar lists supported Agents and shows which are configured for the role. Select a configured Agent, enter a rule name, and choose a rule type before creating it. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules. Open a rule card to edit, enable, or delete it, then click Save at the top of the role page.
+Open Role → Automation → Agent rules and click Add Agent rule. The preview sidebar lists supported Agents and shows which are configured for the role. Select a configured Agent, enter a rule name, and choose a rule type before creating it. Each Agent can have multiple event delivery, TTS announcement, and automatic follow-up rules. Open a rule card to edit, enable, or delete it, then click Save at the top of the role page. While editing a rule, use the left sidebar to switch its Agent. Select the session filters again for the new Agent.
 
 Under Delivery target, select a bound conversation or voice endpoint for the role. The selector fills in the endpoint, route, and conversation parameters. A listed trigger event must match along with all conditions. Under Message format, you can independently turn off the Agent type and task name. Both are included by default.
 

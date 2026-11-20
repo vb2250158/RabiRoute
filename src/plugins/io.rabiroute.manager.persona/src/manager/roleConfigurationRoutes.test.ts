@@ -6,6 +6,8 @@ import path from "node:path";
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
+import { editPersonaAgentRule } from "../../../../shared/personaAgentHooks.js";
+import { AgentCompletionDeliveryService } from "../../../../manager/agentCompletionDelivery.js";
 import { createRoleConfigurationOperations } from "./roleConfigurationOperations.js";
 import { createRoleConfigurationOwner, type RoleConfigurationContext } from "./roleConfigurationOwner.js";
 import { ManagerPluginRouteRegistry } from "../../../../manager/managerPluginRouteRegistry.js";
@@ -15,7 +17,7 @@ import { markAuthenticatedConnectionRequest } from "../../../../manager/connecti
 import { registerLanAgentBodyGuard } from "../../../../manager/lanAgentBodyAuthority.js";
 import { Socket } from "node:net";
 import { assertRoleAcceptsWork, beginRoleWork, readRoleMetadata, withRoleLock } from "../../../../roleLifecycle.js";
-import { gatewayRuntimeAdapterTypes, type GatewayDefinition } from "../../../../shared/gatewayConfigModel.js";
+import { agentHookSettingsFor, gatewayRuntimeAdapterTypes, type GatewayDefinition } from "../../../../shared/gatewayConfigModel.js";
 import { installDataMutationAuditSink, type RecordedDataMutationAudit } from "../../../../observability/dataMutationAudit.js";
 
 async function fixture(run: (value: {
@@ -134,6 +136,44 @@ test("Agent rule names persist through the role configuration API", async () => 
   assert.equal(hooks.completionDeliveries[0].name, "Completion announcement");
   assert.equal(hooks.completionDeliveries[1].name, undefined);
   assert.equal(hooks.planFollowup.rules[0].name, "Check release");
+}));
+
+test("switching an inherited Agent rule changes which producer can deliver after the role save", async () => fixture(async f => {
+  const current = await f.get();
+  const cwd = "C:/fixture/project";
+  const initial = await f.post("configuration", { expectedRevision: current.revision, config: {
+    ...current.config, codexHooks: { completionDeliveries: [{ id: "completion", name: "Finished", enabled: true,
+      event: "task_completed", conditions: [{ type: "project", path: cwd }, { type: "bound_plan" }, { type: "exclude_heartbeat" }],
+      destination: { channel: "napcat", gatewayId: "route", params: { target: "group", targetId: "12345", instanceId: "test" } } }] }
+  } });
+  assert.equal(initial.response.status, 200, JSON.stringify(initial.body));
+  const original = initial.body.data.config.codexHooks;
+  const rule = agentHookSettingsFor(original, "dsh").completionDeliveries![0];
+  const switched = editPersonaAgentRule(original, { targetAgent: "codex", sourceAgent: "dsh",
+    rule: { kind: "delivery", value: rule }, createId: () => { throw new Error("inherited duplicate should keep the original ID"); } });
+  const saved = await f.post("configuration", { expectedRevision: initial.body.data.revision,
+    config: { ...initial.body.data.config, codexHooks: switched } });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.body));
+  const reloaded = (await f.get()).config.codexHooks;
+  assert.deepEqual(agentHookSettingsFor(reloaded, "dsh").completionDeliveries, []);
+  assert.deepEqual(agentHookSettingsFor(reloaded, "codex").completionDeliveries, [rule]);
+  assert.deepEqual(agentHookSettingsFor(reloaded, "workbuddy").completionDeliveries, [rule]);
+
+  const delivered: string[] = [];
+  const service = new AgentCompletionDeliveryService({
+    rules: request => (agentHookSettingsFor(reloaded, request.agentType).completionDeliveries ?? []).map(value => ({ roleId: "Example", rule: value })),
+    projectIdentity: async value => value,
+    taskContext: (_owner, request) => ({ plans: request.sessionId === "bound" ? [{ id: "plan", title: "Test plan" }] : [] }),
+    deliver: async owner => { delivered.push(owner.rule.destination.params.targetId); }
+  });
+  const event = { eventName: "Stop" as const, sessionId: "bound", turnId: "isolated-turn", cwd, lastAssistantMessage: "Done" };
+  assert.deepEqual(await service.handle({ ...event, agentType: "dsh" }), []);
+  assert.deepEqual(await service.handle({ ...event, agentType: "codex", sessionId: "unbound" }), []);
+  assert.deepEqual(await service.handle({ ...event, agentType: "codex", cwd: "C:/fixture/other" }), []);
+  assert.deepEqual(await service.handle({ ...event, agentType: "codex",
+    lastAssistantMessage: "<heartbeat><automation_id>test</automation_id><decision>NOTIFY</decision><message>Done</message></heartbeat>" }), []);
+  assert.deepEqual(await service.handle({ ...event, agentType: "codex" }), [{ ruleId: rule.id, status: "sent" }]);
+  assert.deepEqual(delivered, ["12345"]);
 }));
 
 test("role detail exposes primary destination labels only for its own Routes", async () => fixture(async f => {
