@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { fileTimeToUnixMs, readWindowsLockProcessStart, reclaimWindowsFileLock } from "./windowsFileLock.js";
 
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
@@ -25,34 +26,64 @@ type FileLockRecord = {
   host?: string;
   pid?: number;
   createdAt?: number;
+  processStartedAtFileTime?: string;
 };
 
-function readFileLockRecord(lockPath: string): FileLockRecord | null {
+function parseFileLockRecord(contents: string): FileLockRecord | null {
   try {
-    return JSON.parse(fs.readFileSync(lockPath, "utf8")) as FileLockRecord;
+    return JSON.parse(contents) as FileLockRecord;
   } catch {
     return null;
   }
 }
 
-function sameHostProcessAlive(record: FileLockRecord | null): boolean {
+function readFileLockRecord(lockPath: string): FileLockRecord | null {
+  try {
+    return parseFileLockRecord(fs.readFileSync(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function sameHostProcessAlive(record: FileLockRecord | null, mtimeMs: number): boolean {
   // Legacy local lock records carried pid but no host. Treat their live owner
   // conservatively; elapsed wall time alone never authorizes taking its lock.
-  if (!record || (record.host && record.host.toLowerCase() !== os.hostname().toLowerCase())
-    || !Number.isInteger(record.pid) || Number(record.pid) <= 0) return false;
-  try {
-    process.kill(Number(record.pid), 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+  if (!record || (typeof record.host === "string" && record.host && record.host.toLowerCase() !== os.hostname().toLowerCase())
+    || !Number.isInteger(record.pid) || Number(record.pid) <= 0 || Number(record.pid) > 0x7fffffff) return false;
+  const pid = Number(record.pid);
+  if (process.platform !== "win32") {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
   }
+  const actualStart = readWindowsLockProcessStart(pid);
+  if (actualStart === null) return false;
+  if (actualStart === undefined) return true;
+  if (record.processStartedAtFileTime !== undefined) {
+    return typeof record.processStartedAtFileTime !== "string"
+      || !/^[1-9]\d{0,19}$/.test(record.processStartedAtFileTime)
+      || actualStart <= BigInt(record.processStartedAtFileTime);
+  }
+  // A recognizable legacy owner needs two timestamps that both predate the
+  // current process. Allow for coarse timestamp precision on network shares.
+  const createdAt = record.createdAt;
+  return typeof record.owner !== "string" || !record.owner
+    || typeof createdAt !== "number" || !Number.isFinite(createdAt) || createdAt <= 0
+    || fileTimeToUnixMs(actualStart) <= Math.max(createdAt, mtimeMs) + 2_000;
 }
 
 function reclaimStaleFileLock(lockPath: string, staleMs: number): boolean {
   try {
     const before = fs.statSync(lockPath);
     const record = readFileLockRecord(lockPath);
-    if (sameHostProcessAlive(record) || Date.now() - before.mtimeMs < staleMs) return false;
+    if (sameHostProcessAlive(record, before.mtimeMs) || Date.now() - before.mtimeMs < staleMs) return false;
+    if (process.platform === "win32") {
+      return reclaimWindowsFileLock(lockPath, (contents, mtimeMs) => Date.now() - mtimeMs >= staleMs
+        && !sameHostProcessAlive(parseFileLockRecord(contents), mtimeMs));
+    }
     const owner = String(record?.owner || "");
     const afterRecord = readFileLockRecord(lockPath);
     const after = fs.statSync(lockPath);
@@ -62,7 +93,9 @@ function reclaimStaleFileLock(lockPath: string, staleMs: number): boolean {
     fs.unlinkSync(lockPath);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return true;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY")) return false;
     throw error;
   }
 }
@@ -93,11 +126,12 @@ export function acquireFileLockSync(
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = Date.now() + timeoutMs;
   const owner = `${os.hostname()}:${process.pid}:${randomUUID()}`;
+  const processStartedAtFileTime = process.platform === "win32" ? readWindowsLockProcessStart(process.pid)?.toString() : undefined;
   while (true) {
     try {
       const descriptor = fs.openSync(lockPath, "wx");
       try {
-        fs.writeFileSync(descriptor, `${JSON.stringify({ owner, host: os.hostname(), pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
+        fs.writeFileSync(descriptor, `${JSON.stringify({ owner, host: os.hostname(), pid: process.pid, createdAt: Date.now(), processStartedAtFileTime })}\n`, "utf8");
         fs.fsyncSync(descriptor);
       } finally {
         fs.closeSync(descriptor);

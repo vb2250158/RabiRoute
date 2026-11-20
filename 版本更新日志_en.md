@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.60 - 2026-11-21
+
+- Recover stale Windows persistence locks after PID reuse while preserving live and uncertain owners.
+
 ## 0.15.59 - 2026-11-21
 
 - Recover voice conversation locks safely when Windows reuses a process ID, preserving history and the single-owner guarantee.
