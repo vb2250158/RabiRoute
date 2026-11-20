@@ -79,6 +79,15 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   let previousSize: Point | undefined;
   const transform = computed(() => ({ transform: `translate(${offset.value.x}px, ${offset.value.y}px) scale(${scale.value})` }));
   const grid = computed(() => ({ backgroundSize: `${24 * scale.value}px ${24 * scale.value}px`, backgroundPosition: `${offset.value.x}px ${offset.value.y}px` }));
+  const visibleBounds = computed(() => {
+    const margin = 180;
+    return {
+      left: (-offset.value.x - margin) / scale.value,
+      top: (-offset.value.y - margin) / scale.value,
+      right: (viewportSize.value.x - offset.value.x + margin) / scale.value,
+      bottom: (viewportSize.value.y - offset.value.y + margin) / scale.value,
+    };
+  });
 
   function cardSize(id: string): CardSize {
     const layout = positions.value[id];
@@ -88,6 +97,16 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   function cardBounds(id: string, point: Point) {
     return { id, x: point.x + CARD_LEFT, y: point.y + CARD_HEADER, ...cardSize(id) };
   }
+  const visibleCardIds = computed(() => {
+    const view = visibleBounds.value;
+    const visible = new Set<string>();
+    for (const [id, point] of Object.entries(positions.value)) {
+      const card = cardBounds(id, point);
+      if (card.x <= view.right && card.x + card.width >= view.left && card.y - CARD_HEADER <= view.bottom && card.y + card.height >= view.top) visible.add(id);
+    }
+    if (selectedIds.value.length === 1) visible.add(selectedIds.value[0]!);
+    return visible;
+  });
   function portOffsets(id: string) {
     const center = CARD_HEADER + cardSize(id).height / 2;
     return { step: 72, input: center + 26, content: positions.value[id]?.height === undefined ? 140 : center < 96 ? 45 : center };
@@ -229,7 +248,8 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
       const hits = selection.cards
         .filter(card => card.left < right && card.right > left && card.top < bottom && card.bottom > top)
         .map(card => card.id);
-      selectedIds.value = selectionWith(selectionBeforeDrag, hits, current.selectionMode ?? "replace");
+      const next = selectionWith(selectionBeforeDrag, hits, current.selectionMode ?? "replace");
+      if (next.length !== selectedIds.value.length || next.some((id, index) => id !== selectedIds.value[index])) selectedIds.value = next;
     } else if (current.kind === "card") {
       for (const [id, origin] of Object.entries(origins)) positions.value[id] = { ...origin, x: origin.x + dx / scale.value, y: origin.y + dy / scale.value };
     } else if (current.kind === "resize") {
@@ -364,5 +384,6 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   }, { flush: "post" });
   onBeforeUnmount(() => observer?.disconnect());
   function world(point: Point) { return { x: (point.x - offset.value.x) / scale.value, y: (point.y - offset.value.y) / scale.value }; }
-  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, add, position, cardSize, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory };
+  function moving(pointerId: number) { return gesture?.pointer === pointerId && gesture.started; }
+  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, visibleBounds, visibleCardIds, add, position, cardSize, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, moving, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory };
 }

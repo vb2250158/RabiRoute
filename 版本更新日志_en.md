@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.58 - 2026-11-21
+
+- Improve workbench canvas pagination, thumbnails and large-project loading while preserving committed-canvas recovery.
+
 ## 0.15.57 - 2026-11-20
 
 - Keep the role HTTP test runnable when the system reserves its default fixture port.

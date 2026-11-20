@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 // Request-scoped fences only: background jobs must not retain this object.
 export function checkedFs(access) {
   if (!access) return fs;
-  const mutations = new Set(["mkdir", "copyFile", "writeFile", "rename", "open"]);
+  const mutations = new Set(["mkdir", "copyFile", "writeFile", "rename", "unlink", "open"]);
   return new Proxy(fs, { get(target, name) {
     const operation = target[name];
     if (typeof operation !== "function") return operation;

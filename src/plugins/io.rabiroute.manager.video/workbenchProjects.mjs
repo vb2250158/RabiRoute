@@ -6,13 +6,16 @@ import { VideoError } from "./service.mjs";
 import { validateCanvas, cloneGraph, relativeMaterialPath,externalDependencies } from "./workbenchGraph.mjs";
 import { importWorkbench,exportLinear } from "./workbenchImport.mjs";
 import {projectRules} from "./contracts.mjs";
+import { WorkbenchCanvasIndex } from "./workbenchCanvasIndex.mjs";
+import { canvasGraphThumbnail } from "./workbenchThumbnail.mjs";
 
 const uuid = /^[a-f0-9-]{36}$/;
 const digest = value => createHash("sha256").update(value).digest("hex");
 const now = () => new Date().toISOString();
 const absent = error => { if (error.code === "ENOENT") return undefined; throw error; };
+const isSummary = row => row && uuid.test(row.id) && typeof row.updatedAt === "string" && typeof row.name === "string";
 const pools = new Map();
-function pool(root) { if (!pools.has(root)) pools.set(root, { queues: new Map(), indexes: new Map() }); return pools.get(root); }
+function pool(root) { if (!pools.has(root)) pools.set(root, { queues: new Map(), indexBuilds: new Map() }); return pools.get(root); }
 
 /** v1 and v2 share this owner, authority checks and publication primitives. */
 // Keep only media IDs in the summary index, never draft text, URLs, or media bytes.
@@ -30,6 +33,7 @@ export class WorkbenchProjects {
   constructor(runtime, definition) {
     this.runtime = runtime; this.definition = definition; this.legacyRoot=path.join(runtime.stateRoot,"projects");this.root = runtime.workbenchProjectsRoot || this.legacyRoot;
     this.pool = pool(this.root);
+    this.canvasIndex = new WorkbenchCanvasIndex(runtime.stateRoot, this.root);
     this.canonicalRoots=new Map();
   }
   id(id) { if (typeof id !== "string" || !uuid.test(id)) throw new VideoError("项目或画布不存在。", 404); return id; }
@@ -92,40 +96,175 @@ export class WorkbenchProjects {
   }
   summary(record) { return { id: record.id, name: record.name, revision: record.revision, updatedAt: record.updatedAt, nodeCount: record.graph.nodes.length, mediaEditor: Boolean(record.mediaEditor),
       preview: record.graph.nodes.some(node => node.config?.legacyCardId === record.preview?.cardId) ? record.preview : undefined }; }
-  async indexEntry(projectId, canvas, access) {
-    const file = path.join(this.projectDirectory(projectId), ".canvas-index", `${canvas.id}.json`);
-    await this.atomic(file, this.summary(canvas), access);
-    this.pool.indexes.delete(projectId);
+  summaryDirectory(projectId) {
+    return path.join(this.projectDirectory(projectId), ".canvas-index");
   }
-  async listCanvases(projectId, query = {}, access) {
+  async readCanvasSummary(projectId, canvasId, access) {
+    const id = this.id(canvasId);
+    const pending = await this.json(path.join(this.pendingSummaryDirectory(projectId), `${id}.json`), access).catch(absent);
+    if (pending) {
+      const canvas = await this.json(path.join(this.canvasDirectory(projectId, id), "canvas.json"), access).catch(absent);
+      if (canvas?.id === id) return this.summary(canvas);
+    }
+    return this.json(path.join(this.summaryDirectory(projectId), `${id}.json`), access).catch(absent);
+  }
+  thumbnailFile(projectId, canvasId) {
+    return path.join(this.projectDirectory(projectId), ".canvas-thumbnails", `${this.id(canvasId)}.json`);
+  }
+  thumbnail(canvas) {
+    return { revision: canvas.revision, thumbnail: canvasGraphThumbnail(canvas) ?? null };
+  }
+  async readCanvasThumbnail(projectId, canvasId, requestedRevision, access) {
+    const revision = Number(requestedRevision);
+    if (!/^\d+$/.test(requestedRevision) || !Number.isSafeInteger(revision)) throw new VideoError("画布预览版本无效。", 400);
     await this.readProject(projectId, access);
+    const cached = await this.json(this.thumbnailFile(projectId, canvasId), access).catch(absent);
+    if (cached?.revision === revision) return cached;
+    return this.thumbnail(await this.readCanvas(projectId, canvasId, access));
+  }
+  async summaryStamp(projectId, access) {
+    const stat = await checkedFs(access).stat(this.summaryDirectory(projectId), { bigint: true }).catch(absent);
+    return stat ? `${stat.mtimeNs}:${stat.ctimeNs}` : "missing";
+  }
+  summaryHistoryFile(projectId) {
+    return path.join(this.projectDirectory(projectId), ".canvas-index-history.json");
+  }
+  async summaryHistory(projectId, access) {
+    const history = await this.json(this.summaryHistoryFile(projectId), access).catch(error => {
+      if (error instanceof SyntaxError) return undefined;
+      return absent(error);
+    });
+    return history?.version === 1 && Array.isArray(history.changes) ? history.changes : [];
+  }
+  async recordSummaryChange(projectId, previous, stamp, row, access) {
+    const history = await this.summaryHistory(projectId, access);
+    const changes = history.at(-1)?.stamp === previous ? history.slice(-63) : [];
+    changes.push({ previous, stamp, row });
+    await this.atomic(this.summaryHistoryFile(projectId), { version: 1, changes }, access);
+  }
+  async indexEntry(projectId, canvas, access) {
+    const row = this.summary(canvas);
+    const previous = await this.summaryStamp(projectId, access);
+    await this.atomic(this.thumbnailFile(projectId, canvas.id), this.thumbnail(canvas), access);
+    await this.atomic(path.join(this.summaryDirectory(projectId), `${canvas.id}.json`), row, access);
+    const stamp = await this.summaryStamp(projectId, access);
+    try {
+      await this.recordSummaryChange(projectId, previous, stamp, row, access);
+      const db = await this.canvasIndex.open();
+      try {
+        const scope = this.canvasIndex.scope(projectId);
+        if (this.canvasIndex.stamp(db, scope) === previous) this.canvasIndex.advance(db, scope, previous, stamp, [row]);
+      } finally { db.close(); }
+    } catch (error) {
+      this.runtime.reportWorkbenchIndexFailure?.({ projectId, canvasId: canvas.id, revision: canvas.revision, error });
+    }
+  }
+  pendingSummaryDirectory(projectId) {
+    return path.join(this.projectDirectory(projectId), ".canvas-index-pending");
+  }
+  async commitCanvas(projectId, canvas, publish, access) {
+    const marker = path.join(this.pendingSummaryDirectory(projectId), `${canvas.id}.json`);
+    await this.atomic(marker, { revision: canvas.revision }, access);
+    await publish();
+    try {
+      await this.locked(`index:${projectId}`, access, () => this.indexEntry(projectId, canvas, access));
+      await checkedFs(access).unlink(marker);
+    } catch (error) {
+      // The authoritative canvas is already published. The marker lets listings recover its summary.
+      this.runtime.reportWorkbenchIndexFailure?.({ projectId, canvasId: canvas.id, revision: canvas.revision, error });
+    }
+  }
+  async pendingSummaries(projectId, access) {
+    const names = await checkedFs(access).readdir(this.pendingSummaryDirectory(projectId)).catch(absent);
+    const rows = new Map();
+    for (const name of names ?? []) {
+      const id = name.slice(0, -5);
+      if (!name.endsWith(".json") || !uuid.test(id)) continue;
+      const canvas = await this.json(path.join(this.canvasDirectory(projectId, id), "canvas.json"), access).catch(absent);
+      if (canvas?.id === id) rows.set(id, this.summary(canvas));
+    }
+    return rows;
+  }
+
+  async rebuildLocalIndex(db, scope, projectId, stamp, access) {
+    const previous = this.canvasIndex.stamp(db, scope);
+    if (previous !== undefined) {
+      const history = await this.summaryHistory(projectId, access);
+      const first = history.findIndex(change => change?.previous === previous);
+      const changes = first >= 0 ? history.slice(first) : [];
+      if (changes.at(-1)?.stamp === stamp && changes.every((change, index) => isSummary(change?.row) && (!index || change.previous === changes[index - 1]?.stamp))) {
+        if (await this.summaryStamp(projectId, access) !== stamp) return false;
+        this.canvasIndex.advance(db, scope, previous, stamp, changes.map(change => change.row));
+        return true;
+      }
+    }
+    const directory = this.summaryDirectory(projectId);
+    const names = await checkedFs(access).readdir(directory).catch(absent);
+    const files = (names ?? []).filter(name => name.endsWith(".json") && uuid.test(name.slice(0, -5)));
+    const rows = [];
+    for (let offset = 0; offset < files.length; offset += 32) {
+      rows.push(...await Promise.all(files.slice(offset, offset + 32).map(name => this.json(path.join(directory, name), access).catch(absent))));
+    }
+    if (await this.summaryStamp(projectId, access) !== stamp) return false;
+    this.canvasIndex.replace(db, scope, stamp, rows.filter(isSummary));
+    return true;
+  }
+
+  async listCanvases(projectId, query = {}, access, timing = () => {}) {
+    const started = performance.now();
+    await this.readProject(projectId, access).finally(() => timing("project", performance.now() - started));
     const limit = Number(query.limit ?? 50);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new VideoError("每页数量须为 1–100。", 400);
     const search = String(query.search || "").trim().toLocaleLowerCase();
     if (search.length > 200) throw new VideoError("搜索词过长。", 400);
-    const fs = checkedFs(access), indexRoot = path.join(this.projectDirectory(projectId), ".canvas-index");
-    // The small stamp invalidates caches on other clients without reading graph bodies.
-    const stamp = await fs.stat(indexRoot).then(stat => `${stat.mtimeMs}:${stat.ctimeMs}`, absent);
-    let cached = this.pool.indexes.get(projectId);
-    if (!cached || cached.stamp !== stamp) {
-      const names = await fs.readdir(indexRoot).catch(error => { if (error.code === "ENOENT") return []; throw error; });
-      const rows = [];
-      for (let offset = 0; offset < names.length; offset += 32) {
-        const batch = names.slice(offset, offset + 32).filter(name => uuid.test(name.slice(0, -5)) && name.endsWith(".json"));
-        rows.push(...await Promise.all(batch.map(name => this.json(path.join(indexRoot, name), access))));
-      }
-      cached = { stamp, rows: rows.sort((a, b) => a.id.localeCompare(b.id)) };
-      if (this.pool.indexes.size >= 8) this.pool.indexes.delete(this.pool.indexes.keys().next().value);
-      this.pool.indexes.set(projectId, cached);
-    }
-    let after = "";
+    let after;
     if (query.cursor) {
-      try { const cursor = JSON.parse(Buffer.from(query.cursor, "base64url").toString()); if (cursor.projectId !== projectId || cursor.search !== search || !uuid.test(cursor.after)) throw Error(); after = cursor.after; }
+      try {
+        after = JSON.parse(Buffer.from(query.cursor, "base64url").toString());
+        if (after.projectId !== projectId || after.search !== search || !uuid.test(after.id) || typeof after.updatedAt !== "string" || typeof after.version !== "string") throw Error();
+      }
       catch { throw new VideoError("分页游标无效。", 400); }
     }
-    const rows = cached.rows.filter(row => row.id > after && (!search || row.name.toLocaleLowerCase().includes(search)));
-    const items = rows.slice(0, limit), last = items.at(-1);
-    return { canvases: items, nextCursor: rows.length > limit ? Buffer.from(JSON.stringify({ projectId, search, after: last.id })).toString("base64url") : null };
+    const indexStarted = performance.now();
+    const db = await this.canvasIndex.open();
+    const scope = this.canvasIndex.scope(projectId);
+    try {
+      let stamp = await this.summaryStamp(projectId, access);
+      for (let attempt = 0; this.canvasIndex.stamp(db, scope) !== stamp && attempt < 2; attempt++) {
+        let build = this.pool.indexBuilds.get(scope);
+        if (!build) {
+          build = this.rebuildLocalIndex(db, scope, projectId, stamp, access);
+          this.pool.indexBuilds.set(scope, build);
+          const clear = () => { if (this.pool.indexBuilds.get(scope) === build) this.pool.indexBuilds.delete(scope); };
+          void build.then(clear, clear);
+        }
+        try { await build; }
+        catch (error) {
+          access?.assert();
+          if (attempt > 0) throw error;
+        }
+        stamp = await this.summaryStamp(projectId, access);
+      }
+      if (this.canvasIndex.stamp(db, scope) !== stamp) throw new VideoError("画布列表正在更新，请重试。", 409);
+      timing("index", performance.now() - indexStarted);
+      const queryStarted = performance.now();
+      const pending = await this.pendingSummaries(projectId, access);
+      if (await this.summaryStamp(projectId, access) !== stamp || this.canvasIndex.stamp(db, scope) !== stamp) {
+        throw new VideoError("画布列表正在更新，请重试。", 409);
+      }
+      const version = digest(JSON.stringify([stamp, [...pending].sort().map(([id, row]) => [id, row.revision])]));
+      if (after && after.version !== version) throw new VideoError("画布列表已更新，请重新载入。", 409);
+      const rows = this.canvasIndex.page(db, scope, search, after, limit + 1 + pending.size).filter(row => !pending.has(row.id));
+      for (const row of pending.values()) {
+        if (after && (row.updatedAt > after.updatedAt || (row.updatedAt === after.updatedAt && row.id >= after.id))) continue;
+        if (!search || row.name.toLocaleLowerCase().includes(search)) rows.push(row);
+      }
+      if (pending.size) rows.sort((a, b) => a.updatedAt === b.updatedAt ? (a.id > b.id ? -1 : 1) : a.updatedAt > b.updatedAt ? -1 : 1);
+      const items = rows.slice(0, limit), last = items.at(-1);
+      const nextCursor = rows.length > limit ? Buffer.from(JSON.stringify({ projectId, search, id: last.id, updatedAt: last.updatedAt, version })).toString("base64url") : null;
+      timing("query", performance.now() - queryStarted);
+      return { canvases: items, nextCursor };
+    } finally { db.close(); }
   }
   async saveProject(id, body, access) {
     return this.locked(`project:${this.id(id)}`, access, async () => {
@@ -145,8 +284,8 @@ export class WorkbenchProjects {
       record.preview = previous.preview;
       delete record.externalDependencies;
       try { validateCanvas(record, this.definition); } catch (error) { throw new VideoError(error.message); }
-      await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), record, access);
-      await this.indexEntry(projectId, record, access); return {...record,externalDependencies:externalDependencies(record)};
+      await this.commitCanvas(projectId, record, () => this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), record, access), access);
+      return {...record,externalDependencies:externalDependencies(record)};
     });
   }
   async newCanvas(name = "新画布") { return { version: 2, id: randomUUID(), name, revision: 0, updatedAt: now(), workspaceBindingKey: "", variables: [], graph: { nodes: [], edges: [], groups: [] } }; }
@@ -180,12 +319,12 @@ export class WorkbenchProjects {
       await this.atomic(path.join(stage, "migration", "receipt.json"), { sourceRevision: legacy.revision, sha256: digest(original), canvasId: canvas.id }, access);
     }
     await this.stageCanvas(path.join(stage, "canvases", canvas.id), canvas, access);
+    await this.atomic(path.join(stage, ".canvas-thumbnails", `${canvas.id}.json`), this.thumbnail(canvas), access);
     await this.atomic(path.join(stage, ".canvas-index", `${canvas.id}.json`), this.summary(canvas), access);
     await this.atomic(path.join(stage, "project.json"), project, access);
     const check = await this.json(path.join(stage, "canvases", canvas.id, "canvas.json"), access);
     if (JSON.stringify(check) !== JSON.stringify(canvas)) throw new VideoError("画布回读校验失败。", 409);
     await fs.rename(stage, this.projectDirectory(project.id));
-    this.pool.indexes.delete(project.id);
   }
   async createCanvas(projectId, body, access) {
     this.id(body?.id);
@@ -234,8 +373,8 @@ export class WorkbenchProjects {
     const fs = checkedFs(access), stage = path.join(this.projectDirectory(projectId), ".pending", canvas.id);
     await this.stageCanvas(stage, canvas, access);
     if (source) await this.copyMaterials(path.join(source, "materials"), path.join(stage, "materials"), access);
-    await fs.rename(stage, this.canvasDirectory(projectId, canvas.id));
-    await this.indexEntry(projectId, canvas, access); return canvas;
+    await this.commitCanvas(projectId, canvas, () => fs.rename(stage, this.canvasDirectory(projectId, canvas.id)), access);
+    return canvas;
   }
   async copyMaterials(source, target, access) {
     const fs = checkedFs(access);
@@ -344,15 +483,19 @@ export class WorkbenchProjects {
     return file;
   }
   async rebuildCanvasIndex(projectId, access) {
-    return this.locked(`index:${this.id(projectId)}`, access, async () => {
-      await this.readProject(projectId, access);
-      const names = await checkedFs(access).readdir(path.join(this.projectDirectory(projectId), "canvases")); let count = 0;
-      for (const name of names.filter(name => uuid.test(name))) {
+    await this.readProject(projectId, access);
+    const fs = checkedFs(access);
+    const names = await fs.readdir(path.join(this.projectDirectory(projectId), "canvases"));
+    let count = 0;
+    for (const name of names.filter(name => uuid.test(name))) {
+      await this.locked(`canvas:${projectId}:${name}`, access, async () => {
         const canvas = await this.readCanvas(projectId, name, access);
-        await this.indexEntry(projectId, canvas, access); count++;
-      }
-      return { count };
-    });
+        await this.locked(`index:${projectId}`, access, () => this.indexEntry(projectId, canvas, access));
+        await fs.unlink(path.join(this.pendingSummaryDirectory(projectId), `${name}.json`)).catch(absent);
+      });
+      count++;
+    }
+    return { count };
   }
   async readMediaEditor(projectId, canvasId, access, revision) {
     const canvas = await this.readCanvas(projectId, canvasId, access);
@@ -395,8 +538,8 @@ export class WorkbenchProjects {
       await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), material), value, access);
       canvas.mediaEditor = { path: material, version: 1 }; canvas.preview = previewFromItems(value.items); canvas.revision++; canvas.updatedAt = now();
       delete canvas.externalDependencies;
-      await this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), canvas, access);
-      await this.indexEntry(projectId, canvas, access); return { revision: canvas.revision };
+      await this.commitCanvas(projectId, canvas, () => this.atomic(path.join(this.canvasDirectory(projectId, canvasId), "canvas.json"), canvas, access), access);
+      return { revision: canvas.revision };
     });
   }
 }

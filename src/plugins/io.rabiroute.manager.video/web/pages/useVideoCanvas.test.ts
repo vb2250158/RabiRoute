@@ -24,6 +24,18 @@ test("validated files stay with the selected node and exact run", () => {
 });
 
 type CardRect = { id: string; left: number; top: number; width: number; height: number };
+test("the viewport limits mounted cards while retaining the selected editor", async () => {
+  const canvas = await fixture();
+  canvas.positions.value = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`node-${index}`, { x: index * 500, y: 0 }]));
+  canvas.selectedIds.value = ["node-900"];
+  assert.deepEqual([...canvas.visibleCardIds.value], ["node-0", "node-1", "node-2", "node-900"]);
+  canvas.offset.value = { x: -50000, y: 0 };
+  assert.ok(canvas.visibleCardIds.value.has("node-100"));
+  assert.ok(canvas.visibleCardIds.value.has("node-900"));
+  assert.equal(canvas.visibleCardIds.value.has("node-0"), false);
+  assert.equal(canvas.positions.value["node-0"]?.x, 0);
+});
+
 async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {
   let canvas!: ReturnType<typeof useVideoCanvas>;
   await renderToString(createSSRApp({ setup() { canvas = useVideoCanvas(); return () => null; } }));

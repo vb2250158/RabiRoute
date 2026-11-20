@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { wireBend } from "../../workbenchThumbnail.mjs";
 import TtsModelParameters from "../../../../../ribiwebgui/src/components/TtsModelParameters.vue";
 import {normalizeTtsParameters,ttsCommandSettings,type TtsParameters} from "../../../io.rabiroute.manager.speech/web/speech/ttsParameters";
 import AudioPromptEditor from "../components/AudioPromptEditor.vue";
@@ -184,6 +185,16 @@ const canvas = useVideoCanvas(id => {
 const minimapOpen = ref(true);
 const minimap = canvas.minimap;
 const selectedIds = canvas.selectedIds;
+const minimapShapes = computed(() => {
+  if (!minimapOpen.value) return { selected: "", unselected: "" };
+  const selected = new Set(selectedIds.value);
+  const paths = { selected: [] as string[], unselected: [] as string[] };
+  for (const card of minimap.value.cards) {
+    const bucket = selected.has(card.id) ? paths.selected : paths.unselected;
+    bucket.push(`M${card.x.toFixed(2)} ${card.y.toFixed(2)}h${card.width.toFixed(2)}v${card.height.toFixed(2)}h${(-card.width).toFixed(2)}z`);
+  }
+  return { selected: paths.selected.join(""), unselected: paths.unselected.join("") };
+});
 const marquee = canvas.marquee;
 let minimapGesture: { pointer: number; map: typeof minimap.value; x: number; y: number } | undefined;
 function minimapPoint(event: PointerEvent) {
@@ -227,6 +238,7 @@ watch(selectedIds, ids => {
 canvas.add("draft-1");
 const activeVideo = computed(() => canvasItems.value.find(item => item.id === activeVideoId.value));
 const otherItems = computed(() => canvasItems.value.filter(item => item.id !== activeVideoId.value));
+const visibleMediaItems = computed(() => otherItems.value.filter(item => canvas.visibleCardIds.value.has(item.id)));
 const selected = computed(() => snapshot.value?.jobs.find(job => job.id === activeVideo.value?.jobId));
 const openPopover = ref("");
 function updatePopover(key: string, opened: boolean) {
@@ -629,6 +641,7 @@ const canvasActivity = ref<{ canvasId: string; runId: string; attemptStates: Rec
 const focusedRunId = ref("");
 const activeCanvasRunId = computed(() => focusedRunId.value || (canvasActivity.value?.canvasId === mediaCanvasId.value ? canvasActivity.value.runId : ""));
 const flowNodes = computed(() => workspaceGraph.value?.graph.nodes.filter(node => !node.config.legacyCardId) ?? []);
+const visibleFlowNodes = computed(() => flowNodes.value.filter(node => canvas.visibleCardIds.value.has(node.id)));
 const flowNodesById = computed(() => new Map(flowNodes.value.map(node => [node.id, node])));
 const inputLinksByTarget = computed(() => workflowInputLinks(flowNodes.value));
 const nodeRunStates = computed(() => {
@@ -664,10 +677,10 @@ function portPosition(id: string, direction: "in" | "out", kind: PortKind) {
   if (!point) return;
   return { x: point.x + 130 + (direction === "out" ? canvas.cardSize(id).width : 0), y: point.y + canvas.portOffsets(id)[kind] };
 }
-const flowWires = computed(() => {
+const flowLinks = computed(() => {
   const graph = workspaceGraph.value;
   if (!graph) return [];
-  const links = [
+  return [
     ...graph.graph.edges.map(edge => ({ ...edge, kind: "step" as const })),
     ...(graph.mediaLinks ?? []).map(link => ({ ...link, id: JSON.stringify([link.from, link.to]), kind: "content" as const, condition: "" })),
     ...Array.from(inputLinksByTarget.value.values()).flatMap(rows => rows.map(link => ({
@@ -677,10 +690,26 @@ const flowWires = computed(() => {
       condition: ""
     })))
   ];
-  return links.flatMap(link => {
+});
+type WireGeometry = { x1: number; y1: number; x2: number; y2: number; path: string };
+let visibleWireGeometry = new Map<string, WireGeometry>();
+const flowWires = computed(() => {
+  const view = canvas.visibleBounds.value;
+  const next = new Map<string, WireGeometry>();
+  const wires = flowLinks.value.flatMap(link => {
     const start = portPosition(link.from, "out", link.kind), end = portPosition(link.to, "in", link.kind);
-    return start && end ? [{ ...link, path: wirePath(start, end) }] : [];
+    if (!start || !end) return [];
+    const bend = wireBend(start, end);
+    if (Math.min(start.x, end.x - bend) > view.right || Math.max(start.x + bend, end.x) < view.left ||
+      Math.min(start.y, end.y) > view.bottom || Math.max(start.y, end.y) < view.top) return [];
+    const previous = visibleWireGeometry.get(link.id);
+    const geometry = previous && previous.x1 === start.x && previous.y1 === start.y && previous.x2 === end.x && previous.y2 === end.y
+      ? previous : { x1: start.x, y1: start.y, x2: end.x, y2: end.y, path: wirePath(start, end) };
+    next.set(link.id, geometry);
+    return [{ ...link, path: geometry.path }];
   });
+  visibleWireGeometry = next;
+  return wires;
 });
 const wirePreview = computed(() => {
   const wire = workflowWire.value;
@@ -716,6 +745,12 @@ type ProjectCard = {
 
 };
 const projects = ref<ProjectCard[]>([]);
+const catalogProjectId = ref("");
+const lastOpenedCanvasId = ref("");
+const projectsLoading = ref(false);
+const projectsLoaded = ref(false);
+const projectsError = ref("");
+let projectsRequest: AbortController | undefined;
 const jobsById = computed(() => new Map(snapshot.value?.jobs.map(job => [job.id, job])));
 const previewUnavailable = ref(new Set<string>());
 function resolvePreview(preview?: CanvasPreview): CanvasCover | undefined {
@@ -729,8 +764,27 @@ function resolvePreview(preview?: CanvasPreview): CanvasCover | undefined {
 const projectPreviews = computed(() => new Map(projects.value.map(project => [project.id, previewUnavailable.value.has(project.id) ? undefined : resolvePreview(project.preview)])));
 function failProjectPreview(id: string) { previewUnavailable.value.add(id); }
 async function loadProjects() {
-  projects.value = (await request<{ projects: ProjectCard[] }>("/projects")).projects;
-  previewUnavailable.value.clear();
+  projectsRequest?.abort();
+  const controller = new AbortController();
+  projectsRequest = controller;
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
+  projectsLoading.value = true;
+  projectsError.value = "";
+  try {
+    const result = await request<{ projects: ProjectCard[] }>("/projects", { signal });
+    if (projectsRequest !== controller || signal.aborted) return;
+    projects.value = result.projects;
+    projectsLoaded.value = true;
+    previewUnavailable.value.clear();
+  } catch (failure) {
+    if (projectsRequest !== controller || controller.signal.aborted) return;
+    projectsError.value = signal.aborted ? "项目列表加载超时。" : failure instanceof Error ? failure.message : "项目列表加载失败。";
+  } finally {
+    if (projectsRequest === controller) {
+      projectsRequest = undefined;
+      projectsLoading.value = false;
+    }
+  }
 }
 type CanvasRoute = { canvasId?: string; nodeId?: string; runId?: string; settings?: boolean };
 async function openProject(id: string, route?: CanvasRoute) {
@@ -746,19 +800,29 @@ async function openProject(id: string, route?: CanvasRoute) {
       settings: url.searchParams.get("view") === "flow",
     };
   }
-  const projectResponse = await fetch(`/api/video/v2/projects/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(15000) });
-  if (!projectResponse.ok && projectResponse.status !== 409) {
-    throw new Error((await projectResponse.json()).message || "项目读取失败。");
-  }
   type ProjectIdentity = { defaultCanvasId: string; title: string };
-  const modern: ProjectIdentity = projectResponse.ok ? await projectResponse.json() : await request<ProjectIdentity>(`/v2/projects/${encodeURIComponent(id)}/migrate`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ automatic: true })
-  });
-  const canvasId = route?.canvasId || ((route?.runId || route?.nodeId || route?.settings) ? modern.defaultCanvasId : "");
+  const needsDefault = !route?.canvasId && Boolean(route?.runId || route?.nodeId || route?.settings);
+  let modern: ProjectIdentity;
+  if (id === projectId.value && workbenchProjectTitle.value && !needsDefault) {
+    modern = { title: workbenchProjectTitle.value, defaultCanvasId: "" };
+  } else {
+    const base = `/v2/projects/${encodeURIComponent(id)}`;
+    const projectResponse = await fetch(`/api/video${base}`, { signal: AbortSignal.timeout(15000) });
+    if (!projectResponse.ok && projectResponse.status !== 409) {
+      throw new Error((await projectResponse.json()).message || "项目读取失败。");
+    }
+    modern = projectResponse.ok ? await projectResponse.json() : await request<ProjectIdentity>(`${base}/migrate`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ automatic: true })
+    });
+  }
+  const canvasId = route?.canvasId || (needsDefault ? modern.defaultCanvasId : "");
   const savedCanvas = canvasId
     ? await request<WorkbenchCanvas>(`/v2/projects/${encodeURIComponent(id)}/canvases/${encodeURIComponent(canvasId)}`, { signal: AbortSignal.timeout(15000) })
     : undefined;
   if (savedCanvas && !workspaceDefinition.value) workspaceDefinition.value = await request<WorkbenchDefinition>("/v2/definition");
+  if (projectId.value !== id) lastOpenedCanvasId.value = "";
+  if (!canvasId) catalogProjectId.value = id;
+  else lastOpenedCanvasId.value = canvasId;
   projectId.value = id;
   workbenchProjectTitle.value = modern.title;
   projectTitle.value = savedCanvas?.name || "未命名画布";
@@ -903,11 +967,32 @@ function cancelPort() {
   workflowWire.value = undefined;
   if (pointer !== undefined && viewport.value?.hasPointerCapture(pointer)) viewport.value.releasePointerCapture(pointer);
 }
-function moveWorkspacePointer(event: PointerEvent) {
+function applyWorkspacePointer(event: PointerEvent) {
   if (!workflowWire.value) { canvas.move(event); return; }
   if (workflowWire.value.pointer !== undefined && workflowWire.value.pointer !== event.pointerId) return;
   const bounds = viewport.value?.getBoundingClientRect();
   if (bounds) workflowWire.value.point = canvas.world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+}
+let pointerFrame: number | undefined;
+let pendingPointer: PointerEvent | undefined;
+function finishPointerFrame(pointerId?: number, apply = false) {
+  if (pointerId !== undefined && pendingPointer?.pointerId !== pointerId) return;
+  if (pointerFrame !== undefined) cancelAnimationFrame(pointerFrame);
+  const event = pendingPointer;
+  pointerFrame = undefined;
+  pendingPointer = undefined;
+  if (apply && event) applyWorkspacePointer(event);
+}
+function moveWorkspacePointer(event: PointerEvent) {
+  const wire = workflowWire.value;
+  if (!wire && !canvas.moving(event.pointerId)) {
+    // Capture the pointer as soon as it crosses the drag threshold, before the next frame.
+    canvas.move(event);
+    return;
+  }
+  if (wire?.pointer !== undefined && wire.pointer !== event.pointerId) return;
+  pendingPointer = event;
+  pointerFrame ??= requestAnimationFrame(() => finishPointerFrame(undefined, true));
 }
 async function connectPort(target: string, kind: PortKind) {
   const wire = workflowWire.value;
@@ -967,10 +1052,12 @@ function backgroundPointerDown(event: PointerEvent) {
   contextMenu.value = undefined;
 }
 function cancelWorkspaceGesture(event: PointerEvent) {
+  finishPointerFrame(event.pointerId);
   if (workflowWire.value?.pointer === event.pointerId) cancelPort();
   canvas.cancel(event);
 }
 function endWorkspaceGesture(event: PointerEvent) {
+  finishPointerFrame(event.pointerId, true);
   const wire = workflowWire.value;
   if (wire?.pointer === event.pointerId) {
     const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card-port],[data-card-output]");
@@ -1059,6 +1146,7 @@ function closeWorkflowPanel() {
 }
 async function workbenchHome() {
   projectHome.value = true;
+  catalogProjectId.value = "";
   closeWorkflowPanel();
   projectId.value = "";
   workbenchProjectTitle.value = "";
@@ -1208,11 +1296,13 @@ onMounted(() => {
       try { await openProject(projectId.value); }
       finally { draftLoaded.value = true; }
     });
-  } else void action(loadProjects);
+  } else void loadProjects();
   window.addEventListener("beforeunload", protectUnsavedDraft);
   window.addEventListener("keyup", releaseCanvasSpace);
 });
 onBeforeUnmount(() => {
+  finishPointerFrame();
+  projectsRequest?.abort();
   window.removeEventListener("beforeunload", protectUnsavedDraft);
   window.removeEventListener("keyup", releaseCanvasSpace);
 });
@@ -1255,6 +1345,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
     <section v-if="projectHome" class="project-home">
       <h1>我的项目</h1>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
+      <p v-if="projectsLoading" role="status" class="video-hint">正在加载项目…</p>
+      <v-alert v-if="projectsError" type="error" variant="tonal">
+        {{ projectsError }} <v-btn variant="text" @click="loadProjects">重试</v-btn>
+      </v-alert>
+      <p v-if="projectsLoaded && !projectsLoading && !projectsError && !projects.length" class="video-hint">还没有项目。</p>
       <div class="project-grid">
         <button class="project-tile project-new" :disabled="busy" @click="action(createProject)"><v-icon icon="mdi-plus" size="30" /><span>新建项目</span></button>
         <button v-for="project in projects" :key="project.id" class="project-tile" :disabled="busy"
@@ -1269,9 +1364,9 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         </button>
       </div>
     </section>
-    <section v-else-if="!mediaCanvasId && workbenchProjectTitle" class="project-home">
+    <section v-else-if="catalogProjectId === projectId && workbenchProjectTitle" v-show="!mediaCanvasId" class="project-home">
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
-      <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" mode="list" @back="action(showProjects)"
+      <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" :list-hidden="!!mediaCanvasId" :last-opened-canvas-id="lastOpenedCanvasId" mode="list" @back="action(showProjects)"
         @media="(id,runId) => action(() => openMediaCanvas(id,runId))"/>
     </section>
     <section v-else-if="!mediaCanvasId && error" class="project-home">
@@ -1340,7 +1435,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         </g>
         <path v-if="wirePreview" :d="wirePreview" class="preview-connection"/>
       </svg>
-      <article v-for="item in otherItems" :key="item.id" :data-canvas-node="item.id" class="canvas-object canvas-card" :class="{'canvas-selected':selectedIds.includes(item.id)}" :style="canvas.position(item.id)" @pointerdown="cardPointerDown($event,item)" @contextmenu="openCardMenu($event,item)">
+      <article v-for="item in visibleMediaItems" :key="item.id" :data-canvas-node="item.id" class="canvas-object canvas-card" :class="{'canvas-selected':selectedIds.includes(item.id)}" :style="canvas.position(item.id)" @pointerdown="cardPointerDown($event,item)" @contextmenu="openCardMenu($event,item)">
         <template v-if="workspaceGraph">
         <button class="workspace-port port-in content" :data-card-port="'content'" :data-card-id="item.id" aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(item.id, 'content'))">＋</button>
           <template v-if="item.kind === 'text'">
@@ -1404,7 +1499,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
           </template>
         </section>
       </article>
-      <article v-for="node in flowNodes" :key="node.id" :data-canvas-node="node.id" class="canvas-object canvas-card workflow-card"
+      <article v-for="node in visibleFlowNodes" :key="node.id" :data-canvas-node="node.id" class="canvas-object canvas-card workflow-card"
         :class="{ 'canvas-selected': selectedIds.includes(node.id), 'workflow-card-disabled': node.enabled === false, 'creative-card': node.kind === 'agent' && node.config.textOutput === true, 'workflow-card-processing': nodeProcessing(node.id) }" :style="canvas.position(node.id)" @pointerdown="workflowPointerDown($event,node)">
         <button v-if="node.kind==='agent'" class="workspace-port port-in content" data-card-port="content" :data-card-id="node.id"
           aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'content'))">＋</button>
@@ -1564,7 +1659,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         <button class="minimap-toggle" :aria-expanded="minimapOpen" aria-controls="canvas-minimap-map" @click="minimapOpen=!minimapOpen"><span>小地图</span><span>{{ minimapOpen ? '−' : '+' }}</span></button>
         <svg v-if="minimapOpen" id="canvas-minimap-map" viewBox="0 0 180 110" role="img" aria-label="点击或拖动小地图移动视野" @pointerdown="beginMinimap" @pointermove="moveMinimap" @pointerup="endMinimap" @pointercancel="endMinimap" @lostpointercapture="endMinimap">
           <rect v-bind="minimap.view" class="minimap-viewport" />
-          <rect v-for="card in minimap.cards" :key="card.id" v-bind="{x:card.x,y:card.y,width:card.width,height:card.height}" :class="['minimap-card',{'minimap-selected':selectedIds.includes(card.id)}]" />
+          <path :d="minimapShapes.unselected" class="minimap-card" />
+          <path :d="minimapShapes.selected" class="minimap-selected" />
         </svg>
       </aside>
       <nav class="canvas-tools" aria-label="画布视图">

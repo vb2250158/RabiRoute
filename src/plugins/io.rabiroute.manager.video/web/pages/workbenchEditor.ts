@@ -2,6 +2,7 @@
 // @ts-ignore Shared pure graph contract, also used by the storage/run owners.
 import { validateGraph, resolveLinkedText } from "../../workbenchGraph.mjs";
 import type { NodeLayout } from "./useVideoCanvas";
+export { canvasGraphThumbnail, wirePath } from "../../workbenchThumbnail.mjs";
 export type Point = { x:number; y:number };
 export type TextPreview = { attemptId:string; text:string };
 export type FlowNode = { id:string; kind:string; title?:string; enabled?:boolean; gate?:boolean; optional?:boolean; config:Record<string,any>; textPreview?:TextPreview; layout?:NodeLayout; inputs?:any[]; requirements?:any[]; [key:string]:unknown };
@@ -113,34 +114,6 @@ export function groupBounds(group:FlowGroup,positions:Record<string,Point>) {
   if(!points.length)return undefined;
   const x=Math.min(...points.map(p=>p.x))-28,y=Math.min(...points.map(p=>p.y))-56;
   return {x,y,width:Math.max(...points.map(p=>p.x))+NODE_WIDTH+28-x,height:Math.max(...points.map(p=>p.y))+NODE_HEIGHT+28-y};
-}
-export function wirePath(from:Point,to:Point) {const bend=Math.max(70,Math.abs(to.x-from.x)*.45);return `M ${from.x} ${from.y} C ${from.x+bend} ${from.y}, ${to.x-bend} ${to.y}, ${to.x} ${to.y}`;}
-export function canvasGraphThumbnail(canvas: WorkbenchCanvas) {
-  const visibleNodes = canvas.graph.nodes.slice(0, 120);
-  if (!visibleNodes.length) return;
-  const nodes = visibleNodes.map((node, index) => ({
-    id: node.id,
-    x: node.layout?.x ?? 416 * (index % 4),
-    y: node.layout?.y ?? 224 * Math.floor(index / 4),
-    width: node.layout?.width ?? 380,
-    height: node.layout?.height ?? (node.config.legacyCardId || node.config.textOutput ? 214 : 76),
-    enabled: node.enabled !== false
-  }));
-  const byId = new Map(nodes.map(node => [node.id, node]));
-  for (const node of visibleNodes) {
-    if (typeof node.config.legacyCardId === "string") byId.set(node.config.legacyCardId, byId.get(node.id)!);
-  }
-  const edges = [...canvas.graph.edges, ...(canvas.mediaLinks ?? []), ...Array.from(workflowInputLinks(visibleNodes).values()).flat()];
-  const wires = edges.slice(0, 240).flatMap(edge => {
-    const from = byId.get(edge.from), to = byId.get(edge.to);
-    if (!from || !to) return [];
-    return [wirePath({ x: from.x + from.width, y: from.y + from.height / 2 }, { x: to.x, y: to.y + to.height / 2 })];
-  });
-  const left = Math.min(...nodes.map(node => node.x));
-  const top = Math.min(...nodes.map(node => node.y));
-  const right = Math.max(...nodes.map(node => node.x + node.width));
-  const bottom = Math.max(...nodes.map(node => node.y + node.height));
-  return { viewBox: `${left - 80} ${top - 80} ${right - left + 160} ${bottom - top + 160}`, nodes, wires };
 }
 export function mergePage<T extends {id:string}>(current:T[],incoming:T[],limit=LIST_LIMIT){const all=[...new Map([...current,...incoming].map(row=>[row.id,row])).values()];return {rows:all.slice(-limit),removed:Math.max(0,all.length-limit)};}
 export function visibleList(length:number,scrollTop:number,height:number,rowHeight=80){const offset=Math.max(0,Math.min(scrollTop,Math.max(0,length*rowHeight-height))),start=Math.max(0,Math.floor(offset/rowHeight)-3),end=Math.min(length,Math.ceil((offset+height)/rowHeight)+3);return {start,end,top:start*rowHeight,bottom:Math.max(0,(length-end)*rowHeight)};}

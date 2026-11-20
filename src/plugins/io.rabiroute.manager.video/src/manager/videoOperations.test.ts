@@ -113,8 +113,8 @@ async function fixture(t: test.TestContext) {
 test("original Video contracts and separate Workbench contracts register with public connection access", async t => {
   const f = await fixture(t), original = (row: { contract: { operationId: string } }) => !row.contract.operationId.startsWith("manager.video.workbench.");
   assert.equal(f.bundle.operations.filter(original).length, 25); assert.equal(f.bundle.proxies.filter(original).length, 10);
-  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 24); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
-  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 60); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,60); assert.ok(rows.every(row => row.contract.exposure === "public"));
+  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 25); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
+  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 61); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,61); assert.ok(rows.every(row => row.contract.exposure === "public"));
   for (const path of ["/jobs/:mediaId", "/projects/:mediaId", "/assets/:mediaId"]) assert.ok(rows.some(row => row.contract.aliases?.includes("video:GET:/api/video" + path)));
   assert.equal((await f.request("/status")).status, 200); assert.equal((await f.request("/models/settings")).status, 200); assert.equal((await f.request("/compute/status")).status, 200);
 });
@@ -264,7 +264,16 @@ test("Workbench discovery validates original HTTP project, canvas, media, run an
   const project=await read("/v2/projects","POST",{id,title:"Discovery fixture"}),canvasId=project.defaultCanvasId,prefix=`/v2/projects/${id}/canvases/${canvasId}`;
   const canvas=await read(prefix);canvas.workspaceBindingKey="fixture";canvas.extension={retained:true};canvas.graph.nodes=[{id:"review",kind:"human",config:{}}];
   const saved=await read(prefix,"PUT",canvas);assert.deepEqual(saved.extension,{retained:true});
-  assert.equal((await read(`/v2/projects/${id}/canvases`)).canvases[0].id,canvasId);
+  const list = await f.request(`/v2/projects/${id}/canvases`);
+  assert.equal(list.status, 200);
+  assert.match(list.headers.get("server-timing") ?? "", /project;dur=\d+, index;dur=\d+, query;dur=\d+, total;dur=\d+/);
+  assert.equal((await list.json()).canvases[0].id, canvasId);
+  const projects = await f.request("/projects");
+  assert.match(projects.headers.get("server-timing") ?? "", /directories;dur=\d+, summaries;dur=\d+, total;dur=\d+/);
+  const preview = await read(prefix + "/thumbnail?revision=" + saved.revision);
+  assert.equal(preview.revision, saved.revision);
+  assert.equal(preview.thumbnail.nodes[0].id, "review");
+  assert.equal(Object.hasOwn(preview, "graph"), false);
   assert.equal((await read(prefix+"/editor")).value,null);assert.equal((await read(prefix+"/export")).id,canvasId);
   assert.equal((await read(`/v2/projects/${id}/index/rebuild`,"POST")).count,1);
   const runId=randomUUID(),run=await read(prefix+"/runs","POST",{id:runId,revision:saved.revision},202);assert.equal(run.id,runId);

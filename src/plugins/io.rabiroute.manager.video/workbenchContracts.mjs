@@ -27,6 +27,7 @@ export const workbenchResponses = Object.freeze({
   "workbench.canvas-copy": canvas,
   "workbench.canvas-import": canvas,
   "workbench.canvas-read": canvas,
+  "workbench.canvas-thumbnail": object({ revision: integer, thumbnail: { anyOf: [{ type: "null" }, object({ viewBox: string, nodes: array(opaque), wires: array(string) })] } }),
   "workbench.canvas-export": { description: "Current Workbench canvas or the losslessly reconstructed original linear definition.", anyOf: [canvas, object({ nodes: array(opaque) })] },
   "workbench.canvas-save": canvas,
   "workbench.media-read": object({ revision: integer, title: string, value: { anyOf: [{ type: "null" }, object({ version: integer, items: array(opaque), drafts: array(opaque) })] } }),

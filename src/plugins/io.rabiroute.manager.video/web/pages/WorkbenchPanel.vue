@@ -8,6 +8,8 @@ import { connectGraph, stageLayout, initialFlowNodeConfig, mergePage, rebaseWork
 const props = defineProps<{
   projectId: string;
   projectTitle?: string;
+  listHidden?: boolean;
+  lastOpenedCanvasId?: string;
   resolveCover?: (preview?: CanvasPreview) => CanvasCover | undefined;
   canvasId?: string;
   nodeId?: string;
@@ -178,7 +180,7 @@ async function initialize(){
   selectedEdge.value = props.edgeId || "";
 }
 watch(()=>props.projectId,(_next,previous)=>{rememberDraft(previous);++actionId;++openId;++listId;++initId;openController?.abort();listController?.abort();busy.value=false;saveFlight=undefined;listFlight=undefined;value.value=undefined;project.value=undefined;dirty.value=false;selected.value="";editor.value="";rows.value=[];cursor.value=null;listLoading.value=false;listLoaded.value=false;listError.value="";recovery.value=undefined;void action(initialize);});
-onMounted(()=>{void action(initialize);window.addEventListener("beforeunload",protect);});
+onMounted(()=>{void (props.mode === "list" ? initialize() : action(initialize));window.addEventListener("beforeunload",protect);});
 onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++actionId;openController?.abort();listController?.abort();window.removeEventListener("beforeunload",protect);});
 </script>
 <template>
@@ -200,7 +202,29 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
     <v-alert v-if="recovery" type="warning" variant="tonal">此画布有未保存的草稿。<v-btn @click="restoreDraft">恢复草稿</v-btn><v-btn variant="text" @click="forgetDraft();recovery=undefined">忽略草稿</v-btn></v-alert>
     <details v-if="mode === 'settings' && value?.importReport" class="report"><summary>导入报告</summary><pre>{{JSON.stringify(value.importReport,null,2)}}</pre></details>
     <details v-if="mode === 'settings' && value?.externalDependencies" class="report"><summary>外部依赖</summary><pre>{{JSON.stringify(value.externalDependencies,null,2)}}</pre></details>
-    <template v-if="mode === 'list'"><div class="list-tools"><div><h2>画布</h2></div><v-spacer/><input v-model="search" type="search" aria-label="搜索画布" placeholder="搜索画布" @keyup.enter="action(()=>list())"/><v-btn :disabled="listLoading" @click="action(()=>list())">搜索</v-btn></div><p v-if="listLoading && !rows.length" class="list-message" role="status">正在加载画布…</p><v-alert v-if="listError" type="error" variant="tonal" class="list-message">{{listError}} <v-btn variant="text" @click="list()">重试</v-btn></v-alert><WorkbenchCanvasList v-if="rows.length || (listLoaded && !listLoading && !listError)" :rows="rows" :disabled="busy" :project-id="projectId" :resolve-cover="resolveCover" @open="id=>action(()=>chooseCanvas(id))" @copy="row=>action(()=>copy(row))"/><div class="list-footer"><small v-if="listLoaded">{{trimmed?`当前保留第 ${trimmed+1}–${trimmed+rows.length} 项`:`已加载 ${rows.length} 张画布`}}</small><v-btn v-if="trimmed" variant="text" :disabled="listLoading" @click="action(()=>list())">返回首页</v-btn><v-btn v-if="cursor" :disabled="listLoading||busy" @click="action(()=>list(true))">{{listLoading?'加载中…':'加载下一页'}}</v-btn></div><details class="import-tools"><summary>导入与文件夹副本</summary><label>导入定义或材料包<input type="file" accept="application/json,.json" :disabled="busy" @change="event=>action(()=>importFile(event))"/></label><div class="list-tools"><input v-model="pastedFolder" aria-label="已粘贴的文件夹名" placeholder="已粘贴到 canvases/ 的文件夹名"/><v-btn :disabled="!pastedFolder||busy" @click="action(registerFolder)">登记副本</v-btn></div></details></template>
+    <template v-if="mode === 'list'">
+      <div class="list-tools">
+        <h2>画布</h2><v-spacer/>
+        <input v-model="search" type="search" aria-label="搜索画布" placeholder="搜索画布" @keyup.enter="list()"/>
+        <v-btn :disabled="listLoading" @click="list()">搜索</v-btn>
+      </div>
+      <p v-if="listLoading && !rows.length" class="list-message" role="status">正在加载画布…</p>
+      <v-alert v-if="listError" type="error" variant="tonal" class="list-message">
+        {{ listError }} <v-btn variant="text" @click="list()">重试</v-btn>
+      </v-alert>
+      <p v-if="listLoaded && !listLoading && !listError && !rows.length" class="list-message">
+        {{ search.trim() ? '没有匹配的画布。' : '还没有画布。' }}
+      </p>
+      <WorkbenchCanvasList v-if="rows.length" :rows="rows" :disabled="busy" :project-id="projectId"
+        :resolve-cover="resolveCover" :hidden="listHidden" :focused-id="lastOpenedCanvasId"
+        @open="id => action(() => chooseCanvas(id))" @copy="row => action(() => copy(row))"/>
+      <div class="list-footer">
+        <small v-if="rows.length">{{ trimmed ? `当前保留第 ${trimmed + 1}–${trimmed + rows.length} 项` : `已加载 ${rows.length} 张画布` }}</small>
+        <v-btn v-if="trimmed" variant="text" :disabled="listLoading" @click="list()">返回首页</v-btn>
+        <v-btn v-if="cursor" :disabled="listLoading || busy" @click="list(true)">{{ listLoading ? '加载中…' : '加载下一页' }}</v-btn>
+      </div>
+      <details class="import-tools"><summary>导入与文件夹副本</summary><label>导入定义或材料包<input type="file" accept="application/json,.json" :disabled="busy" @change="event=>action(()=>importFile(event))"/></label><div class="list-tools"><input v-model="pastedFolder" aria-label="已粘贴的文件夹名" placeholder="已粘贴到 canvases/ 的文件夹名"/><v-btn :disabled="!pastedFolder||busy" @click="action(registerFolder)">登记副本</v-btn></div></details>
+    </template>
     <template v-else-if="value">
       <div class="editor-layout">
         <aside v-if="mode === 'settings'" class="tool-rail"><label>画布名称<input v-model="value.name" @input="dirty=true"/></label><v-btn variant="text" size="small" @click="action(async()=>autoLayout())">排列流程节点</v-btn><label>执行目录绑定<input v-model="value.workspaceBindingKey" @input="dirty=true"/></label><details><summary>变量</summary><textarea v-model="variables" rows="6" aria-label="画布变量 JSON" @input="dirty=true"/></details><h3>添加节点</h3><div class="node-palette"><button v-for="(entry,kind) in definition?.capabilities" :key="kind" @click="action(async()=>add(String(kind)))"><span aria-hidden="true">＋</span>{{entry.label}}</button></div><h3>阶段</h3><div class="stage-form"><input v-model="stageName" aria-label="新阶段名称" placeholder="阶段名称"/><button :disabled="!stageName.trim()" aria-label="添加阶段" @click="createStage">＋</button></div><details class="connection-tools"><summary>键盘连接</summary><select v-model="edgeFrom" aria-label="前置节点"><option value="">选择前置</option><option v-for="node in value.graph.nodes.filter(n=>ports(n,'out').length)" :key="node.id" :value="node.id">{{node.title}}</option></select><select v-model="edgeTo" aria-label="后继节点"><option value="">选择后继</option><option v-for="node in value.graph.nodes.filter(n=>ports(n,'in').length)" :key="node.id" :value="node.id">{{node.title}}</option></select><select v-model="edgeCondition" aria-label="连接条件"><option value="success">成功后</option><option value="completed">结束后</option></select><v-btn :disabled="!edgeFrom||!edgeTo" @click="action(async()=>connect())">连接</v-btn></details></aside>

@@ -77,7 +77,7 @@ test("folder copies include materials, remap internal references, and retry with
   await assert.rejects(store.copyCanvas(id, { id: randomUUID(), folderName: "../escape", requestId: randomUUID() }));
 });
 test("paged index handles 5000 canvases without reading graph bodies", async t => {
-  const { store, id, project } = await fixture(t), index = path.join(store.projectDirectory(id), ".canvas-index");
+  const { store, id, project, stateRoot } = await fixture(t), index = path.join(store.projectDirectory(id), ".canvas-index");
   for (let start = 0; start < 5000; start += 100) await Promise.all(Array.from({ length: 100 }, (_, offset) => {
     const row = { id: randomUUID(), name: `期次 ${start + offset}`, revision: 0, nodeCount: 10, updatedAt: "2026-11-17" };
     return fs.writeFile(path.join(index, `${row.id}.json`), JSON.stringify(row));
@@ -89,6 +89,61 @@ test("paged index handles 5000 canvases without reading graph bodies", async t =
   assert.equal(count, 5001);
   const filtered = await store.listCanvases(id, { search: "期次 1234" }); assert.equal(filtered.canvases.length, 1);
   assert.equal((await store.readProject(id)).defaultCanvasId, project.defaultCanvasId);
+  const restarted = new VideoProjects({ stateRoot });
+  const readJson = restarted.json.bind(restarted);
+  restarted.json = (file, ...args) => {
+    assert.notEqual(path.dirname(file), index, "an indexed project should not reopen its summary files on restart");
+    return readJson(file, ...args);
+  };
+  const first = await restarted.listCanvases(id, { limit: 50 });
+  assert.equal(first.canvases.length, 50);
+  assert.equal(first.canvases[0].id, project.defaultCanvasId);
+  const source = await restarted.readCanvas(id, project.defaultCanvasId);
+  await restarted.saveCanvas(id, source.id, { ...source, name: "刚保存" });
+  assert.equal((await restarted.listCanvases(id, { limit: 1 })).canvases[0].name, "刚保存");
+  await assert.rejects(restarted.listCanvases(id, { limit: 50, cursor: first.nextCursor }), error => error.status === 409);
+});
+
+test("a remotely saved canvas advances a local index through the shared change history", async t => {
+  const { store, id, project, stateRoot } = await fixture(t);
+  const peer = new VideoProjects({ stateRoot: path.join(stateRoot, "peer"), workbenchProjectsRoot: store.root });
+  await peer.listCanvases(id);
+  const canvas = await store.readCanvas(id, project.defaultCanvasId);
+  await store.saveCanvas(id, canvas.id, { ...canvas, name: "来自另一台电脑" });
+  const readJson = peer.json.bind(peer);
+  peer.json = (file, ...args) => {
+    assert.notEqual(path.dirname(file), store.summaryDirectory(id));
+    return readJson(file, ...args);
+  };
+  assert.equal((await peer.listCanvases(id)).canvases[0].name, "来自另一台电脑");
+});
+
+test("committed canvas remains visible when the derived summary write fails", async t => {
+  const { store, id, project, stateRoot } = await fixture(t);
+  const canvas = await store.readCanvas(id, project.defaultCanvasId);
+  const indexEntry = store.indexEntry.bind(store);
+  store.indexEntry = async () => { throw new Error("simulated summary I/O error"); };
+  const saved = await store.saveCanvas(id, canvas.id, { ...canvas, name: "已保存" });
+  assert.equal(saved.revision, 1);
+  const restarted = new VideoProjects({ stateRoot });
+  assert.equal((await restarted.readCanvas(id, canvas.id)).name, "已保存");
+  assert.equal((await restarted.listCanvases(id)).canvases[0].name, "已保存");
+  assert.equal((await restarted.readCanvasSummary(id, canvas.id)).revision, 1);
+  store.indexEntry = indexEntry;
+  await store.saveCanvas(id, canvas.id, { ...saved, name: "已同步" });
+  assert.equal((await restarted.listCanvases(id)).canvases[0].name, "已同步");
+  assert.deepEqual(await fs.readdir(store.pendingSummaryDirectory(id)), []);
+});
+
+test("revision thumbnail serves only card geometry without loading the canvas body", async t => {
+  const { store, id, project } = await fixture(t);
+  const canvas = await store.readCanvas(id, project.defaultCanvasId);
+  canvas.graph.nodes = [{ id: "one", kind: "command", title: "标题不能出现在预览响应", config: {}, layout: { x: 90, y: 150, width: 420, height: 140 } }];
+  const saved = await store.saveCanvas(id, canvas.id, canvas);
+  store.readCanvas = () => assert.fail("previews should not load the canvas body for a persisted thumbnail");
+  const preview = await store.readCanvasThumbnail(id, canvas.id, String(saved.revision));
+  assert.deepEqual(preview.thumbnail.nodes, [{ id: "one", x: 90, y: 150, width: 420, height: 140, enabled: true }]);
+  assert.equal(Object.hasOwn(preview, "graph"), false);
 });
 test("graph owner rejects cycles, unsupported ports, missing references and invalid variable values", async t => {
   const { store, id, project } = await fixture(t), canvas = await store.readCanvas(id, project.defaultCanvasId), definition = store.definition;

@@ -1,19 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { canvasGraphThumbnail, visibleList, type CanvasCover, type CanvasPreview, type CanvasSummary, type WorkbenchCanvas } from "./workbenchEditor";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { visibleList, type CanvasCover, type CanvasPreview, type CanvasSummary } from "./workbenchEditor";
+import type { CanvasThumbnail } from "../../workbenchThumbnail.mjs";
 
 const props = defineProps<{
   rows: CanvasSummary[];
   disabled: boolean;
   resolveCover?: (preview?: CanvasPreview) => CanvasCover | undefined;
   projectId?: string;
+  focusedId?: string;
+  hidden?: boolean;
 }>();
 const emit = defineEmits<{ open: [id: string]; copy: [row: CanvasSummary] }>();
 const cardWidth = 208, gap = 16, rowHeight = 178;
 const scroller = ref<HTMLElement>(), top = ref(0), height = ref(480), width = ref(0);
 const failedCovers = ref(new Set<string>());
 const readyCovers = ref(new Set<string>());
-const thumbnails = ref(new Map<string, ReturnType<typeof canvasGraphThumbnail>>());
+const thumbnails = ref(new Map<string, CanvasThumbnail | null>());
 const mounted = ref(false);
 const columns = computed(() => Math.max(1, Math.floor((width.value + gap) / (cardWidth + gap))));
 const range = computed(() => visibleList(Math.ceil(props.rows.length / columns.value), top.value, height.value, rowHeight));
@@ -22,7 +25,7 @@ const cards = computed(() => props.rows.slice(range.value.start * columns.value,
   const key = `${row.id}:${row.revision}`;
   return { row, cover: cover && !failedCovers.value.has(cover.url) ? cover : undefined, key, thumbnail: thumbnails.value.get(`${props.projectId}/${key}`) };
 }));
-const previewRequests = computed(() => mounted.value && props.projectId ? cards.value.filter(card => !card.cover || !readyCovers.value.has(card.cover.url)) : []);
+const previewRequests = computed(() => mounted.value && !props.hidden && props.projectId ? cards.value.filter(card => !card.cover) : []);
 const gridStyle = computed(() => ({
   "--canvas-columns": String(columns.value),
   "--canvas-gap": gap + "px",
@@ -32,7 +35,7 @@ let observer: ResizeObserver | undefined;
 
 function resize() {
   const element = scroller.value;
-  if (!element) return;
+  if (!element || !element.clientWidth || props.hidden) return;
   const previousColumns = columns.value;
   const firstCard = Math.floor(top.value / rowHeight) * previousColumns;
   width.value = element.clientWidth;
@@ -50,6 +53,14 @@ function markCoverReady(url: string) {
   if (readyCovers.value.size > 300) readyCovers.value.delete(readyCovers.value.values().next().value!);
 }
 watch(() => props.rows[0]?.id, reset);
+watch(() => props.hidden, async hidden => {
+  if (hidden) return;
+  const previousTop = top.value;
+  await nextTick();
+  if (!scroller.value || props.hidden) return;
+  scroller.value.scrollTop = previousTop;
+  resize();
+});
 watch([() => props.projectId, () => previewRequests.value.map(card => card.key).join("/")], async (_next, _previous, onCleanup) => {
   const project = props.projectId;
   if (!project) return;
@@ -58,11 +69,11 @@ watch([() => props.projectId, () => previewRequests.value.map(card => card.key).
   const requests = previewRequests.value.filter(card => !thumbnails.value.has(`${project}/${card.key}`));
   for (let index = 0; index < requests.length && !controller.signal.aborted; index += 4) {
     await Promise.allSettled(requests.slice(index, index + 4).map(async ({ row, key }) => {
-      const response = await fetch(`/api/video/v2/projects/${encodeURIComponent(project)}/canvases/${encodeURIComponent(row.id)}`, { signal: controller.signal });
+      const response = await fetch(`/api/video/v2/projects/${encodeURIComponent(project)}/canvases/${encodeURIComponent(row.id)}/thumbnail?revision=${row.revision}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) });
       if (!response.ok) return;
-      const canvas = await response.json() as WorkbenchCanvas;
-      if (controller.signal.aborted || canvas.revision !== row.revision) return;
-      thumbnails.value.set(`${project}/${key}`, canvasGraphThumbnail(canvas));
+      const result = await response.json() as { revision: number; thumbnail: CanvasThumbnail | null };
+      if (controller.signal.aborted || result.revision !== row.revision) return;
+      thumbnails.value.set(`${project}/${key}`, result.thumbnail);
       if (thumbnails.value.size > 80) thumbnails.value.delete(thumbnails.value.keys().next().value!);
     }));
   }
@@ -78,11 +89,11 @@ defineExpose({ reset });
 </script>
 
 <template>
-  <div ref="scroller" class="canvas-list" role="list" aria-label="画布列表" tabindex="0" @scroll="top = ($event.target as HTMLElement).scrollTop">
+  <div ref="scroller" class="canvas-list" role="list" aria-label="画布列表" tabindex="0" @scroll="!hidden && (top = ($event.target as HTMLElement).scrollTop)">
     <div v-if="range.top" :style="{ height: range.top + 'px' }" aria-hidden="true"/>
     <div v-if="cards.length" class="canvas-grid" :style="gridStyle" role="presentation">
-      <article v-for="{ row, cover, thumbnail } in cards" :key="row.id" class="canvas-tile" role="listitem">
-        <button type="button" class="open-canvas" :title="row.name" :disabled="disabled" @click="emit('open', row.id)">
+      <article v-for="{ row, cover, thumbnail } in cards" :key="row.id" class="canvas-tile" :class="{'canvas-tile-current': row.id === focusedId}" role="listitem">
+        <button type="button" class="open-canvas" :title="row.name" :aria-current="row.id === focusedId ? 'true' : undefined" :disabled="disabled" @click="emit('open', row.id)">
           <span class="canvas-cover">
             <template v-if="!cover || !readyCovers.has(cover.url)">
               <svg v-if="thumbnail" :viewBox="thumbnail.viewBox" role="img" aria-label="画布缩略图">
@@ -135,7 +146,7 @@ defineExpose({ reset });
   background: var(--rr-surface);
   color: var(--rr-text);
 }
-.canvas-tile:hover, .canvas-tile:focus-within { border-color: var(--rr-accent); }
+.canvas-tile:hover, .canvas-tile:focus-within, .canvas-tile-current { border-color: var(--rr-accent); }
 .open-canvas {
   display: flex;
   flex-direction: column;

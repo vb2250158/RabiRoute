@@ -158,6 +158,21 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
     auditWorkbench(event: string, id: string, outcome: "started" | "committed" | "failed") {
       recordDataMutationAudit({ group:"config.video", event, owner:"Workbench", action:"write", target:{type:"workbench_run",id}, dataSource:{kind:"file",id:"data/workbench-runtime"}, outcome });
     },
+    reportWorkbenchRead(operation: string, id: string, stages: Record<string, number>, failed: boolean) {
+      recordDataMutationAudit({
+        level: failed ? "warn" : "info", group: "config.video", event: "workbench_list_timing", owner: "WorkbenchProjects", action: "read",
+        target: { type: "workbench_project", id }, dataSource: { kind: "file", id: "workbench_project_storage" },
+        outcome: failed ? "failed" : "no_change", durationMs: stages.total, result: operation,
+        changes: Object.entries(stages).filter(([stage]) => stage !== "total").map(([stage, ms]) => ({ field: `${stage}Ms`, to: ms })),
+      });
+    },
+    reportWorkbenchIndexFailure({ projectId, canvasId, revision, error }: { projectId: string; canvasId: string; revision: number; error: unknown }) {
+      recordDataMutationAudit({
+        level: "warn", group: "config.video", event: "workbench_canvas_summary_pending", owner: "WorkbenchProjects", action: "write",
+        target: { type: "workbench_canvas", id: canvasId }, dataSource: { kind: "file", id: "workbench_canvas_summary" },
+        outcome: "failed", after: { revision: String(revision) }, changes: [{ field: "projectId", to: projectId }], error,
+      });
+    },
     launchWorkbenchProcess(request: { attemptId:string; executable:string; argv:string[]; cwd:string; env:Record<string,string>; timeoutMs:number }, output: (stream:string, text:string)=>void|Promise<void>) {
       if (readOnly) throw new Error("当前服务只读。");
       if (workbenchProcesses.has(request.attemptId)) throw new Error("此 attempt 已有执行租约。");

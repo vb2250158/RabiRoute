@@ -21,36 +21,47 @@ export class VideoProjects extends WorkbenchProjects {
     }
     catch(error) { if(error.code==='ENOENT') throw new VideoError('项目不存在。',404); throw error; }
   }
-  async list(access) {
+  async list(access, timing = () => {}) {
     const fs=checkedFs(access);
-    const names=await fs.readdir(this.legacyRoot).catch(error=>{if(error.code==='ENOENT') return [];throw error;});
-    const modernNames=this.root===this.legacyRoot?names:await fs.readdir(this.root).catch(error=>{if(error.code==='ENOENT')return[];throw error;});
-    const projects=[], issues=[];
-    for (const name of names.filter(name=>/^[a-f0-9-]{36}\.json$/.test(name))) {
-      try { if(await this.modern(name.slice(0,-5),access)) continue; projects.push(await this.read(name.slice(0,-5),access)); }
-      catch { access?.assert(); issues.push({id:name.slice(0,-5),scope:'projects',code:'unreadable_record'}); }
-    }
-    access?.assert(); this.recordIssues=issues;
-    const summaries=projects.map(({id,title,updatedAt,revision,value})=>({id,title,updatedAt,revision,version:1,cardCount:Array.isArray(value?.items)?value.items.length:0, preview: previewFromItems(value?.items)}));
-    for(const name of modernNames.filter(name=>/^[a-f0-9-]{36}$/.test(name))) {
+    const start = performance.now();
+    const readDirectory = directory => fs.readdir(directory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+    const legacyNames = readDirectory(this.legacyRoot);
+    const [names, modernNames] = await Promise.all([legacyNames, this.root === this.legacyRoot ? legacyNames : readDirectory(this.root)])
+      .finally(() => timing("directories", performance.now() - start));
+    const summaryStart = performance.now();
+    const summaries = [], issues = [];
+    const currentIds = new Set(modernNames.filter(name => /^[a-f0-9-]{36}$/.test(name)));
+    const entries = [...Array.from(currentIds, id => ({ id, modern: true })),
+      ...names.filter(name => /^[a-f0-9-]{36}\.json$/.test(name)).map(name => ({ id: name.slice(0, -5), modern: false }))];
+    const readSummary = async ({ id, modern }) => {
       try {
-        const record = await this.readProject(name, access, true);
-        const indexFile = path.join(this.projectDirectory(name), '.canvas-index', this.id(record.defaultCanvasId) + '.json');
-        // Read only the default canvas summary. Project cards never load all of a project's canvases.
-        const canvas = await this.json(indexFile, access).catch(error => {
-          if (error.code === 'ENOENT') return undefined;
-          throw error;
-        });
-        summaries.push({
+        if (!modern) {
+          const { title, updatedAt, revision, value } = await this.read(id, access);
+          return { id, title, updatedAt, revision, version: 1, cardCount: Array.isArray(value?.items) ? value.items.length : 0, preview: previewFromItems(value?.items) };
+        }
+        const record = await this.readProject(id, access, true);
+        const canvas = await this.readCanvasSummary(id, record.defaultCanvasId, access);
+        return {
           ...record, title: canvas?.mediaEditor ? canvas.name : record.title,
           updatedAt: canvas?.updatedAt > record.updatedAt ? canvas.updatedAt : record.updatedAt,
           cardCount: canvas?.nodeCount ?? 0, preview: canvas?.preview, mediaEditor: Boolean(canvas?.mediaEditor),
           ...(record.migration?.phase === 'prepared' ? { migrationPending: true, migrationSourceRevision: record.migration.sourceRevision } : {})
-        });
+        };
+      } catch (error) {
+        access?.assert();
+        if (modern || error.status !== 426) issues.push({ id, scope: "projects", code: "unreadable_record" });
       }
-      catch {access?.assert();issues.push({id:name,scope:'projects',code:'unreadable_record'});}
+    };
+    try {
+      for (let offset = 0; offset < entries.length; offset += 8) {
+        summaries.push(...(await Promise.all(entries.slice(offset, offset + 8).map(readSummary))).filter(Boolean));
+      }
+      access?.assert();
+      this.recordIssues = issues;
+      return summaries.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+    } finally {
+      timing("summaries", performance.now() - summaryStart);
     }
-    return summaries.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
   }
   mutate(operation,access,key='legacy') {
     access?.assert();

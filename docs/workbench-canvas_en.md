@@ -15,7 +15,9 @@ projects/<projectId>/
   .canvas-index/
 ```
 
-Each canvas has its own revision and CAS. Editing another canvas does not update the project revision. A conflict preserves unsaved edits. The canvas list is a responsive grid with server-side search and cursor pagination. A tile shows its media cover when available. Visible tiles without a cover load a thumbnail of the node layout on demand.
+Each canvas has its own revision and CAS. Editing another canvas does not update the project revision. A conflict preserves unsaved edits for the user to resolve. A committed canvas is saved even if updating its derived summary or thumbnail fails; a pending marker lets the service read the committed version, and maintainers can rebuild the index.
+
+The canvas list is a responsive grid ordered by recent updates and supports name searches. A tile shows its media cover when available. Other visible tiles load node and connection geometry for the requested revision from the thumbnail endpoint. On first opening an older project, the server builds a local pagination index from its summaries. The shared directory keeps at most 64 recent summary updates for other computers to apply. If the project changes during pagination, the interface retains the current cards and asks the user to reload.
 
 Copying a canvas folder includes its definition and private materials. Copy/register operations allocate new identities and remap internal graph references. Junctions, escaping paths and broken references are rejected. Shared models, external assets, machine bindings and templates remain explicit dependencies. Copies do not inherit running processes or execution claims.
 
