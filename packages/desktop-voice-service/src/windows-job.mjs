@@ -18,6 +18,8 @@ function bindings() {
     attribute: bind('UpdateProcThreadAttribute', 'int', ['void *', 'uint32', 'uintptr_t', 'void *', 'size_t', 'void *', 'void *']),
     destroy: bind('DeleteProcThreadAttributeList', 'void', ['void *']),
     create: bind('CreateProcessW', 'int', ['str16', 'void *', 'void *', 'void *', 'int', 'uint32', 'void *', 'str16', 'void *', 'void *']),
+    openProcess: bind('OpenProcess', 'void *', ['uint32', 'int', 'uint32']),
+    processTimes: bind('GetProcessTimes', 'int', ['void *', 'void *', 'void *', 'void *', 'void *']),
     resume: bind('ResumeThread', 'uint32', ['void *']),
     terminate: bind('TerminateJobObject', 'int', ['void *', 'uint32']),
     close: bind('CloseHandle', 'int', ['void *']),
@@ -27,6 +29,22 @@ function bindings() {
     flags: bind('GetHandleInformation', 'int', ['void *', 'void *']),
   };
   return api;
+}
+
+/** Return the native creation time as Windows FILETIME ticks when the process is readable. */
+export function readWindowsProcessStart(pid) {
+  if (process.platform !== 'win32' || process.arch !== 'x64') return undefined;
+  const native = bindings();
+  const handle = native.openProcess(0x1000, 0, pid); // PROCESS_QUERY_LIMITED_INFORMATION
+  if (!handle) return undefined;
+  try {
+    const times = Buffer.alloc(32);
+    if (!native.processTimes(handle, times, times.subarray(8), times.subarray(16), times.subarray(24))) return undefined;
+    const started = times.readBigUInt64LE();
+    return started || undefined;
+  } finally {
+    native.close(handle);
+  }
 }
 function checked(ok, label) { if (!ok) throw Object.assign(Error(label + ' failed: ' + bindings().error()), { code: 'WINDOWS_JOB_ERROR' }); }
 function quote(value) {

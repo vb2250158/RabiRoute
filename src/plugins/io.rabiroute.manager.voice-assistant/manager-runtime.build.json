@@ -35,6 +35,7 @@
     "@rabilink/desktop-voice-service/speech-catalog": "packages/desktop-voice-service/src/speech-catalog.mjs",
     "@rabilink/desktop-voice-service/model-providers": "packages/desktop-voice-service/src/model-providers.mjs",
     "@rabilink/desktop-voice-service/windows-secrets": "packages/desktop-voice-service/src/windows-secrets.mjs",
+    "@rabilink/desktop-voice-service/windows-job": "packages/desktop-voice-service/src/windows-job.mjs",
     "@rabilink/desktop-voice-service/host": "packages/desktop-voice-service/src/assistant-host.mjs",
     "@rabilink/desktop-voice-service/speech-sample": "packages/desktop-voice-service/src/speech-sample.mjs",
     "@rabilink/desktop-voice-service/settings": "packages/desktop-voice-service/src/assistant-settings.mjs",

@@ -10,6 +10,7 @@
     "./speech-catalog": "./src/speech-catalog.mjs",
     "./model-providers": "./src/model-providers.mjs",
     "./windows-secrets": "./src/windows-secrets.mjs",
+    "./windows-job": "./src/windows-job.mjs",
     "./host": "./src/assistant-host.mjs",
     "./speech-sample": "./src/speech-sample.mjs",
     "./settings": "./src/assistant-settings.mjs",

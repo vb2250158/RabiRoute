@@ -1,18 +1,44 @@
 import {DatabaseSync} from 'node:sqlite';
-import {mkdir,open,readFile,statfs,unlink} from 'node:fs/promises';
+import {readFileSync,unlinkSync} from 'node:fs';
+import {mkdir,open,readFile,stat,statfs,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 import {transformWindowsSecret} from '@rabilink/desktop-voice-service/windows-secrets';
+import {readWindowsProcessStart} from '@rabilink/desktop-voice-service/windows-job';
 
 const newId=()=> 'local-'+randomUUID().slice(0,30);
 const validId=id=>typeof id==='string'&&/^[A-Za-z0-9:._-]{1,40}$/.test(id);
 const failed=(code,cause)=>Object.assign(new Error(code,{cause}),{code});
 const storageFull=error=>error.code==='ENOSPC'||(Number.isInteger(error.errcode)&&(error.errcode&255)===13);
 
+function lockOwnerIsActive(owner,modifiedTime){
+ try{process.kill(owner.pid,0)}catch(error){if(error.code==='ESRCH')return false;throw error}
+ const started=readWindowsProcessStart(owner.pid);
+ if(started===undefined)return true;
+ if(owner.processStart!==undefined){
+  if(typeof owner.processStart!=='string'||!/^\d{1,19}$/.test(owner.processStart))return true;
+  return owner.processStart===started.toString();
+ }
+ // Old leases contain only a PID. Allow a margin for file timestamp precision.
+ const startedMs=Number((started-116444736000000000n)/10000n);
+ return startedMs<=modifiedTime+2000;
+}
+
+function reclaimStaleLock(databasePath,lockPath,old){
+ const guard=new DatabaseSync(databasePath,{timeout:1500});
+ try{
+  // Serialize stale-lock removal so another recoverer cannot unlink a replacement.
+  guard.exec('BEGIN IMMEDIATE');
+  if(readFileSync(lockPath,'utf8')!==old)throw failed('ASSISTANT_CONTEXT_IN_USE');
+  unlinkSync(lockPath);
+ }finally{guard.close()}
+}
+
 /** One local owner. Content is AES-GCM encrypted; DPAPI CurrentUser wraps its key. */
 export async function openConversationStore(directory,{protect=value=>transformWindowsSecret(value),unprotect=value=>transformWindowsSecret(value,true),initialId}={}){
  if(initialId!==undefined&&!validId(initialId))throw failed('ASSISTANT_CONTEXT_FILE_INVALID');
- const lockPath=join(directory,'conversation.lock'),lease=JSON.stringify({pid:process.pid,token:randomUUID()});
+ const lockPath=join(directory,'conversation.lock'),databasePath=join(directory,'conversation.sqlite');
+ const lease=JSON.stringify({pid:process.pid,token:randomUUID(),processStart:readWindowsProcessStart(process.pid)?.toString()});
  let lock,db,key;
  try{
   await mkdir(directory,{recursive:true});
@@ -22,12 +48,12 @@ export async function openConversationStore(directory,{protect=value=>transformW
    if(error.code!=='EEXIST')throw error;
    const old=await readFile(lockPath,'utf8');let owner;try{owner=JSON.parse(old)}catch{throw failed('ASSISTANT_CONTEXT_IN_USE')}
    if(!Number.isSafeInteger(owner.pid)||owner.pid<=0)throw failed('ASSISTANT_CONTEXT_IN_USE');
-   try{process.kill(owner.pid,0);throw failed('ASSISTANT_CONTEXT_IN_USE')}catch(e){if(e.code!=='ESRCH')throw e}
-   if(await readFile(lockPath,'utf8')!==old)throw failed('ASSISTANT_CONTEXT_IN_USE');
-   await unlink(lockPath);lock=await open(lockPath,'wx',0o600);
+   const info=await stat(lockPath);
+   if(lockOwnerIsActive(owner,info.mtimeMs))throw failed('ASSISTANT_CONTEXT_IN_USE');
+   reclaimStaleLock(databasePath,lockPath,old);lock=await open(lockPath,'wx',0o600);
   }
   await lock.writeFile(lease);await lock.sync();
-  db=new DatabaseSync(join(directory,'conversation.sqlite'),{timeout:1500});
+  db=new DatabaseSync(databasePath,{timeout:1500});
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; CREATE TABLE IF NOT EXISTS metadata(name TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,role TEXT NOT NULL,status TEXT NOT NULL,payload BLOB NOT NULL);');
   const meta=name=>db.prepare('SELECT value FROM metadata WHERE name=?').get(name)?.value;
   const setMeta=(name,value)=>db.prepare('INSERT INTO metadata(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value').run(name,value);

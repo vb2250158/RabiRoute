@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {mkdtemp,rm,readFile,writeFile,utimes} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {openConversationStore} from '../src/conversation-store.mjs';
 import {createStandaloneConversation} from '../src/conversation.mjs';
 import {createChatModel} from '@rabilink/desktop-voice-service/chat-model';
@@ -36,6 +36,39 @@ test('storage has one owner, rejects unreadable data without resetting it and re
  try{store=await openConversationStore(dir,crypto);await assert.rejects(openConversationStore(dir,crypto),/CONTEXT_IN_USE/);store.commit({id:store.read().id,messages:[{id:'private',role:'user',text:'private example'}]});await store.close();
   const path=join(dir,'conversation.sqlite'),before=await readFile(path);await assert.rejects(openConversationStore(dir,{...crypto,unprotect:()=>{throw Error('WRONG_USER')}}),/CONTEXT_LOAD_FAILED/);assert.deepEqual(await readFile(path),before);
   store=await openConversationStore(dir,crypto);assert.equal(store.find('private').text,'private example');
+ }finally{await store?.close();await rm(dir,{recursive:true,force:true})}
+});
+
+test('Windows reclaims a conversation lease from a reused PID and keeps one active owner', {
+ skip:process.platform!=='win32'||process.arch!=='x64'
+},async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'assistant-context-'));
+ const lockPath=join(dir,'conversation.lock');
+ let store;
+ try{
+  store=await openConversationStore(dir,crypto);
+  const {id}=store.read();
+  store.commit({id,messages:[{id:'kept',role:'user',text:'保留对话'}]});
+  await store.close();
+
+  await writeFile(lockPath,JSON.stringify({pid:process.pid,token:'legacy-owner'}));
+  const past=new Date(Date.now()-86400000);
+  await utimes(lockPath,past,past);
+  const opens=await Promise.allSettled([openConversationStore(dir,crypto),openConversationStore(dir,crypto)]);
+  const owners=opens.filter(result=>result.status==='fulfilled').map(result=>result.value);
+  store=owners[0];
+  try{assert.equal(owners.length,1)}finally{await Promise.all(owners.slice(1).map(owner=>owner.close()))}
+  assert.equal(store.read().id,id);
+  assert.equal(store.find('kept').text,'保留对话');
+  const lease=JSON.parse(await readFile(lockPath,'utf8'));
+  assert.match(lease.processStart,/^\d+$/);
+  await assert.rejects(openConversationStore(dir,crypto),{code:'ASSISTANT_CONTEXT_IN_USE'});
+  await store.close();
+
+  await writeFile(lockPath,JSON.stringify({...lease,processStart:'1'}));
+  store=await openConversationStore(dir,crypto);
+  assert.equal(store.read().id,id);
+  assert.equal(store.count(),1);
  }finally{await store?.close();await rm(dir,{recursive:true,force:true})}
 });
 
