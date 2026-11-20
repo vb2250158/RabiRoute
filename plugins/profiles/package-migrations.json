@@ -114,9 +114,10 @@
         "0.1.8",
         "0.1.9",
         "0.1.10",
-        "0.1.11"
+        "0.1.11",
+        "0.1.12"
       ],
-      "toVersion": "0.1.12"
+      "toVersion": "0.1.13"
     },
     {
       "packageId": "io.rabiroute.endpoint.feishu",

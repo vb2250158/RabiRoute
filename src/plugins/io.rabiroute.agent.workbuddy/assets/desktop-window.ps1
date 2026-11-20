@@ -47,7 +47,7 @@ $app = Get-Process -Id $WorkBuddyPid
 if ($app.Path -ne $Executable) { throw 'WorkBuddy main window is not ready.' }
 $window = $app.MainWindowHandle
 if ($window -eq 0) { $window = [WorkBuddyDesktopWindow]::FindMainWindow($WorkBuddyPid) }
-if ($window -eq 0) { throw 'WorkBuddy main window is not ready.' }
+if ($window -eq 0) { exit 42 }
 if ($Minimize) {
     $deadline = [Diagnostics.Stopwatch]::StartNew()
     do {

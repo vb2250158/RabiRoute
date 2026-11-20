@@ -21,6 +21,20 @@ test("an active connector is reused and concurrent cold starts join one launch",
   assert.equal(calls, 1);
 });
 
+test("a launcher conflict reuses the connector that became ready during startup", async () => {
+  let ready = false;
+  const conflict = new Error("another WorkBuddy owner is already running");
+  const ensure = createWorkbuddyDesktopBootstrap(fixturePaths, {
+    supported: true, timeoutMs: 1000, isReady: async () => ready,
+    launch: async () => { ready = true; throw conflict; }
+  });
+  await ensure();
+  const unavailable = createWorkbuddyDesktopBootstrap(fixturePaths, {
+    supported: true, timeoutMs: 1000, isReady: async () => false, launch: async () => { throw conflict; }
+  });
+  await assert.rejects(unavailable(), error => error === conflict);
+});
+
 test("one cancelled request leaves other waiters attached to the same desktop startup", async () => {
   let ready = false;
   let began!: () => void, release!: () => void;

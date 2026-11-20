@@ -26,9 +26,19 @@ async function launchInteractiveWorker({ scannerEntry, applicationRoot }: Deskto
   const { stdout } = await execute("whoami.exe", ["/user", "/fo", "csv", "/nh"], { windowsHide: true, timeout: 4_000 });
   const sid = /,"(S-1-(?:\d+-)*\d+)"\s*$/i.exec(stdout.trim())?.[1];
   if (!sid) throw new Error("无法确认 WorkBuddy 桌面连接器的 Windows 用户。");
-  await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-File", launcher,
-    "-Node", process.execPath, "-ApplicationRoot", applicationRoot, "-OwnerSid", sid, "-WorkBuddyHome", workbuddyHomeDir()],
-    { windowsHide: true, timeout: 8_000 });
+  try {
+    await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-STA", "-File", launcher,
+      "-Node", process.execPath, "-ApplicationRoot", applicationRoot, "-OwnerSid", sid, "-WorkBuddyHome", workbuddyHomeDir(),
+      ...(process.env.RABI_WORKBUDDY_RESTART_UNMANAGED === "1" ? ["-RestartUnmanaged"] : [])],
+      { windowsHide: true, timeout: 22_000 });
+  } catch (error) {
+    const failure = error as { code?: number | string; killed?: boolean };
+    if (failure.code === 42) return; // A managed desktop is still starting. Wait for its original relay.
+    if (failure.code === 41) {
+      throw new Error("WorkBuddy 已独立启动。启用 Rabi 的自动接管选项后，后续原聊天消息可由 Rabi 启动并恢复。", { cause: error });
+    }
+    throw new Error(failure.killed ? "WorkBuddy 桌面连接器启动超时。" : "Windows 未能启动 WorkBuddy 桌面连接器。", { cause: error });
+  }
 }
 
 /** Shared readiness per Manager and single native ownership per Windows desktop. */
@@ -43,7 +53,11 @@ export function createWorkbuddyDesktopBootstrap(paths: DesktopBootstrapPaths, de
     assertCurrent?.();
     if (!dependencies.supported) throw new Error("WorkBuddy 桌面创建需要 Windows 登录会话。");
     starting ??= (async () => {
-      await dependencies.launch(paths);
+      try { await dependencies.launch(paths); }
+      catch (error) {
+        if (await dependencies.isReady()) return;
+        throw error;
+      }
       const deadline = performance.now() + dependencies.timeoutMs;
       while (performance.now() < deadline) {
         if (await dependencies.isReady()) return;

@@ -123,7 +123,14 @@ export async function sendWorkbuddyThreadMessage(params: {
     return { threadId: resolved.id, action: "started", openedThread: false, transport: "http",
       warning: "WorkBuddy 原任务已接收，可能仍在排队；未确认执行开始、回答完成或桌面即时显示。" };
   } catch (error) {
-    if (!params.continueUnloaded || task.background || !(error instanceof WorkbuddyDeliveryError) || error.outcome !== "unreachable") throw error;
+    if (!(error instanceof WorkbuddyDeliveryError) || error.outcome !== "unreachable") throw error;
+    if (task.background) {
+      throw new WorkbuddyDeliveryError(
+        "这次 WorkBuddy 定时任务已经没有可接收消息的会话。要追问结果，请在普通 WorkBuddy 聊天里继续。",
+        "unreachable"
+      );
+    }
+    if (!params.continueUnloaded) throw error;
     await params.continueUnloaded(task);
     return { threadId: task.id, action: "started", openedThread: false, transport: "desktop-ipc",
       warning: "WorkBuddy 原桌面会话已接收，后续执行状态以原聊天记录为准。" };

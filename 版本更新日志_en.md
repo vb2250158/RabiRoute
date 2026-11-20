@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.52 - 2026-11-20
+
+- WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.13 allows more time for desktop startup and reuses the original starting connector. Local users may explicitly opt into restarting their separately opened client; the default preserves it. Scheduled runs without a receiving session explain where to follow up, while original delivery IDs and uncertain receipts remain intact. Adopted independently on Host 0.15.50; no new full Host package is claimed.
+
 ## 0.15.51 - 2026-11-20
 
 - WebGUI account login, registration, logout and avatar actions use the existing configurable 30-second response deadline, including response body reads. Errors or timeouts end loading and refresh account status without resending the submission. Delivered as a Web hot patch; the full Host package remains 0.15.50.

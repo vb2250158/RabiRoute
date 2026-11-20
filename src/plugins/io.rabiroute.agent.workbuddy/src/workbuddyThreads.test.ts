@@ -563,6 +563,22 @@ test("unloaded continuation can use only the original ordinary desktop task", as
   });
 });
 
+test("a scheduled run without an owner explains how to follow up without launching a desktop", async t => {
+  const root = createHome([]);
+  const cwd = path.join(root, "project");
+  fs.mkdirSync(cwd);
+  const database = new DatabaseSync(path.join(root, "workbuddy.db"));
+  database.prepare("INSERT INTO sessions (id, cwd, title, status, is_background_automation) VALUES (?, ?, ?, ?, 1)")
+    .run("scheduled", cwd, "Scheduled test", "completed");
+  database.close();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await withHome(root, async () => {
+    const send = () => sendWorkbuddyThreadMessage({ threadId: "scheduled", cwd, prompt: "Follow up",
+      continueUnloaded: async () => assert.fail("a scheduled run must never start an ordinary desktop chat") });
+    await assert.rejects(send, /定时任务.*普通 WorkBuddy 聊天/);
+  });
+});
+
 test("the Manager continues an unloaded original chat through the typed desktop relay", { skip: process.platform !== "win32" }, async t => {
   const root = createHome([]);
   const cwd = path.join(root, "project");

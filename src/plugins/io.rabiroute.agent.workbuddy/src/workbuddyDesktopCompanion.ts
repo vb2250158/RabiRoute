@@ -12,6 +12,8 @@ import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 
 const execute = promisify(execFile);
 type Reply = { id?: number; result?: unknown; error?: { message: string } };
+class RendererHandshakeTimeout extends Error {}
+const desktopStartupTimeoutMs = 120_000;
 
 export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
   if (process.platform !== "win32") throw new Error("The WorkBuddy desktop connector requires Windows.");
@@ -64,7 +66,7 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
     if (closed) throw new Error("WorkBuddy renderer pipe is unavailable.");
     const id = ++serial;
     const reply = await new Promise<Reply>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`WorkBuddy renderer rejected or timed out: ${method}.`)), timeoutMs);
+      const timer = setTimeout(() => reject(new RendererHandshakeTimeout(`WorkBuddy renderer timed out: ${method}.`)), timeoutMs);
       pending.set(id, result => { clearTimeout(timer); resolve(result); });
       input.write(`${JSON.stringify({ id, method, params, sessionId })}\0`);
     }).finally(() => pending.delete(id));
@@ -79,10 +81,15 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
   };
 
   try {
-    const deadline = performance.now() + 20_000;
+    const deadline = performance.now() + desktopStartupTimeoutMs;
     let targetId: string | undefined;
     while (!targetId && performance.now() < deadline) {
-      const { targetInfos } = await call<{ targetInfos: Array<{ targetId: string; type: string; url: string }> }>("Target.getTargets");
+      const targets = await call<{ targetInfos: Array<{ targetId: string; type: string; url: string }> }>("Target.getTargets")
+        .catch(error => {
+          if (error instanceof RendererHandshakeTimeout) return undefined;
+          throw error;
+        });
+      const targetInfos = targets?.targetInfos ?? [];
       const matches = targetInfos.filter(target => target.type === "page" && target.url.startsWith("file:")
         && new URL(target.url).pathname.toLowerCase() === renderer);
       if (matches.length > 1) throw new Error("WorkBuddy exposes more than one main renderer.");
@@ -97,8 +104,15 @@ export async function startWorkbuddyDesktopCompanion(windowObserver: string) {
       if (reply.exceptionDetails) throw new Error("WorkBuddy renderer did not apply the desktop action.");
       return reply.result;
     };
-    const minimized = await observe(true);
-    if (!minimized.minimized || minimized.isForeground) throw new Error("WorkBuddy could not start minimized.");
+    let minimized: Awaited<ReturnType<typeof observe>> | undefined;
+    while (!minimized && performance.now() < deadline) {
+      minimized = await observe(true).catch(error => {
+        if ((error as { code?: number }).code === 42) return undefined;
+        throw error;
+      });
+      if (!minimized) await delay(300);
+    }
+    if (!minimized?.minimized || minimized.isForeground) throw new Error("WorkBuddy could not start minimized.");
     const create = createWorkbuddyDesktopCreator({
       evaluate: async <T>(expression: string) => (await run(expression, true)).value as T,
       focusComposer: async expression => {
