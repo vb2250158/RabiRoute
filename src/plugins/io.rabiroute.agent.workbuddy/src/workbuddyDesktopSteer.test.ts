@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { requestWorkbuddyDesktopMessage, requestWorkbuddyDesktopSteer, serveWorkbuddyDesktopRelay } from "./workbuddyDesktopRelay.js";
-import { workbuddyDesktopContinuationReadinessExpression, workbuddyDesktopMessageExpression } from "./workbuddyDesktopSteer.js";
+import { dispatchWorkbuddyDesktopMessage, workbuddyDesktopContinuationReadinessExpression, workbuddyDesktopMessageExpression } from "./workbuddyDesktopSteer.js";
 import { workbuddyRecordConfirmsDelivery } from "./workbuddyHistory.js";
 import { RABI_MESSAGE_CONTENT_HEADER, RABI_MESSAGE_SOURCE_HEADER } from "@rabiroute/host-api/shared/rabiMessage";
 
@@ -131,6 +131,37 @@ test("cold continuation waits for the desktop lookup and original workspace with
   info.transport = "local";
   assert.equal((await send()).state, "accepted");
   assert.equal(sends, 1);
+});
+
+test("a cold renderer lookup timeout leaves the exact continuation definitively unsent", async () => {
+  const input = { threadId: "original", workspace: "C:/project", text: "private fixture prompt", deliveryId: "same-intent" };
+  const signal = new AbortController().signal;
+  const expressions: string[] = [];
+  const result = await dispatchWorkbuddyDesktopMessage(input, signal, "continue", async expression => {
+    expressions.push(expression);
+    throw new Error("WorkBuddy renderer timed out: Runtime.evaluate.");
+  });
+  assert.deepEqual(result, { state: "unavailable", threadId: "original", deliveryId: "same-intent" });
+  assert.equal(expressions.length, 1);
+  assert.ok(!expressions[0].includes(input.text));
+  assert.ok(!expressions[0].includes(input.deliveryId));
+  assert.ok(!expressions[0].includes(".sendPrompt("));
+});
+
+test("a timeout after the continuation send boundary stays uncertain", async () => {
+  const input = { threadId: "original", workspace: "C:/project", text: "private fixture prompt", deliveryId: "same-intent" };
+  const signal = new AbortController().signal;
+  const timeout = new Error("WorkBuddy renderer timed out: Runtime.evaluate.");
+  const expressions: string[] = [];
+  await assert.rejects(dispatchWorkbuddyDesktopMessage(input, signal, "continue", async expression => {
+    expressions.push(expression);
+    if (expressions.length === 1) return "ready";
+    throw timeout;
+  }), error => error === timeout);
+  assert.equal(expressions.length, 2);
+  assert.ok(!expressions[0].includes(input.text));
+  assert.ok(expressions[1].includes(input.text));
+  assert.ok(expressions[1].includes(".sendPrompt("));
 });
 
 test("the relay declines steer on an old connector and sends the typed action only to a compatible connector", async () => {

@@ -353,7 +353,7 @@
     {
       "id": "agent:workbuddy",
       "package": "io.rabiroute.agent.workbuddy",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []

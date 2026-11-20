@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.53 - 2026-11-20
+
+- WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.14 separates a prompt-free preflight timeout from a timeout after message dispatch. Preflight failure is definitively unsent and can resume under the original ID; errors after dispatch stay uncertain without automatic resend. The isolated build, 149 regressions and packaged connector acceptance passed. Production Rabi remains closed at the user's request; this version has not been formally adopted.
+
 ## 0.15.52 - 2026-11-20
 
 - WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.13 allows more time for desktop startup and reuses the original starting connector. Local users may explicitly opt into restarting their separately opened client; the default preserves it. Scheduled runs without a receiving session explain where to follow up, while original delivery IDs and uncertain receipts remain intact. Adopted independently on Host 0.15.50; no new full Host package is claimed.

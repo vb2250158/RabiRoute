@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { normalizeWorkbuddyWorkspace } from "./workbuddySessionStore.js";
 
 export type WorkbuddyDesktopMessageInput = {
@@ -38,6 +39,28 @@ export function workbuddyDesktopContinuationReadinessExpression({ threadId, work
     ${desktopConversationLookup}
     return readiness;
   })()`;
+}
+
+export async function dispatchWorkbuddyDesktopMessage(
+  input: WorkbuddyDesktopMessageInput, signal: AbortSignal, mode: WorkbuddyDesktopMessageMode,
+  evaluate: (expression: string, timeoutMs?: number) => Promise<unknown>
+): Promise<WorkbuddyDesktopMessageResult> {
+  signal.throwIfAborted();
+  if (mode === "continue") {
+    const lookup = workbuddyDesktopContinuationReadinessExpression(input);
+    const deadline = performance.now() + 6_000;
+    let readiness: unknown = "loading";
+    while (readiness === "loading" && performance.now() < deadline) {
+      // This expression does not have the prompt or a send operation. A late reply can only finish the lookup.
+      readiness = await evaluate(lookup, Math.max(1, deadline - performance.now())).catch(() => undefined);
+      signal.throwIfAborted();
+      if (readiness === "loading") await delay(200, undefined, { signal });
+    }
+    if (readiness !== "ready") return { state: "unavailable", threadId: input.threadId, deliveryId: input.deliveryId };
+  }
+  signal.throwIfAborted();
+  // Errors after dispatch are deliberately left uncertain. The original native history owns reconciliation.
+  return await evaluate(workbuddyDesktopMessageExpression(input, mode)) as WorkbuddyDesktopMessageResult;
 }
 
 /** Use the desktop’s native send operation with the requested queue behavior. */
