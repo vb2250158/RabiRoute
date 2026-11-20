@@ -102,7 +102,7 @@ export function createStandaloneConversation({ settings, credentials, onError, o
       if (JSON.stringify(next) === JSON.stringify(configuredProfile)) return { applied: false, deferred: false };
       const result = session.configure(next); configuredProfile = next; return result;
     },
-    async submit(text, requestId, {source='text',details,conversationId,recentSpeech} = {}) {
+    async submit(text, requestId, {source='text',details,conversationId,recentSpeech,output='resident'} = {}) {
       if (closed) throw Error('ASSISTANT_CLOSED');
       if (typeof text !== 'string' || !text.trim() || text.length > 16000 || typeof requestId !== 'string' || requestId.length > 128) throw Error('ASSISTANT_INPUT_INVALID');
       if(conversationId!==undefined&&conversationId!==id)throw Error('ASSISTANT_CONTEXT_CHANGED');
@@ -121,7 +121,8 @@ export function createStandaloneConversation({ settings, credentials, onError, o
       const userMessage={id:requestId,role:'user',text,status:'queued',createdAt:new Date().toISOString(),source:source==='speech'?'speech':'text',...(source==='speech'&&details?{details:safeSpeechDetails(details)}:{}) };
       messages.push(userMessage);mark(userMessage);try{flush()}catch(error){messages=messages.filter(m=>m!==userMessage);dirty.delete(userMessage.id);accepted.delete(requestId);throw error}
       messages = messages.slice(-100); publish();
-      Promise.resolve().then(()=>onSubmitted(userMessage,settings())).catch(()=>{});
+      const playOnHost=output!=='client';
+      if(playOnHost)Promise.resolve().then(()=>onSubmitted(userMessage,settings())).catch(()=>{});
       let token, started = false, response;
       const config=structuredClone(settings());
       const speechObservation=source==='speech'?asrAgentContext(userMessage.details):undefined;
@@ -130,16 +131,17 @@ export function createStandaloneConversation({ settings, credentials, onError, o
         if(value.expression&&Object.keys(value.expression).length){response.expression=value.expression;response.details.expression=value.expression;token?.setSpeech({expression:value.expression})}
         if(value.warning)response.expressionWarning=value.warning;
         response.text=prosePrefix+value.text;if(value.delta)token?.append(value.delta);
-        observer?.onText({responseId:response.id,text:response.text,expression:response.expression});mark(response);publish();
+        if(playOnHost)observer?.onText({responseId:response.id,text:response.text,expression:response.expression});
+        mark(response);publish();
       };
       const begin = () => {
         if (started) return;
         started = true;
-        const voiceState=observer?.voice.getState();
-        response = { id: 'reply-' + requestId, role:'assistant',text:'',status:'generating',createdAt:new Date().toISOString(),details:{kind:'tts',requests:[],requestCount:0,reason:voiceState?.phase!=='running'?'本次未开启语音播放':voiceState.outputEnabled===false?'本次播报已静音':'等待播报请求'} };
+        const voiceState=playOnHost?observer?.voice.getState():undefined;
+        response = { id: 'reply-' + requestId, role:'assistant',text:'',status:'generating',createdAt:new Date().toISOString(),details:{kind:'tts',requests:[],requestCount:0,reason:!playOnHost?'由移动端处理播报':voiceState?.phase!=='running'?'本次未开启语音播放':voiceState.outputEnabled===false?'本次播报已静音':'等待播报请求'} };
         messages.push(response);mark(response);messages=messages.slice(-100);
         visualOwner={responseId:response.id,inputEpoch:visualInputEpoch};
-        if (observer?.voice.getState().phase === 'running') token = observer.voice.beginResponse({ id: response.id });
+        if (voiceState?.phase === 'running') token = observer.voice.beginResponse({ id: response.id });
       };
       const work = conversation.run(text, {
         speechCapabilities:policy,speechObservation,recentSpeech:source==='speech'?recentSpeech:undefined,

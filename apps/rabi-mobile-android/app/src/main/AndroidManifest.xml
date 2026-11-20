@@ -68,6 +68,7 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         tools:replace="android:allowBackup">
+        <activity android:name=".assistant.MobileAssistantActivity" android:exported="false" />
         <activity android:name=".recording.RabiRecordingHubActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".location.LocationSettingsActivity" android:exported="false" />
         <service android:name="com.amap.api.location.APSService" android:exported="false" />

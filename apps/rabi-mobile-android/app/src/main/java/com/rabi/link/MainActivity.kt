@@ -292,6 +292,9 @@ class MainActivity : Activity() {
         })
         root.addView(search, full(16, 6, 16, 8))
         root.addView(RabiMobileUi.actionRow(this, R.drawable.ic_ui_connection, currentComputerLabel()) { chooseComputer() })
+        root.addView(RabiMobileUi.actionRow(this, R.drawable.ic_ui_connection, "语音助手") {
+            startActivity(Intent(this, com.rabi.link.assistant.MobileAssistantActivity::class.java))
+        })
         conversationListHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.surface) }
         conversationListScroll = ScrollView(this).apply {
             isFillViewport = true

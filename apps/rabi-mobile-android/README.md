@@ -4,6 +4,16 @@
 
 本目录是 RabiLink 手机端和随包构建的眼镜端工程。目录名固定为 `apps/rabi-mobile-android/`，APK、Gradle 工程和移动端录音/语音采集源码统一从这里查找。
 
+## 语音助手
+
+在「消息」中打开「语音助手」。手机调节启用开关，点击「开始实时语音」并授予麦克风权限。当前手机使用前台整句识别，边说边显示波形，识别完成后自动发送。回复在手机播报。退出或切到后台后释放手机采播，已提交任务仍由电脑处理。
+
+先在对应电脑启用语音助手，并选择人格、本机 ASR 和本机 TTS。手机通过已配对的 RabiLink 调用对应电脑的识别、模型、工具及语音接口，沿用该人格的持久对话。手机语音回合使用独立播放绑定，电脑不会同时播这条回复。手机关键词唤醒和自定义流式服务当前不可用。
+
+调试与验收使用独立的 APK 应用 ID。先构建 :app:assembleDebug 和 :app:assembleDebugAndroidTest，附加 -PmobileSlim -PmobileAssistantAcceptance -PmobileTestRunner=com.rabi.link.test.MobileAssistantInstrumentation。将两个 APK 安装到测试模拟器后执行 adb shell am instrument -w com.rabi.link.assistantacceptance.test/com.rabi.link.test.MobileAssistantInstrumentation。测试使用 Android 真权限和浏览器实际收音与播放，另以生成信号和测试夹具验证识别、模型回执与合成。
+
+## 记录与设备
+
 [全天记录整合](../../docs/rabilink-all-day-recording.md)（实施中）：唯一 `RabiConversationService` owner 协调手机、眼镜与健康；旧独立本地音频/录像/设备状态 service 已移除，视频为普通 controller，音频使用统一 durable spool，健康 controller 受总许可与窗口限制。[记录界面](../../docs/rabilink-mobile-recording-ui.md)区分当前源码与历史真机证据。视频仅停止后派生音轨，PC 仅转写能力及 worker 围栏已接入源码，不支持则 deferred；captureId 只读关联仅人工刷新 processedAt 最近24小时最多200条，无ID不猜。健康仅统一采集/状态、完整历史仍PC；打开应用只按用户已保存的记录开关恢复采集；开关关闭时不会开启记录（仍需麦克风权限；Android 限制开机直接启动麦克风）。源码已取消录音队列容量上限，仅在手机实际剩余空间不足时暂停；历史首次读取后缓存，文件变化才增量更新，不持续显示读取或更新提示。[电脑归档](../../docs/mobile-recording-archive.md)强回执及远程历史、原音频回读校验通过后，源码才允许自动清理手机原件；普通转写或传输 ACK 不能触发清理。0.3.72-dev（75）已覆盖安装，记录页验收范围见下文；不能把局部界面验收视作所有硬件及归档链路通过。
 
 [眼镜离线录像与实时预览](../../docs/rabilink-offline-recording.md)：眼镜通过原生直播推到手机，手机本地预览、分段录像与回看；实现及真机验证进行中。

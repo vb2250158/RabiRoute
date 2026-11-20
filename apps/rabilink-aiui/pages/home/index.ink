@@ -157,7 +157,7 @@ import { createAiuiAssistantRuntime } from "../../../../packages/assistant-runti
 import { createVoiceInteraction } from "../../../../packages/assistant-runtime/src/voice-interaction.js";
 import { rabiAgentProtocol, getAgentProtocolFailureReason } from "../../utils/agent-decision-protocol.js";
 import { rabiAgentToolPolicy } from "../../utils/rabi-agent-tool-policy.js";
-import { installHudDisplay } from "../../utils/hud-text.js";
+import { installHudDisplay, toolProgressLabel } from "../../utils/hud-text.js";
 import {
   loadCloudLogQueue,
   loadDeviceCredential,
@@ -675,7 +675,6 @@ export default {
     phoneBridgeStatus: '手机直连',
     deviceAgentProfileStatus: "尚未读取设备 Agent 配置",
     knowledgeToolStatus: "Rabi 通用接口未连接",
-    knowledgeToolHudText: "Rabi 接口 · 点击刷新",
     knowledgeToolResultText: "",
     modelProbe: false,
     relayBaseUrl: "",
@@ -911,6 +910,7 @@ export default {
     lingzhuAgentName: "拉比小助手",
     lingzhuSystemPrompt: "",
     agentStatus: "等待语音",
+    activeToolStatus: "",
     agentReplyText: "Agent 的回复会显示在这里",
     hudDisplayReply: "",
     agentSpeaking: false,
@@ -4789,7 +4789,7 @@ export default {
     try {
       inputEntry?.owner.assertBinding();
       historyTicket = ticket || this.beginAiuiConversation?.(userText) || null;
-      this.setData({ assistantModelBusy: true, agentStatus: `${currentAgentName}思考中...`,
+      this.setData({ assistantModelBusy: true, activeToolStatus: "", agentStatus: `${currentAgentName}思考中...`,
         agentReplyText: "", assistantReplyText: "" });
       voiceResponse = this.beginVoiceResponse("turn-" + promptGeneration + "-" + (++voiceResponseIndex));
       const assistant = await this.ensureChatModel();
@@ -4832,11 +4832,13 @@ export default {
           this.setData({ agentReplyText: text, assistantReplyText: text });
           voiceResponse.append(delta);
         },
-        onState: ({ state }) => {
+        onState: ({ state, tool }) => {
           if (!current()) return;
           const labels = { thinking: `${currentAgentName}思考中...`, responding: `${currentAgentName}回复中...`,
-            "executing-tool": "正在调用 Rabi 接口", interjecting: "正在回应，原任务继续", "waiting-tool": "已回应，原任务仍在等待结果", uncertain: "工具请求未确认，请查看工具状态" };
-          if (labels[state]) this.setData({ agentStatus: labels[state] });
+            interjecting: "正在回应，原任务继续", "waiting-tool": "已回应，原任务仍在等待结果", uncertain: "工具请求未确认，请查看工具状态" };
+          if (state === "executing-tool") this.setData({ activeToolStatus: toolProgressLabel(tool) });
+          else if (state === "tool-completed") this.setData({ activeToolStatus: "" });
+          else if (labels[state]) this.setData({ agentStatus: labels[state] });
         }
       };
       this.chatTurnRuntime = runtime;
@@ -4884,6 +4886,7 @@ export default {
       this.finishAiuiConversation?.(historyTicket, historyReply);
       this.refreshAiuiInputReview?.();
       if (this.promptGeneration === promptGeneration) {
+        if (!this.destroyed && this.data.activeToolStatus) this.setData({ activeToolStatus: "" });
         if (this.aiuiTurnInputOwner === inputOwner) this.aiuiTurnInputOwner = null;
         if (this.chatTurnRuntime === runtime) this.chatTurnRuntime = null;
         this.deviceAgentTurnActive = false;
@@ -4907,6 +4910,7 @@ export default {
   },
 
   cleanupChatModel() {
+    if (!this.destroyed && this.data.activeToolStatus) this.setData({ activeToolStatus: "" });
     this.aiuiTurnInputOwner = null;
     this.aiuiGuidanceQueue = (this.aiuiGuidanceQueue || []).filter(entry => !entry.input);
     this.chatTurnRuntime?.cancel();
@@ -5842,7 +5846,7 @@ export default {
           <view class="hudBrandRow">
             <text class="hudBrandText">{{hudDisplayName}}</text>
             <view class="hudStatusPill {{agentSpeaking || transcriptionListening || assistantModelBusy ? 'hudStatusPillActive' : ''}}">
-              <text class="hudStatusPillDot">●</text>
+              <text class="hudStatusPillDot {{visualCanvasVisible && activeToolStatus ? 'toolActivityDot' : ''}}">●</text>
               <text class="hudStatusPillText">{{hudDisplayStatus}}</text>
             </view>
           </view>
@@ -5872,15 +5876,19 @@ export default {
             </view>
           </view>
           <view class="hudFooterRow {{visualCanvasVisible ? 'statusHidden' : ''}}">
-            <text class="hudBargeInText" catchtap="onPageTap" wx:if="{{agentSpeaking}}">单击打断</text>
-            <text class="hudBargeInText" catchtap="startRealtimeVoice" wx:elif="{{voiceAssistantEnabled && !transcriptionListening && !assistantListening}}">开始实时语音</text>
-            <text class="hudBargeInText" wx:else>{{voiceAssistantEnabled ? '正在聆听' : '语音已关闭'}}</text>
-            <text class="hudBargeInText" catchtap="toggleVoiceWake" wx:if="{{voiceAssistantEnabled}}">{{voiceWakeEnabled ? '手动或唤醒' : '手动开始'}}</text>
+            <text class="hudBargeInText {{agentSpeaking ? '' : 'statusHidden'}}" catchtap="onPageTap">单击打断</text>
+            <text class="hudBargeInText {{!agentSpeaking && voiceAssistantEnabled && !transcriptionListening && !assistantListening ? '' : 'statusHidden'}}" catchtap="startRealtimeVoice">开始实时语音</text>
+            <text class="hudBargeInText {{!agentSpeaking && (!voiceAssistantEnabled || transcriptionListening || assistantListening) ? '' : 'statusHidden'}}">{{voiceAssistantEnabled ? '正在聆听' : '语音已关闭'}}</text>
+            <text class="hudBargeInText {{voiceAssistantEnabled ? '' : 'statusHidden'}}" catchtap="toggleVoiceWake">{{voiceWakeEnabled ? '手动或唤醒' : '手动开始'}}</text>
             <switch checked="{{voiceAssistantEnabled}}" color="#40ff5e" bindchange="onVoiceAssistantChange" />
             <text class="inputRecordEntry {{inputRecordCount > 0 || inputRecordError ? '' : 'statusHidden'}}" catchtap="openAiuiInputReview">↑ 记录 {{inputRecordError ? '!' : inputRecordCount}}</text>
             <text class="releaseVersion">v{{releaseVersion}}</text>
           </view>
-          <text class="agentProfileStatus {{visualCanvasVisible ? 'statusHidden' : ''}}" catchtap="refreshAgentAndApiTools">{{hudDisplayKnowledge}}</text>
+          <view class="toolActivityRow {{activeToolStatus && !visualCanvasVisible ? '' : 'statusHidden'}}">
+            <text class="toolActivityDot">●</text>
+            <text class="toolActivityText">{{activeToolStatus}}</text>
+          </view>
+          <text class="agentProfileStatus {{activeToolStatus || visualCanvasVisible ? 'statusHidden' : ''}}" catchtap="refreshAgentAndApiTools">刷新工具连接</text>
         </view>
       </view>
       <view class="phoneBridgeSetup {{phoneBridgeSetup ? '' : 'statusHidden'}}">
@@ -6057,6 +6065,11 @@ export default {
   line-height: 16px;
   color: #40ff5e;
 }
+
+.toolActivityRow { display: flex; flex-direction: row; gap: 5px; align-items: center; height: 14px; }
+.toolActivityText, .toolActivityDot { font-size: 10px; line-height: 14px; color: #40ff5e; }
+.toolActivityDot { animation: toolActivityPulse 1.3s ease-in-out infinite; }
+@keyframes toolActivityPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 .hudUserSpeech {
   width: 416px;

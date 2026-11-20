@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.61 - 2026-11-21
+
+- Add mobile voice submission and late-loading local voice support, with updated phone and glasses interactions and tests.
+
 ## 0.15.60 - 2026-11-21
 
 - Recover stale Windows persistence locks after PID reuse while preserving live and uncertain owners.

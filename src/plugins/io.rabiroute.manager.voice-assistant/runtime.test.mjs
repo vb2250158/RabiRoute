@@ -144,3 +144,21 @@ test('read-only observation cannot acquire an audio device from saved enabled ca
     assert.equal(deviceCalls,0);assert.equal(state.voice.phase,'stopped');assert.equal(state.caption.status,'failed');assert.equal(state.error,'ASSISTANT_READ_ONLY');assert.equal(f.modelRequests.length,0);
   }finally{await f.close()}
 });
+
+test('the same session picks up its host voice when the persona catalogue is published after startup',async()=>{
+  const f=await fixture();
+  try{
+    f.args.speech.speechControl.personas=()=>[];
+    await f.owner.command({action:'host-settings',patch:{personaId:'A'}});
+    const before=await f.owner.state();
+    assert.equal(before.hostSettings.voiceReady,false);
+    assert.equal(before.settings.ttsVoice,'');
+    f.args.speech.speechControl.personas=()=>[{id:'A',voiceReady:true,defaultModel:'tts',speed:1.2}];
+    const after=await f.owner.state();
+    assert.equal(after.sessionId,before.sessionId);
+    assert.equal(after.hostSettings.voiceReady,true);
+    assert.equal(after.hostSettings.ttsIssue,null);
+    assert.equal(after.settings.ttsVoice,'A');
+    assert.equal(after.settings.ttsSpeed,1.2);
+  }finally{await f.close()}
+});

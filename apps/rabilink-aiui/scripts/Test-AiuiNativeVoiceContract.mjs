@@ -49,6 +49,14 @@ test('packaged app declares microphone capture permission', () => {
   assert.ok(manifest.permissions?.includes('RECORD_AUDIO'),
     'Host microphone capture requires RECORD_AUDIO in the packaged app.json');
 });
+
+test('packaged HUD shows live tool activity and keeps old results off the status row', () => {
+  const markup = fs.readFileSync(path.join(staging, 'pages/home/index.wxml'), 'utf8');
+  assert.match(markup, /class="toolActivityRow {{activeToolStatus && !visualCanvasVisible \? '' : 'statusHidden'}}"/);
+  assert.match(markup, /{{activeToolStatus}}/);
+  assert.doesNotMatch(markup, /{{hudDisplayKnowledge}}|{{knowledgeToolResultText}}/);
+  assert.equal(hudDisplayFields({ visualCanvasVisible: true, activeToolStatus: '正在检索资料', agentSpeaking: true }).hudDisplayStatus, '正在检索资料');
+});
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 const pages = new Set();
 after(() => { for (const p of pages) { p.cancelSpeech(); p.stopRecognition(); p.voiceInteraction?.dispose(); p.aiuiRuntime?.dispose(); } });
@@ -901,18 +909,21 @@ test('packaged page speaks an interjection while its original tool is still wait
     SpeechSynthesisUtteranceCtor:Utterance,SpeechAudioPlayerCtor:Player});
   const assistant=createPageAssistantFixture(p,{async prompt(input){
     const value=JSON.parse(input[0].content);requests.push(value);
-    if(value.kind==='user-input')return JSON.stringify({protocol:value.protocol,requestId:value.requestId,kind:'tool',name:'rabi_api_call',arguments:{method:'GET',path:'/fixture/slow'}});
+    if(value.kind==='user-input')return JSON.stringify({protocol:value.protocol,requestId:value.requestId,kind:'tool',name:'rabi_api_call',arguments:{method:'GET',path:'/api/search?q=private'}});
     if(value.kind==='independent-input')return JSON.stringify({protocol:value.protocol,requestId:value.requestId,kind:'interjection',inputId:value.input.id,disposition:'answer',text:'四十二'});
     assert.equal(value.kind,'tool-observation');return '原任务已完成。';
   }});
   p.ensureChatModel=async()=>assistant;
   const run=p.executeLingzhuAgentPrompt('执行原任务');await settle();
   assert.equal(toolCalls,1);
+  assert.equal(p.data.activeToolStatus,'正在检索资料');
   p.stopAiuiPlaybackForInput('用户插话');await p.executeLingzhuAgentPrompt('六乘以七是多少？');await settle();
   assert.deepEqual(spoken,['四十二']);assert.equal(p.deviceAgentTurnActive,true);
+  assert.equal(p.data.activeToolStatus,'正在检索资料');
   assert.equal(assistant.getState().turn.settledToolCount,0);assert.equal(requests[1].kind,'independent-input');
   finishTool({result:{structuredContent:{ok:true,receipt:'original'}}});
   assert.equal((await run).state,'completed');assert.equal(toolCalls,1);assert.equal(requests.length,3);
+  assert.equal(p.data.activeToolStatus,'');
   p.cancelSpeech();assistant.dispose();
 });
 
@@ -954,6 +965,7 @@ test('packaged cleanup retains submitted input for recovery and cannot revive la
   p.chatAssistant=assistant;p.ensureChatModel=async()=>assistant;
   const original=p.executeLingzhuAgentPrompt('原任务');await settle();await p.executeLingzhuAgentPrompt('需保留的新话');await settle();
   const identity=requests[1].input;p.pageVisible=false;p.cleanupChatModel();await original;await settle();
+  assert.equal(p.data.activeToolStatus,'');
   finishAnswer(JSON.stringify({protocol:requests[1].protocol,requestId:requests[1].requestId,kind:'interjection',inputId:identity.id,disposition:'answer',text:'迟到回复'}));
   finishTool({result:{structuredContent:{ok:true}}});await settle();
   const reopened=page();reopened.recoverAiuiInputs();

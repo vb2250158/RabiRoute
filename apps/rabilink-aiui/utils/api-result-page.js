@@ -2,7 +2,7 @@
 // authorization filter, and refreshing this surface creates no business request.
 export const apiResultPageMethods = {
   setKnowledgePageData(patch) {
-    this.setData({ ...patch, ...(patch.knowledgeToolStatus ? { knowledgeToolHudText: patch.knowledgeToolStatus.slice(0, 22) } : {}) });
+    this.setData(patch);
   },
   async refreshAgentAndApiTools() { await this.refreshDeviceAgentProfile(); await this.refreshApiTools(); await this.startDeviceAgentOwner?.(); },
   clearKnowledgeResultView() { this.knowledgeResultView = null; this.setData({ knowledgeToolResultText: '' }); },

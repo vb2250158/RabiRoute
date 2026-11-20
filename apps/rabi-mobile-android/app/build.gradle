@@ -37,6 +37,7 @@ android {
     defaultConfig {
         applicationId "com.rabi.link"
         if (project.hasProperty("videoAcceptance")) applicationIdSuffix ".videoacceptance"
+        else if (project.hasProperty("mobileAssistantAcceptance")) applicationIdSuffix ".assistantacceptance"
         minSdk 31
         targetSdk 34
         testInstrumentationRunner project.findProperty("mobileTestRunner") ?: "com.rabi.link.test.DirectVideoInstrumentation"
@@ -80,6 +81,7 @@ android {
             res.srcDir("$buildDir/generated/mobileTheme/res")
             jniLibs.srcDir("$rootDir/out/live-recorder/jniLibs")
             assets.srcDir("$rootDir/out/live-recorder/assets")
+            assets.srcDir("$buildDir/generated/mobileAssistantSdk")
             java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
             java.srcDir("$rootDir/shared/src/main/java")
             if (!mobileSlim && rokidAiSdkAssetsDir.exists()) {
@@ -116,7 +118,11 @@ tasks.register("generateMobileTheme", Exec) {
     inputs.files(rootProject.file("../../ribiwebgui/src/themes/light/tokens.css"), rootProject.file("../../ribiwebgui/src/themes/dark/tokens.css"), rootProject.file("scripts/generate-mobile-theme.mjs"))
     outputs.dir("$buildDir/generated/mobileTheme")
 }
-tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime", "generateMobileTheme") }
+tasks.register("copyMobileAssistantSdk", Sync) {
+    from(rootProject.file("../../packages/assistant-runtime/src")) { include("*.js") }
+    into("$buildDir/generated/mobileAssistantSdk/mobile-assistant/sdk")
+}
+tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime", "generateMobileTheme", "copyMobileAssistantSdk") }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"

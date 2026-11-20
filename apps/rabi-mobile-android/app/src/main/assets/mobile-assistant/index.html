@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; media-src blob:; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<title>语音助手</title>
+<link href="./screen.css" rel="stylesheet">
+</head>
+<body>
+<header>
+  <button id="back" class="back" aria-label="返回">‹</button>
+  <div><h1>语音助手</h1><p id="source">RabiLink</p></div>
+  <button id="refresh">刷新连接</button>
+</header>
+<section class="control">
+  <label class="switch">启用语音助手<input type="checkbox" id="enabled" role="switch"><span aria-hidden="true"></span></label>
+  <p id="status" role="status">正在连接电脑</p>
+  <p id="issue" role="alert" hidden></p>
+</section>
+<main id="messages" aria-label="对话">
+  <p id="empty">点击「开始实时语音」，说完会自动发送。</p>
+  <ol id="history"></ol>
+</main>
+<footer>
+  <p id="tool" role="status" hidden></p>
+  <p id="playing" role="status" hidden>正在播报 · 字幕跟随</p>
+  <div id="waveform" aria-label="收音波形" hidden></div>
+  <div class="actions"><button id="start" disabled>开始实时语音</button><button id="mute" disabled>播报静音</button></div>
+</footer>
+<script type="module" src="./entry.js"></script>
+</body>
+</html>

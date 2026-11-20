@@ -50,11 +50,13 @@ function pxValue(selector, property) {
   assert(hasDeclaration('.hudBottomArea','flex-direction','column'), 'Reply, controls and profile need separate rows.');
   assert(hasDeclaration('.agentProfileStatus','flex','none') && !hasDeclaration('.agentProfileStatus','text-align','right'), 'Profile status must not inherit version compression.');
   assert((source.match(/class="releaseVersion"/g)||[]).length===1, 'One visible version required.');
-  assert(source.includes('class="hudTopBar"') && source.includes('class="hudBottomArea"') && source.includes('class="agentProfileStatus"'), 'Required HUD regions missing.');
+  assert(source.includes('class="hudTopBar"') && source.includes('class="hudBottomArea"') && /class="agentProfileStatus\b/.test(source), 'Required HUD regions missing.');
   assert(/@media\s*\(max-height:\s*180px\)/.test(style), 'Compact layout required.');
   assert(!source.includes('<scroll-view') && !source.includes('<button') && !/ink:(?:if|elif|else)\b/.test(source), 'Stable single HUD required.');
   for (const handler of ['onShow','onHide','onKeyDown','onKeyUp','cleanupChatModel','refreshAgentAndApiTools']) assert(source.includes(handler), handler+' required.');
   assert(!source.includes('saveSettings({ token })'), 'Do not persist raw token in settings.');
   assert(!source.includes('单击请 Agent 审阅') && !source.includes('单击打断 / 审阅'), 'Retired observer review must not remain in device Agent HUD instructions.');
-  assert(source.includes('单击接收设备消息') && source.includes('单击打断 / 接收'), 'Device Agent HUD must describe its actual idle reception and active interruption actions.');
+  assert(source.includes('class="hudBargeInText {{agentSpeaking ? \'\' : \'statusHidden\'}}" catchtap="onPageTap">单击打断</text>')
+    && source.includes('catchtap="startRealtimeVoice"') && source.includes('>开始实时语音</text>')
+    && source.includes('bindchange="onVoiceAssistantChange"'), 'Device Agent HUD must show its actual start, interruption and enable actions.');
   console.log('AIUI current HUD structural audit passed; real region/edge/fault checks run in Smoke-RabiLinkAiuiInkRuntime.mjs.');
