@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { managerEventSource } from "../managerApi";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import { isLoopbackHostname } from "../webguiLanRedirect";
 
 const store = useGatewayStore();
@@ -117,16 +118,22 @@ async function submit(action: "login" | "register" | "logout" | "avatar") {
   }
   if (action === "avatar" && !draft.value) return;
   request?.abort();
+  const deadline = AbortSignal.timeout(getTimeoutMs("webgui.rabilink.account.submit", 30000));
   busy.value = true;
   try {
     const response = await fetch(action === "avatar" ? `${accountPath}/avatar` : accountPath, {
       method: "POST",
+      signal: deadline,
       headers: { "content-type": "application/json" },
       body: JSON.stringify(action === "avatar" ? { accountId: account.value?.id, avatar: draft.value.split(",")[1] }
         : action === "logout" ? { action } : { action, username: username.value.trim(), password: password.value })
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || "账号操作失败，请重试。");
+    const data = await response.json().catch(failure => {
+      deadline.throwIfAborted();
+      if (response.ok) throw failure;
+      return null;
+    });
+    if (!response.ok) throw new Error(data?.message || "账号操作失败，请重试。");
     if (action === "avatar") {
       if (data.accountId !== account.value?.id) throw new Error("账号已更改，请重试。");
       avatar.value = avatarUrl(data.avatar);
@@ -138,10 +145,11 @@ async function submit(action: "login" | "register" | "logout" | "avatar") {
     dialog.value = null;
     menu.value = false;
   } catch (failure) {
-    error.value = failure instanceof Error ? failure.message : "账号操作失败，请重试。";
+    error.value = deadline.aborted ? "账号操作响应超时，请核对左下角的登录状态。"
+      : failure instanceof Error ? failure.message : "账号操作失败，请重试。";
   } finally {
     busy.value = false;
-    if (action === "login" || action === "register") void refreshAccount();
+    if (deadline.aborted || action === "login" || action === "register") void refreshAccount();
   }
 }
 

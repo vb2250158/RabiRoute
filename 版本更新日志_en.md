@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.51 - 2026-11-20
+
+- WebGUI account login, registration, logout and avatar actions use the existing configurable 30-second response deadline, including response body reads. Errors or timeouts end loading and refresh account status without resending the submission. Delivered as a Web hot patch; the full Host package remains 0.15.50.
+
 ## 0.15.50 - 2026-11-20
 
 - Refresh the complete runtime closures for Core 0.1.15, Xiaomi Home 0.1.14, Weixin 0.1.9, QQ Bot 0.1.8, and the RabiLink endpoint 0.1.9.

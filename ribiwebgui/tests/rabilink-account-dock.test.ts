@@ -18,14 +18,16 @@ test("the account dock opens login directly or saves a missing server before log
   const vue = require("vue");
   const store = { meta: vue.reactive({ rabiLinkRelay: { enabled: false, url: "" } }) };
   let saved = false;
+  let loginResult: "rejected" | "timeout" | "success" = "rejected";
   const module = { exports: {} as any };
   const writes: Array<{ path: string; method: string; body: unknown }> = [];
   vm.runInNewContext(code, {
-    module, exports: module.exports, URL, AbortController,
+    module, exports: module.exports, URL, AbortController, AbortSignal,
     require: (name: string) => {
       if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
       if (name.includes("gatewayStore")) return { useGatewayStore: () => store };
       if (name.endsWith("managerApi")) return {};
+      if (name.endsWith("timeoutSettingsClient")) return { getTimeoutMs: () => 15 };
       if (name.endsWith("webguiLanRedirect")) return { isLoopbackHostname: () => false };
       throw new Error(name);
     },
@@ -38,6 +40,14 @@ test("the account dock opens login directly or saves a missing server before log
       }
       if (init.method === "POST") {
         writes.push({ path, method: init.method, body: JSON.parse(String(init.body)) });
+        if (loginResult === "rejected") return { ok: false, json: async () => ({ message: "账号或密码不正确。" }) };
+        if (loginResult === "timeout") return {
+          ok: true,
+          json: () => new Promise((_resolve, reject) => {
+            const signal = init.signal!;
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          })
+        };
         return { ok: true, json: async () => ({ account: { id: "fixture-id", username: "fixture" } }) };
       }
       return { ok: false };
@@ -61,6 +71,19 @@ test("the account dock opens login directly or saves a missing server before log
     await vue.nextTick();
     dock.username.value = "fixture";
     dock.password.value = "fixture-test-password";
+    await dock.submit("login");
+    assert.equal(dock.busy.value, false);
+    assert.equal(dock.dialog.value, "login");
+    assert.equal(dock.error.value, "账号或密码不正确。");
+    loginResult = "timeout";
+    const stalled = dock.submit("login");
+    assert.equal(dock.busy.value, true);
+    const keepAlive = setInterval(() => {}, 100);
+    try { await stalled; } finally { clearInterval(keepAlive); }
+    assert.equal(dock.busy.value, false);
+    assert.equal(dock.dialog.value, "login");
+    assert.match(dock.error.value, /响应超时/);
+    loginResult = "success";
     await dock.submit("login");
     assert.equal(dock.dialog.value, null);
     assert.equal(dock.account.value.username, "fixture");
