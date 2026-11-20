@@ -57,12 +57,14 @@ async function fixture(t: test.TestContext, port = 0) {
 }
 
 test("HTTP role fixture reaches its exact listener when the OS port is restricted by Fetch", async t => {
-  let f: Awaited<ReturnType<typeof fixture>>;
-  try { f = await fixture(t, 6667); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") { t.skip("Private loopback port 6667 is occupied"); return; }
-    throw error;
+  let f: Awaited<ReturnType<typeof fixture>> | undefined;
+  for (const port of [6667, 10080]) {
+    try { f = await fixture(t, port); break; }
+    catch (error) {
+      if (!["EADDRINUSE", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
   }
+  if (!f) { t.skip("No Fetch-restricted loopback fixture port is available"); return; }
   await assert.rejects(fetch(f.base), error => (error as Error & { cause?: Error }).cause?.message === "bad port");
   const result = await f.call("/Existing/document");
   assert.equal(result.status, 200);

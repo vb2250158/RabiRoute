@@ -37,9 +37,10 @@
         "0.1.11",
         "0.1.12",
         "0.1.13",
-        "0.1.14"
+        "0.1.14",
+        "0.1.15"
       ],
-      "toVersion": "0.1.15"
+      "toVersion": "0.1.16"
     },
     {
       "packageId": "io.rabiroute.agent.copilot-cli",
@@ -545,9 +546,10 @@
         "1.1.13",
         "1.1.14",
         "1.1.15",
-        "1.1.16"
+        "1.1.16",
+        "1.1.17"
       ],
-      "toVersion": "1.1.17"
+      "toVersion": "1.1.18"
     },
     {
       "packageId": "io.rabiroute.manager.speech",
@@ -589,9 +591,11 @@
         "0.2.13",
         "0.2.14",
         "0.2.15",
-        "0.2.16"
+        "0.2.16",
+        "0.2.17",
+        "0.2.18"
       ],
-      "toVersion": "0.2.17"
+      "toVersion": "0.2.19"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",

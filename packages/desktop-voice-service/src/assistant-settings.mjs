@@ -16,7 +16,7 @@ export const assistantSettingDefinitions = {
   ttsModel: { default: '' }, ttsVoice: { default: '' }, ttsResourceId: { default: '' },
   inputDeviceId: { default: '' }, outputDeviceId: { default: '' },
   silenceThreshold: { default: .01, min: .001, max: 1 }, silenceDurationMs: { default: 700, min: 200, max: 10000 },
-  sampleMs: { default: 50, min: 10, max: 1000 }, outputEnabled: { default: true },
+  sampleMs: { default: 50, min: 10, max: 1000 }, voiceEnabled: { default: true }, outputEnabled: { default: true },
   captionsEnabled: { default: false }, captionLocked: { default: false }, captionSkin: { default: 'dark' },
   captionFontSize: { default: 24, min: 16, max: 48 }, captionOpacity: { default: .85, min: .15, max: 1 },
   captionPosition: { default: 'bottom' }, captionX: { default: 0 }, captionY: { default: 0 },

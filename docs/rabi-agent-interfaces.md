@@ -3080,7 +3080,7 @@ Manager 记录已鉴权连接及可用来源描述，再解析实际目标、持
 
 
 
-发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；Manager 不因启动、连接、catalog、回执或 turn 事件自动扫描历史预留，调用方沿原实际 ID 显式核对，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次的超时仍只使用原有的短回执宽限。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
+发送结果不确定时返回 HTTP 202、`delivery_unconfirmed`、`retryable=false`，保留原正式回复 reservation。不得换投递 ID重发正文。`reconcile_delivery` 只核对原目标的传输证据；Manager 不因启动、连接、catalog、回执或 turn 事件自动扫描历史预留，调用方沿原实际 ID 显式核对，不换 owner、不自动重投。公共核对本身不轮询。打开新轮次的 Desktop IPC 若在调用方等待结束后才成功，或同一 owner 的 rollout 稍后才出现原投递标记，桥接会在默认 60 秒内保留这一次请求并补记回执；确认后按迟到回执提交原投递。追加已有轮次超时后也在同一有界窗口核对原 rollout，只有找到原投递标记才补记回执。连接器只持有传输 attempt/receipt，不另建业务请求账本。Codex 可从同一个 Desktop owner 的原始用户消息恢复精确 hash；其它 Provider 缺少可读接受证据时继续待确认。
 
 
 
@@ -3392,7 +3392,7 @@ Agent 调用线程桥时，已有会话上下文由 SDK 和入口自动记录。
 
 
 
-Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。启动超时后，同一请求还会在有界窗口内接受迟到的 Desktop 受理，或在 rollout 出现原投递标记时补记回执。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。连接中途关闭时同样保留原载荷与 ID，等待这次补核对或显式 `reconcile_delivery`，不换键重发。
+Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。启动或追加超时后，同一请求仍会在有界窗口内核对原 rollout，找到原投递标记后补记回执。启动请求还会在同一窗口接受迟到的 Desktop 受理。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认标记后提交请求/回复状态；有界等待后仍未确认时返回 HTTP `202`、`code=-1`、`status=delivery_unconfirmed` 和 `error.retryable=false`，保留原 `deliveryId`、`requestId` 及 `pending_delivery` 请求，不删除记录、不再次发送。调用方先查询原请求和目标任务，不把 HTTP `202` 当成送达成功。连接中途关闭时同样保留原载荷与 ID，等待这次补核对或显式 `reconcile_delivery`，不换键重发。
 
 
 

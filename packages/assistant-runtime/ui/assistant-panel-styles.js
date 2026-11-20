@@ -1,6 +1,12 @@
 export const assistantPanelStyles = `
 .va-panel,.va-settings{--va-line:var(--dsw-alias-border,#31454f);--va-muted:var(--dsw-alias-text-secondary,#9fb3bd);--va-accent:#69d6bd;--va-surface:var(--dsw-alias-background-primary,#101c24);font-size:14px;line-height:1.5}
 .va-panel *,.va-settings *{box-sizing:border-box}
+.va-panel .va-voice-switch{display:inline-flex;align-items:center;gap:9px;white-space:nowrap}
+.va-voice-switch span{position:relative;display:block;width:34px;height:20px;flex:none;border-radius:12px;background:#4a5c64;transition:background .16s ease}
+.va-voice-switch span::after{content:'';position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#eef8f7;transition:transform .16s ease}
+.va-voice-switch[aria-checked=true] span{background:#327e70}
+.va-voice-switch[aria-checked=true] span::after{transform:translateX(14px)}
+@media(prefers-reduced-motion:reduce){.va-voice-switch span,.va-voice-switch span::after{transition:none}}
 .va-settings{display:flex;flex-direction:column;height:min(74dvh,820px);min-height:320px;max-width:1040px;margin:auto;gap:0!important;padding:0!important}
 .va-nav{display:flex;gap:4px;padding:12px 20px;border-bottom:1px solid var(--va-line);flex-shrink:0}
 .va-nav button{flex:1;padding:10px 14px;border:0;border-radius:7px;background:transparent;color:var(--va-muted)}

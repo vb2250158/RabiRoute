@@ -120,7 +120,7 @@ test("zoom preserves the world point under its anchor and clamps the supported r
   assert.ok(Math.abs(canvas.world(anchor).x - before.x) < 1e-9);
   assert.ok(Math.abs(canvas.world(anchor).y - before.y) < 1e-9);
   canvas.zoom(100); assert.equal(canvas.scale.value, 2);
-  canvas.zoom(0); assert.equal(canvas.scale.value, 0.25);
+  canvas.zoom(0); assert.equal(canvas.scale.value, 0.05);
 });
 test("card dragging converts screen distance by zoom and ignores unrelated pointers", async () => {
   const canvas = await fixture(); canvas.add("a"); canvas.scale.value = 0.5;
@@ -134,13 +134,14 @@ test("hand mode pans without moving cards; fit includes cards at negative coordi
   const canvas = await fixture(); canvas.add("a"); canvas.add("b");
   canvas.handMode.value = true; canvas.begin(pointer(0, 0), "a"); canvas.move(pointer(100, 50)); canvas.end(pointer(100, 50));
   assert.deepEqual(canvas.positions.value.a, { x: 0, y: 0 });
-  canvas.positions.value.a = { x: -900, y: -100 };
+  canvas.positions.value.a = { x: -4600, y: -100 };
   canvas.fit();
+  assert.ok(canvas.scale.value < 0.25);
   for (const position of Object.values(canvas.positions.value)) {
     const point = canvas.world({ x: 0, y: 0 });
     assert.ok(position.x >= point.x && position.y >= point.y);
     const right = canvas.world({ x: 1200, y: 900 });
-    assert.ok(position.x + 640 <= right.x && position.y + 620 <= right.y);
+    assert.ok(position.x + 130 + 380 <= right.x && position.y + 34 + 214 <= right.y);
   }
 });
 
@@ -225,4 +226,44 @@ test("marquee uses the visible card rect and stays in screen pixels at low zoom"
   canvas.end(pointer(290, 128));
   assert.deepEqual(canvas.selectedIds.value, ["media"]);
   assert.equal(canvas.marquee.value, undefined);
+});
+
+test("modifier clicks and marquee preserve unrelated nodes, while a plain click selects only its card", async () => {
+  const canvas = await fixture([
+    { id: "a", left: 25, top: 30, width: 80, height: 50 },
+    { id: "b", left: 140, top: 30, width: 80, height: 50 },
+  ]);
+  canvas.add("a"); canvas.add("b");
+  canvas.selectedIds.value = ["a"];
+  const clickB = pointer(150, 40);
+  canvas.begin({ ...clickB, shiftKey: true }, "b"); canvas.end(clickB);
+  assert.deepEqual(canvas.selectedIds.value, ["a", "b"]);
+  canvas.begin({ ...pointer(125, 10), ctrlKey: true });
+  canvas.move(pointer(235, 85));
+  canvas.move(pointer(215, 75));
+  canvas.end(pointer(215, 75));
+  assert.deepEqual(canvas.selectedIds.value, ["a"]);
+  canvas.begin(clickB, "b"); canvas.end(clickB);
+  assert.deepEqual(canvas.selectedIds.value, ["b"]);
+});
+
+test("space temporarily pans and layout history treats a group move as one change", async () => {
+  const canvas = await fixture();
+  canvas.add("a"); canvas.add("b");
+  canvas.selectedIds.value = ["a", "b"];
+  canvas.spacePan.value = true;
+  canvas.begin(pointer(0, 0), "a"); canvas.end(pointer(35, 15));
+  assert.deepEqual(canvas.offset.value, { x: 35, y: 15 });
+  assert.equal(canvas.canUndo.value, false);
+  canvas.spacePan.value = false;
+  canvas.begin(pointer(10, 10), "a"); canvas.move(pointer(20, 20)); canvas.end(pointer(60, 40));
+  assert.deepEqual(canvas.positions.value, { a: { x: 50, y: 30 }, b: { x: 770, y: 30 } });
+  assert.equal(canvas.restoreLayout(true), true);
+  assert.deepEqual(canvas.positions.value, { a: { x: 0, y: 0 }, b: { x: 720, y: 0 } });
+  assert.equal(canvas.restoreLayout(false), true);
+  assert.deepEqual(canvas.positions.value.b, { x: 770, y: 30 });
+  canvas.restoreLayout(true);
+  canvas.nudge({ key: "ArrowRight", preventDefault() {} } as KeyboardEvent);
+  assert.equal(canvas.canRedo.value, false);
+  assert.deepEqual(canvas.positions.value, { a: { x: 10, y: 0 }, b: { x: 730, y: 0 } });
 });

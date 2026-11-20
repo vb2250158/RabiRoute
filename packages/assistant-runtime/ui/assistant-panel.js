@@ -46,8 +46,8 @@ export function assistantLiveState(state,disconnected=false) {
   const listening=phase==='running'&&capture==='listening';
   const working=['thinking','responding','searching','executing-tool','finishing'].includes(state?.activity?.status);
   const playing=Boolean(state?.interaction?.outputActive);
-  let title='正在连接',detail='',action='start',actionLabel='开启语音';
-  if(state){title='语音已停止';detail='开启语音，与助手交流。'}
+  let title='正在连接',detail='',action='start',actionLabel='开始实时语音';
+  if(state){title='语音已停止';detail='点击「开始实时语音」后直接说话。'}
   if(phase==='starting'){title='正在准备麦克风';detail='正在连接音频设备，请稍候。'}
   if(phase==='running'){
     action=listening?'pause':'resume';actionLabel=listening?'暂停麦克风':'继续收音';
@@ -61,6 +61,7 @@ export function assistantLiveState(state,disconnected=false) {
   if(state?.activity?.status==='finishing'){title='正在整理回复';detail='正在根据已取得的结果回答。'}
   if(playing&&!working){title='正在播报';detail=listening?'麦克风开启，直接说话可打断声音。':'可停止本次播报，文字回复会继续。'}
   if(phase==='failed'){title='语音出现故障';detail='检查错误提示，修复后重新开启语音。'}
+  if(state?.settings?.voiceEnabled===false){title='语音助手已关闭';detail='打开语音助手开关后可开始实时语音。'}
   if(disconnected){title='与助手的连接已断开';detail='重新连接后可查看当前状态。'}
   return {title,detail,listening,working,playing,action,actionLabel,
     captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':'收音关闭',
@@ -94,6 +95,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     TURN_DECISION_INVALID:'助手返回的动作格式有误，本轮未能完成。可以继续说话或重新发送。',
     TURN_INTERJECTION_RESPONSE_INVALID:'助手未能处理这次插话，可以再说一次。',
     SPEECH_SEND_BACKLOG:'识别音频发送积压，收音已停止。请检查网络后重新开启语音。',
+    ASSISTANT_VOICE_DISABLED:'请先打开语音助手开关。',
     ASSISTANT_PERSONA_READ_FAILED:'无法读取所选人格，请查看人格设置中的错误详情。',
     ASSISTANT_HOST_OPERATION_FAILED:'Rabi 宿主操作未完成，请查看服务设置中的错误详情。',
     'Failed to fetch':'与本机助手的连接已断开，请确认后台服务正在运行后重试。',
@@ -171,6 +173,11 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const checksPassed=serviceRows.length>0&&serviceRows.every(item=>item.status==='passed')
     const showChecks=testRunning||(checksExpanded??!checksPassed)
     const live=assistantLiveState(state,connectionError)
+    const voicePreference=state?.settings?.voiceEnabled
+    const voiceDisabled=voicePreference===false
+    const voiceSwitch=typeof voicePreference==='boolean'&&h(Button,{className:'va-voice-switch',role:'switch','aria-checked':voicePreference,
+      disabled:preview||busy||testRunning||connectionError,onClick:()=>invoke({action:'settings',patch:{voiceEnabled:!voicePreference}})},
+    '语音助手',h('span',{'aria-hidden':true}))
     const participants=assistantParticipants(state)
     const chat=React.useRef(null),composer=React.useRef(null),follow=React.useRef(true),onboardingOpened=React.useRef(false)
     const motionMessages=React.useRef(new Set()),motionSession=React.useRef(null)
@@ -530,20 +537,20 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     if(editing&&settingsPresentation==='page'&&Modal)return h('section',{style:layout,className:'va-panel va-full-page'},h('style',null,assistantPanelStyles),h(Modal,{open:true,title:({conversation:'对话设置',speech:speechKind==='asr'?'语音识别设置':'语音播报设置',devices:'音频设备',appearance:'字幕与外观',search:'联网搜索设置',setup:'连接与测试'})[settingsTab]||'助手设置',onClose:requestClose},settingsBody))
     return h('section',{style:layout,className:'va-panel'+(state?.canvas?.visible&&state.canvas.persistent?' va-has-canvas':''),'aria-label':'语音助手'},h('style',null,assistantPanelStyles),
       preview&&h('div',{className:'va-preview'},h('strong',null,'这是设置预览，不能实际对话'),h('p',null,'这里可以查看设置操作。模型列表是示例，不会连接服务、录音或播放声音。'),state?.capabilities?.assistantUrl&&/^http:\/\/127\.0\.0\.1:\d+\/\?voice-assistant=1$/.test(state.capabilities.assistantUrl)&&h('a',{href:state.capabilities.assistantUrl},'打开 DSH 语音助手 →')),
-      h('div',{className:'va-live-header'},h('div',null,state?.settings?.assistantName&&state.settings.assistantName!=='语音助手'&&h('strong',null,state.settings.assistantName),h('span',{className:'va-status','data-running':!connectionError&&live.listening,role:'status'},live.title)),h('div',{style:row},state?.capabilities?.contextManagement&&h(Button,{disabled:busy||connectionError||state.context?.busy||testRunning,onClick:()=>setClearPrompt(true)},'清除上下文'),h(Button,{disabled:!state||connectionError,onClick:openSettings},'设置'))),
+      h('div',{className:'va-live-header'},h('div',null,state?.settings?.assistantName&&state.settings.assistantName!=='语音助手'&&h('strong',null,state.settings.assistantName),h('span',{className:'va-status','data-running':!connectionError&&live.listening,role:'status'},live.title)),h('div',{style:row},voiceSwitch,state?.capabilities?.contextManagement&&h(Button,{disabled:busy||connectionError||state.context?.busy||testRunning,onClick:()=>setClearPrompt(true)},'清除上下文'),h(Button,{disabled:!state||connectionError,onClick:openSettings},'设置'))),
       connectionError&&h(Button,{disabled:busy,onClick:()=>void refresh().catch(report)},'重新连接'),
       state&&h('div',{className:'va-duplex-status','aria-label':'并行语音状态',role:'status'},h('span',{'data-active':live.listening},live.captureLabel),h('span',{'data-active':live.working},live.generationLabel),h('span',{'data-active':live.playing},live.playbackLabel)),
-      h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':live.detail),
+      h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':!connectionError&&!voiceDisabled&&live.action==='start'&&setupGaps.length?'先在设置中完成语音配置。':live.detail),
       message&&!editing&&h('p',{role:'status'},message),[...new Set([state?.voice?.error,state?.error].filter(Boolean))].map(code=>h('p',{key:code,role:'alert'},errors[code]||code)),
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
       state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,state.context.error==='ASSISTANT_CONTEXT_STORAGE_FULL'?'请释放对话所在磁盘的空间，再重试保存。成功前请保持助手运行。':'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),
       state?.context?.interruptedCount>0&&h('p',{className:'va-note'},'上次有 '+state.context.interruptedCount+' 条消息未完成，已保留记录，没有自动重发。'),
-      h('div',{'aria-label':'对话',className:'va-conversation',role:'log','aria-live':'polite','aria-relevant':'additions text',ref:chat,onScroll:()=>{const node=chat.current;follow.current=node.scrollHeight-node.scrollTop-node.clientHeight<60;if(follow.current)setUnseen(false)}},state?.capabilities?.messageHistory&&messages.length>0&&moreHistory!==false&&(moreHistory===true||state.context?.messageCount>messages.length)&&h(Button,{className:'va-history-more',disabled:historyBusy,onClick:()=>void loadHistory()},historyBusy?'正在加载…':'加载更早消息'),!messages.length&&!live.listening&&!live.working&&h('div',{className:'va-empty'},h('strong',null,preview?'请在实际助手中开始对话':conversationMissing?'先选择一个对话模型':'开启语音，直接说话'),h('p',null,preview?'本页只展示设置，语音功能不可用。':conversationMissing?'完成“对话”设置并保存后，即可开启语音。':'可以请助手查资料、处理任务，或画一张图。')),messages.map((item,index)=>renderMessage(item,index)),live.listening&&state?.inputPreview&&!state.inputPreview.final&&h('div',{className:'va-message va-message-live','data-role':'user',role:'status'},avatar(participants.user,'user'),h('div',{className:'va-message-main'},h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',null,participants.user.name),h('span',{className:'va-message-source'},'正在说话'))),h('div',{className:'va-live-input'},h('p',null,state.inputPreview.text||'正在聆听…'))))),
+      h('div',{'aria-label':'对话',className:'va-conversation',role:'log','aria-live':'polite','aria-relevant':'additions text',ref:chat,onScroll:()=>{const node=chat.current;follow.current=node.scrollHeight-node.scrollTop-node.clientHeight<60;if(follow.current)setUnseen(false)}},state?.capabilities?.messageHistory&&messages.length>0&&moreHistory!==false&&(moreHistory===true||state.context?.messageCount>messages.length)&&h(Button,{className:'va-history-more',disabled:historyBusy,onClick:()=>void loadHistory()},historyBusy?'正在加载…':'加载更早消息'),!voiceDisabled&&!messages.length&&!live.listening&&!live.working&&h('div',{className:'va-empty'},h('strong',null,preview?'请在实际助手中开始对话':conversationMissing?'先选择一个对话模型':'开始实时语音，直接说话'),h('p',null,preview?'本页只展示设置，语音功能不可用。':conversationMissing?'完成“对话”设置并保存后，即可开启语音。':'可以请助手查资料、处理任务，或画一张图。')),messages.map((item,index)=>renderMessage(item,index)),live.listening&&state?.inputPreview&&!state.inputPreview.final&&h('div',{className:'va-message va-message-live','data-role':'user',role:'status'},avatar(participants.user,'user'),h('div',{className:'va-message-main'},h('div',{className:'va-message-heading'},h('div',{className:'va-message-author'},h('strong',null,participants.user.name),h('span',{className:'va-message-source'},'正在说话'))),h('div',{className:'va-live-input'},h('p',null,state.inputPreview.text||'正在聆听…'))))),
       h('style',null,visualCanvasStyles),state?.canvas?.visible&&state.canvas.persistent&&h(VisualCanvas,{value:state.canvas,pinned:true,onClose:()=>invoke({action:'canvas-close'})}),
       unseen&&h(Button,{className:'va-latest',onClick:()=>{follow.current=true;chat.current.scrollTop=chat.current.scrollHeight;setUnseen(false)}},'回到最新回复'),
       state?.voice.phase==='running'&&state?.asrFeedback==='utterance'&&h('div',{className:'va-waveform','data-active':live.listening},h('span',null,live.listening?(Date.now()-(state.waveform?.updatedAt||0)<1500?'正在收音 · 说完后转写':'等待麦克风数据'):'麦克风已暂停'),h('svg',{viewBox:'0 0 288 56',role:'img','aria-label':live.listening?'真实麦克风音量波形':'麦克风已暂停，波形停止'},Array.from({length:48},(_,i)=>{const fresh=live.listening&&Date.now()-(state.waveform?.updatedAt||0)<1500,value=fresh?(state.waveform?.samples?.[i]||0):0,height=Math.max(1,Math.min(52,Math.sqrt(value)*170));return h('rect',{key:i,x:i*6,y:(56-height)/2,width:3,height,rx:1})}))),
       h('div',{className:'va-actions'},
-        h(Button,{className:'va-primary',disabled:preview||busy||testRunning||!state||connectionError||state?.voice.phase==='starting',onClick:()=>live.action==='start'&&setupGaps.length?openSettings(setupGaps[0].section):invoke({action:live.action})},preview?'预览不支持语音':live.action==='start'&&setupGaps.length?'配置语音':live.actionLabel),
+        h(Button,{className:'va-primary',disabled:preview||busy||testRunning||!state||connectionError||voiceDisabled||state?.voice.phase==='starting',onClick:()=>live.action==='start'&&setupGaps.length?openSettings(setupGaps[0].section):invoke({action:live.action})},preview?'预览不支持语音':live.actionLabel),
         state?.interaction?.outputActive&&h(Button,{disabled:busy,onClick:()=>invoke({action:'interrupt-speech'})},'停止本次播报'),
         h(Button,{disabled:preview||!state||busy||testRunning||connectionError,onClick:()=>invoke({action:'mute',enabled:!state.voice.outputEnabled})},state?.voice.outputEnabled?'播报静音':'恢复播报'),
         state?.voice.phase==='running'&&h(Button,{disabled:busy||testRunning,onClick:()=>invoke({action:'stop'})},'结束语音')),

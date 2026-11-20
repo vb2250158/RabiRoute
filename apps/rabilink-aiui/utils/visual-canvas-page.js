@@ -20,10 +20,12 @@ export const visualCanvasPageMethods={
  paintVisualCanvas(){
   if(!this.pageReady||this.destroyed)return;
   const value=this.ensureVisualCanvas().canvas.snapshot();
-  const width=Math.max(160,Math.min((window.innerWidth||480)-32,Math.max(90,(window.innerHeight||352)-132)*16/9));
+  const viewport=globalThis.window;
+  const width=Math.max(160,Math.min((viewport?.innerWidth||480)-32,Math.max(90,(viewport?.innerHeight||352)-132)*16/9));
   this.setData({visualCanvasVisible:value.visible,visualCanvasTitle:value.document?.title||'',visualCanvasPersistent:value.persistent,visualCanvasWidth:width,visualCanvasHeight:width*9/16});
+  if(!value.visible||typeof wx.createCanvasContext!=='function')return;
   const ctx=wx.createCanvasContext('assistantVisualCanvas');
-  if(value.visible&&ctx)paintVisualCanvas(ctx,value.document,{color:'#00ff88',background:'#000000'});
+  if(ctx)paintVisualCanvas(ctx,value.document,{color:'#00ff88',background:'#000000'});
  },
  beginVisualCanvasInput(){const owner=this.ensureVisualCanvas();if(this.visualCanvasInputPending)return;this.visualCanvasInputPending=true;this.visualCanvasTurnEpoch=owner.canvas.beginInput()},
  closeVisualCanvas(){this.ensureVisualCanvas().canvas.close()},

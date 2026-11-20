@@ -606,9 +606,10 @@ test("receipt reader deadline releases the same task queue when the reader never
   }
 });
 
-for (const action of ["started", "steered"] as const) {
-  test(`accepted ${action} observes the original late native receipt without sending again`, async () => {
-    const marker = action === "started" ? "11111111-aaaa-4bbb-8ccc-111111111171" : "11111111-aaaa-4bbb-8ccc-111111111172";
+for (const [action, timesOut] of [["started", false], ["steered", false], ["steered", true]] as const) {
+  test(`${timesOut ? "timed-out" : "accepted"} ${action} observes the original late native receipt without sending again`, async () => {
+    const marker = action === "started" ? "11111111-aaaa-4bbb-8ccc-111111111171"
+      : timesOut ? "11111111-aaaa-4bbb-8ccc-111111111173" : "11111111-aaaa-4bbb-8ccc-111111111172";
     const threadId = "019f0000-0000-7000-8000-000000000171";
     const events: CodexDesktopDeliveryEvent[] = [];
     let visible = false;
@@ -627,6 +628,7 @@ for (const action of ["started", "steered"] as const) {
     const router = await createMockDesktopRouter(request => {
       if (request.method === "initialize") return { type: "response", requestId: request.requestId, resultType: "success", result: { clientId: "rabi" } };
       if (action === "started" && request.method === "thread-follower-steer-turn") return { type: "response", requestId: request.requestId, resultType: "error", error: "NoActiveTurn" };
+      if (timesOut) return { type: "response", requestId: request.requestId, resultType: "error", error: "thread-follower-steer-turn-timeout" };
       return { type: "response", requestId: request.requestId, resultType: "success", result: {} };
     });
     const bridge = new CodexDesktopBridge({

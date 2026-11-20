@@ -918,6 +918,8 @@ export default {
     playbackCaptionText: "", playbackCaptionStart: 0, playbackCaptionLength: 0,
     visualCanvasVisible: false, visualCanvasTitle: '', visualCanvasPersistent: false, visualCanvasWidth: 448, visualCanvasHeight: 252,
     transcriptionDesired: true,
+    voiceAssistantEnabled: true,
+    voiceWakeEnabled: true,
     transcriptionListening: false,
     transcriptionState: "准备中",
     transcriptionText: "等待语音",
@@ -1007,12 +1009,10 @@ export default {
     const deviceCredential = loadDeviceCredential(relayBaseUrl, asrHostPolicy.deviceSerialNumber);
     const token = deviceCredential || (asrHostPolicy.deviceSerialNumber ? "" : invocation.token);
     const needsDeviceSetup = !token;
-    const agentRequestedTranscription = invocation.mode === APP_MODES.TRANSCRIPTION && invocation.invokedByAgent;
-    const isPhysicalGlasses = Boolean(asrHostPolicy.deviceSerialNumber);
-    const shouldAutoStartTranscription = (Boolean(token) || isPhysicalGlasses) && !asrHostPolicy.requiresInteractiveWakeup;
-    const waitsForInteractiveWakeup = asrHostPolicy.requiresInteractiveWakeup;
-    const shouldAutoStartConfiguration = invocation.mode === APP_MODES.CONFIGURATION && !asrHostPolicy.requiresInteractiveWakeup;
-    const configurationWaitsForInteractiveWakeup = invocation.mode === APP_MODES.CONFIGURATION && asrHostPolicy.requiresInteractiveWakeup;
+    let voicePreferences;
+    try { voicePreferences = wx.getStorageSync("rabilink-aiui-voice-preferences"); } catch (_) {}
+    const voiceAssistantEnabled = voicePreferences?.enabled !== false;
+    const voiceWakeEnabled = voicePreferences?.wakeEnabled !== false;
     const firstFrameSurface = APP_SURFACES[invocation.surfaceIndex] || APP_SURFACES[0];
     const firstFramePanel = CONFIG_PANELS[invocation.panelIndex] || CONFIG_PANELS[0];
     this.asrHostPolicy = asrHostPolicy;
@@ -1090,23 +1090,21 @@ export default {
       mode: invocation.mode,
       isTranscriptionMode: invocation.mode === APP_MODES.TRANSCRIPTION,
       isConfigurationMode: invocation.mode === APP_MODES.CONFIGURATION,
-      transcriptionDesired: shouldAutoStartTranscription,
-      assistantListeningDesired: shouldAutoStartConfiguration,
+      voiceAssistantEnabled,
+      voiceWakeEnabled,
+      transcriptionDesired: false,
+      assistantListeningDesired: false,
       assistantListening: false,
       assistantModelBusy: false,
       assistantModelState: "原生 AI 待命",
       lingzhuAgentId,
       lingzhuAgentName,
       lingzhuSystemPrompt,
-      transcriptionState: (invocation.mode === APP_MODES.TRANSCRIPTION
-          ? (shouldAutoStartTranscription
-            ? "准备聆听"
-            : (waitsForInteractiveWakeup ? "浏览器调试：进入后点麦克风" : "待运行智能体"))
-          : "配置助手"),
+      transcriptionState: voiceAssistantEnabled ? "等待开始实时语音" : "语音助手已关闭",
       transcriptionSessionId: `rabilink-aiui-${Date.now()}`,
       assistantStatus: invocation.intent
         ? "执行外层灵珠指令"
-        : (configurationWaitsForInteractiveWakeup ? "浏览器调试：点麦克风开始" : "准备聆听"),
+        : (voiceAssistantEnabled ? "等待开始实时语音" : "语音助手已关闭"),
       assistantUserText: invocation.intent || "直接说出配置需求",
       assistantReplyText: invocation.intent ? "正在调用对应配置接口。" : "轻触镜腿或唤醒后开始对话。",
       assistantLastRequest: invocation.intent,
@@ -1139,7 +1137,7 @@ export default {
     if (this.data.modelProbe) { this.pageVisible = true; void this.runHostModelProbe("onShow"); return; }
     console.info("[RabiLink AIUI] page:onShow");
     this.pageVisible = true;
-    this.voiceInteraction?.setOutputEnabled(this.voiceOutputAllowed !== false);
+    this.voiceInteraction?.setOutputEnabled(this.data.voiceAssistantEnabled && this.voiceOutputAllowed !== false);
     if (this.deviceAgentOwner) {
       this.deviceAgentOwner.leaseConfirmed = false;
       this.scheduleDeviceAgentLease(0);
@@ -1418,8 +1416,9 @@ export default {
   },
 
   onVoiceWakeup(event) {
-    if (this.data.modelProbe) return;
+    if (this.data.modelProbe || !this.data.voiceAssistantEnabled) return;
     const keyword = String(event?.keyword || "").trim();
+    if (!this.data.voiceWakeEnabled && keyword !== "clickAiAssist") return;
     this.appendLog(keyword ? `唤醒词：${keyword}` : "收到语音唤醒。");
     if (this.data.agentSpeaking || this.data.assistantModelBusy) {
       this.interruptAiuiPlayback("wakeup");
@@ -4200,6 +4199,42 @@ export default {
     this.resumeTranscription();
   },
 
+  saveVoicePreferences(enabled, wakeEnabled) {
+    const previous = this.data.voiceAssistantEnabled;
+    try { wx.setStorageSync("rabilink-aiui-voice-preferences", { enabled, wakeEnabled }); }
+    catch (_) {
+      this.setData({ voiceAssistantEnabled: this.data.voiceAssistantEnabled, voiceWakeEnabled: this.data.voiceWakeEnabled,
+        transcriptionState: "语音设置未保存", assistantStatus: "语音设置未保存" });
+      return;
+    }
+    this.setData({ voiceAssistantEnabled: enabled, voiceWakeEnabled: wakeEnabled });
+    if (enabled === previous) return;
+    if (enabled) {
+      this.setData({ transcriptionState: "等待开始实时语音", assistantStatus: "等待开始实时语音" });
+      return;
+    }
+    this.voiceOutputAllowed = false;
+    this.voiceInteraction?.setOutputEnabled(false);
+    this.clearTranscriptionRestart();
+    this.stopTranscriptionClock();
+    this.stopRecognition(false);
+    this.setData({ transcriptionDesired: false, assistantListeningDesired: false,
+      transcriptionState: "语音助手已关闭", assistantStatus: "语音助手已关闭" });
+  },
+
+  onVoiceAssistantChange(event) {
+    if (typeof event?.detail?.value === "boolean") this.saveVoicePreferences(event.detail.value, this.data.voiceWakeEnabled);
+  },
+
+  toggleVoiceWake() {
+    this.saveVoicePreferences(this.data.voiceAssistantEnabled, !this.data.voiceWakeEnabled);
+  },
+
+  startRealtimeVoice() {
+    if (this.data.isConfigurationMode) this.resumeConfigurationListening("button");
+    else this.resumeTranscription("button");
+  },
+
   pauseTranscription() {
     this.voiceOutputAllowed = false;
     this.voiceInteraction?.setOutputEnabled(false);
@@ -4215,6 +4250,7 @@ export default {
   },
 
   resumeTranscription(reason = "ui") {
+    if (!this.data.voiceAssistantEnabled) return;
     if (!this.data.isTranscriptionMode) {
       this.switchToTranscription(reason);
       return;
@@ -4321,6 +4357,7 @@ export default {
   },
 
   resumeConfigurationListening(reason = "ui") {
+    if (!this.data.voiceAssistantEnabled) return;
     if (!this.data.isConfigurationMode) {
       this.requestConfigurationAssistant(reason);
       return;
@@ -4380,8 +4417,8 @@ export default {
     this.voiceInteraction = createVoiceInteraction({
       runtime: this.aiuiRuntime,
       isActive: () => !this.destroyed,
-      outputEnabled: this.pageVisible && this.voiceOutputAllowed !== false,
-      acceptTranscript: text => this.pageVisible
+      outputEnabled: this.pageVisible && this.data.voiceAssistantEnabled && this.voiceOutputAllowed !== false,
+      acceptTranscript: text => this.pageVisible && this.data.voiceAssistantEnabled
         && (this.transcriptPolicy?.evaluate(text, Date.now(), { commit: false }).accepted ?? /[\p{L}\p{N}]/u.test(text))
         && !(this.listeningPurpose === "transcription"
           && (this.speechActive || this.data.agentSpeaking) && this.isAiuiPlaybackEcho(text)),
@@ -4399,7 +4436,7 @@ export default {
       listening: {
         restartDelayMs: TRANSCRIPTION_RESTART_DELAY_MS,
         earlyEndMs: ASR_EARLY_END_MS, maxEmptyEnds: ASR_EMPTY_END_LIMIT,
-        canStart: () => this.pageVisible && !this.destroyed && (this.data.isConfigurationMode
+        canStart: () => this.pageVisible && this.data.voiceAssistantEnabled && !this.destroyed && (this.data.isConfigurationMode
           ? this.data.assistantListeningDesired && !this.data.busy && !this.data.assistantModelBusy
           : this.data.isTranscriptionMode && this.data.transcriptionDesired),
         onEvent: event => this.onListeningLifecycleEvent(event)
@@ -4474,13 +4511,14 @@ export default {
   clearTranscriptionRestart() { this.listeningLifecycle?.clearRestart(); },
 
   scheduleTranscriptionRestart(delayMs = TRANSCRIPTION_RESTART_DELAY_MS) {
-    if (!this.pageReady || !this.pageVisible || this.destroyed || this.recognition) return;
+    if (!this.data.voiceAssistantEnabled || !this.pageReady || !this.pageVisible || this.destroyed || this.recognition) return;
     const wanted = this.data.isTranscriptionMode ? this.data.transcriptionDesired
       : this.data.isConfigurationMode && this.data.assistantListeningDesired;
     if (wanted) this.ensureListeningLifecycle().requestRestart(delayMs);
   },
 
   startTranscription({ interactive = false } = {}) {
+    if (!this.data.voiceAssistantEnabled) return;
     if (!interactive) { this.scheduleTranscriptionRestart(); return; }
     if (!this.pageVisible || this.destroyed || this.recognition) return;
     const purpose = this.data.isConfigurationMode ? "configuration" : "transcription";
@@ -5834,7 +5872,11 @@ export default {
             </view>
           </view>
           <view class="hudFooterRow {{visualCanvasVisible ? 'statusHidden' : ''}}">
-            <text class="hudBargeInText">{{agentSpeaking ? '⚡ 单击打断' : '⚡ 单击打断 / 接收 · 双击退出'}}</text>
+            <text class="hudBargeInText" catchtap="onPageTap" wx:if="{{agentSpeaking}}">单击打断</text>
+            <text class="hudBargeInText" catchtap="startRealtimeVoice" wx:elif="{{voiceAssistantEnabled && !transcriptionListening && !assistantListening}}">开始实时语音</text>
+            <text class="hudBargeInText" wx:else>{{voiceAssistantEnabled ? '正在聆听' : '语音已关闭'}}</text>
+            <text class="hudBargeInText" catchtap="toggleVoiceWake" wx:if="{{voiceAssistantEnabled}}">{{voiceWakeEnabled ? '手动或唤醒' : '手动开始'}}</text>
+            <switch checked="{{voiceAssistantEnabled}}" color="#40ff5e" bindchange="onVoiceAssistantChange" />
             <text class="inputRecordEntry {{inputRecordCount > 0 || inputRecordError ? '' : 'statusHidden'}}" catchtap="openAiuiInputReview">↑ 记录 {{inputRecordError ? '!' : inputRecordCount}}</text>
             <text class="releaseVersion">v{{releaseVersion}}</text>
           </view>

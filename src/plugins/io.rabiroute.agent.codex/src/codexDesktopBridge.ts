@@ -1133,6 +1133,7 @@ export class CodexDesktopBridge {
       this.deliveryEvent(params, "steer_rejected", { method, requestId, elapsedMs: Date.now() - startedAt, outcome: timedOut ? "timeout" : "rejected", error: diagnosticErrorMessage(error) });
       if (timedOut) {
         if (this.deliveryMarker(params) && await this.deliveryReceiptConfirmed(params)) return true;
+        this.watchLateRollout(params, requestId, method, "steered", attempt.observerGeneration);
         throw this.unconfirmedDelivery(params, method, error);
       }
       throw error;

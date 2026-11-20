@@ -274,6 +274,15 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     })().finally(() => { diagnostic = undefined; diagnosticAbort = undefined })
     return diagnostic
   }
+  const voiceEnabled = () => settings().voiceEnabled !== false;
+  const assertVoiceEnabled = () => { if (!voiceEnabled()) throw Error('ASSISTANT_VOICE_DISABLED') };
+  async function stopVoice() {
+    diagnosticAbort?.abort();
+    await diagnostic?.catch(() => {});
+    await voice.stop();
+    inputPreview = null;
+  }
+
   async function command(request) {
     if (closed) throw Error('ASSISTANT_CLOSED')
     if(request.action!=='message-details')error = null
@@ -297,10 +306,10 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       }
       case 'text': return native.submit(request.text, request.requestId)
       case 'start': await startVoice(); return state()
-      case 'stop': diagnosticAbort?.abort(); await diagnostic?.catch(() => {}); await voice.stop(); inputPreview=null; return state()
+      case 'stop': await stopVoice(); return state()
       case 'interrupt-speech': voice.interruptSpeech('manual'); changed(); return state()
       case 'pause': voice.pauseCapture(); inputPreview=null; return state()
-      case 'resume': await voice.resumeCapture(); return state()
+      case 'resume': assertVoiceEnabled(); await voice.resumeCapture(); return state()
       case 'mute': await saveSettings({ outputEnabled: Boolean(request.enabled) }); voice.setOutputEnabled(Boolean(request.enabled)); return state()
       case 'test-captions': {
         if(!settings().captionsEnabled)throw Error('ASSISTANT_CAPTIONS_DISABLED')
@@ -331,6 +340,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
         }
         if (batch !== undefined) await saveSettingsBatch(batch)
         else await saveSettings(patch)
+        if ('voiceEnabled' in patch && !voiceEnabled()) await stopVoice()
         native.configure?.()
         voice.setOutputEnabled(settings().outputEnabled)
         await synchronizePresenter()
@@ -373,6 +383,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       pet: pet?.state() ?? { available: false, reason: '未安装兼容桌宠', repository: 'https://github.com/vb2250158/dsh-pet', pets: [] } }
   }
   async function startVoice(createRecording, {fallback, recentSpeech} = {}) {
+    assertVoiceEnabled()
     const phase = voice.getState().phase
     if (phase === 'running' || phase === 'starting') {
       if (createRecording) throw Error('ASSISTANT_CAPTURE_ALREADY_ACTIVE')
@@ -387,7 +398,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     const activity = voice.getPresentationState()
     return recognizing > 0 || Boolean(activity?.inputPending || activity?.outputActive || activity?.outputQueued)
   }
-  return { state, command, startWithRecording: startVoice, captureState: () => voice.getState(), captureHasWork, initialize:()=>synchronizePresenter().catch(()=>{}), openSettings(url) {
+  return { state, command, voiceEnabled, startWithRecording: startVoice, captureState: () => voice.getState(), captureHasWork, initialize:()=>synchronizePresenter().catch(()=>{}), openSettings(url) {
     if (!device) throw Error('ASSISTANT_DEVICE_UNAVAILABLE')
     return device.request('presenter.open-settings', { url })
   }, async dispose() {

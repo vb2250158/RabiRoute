@@ -4,11 +4,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createResidentHost } from '../src/assistant-host.mjs';
 import { initialAssistantSettings } from '../src/assistant-settings.mjs';
 
-test('resident stop drains capture before closing device, and can start again', async () => {
+test('resident stop and voice disable drain capture before closing the device', async () => {
   const events = [];
   const config = {...initialAssistantSettings(), electronExecutable:process.execPath,
     asrMode:'native', ttsModel:'fixture', ttsVoice:'fixture'};
-  const host = createResidentHost({settings:()=>config, saveSettings:async()=>{},
+  const host = createResidentHost({settings:()=>config, saveSettings:async patch=>Object.assign(config,patch),
     credentials:{describe:async()=>({configured:true})},
     conversation:()=>({open:async()=>{},getSessionId:()=>null,close:()=>{}}),
     observeOutput:()=>()=>{}, speech:()=>({catalog:async()=>({maxAudioBytes:1000})}),
@@ -26,10 +26,16 @@ test('resident stop drains capture before closing device, and can start again', 
     },
   });
   try {
+    await host.command({action:'settings',patch:{voiceEnabled:false}});
+    await assert.rejects(host.command({action:'start'}),{message:'ASSISTANT_VOICE_DISABLED'});
+    await assert.rejects(host.startWithRecording(()=>{throw Error('WAKE_CAPTURE_LEAK')}),{message:'ASSISTANT_VOICE_DISABLED'});
+    await assert.rejects(host.command({action:'resume'}),{message:'ASSISTANT_VOICE_DISABLED'});
     for(let i=0;i<2;i++) {
+      await host.command({action:'settings',patch:{voiceEnabled:true}});
+      assert.equal((await host.state()).voice.phase,'stopped');
       await host.command({action:'start'});
       assert.equal((await host.state()).waveform.samples.at(-1),.25);
-      await host.command({action:'stop'});
+      await host.command(i===0?{action:'settings',patch:{voiceEnabled:false}}:{action:'stop'});
       await delay(65);
       assert.equal((await host.state()).error,null);
       assert.equal((await host.state()).voice.phase,'stopped');

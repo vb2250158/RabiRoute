@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.57 - 2026-11-20
+
+- Keep the role HTTP test runnable when the system reserves its default fixture port.
+- Add a persistent voice-assistant switch and manual start; disabling it stops capture and keyword wake while glasses retain native voice entry.
+- Retain workbench canvas interaction improvements and observe late receipts for timed-out Codex steer deliveries without resending.
+
 ## 0.15.56 - 2026-11-20
 
 - WorkBuddy (io.rabiroute.agent.workbuddy) 0.1.16 unwraps native system reminders and the original user-query envelope before exact receipt recovery. Original delivery and task identities remain unchanged; reconciliation does not resend messages.

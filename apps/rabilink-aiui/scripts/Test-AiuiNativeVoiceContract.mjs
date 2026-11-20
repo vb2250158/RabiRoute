@@ -82,6 +82,33 @@ function page() {
 }
 class Utterance { constructor(text) { this.text = text; } }
 
+test('voice switch gates manual and host wake entry and preserves the chosen mode', () => {
+  const p = page();
+  const key = 'rabilink-aiui-voice-preferences';
+  const saved = fixtureWx.getStorageSync(key);
+  let starts = 0, stops = 0;
+  p.asrAdapter = { createRound: handlers => ({ handlers }), start() { starts++; }, stop() { stops++; } };
+  try {
+    p.onVoiceAssistantChange({ detail: { value: false } });
+    p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+    p.startRealtimeVoice();
+    assert.equal(starts, 0);
+    p.toggleVoiceWake();
+    p.onVoiceAssistantChange({ detail: { value: true } });
+    assert.equal(starts, 0);
+    p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+    assert.equal(starts, 0);
+    p.startRealtimeVoice();
+    assert.equal(starts, 1);
+    p.onVoiceAssistantChange({ detail: { value: false } });
+    assert.equal(stops, 1);
+    assert.deepEqual(fixtureWx.getStorageSync(key), { enabled: false, wakeEnabled: false });
+    assert.equal(p.data.transcriptionDesired, false);
+  } finally {
+    fixtureWx.setStorageSync(key, saved ?? null);
+  }
+});
+
 test('unrelated keyboard input cannot silence a pending answer or steal browser navigation', () => {
   const p = page();
   p.data.assistantModelBusy = true;

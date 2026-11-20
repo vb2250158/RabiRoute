@@ -132,10 +132,12 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     const epoch = profileRevision, personaId = profile.personaId;
     armedRevision = epoch; wakeError = null;
     arming = (async () => {
+      const current = await open();
+      if (!current.host.voiceEnabled() || epoch !== profileRevision) return;
       if (!personaId) throw Error('ASSISTANT_WAKE_PERSONA_REQUIRED');
       const role = await call('manager.roles.detail', {pathParams:{roleId:personaId}});
       assertWritable();
-      if (epoch !== profileRevision) return;
+      if (epoch !== profileRevision || !current.host.voiceEnabled()) return;
       const value = role.config?.speechTriggerKeywords ?? role.personaConfig?.speechTriggerKeywords;
       const aliases = Array.isArray(value) ? [...new Set(value.filter(item=>typeof item==='string')
         .map(item=>item.normalize('NFKC').trim()).filter(Boolean))] : [];
@@ -246,6 +248,15 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       if(['stop','exit'].includes(request.action))forgetActiveWake();
       if(request.action==='exit'){await current.host.command({action:'stop'});await handoffWrites;return {stopped:true}}
       if(request.action==='stop'){const result=await current.command(request);await handoffWrites;return result}
+      if(request.action==='settings'){
+        const previouslyEnabled=current.host.voiceEnabled();
+        const result=await current.command(request);
+        if(previouslyEnabled!==current.host.voiceEnabled()){
+          await retireWake();
+          if(current.host.voiceEnabled())armWake();
+        }
+        return result;
+      }
       return current.command(request);
     },
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},
