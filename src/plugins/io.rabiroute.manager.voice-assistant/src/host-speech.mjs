@@ -1,3 +1,5 @@
+import {boundedDictionary} from '@rabilink/desktop-voice-service/speech-providers';
+
 /** Only fields declared by the selected model and accepted by Manager's speech API are callable. */
 export function hostSpeechDefaultModel(kind,models,status,preferredModel){
  const ready=models.filter(item=>item.capability===kind&&item.enabled&&item.available),provider=status?.defaults?.[kind];
@@ -23,4 +25,20 @@ export function hostSpeechCommand({model,persona,text,expression={},sessionId}){
 export function hostSpeechModelSummary(model){
  return {id:model.id,name:model.name,capability:model.capability,provider:model.provider,enabled:model.enabled,available:model.available,features:model.features||[],note:model.note,
   requestFields:Object.entries(model.request?.properties||{}).map(([id,value])=>({id,type:value.type,description:value.description||null}))};
+}
+
+function dictionaryField(model) {
+  const field = model?.request?.properties?.prompt?.['x-rabi-dictionary'];
+  return ['prompt','context'].includes(field?.format) &&
+    Number.isSafeInteger(field.maxBytes) && field.maxBytes > 0 && field.maxBytes <= 4096 ? field : null;
+}
+
+export function hostAsrDictionaryPolicy(model) {
+  const field = dictionaryField(model);
+  return field ? {format:field.format,mode:'utterance',local:field.local !== false} : null;
+}
+
+export function hostAsrDictionaryPrompt(model, value) {
+  const field = dictionaryField(model);
+  return field ? boundedDictionary(value,field).join('\n') : '';
 }

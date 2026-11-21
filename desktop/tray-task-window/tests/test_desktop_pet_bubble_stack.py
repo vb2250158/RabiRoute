@@ -3,6 +3,7 @@ import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtTest import QTest
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
@@ -53,6 +54,37 @@ class BubbleStackTest(unittest.TestCase):
         self.assertEqual(job["text"], "第二句。")
         self.assertTrue(job["bubbleKey"].endswith(":4"))
         self.assertIsNone(state.accept(dict(value, personaId="other", revision=2), job))
+
+    def test_live_transcript_and_reply_use_separate_windows_inside_the_work_area(self):
+        window = DesktopPetWindow()
+        area = QApplication.primaryScreen().availableGeometry()
+        window.move(area.right() - window.width() + 1, area.bottom() - window.height() + 1)
+        window.show()
+        try:
+            window.show_speech_bubble("这是桌宠的回复。", playing=True, key="reply")
+            window.set_transcript_preview(("", False))
+            bubble = window._transcript_bubble
+            self.assertTrue(bubble.isVisible())
+            self.assertEqual(bubble.status.text(), "你 · 正在转写")
+            window.set_transcript_preview(("这是语音转", False))
+            window.set_transcript_preview(("这是语音转写的最终稿。", True))
+            self.assertEqual(bubble.status.text(), "你 · 转写完成")
+            self.assertEqual(bubble.text.text(), "这是语音转写的最终稿。")
+            self.assertTrue(bubble.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+            self.assertTrue(window._bubble.isVisible())
+            self.assertEqual(window._bubble._text.text(), "这是桌宠的回复。")
+            self.assertFalse(window._previous_bubbles)
+            for _ in range(2):
+                self.assertTrue(area.contains(bubble.frameGeometry()))
+                self.assertFalse(bubble.frameGeometry().intersects(window._visible_sprite_rect()))
+                self.assertFalse(bubble.frameGeometry().intersects(window._bubble.placement_bounds()))
+                window.move(area.topLeft())
+            window.set_transcript_preview(None)
+            self.assertFalse(bubble.isVisible())
+            self.assertEqual(bubble.text.text(), "")
+            self.assertTrue(window._bubble.isVisible())
+        finally:
+            window.close()
 
     def test_old_tail_retracts_and_repeated_updates_do_not_restart_motion_or_erase_text(self):
         window = DesktopPetWindow()

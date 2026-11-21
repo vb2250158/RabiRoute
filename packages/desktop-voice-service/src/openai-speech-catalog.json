@@ -558,7 +558,7 @@
           "gpt-4o-mini-transcribe",
           "whisper-1"
         ],
-        "note": "程序自动附带最近助手回复和专有词；说话人分离模型不支持此输入。",
+        "note": "程序按识别词典和对话辅助设置生成提示。",
         "owner": "system",
         "kind": "asr",
         "integration": "dialog-context"
@@ -634,23 +634,7 @@
           "gpt-4o-mini-transcribe",
           "whisper-1"
         ],
-        "note": "转写时自动附带最近助手回复和专有词，帮助识别当前对话。"
-      },
-      {
-        "key": "asrHotwords",
-        "label": "专有词与拼写（每行一个）",
-        "type": "textarea",
-        "group": "识别偏好",
-        "default": "",
-        "maxLength": 2048,
-        "owner": "user",
-        "kind": "asr",
-        "models": [
-          "gpt-4o-transcribe",
-          "gpt-4o-mini-transcribe",
-          "whisper-1"
-        ],
-        "note": "你希望优先识别的人名、产品名或专业词语。"
+        "note": "转写时自动附带最近一条助手回复。"
       }
     ]
   }

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 
 from .theme import rabi_scrollbar_stylesheet
@@ -48,6 +48,72 @@ def place_dialogue_bubble(anchor: QRect, size: QSize, area: QRect):
         y = anchor.bottom() + 9
     y = max(area.top(), min(y, area.bottom() - size.height() + 1))
     return QPoint(x, y), anchor.center().x() - x, not above
+
+
+def place_transcript_bubble(anchor: QRect, size: QSize, area: QRect, occupied: list[QRect]) -> QPoint | None:
+    """Fit a separate input window beside the pet and the animated reply stack."""
+    if size.width() > area.width() or size.height() > area.height():
+        return None
+    obstacles = [rect.adjusted(-8, -8, 8, 8) for rect in (anchor, *occupied)]
+    columns = [anchor.right() + 9, anchor.left() - size.width() - 8, anchor.center().x() - size.width() // 2]
+    rows = [anchor.top()]
+    for rect in obstacles:
+        columns.extend((rect.right() + 1, rect.left() - size.width()))
+        rows.extend((rect.bottom() + 1, rect.top() - size.height()))
+    rows.sort(key=lambda y: abs(y - anchor.top()))
+    for x in columns:
+        x = max(area.left(), min(x, area.right() - size.width() + 1))
+        for y in rows:
+            y = max(area.top(), min(y, area.bottom() - size.height() + 1))
+            box = QRect(QPoint(x, y), size)
+            if not any(box.intersects(rect) for rect in obstacles):
+                return box.topLeft()
+    return None
+
+
+class DesktopPetTranscriptBubble(QWidget):
+    """A local read-only microphone preview, outside the dialogue queue."""
+
+    def __init__(self, flags: Qt.WindowType) -> None:
+        super().__init__(None, flags | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setWindowTitle("语音转写")
+        self.setFixedWidth(248)
+        frame = QFrame(self)
+        frame.setObjectName("petTranscript")
+        frame.setStyleSheet(
+            "QFrame#petTranscript { background: #f0f6ff; border: 1px solid #9bb7e2; border-radius: 12px; }"
+            "QLabel { color: #1e3152; font-size: 14px; }"
+            "QLabel#petTranscriptStatus { color: #345782; font-size: 12px; font-weight: 600; }"
+        )
+        self.status = QLabel()
+        self.status.setObjectName("petTranscriptStatus")
+        self.text = QLabel()
+        self.text.setTextFormat(Qt.TextFormat.PlainText)
+        self.text.setWordWrap(True)
+        self.text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        inside = QVBoxLayout(frame)
+        inside.setContentsMargins(12, 8, 12, 8)
+        inside.setSpacing(3)
+        inside.addWidget(self.status)
+        inside.addWidget(self.text)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(frame)
+
+    def set_preview(self, preview: tuple[str, bool] | None) -> None:
+        if preview is None:
+            self.hide()
+            self.text.clear()
+            self.status.clear()
+            return
+        text, final = preview
+        text = " ".join(text.split())
+        self.status.setText("你 · 转写完成" if final else "你 · 正在转写")
+        self.text.setText("…" + text[-150:] if len(text) > 150 else text)
+        self.text.setVisible(bool(text))
+        self.adjustSize()
 
 
 def nine_slice_rects(source_width: int, source_height: int, width: int, height: int):
@@ -160,6 +226,12 @@ class DesktopPetBubble(QWidget):
         self._tail_animation.setStartValue(self._tail_progress)
         self._tail_animation.setEndValue(target)
         self._tail_animation.start()
+
+    def placement_bounds(self) -> QRect:
+        bounds = self.frameGeometry()
+        if self._motion_target is not None:
+            bounds = bounds.united(QRect(self._motion_target, self.size()))
+        return bounds
 
     def transition_to(self, position: QPoint) -> None:
         entering = not self.isVisible() or self._exiting

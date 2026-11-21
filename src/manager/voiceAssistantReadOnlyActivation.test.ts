@@ -45,7 +45,25 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
     await assert.rejects(provider.invoke("deliver", { envelope: { id: "blocked", text: "fixture" }, binding: { sessionId: "unopened" } }), /ASSISTANT_READ_ONLY/);
     for (const action of ["send", "reconcile_delivery"] as const)
       await assert.rejects(sender.bind(provider)({ action, agentAdapter: "voice-assistant", threadId: "target", prompt: "fixture" }, "unopened"), /admission is unavailable/);
-    assert.equal(registrations, 1); assert.equal(operations.length, 4);
+    assert.equal(registrations, 1);
+    assert.deepEqual(operations.map(operation => operation.contract.operationId).sort(), [
+      "manager.voice-assistant.command",
+      "manager.voice-assistant.messages",
+      "manager.voice-assistant.mobile-asr",
+      "manager.voice-assistant.mobile-transcribe",
+      "manager.voice-assistant.scan",
+      "manager.voice-assistant.state",
+    ]);
+    const untouchedAudio = { [Symbol.asyncIterator]() { assert.fail("read-only activation consumed audio"); } };
+    for (const [name, body] of [["mobile-asr", untouchedAudio], ["mobile-transcribe", Buffer.alloc(0)]] as const) {
+      const operation = operations.find(item => item.contract.operationId === `manager.voice-assistant.${name}`);
+      const blocked = await operation.handler({
+        body,
+        query: { sessionId: "unopened", ...(name === "mobile-transcribe" ? { source: "local" } : {}) },
+      });
+      assert.equal(blocked.status, 409);
+      assert.deepEqual(blocked.body, { code: -1, message: "ASSISTANT_READ_ONLY" });
+    }
     assert.equal(endpointCalls, 0); assert.equal(dispatches, 0);
     assert.deepEqual(await fs.readdir(path.join(directory, "state/data/voice-assistant")), ["connection"]);
     assert.deepEqual(await fs.readdir(path.join(directory, "state/data/voice-assistant/connection")), []);

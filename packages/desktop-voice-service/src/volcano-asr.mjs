@@ -15,7 +15,7 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
   };
   return {
     createRound(handlers) {
-      const round = {}, state = { handlers, recording: createRecording(), closed: false, abort: new AbortController(), chain: Promise.resolve(), pendingBytes: 0, pcm: Buffer.alloc(0), speaking: false, committedEnd: -1, interim: '' };
+      const round = {}, state = { handlers, recording: createRecording(), closed: false, abort: new AbortController(), chain: Promise.resolve(), pendingBytes: 0, sentSamples: 0, pcm: Buffer.alloc(0), speaking: false, committedEnd: -1, interim: '' };
       rounds.set(round, state); return round;
     },
     async start(round) {
@@ -47,7 +47,9 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
               for (const item of utterances) {
                 if (item.definite === true && typeof item.text === 'string' && item.text.trim() && Number.isFinite(item.end_time) && item.end_time > state.committedEnd) {
                   state.committedEnd = item.end_time;
+                  const endSample = item.end_time * 16; // Volcano reports milliseconds on a 16 kHz PCM timeline.
                   state.handlers.onFinal?.({ text: item.text, additions: item.additions, startTime:item.start_time,endTime:item.end_time,
+                    ...(Number.isSafeInteger(endSample) && endSample > 0 && endSample <= state.sentSamples ? {endSample} : {}),
                     providerDetails:safeSpeechDetails({request:state.request,result:{...item,additions:{...result.additions,...item.additions}}}) });
                 }
               }
@@ -72,7 +74,11 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
             // callback count; ordinary batches must drain without losing words.
             state.pendingBytes += chunk.length;
             checkBacklog();
-            state.chain = state.chain.then(() => { if (!state.closed) return state.socket.send(encodeAsr(chunk, { audio: true })); }).catch(fail).finally(() => { state.pendingBytes -= chunk.length; checkBacklog(); });
+            state.chain = state.chain.then(() => {
+              if (state.closed) return;
+              state.sentSamples += chunk.length / 2;
+              return state.socket.send(encodeAsr(chunk, { audio: true }));
+            }).catch(fail).finally(() => { state.pendingBytes -= chunk.length; checkBacklog(); });
           }
         } });
         if (state.closed) return;
@@ -92,7 +98,10 @@ export function createVolcanoAsr({ createRecording, settings, connection, recogn
     async finish(round) {
       const state=rounds.get(round);if(!state||state.closed||state.inputFinished)return;
       state.inputFinished=true;clearInterval(state.monitor);await state.chain;
-      if(!state.closed)await state.socket.send(encodeAsr(state.pcm,{audio:true,last:true}));
+      if(!state.closed){
+        state.sentSamples += state.pcm.length / 2;
+        await state.socket.send(encodeAsr(state.pcm,{audio:true,last:true}));
+      }
     },
     stop(round) { return stop(rounds.get(round)); },
   };

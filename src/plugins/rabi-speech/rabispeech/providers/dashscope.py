@@ -18,6 +18,7 @@ import httpx
 
 from ..config import ApiProviderSettings
 from ..contracts import SpeechAudioArtifact, SpeechSynthesisRequest, TranscriptSegment, TranscriptionRequest, TranscriptionResult
+from ..model_discovery import dictionary_prompt
 from ..persona_voice import persona_voice_dir, resolve_persona_role_dir
 
 
@@ -214,6 +215,8 @@ class DashScopeAsrProvider:
                             }
                         }
                         if "speaker_diarization" in {feature.lower() for feature in model.features}
+                        else {"parameters": {"prompt": dictionary_prompt("context", 2048, local=False)}}
+                        if model.id == "qwen3-asr-flash" and _official_asr_host(self.settings.base_url)
                         else {}
                     ),
                 }
@@ -462,6 +465,15 @@ def _seconds(value: object) -> float:
     except (TypeError, ValueError):
         return 0.0
     return number / 1000.0 if number > 100.0 else number
+
+
+def _official_asr_host(value: str) -> bool:
+    parsed = urlparse(value)
+    host = parsed.hostname or ""
+    return parsed.scheme == "https" and parsed.port in (None, 443) and (
+        host in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
+        or bool(re.fullmatch(r"[a-z0-9-]+\.(?:cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com", host))
+    )
 
 
 def _validate_remote_base_url(value: str) -> None:

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createResidentHost } from '../src/assistant-host.mjs';
 import { initialAssistantSettings } from '../src/assistant-settings.mjs';
+import { createPlaybackEchoFilter } from '../src/playback-echo.mjs';
 
 test('resident stop and voice disable drain capture before closing the device', async () => {
   const events = [];
@@ -44,13 +45,39 @@ test('resident stop and voice disable drain capture before closing the device', 
   } finally {await host.dispose()}
 });
 
-test('accepted speech automatically enters conversation once and clears the temporary transcript',async()=>{
- let handlers;const received=[];const config={...initialAssistantSettings(),electronExecutable:process.execPath,asrMode:'volcengine',asrModel:'bigmodel',ttsModel:'fixture',ttsVoice:'fixture'};
+test('speech enters conversation once and the pet keeps a separate, temporary transcript',async()=>{
+ let handlers, onText, petPresentation;const received=[];const config={...initialAssistantSettings(),electronExecutable:process.execPath,asrMode:'volcengine',asrModel:'bigmodel',ttsModel:'fixture',ttsVoice:'fixture'};
  const host=createResidentHost({settings:()=>config,saveSettings:async()=>{},credentials:{describe:async()=>({configured:true})},
- conversation:()=>({open:async()=>{},getSessionId:()=>null,close(){},submit:async(text,id)=>{received.push({text,id});return{accepted:true}}}),observeOutput:()=>()=>{},
+ conversation:()=>({open:async()=>{},getSessionId:()=>null,close(){},submit:async(text,id)=>{received.push({text,id});return{accepted:true}}}),
+ observeOutput:options=>{onText=options.onText;return()=>{}},
+ pet:{present(_config,presentation){petPresentation=presentation},state:()=>({}),dispose:async()=>{}},
  createProviders:()=>({asrFeedback:'streaming',createAsr:()=>({createRound(value){handlers=value;return{}},start(){handlers.onStart?.()},stop(){}}),synthesize:async()=>Buffer.alloc(2)}),
  deviceFactory:async()=>({close:async()=>{},configurePresenter:async()=>{},present:async()=>{}})});
- try{await host.command({action:'start'});handlers.onInterim({text:'临时转写'});assert.equal((await host.state()).inputPreview.text,'临时转写');handlers.onFinal({text:'确定的语音。'});await delay(0);assert.equal(received.length,1);assert.equal(received[0].text,'确定的语音。');assert.equal((await host.state()).inputPreview,null)}finally{await host.dispose()}
+ try {
+   await host.command({action:'start'});
+   onText({responseId:'reply',text:'桌宠的上一句'});
+   handlers.onInterim({text:'临时转写'});
+   assert.equal((await host.state()).inputPreview.text,'临时转写');
+   assert.deepEqual(petPresentation.inputPreview,{text:'临时转写',final:false});
+   assert.equal(petPresentation.text,'桌宠的上一句');
+   handlers.onFinal({text:'确定的语音。'});
+   await delay(0);
+   assert.equal(received.length,1);
+   assert.equal(received[0].text,'确定的语音。');
+   assert.equal((await host.state()).inputPreview,null);
+   assert.deepEqual(petPresentation.inputPreview,{text:'确定的语音。',final:true,corrected:true});
+   await delay(4100);
+   assert.equal(petPresentation.inputPreview,null);
+   handlers.onInterim({text:'下一句'});
+   await host.command({action:'pause'});
+   assert.equal(petPresentation.inputPreview,null);
+   await host.command({action:'resume'});
+   handlers.onInterim({text:'停止前未提交'});
+   assert.equal(petPresentation.inputPreview.text,'停止前未提交');
+   await host.command({action:'stop'});
+   assert.equal(petPresentation.inputPreview,null);
+   assert.equal(received.length,1);
+ } finally {await host.dispose()}
 });
 
 test('a cold local fallback keeps the wake session busy until recognition finishes', async () => {
@@ -101,4 +128,69 @@ test('historical invalid endpoint stays readable and repairable while actual sta
    const repaired=await host.command({action:'settings',patch:{ttsEndpoint:'https://example.test/tts'}});assert.equal(repaired.settings.ttsEndpoint,'https://example.test/tts');
    await host.command({action:'start'});assert.equal((await host.state()).voice.capture,'listening');assert.equal(devices,1);await host.command({action:'stop'});
  }finally{await host.dispose()}
+});
+
+test('desktop playback never submits its own words and a distinct utterance can interrupt it', async () => {
+  const config = {...initialAssistantSettings(), electronExecutable:process.execPath,
+    asrMode:'volcengine', asrModel:'fixture', ttsModel:'fixture', ttsVoice:'fixture'};
+  const submissions = [], players = [];
+  const playing = [Promise.withResolvers(), Promise.withResolvers()];
+  let handlers, voice;
+  const host = createResidentHost({
+    settings:()=>config, saveSettings:async()=>{}, credentials:{describe:async()=>({configured:true})},
+    conversation:()=>({open:async()=>{}, getSessionId:()=>null, close(){},
+      async submit(text){submissions.push(text);return {accepted:true};}}),
+    observeOutput:options=>{voice=options.voice;return ()=>{};},
+    createProviders:()=>({
+      createAsr:()=>({createRound(value){handlers=value;return {};},start(){handlers.onStart();},stop(){}}),
+      synthesize:async()=>new Uint8Array(44),
+    }),
+    deviceFactory:async()=>({close:async()=>{},configurePresenter:async()=>{},present:async()=>{},
+      async createPlayer(){
+        const index = players.length;
+        const player = {events:new EventTarget(), stops:0, async play(){playing[index].resolve();},
+          async stop(){player.stops++;},async destroy(){}};
+        players.push(player);
+        return player;
+      },
+    }),
+  });
+  try {
+    await host.startWithRecording(()=>{throw Error('UNEXPECTED_DIRECT_CAPTURE');});
+    const output = voice.beginResponse({id:'reply'});
+    output.append('听得到喵，很清楚。凳子旁边有一本书。');
+    output.finish();
+    await playing[0].promise;
+    handlers.onSpeechStart();
+    handlers.onInterim({text:'听'});
+    assert.equal(players[0].stops,0);
+    assert.equal((await host.state()).inputPreview?.text || '','');
+    players[0].events.dispatchEvent(new Event('ended'));
+    await playing[1].promise;
+    handlers.onFinal({text:'听得到喵很清楚，凳子旁边有'});
+    assert.deepEqual(submissions,[]);
+    assert.equal(players[1].stops,0);
+    handlers.onSpeechStart();
+    handlers.onInterim({text:'等等'});
+    assert.equal(players[1].stops,1);
+    handlers.onFinal({text:'等等，我有个新问题。'});
+    assert.deepEqual(submissions,['等等，我有个新问题。']);
+  } finally {await host.dispose();}
+});
+
+test('echo matching tracks audible updates, short repeats and playback expiry', () => {
+  let time = 0;
+  const filter = createPlaybackEchoFilter(() => time);
+  const reply = {id:1, responseId:'reply', textOffset:10};
+  filter.observe({...reply, type:'synthesizing', text:'好的。'});
+  assert.equal(filter.acceptTranscript('好的', 'final'),true);
+  filter.observe({...reply, type:'play-requested', text:''});
+  filter.observe({...reply, type:'cue', text:'好的。没有播完的尾巴', cue:{charIndex:10,charLength:2}});
+  assert.equal(filter.acceptTranscript('好的', 'final'),false);
+  assert.equal(filter.acceptTranscript('停', 'final'),true);
+  assert.equal(filter.acceptTranscript('没有播完的尾巴', 'final'),true);
+  filter.observe({...reply, type:'cancelled', text:'好的。没有播完的尾巴'});
+  assert.equal(filter.acceptTranscript('好的', 'final'),false);
+  time = 3000;
+  assert.equal(filter.acceptTranscript('好的', 'final'),true);
 });

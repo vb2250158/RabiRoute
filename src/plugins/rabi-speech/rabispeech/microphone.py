@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import tempfile
 import time
 import wave
@@ -15,6 +16,33 @@ import numpy as np
 
 from .assistant_capture import AssistantAudio, AssistantCaptureWindow
 from .contracts import TranscriptionResult
+
+
+class MicrophoneBusyError(RuntimeError):
+    pass
+
+
+def _reserve_local_microphone() -> Callable[[], None]:
+    if os.name != "nt":
+        return lambda: None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateMutexW
+    create.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    handle = create(None, False, "Local\\RabiSpeech.ResidentMicrophone")
+    error = ctypes.get_last_error()
+    if not handle:
+        raise OSError(error, "Cannot reserve RabiSpeech microphone.")
+    if error == 183:
+        close(handle)
+        raise MicrophoneBusyError("ASSISTANT_WAKE_MICROPHONE_IN_USE")
+    return lambda: close(handle)
 
 
 @dataclass(frozen=True)
@@ -189,6 +217,7 @@ class MicrophoneService:
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
+        self._release_microphone: Callable[[], None] | None = None
         self._assistant_capture: AssistantCaptureWindow | None = None
         self._delivery_consumer: asyncio.Task[None] | None = None
         self._deliveries: asyncio.Queue = asyncio.Queue(maxsize=32)
@@ -230,6 +259,11 @@ class MicrophoneService:
         self._submit_failed = 0
         self._dropped = 0
 
+    def _release_local_microphone(self) -> None:
+        release, self._release_microphone = self._release_microphone, None
+        if release is not None:
+            release()
+
     async def restore(self) -> None:
         if not self.config.enabled or not self.config.streaming_enabled:
             return
@@ -265,13 +299,22 @@ class MicrophoneService:
                 if self._remote_audio is not None and self._remote_audio.selected_client_id:
                     await self._remote_audio.start_capture(self.config.sample_rate, self.config.chunk_ms)
                 else:
+                    if self._stream_factory is _sounddevice_stream:
+                        self._release_microphone = _reserve_local_microphone()
                     self._stream = self._stream_factory(self.config, self._audio_callback)
                     self._stream.start()
             except Exception as exc:
-                self._stream = None
+                stream, self._stream = self._stream, None
+                try:
+                    if stream is not None:
+                        stream.close()
+                finally:
+                    self._release_local_microphone()
                 self._state = "error"
                 self._error = f"{type(exc).__name__}: {exc}"
                 self._emit_event("microphone", "microphone_start_failed", "麦克风启动失败", level="error", error=self._error)
+                if isinstance(exc, MicrophoneBusyError):
+                    raise
                 raise RuntimeError(f"Microphone start failed: {exc}") from exc
             self._running = True
             self._state = "listening"
@@ -319,11 +362,14 @@ class MicrophoneService:
                 self._assistant_capture.close()
                 self._assistant_capture = None
             stream, self._stream = self._stream, None
-            if stream is not None:
-                try:
-                    stream.stop()
-                finally:
-                    stream.close()
+            try:
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    finally:
+                        stream.close()
+            finally:
+                self._release_local_microphone()
             if self._remote_audio is not None:
                 await self._remote_audio.stop_capture()
             consumer, self._consumer = self._consumer, None

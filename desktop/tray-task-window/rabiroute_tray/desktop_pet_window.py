@@ -13,7 +13,10 @@ from .desktop_pet_frames import DesktopPetFrames, decode_desktop_pet_frames, mea
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
 from .desktop_pet_drag import DragFollow, NativeDrag, preserve_dpi_size
 from .desktop_pet_physics import DisplayArea, PetFlight, ReleaseTrail
-from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble, normalize_bubble_style
+from .desktop_pet_bubble import (
+    DesktopPetBubble, DesktopPetTranscriptBubble, normalize_bubble_style,
+    place_dialogue_bubble, place_transcript_bubble,
+)
 
 _PREPARED_FRAME_BUDGET = 128 * 1024 * 1024
 _MOTION_FRAME_STATES = {"move", "run", "teleport-in", "teleport-out"}
@@ -154,6 +157,8 @@ class DesktopPetWindow(QWidget):
         self._bubble_timer.timeout.connect(self._expire_bubbles)
         self._bubble = DesktopPetBubble(self.windowFlags())
         self._work_bubble = DesktopPetBubble(self.windowFlags())
+        self._transcript_bubble = DesktopPetTranscriptBubble(self.windowFlags())
+        self._transcript_preview: tuple[str, bool] | None = None
         self._work_bubble_text = ""
         self._bubble_style = normalize_bubble_style({})
         self._previous_bubbles: list[tuple[DesktopPetBubble, float]] = []
@@ -597,6 +602,17 @@ class DesktopPetWindow(QWidget):
             bubble.close()
             bubble.deleteLater()
         self._previous_bubbles.clear()
+        self.set_transcript_preview(None)
+
+    def set_transcript_preview(self, preview: tuple[str, bool] | None) -> None:
+        if not self._bubble_enabled or not self.isVisible():
+            preview = None
+        if preview == self._transcript_preview:
+            return
+        self._transcript_preview = preview
+        self._transcript_bubble.set_preview(preview)
+        if preview is not None:
+            self._place_bubble()
 
     def finish_speech_bubble(self) -> None:
         self._speech_active = False
@@ -615,7 +631,7 @@ class DesktopPetWindow(QWidget):
         self._work_bubble.setVisible(show_work)
         if show_work:
             bubbles.append(self._work_bubble)
-        if not bubbles:
+        if not bubbles and self._transcript_preview is None:
             return
         area = screen.availableGeometry()
         while len(bubbles) > 1 and sum(b.height() + 8 for b in bubbles) > area.height() - 24:
@@ -623,16 +639,26 @@ class DesktopPetWindow(QWidget):
             bubble.close()
             bubble.deleteLater()
             bubbles.pop(0)
-        size = QSize(max(b.width() for b in bubbles), sum(b.height() for b in bubbles) + 8 * (len(bubbles) - 1))
         anchor = self._visible_sprite_rect()
-        position, _, upward = place_dialogue_bubble(anchor, size, area)
-        y = position.y()
-        for bubble in (list(reversed(bubbles)) if upward else bubbles):
-            x = max(area.left(), min(anchor.center().x() - bubble.width() // 2, area.right() - bubble.width() + 1))
-            bubble.set_tail_anchor(anchor.center().x() - x, upward)
-            bubble.set_tail_visible(bubble is self._bubble or bubble is self._work_bubble)
-            bubble.transition_to(QPoint(x, y))
-            y += bubble.height() + 8
+        if bubbles:
+            size = QSize(max(b.width() for b in bubbles), sum(b.height() for b in bubbles) + 8 * (len(bubbles) - 1))
+            position, _, upward = place_dialogue_bubble(anchor, size, area)
+            y = position.y()
+            for bubble in (list(reversed(bubbles)) if upward else bubbles):
+                x = max(area.left(), min(anchor.center().x() - bubble.width() // 2, area.right() - bubble.width() + 1))
+                bubble.set_tail_anchor(anchor.center().x() - x, upward)
+                bubble.set_tail_visible(bubble is self._bubble or bubble is self._work_bubble)
+                bubble.transition_to(QPoint(x, y))
+                y += bubble.height() + 8
+        if self._transcript_preview is not None:
+            transcript = self._transcript_bubble
+            point = place_transcript_bubble(anchor, transcript.size(), area, [bubble.placement_bounds() for bubble in bubbles])
+            if point is None:
+                transcript.hide()
+            else:
+                transcript.move(point)
+                if not transcript.isVisible():
+                    transcript.show()
 
 
     def _visible_sprite_rect(self) -> QRect:
@@ -717,6 +743,8 @@ class DesktopPetWindow(QWidget):
             self._finish_drag(cancelled=True)
         self._locked = bool(locked)
         self._bubble_enabled = bool(bubble_enabled)
+        if not self._bubble_enabled:
+            self.set_transcript_preview(None)
         self.setWindowOpacity(max(0.2, min(1.0, float(opacity))))
         was_visible = self.isVisible()
         bubble_visible = self._bubble.isVisible()
@@ -725,6 +753,7 @@ class DesktopPetWindow(QWidget):
             self.setWindowFlag(flag, bool(always_on_top))
             self._bubble.setWindowFlag(flag, bool(always_on_top))
             self._work_bubble.setWindowFlag(flag, bool(always_on_top))
+            self._transcript_bubble.setWindowFlag(flag, bool(always_on_top))
             for bubble, _ in self._previous_bubbles:
                 visible = bubble.isVisible()
                 bubble.setWindowFlag(flag, bool(always_on_top))
@@ -798,7 +827,7 @@ class DesktopPetWindow(QWidget):
 
     def recover_to_visible_screen(self) -> None:
         self._keep_visible()
-        if self._bubble.isVisible():
+        if self._bubble.isVisible() or self._transcript_preview is not None:
             self._place_bubble()
 
     def _play_png_sequence(self, animation: LoadedDesktopPetAnimation, target: QSize, *, start_clock: bool) -> None:
@@ -929,7 +958,7 @@ class DesktopPetWindow(QWidget):
         self._label.setPixmap(rendered)
         floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
         self._label.move(0, round(floor_offset))
-        if self._bubble.isVisible():
+        if self._bubble.isVisible() or self._transcript_preview is not None:
             self._place_bubble()
 
     def _display_squash(self, progress: float) -> None:
@@ -957,6 +986,13 @@ class DesktopPetWindow(QWidget):
         self._previous_frame.setGeometry(self.rect())
         self._travel_halo.setGeometry(self.rect())
         super().resizeEvent(event)
+        if self._transcript_preview is not None:
+            self._place_bubble()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        if self._transcript_preview is not None:
+            self._place_bubble()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1037,6 +1073,8 @@ class DesktopPetWindow(QWidget):
         self._bubble_timer.stop()
         self._bubble.close()
         self._work_bubble.close()
+        self.set_transcript_preview(None)
+        self._transcript_bubble.close()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:

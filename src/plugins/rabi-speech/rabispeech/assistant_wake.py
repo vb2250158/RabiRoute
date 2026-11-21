@@ -87,6 +87,15 @@ def _encode_aliases(aliases: list[str], lexicon: str, tokens: str) -> str:
     return "/".join(entries)
 
 
+def assistant_keyword_profile(directory: Path, aliases: list[str]) -> dict[str, str]:
+    paths = _model_paths(directory)
+    return {
+        "model": WAKE_MODEL,
+        "keywords": _encode_aliases(aliases, paths["en.phone"], paths["tokens.txt"]),
+        "tokensSha256": MODEL_FILES["tokens.txt"],
+    }
+
+
 class AssistantWakeSpotter:
     def __init__(self, model_directory: Path, aliases: list[str], sample_rate: int, start_sample: int = 0):
         paths = _model_paths(model_directory)

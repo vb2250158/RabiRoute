@@ -76,12 +76,13 @@ test('streaming ASR sends microphone PCM before silence and deduplicates final u
   const asr=createVolcanoAsr({settings:()=>({sampleMs:50,silenceThreshold:.01,silenceDurationMs:700}),connection:async()=>({}),
     createRecording:()=>({start:async(_fail,options)=>{capture=options.onPcm},amplitude:()=>0,dispose:async()=>{disposed++}}),
     connect:async({onMessage})=>{receive=onMessage;return {send:async b=>frames.push(decodeFrame(b)),close:async()=>{closed++}}}});
-  const round=asr.createRound({onFinal:value=>finals.push(value.text),onInterim:value=>interims.push(value.text)});
+  const round=asr.createRound({onFinal:value=>finals.push([value.text,value.endSample]),onInterim:value=>interims.push(value.text)});
   await asr.start(round);capture(Buffer.alloc(2048));capture(Buffer.alloc(2048));await flush();
   assert.equal(frames[1].type,2);assert.equal(frames[1].payload.length,4096);
   receive(asrResponse({utterances:[{text:'你好',definite:false,end_time:100}]}));
-  const result=asrResponse({utterances:[{text:'你好。',definite:true,start_time:0,end_time:200}]});receive(result);receive(result);
-  assert.deepEqual(finals,['你好。']);assert.deepEqual(interims,['你好']);
+  const result=asrResponse({utterances:[{text:'你好。',definite:true,start_time:0,end_time:100}]});receive(result);receive(result);
+  receive(asrResponse({utterances:[{text:'超出已送音频。',definite:true,start_time:100,end_time:200}]}));
+  assert.deepEqual(finals,[['你好。',1600],['超出已送音频。',undefined]]);assert.deepEqual(interims,['你好']);
   capture(Buffer.alloc(100));await asr.finish(round);await asr.finish(round);assert.equal(frames.at(-1).last,true);assert.equal(frames.at(-1).payload.length,100);
   await asr.stop(round);capture(Buffer.alloc(4096));await flush();assert.equal(frames.length,3);assert.equal(disposed,1);assert.equal(closed,1);
 });

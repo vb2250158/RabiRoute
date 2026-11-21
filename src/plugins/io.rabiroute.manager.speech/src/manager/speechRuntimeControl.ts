@@ -228,6 +228,37 @@ export class SpeechRuntimeControl {
     return this.requestAssistantAudio("/v1/internal/assistant-wake", signal, "", JSON.stringify({ aliases }));
   }
 
+  async assistantKeywordProfile(aliases: readonly string[], signal: AbortSignal): Promise<{
+    model: string; keywords: string; tokensSha256: string;
+  }> {
+    const response = await this.requestAssistantAudio("/v1/internal/assistant-keywords", signal, "", JSON.stringify({ aliases }));
+    try {
+      if (response.statusCode !== 200 || response.headers["content-type"] !== "application/json") {
+        throw new SpeechRuntimeControlError("本机唤醒词表不可用。", response.statusCode || 503);
+      }
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of response) {
+        size += chunk.length;
+        if (size > 128 * 1024) throw new SpeechRuntimeControlError("本机唤醒词表过长。", 502);
+        chunks.push(chunk);
+      }
+      const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const value = data && typeof data === "object" ? data as Record<string, unknown> : {};
+      const { model, keywords, tokensSha256 } = value;
+      if (typeof model !== "string" || !/^[a-z0-9][a-z0-9._-]{1,127}$/i.test(model)
+          || typeof tokensSha256 !== "string" || !/^[a-f0-9]{64}$/.test(tokensSha256)
+          || typeof keywords !== "string" || /[\x00-\x1f\x7f]/.test(keywords)) {
+        throw new SpeechRuntimeControlError("本机唤醒词表格式无效。", 502);
+      }
+      const entries = keywords.split("/");
+      if (entries.length !== aliases.length || !entries.every((entry, index) => entry.endsWith(" @rabi-" + index))) {
+        throw new SpeechRuntimeControlError("本机唤醒词位置不匹配。", 502);
+      }
+      return { model, keywords, tokensSha256 };
+    } finally { response.destroy(); }
+  }
+
   async setAssistantRealtime(captureId: string, enabled: boolean, signal: AbortSignal): Promise<void> {
     const body = JSON.stringify({ captureId, enabled });
     const response = await this.requestAssistantAudio("/v1/internal/assistant-realtime", signal, "", body);

@@ -68,12 +68,16 @@ def test_dashscope_asr_uses_fennenote_multimodal_contract(tmp_path: Path, monkey
         assert request.headers["authorization"] == "Bearer test-secret"
         payload = json.loads(request.content)
         assert payload["model"] == "qwen3-asr-flash"
+        assert payload["input"]["messages"][0] == {"role": "system", "content": [{"text": "术语\nRabi"}]}
         assert payload["input"]["messages"][1]["content"][0]["audio"].startswith("data:audio/wav;base64,")
         assert payload["parameters"]["asr_options"]["language"] == "zh"
         return httpx.Response(200, json={"output": {"choices": [{"message": {"content": [{"text": "你好，世界。"}]}}]}})
 
     provider = DashScopeAsrProvider(settings("asr"), httpx.MockTransport(handler))
-    result = asyncio.run(provider.transcribe(TranscriptionRequest(audio_path=audio, model="qwen3-asr-flash", language="zh")))
+    assert provider.capabilities()["models"][0]["parameters"]["prompt"]["x-rabi-dictionary"]["local"] is False
+    result = asyncio.run(provider.transcribe(TranscriptionRequest(
+        audio_path=audio, model="qwen3-asr-flash", language="zh", prompt="术语\nRabi",
+    )))
     assert result.text == "你好，世界。"
     assert result.provider == "dashscope-qwen"
     assert result.duration == 0.01

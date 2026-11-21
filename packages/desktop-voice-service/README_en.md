@@ -14,6 +14,8 @@ The settings panel supports model/voice selection, grouped parameter search, dep
 
 ### Settings drafts and navigation
 
+In **Settings → Speech Recognition → Transcription Dictionary**, put one name or term on each line. Saving removes duplicates, and changing models or providers retains the dictionary. Volcano sends hotwords. Supported OpenAI models and local Whisper use an utterance prompt. Turning off conversation context leaves dictionary hints enabled. Put important terms first so they fit the provider's request limits.
+
 Conversation, recognition, speech output, devices and appearance have separate top-level entries. Provider/model/mode changes remain drafts until Save. Closing offers Continue editing, Discard or Save and close. Refresh, playback and microphone tests explicitly say Save and… when pending settings must be applied. DSH host model selection remains immediate and is labeled accordingly.
 
 Hosts expose `previewSettings(patches)` and `saveSettingsBatch(patches)` with matching validation and profile reduction. Preview neither persists nor stops voice. Batch save accepts at most 64 patches and commits once; direct profile writes are rejected. Credentials are saved separately for the effective provider and endpoint. The UI distinguishes draft state, missing setup and disconnection.

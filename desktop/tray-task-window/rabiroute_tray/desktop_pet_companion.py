@@ -72,6 +72,7 @@ def foreground_observation(sequence: int) -> dict | None:
 
 class DesktopPetCompanion(QObject):
     changed = Signal(object)
+    started_from_menu = Signal(object)
     failed = Signal(str)
 
     def __init__(self, manager_url: str, persona_id: str, parent: QObject) -> None:
@@ -130,6 +131,12 @@ class DesktopPetCompanion(QObject):
         with self._recorder.lock:
             self._recorder.suppressed = playing
 
+    def _start_from_menu(self, preset_id: str) -> dict:
+        result = self._request("start", {
+            "requestId": str(uuid.uuid4()), "presetId": preset_id, "title": "",
+            "autoReview": True, "voice": True, "observationOwner": "desktop"})
+        return {**result, "_startedFromMenu": True}
+
     def toggle(self) -> None:
         if self.control_busy or self.closed:
             return
@@ -141,8 +148,7 @@ class DesktopPetCompanion(QObject):
             session = snapshot.get("session") or {}
             if session.get("status") in ("active", "paused"):
                 return self._request("command", {"sessionId": session["id"], "revision": session["revision"], "action": "stop"})
-            return self._request("start", {"requestId": str(uuid.uuid4()), "presetId": "adaptive", "title": "",
-                                          "autoReview": True, "voice": True, "observationOwner": "desktop"})
+            return self._start_from_menu("adaptive")
         self._work(operation, control=True)
 
     def select_mode(self, preset_id: str) -> None:
@@ -160,9 +166,7 @@ class DesktopPetCompanion(QObject):
                 return self._request("command", {
                     "sessionId": session["id"], "revision": session["revision"],
                     "action": "set-mode", "presetId": preset_id})
-            return self._request("start", {
-                "requestId": str(uuid.uuid4()), "presetId": preset_id, "title": "",
-                "autoReview": True, "voice": True, "observationOwner": "desktop"})
+            return self._start_from_menu(preset_id)
 
         self._work(operation, control=True)
 
@@ -253,6 +257,8 @@ class DesktopPetCompanion(QObject):
                 self._pause_pending = False
                 self.pause()
                 return
+            if result.get("_startedFromMenu") and session.get("status") == "active" and self._enabled():
+                self.started_from_menu.emit(session)
             if self._reconnect_requested and not self.control_busy:
                 self._reconnect_requested = False
                 self.reconnect()

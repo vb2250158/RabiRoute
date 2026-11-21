@@ -53,6 +53,9 @@ class DesktopPetEventStream(QObject):
     def __init__(self, manager_url: str, *, path: str = "/api/events") -> None:
         super().__init__()
         self._url = f"{manager_url.rstrip('/')}{path}"
+        self._headers = {"accept": "text/event-stream"}
+        if path == "/api/events":
+            self._headers["x-rabiroute-desktop-presentation"] = "1"
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._response: object | None = None
@@ -85,7 +88,7 @@ class DesktopPetEventStream(QObject):
         while not self._stop.is_set():
             response: object | None = None
             try:
-                request = Request(self._url, method="GET", headers={"accept": "text/event-stream"})
+                request = Request(self._url, method="GET", headers=self._headers)
                 with urlopen(request, timeout=get_timeout_seconds("desktop.pet.eventsIdle", 65)) as opened_response:
                     response = opened_response
                     with self._response_lock:

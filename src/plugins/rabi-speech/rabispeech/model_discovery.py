@@ -14,6 +14,10 @@ PRIVATE_CAPABILITY_KEYS = {
     "worker_url",
 }
 
+def dictionary_prompt(format: str, max_bytes: int, *, local: bool = True) -> dict[str, object]:
+    return {"type": ["string", "null"], "default": None,
+            "x-rabi-dictionary": {"format": format, "maxBytes": max_bytes, "local": local}}
+
 
 def public_capabilities(capabilities: dict[str, object]) -> dict[str, object]:
     return _redact(deepcopy(capabilities))

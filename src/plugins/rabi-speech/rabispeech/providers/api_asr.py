@@ -12,6 +12,7 @@ import httpx
 
 from ..config import ApiProviderSettings
 from ..contracts import TranscriptSegment, TranscriptionRequest, TranscriptionResult
+from ..model_discovery import dictionary_prompt
 
 
 class ApiAsrProvider:
@@ -40,6 +41,8 @@ class ApiAsrProvider:
                     "languages": list(model.languages),
                     "features": list(model.features),
                     "status": "ready" if configured else "missing_api_key",
+                    **({"parameters": {"prompt": dictionary_prompt("prompt", 224, local=False)}}
+                       if model.id == "whisper-1" and self.settings.base_url.rstrip("/") == "https://api.openai.com/v1" else {}),
                 }
                 for model in self.settings.models
             ],

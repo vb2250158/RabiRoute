@@ -20,3 +20,18 @@ class AssistantPresentationTest(unittest.TestCase):
         new_job = state.accept(dict(event, ownerId="new", ownerStartedAt=20), {})
         self.assertIsNotNone(new_job)
         self.assertIsNone(state.accept(dict(event, revision=100, clear=True), new_job))
+
+    def test_preview_changes_independently_and_new_scope_with_same_activation_resets_revision(self):
+        state = AssistantPresentation("A")
+        event = dict(personaId="A", ownerId="activation", ownerStartedAt=10, revision=10,
+                     responseId="response", text="角色回复", speechStatus="playing")
+        job = state.accept(dict(event, inputPreview={"text": "我说", "final": False}), {})
+        self.assertEqual(job["text"], "角色回复")
+        self.assertEqual(state.input_preview, ("我说", False))
+        self.assertIsNone(state.accept(dict(event, revision=11, inputPreview={"text": "我说完了", "final": True}), job))
+        self.assertEqual(state.input_preview, ("我说完了", True))
+        self.assertIsNone(state.accept(dict(event, personaId="B", revision=12, clear=True), job))
+        self.assertEqual(state.input_preview, ("我说完了", True))
+        self.assertEqual(state.accept(dict(event, ownerStartedAt=11, revision=1, clear=True), job), {})
+        self.assertIsNone(state.accept(dict(event, revision=40, inputPreview={"text": "过期文字", "final": True}), {}))
+        self.assertIsNone(state.input_preview)

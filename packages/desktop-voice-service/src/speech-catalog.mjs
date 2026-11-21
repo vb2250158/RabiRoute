@@ -1,5 +1,6 @@
 /** Provider-owned public capability schema. Controls and request encoding share these keys. */
 import {recognitionContextMessages} from './recognition-context.mjs';
+import {volcanoDictionary} from './asr-dictionary.mjs';
 import { volcanoVoices } from './volcano-voices.mjs';
 import expressionFields from './expression-fields.json' with {type:'json'};
 import openaiCatalog from './openai-speech-catalog.json' with {type:'json'};
@@ -41,7 +42,6 @@ const numberParam=(key,label,parameter,group,initial,min,max,extra={})=>({key,la
 const selectParam=(key,label,parameter,group,initial,options,extra={})=>({key,label,parameter,group,type:'select',default:initial,options:options.map(([id,label])=>({id,label})),...extra});
 volcanoAsrParameters.push(
   selectParam('asrOutputZhVariant','中文输出字形','output_zh_variant','文字处理','',[['','默认简体'],['traditional','繁体（大陆）'],['tw','台湾正体'],['hk','香港繁体']]),
-  textParam('asrHotwords','热词（每行一个）','corpus.context.hotwords','词典与上下文',{type:'textarea',note:'平台按模型和模式限制总长度；热词用于引导，不保证一定识别。'}),
   textParam('asrContext','辅助上下文','corpus.context.context_data','词典与上下文',{type:'textarea',note:'只发送此处手动填写的内容，不自动附带其他聊天。'}),
   textParam('asrBoostingTableName','热词表名称','corpus.boosting_table_name','词典与上下文'),
   textParam('asrBoostingTableId','热词表 ID','corpus.boosting_table_id','词典与上下文'),
@@ -195,7 +195,8 @@ export function encodeVolcanoAsrRequest(config,options={}){
   const corpus={};
   for(const field of volcanoAsrParameters.filter(f=>f.parameter?.startsWith('corpus.')&&!f.parameter.startsWith('corpus.context.')))if(config[field.key])corpus[field.parameter.slice(7)]=config[field.key];
   const context={};
-  if(config.asrHotwords)context.hotwords=config.asrHotwords.split(/\r?\n/).map(s=>s.trim()).filter(Boolean).map(word=>({word}));
+  const hotwords=volcanoDictionary(config);
+  if(hotwords.length)context.hotwords=hotwords;
   if(Object.hasOwn(options,'context')){const values=recognitionContextMessages(options.context);if(values.length){context.context_type='dialog_ctx';context.context_data=values}}
   else if(config.asrContext){context.context_type='dialog_ctx';context.context_data=[{speaker:'user',text:config.asrContext}]}
   if(Object.keys(context).length)corpus.context=JSON.stringify(context);

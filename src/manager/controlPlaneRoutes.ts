@@ -7932,6 +7932,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     }
   });
   const voiceAssistantHostPort = Object.freeze({
+    publishDesktopPresentation(data: Readonly<Record<string, unknown>>, publicReply: boolean) {
+      const { inputPreview, ...publicData } = data;
+      managerEventHub.publish("voice_assistant_presentation", data, publicReply ? { publicData } : {});
+    },
     deliveryAuthorityId: voiceAssistantAccess.deliveryAuthorityId,
     bindAgentSender: createOwnedServiceAgentSender({
       providers: () => resolvePublishedAgentManagerProviders(publishedPluginGeneration()),

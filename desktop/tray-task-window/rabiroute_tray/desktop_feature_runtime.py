@@ -20,7 +20,6 @@ class DesktopFeatureContext:
     application: object
     desktop_pet_menu: object
     open_desktop_pet_persona: Callable[[str], None]
-    open_desktop_pet_voice: Callable[[str], None] | None = None
 
 
 def enabled_builtin_feature_ids(profile_path: Path | None = None) -> tuple[str, ...]:

@@ -3,18 +3,19 @@ function containsText(result) {
     && Boolean((typeof result === 'string' ? result : result.text).trim())
 }
 
-/** The woken utterance belongs to exactly one recognizer, even after a late provider callback. */
-export function createAsrStartupFallback(primary, fallback, {
-  releasePrimary, startupMs = 6000, recognitionMs = 8000, onFallback = () => {},
+/** Recover the unfinished PCM suffix and fence final callbacks from the retired provider. */
+export function createAsrStartupFallback(primary, createFallback, {
+  releasePrimary, replayCursor = () => undefined, startupMs = 6000, recognitionMs = 8000, onFallback = () => {},
 } = {}) {
   const rounds = new WeakMap()
+  const canReplay = state => !state.committed || state.finalCursor !== undefined
   function clearDeadline(state) {
     clearTimeout(state.timer)
     state.timer = undefined
   }
   function deadline(state, lease, delay, stage) {
     clearDeadline(state)
-    if (state.committed || state.active !== lease || !lease.remote) return
+    if (!canReplay(state) || state.active !== lease || !lease.remote) return
     state.timer = setTimeout(() => switchToLocal(state, lease, stage), delay)
     state.timer.unref?.()
   }
@@ -44,7 +45,7 @@ export function createAsrStartupFallback(primary, fallback, {
     const allowed = () => !state.stopped && state.active === lease
     const report = error => {
       if (!allowed()) return
-      if (remote && !state.committed) switchToLocal(state, lease, error?.message)
+      if (remote && canReplay(state)) switchToLocal(state, lease, error?.message)
       else fail(state, error)
     }
     try {
@@ -56,29 +57,39 @@ export function createAsrStartupFallback(primary, fallback, {
         },
         onSpeechStart(...args) {
           if (!allowed()) return
+          state.unfinished = true
           deadline(state, lease, recognitionMs, 'ASSISTANT_REALTIME_NO_TEXT')
           state.handlers.onSpeechStart?.(...args)
         },
         onSpeechEnd(...args) {
           if (!allowed()) return
-          deadline(state, lease, recognitionMs, 'ASSISTANT_REALTIME_NO_FINAL')
+          if (!state.committed || state.unfinished) deadline(state, lease, recognitionMs, 'ASSISTANT_REALTIME_NO_FINAL')
           state.handlers.onSpeechEnd?.(...args)
         },
         onInterim(result) {
           if (!allowed() || !containsText(result)) return
+          state.unfinished = true
           deadline(state, lease, recognitionMs, 'ASSISTANT_REALTIME_NO_FINAL')
           state.handlers.onInterim?.(result)
         },
         onFinal(result) {
           if (!allowed() || !containsText(result)) return
-          state.committed = true
+          if (remote) {
+            state.committed = true
+            // A final without an authoritative sample position must invalidate any
+            // older cursor, which would now include a sentence already delivered.
+            state.finalCursor = Number.isSafeInteger(result.endSample) && result.endSample > state.finalSample
+              ? replayCursor(result.endSample) : undefined
+            if (state.finalCursor !== undefined) state.finalSample = result.endSample
+            state.unfinished = false
+          }
           clearDeadline(state)
           state.handlers.onFinal?.(result)
         },
         onError: report,
         onEnd(...args) {
           if (!allowed()) return
-          if (remote && !state.committed) switchToLocal(state, lease, 'ASSISTANT_REALTIME_ENDED')
+          if (remote && canReplay(state)) switchToLocal(state, lease, 'ASSISTANT_REALTIME_ENDED')
           else state.handlers.onEnd?.(...args)
         },
       })
@@ -88,7 +99,8 @@ export function createAsrStartupFallback(primary, fallback, {
     return lease
   }
   function switchToLocal(state, lease, reason) {
-    if (state.stopped || state.active !== lease || state.committed) return
+    if (state.stopped || state.active !== lease || !canReplay(state)) return
+    const cursor = state.committed ? state.finalCursor : replayCursor(0)
     // Fence the old recognizer before either asynchronous cleanup or local startup.
     state.active = undefined
     clearDeadline(state)
@@ -97,13 +109,13 @@ export function createAsrStartupFallback(primary, fallback, {
       await releasePrimary?.()
       if (state.stopped) return
       onFallback(reason)
-      runLease(state, fallback, false)
+      runLease(state, createFallback(cursor), false)
     }).catch(error => fail(state, error))
   }
   return {
     createRound(handlers) {
       const round = {}
-      rounds.set(round, {handlers, leases:[], ready:false, stopped:false, committed:false})
+      rounds.set(round, {handlers, leases:[], ready:false, stopped:false, committed:false, finalSample:0, unfinished:false})
       return round
     },
     start(round) {

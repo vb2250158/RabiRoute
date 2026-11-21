@@ -2,6 +2,7 @@ import { updateProviderProfiles } from './provider-profiles.mjs';
 import { updateModelProfiles, validateModelEndpoint } from './model-providers.mjs';
 import { speechParameterDefinitions, speechSelectionDefinitions } from './speech-catalog.mjs';
 import {webSearchDefinitions} from './web-search-catalog.mjs';
+import {asrDictionaryMaxLength,dictionaryTerms} from './asr-dictionary.mjs';
 
 /** Shared settings data. Host-only model configuration stays out of DSH accounts. */
 export const assistantSettingDefinitions = {
@@ -12,11 +13,13 @@ export const assistantSettingDefinitions = {
   agentPreset: { default: '' }, cwd: { default: '' }, manageAllWorkspaces: { default: true },
   electronExecutable: { default: '' }, asrMode: { default: 'compatible' }, asrProviderId: { default: '' },
   asrEndpoint: { default: 'https://api.openai.com/v1/audio/transcriptions' }, asrModel: { default: '' }, asrResourceId: { default: '' },
+  asrDictionary: { default: '', max: asrDictionaryMaxLength },
   ttsProvider: { default: 'compatible' }, ttsEndpoint: { default: 'https://api.openai.com/v1/audio/speech' },
   ttsModel: { default: '' }, ttsVoice: { default: '' }, ttsResourceId: { default: '' },
   inputDeviceId: { default: '' }, outputDeviceId: { default: '' },
   silenceThreshold: { default: .01, min: .001, max: 1 }, silenceDurationMs: { default: 700, min: 200, max: 10000 },
   sampleMs: { default: 50, min: 10, max: 1000 }, voiceEnabled: { default: true }, outputEnabled: { default: true },
+  keywordWakeEnabled: { default: false }, keywordWakeAliases: { default: '', max: 4096 },
   captionsEnabled: { default: false }, captionLocked: { default: false }, captionSkin: { default: 'dark' },
   captionFontSize: { default: 24, min: 16, max: 48 }, captionOpacity: { default: .85, min: .15, max: 1 },
   captionPosition: { default: 'bottom' }, captionX: { default: 0 }, captionY: { default: 0 },
@@ -36,10 +39,37 @@ export function initialAssistantSettings({ host = 'standalone', overrides = {} }
   const definitions = { ...assistantSettingDefinitions, ...(host === 'standalone' ? standaloneModelDefinitions : {}) };
   const defaults = Object.fromEntries(Object.entries(definitions).map(([name, spec]) => [name, spec.default]));
   if (host === 'dsh') defaults.asrMode = 'native';
-  return validateAssistantSettings({ ...defaults, ...overrides }, host);
+  return validateAssistantSettings({ ...defaults, ...migrateAsrDictionary(overrides) }, host);
+}
+
+/** Read the former provider/model setting once and strip every persisted copy. */
+function migrateAsrDictionary(settings) {
+  const {asrHotwords, ...current} = settings;
+  const profiles = settings.speechProfiles?.asr;
+  const legacy = Object.values(profiles || {}).filter(profile => profile && Object.hasOwn(profile, 'asrHotwords'));
+  if (!Object.hasOwn(settings, 'asrDictionary') && (asrHotwords !== undefined || legacy.length)) {
+    // Prefer the active words and the latest provider settings over older model snapshots.
+    const latest = [profiles?.[settings.asrMode]?.asrHotwords, profiles?.volcengine?.asrHotwords];
+    const terms = dictionaryTerms([asrHotwords, ...latest, ...legacy.map(profile => profile.asrHotwords)]
+      .filter(value => typeof value === 'string').join('\n'));
+    let dictionary = '';
+    for (const term of terms) {
+      const separator = dictionary ? '\n' : '';
+      if (dictionary.length + separator.length + term.length <= asrDictionaryMaxLength) dictionary += separator + term;
+    }
+    current.asrDictionary = dictionary;
+  }
+  if (legacy.length) {
+    current.speechProfiles = structuredClone(settings.speechProfiles);
+    for (const profile of Object.values(current.speechProfiles.asr)) {
+      if (profile && typeof profile === 'object') delete profile.asrHotwords;
+    }
+  }
+  return current;
 }
 
 export function validateAssistantSettings(value, host = 'standalone') {
+  value = migrateAsrDictionary(value);
   const definitions = { ...assistantSettingDefinitions, ...(host === 'standalone' ? standaloneModelDefinitions : {}) };
   for (const [key, item] of Object.entries(value)) {
     if (key === 'speechProfiles' || key === 'llmProfiles' && host === 'standalone') continue;
@@ -54,11 +84,19 @@ export function validateAssistantSettings(value, host = 'standalone') {
   if (host === 'standalone') {
     validateModelEndpoint(value.llmEndpoint,value.llmProvider||'compatible');
   }
+  if (value.asrDictionary !== undefined) value.asrDictionary = dictionaryTerms(value.asrDictionary).join('\n');
   return structuredClone(value);
 }
 
 export function patchAssistantSettings(previous, patch, host = 'standalone') {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw Error('ASSISTANT_SETTINGS_INVALID');
   if (Object.hasOwn(patch, 'speechProfiles') || Object.hasOwn(patch,'llmProfiles')) throw Error('ASSISTANT_SETTINGS_INVALID');
+  // Older clients may still write this key. Store only the shared setting.
+  if (Object.hasOwn(patch, 'asrHotwords')) {
+    const {asrHotwords, ...rest} = patch;
+    patch = {asrDictionary:asrHotwords, ...rest};
+  }
+  previous = migrateAsrDictionary(previous);
   const speech=updateProviderProfiles(previous, patch, host);
   if (host !== 'standalone') return validateAssistantSettings(speech,host);
   const model = updateModelProfiles(previous,patch);

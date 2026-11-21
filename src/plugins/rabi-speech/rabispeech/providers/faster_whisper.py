@@ -10,6 +10,7 @@ from typing import Any
 
 from ..config import FasterWhisperSettings
 from ..contracts import TranscriptSegment, TranscriptionRequest, TranscriptionResult
+from ..model_discovery import dictionary_prompt
 
 
 class FasterWhisperProvider:
@@ -38,6 +39,7 @@ class FasterWhisperProvider:
                     "loaded": self._model is not None and self._loaded_model_id == spec.id,
                     "languages": ["multilingual"],
                     "features": ["transcription", "language_hint", "segment_timestamps", "word_timestamps", "vad"],
+                    "parameters": {"prompt": dictionary_prompt("prompt", 224)},
                 }
             )
         return {

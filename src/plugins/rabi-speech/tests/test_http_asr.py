@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import runpy
 import sys
+import threading
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from rabispeech.config import HttpAsrModelSettings, HttpAsrProviderSettings
 from rabispeech.contracts import TranscriptionRequest
+from rabispeech.model_discovery import model_rows
 from rabispeech.providers.http_asr import LocalHttpAsrProvider
 from rabispeech.worker_supervisor import WorkerLaunch, WorkerSupervisor
 
@@ -46,6 +50,31 @@ def test_http_asr_keeps_observations_separate_from_text(tmp_path, monkeypatch):
         "emotion": "NEUTRAL", "emotion_labels": ["NEUTRAL"], "audio_events": ["Speech"],
         "raw_tags": ["<|zh|>", "<|NEUTRAL|>", "<|zh|>"], "confidence": 0.97,
     }
+
+def test_qwen_worker_consumes_the_dictionary_as_context(tmp_path):
+    model = HttpAsrModelSettings("fixture", "Fixture", "Qwen3-ASR", "http://127.0.0.1:8790", "", True, (), (), WorkerLaunch())
+    provider = LocalHttpAsrProvider(HttpAsrProviderSettings("qwen3-asr", True, "fixture", 10, (model,)))
+    rows = model_rows({"asr": {"qwen3-asr": provider.capabilities()}})
+    contract = rows[0]["request"]["properties"]["prompt"]["x-rabi-dictionary"]
+    assert contract == {"format": "context", "maxBytes": 2048, "local": True}
+    script = Path(__file__).resolve().parents[1] / "scripts" / "local_asr_worker.py"
+    runtime_class = runpy.run_path(str(script))["ModelRuntime"]
+    calls = []
+
+    def transcribe(**kwargs):
+        calls.append(kwargs)
+        return [SimpleNamespace(text="Fixture", language="Chinese")]
+
+    runtime = runtime_class.__new__(runtime_class)
+    runtime.lock = threading.Lock()
+    runtime.args = SimpleNamespace(engine="qwen3-asr")
+    runtime.model = SimpleNamespace(transcribe=transcribe)
+    audio = tmp_path / "sample.wav"
+    with wave.open(str(audio), "wb") as output:
+        output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        output.writeframes(b"\x00\x00" * 160)
+    assert runtime.transcribe(audio, "zh", False, "术语\nRabi")["text"] == "Fixture"
+    assert calls == [{"audio": str(audio), "language": "Chinese", "context": "术语\nRabi"}]
 
 
 def test_http_asr_maps_word_timestamps_without_inventing_word_probabilities(tmp_path, monkeypatch):

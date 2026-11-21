@@ -7,16 +7,23 @@ import { validateProviderEndpoint } from './provider-profiles.mjs';
 import { encodeVolcanoTtsParams,recognitionFeedback } from './speech-catalog.mjs';
 import {selectedSpeechCatalog,resolveSpeechExpression} from './tts-expression.mjs';
 import {openOpenAiTts} from './openai-tts.mjs';
+import {asrDictionaryPolicy,boundedDictionary} from './asr-dictionary.mjs';
+export {asrDictionaryPolicy,boundedDictionary} from './asr-dictionary.mjs';
 
 /** Provider selection is shared; credentials are always resolved for one fixed target. */
 export function createSpeechProviders({ config, credentials, connect, fetcher, recognitionContext=()=>[] }) {
   const openaiTts=config.ttsProvider==='compatible'&&Boolean(selectedSpeechCatalog(config));
   const openaiAsr=config.asrMode==='compatible'&&Boolean(selectedSpeechCatalog(config,'asr'));
   const ttsParameters=expression=>{const value=resolveSpeechExpression(config,expression);return {speed:value.ttsSpeed||1,...(value.ttsModel.startsWith('gpt-4o-mini-tts')&&value.ttsContextText?{instructions:value.ttsContextText}:{})}};
-  const asrParameters=()=>({temperature:config.asrTemperature||0,...(config.asrLanguage?{language:config.asrLanguage}:{}),...(config.asrModel!=='gpt-4o-transcribe-diarize'&&recognitionContextPrompt(config,recognitionContext())?{prompt:recognitionContextPrompt(config,recognitionContext())}:{}),
+  const asrParameters=()=>{
+    const prompt = asrDictionaryPolicy(config)?.format === 'prompt'
+      ? recognitionContextPrompt(config, config.asrUseContext === false ? [] : recognitionContext())
+      : '';
+    return {temperature:config.asrTemperature||0,...(config.asrLanguage?{language:config.asrLanguage}:{}),...(prompt?{prompt}:{}),
     response_format:config.asrModel==='gpt-4o-transcribe-diarize'?'diarized_json':config.asrModel==='whisper-1'&&(config.asrWordTimestamps||config.asrSegmentTimestamps)?'verbose_json':'json',
     ...(config.asrModel==='gpt-4o-transcribe-diarize'?{chunking_strategy:'auto'}:{}),...(config.asrModel==='whisper-1'?{'timestamp_granularities[]':[...(config.asrWordTimestamps?['word']:[]),...(config.asrSegmentTimestamps?['segment']:[])]}:{}),
-    ...(config.asrLogprobs&&config.asrModel.startsWith('gpt-4o-')&&config.asrModel!=='gpt-4o-transcribe-diarize'?{'include[]':['logprobs']}:{})});
+    ...(config.asrLogprobs&&config.asrModel.startsWith('gpt-4o-')&&config.asrModel!=='gpt-4o-transcribe-diarize'?{'include[]':['logprobs']}:{})};
+  };
   const http = createHttpSpeechProviders({
     ...(config.asrMode === 'compatible' ? { asr: { endpoint: config.asrEndpoint, model: config.asrModel, credentialRef: 'asr',...(openaiAsr?{encode:asrParameters}:{}) } } : {}),
     ...(config.ttsProvider !== 'volcengine' ? { tts: { endpoint: config.ttsEndpoint, model: config.ttsModel, voice: config.ttsVoice, credentialRef: 'tts',...(openaiTts?{encode:ttsParameters}:{}) } } : {}),

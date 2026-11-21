@@ -27,7 +27,8 @@
       "types": "./src/providers.d.ts"
     },
     "./expression": "./src/tts-expression.mjs",
-    "./speech-details": "./src/speech-details.mjs"
+    "./speech-details": "./src/speech-details.mjs",
+    "./resident-speech": "./src/resident-speech.mjs"
   },
   "files": [
     "src",

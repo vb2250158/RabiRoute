@@ -377,6 +377,22 @@ class DesktopPetClient:
         data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
         return parse_desktop_pet_binding(data.get("binding"))
 
+    def start_voice_assistant(self) -> None:
+        body = json.dumps({"action": "start-for-persona", "personaId": self.persona_id}).encode("utf-8")
+        request = Request(f"{self.manager_url}/api/voice-assistant/command", method="POST", data=body,
+                          headers={"content-type": "application/json"})
+        try:
+            with urlopen(request, timeout=get_timeout_seconds("desktop.pet.companionVoiceStart", 30)) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            if error.code == 409:
+                rejection = json.loads(error.read(4096).decode("utf-8"))
+                raise RuntimeError(rejection.get("message")) from error
+            raise
+        voice = payload.get("data", {}).get("voice", {})
+        if payload.get("code") != 0 or voice.get("phase") != "running" or voice.get("capture") != "listening":
+            raise RuntimeError("Manager did not confirm that the voice assistant is listening.")
+
     def load_animation(
         self,
         pack: DesktopPetPack,

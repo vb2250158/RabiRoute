@@ -2,6 +2,8 @@
 
 # io.rabiroute.manager.desktop-pet
 
+Right-click the desktop pet and turn on Companion mode to start or resume live voice with that pet's persona. End live voice in the voice assistant.
+
 This built-in Manager plugin reuses original persona assets, desktop settings, catalog workers and motion receipts, and provides `manager.desktop-pet@1`. It does not start a replacement pet runtime inside Manager.
 
 `DesktopPetOwner` and `createDesktopPetOperations` install twelve public HTTP operations from executable contracts. Every path starts with `/api/desktop-pet/roles/:roleId`; every operation ID starts with `manager.desktop-pet.`:

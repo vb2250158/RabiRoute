@@ -1,10 +1,13 @@
 import type { ApiOperationDefinition, ApiOperationStream } from "./apiOperationContract.js";
+import { hasTrustedLanAgentPrincipal } from "./lanAgentRequestAccess.js";
+import { rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
+import { isLoopbackRemoteAddress } from "./webguiLanAccess.js";
 
 export const MANAGER_EVENT_LIMITS = Object.freeze({ subscribers: 0, queuedFrames: 64, queuedBytes: 4 * 1024 * 1024,
   frameBytes: 4 * 1024 * 1024, heartbeatMs: 15_000, retryMs: 3000 });
 type Frame = Readonly<{ event?: string; data?: unknown; retry?: number; comment?: string }>;
 type QueuedFrame = { frame: Frame; bytes: number };
-type Subscriber = { queue: QueuedFrame[]; bytes: number; closed: boolean; controller: AbortController; wake?: () => void };
+type Subscriber = { queue: QueuedFrame[]; bytes: number; closed: boolean; desktopPresentation: boolean; controller: AbortController; wake?: () => void };
 type EventLimits = { readonly [Key in keyof typeof MANAGER_EVENT_LIMITS]: number };
 
 /** One publication owner for business events and protocol keepalives; never executes subscriber code while publishing. */
@@ -52,16 +55,22 @@ export class ManagerEventHub {
       unsubscribe?.();
     }
   }
-  publish(event: string, data: unknown): void {
+  publish(event: string, data: unknown, desktop?: { publicData?: unknown }): void {
     if (!this.subscribers.size) return;
-    let frame: QueuedFrame;
-    try { frame = this.prepare({ event: event.replace(/[^a-zA-Z0-9_.:-]/g, "_"), data: data === undefined ? null : data }); }
-    catch { return; } // An invalid notification must not fail an already committed business write.
-    for (const subscriber of [...this.subscribers]) this.push(subscriber, frame);
+    try {
+      const name = event.replace(/[^a-zA-Z0-9_.:-]/g, "_");
+      const frame = this.prepare({ event: name, data: data ?? null });
+      const publicFrame = !desktop ? frame : desktop.publicData === undefined ? undefined
+        : this.prepare({ event: name, data: desktop.publicData });
+      for (const subscriber of [...this.subscribers]) {
+        const visible = subscriber.desktopPresentation ? frame : publicFrame;
+        if (visible) this.push(subscriber, visible);
+      }
+    } catch { /* An invalid notification must not fail an already committed business write. */ }
   }
-  open(): ApiOperationStream | undefined {
+  open(desktopPresentation = false): ApiOperationStream | undefined {
     if (this.limits.subscribers > 0 && this.subscribers.size >= this.limits.subscribers) return undefined;
-    const subscriber: Subscriber = { queue: [], bytes: 0, closed: false, controller: new AbortController() };
+    const subscriber: Subscriber = { queue: [], bytes: 0, closed: false, desktopPresentation, controller: new AbortController() };
     this.subscribers.add(subscriber);
     try {
       this.push(subscriber, this.prepare({ retry: this.limits.retryMs }));
@@ -111,8 +120,12 @@ export function createManagerEventsOperation(hub: ManagerEventHub): ApiOperation
     effects: { mode: "subscription", description: "Keeps one bounded in-memory notification subscription and shared keepalive/knowledge event listener. Does not run the referenced business actions." },
     recovery: { strategy: "reconnect-and-refresh", description: "The stream has no durable replay cursor. On EOF/reconnect, refresh current resources and API discovery under the current Manager identity; never replay writes because an event was missed." },
     validators: [{ id: "manager.events.capacity", description: `${hub.limits.subscribers > 0 ? `An explicit limit permits ${hub.limits.subscribers} subscriptions.` : "Subscription count has no default quota."} Each subscriber retains bounded queues of ${hub.limits.queuedFrames} frames and ${hub.limits.queuedBytes} bytes. Slow consumers close on queue overflow. Only protocol keepalive uses a timer; no business polling is added.` }]
-  }, handler: () => {
-    const stream = hub.open();
+  }, handler: ({ request }) => {
+    const desktopPresentation = request?.headers["x-rabiroute-desktop-presentation"] === "1"
+      && !request.headers.forwarded && !request.headers["x-forwarded-for"]
+      && isLoopbackRemoteAddress(request.socket.remoteAddress)
+      && !hasTrustedLanAgentPrincipal(request) && !rabiLinkTransportAssertionPresent(request);
+    const stream = hub.open(desktopPresentation);
     return stream ? { status: 200, stream, headers: { "cache-control": "no-store, no-transform", connection: "keep-alive", "x-accel-buffering": "no" } }
       : { status: 429, body: { code: -1, errorCode: "MANAGER_EVENT_CAPACITY", retryable: false } };
   } };

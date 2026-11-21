@@ -173,10 +173,17 @@ def _run_managed_application(*, sockets: list[socket.socket], stop_event=None) -
             if not self.started or self.should_exit:
                 return
             address = sockets[0].getsockname()
-            print("RABISPEECH_READY:" + json.dumps({
+            ready = {
                 "schemaVersion": 1, "pid": os.getpid(), "nonce": nonce,
                 "host": address[0], "port": address[1],
-            }), flush=True)
+            }
+            if os.environ.get("RABISPEECH_ASSISTANT_CAPTURE_ONLY") == "1":
+                ready_path = Path(os.environ["RABISPEECH_ASSISTANT_READY_FILE"])
+                temporary = ready_path.with_suffix(".tmp")
+                temporary.write_text(json.dumps({**ready, "mode": "assistant-capture"}), encoding="utf-8")
+                temporary.replace(ready_path)
+            else:
+                print("RABISPEECH_READY:" + json.dumps(ready), flush=True)
 
     # Preserve Uvicorn's subprocess event-loop policy on Windows. A Proactor
     # loop cannot safely inherit the listening socket across reload workers.
@@ -296,6 +303,11 @@ def run_server(*, reload: bool = False) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
+    if "--assistant-only" in arguments:
+        required = ("RABISPEECH_ENDPOINT_NONCE", "RABISPEECH_ASSISTANT_READY_FILE", "RABISPEECH_ASSISTANT_AUDIO_TOKEN")
+        if "--reload" in arguments or any(not os.environ.get(name) for name in required):
+            raise RuntimeError("Private RabiSpeech capture requires a managed launch.")
+        os.environ["RABISPEECH_ASSISTANT_CAPTURE_ONLY"] = "1"
     root = resolve_service_root()
     runtime = configure_runtime(root)
     if "--probe" in arguments:

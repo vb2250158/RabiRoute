@@ -28,6 +28,34 @@ test("Manager events share one publication owner, snapshot payloads and release 
   const reopened = hub.open()!; await ready(reopened); assert.equal(subscribed, 2); await reopened.cancel("done"); assert.equal(unsubscribed, 2);
 });
 
+test("live pet transcripts are only included for the direct loopback desktop event subscriber", async () => {
+  const hub = new ManagerEventHub();
+  const operation = createManagerEventsOperation(hub);
+  const optIn = { "x-rabiroute-desktop-presentation": "1" };
+  const open = async (remoteAddress: string, headers: Record<string, string>) =>
+    ready((await operation.handler({ request: { headers, socket: { remoteAddress } } } as unknown as ApiOperationInput)).stream!);
+  try {
+    const desktop = await open("127.0.0.1", optIn);
+    const relay = await open("127.0.0.1", {});
+    const lan = await open("192.0.2.1", optIn);
+    const proxy = await open("127.0.0.1", { ...optIn, "x-forwarded-for": "192.0.2.2" });
+    const tunnel = await open("127.0.0.1", { ...optIn, "x-rabilink-tunnel-local": "1" });
+    const publicData = { revision: 1, responseId: "reply", text: "Assistant output" };
+    const data = { ...publicData, inputPreview: { text: "Live input", final: false } };
+    hub.publish("voice_assistant_presentation", data, { publicData });
+    assert.deepEqual((await desktop.next()).value, { event: "voice_assistant_presentation", data });
+    for (const reader of [relay, lan, proxy, tunnel]) {
+      assert.deepEqual((await reader.next()).value, { event: "voice_assistant_presentation", data: publicData });
+    }
+    hub.publish("voice_assistant_presentation", data, {});
+    hub.publish("unrelated", {});
+    assert.deepEqual((await desktop.next()).value, { event: "voice_assistant_presentation", data });
+    for (const reader of [relay, lan, proxy, tunnel]) {
+      assert.deepEqual((await reader.next()).value, { event: "unrelated", data: {} });
+    }
+  } finally { hub.closeAll(); }
+});
+
 test("a slow subscriber exceeds the bounded queue without failing publication or disturbing a current consumer", async () => {
   let unsubscribed = 0;
   const hub = new ManagerEventHub({ limits: { queuedFrames: 3 }, subscribe: () => () => { unsubscribed++; } });

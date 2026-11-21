@@ -44,10 +44,13 @@ export function assistantServiceRows(state) {
 export function assistantLiveState(state,disconnected=false) {
   const phase=state?.voice?.phase,capture=state?.voice?.capture;
   const listening=phase==='running'&&capture==='listening';
+  const wake = state?.keywordWake ?? state?.hostSettings?.wake;
+  const wakeArmed = state?.settings?.voiceEnabled!==false && wake?.phase==='armed';
   const working=['thinking','responding','searching','executing-tool','finishing'].includes(state?.activity?.status);
   const playing=Boolean(state?.interaction?.outputActive);
   let title='正在连接',detail='',action='start',actionLabel='开始实时语音';
   if(state){title='语音已停止';detail='点击「开始实时语音」后直接说话。'}
+  if(wakeArmed){title='等待唤醒词';detail='说出唤醒词，或点击「开始实时语音」。'}
   if(phase==='starting'){title='正在准备麦克风';detail='正在连接音频设备，请稍候。'}
   if(phase==='running'){
     action=listening?'pause':'resume';actionLabel=listening?'暂停麦克风':'继续收音';
@@ -64,7 +67,7 @@ export function assistantLiveState(state,disconnected=false) {
   if(state?.settings?.voiceEnabled===false){title='语音助手已关闭';detail='打开语音助手开关后可开始实时语音。'}
   if(disconnected){title='与助手的连接已断开';detail='重新连接后可查看当前状态。'}
   return {title,detail,listening,working,playing,action,actionLabel,
-    captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':'收音关闭',
+    captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':wakeArmed&&!disconnected?'唤醒待命':'收音关闭',
     generationLabel:working?(state.activity.status==='executing-tool'?'工具执行中':state.activity.status==='finishing'?'整理回复':state.activity.status==='searching'?'正在联网搜索':state.activity.status==='thinking'?'正在思考':'正在生成文字'):'当前无任务',
     playbackLabel:state?.voice?.outputEnabled===false?'播报静音':playing?'正在播报':state?.interaction?.responseSuppressed?'本次声音已打断':'当前无播报'};
 }
@@ -96,6 +99,9 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     TURN_INTERJECTION_RESPONSE_INVALID:'助手未能处理这次插话，可以再说一次。',
     SPEECH_SEND_BACKLOG:'识别音频发送积压，收音已停止。请检查网络后重新开启语音。',
     ASSISTANT_VOICE_DISABLED:'请先打开语音助手开关。',
+    ASSISTANT_WAKE_ALIASES_REQUIRED:'请至少填写一个唤醒词。',
+    ASSISTANT_WAKE_ALIASES_INVALID:'最多可设置 64 个唤醒词，每个词不超过 64 个字符。',
+    ASSISTANT_WAKE_SERVICE_UNAVAILABLE:'当前入口未连接本机唤醒服务，可手动开始实时语音。',
     ASSISTANT_PERSONA_READ_FAILED:'无法读取所选人格，请查看人格设置中的错误详情。',
     ASSISTANT_HOST_OPERATION_FAILED:'Rabi 宿主操作未完成，请查看服务设置中的错误详情。',
     'Failed to fetch':'与本机助手的连接已断开，请确认后台服务正在运行后重试。',
@@ -365,7 +371,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
         h('h4',null,'返回识别信息'),h('div',{className:'va-cap-grid'},features.filter(spec=>['识别信息','返回信息'].includes(spec.group)).map(feature)),
         catalog.detectionInfo&&h('p',{className:'va-note'},catalog.detectionInfo),
         h('h4',null,'输入辅助'),h('div',{className:'va-cap-grid'},features.filter(spec=>!['识别信息','返回信息'].includes(spec.group)).map(feature)),
-        h('details',{className:'va-asr-preferences'},h('summary',null,'识别偏好 · 语言、分句与词典'),rawProviderParameters('asr')),
+        h('details',{className:'va-asr-preferences'},h('summary',null,'识别偏好 · 语言与分句'),rawProviderParameters('asr')),
         system.length>0&&h('details',{className:'va-asr-system'},h('summary',null,'程序自动处理'),h('div',{className:'va-cap-grid'},system.map(spec=>h(CapabilityChip,{key:spec.key,help:speechCapabilityHelp(providerId('asr'),spec,catalog),status:enabledParameter(spec)?'available':'unavailable',statusLabel:enabledParameter(spec)?spec.integration==='dialog-context'?(draft.asrUseContext?'自动附带对话':'对话辅助已关闭'):'共享语音循环管理':'当前模型不支持',selection})))))
     }
     const ttsCapabilities=(summaryOnly=false)=>{
@@ -408,6 +414,25 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
         (catalog.parameters||[]).some(spec=>spec.owner==='user'&&!['ttsVariant','ttsSpeed','ttsSpeechRate','ttsLoudnessRate'].includes(spec.key))&&h('details',{className:'va-advanced-preferences'},h('summary',null,'更多播放设置'),rawProviderParameters('tts')))
     }
     const providerParameters=kind=>kind==='tts'?ttsCapabilities():rawProviderParameters(kind)
+    const recognitionDictionary=()=>{
+      const settings=state?.asrDictionary;
+      if (!settings) return null;
+      const recognition=settings.recognition;
+      let usage='已保存的识别模式未接入词典。'
+      if(recognition?.format==='hotwords'){
+        const mode={realtime:'实时识别',twopass:'实时和二遍识别',utterance:'整句识别'}[recognition.mode]||'语音识别'
+        usage='已保存的模式会把符合长度限制的词条作为豆包'+mode+'热词。'
+      }else if(recognition){
+        usage='已保存的模式会把符合长度限制的词条用作'+(recognition.local?'本机':'所选服务的')+'整句识别'+(recognition.format==='context'?'上下文。':'提示。')
+      }
+      const mobile=state.hostSettings?.mobileAudio
+      return h('fieldset',{hidden:speechKind!=='asr',className:'va-service'},h('legend',null,'语音转写词典'),
+        h('label',{style:label},'词条（每行一个）',h('textarea',{rows:5,value:draft.asrDictionary??'',maxLength:settings.maxLength,
+          'aria-label':'语音转写词典词条',onChange:event=>edit('asrDictionary',event.target.value)})),
+        h('p',{className:'va-note'},usage),
+        mobile?.passiveModel&&h('p',{className:'va-note'},mobile.dictionary?'手机的被动转写和本机回退也使用词典。':'手机用于被动转写和本机回退的模型没有接入词典。'),
+        h('p',{className:'va-note'},'切换识别服务会保留词典。请把最重要的词放在前面。'))
+    }
     const chooseSpeechSelection=async(kind,patch)=>{
       setMessage('')
       try{if(state.settingsDraft){await previewSelection(patch);return}validateSpeechDraft(kind);const dirty=dirtyKind(kind);if(Object.keys(dirty).length)await command({action:'settings',patch:dirty})
@@ -504,6 +529,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
           h('div',{className:'va-basic-grid'},providerSelect('asr'),draft.asrMode==='local-whisper'?h('label',{style:label},'模型',h(Input,{readOnly:true,value:'Whisper base · CPU / int8'})):draft.asrMode!=='native'&&speechModel('asr')),
           !['native','local-whisper'].includes(draft.asrMode)&&h(React.Fragment,null,credential('asr'),connectionDetails('asr'))),
           !['native','local-whisper'].includes(draft.asrMode)&&h('section',{className:'va-recognition-settings','aria-label':'识别能力与偏好'},asrCapabilities()))),
+      recognitionDictionary(),
       h('fieldset',{hidden:speechKind!=='tts'||state?.hostSettings?.ttsSource==='host',className:'va-service'},h('legend',null,'语音播报'),
         h('div',{className:'va-speech-layout va-tts-layout'},
           h('section',{className:'va-connection-settings va-tts-selection','aria-label':'播报连接'},h('div',{className:'va-tts-card-heading'},h('h3',null,'选择声音')),

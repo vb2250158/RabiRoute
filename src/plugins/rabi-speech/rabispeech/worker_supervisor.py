@@ -299,7 +299,7 @@ class WorkerSupervisor:
     @staticmethod
     async def _healthy(base_url: str) -> bool:
         timeout = httpx.Timeout(get_timeout_seconds("speech.worker.health", 1), connect=get_timeout_seconds("speech.worker.healthConnect", 0.5))
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             for path in ("/health", "/status"):
                 try:
                     response = await client.get(f"{base_url.rstrip('/')}{path}")

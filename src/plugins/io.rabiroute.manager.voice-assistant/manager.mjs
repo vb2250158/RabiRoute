@@ -10,7 +10,8 @@ export const activate=definePlugin({async activate(context){
   const managerEndpoint=managerPort.endpoint;let agentSender;
   const implementation=createImplementation(host);
   const owner=await implementation.createVoiceAssistantOwner({identity:context.identity,stateRoot:host.environment.RABIROUTE_STATE_ROOT,speech,managerEndpoint,signal:context.lifecycle.signal,readOnly:host.manager.readOnly,
-    publish:host.manager.publishManagerEvent,sendAgent:(request,sessionId)=>{if(!agentSender)throw Error('AGENT_SOURCE_OWNER_NOT_READY');return agentSender(request,sessionId)},runtimeEntry:fileURLToPath(new URL('./native-device/main.cjs',import.meta.url)),
+    publish:host.manager.publishManagerEvent,publishDesktopPresentation:managerPort.publishDesktopPresentation,
+    sendAgent:(request,sessionId)=>{if(!agentSender)throw Error('AGENT_SOURCE_OWNER_NOT_READY');return agentSender(request,sessionId)},runtimeEntry:fileURLToPath(new URL('./native-device/main.cjs',import.meta.url)),
     recognitionSampleUrl:new URL('./diagnostic-assets/recognition-zh-CN.wav',import.meta.url)});
   context.effects.adopt(()=>owner.dispose(),'dispose owned voice assistant audio/model client');
   const assertCurrent=()=>context.lifecycle.signal.throwIfAborted();

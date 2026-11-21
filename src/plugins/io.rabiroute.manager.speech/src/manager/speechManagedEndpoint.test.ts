@@ -129,6 +129,11 @@ test("configuration reconciliation never replaces an owner whose process retirem
 test("assistant PCM reads are scoped to the owning managed process and carry the sample cursor", async () => {
   const bytes = Buffer.from([1, 0, 2, 0]);
   const requests: Array<{ path: string | undefined; token: unknown; aliases?: string[] }> = [];
+  const profile = {
+    model: "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
+    keywords: "Y E @rabi-0/D A @rabi-1",
+    tokensSha256: "1".repeat(64)
+  };
   const endpoint = createServer(async (request, response) => {
     const entry: typeof requests[number] = { path: request.url, token: request.headers["x-rabispeech-assistant-token"] };
     requests.push(entry);
@@ -136,6 +141,11 @@ test("assistant PCM reads are scoped to the owning managed process and carry the
       const body = [];
       for await (const chunk of request) body.push(chunk as Buffer);
       entry.aliases = JSON.parse(Buffer.concat(body).toString()).aliases;
+      if (request.url === "/v1/internal/assistant-keywords") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(profile));
+        return;
+      }
       response.writeHead(200, { "content-type": "application/x-ndjson" });
       response.end('{"type":"ready"}\n');
     } else {
@@ -167,6 +177,11 @@ test("assistant PCM reads are scoped to the owning managed process and carry the
       assert.equal(requests[1].path, "/v1/internal/assistant-wake");
       assert.deepEqual(requests[1].aliases, ["夜雨", "大肥鱼"]);
       assert.equal(requests[1].token, f.assistantAudioToken());
+      assert.deepEqual(await f.control.assistantKeywordProfile(["夜雨", "大肥鱼"], signal), profile);
+      assert.equal(requests[2].path, "/v1/internal/assistant-keywords");
+      assert.deepEqual(requests[2].aliases, ["夜雨", "大肥鱼"]);
+      assert.equal(requests[2].token, f.assistantAudioToken());
+      await assert.rejects(f.control.assistantKeywordProfile(["夜雨"], signal), /位置不匹配/);
     } finally {
       await f.control.releaseOwnedRuntime();
     }

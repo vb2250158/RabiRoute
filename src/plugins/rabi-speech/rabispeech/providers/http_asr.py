@@ -15,6 +15,7 @@ import httpx
 
 from ..config import SERVICE_ROOT, HttpAsrModelSettings, HttpAsrProviderSettings
 from ..contracts import TranscriptSegment, TranscriptionRequest, TranscriptionResult
+from ..model_discovery import dictionary_prompt
 from ..worker_paths import discover_firered_command
 from ..worker_supervisor import WorkerLaunch, WorkerSupervisor
 
@@ -65,6 +66,8 @@ class LocalHttpAsrProvider:
                     ),
                     "languages": list(model.languages),
                     "features": list(model.features),
+                    **({"parameters": {"prompt": dictionary_prompt("context", 2048)}}
+                       if self.provider_id == "qwen3-asr" and model.family.casefold() == "qwen3-asr" else {}),
                 }
                 for model in self.settings.models
             ],
@@ -90,7 +93,7 @@ class LocalHttpAsrProvider:
         async with self._lock, self.worker_supervisor.use(
             key, model.base_url, launch, idle_seconds=self.settings.idle_unload_seconds,
             on_unloaded=lambda: self._on_worker_unloaded(model.id),
-        ) as worker_url, httpx.AsyncClient(timeout=timeout) as client:
+        ) as worker_url, httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             response = await client.post(f"{worker_url}/transcribe", json=payload)
             response.raise_for_status()
             data = response.json()

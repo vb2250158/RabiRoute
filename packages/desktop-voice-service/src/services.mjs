@@ -23,8 +23,9 @@ export async function openDesktopVoiceServices({openDevice,createRecording,fallb
     clock:{now:()=>performance.now(),setTimeout,clearTimeout,setInterval,clearInterval}})
   const primary=createAsr?createAsr({createRecording:recording}):desktop(recording,recognize)
   const recognizer=fallbackCapture?createAsrStartupFallback(primary,
-    desktop(fallbackCapture.createRecording,fallbackCapture.recognize),
-    {releasePrimary:()=>currentRecording?.dispose(),onFallback:fallbackCapture.onFallback}):primary
+    cursor=>desktop(()=>fallbackCapture.createRecording(cursor),fallbackCapture.recognize),
+    {releasePrimary:()=>currentRecording?.dispose(),replayCursor:offset=>currentRecording?.replayCursor?.(offset),
+      onFallback:fallbackCapture.onFallback}):primary
   const rounds=new Set()
   const asr={...recognizer,
     createRound(handlers){const round=recognizer.createRound(handlers);rounds.add(round);return round},

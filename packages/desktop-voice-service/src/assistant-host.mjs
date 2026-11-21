@@ -11,12 +11,17 @@ import { volcanoCatalog,recognitionFeedback } from './speech-catalog.mjs'
 import {openaiCatalog,speechExpressionPolicy} from './tts-expression.mjs'
 import {asrMessageDetails} from './speech-details.mjs'
 import {projectCaptionText,projectCaptionPlayback} from './caption-progress.mjs'
+import {asrDictionaryMaxLength,asrDictionaryPolicy} from './asr-dictionary.mjs'
+import {createPlaybackEchoFilter} from './playback-echo.mjs'
+
+const PET_FINAL_TRANSCRIPT_MS = 4000
 
 /** Native Host owns audio. Client and pet only issue commands and present state. */
-export function createResidentHost({ conversation, observeOutput, settings, saveSettings, previewSettings, saveSettingsBatch, credentials, openSettings = () => {}, deviceFactory, speech = () => undefined, pet, createProviders, supportsDynamicExpression=false, listModels=listProviderModels, onCaptureActivity, onCaptureStopped }) {
+export function createResidentHost({ conversation, observeOutput, settings, saveSettings, previewSettings, saveSettingsBatch, credentials, openSettings = () => {}, deviceFactory, speech = () => undefined, pet, createProviders, supportsDynamicExpression=false, listModels=listProviderModels, onCaptureActivity, onCaptureStopped, dictionaryPolicy=asrDictionaryPolicy }) {
   if (typeof deviceFactory !== 'function') throw Error('ASSISTANT_DEVICE_FACTORY_REQUIRED')
   let device, closed = false, diagnostic, diagnosticAbort, presentationTimer, error = null, revision = 0
   let inputPreview = null, levels=[],levelUpdatedAt=0
+  let petFinalPreview = null, petPreviewTimer, petResponseId
   let borrowedCapture, localCaptureFallback, wakeBackground
   let recognizing = 0
   let failedDiagnostic
@@ -26,7 +31,19 @@ export function createResidentHost({ conversation, observeOutput, settings, save
   const speechProgress=new Map()
   const failedPresenters = new WeakSet()
   let presentation = { statusText: '语音已停止', text: '', outputEnabled: settings().outputEnabled, capturePaused: true }
-  const changed = () => { revision++; pet?.present(settings(), presentation); publishPresentation() }
+  const changed = () => {
+    revision++
+    if (pet && !closed) {
+      const { statusText, outputEnabled, capturePaused, canvas } = presentation
+      pet.present(settings(), { statusText, outputEnabled, capturePaused, canvas,
+        ...speechProgress.get(petResponseId), inputPreview: inputPreview ?? petFinalPreview })
+    }
+    publishPresentation()
+  }
+  function clearPetFinalPreview() {
+    clearTimeout(petPreviewTimer)
+    petFinalPreview = null
+  }
   const report = value => { error = /^[A-Z][A-Z0-9_]{1,100}$/.test(value?.message) ? value.message : 'ASSISTANT_OPERATION_FAILED'; changed() }
   const trackRecognition = recognize => async (audio, signal) => {
     recognizing++
@@ -141,7 +158,9 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       })
     }, 50)
   }
+  const playbackEcho = createPlaybackEchoFilter()
   const voice = createResidentInteraction({ outputEnabled: settings().outputEnabled,
+    voiceOptions: { acceptTranscript: playbackEcho.acceptTranscript },
     async openServices({ signal }) {
       if (failedDiagnostic) throw Error('ASSISTANT_DEVICE_CLEANUP_UNCONFIRMED')
       if (diagnostic) throw Error('ASSISTANT_DEVICE_TEST_BUSY')
@@ -182,30 +201,58 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       const preview=inputPreview;
       const recentSpeech = input.source === 'speech' ? wakeBackground : undefined;
       if (recentSpeech !== undefined) wakeBackground = undefined;
-      const receipt=await native.submit(input.text,randomUUID(),{source:input.source,...(input.source==='speech'?{details:asrMessageDetails(settings(),input.result),recentSpeech}:{})});
-      if(inputPreview===preview){inputPreview=null;changed()}
-      return receipt;
+      try {
+        return await native.submit(input.text,randomUUID(),{source:input.source,...(input.source==='speech'?{details:asrMessageDetails(settings(),input.result),recentSpeech}:{})});
+      } finally {
+        if(inputPreview===preview){inputPreview=null;changed()}
+      }
     },
     onError: report,
     onEvent(event) {
       if (event.type === 'state') {
         const s = event.state
-        if (['stopped','failed','disposed'].includes(s.phase)) onCaptureStopped?.()
+        if (['stopped','failed','disposed'].includes(s.phase)) {
+          playbackEcho.clear()
+          inputPreview = null
+          clearPetFinalPreview()
+          petResponseId = undefined
+          onCaptureStopped?.()
+        }
         presentation = { ...presentation, outputEnabled: s.outputEnabled, capturePaused: s.capture !== 'listening',
           statusText: s.phase === 'failed' ? '语音故障' : s.phase === 'starting' ? '正在准备' : s.phase === 'stopped' ? '语音已停止' : s.capture === 'listening' ? '正在聆听' : '麦克风已暂停' }
       } else {
         const e = event.event
         if(e.type==='playback'){
+          playbackEcho.observe(e.event)
           const prior=speechProgress.get(e.event.responseId)
           if(prior){const next=projectCaptionPlayback(prior,e.event);speechProgress.set(e.event.responseId,next);if(presentation.responseId===e.event.responseId)presentation={...presentation,...next}}
         }
         if(e.type==='playback'&&e.event?.responseId)native.recordSpeechDetails?.(e.event.responseId,{type:'playback',status:e.event.type,...(e.event.error?{error:'SPEECH_PLAYBACK_FAILED'}:{})})
         if ((e.type === 'transcript' && e.text?.trim()) || (e.type === 'input' && e.input?.text?.trim())) onCaptureActivity?.(true)
         if (e.type === 'speech-started') onCaptureActivity?.(false)
-        if (e.type === 'speech-started') inputPreview = {text:'',final:false}
+        if (e.type === 'listening' && e.event.type === 'ended' && !inputPreview?.final) inputPreview = null
+        if (e.type === 'speech-started' && (!inputPreview || inputPreview.final)) {
+          clearPetFinalPreview()
+          inputPreview = {text:'',final:false}
+        }
         if(e.type==='transcript'&&e.text?.trim()&&!inputPreview?.text)native.beginVisualInput?.()
-        if (e.type === 'transcript') inputPreview = {text:e.text,final:false}
-        if (e.type === 'input') inputPreview = {text:e.input.text,final:true,corrected:Boolean(inputPreview&&!inputPreview.final&&inputPreview.text&&inputPreview.text!==e.input.text)}
+        if (e.type === 'transcript') {
+          clearPetFinalPreview()
+          inputPreview = {text:e.text,final:false}
+        }
+        if (e.type === 'input') {
+          clearPetFinalPreview()
+          inputPreview = {text:e.input.text,final:true,corrected:Boolean(inputPreview&&!inputPreview.final&&inputPreview.text&&inputPreview.text!==e.input.text)}
+          if (e.input.source === 'speech' && pet) {
+            const preview = petFinalPreview = inputPreview
+            petPreviewTimer = setTimeout(() => {
+              clearPetFinalPreview()
+              if (inputPreview === preview) inputPreview = null
+              changed()
+            }, PET_FINAL_TRANSCRIPT_MS)
+            petPreviewTimer.unref?.()
+          }
+        }
         if (e.type === 'transcript') presentation = projectCaptionText(presentation,{text:e.text,responseId:null})
         if (e.type === 'input') presentation = projectCaptionText(presentation,{text:e.input.text,statusText:'正在处理',responseId:null})
       }
@@ -223,6 +270,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     },
     onText(value) {
       recognitionSession=native.getSessionId?.();latestRecognitionText=value.responseId?String(value.text||'').slice(0,2048):''
+      petResponseId = value.responseId || undefined
       if(!value.responseId)speechProgress.clear()
       const next=projectCaptionText(speechProgress.get(value.responseId)||{},value)
       if(value.responseId){speechProgress.set(value.responseId,next);while(speechProgress.size>16)speechProgress.delete(speechProgress.keys().next().value)}
@@ -277,10 +325,12 @@ export function createResidentHost({ conversation, observeOutput, settings, save
   const voiceEnabled = () => settings().voiceEnabled !== false;
   const assertVoiceEnabled = () => { if (!voiceEnabled()) throw Error('ASSISTANT_VOICE_DISABLED') };
   async function stopVoice() {
+    inputPreview = null
+    clearPetFinalPreview()
+    changed()
     diagnosticAbort?.abort();
     await diagnostic?.catch(() => {});
     await voice.stop();
-    inputPreview = null;
   }
 
   async function command(request) {
@@ -308,7 +358,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
       case 'start': await startVoice(); return state()
       case 'stop': await stopVoice(); return state()
       case 'interrupt-speech': voice.interruptSpeech('manual'); changed(); return state()
-      case 'pause': voice.pauseCapture(); inputPreview=null; return state()
+      case 'pause': voice.pauseCapture(); inputPreview=null; clearPetFinalPreview(); changed(); return state()
       case 'resume': assertVoiceEnabled(); await voice.resumeCapture(); return state()
       case 'mute': await saveSettings({ outputEnabled: Boolean(request.enabled) }); voice.setOutputEnabled(Boolean(request.enabled)); return state()
       case 'test-captions': {
@@ -378,6 +428,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     return { revision, sessionId: native.getSessionId() ?? null, canvas:native.canvasState?.(),voice: voice.getState(), interaction: voice.getPresentationState(), inputPreview, waveform:{samples:levels,updatedAt:levelUpdatedAt},asrFeedback:recognitionFeedback(config), presentation, caption, playback, error, settings: config, settingsDraft:Boolean(previewSettings&&saveSettingsBatch),
       speechProgress:[...speechProgress.values()].map(({responseId,spokenEnd,timingMode,speechStatus})=>({responseId,spokenEnd,timingMode,speechStatus})),
       speechCatalogs:{volcengine:volcanoCatalog,compatible:openaiCatalog},
+      asrDictionary:{maxLength:asrDictionaryMaxLength,recognition:dictionaryPolicy(config)},
       speechExpression:{...speechExpressionPolicy(config),available:supportsDynamicExpression},
       credentials: { asr: await describe('asr'), tts: await describe('tts') },
       pet: pet?.state() ?? { available: false, reason: '未安装兼容桌宠', repository: 'https://github.com/vb2250158/dsh-pet', pets: [] } }
@@ -402,7 +453,7 @@ export function createResidentHost({ conversation, observeOutput, settings, save
     if (!device) throw Error('ASSISTANT_DEVICE_UNAVAILABLE')
     return device.request('presenter.open-settings', { url })
   }, async dispose() {
-    if (closed) return; closed = true; clearTimeout(presentationTimer); clearTimeout(captionTestTimer); deviceOpeningAbort?.abort(); diagnosticAbort?.abort()
+    if (closed) return; closed = true; clearPetFinalPreview(); clearTimeout(presentationTimer); clearTimeout(captionTestTimer); deviceOpeningAbort?.abort(); diagnosticAbort?.abort()
     unobserve(); native.close(); await diagnostic?.catch(() => {})
     const results = await Promise.allSettled([voice.dispose(), pet?.dispose(), failedDiagnostic?.close()])
     await Promise.allSettled([deviceOpening,presenterQueue])

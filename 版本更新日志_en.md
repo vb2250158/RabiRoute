@@ -9,6 +9,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ## Unreleased
 
 
+## 0.15.64 - 2026-11-21
+
+- Local speech adds wake fallback, playback echo filtering, and a transcription dictionary. Desktop pets can display a separate transcription bubble.
+
 ## 0.15.63 - 2026-11-21
 
 - Desktop pet size uses a 512-pixel canvas height in both the desktop menu and role settings. Existing sizes display as percentages of that reference.

@@ -72,7 +72,6 @@ class DesktopPetController(QObject):
         persona_id: str,
         open_persona: Callable[[str], None],
         *,
-        open_voice: Callable[[str], None] | None = None,
         persona_name: str | None = None,
         initial_binding: DesktopPetBinding | None = None,
         event_stream: DesktopPetEventStream | None = None,
@@ -98,7 +97,6 @@ class DesktopPetController(QObject):
         if self._application is not None:
             self._application.screenRemoved.connect(self._screen_removed)
         self._open_persona = open_persona
-        self._open_voice = open_voice
         self._client = DesktopPetClient(manager_url, persona_id)
         self._dialogue = DesktopPetDialogue()
         self._dialogue_task: QtAsyncTask | None = None
@@ -131,6 +129,7 @@ class DesktopPetController(QObject):
         self._companion_failure_notice = CompanionFailureNotice()
         self._companion = DesktopPetCompanion(manager_url, persona_id, self)
         self._companion.changed.connect(self._companion_changed)
+        self._companion.started_from_menu.connect(self._start_companion_voice)
         self._companion.failed.connect(lambda message: self.window.show_bubble(self._dialogue.line("fallbacks", "companionFailed")))
         self._events.companion_changed.connect(self._companion_changed)
         self._events.companion_reaction.connect(self._companion_reaction)
@@ -177,6 +176,7 @@ class DesktopPetController(QObject):
         self._binding_task: QtAsyncTask | None = None
         self._settings_task: QtAsyncTask | None = None
         self._pending_settings_patch: dict[str, object] = {}
+        self._companion_voice_session_id = None
         self._hide_on_fullscreen = True
         self._scale = 0.5
         self._display_height_px: float | None = None
@@ -613,9 +613,13 @@ class DesktopPetController(QObject):
     def _assistant_changed(self, payload: object) -> None:
         if self._closed:
             return
+        previous = self._assistant_presentation.input_preview
         job = self._assistant_presentation.accept(payload, self._speech_job)
         if job is not None:
             self._speech_changed(job)
+        preview = self._assistant_presentation.input_preview
+        if preview is not previous:
+            self.window.set_transcript_preview(preview if self.visible and time.monotonic() >= self._muted_until else None)
 
     def _speech_changed(self, payload: object) -> None:
         job = payload if isinstance(payload, dict) else {}
@@ -897,6 +901,29 @@ class DesktopPetController(QObject):
         if summary and (not binding or binding.work_bubbles_enabled):
             self.window.show_bubble(summary)
 
+    def _start_companion_voice(self, session: dict) -> None:
+        session_id = session.get("id")
+        if (self._closed or not session_id or session_id == self._companion_voice_session_id
+                or self._companion_session.get("id") != session_id or self._companion_session.get("status") != "active"):
+            return
+        self._companion_voice_session_id = session_id
+
+        def completed(_task: QtAsyncTask, result: object) -> None:
+            if self._closed or self._companion_session.get("id") != session_id:
+                return
+            if not isinstance(result, Exception):
+                return
+            reason = {
+                "ASSISTANT_OTHER_PERSONA_ACTIVE": "另一位角色正在使用语音助手。",
+                "ASSISTANT_CONTEXT_BUSY": "语音助手正在处理上一轮对话。",
+                "ASSISTANT_VOICE_DISABLED": "请先在语音助手开启语音总开关。",
+                "HOST_ASR_CONFIGURATION_REQUIRED": "请先配置语音识别。",
+                "HOST_TTS_CONFIGURATION_REQUIRED": "请先配置语音播报。",
+            }.get(str(result), "未能确认实时语音已开启，请查看语音助手状态。")
+            self.window.show_bubble(f"陪伴已开启。{reason}")
+
+        start_qt_task(self._client.start_voice_assistant, completed)
+
     def _companion_changed(self, payload: object) -> None:
         event = payload if isinstance(payload, dict) else {}
         if event.get("roleId") != self.persona_id:
@@ -957,6 +984,8 @@ class DesktopPetController(QObject):
                 self.set_state("idle")
             return
         self._work.clear()
+        self._assistant_presentation.input_preview = None
+        self.window.set_transcript_preview(None)
         self._refresh_work()
         self._companion_session = {}
         self._companion.disconnect()
@@ -1091,7 +1120,8 @@ class DesktopPetController(QObject):
         companion = menu.addAction("陪伴模式", self._companion.toggle)
         companion.setCheckable(True)
         companion.setChecked(bool(self._companion_session))
-        companion.setEnabled(not self._companion.control_busy)
+        companion_available = not self._companion.control_busy
+        companion.setEnabled(companion_available)
         modes = QMenu("陪伴方式", menu)
         menu.addMenu(modes)
         if not self._companion.presets:
@@ -1101,7 +1131,7 @@ class DesktopPetController(QObject):
             action.setCheckable(True)
             action.setChecked(bool(self._companion_session)
                               and self._companion_session.get("presetId") == preset["id"])
-            action.setEnabled(not self._companion.control_busy)
+            action.setEnabled(companion_available)
             action.triggered.connect(
                 lambda _checked=False, preset_id=preset["id"]: self._companion.select_mode(preset_id))
         if self._companion_session:
@@ -1116,8 +1146,6 @@ class DesktopPetController(QObject):
                          "other": "安静陪着"}.get(session.get("activityKind"), "正在识别当前画面")
             menu.addAction(label).setEnabled(False)
         menu.addAction(f"打开 {self.persona_name} 角色面板", self._open_current_persona)
-        if self._open_voice is not None:
-            menu.addAction(f"与 {self.persona_name} 语音对话", lambda: self._open_voice(self.persona_id))
         menu.addAction("安静一小时", self._mute_for_one_hour)
         menu.addSeparator()
         click_through = menu.addAction("鼠标点透")

@@ -3,8 +3,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import patch, MagicMock, PropertyMock
 
-from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtWidgets import QApplication
 from rabiroute_tray.desktop_pet_dialogue import DesktopPetDialogue, parse_desktop_pet_dialogue
 from rabiroute_tray.desktop_pet_client import DesktopPetBinding, DesktopPetClient
 from rabiroute_tray.desktop_pet_controller import DesktopPetController
@@ -27,35 +26,34 @@ class PetDialogueTest(unittest.TestCase):
             mocked.start()
             self.addCleanup(mocked.stop)
 
-    def test_voice_menu_dispatches_selected_persona_without_starting_second_player(self):
-        voice_calls = []
-        controller = self.controller("voice-persona", open_voice=voice_calls.append)
-        speech_owner = controller._speech
-        with patch.object(QMenu, "popup"):
-            controller._show_context_menu(QPoint(0, 0))
-        menu = controller._context_menu
-        actions = [action for action in menu.actions() if action.text().endswith("语音对话")]
-        self.assertEqual(len(actions), 1)
-        actions[0].trigger()
-        self.assertEqual(voice_calls, ["voice-persona"])
-        self.assertIs(controller._speech, speech_owner)
-        menu.close()
-
-    def test_voice_menu_is_absent_without_host_callback(self):
-        controller = self.controller("voice-persona")
-        with patch.object(QMenu, "popup"):
-            controller._show_context_menu(QPoint(0, 0))
-        menu = controller._context_menu
-        self.assertFalse(any(action.text().endswith("语音对话") for action in menu.actions()))
-        menu.close()
-
-    def controller(self, persona, open_voice=None):
+    def controller(self, persona):
         controller = DesktopPetController("http://127.0.0.1:1", persona, lambda _: None,
-            open_voice=open_voice, initial_binding=DesktopPetBinding(), event_stream=DesktopPetEventStream("http://127.0.0.1:1"))
+            initial_binding=DesktopPetBinding(), event_stream=DesktopPetEventStream("http://127.0.0.1:1"))
         self.addCleanup(controller.close)
         controller._hidden = False
         controller.window.show()
         return controller
+
+    def test_transcript_clears_on_scope_disposal_and_disconnect(self):
+        controller = self.controller("cat-persona")
+        controller.window.move(280, 380)
+        stream = controller._events
+        bubble = controller.window._transcript_bubble
+        event = dict(personaId=controller.persona_id, ownerId="owner", ownerStartedAt=1, revision=1,
+                     inputPreview={"text": "现在说的话", "final": False})
+        with patch.object(DesktopPetController, "visible", new_callable=PropertyMock, return_value=True):
+            stream.voice_assistant_presentation.emit(event)
+            self.assertTrue(bubble.isVisible())
+            stream.voice_assistant_presentation.emit(dict(event, personaId="another", revision=2, clear=True))
+            self.assertTrue(bubble.isVisible())
+            stream.voice_assistant_presentation.emit(dict(event, revision=2, clear=True))
+            self.assertFalse(bubble.isVisible())
+            stream.voice_assistant_presentation.emit(dict(event, revision=3))
+            self.assertTrue(bubble.isVisible())
+            stream.connection_changed.emit(False)
+            self.assertFalse(bubble.isVisible())
+            stream.voice_assistant_presentation.emit(dict(event, revision=3))
+            self.assertFalse(bubble.isVisible())
 
     def test_missing_config_is_neutral_and_configured_lines_do_not_cross_personas(self):
         visible = patch.object(DesktopPetController, "visible", new_callable=PropertyMock, return_value=True)

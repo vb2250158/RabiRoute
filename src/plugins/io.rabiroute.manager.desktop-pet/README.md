@@ -2,6 +2,8 @@
 
 # io.rabiroute.manager.desktop-pet
 
+右键桌宠并开启「陪伴模式」，即可开始或恢复该角色的实时语音。可在语音助手中结束实时语音。
+
 内置 Manager 插件复用原角色资源、桌面设置、目录工作进程与动作回执，提供 `manager.desktop-pet@1`。不在 Manager 内启动替代桌宠运行时。
 
 `DesktopPetOwner` 与 `createDesktopPetOperations` 从同一可执行合同安装 12 个公共 HTTP 操作。以下路径均以 `/api/desktop-pet/roles/:roleId` 开头，操作 ID 均以 `manager.desktop-pet.` 开头：

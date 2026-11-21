@@ -62,25 +62,21 @@ class DesktopFeatureProfileTest(unittest.TestCase):
         refs = []
 
         class Manager(QObject):
-            def __init__(self, *args, open_voice=None):
+            def __init__(self, *args):
                 super().__init__()
-                self.open_voice = open_voice
                 refs.append(weakref.ref(self))
 
             def close(self):
                 pass
 
-        voice_calls = []
         with patch("rabiroute_tray.desktop_pet_feature.DesktopPetManager", Manager):
-            dispose = activate(DesktopFeatureContext("", app, object(), lambda _: None, voice_calls.append))
+            dispose = activate(DesktopFeatureContext("", app, object(), lambda _: None))
         app.aboutToQuit.connect(dispose)
         del dispose
         gc.collect()
         manager = refs[0]()
         self.assertIsNotNone(manager)
         self.assertIs(manager.parent(), app)
-        manager.open_voice("selected-persona")
-        self.assertEqual(voice_calls, ["selected-persona"])
         app.aboutToQuit.disconnect()
         manager.setParent(None)
 

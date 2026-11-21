@@ -96,13 +96,14 @@ class ModelRuntime:
         )
         return FireRedAsr2.from_pretrained("aed", str(self.model_path), config)
 
-    def transcribe(self, audio_path: Path, language: str | None, word_timestamps: bool) -> dict[str, object]:
+    def transcribe(self, audio_path: Path, language: str | None, word_timestamps: bool, prompt: str = "") -> dict[str, object]:
         with self.lock:
             started = time.perf_counter()
             if self.args.engine == "qwen3-asr":
                 result = self.model.transcribe(
                     audio=str(audio_path),
                     language=LANGUAGE_NAMES.get(str(language or "").lower(), language) or None,
+                    context=prompt,
                 )[0]
                 output = {
                     "text": str(result.text or "").strip(),
@@ -198,6 +199,7 @@ def make_handler(runtime: ModelRuntime):
                         path,
                         str(payload.get("language") or "") or None,
                         bool(payload.get("word_timestamps")),
+                        str(payload.get("prompt") or "")[:4096],
                     )
                     self._json(200, result)
                 finally:

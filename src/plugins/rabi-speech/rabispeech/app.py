@@ -17,7 +17,7 @@ import tempfile
 import time
 import wave
 from contextlib import asynccontextmanager, suppress
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from hmac import compare_digest
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -30,7 +30,7 @@ from fastapi.background import BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .assistant_wake import AssistantWakeSpotter
+from .assistant_wake import AssistantWakeSpotter, assistant_keyword_profile
 from .audio import AudioTranscoder, subtitle_text
 from .all_day_capture import register_all_day_capture
 from .audio_stream_events import AudioStreamEventStore
@@ -39,7 +39,7 @@ from .contracts import SpeechSynthesisRequest, TranscriptionRequest, Transcripti
 from .extensions import load_provider_extensions
 from .events import SpeechEventHub
 from .model_discovery import api_index, model_rows, public_capabilities
-from .microphone import MicrophoneConfig, MicrophoneService, SpeechInputSource, SpeechUtteranceMetadata
+from .microphone import MicrophoneBusyError, MicrophoneConfig, MicrophoneService, SpeechInputSource, SpeechUtteranceMetadata
 from .persona_voice import (
     persona_speech_defaults_for_role,
     persona_tts_cache_dir,
@@ -203,6 +203,20 @@ def create_app(
 ) -> FastAPI:
     current = settings or load_settings()
     assistant_audio_token = os.environ.pop("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "")
+    capture_only = os.environ.get("RABISPEECH_ASSISTANT_CAPTURE_ONLY") == "1"
+    if capture_only:
+        if not assistant_audio_token or current.server.host != "127.0.0.1":
+            raise RuntimeError("Private assistant capture requires loopback and a launch credential.")
+        current = replace(
+            current,
+            remote_audio=replace(current.remote_audio, enabled=False),
+            local_tts=replace(current.local_tts, enabled=False),
+            faster_whisper=replace(current.faster_whisper, enabled=False),
+            speaker_recognition=replace(current.speaker_recognition, enabled=False),
+            http_asr=tuple(item for item in current.http_asr if item.id == "fireredasr2"),
+            api_tts=(), api_asr=(), provider_extensions=(),
+        )
+        roles_root = current.server.temp_dir.parent / "roles"
     persona_roles_root = (roles_root or current.config_path.parents[2] / "data" / "roles").expanduser().resolve()
     rabilink_audio_stale_timeout = get_timeout_seconds("speech.remoteAudio.stale", rabilink_audio_stale_timeout_seconds)
     if rabilink_audio_stale_timeout <= 0:
@@ -412,18 +426,21 @@ def create_app(
             route_id=config.route_id, recorded_at=started_at, record_id=result.record_id, input_source=input_source)
         pending_audio_ids.pop(str(audio_path), None)
 
+    async def record_privately(*_args):
+        return {"status": "recorded", "reason": "assistant_local"}
+
     microphone = MicrophoneService(
         state_path=current.server.temp_dir.parent / "microphone.json",
         temp_dir=current.server.temp_dir,
-        transcriber=microphone_transcriber,
-        submitter=microphone_submitter,
+        transcriber=(lambda audio, config: microphone_transcriber(audio, config, assistant_local=True)) if capture_only else microphone_transcriber,
+        submitter=record_privately if capture_only else microphone_submitter,
         assistant_transcriber=lambda audio, config: microphone_transcriber(audio, config, assistant_local=True),
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
         stop_playback=lambda: playback_queue.stop(clear_pending=True),
-        record_transcription=record_completed_audio,
-        record_audio_state=record_audio_state,
-        remote_audio=remote_audio,
-        event_sink=publish_microphone_event,
+        record_transcription=None if capture_only else record_completed_audio,
+        record_audio_state=None if capture_only else record_audio_state,
+        remote_audio=None if capture_only else remote_audio,
+        event_sink=None if capture_only else publish_microphone_event,
     )
     remote_audio.set_feed(microphone.feed_remote)
     virtual_audio_lock = asyncio.Lock()
@@ -522,6 +539,15 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
         await providers.open()
+        if capture_only:
+            try:
+                yield
+            finally:
+                try:
+                    await microphone.stop(persist=False)
+                finally:
+                    await providers.close()
+            return
         nonlocal tts_cleanup_closed, tts_cleanup_task
         providers.set_capabilities_event_sink(event_hub.publish)
         async def warmup_providers() -> None:
@@ -1105,6 +1131,21 @@ def create_app(
 
     wake_listener = asyncio.Lock()
 
+    @api.post("/v1/internal/assistant-keywords", include_in_schema=False)
+    async def assistant_keywords(request: Request, body: AssistantWakeBody) -> dict[str, str]:
+        require_assistant_capture(request)
+        directory = current.assistant_wake_model_dir
+        if directory is None:
+            raise HTTPException(status_code=503, detail="ASSISTANT_WAKE_MODEL_MISSING")
+        try:
+            return await asyncio.to_thread(assistant_keyword_profile, directory, body.aliases)
+        except ValueError as error:
+            code = str(error).split(":", 1)[0]
+            safe_code = code if code in {"ASSISTANT_WAKE_ALIAS_UNSUPPORTED", "ASSISTANT_WAKE_ALIAS_AMBIGUOUS"} else "ASSISTANT_WAKE_ALIAS_INVALID"
+            raise HTTPException(status_code=422, detail=safe_code) from error
+        except (OSError, RuntimeError, ImportError) as error:
+            raise HTTPException(status_code=503, detail="ASSISTANT_WAKE_KEYWORDS_UNAVAILABLE") from error
+
     @api.post("/v1/internal/assistant-wake", include_in_schema=False)
     async def assistant_wake(request: Request, body: AssistantWakeBody) -> StreamingResponse:
         require_assistant_capture(request)
@@ -1115,25 +1156,49 @@ def create_app(
             raise HTTPException(status_code=409, detail="ASSISTANT_WAKE_ALREADY_LISTENING")
         await wake_listener.acquire()
         try:
-            sample_rate = microphone.config.sample_rate
+            sample_rate = 16000 if capture_only else microphone.config.sample_rate
             spotter = await asyncio.to_thread(AssistantWakeSpotter, directory, body.aliases, sample_rate)
+            if capture_only:
+                await microphone.start({"sample_rate": sample_rate}, persist=False)
             audio = microphone.assistant_audio(None, None)
             if audio.sample_rate != sample_rate:
                 raise ValueError("ASSISTANT_WAKE_MICROPHONE_CHANGED")
         except BaseException as error:
-            wake_listener.release()
-            if isinstance(error, ValueError):
+            try:
+                if capture_only:
+                    await microphone.stop(persist=False)
+            finally:
+                wake_listener.release()
+            if isinstance(error, (ValueError, MicrophoneBusyError)):
                 raise HTTPException(status_code=409, detail=str(error)) from error
             if isinstance(error, (RuntimeError, ImportError)):
                 detail = str(error) if str(error).startswith("ASSISTANT_WAKE_") else "ASSISTANT_WAKE_UNAVAILABLE"
                 raise HTTPException(status_code=503, detail=detail) from error
             raise
 
-        # A client may disconnect just before the response begins streaming.
-        pending = asyncio.get_running_loop().call_later(5, wake_listener.release)
+        release_task: asyncio.Task | None = None
+
+        async def release_wake():
+            try:
+                try:
+                    await audio.chunks.aclose()
+                finally:
+                    if capture_only:
+                        await microphone.stop(persist=False)
+            finally:
+                wake_listener.release()
+
+        def start_release():
+            nonlocal release_task
+            if release_task is None:
+                release_task = asyncio.create_task(release_wake())
+            return release_task
+
+        # Covers a transport that closes before entering the response generator.
+        pending = asyncio.get_running_loop().call_later(5, start_release)
 
         async def wake_events():
-            if pending.cancelled() or pending.when() <= asyncio.get_running_loop().time():
+            if release_task is not None:
                 return
             pending.cancel()
             try:
@@ -1152,10 +1217,7 @@ def create_app(
                             "recentSpeech": background,
                         }, ensure_ascii=False) + "\n"
             finally:
-                try:
-                    await audio.chunks.aclose()
-                finally:
-                    wake_listener.release()
+                await asyncio.shield(start_release())
 
         return StreamingResponse(wake_events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
@@ -1457,6 +1519,10 @@ def create_app(
             }
         )
 
+    if capture_only:
+        allowed = {"/v1/internal/assistant-wake", "/v1/internal/assistant-capture", "/v1/internal/assistant-keywords",
+                   "/v1/internal/assistant-realtime", "/v1/internal/assistant-transcribe"}
+        api.router.routes[:] = [route for route in api.router.routes if getattr(route, "path", "") in allowed]
     return api
 
 

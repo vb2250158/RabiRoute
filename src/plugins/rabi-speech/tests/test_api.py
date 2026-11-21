@@ -156,12 +156,45 @@ def test_private_assistant_audio_requires_owning_process_token(tmp_path: Path, m
     response = client.get(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"})
     assert response.status_code == 409
     assert response.json()["detail"] == "ASSISTANT_CAPTURE_LOCAL_MICROPHONE_REQUIRED"
+    companion = {"companion_client_id": "unselected-glasses"}
+    assert client.get(endpoint, params=companion).status_code == 403
+    response = client.get(endpoint, params=companion, headers={"x-rabispeech-assistant-token": "owned-fixture"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "ASSISTANT_COMPANION_NOT_SELECTED"
     assert endpoint not in client.get("/openapi.json").json()["paths"]
     assert "RABISPEECH_ASSISTANT_AUDIO_TOKEN" not in os.environ
 
 
+def test_assistant_keyword_profile_uses_the_private_owner_without_opening_capture(tmp_path: Path, monkeypatch) -> None:
+    from rabispeech.microphone import MicrophoneService
+
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "owned-fixture")
+    monkeypatch.setenv("RABISPEECH_ASSISTANT_WAKE_MODEL", str(tmp_path))
+    monkeypatch.setattr(MicrophoneService, "start", lambda *_args, **_kwargs: pytest.fail("should not start the microphone"))
+    profile = {"model": "fixture-kws", "keywords": "Y E @rabi-0/N AY T @rabi-1", "tokensSha256": "1" * 64}
+    compiled = []
+
+    def encode(directory, aliases):
+        assert directory == tmp_path
+        compiled.append(aliases)
+        return profile
+
+    monkeypatch.setattr("rabispeech.app.assistant_keyword_profile", encode)
+    client, _, _ = fixture(tmp_path)
+    endpoint = "/v1/internal/assistant-keywords"
+    body = {"aliases": ["夜雨", "night"]}
+    assert client.post(endpoint, json=body).status_code == 403
+    assert compiled == []
+    response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"}, json=body)
+    assert response.status_code == 200
+    assert response.json() == profile
+    assert compiled == [body["aliases"]]
+    assert endpoint not in client.get("/openapi.json").json()["paths"]
+
+
+@pytest.mark.parametrize("capture_only", [False, True])
 def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample_positions(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch, capture_only,
 ) -> None:
     from rabispeech.assistant_capture import AssistantAudio
     from rabispeech.assistant_wake import WakeDetection
@@ -170,9 +203,24 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
     monkeypatch.setenv("RABISPEECH_ASSISTANT_AUDIO_TOKEN", "owned-fixture")
     monkeypatch.setenv("RABISPEECH_ASSISTANT_WAKE_MODEL", str(tmp_path))
     chunk = bytes(3200)
+    lifecycle = []
+    if capture_only:
+        monkeypatch.setenv("RABISPEECH_ASSISTANT_CAPTURE_ONLY", "1")
 
-    def local_capture(_self, capture_id, from_sample):
-        assert (capture_id, from_sample) == (None, None)
+        async def start(_self, settings, *, persist):
+            assert settings == {"sample_rate": 16000}
+            assert persist is False
+            lifecycle.append("start")
+
+        async def stop(_self, *, persist):
+            assert persist is False
+            lifecycle.append("stop")
+
+        monkeypatch.setattr(MicrophoneService, "start", start)
+        monkeypatch.setattr(MicrophoneService, "stop", stop)
+
+    def local_capture(_self, capture_id, from_sample, *, companion_client_id):
+        assert (capture_id, from_sample, companion_client_id) == (None, None, None)
 
         async def chunks():
             yield chunk
@@ -193,6 +241,16 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
     endpoint = "/v1/internal/assistant-wake"
     body = {"aliases": ["夜雨", "大肥鱼"]}
     assert client.post(endpoint, json=body).status_code == 403
+    assert lifecycle == []
+    if capture_only:
+        assert client.get("/health").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+        assert client.post("/v1/microphone/start").status_code == 404
+        response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"},
+                               json={**body, "companionClientId": "glasses-fixture"})
+        assert response.status_code == 409
+        assert response.json()["detail"] == "ASSISTANT_COMPANION_NOT_SELECTED"
+        assert lifecycle == []
     for _ in range(2):
         response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"}, json=body)
         assert response.status_code == 200
@@ -203,6 +261,7 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
              "aliasIndex": 1, "utteranceStartSample": 1220, "observedThroughSample": 2800,
              "keywordStartSample": 1280, "replayFromSample": 1600, "recentSpeech": []},
         ]
+    assert lifecycle == (["start", "stop"] * 2 if capture_only else [])
 
 
 def test_private_assistant_fallback_uses_only_firered_without_retaining_raw_audio(tmp_path: Path, monkeypatch) -> None:

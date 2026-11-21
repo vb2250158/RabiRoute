@@ -34,12 +34,42 @@ class CompanionMenuTest(unittest.TestCase):
             self.assertEqual(len(entries), 1)
             self.assertTrue(entries[0].isCheckable())
             self.assertFalse(entries[0].isChecked())
-            self.assertNotIn("选择窗口", [a.text() for a in controller._context_menu.actions()])
+            labels = [a.text() for a in controller._context_menu.actions()]
+            self.assertNotIn("选择窗口", labels)
+            self.assertNotIn("陪伴模式与语音助手关联", labels)
+            self.assertFalse(any(label.endswith("语音对话") for label in labels))
             with patch.object(controller._companion, "_work") as work:
                 entries[0].trigger()
                 self.assertEqual(work.call_count, 1)
         finally:
             controller._context_menu.close()
+            controller.close()
+
+    def test_local_start_receipt_starts_companion_voice_once(self):
+        controller = DesktopPetController("http://127.0.0.1:1", "one", lambda _: None,
+            initial_binding=DesktopPetBinding(),
+            event_stream=DesktopPetEventStream("http://127.0.0.1:1"))
+        active = {"id": "activity", "revision": 1, "version": 1, "status": "active", "observationOwner": "desktop"}
+        companion = controller._companion
+        try:
+            with patch("rabiroute_tray.desktop_pet_controller.start_qt_task") as start_voice, patch(
+                "rabiroute_tray.desktop_pet_companion.start_qt_task", side_effect=lambda work, done: done(None, work())
+            ):
+                controller._companion_changed({"roleId": "one", "session": active})
+                with patch.object(companion, "_request", return_value={"session": active}):
+                    companion.reconnect()
+                    companion.select_mode("adaptive")
+                start_voice.assert_not_called()
+                with patch.object(companion, "_request", side_effect=[{"session": None}, {"session": active}]):
+                    companion.toggle()
+                companion.started_from_menu.emit(active)
+                self.assertEqual(start_voice.call_count, 1)
+                self.assertEqual(start_voice.call_args.args[0], controller._client.start_voice_assistant)
+                new_session = dict(active, id="next")
+                with patch.object(companion, "_request", side_effect=[{"session": None}, {"session": new_session}]):
+                    companion.toggle()
+                self.assertEqual(start_voice.call_count, 2)
+        finally:
             controller.close()
 
     def test_old_revision_does_not_replace_active_companion_and_stopping_restores_binding(self):
