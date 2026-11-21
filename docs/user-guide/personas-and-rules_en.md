@@ -132,7 +132,7 @@ Use **Open role configuration** to edit the full text. Do not mechanically trans
 
 Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for the current role, then turn on **Enable on this PC**. The switch stays unavailable until a runnable pack is selected, and no empty window is shown. Each enabled role gets its own pet: enabling several roles displays several pets, while disabling one removes only that role's pet. Window names use role names.
 
-Animation assets live under the current role's `desktop-pet/packs/` directory and are retained after synchronization retirement. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate are display preferences for this PC rather than role data.
+Animation assets live under the current role's `desktop-pet/packs/` directory and are retained after synchronization retirement. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate are display preferences for this PC. A size of 100% means a 512-pixel canvas height, with the width adjusted proportionally. Existing sizes display as percentages of the new reference.
 
 Under **Display on this PC → Idle behavior**, you can control random idle actions, continuous rotation, and automatic rest independently. In ordinary mode with a compatible pack, the pet picks a gesture, turns in place, or keeps idling when its standing loop finishes. Wandering follows its own interval. Turning off rotation uses the action pack's random-action interval. The pack also defines the inactivity timeout. If it includes a sleep animation, right-click the pet and choose **Rest now**. Click or drag the pet, or choose **Wake up**, to wake it.
 
@@ -142,7 +142,7 @@ Under **Agent work activity**, work animations and status bubbles are on by defa
 
 After selecting a pack, the page lists the total number of actions, animation entries, and static images, grouped by idle and sleep, task and connection feedback, mouse interactions, random idle actions, and other actions. Each entry shows its trigger, format, and looping behavior; PNG sequences also show frame count and frame rate. Counts refer to available action entries. Single-frame PNG entries count as static images; GIF frame counts are not guessed.
 
-Click **Preview** beside an action, then **Play preview** to view, replay, or stop the asset on this page. PNG sequences follow the pack's frame rate and looping settings; GIF previews follow the file's own settings. Previewing never triggers the desktop pet or changes its binding, and closes when switching packs or personas. Actions without an automatic trigger are listed as manually played.
+Click **Preview** beside an action, then **Play preview** to view, replay, or stop the asset on this page. PNG sequences follow the pack's frame rate and looping settings; GIF and WebP previews follow the file's own settings. Packs can use transparent WebP for higher-resolution animation. Previewing never triggers the desktop pet or changes its binding, and closes when switching packs or personas. Actions without an automatic trigger are listed as manually played.
 
 ## Let roles contact each other
 

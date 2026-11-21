@@ -73,11 +73,14 @@ export const DESKTOP_PET_WORK_PHASES = [
 
 type DesktopPetWorkAnimations = Partial<Record<typeof DESKTOP_PET_WORK_PHASES[number]["id"], string[]>>;
 
+export const DESKTOP_PET_BASE_HEIGHT_PX = 512;
+
 export type DesktopPetBinding = {
   enabled: boolean;
   packId: string;
   placement: DesktopPetPlacement | null;
   scale: number;
+  displayHeightPx?: number | null;
   opacity: number;
   alwaysOnTop: boolean;
   clickThrough: boolean;
@@ -143,6 +146,7 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
   packId: "",
   placement: null,
   scale: 0.5,
+  displayHeightPx: null,
   opacity: 1,
   alwaysOnTop: true,
   clickThrough: false,
@@ -229,6 +233,9 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     packId,
     placement,
     scale: boundedNumber(row.scale, DEFAULT_DESKTOP_PET_BINDING.scale, 0.1, 2),
+    displayHeightPx: typeof row.displayHeightPx === "number" && Number.isFinite(row.displayHeightPx)
+      ? boundedNumber(row.displayHeightPx, DESKTOP_PET_BASE_HEIGHT_PX / 2, 1, DESKTOP_PET_BASE_HEIGHT_PX * 2)
+      : null,
     opacity: boundedNumber(row.opacity, DEFAULT_DESKTOP_PET_BINDING.opacity, 0.2, 1),
     alwaysOnTop: row.alwaysOnTop !== false,
     clickThrough: row.clickThrough === true,

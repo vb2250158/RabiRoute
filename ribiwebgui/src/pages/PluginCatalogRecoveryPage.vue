@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { isWebPageRouteActive } from "../pluginPages";
-import { webPluginPageLoading } from "../pluginModuleBootstrap";
+import { refreshWebPluginModulesSafely, webPluginPageLoading } from "../pluginModuleBootstrap";
 import { useI18n } from "../i18n/index";
 
 const route = useRoute();
@@ -19,8 +19,12 @@ const requestedPath = computed(() => {
 async function retry(): Promise<void> {
   if (refreshing.value) return;
   refreshing.value = true;
+  const recoveryPath = route.fullPath;
   try {
     await pluginCatalogStore.refresh();
+    if (pluginCatalogStore.status.value !== "ready") return;
+    await refreshWebPluginModulesSafely();
+    if (route.fullPath !== recoveryPath) return;
     const target = router.resolve(requestedPath.value);
     const routeId = typeof target.meta.pluginRouteId === "string" ? target.meta.pluginRouteId : "";
     if (routeId && isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {

@@ -5,6 +5,7 @@ export type DesktopPetPackSummary = {
   id: string;
   name: string;
   personaId: string;
+  canvas?: { width: number; height: number };
   states: Record<string, DesktopPetAnimation>;
   idleBehavior?: {
     randomStates: string[];
@@ -18,7 +19,7 @@ export type DesktopPetPackSummary = {
 };
 
 export type DesktopPetAnimation = {
-  type: "gif" | "png-sequence";
+  type: "gif" | "webp" | "png-sequence";
   assets: string[];
   fps: number;
   loop: boolean;

@@ -5,13 +5,14 @@ import math
 import random
 import logging
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider, QVBoxLayout, QWidget, QWidgetAction
 
-from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetIdleBehavior, DesktopPetModeAnimationSet, DesktopPetPack, LoadedDesktopPetAnimation
+from .desktop_pet_client import DESKTOP_PET_BASE_HEIGHT_PX, DesktopPetBinding, DesktopPetClient, DesktopPetIdleBehavior, DesktopPetModeAnimationSet, DesktopPetPack, LoadedDesktopPetAnimation
+from .desktop_pet_frames import DesktopPetFrames, prepare_desktop_pet_frames
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_companion import DesktopPetCompanion
 from .desktop_pet_companion_notice import CompanionFailureNotice
@@ -150,6 +151,8 @@ class DesktopPetController(QObject):
         self._binding_snapshot: DesktopPetBinding | None = None
         self._animation_cache: dict[str, LoadedDesktopPetAnimation] = {}
         self._preload_queue: deque[str] = deque()
+        self._preload_scope: tuple | None = None
+        self._preloading_state = ""
         self._requested_state = "idle"
         self._auto_rest_active = False
         self._animation_retry_delay = 1500
@@ -176,6 +179,7 @@ class DesktopPetController(QObject):
         self._pending_settings_patch: dict[str, object] = {}
         self._hide_on_fullscreen = True
         self._scale = 0.5
+        self._display_height_px: float | None = None
         self._opacity = 1.0
         self._always_on_top = True
         self._locked = False
@@ -323,6 +327,7 @@ class DesktopPetController(QObject):
         if self._animation_task is not None:
             return
         requested_pack = self._pack
+        target = self.window._target_size(requested_pack)
 
         def completed(task: QtAsyncTask, result: object) -> None:
             if self._animation_task is not task:
@@ -337,23 +342,22 @@ class DesktopPetController(QObject):
             if pending_state != requested:
                 self.set_state(pending_state)
                 return
-            if isinstance(result, LoadedDesktopPetAnimation) and self._pack is not None:
-                pending_state = self._requested_state if self._requested_state in self._pack.states else "idle"
-                if pending_state != result.state.name:
-                    self.set_state(pending_state)
-                    return
-                self._cache_animation(result)
-                if self._play_animation(self._pack, result):
-                    self._animation_retry_delay = 1500
-                    self._idle_scheduler.state_started(result.state.name)
-                else:
-                    self._animation_unavailable()
+            if not isinstance(result, tuple):
+                self._animation_unavailable()
+                return
+            animation, frames = result
+            if frames.target != self.window._target_size(requested_pack):
+                self.set_state(self._requested_state)
+                return
+            if self._cache_animation(animation, frames) and self._play_animation(requested_pack, animation):
+                self._animation_retry_delay = 1500
+                self._idle_scheduler.state_started(animation.state.name)
                 self._enqueue_animation_preloads()
             else:
                 self._animation_unavailable()
 
         self._animation_task = start_qt_task(
-            lambda: self._client.load_animation(requested_pack, requested, max_concurrency=4),
+            lambda: self._load_frames(requested_pack, requested, target),
             completed,
             on_error=lambda error: error,
         )
@@ -377,6 +381,7 @@ class DesktopPetController(QObject):
                 return
             self._animation_cache.clear()
             self._preload_queue.clear()
+            self._preload_scope = None
             self.window.clear_prepared_animations()
             self._idle_behavior_snapshot = None
             self._configure_idle_scheduler()
@@ -472,7 +477,7 @@ class DesktopPetController(QObject):
                 random_max_seconds=(behavior.random_max_seconds or 180) if custom_idle else behavior.random_max_seconds,
                 sleep_after_seconds=behavior.sleep_after_seconds if binding.auto_sleep_enabled else 0,
                 rotate_each_loop=bool(group is None and binding.idle_rotation_enabled and idle
-                                      and idle.loop and len(idle.asset_urls) > 1),
+                                      and idle.loop and (idle.kind != "png-sequence" or len(idle.asset_urls) > 1)),
             )
         if self._idle_behavior_snapshot != behavior:
             self._idle_scheduler.set_active(False)
@@ -751,11 +756,13 @@ class DesktopPetController(QObject):
             self._pack = None
             self._animation_cache.clear()
             self._preload_queue.clear()
+            self._preload_scope = None
             self.window.clear_prepared_animations()
         self._preferred_pack_id = binding.pack_id
         self._hide_on_fullscreen = binding.hide_on_fullscreen and not self._companion_session
         self._click_through = binding.click_through
         self._scale = binding.scale
+        self._display_height_px = binding.display_height_px
         self._opacity = binding.opacity
         self._always_on_top = binding.always_on_top
         self._locked = binding.locked
@@ -764,6 +771,7 @@ class DesktopPetController(QObject):
         self._fps_cap = binding.fps_cap
         self.window.apply_presentation_settings(
             scale=binding.scale,
+            display_height_px=binding.display_height_px,
             opacity=binding.opacity,
             always_on_top=binding.always_on_top,
             locked=binding.locked,
@@ -774,6 +782,7 @@ class DesktopPetController(QObject):
         # that anchor after every size change, including shrinking back down.
         if binding.placement and (
             previous is None or previous.placement != binding.placement or previous.scale != binding.scale
+            or previous.display_height_px != binding.display_height_px
         ):
             self.window.cancel_travel()
             self.window.restore_placement(binding.placement)
@@ -816,7 +825,7 @@ class DesktopPetController(QObject):
                     or previous.work_bubbles_enabled != binding.work_bubbles_enabled
                     or previous.work_animations != binding.work_animations):
                 self._refresh_work(force=bool(self._work_phase))
-            if previous.scale != binding.scale:
+            if previous.scale != binding.scale or previous.display_height_px != binding.display_height_px:
                 self._enqueue_animation_preloads()
 
     def _persist(self, patch: dict[str, object]) -> None:
@@ -1037,6 +1046,7 @@ class DesktopPetController(QObject):
         # A walking action must be ready before the character starts travelling.
         if kind in {"move", "run"} and not self._is_action_ready(kind):
             diagnostic = (self._pack.pack_id, kind)
+            self._queue_action_preloads((kind,))
             if self._wander_unavailable_action != diagnostic:
                 _LOGGER.warning("Desktop pet wander is waiting for action %s (pack=%s)", kind, self._pack.pack_id)
                 self._wander_unavailable_action = diagnostic
@@ -1133,17 +1143,10 @@ class DesktopPetController(QObject):
         if self._pack is None:
             action_menu.addAction("动作正在加载…").setEnabled(False)
         else:
-            ready_count = sum(self._is_action_ready(state_name) for state_name in self._pack.states)
-            if ready_count < len(self._pack.states):
-                action_menu.addAction(f"正在预载动作（{ready_count}/{len(self._pack.states)}）").setEnabled(False)
-                action_menu.addSeparator()
             for state_name in self._pack.states:
-                ready = self._is_action_ready(state_name)
-                label = desktop_pet_state_label(state_name)
-                action = action_menu.addAction(label if ready else f"{label}（准备中）")
+                action = action_menu.addAction(desktop_pet_state_label(state_name))
                 action.setCheckable(True)
                 action.setChecked(state_name == self._requested_state)
-                action.setEnabled(ready)
                 action.triggered.connect(
                     lambda _checked=False, value=state_name: self._play_manual_action(value)
                 )
@@ -1159,6 +1162,7 @@ class DesktopPetController(QObject):
     def _apply_presentation(self) -> None:
         self.window.apply_presentation_settings(
             scale=self._scale,
+            display_height_px=self._display_height_px,
             opacity=self._opacity,
             always_on_top=self._always_on_top,
             locked=self._locked,
@@ -1194,8 +1198,15 @@ class DesktopPetController(QObject):
         dialog.deleteLater()
         self._arm_wander()
 
+    def _current_height_px(self) -> float:
+        if self._display_height_px is not None:
+            return self._display_height_px
+        canvas_height = self._pack.canvas_height if self._pack else DESKTOP_PET_BASE_HEIGHT_PX
+        return max(1, min(1024, int(canvas_height * self._scale)))
+
     def _add_scale_control(self, menu: QMenu) -> QMenu:
-        percent = round(self._scale * 100)
+        height_px = self._current_height_px()
+        percent = round(height_px * 100 / DESKTOP_PET_BASE_HEIGHT_PX)
         scale_menu = menu.addMenu(f"大小：{percent}%")
         panel = QWidget(scale_menu)
         layout = QVBoxLayout(panel)
@@ -1209,29 +1220,29 @@ class DesktopPetController(QObject):
         slider.setAccessibleName("桌宠大小（10%–200%）")
         layout.addWidget(label)
         layout.addWidget(slider)
-        layout.addWidget(QLabel("10%                         200%", panel))
+        layout.addWidget(QLabel(f"100% = {DESKTOP_PET_BASE_HEIGHT_PX} px 高", panel))
         action = QWidgetAction(scale_menu)
         action.setDefaultWidget(panel)
         scale_menu.addAction(action)
         timer = QTimer(self)
         timer.setSingleShot(True)
-        pending_scale = self._scale
+        pending_height_px = height_px
         edited = False
 
         def apply() -> None:
             timer.deleteLater()
             if not self._closed:
-                self._set_scale(pending_scale)
+                self._set_display_height(pending_height_px)
 
         timer.timeout.connect(apply)
 
         def changed(value: int) -> None:
-            nonlocal pending_scale, edited
+            nonlocal pending_height_px, edited
             edited = True
-            pending_scale = value / 100
+            pending_height_px = height_px if value == percent else value * DESKTOP_PET_BASE_HEIGHT_PX / 100
             label.setText(f"当前大小：{value}%")
             scale_menu.setTitle(f"大小：{value}%")
-            self.window.set_scale_preview(pending_scale)
+            self.window.set_height_preview(pending_height_px)
 
         def commit() -> None:
             # Let the entire popup disappear before decoding at the final size.
@@ -1244,15 +1255,14 @@ class DesktopPetController(QObject):
         menu.aboutToHide.connect(commit)
         return scale_menu
 
-    def _set_scale(self, scale: float) -> None:
-        scale = max(0.1, min(2.0, float(scale)))
-        if abs(self._scale - scale) < 0.0001:
-            self.window.set_scale_preview(None)
+    def _set_display_height(self, height_px: float) -> None:
+        if abs(self._current_height_px() - height_px) < 0.0001:
+            self.window.set_height_preview(None)
             return
-        self._scale = scale
+        self._display_height_px = height_px
         self._apply_presentation()
         self._enqueue_animation_preloads()
-        patch = {"scale": scale}
+        patch = {"displayHeightPx": height_px}
         placement = self.window.placement()
         if placement is not None:
             patch["placement"] = placement
@@ -1261,7 +1271,7 @@ class DesktopPetController(QObject):
     def _play_manual_action(self, state_name: str) -> None:
         self.window.cancel_travel()
         self._manual_pause_until = time.monotonic() + 30
-        if not self._is_action_ready(state_name):
+        if self._pack is None or state_name not in self._pack.states:
             return
         self._idle_scheduler.note_activity()
         if state_name == self._sleep_state():
@@ -1278,19 +1288,33 @@ class DesktopPetController(QObject):
         animation = self._animation_cache.get(state_name)
         return animation is not None and self.window.is_animation_prepared(self._pack, animation)
 
-    def _cache_animation(self, animation: LoadedDesktopPetAnimation) -> None:
+    def _load_frames(self, pack: DesktopPetPack, state_name: str, target: QSize,
+                     cached: LoadedDesktopPetAnimation | None = None) -> tuple[LoadedDesktopPetAnimation, DesktopPetFrames]:
+        animation = cached or self._client.load_animation(pack, state_name, max_concurrency=4)
+        return animation, prepare_desktop_pet_frames(pack, animation, target)
+
+    def _cache_animation(self, animation: LoadedDesktopPetAnimation, frames: DesktopPetFrames | None = None) -> bool:
         if self._pack is None or animation.state.name not in self._pack.states:
-            return
-        if self.window.prepare_animation(self._pack, animation):
-            self._animation_cache[animation.state.name] = animation
+            return False
+        if not self.window.prepare_animation(self._pack, animation, frames):
+            return False
+        self._animation_cache[animation.state.name] = animation
+        for state, previous in tuple(self._animation_cache.items()):
+            if not self.window.has_decoded_frames(self._pack, previous):
+                self._animation_cache.pop(state)
+        return True
 
     def _enqueue_animation_preloads(self) -> None:
         if self._pack is None or not self.visible:
             return
-        queued = set(self._preload_queue)
+        group = self._companion_animation_set()
+        scope = (self._pack.pack_id, self.window._target_size(self._pack).toTuple(), group)
+        if self._preload_scope == scope:
+            return
+        self._preload_scope = scope
         interaction_states = [
             state_name
-            for state_name in ("attention", "lift", "drag", "throw", "airborne", "move", "run")
+            for state_name in ("attention", "lift", "drag", "throw", "airborne", "move", "run", "teleport-out", "teleport-in")
             if state_name in self._pack.states
         ]
         one_shot_states = [
@@ -1303,10 +1327,19 @@ class DesktopPetController(QObject):
             for state_name, state in self._pack.states.items()
             if state_name != "idle" and state_name not in interaction_states and state.loop
         ]
-        group = self._companion_animation_set()
         mode_states = [group.idle_state, *group.click_states, *group.random_states] if group else []
-        for state_name in mode_states + interaction_states + one_shot_states + looping_states:
-            if not self._is_action_ready(state_name) and state_name not in queued:
+        states = mode_states + interaction_states
+        if len(self._pack.states) <= 20:
+            states += one_shot_states + looping_states
+        self._queue_action_preloads(states)
+
+    def _queue_action_preloads(self, states: Iterable[str]) -> None:
+        if self._pack is None or not self.visible:
+            return
+        queued = set(self._preload_queue)
+        queued.add(self._preloading_state)
+        for state_name in states:
+            if state_name in self._pack.states and state_name not in queued and not self._is_action_ready(state_name):
                 self._preload_queue.append(state_name)
                 queued.add(state_name)
         self._start_next_animation_preload()
@@ -1319,23 +1352,23 @@ class DesktopPetController(QObject):
             if self._is_action_ready(state_name):
                 continue
             cached_animation = self._animation_cache.get(state_name)
-            if cached_animation is not None:
-                self.window.prepare_animation(self._pack, cached_animation)
-                QTimer.singleShot(0, self._start_next_animation_preload)
-                return
             pack = self._pack
+            target = self.window._target_size(pack)
 
             def completed(task: QtAsyncTask, result: object, *, requested_state=state_name, requested_pack=pack) -> None:
                 if self._preload_task is not task:
                     return
                 self._preload_task = None
-                if self._pack is requested_pack and isinstance(result, LoadedDesktopPetAnimation):
-                    if result.state.name == requested_state:
-                        self._cache_animation(result)
+                self._preloading_state = ""
+                if self._pack is requested_pack and isinstance(result, tuple):
+                    animation, frames = result
+                    if animation.state.name == requested_state:
+                        self._cache_animation(animation, frames)
                 self._start_next_animation_preload()
 
+            self._preloading_state = state_name
             self._preload_task = start_qt_task(
-                lambda: self._client.load_animation(pack, state_name, max_concurrency=4),
+                lambda: self._load_frames(pack, state_name, target, cached_animation),
                 completed,
                 on_error=lambda error: error,
             )

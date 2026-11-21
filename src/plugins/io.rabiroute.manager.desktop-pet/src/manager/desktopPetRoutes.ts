@@ -19,7 +19,7 @@ import { recordDataMutationAudit } from "@rabiroute/host-api/observability/dataM
 import { normalizeDesktopPetModeAnimationSets, type DesktopPetModeAnimationSet } from "@rabiroute/host-api/shared/desktopPetModeAnimationSets";
 
 const PACK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
-const IMAGE_EXTENSIONS = new Set([".gif", ".png"]);
+const IMAGE_TYPES = new Map([[".gif", "image/gif"], [".png", "image/png"], [".webp", "image/webp"]]);
 export const DESKTOP_PET_LIMITS = Object.freeze({ assetBytes: 64 * 1024 * 1024, jsonBytes: 64 * 1024, importBytes: 128 * 1024 * 1024, motionBytes: 8192 });
 const MAX_ASSET_BYTES = DESKTOP_PET_LIMITS.assetBytes;
 const DEFAULT_DESKTOP_PET_CACHE_ROOT = path.join(process.cwd(), "data", "cache", "desktop-pet-roles");
@@ -27,7 +27,7 @@ const DEFAULT_DESKTOP_PET_CACHE_ROOT = path.join(process.cwd(), "data", "cache",
 type JsonObject = Record<string, unknown>;
 
 export type DesktopPetStateAsset = {
-  type: "gif" | "png-sequence";
+  type: "gif" | "webp" | "png-sequence";
   assets: string[];
   fps: number;
   loop: boolean;
@@ -160,7 +160,7 @@ function statePresentation(
   defaults: JsonObject
 ): DesktopPetStateAsset | undefined {
   const state = objectValue(rawState);
-  const type = state.type === "gif" ? "gif" : state.type === "png-sequence" ? "png-sequence" : undefined;
+  const type = state.type === "gif" || state.type === "webp" || state.type === "png-sequence" ? state.type : undefined;
   const source = typeof state.source === "string" ? state.source.trim() : "";
   if (!type || !source) return undefined;
   const sourcePath = resolveInside(packDir, source);
@@ -171,8 +171,8 @@ function statePresentation(
   if (!inside(realPackDir, realSourcePath)) return undefined;
 
   let packRelativeAssets: string[] = [];
-  if (type === "gif") {
-    if (path.extname(sourcePath).toLowerCase() !== ".gif" || !fs.statSync(sourcePath).isFile()) {
+  if (type === "gif" || type === "webp") {
+    if (path.extname(sourcePath).toLowerCase() !== `.${type}` || !fs.statSync(sourcePath).isFile()) {
       return undefined;
     }
     packRelativeAssets = [path.relative(packDir, sourcePath)];
@@ -357,7 +357,7 @@ async function readAsset(
     packRoot = sourcePackRoot;
   }
   const candidate = resolveInside(packRoot, relativePath);
-  if (!candidate || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) throw new Error("Invalid desktop pet asset path.");
+  if (!candidate || !IMAGE_TYPES.has(path.extname(candidate).toLowerCase())) throw new Error("Invalid desktop pet asset path.");
   const realPackRoot = await fs.promises.realpath(packRoot);
   const realCandidate = await fs.promises.realpath(candidate);
   if (!inside(realPackRoot, realCandidate)) throw new Error("Desktop pet asset escapes its pack directory.");
@@ -366,7 +366,7 @@ async function readAsset(
   const payload = await fs.promises.readFile(realCandidate);
   if (payload.length > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is too large.");
   return { status: 200, body: payload, headers: {
-    "content-type": path.extname(realCandidate).toLowerCase() === ".gif" ? "image/gif" : "image/png",
+    "content-type": IMAGE_TYPES.get(path.extname(candidate).toLowerCase())!,
     "content-length": String(payload.length), "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff"
   } };
 }

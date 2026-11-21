@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+
+## 0.15.63 - 2026-11-21
+
+- Desktop pet size uses a 512-pixel canvas height in both the desktop menu and role settings. Existing sizes display as percentages of that reference.
+- Decode desktop pet animations in the background, limit cached action frames, reuse sprite bounds, and support transparent WebP in animation packs.
+- Plugin recovery reloads both the catalog and modules and offers a retry after a timeout.
+
 ## 0.15.62 - 2026-11-21
 
 - Desktop pets rotate idle actions in normal mode. Persona-bound Codex sessions can trigger work animations and status bubbles, and the appearance settings expose click actions and work-state action pools.

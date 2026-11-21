@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
+import { configureTimeouts, readTimeoutOverrides } from "../../src/shared/timeoutSettings";
 import { activateCore } from "../../src/plugins/io.rabiroute.manager.core/web/contributions";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { activateWebPluginForTest } from "../tests/web-plugin-test-host";
@@ -111,4 +112,29 @@ test("a late catalog response cannot restore a snapshot after newer authenticati
     assert.equal(pluginCatalogStore.status.value, "unavailable");
     assert.equal(pluginCatalogStore.pages.value.mode, "recovery");
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("a stalled plugin catalog request releases the recovery page at the read deadline", async () => {
+  const previous = readTimeoutOverrides();
+  const originalFetch = globalThis.fetch;
+  let signal: AbortSignal | null | undefined;
+  configureTimeouts({ ...previous, "webgui.plugins.read": 10 });
+  globalThis.fetch = async (_input, options) => {
+    const observed = options?.signal;
+    signal = observed;
+    if (!observed) return catalogResponse();
+    return new Promise<Response>((_resolve, reject) => {
+      observed.addEventListener("abort", () => reject(observed.reason), { once: true });
+    });
+  };
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    await pluginCatalogStore.refresh();
+    assert.equal(signal?.reason?.name, "TimeoutError");
+    assert.equal(pluginCatalogStore.status.value, "unavailable");
+  } finally {
+    clearTimeout(keepAlive);
+    globalThis.fetch = originalFetch;
+    configureTimeouts(previous);
+  }
 });

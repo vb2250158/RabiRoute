@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 import time
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QEvent, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal, qInfo
-from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QMouseEvent, QPainter, QPen, QPixmap, QRegion, QTransform
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal, qInfo
+from PySide6.QtGui import QColor, QCursor, QImage, QMouseEvent, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
+from .desktop_pet_frames import DesktopPetFrames, decode_desktop_pet_frames, measure_sprite_soles
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
 from .desktop_pet_drag import DragFollow, NativeDrag, preserve_dpi_size
 from .desktop_pet_physics import DisplayArea, PetFlight, ReleaseTrail
 from .desktop_pet_bubble import DesktopPetBubble, place_dialogue_bubble, normalize_bubble_style
+
+_PREPARED_FRAME_BUDGET = 128 * 1024 * 1024
+_MOTION_FRAME_STATES = {"move", "run", "teleport-in", "teleport-out"}
+
 
 class _TravelHalo(QWidget):
     def __init__(self, parent: QWidget) -> None:
@@ -135,7 +141,8 @@ class DesktopPetWindow(QWidget):
         self._drag_timer.timeout.connect(self._advance_drag)
         self._double_click_release = False
         self._png_frames: tuple[QPixmap, ...] = ()
-        self._prepared_png_frames: dict[tuple[str, str, int, int], tuple[QPixmap, ...]] = {}
+        self._prepared_png_frames: OrderedDict[tuple[str, str, int, int], tuple[QPixmap, ...]] = OrderedDict()
+        self._prepared_bounds: dict[tuple[str, str, int, int], QRect] = {}
         self._png_index = 0
         self._png_loop = True
         self._png_next_state = ""
@@ -157,6 +164,7 @@ class DesktopPetWindow(QWidget):
         self._active_pack: DesktopPetPack | None = None
         self._active_animation: LoadedDesktopPetAnimation | None = None
         self._scale = 0.5
+        self._display_height_px: float | None = None
         self._pixel_size_timer = QTimer(self)
         self._pixel_size_timer.setSingleShot(True)
         self._pixel_size_timer.timeout.connect(self._sync_pixel_size)
@@ -400,19 +408,44 @@ class DesktopPetWindow(QWidget):
         if resume_playback and was_blending and self._active_animation:
             self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
 
-    def prepare_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
-        """Pre-render an authorized action; GIF and PNG share one playback clock."""
+    def prepare_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation,
+                          decoded: DesktopPetFrames | None = None) -> bool:
         target = self._target_size(pack)
         cache_key = self._prepared_key(pack, animation, target)
         if cache_key in self._prepared_png_frames:
+            self._prepared_png_frames.move_to_end(cache_key)
             return True
-        frames = self._decode_png_frames(animation, target, cache_key)
+        if decoded is not None and decoded.target != target:
+            return False
+        frames = (self._accept_frames(decoded, cache_key) if decoded is not None
+                  else self._decode_png_frames(animation, target, cache_key))
         if not frames:
             return False
         self._prepared_png_frames[cache_key] = frames
         if animation.state.name in {"move", "run"}:
-            self._prepared_gaits[cache_key] = self._prepare_locomotion_gait(pack, animation, frames)
+            self._prepared_gaits[cache_key] = (decoded.gait if decoded is not None
+                                                else self._prepare_locomotion_gait(pack, animation, frames))
+        self._trim_prepared_frames(cache_key)
         return True
+
+    def _trim_prepared_frames(self, newest: tuple[str, str, int, int]) -> None:
+        def size(frames: tuple[QPixmap, ...]) -> int:
+            return frames[0].width() * frames[0].height() * 4 * len(frames)
+
+        # Keep the bounded set of motion clips ready for pointer and Agent travel.
+        regular = [(key, frames) for key, frames in self._prepared_png_frames.items()
+                   if key[1] not in _MOTION_FRAME_STATES]
+        total = sum(size(frames) for _, frames in regular)
+        for key, frames in regular:
+            if total <= _PREPARED_FRAME_BUDGET:
+                break
+            if key == newest:
+                continue
+            total -= size(frames)
+            self._prepared_png_frames.pop(key)
+            self._prepared_gaits.pop(key, None)
+            self._prepared_gif_delays.pop(key, None)
+            self._prepared_bounds.pop(key, None)
 
     def _prepare_locomotion_gait(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation,
                               frames: tuple[QPixmap, ...]) -> WalkingGait | None:
@@ -435,12 +468,16 @@ class DesktopPetWindow(QWidget):
         return gait.scaled(frames[0].width() / reference_frames[0].width(),
                            frames[0].height() / reference_frames[0].height())
 
+    def has_decoded_frames(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
+        return self._prepared_key(pack, animation, self._target_size(pack)) in self._prepared_png_frames
+
     def is_animation_prepared(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
         key = self._prepared_key(pack, animation, self._target_size(pack))
         return key in self._prepared_png_frames and (animation.state.name not in {"move", "run"} or self._prepared_gaits.get(key) is not None)
 
     def clear_prepared_animations(self) -> None:
         self._prepared_png_frames.clear()
+        self._prepared_bounds.clear()
         self._prepared_gaits.clear()
         self._prepared_gif_delays.clear()
 
@@ -637,22 +674,21 @@ class DesktopPetWindow(QWidget):
     def _preview_size(self) -> QSize | None:
         if self._scale_preview is None or self._active_pack is None:
             return None
-        return QSize(max(1, min(1024, int(self._active_pack.canvas_width * self._scale_preview))),
-                     max(1, min(1024, int(self._active_pack.canvas_height * self._scale_preview))))
+        return self._size_for_height(self._active_pack, self._scale_preview)
 
-    def set_scale_preview(self, scale: float | None) -> None:
-        """Resize decoded frames only; keep playback, prepared actions and saved scale intact."""
-        if scale is not None and self._scale_preview_origin is None:
+    def set_height_preview(self, height_px: float | None) -> None:
+        """Resize decoded frames without changing playback or the saved height."""
+        if height_px is not None and self._scale_preview_origin is None:
             self._scale_preview_origin = self.pos()
             self._finish_transition()
-        self._scale_preview = max(0.1, min(2.0, float(scale))) if scale is not None else None
+        self._scale_preview = height_px
         if self._active_pack is not None:
             self._resize_pet(self._preview_size() or self._target_size(self._active_pack))
             if self._scale_preview_origin is not None:
                 self.move(self._scale_preview_origin)
             self._keep_visible()
             self._display_png_frame()
-        if scale is None:
+        if height_px is None:
             self._scale_preview_origin = None
 
     def apply_presentation_settings(
@@ -664,15 +700,20 @@ class DesktopPetWindow(QWidget):
         locked: bool,
         bubble_enabled: bool,
         fps_cap: int,
+        display_height_px: float | None = None,
     ) -> None:
         previous_scale = self._scale
+        previous_height_px = self._display_height_px
         previous_fps_cap = self._fps_cap
         self._scale = max(0.1, min(2.0, float(scale)))
-        if abs(self._scale - previous_scale) > 0.001:
+        self._display_height_px = display_height_px
+        size_changed = previous_height_px != display_height_px or (
+            display_height_px is None and abs(self._scale - previous_scale) > 0.001)
+        if size_changed:
             self._scale_preview = None
             self._scale_preview_origin = None
         self._fps_cap = min((6, 12, 15, 24), key=lambda candidate: abs(candidate - int(fps_cap)))
-        if locked or abs(self._scale - previous_scale) > 0.001:
+        if locked or size_changed:
             self._finish_drag(cancelled=True)
         self._locked = bool(locked)
         self._bubble_enabled = bool(bubble_enabled)
@@ -697,10 +738,10 @@ class DesktopPetWindow(QWidget):
         if (
             self._active_pack is not None
             and self._active_animation is not None
-            and (abs(self._scale - previous_scale) > 0.001 or self._fps_cap != previous_fps_cap)
+            and (size_changed or self._fps_cap != previous_fps_cap)
         ):
             self.cancel_travel()
-            if abs(self._scale - previous_scale) > 0.001:
+            if size_changed:
                 self.clear_prepared_animations()
             self.play(self._active_pack, self._active_animation)
         self._place_bubble()
@@ -771,9 +812,7 @@ class DesktopPetWindow(QWidget):
             self.show_placeholder(f"{self._persona_name}\n素材无法解码")
             return
         self._png_frames = frames
-        self._sprite_bounds = QRect()
-        for frame in frames:
-            self._sprite_bounds = self._sprite_bounds.united(QRegion(frame.mask()).boundingRect())
+        self._sprite_bounds = self._prepared_bounds.get(cache_key, QRect())
         self._sprite_canvas = frames[0].size()
         self._png_frame_delays = self._prepared_gif_delays.get(cache_key, ())
         if animation.state.name in {"move", "run"}:
@@ -794,7 +833,14 @@ class DesktopPetWindow(QWidget):
             return max(round(1000 / self._fps_cap), self._png_frame_delays[self._png_index])
         return max(42, round(1000 / min(fps, self._fps_cap)))
 
+    @staticmethod
+    def _size_for_height(pack: DesktopPetPack, height_px: float) -> QSize:
+        ratio = min(height_px / pack.canvas_height, 1024 / max(pack.canvas_width, pack.canvas_height))
+        return QSize(max(1, int(pack.canvas_width * ratio)), max(1, int(pack.canvas_height * ratio)))
+
     def _target_size(self, pack: DesktopPetPack) -> QSize:
+        if self._display_height_px is not None:
+            return self._size_for_height(pack, self._display_height_px)
         return QSize(
             max(1, min(1024, int(pack.canvas_width * self._scale))),
             max(1, min(1024, int(pack.canvas_height * self._scale))),
@@ -810,43 +856,15 @@ class DesktopPetWindow(QWidget):
 
     def _decode_png_frames(self, animation: LoadedDesktopPetAnimation, target: QSize,
                            cache_key: tuple[str, str, int, int]) -> tuple[QPixmap, ...]:
-        if animation.state.kind == "gif":
-            if not animation.assets:
-                return ()
-            buffer = QBuffer()
-            buffer.setData(QByteArray(animation.assets[0]))
-            buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-            reader = QImageReader(buffer, b"gif")
-            expected_frames = reader.imageCount()
-            if expected_frames > 600:
-                buffer.close()
-                return ()
-            frames, delays = [], []
-            for _ in range(600):
-                image = reader.read()
-                if image.isNull():
-                    break
-                frames.append(QPixmap.fromImage(image).scaled(target, Qt.AspectRatioMode.KeepAspectRatio,
-                                                              Qt.TransformationMode.SmoothTransformation))
-                delays.append(max(10, reader.nextImageDelay()))
-            buffer.close()
-            if expected_frames > 0 and len(frames) != expected_frames:
-                return ()
-            self._prepared_gif_delays[cache_key] = tuple(delays)
-            return tuple(frames)
-        frames: list[QPixmap] = []
-        for payload in animation.assets:
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(payload, "PNG"):
-                return ()
-            frames.append(
-                pixmap.scaled(
-                    target,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-        return tuple(frames)
+        return self._accept_frames(decode_desktop_pet_frames(animation, target), cache_key)
+
+    def _accept_frames(self, decoded: DesktopPetFrames,
+                       cache_key: tuple[str, str, int, int]) -> tuple[QPixmap, ...]:
+        if not decoded.images:
+            return ()
+        self._prepared_gif_delays[cache_key] = decoded.delays
+        self._prepared_bounds[cache_key] = decoded.bounds
+        return tuple(QPixmap.fromImage(image) for image in decoded.images)
 
     def _advance_png_frame(self) -> None:
         if not self._png_frames:
@@ -868,29 +886,7 @@ class DesktopPetWindow(QWidget):
 
     @staticmethod
     def _measure_soles(pixmap: QPixmap) -> SoleFrame:
-        image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
-        width = image.width()
-        alpha = bytes(image.constBits())[3::4]
-        occupied = [index for index, value in enumerate(alpha) if value >= 128]
-        if not occupied:
-            return SoleFrame(None, None)
-        top, bottom = occupied[0] // width, occupied[-1] // width
-        height = bottom - top + 1
-        band_top = bottom - math.ceil(height * 0.12) + 1
-        feet = [(index % width, index // width) for index in occupied if index // width >= band_top]
-        # Split the occupied foot band, not the transparent canvas midpoint.
-        # Average several sole rows so a single antialiased toe cannot set speed.
-        split = (min(x for x, _ in feet) + max(x for x, _ in feet) + 1) / 2
-        points = []
-        for is_left in (True, False):
-            foot = [(x, y) for x, y in feet if (x < split) == is_left]
-            if not foot:
-                points.append(None)
-                continue
-            floor = max(y for _, y in foot)
-            sole = [x for x, y in foot if y >= floor - max(1, round(height * 0.01))]
-            points.append((sum(sole) / len(sole), float(floor)))
-        return SoleFrame(*points, occupied_height=float(height))
+        return measure_sprite_soles(pixmap.toImage())
 
     def _facing_scale(self) -> float:
         if self._turn_scale is not None:
@@ -908,7 +904,7 @@ class DesktopPetWindow(QWidget):
             frame = frame.scaled(preview_size, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.FastTransformation)
         horizontal_scale = self._facing_scale()
-        rendered = frame.transformed(QTransform().scale(horizontal_scale, 1))
+        rendered = frame if horizontal_scale == 1.0 else frame.transformed(QTransform().scale(horizontal_scale, 1))
         if self._airborne_angle:
             tilted = QPixmap(frame.size())
             tilted.fill(Qt.GlobalColor.transparent)

@@ -5,6 +5,7 @@ from .timeout_settings import get_timeout_seconds
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from math import isfinite
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -69,6 +70,9 @@ class LoadedDesktopPetAnimation:
     assets: tuple[bytes, ...]
 
 
+DESKTOP_PET_BASE_HEIGHT_PX = 512
+
+
 @dataclass(frozen=True)
 class DesktopPetBinding:
     enabled: bool = False
@@ -96,6 +100,7 @@ class DesktopPetBinding:
     work_animations_enabled: bool = True
     work_bubbles_enabled: bool = True
     work_animations: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    display_height_px: float | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,7 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
     row = value if isinstance(value, dict) else {}
     pack_id = str(row.get("packId") or "").strip()
     raw_work_animations = row.get("workAnimations")
+    raw_height_px = row.get("displayHeightPx")
     def animation_ids(value: object, limit: int = 128) -> tuple[str, ...]:
         return tuple(state for state in value[:limit] if isinstance(state, str)) if isinstance(value, list) else ()
     return DesktopPetBinding(
@@ -124,6 +130,12 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
         pack_id=pack_id,
         placement=row.get("placement") if isinstance(row.get("placement"), dict) else None,
         scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
+        display_height_px=(
+            _bounded_number(raw_height_px, DESKTOP_PET_BASE_HEIGHT_PX / 2,
+                            1, DESKTOP_PET_BASE_HEIGHT_PX * 2)
+            if type(raw_height_px) in (int, float) and isfinite(raw_height_px)
+            else None
+        ),
         opacity=_bounded_number(row.get("opacity"), 1, 0.2, 1),
         always_on_top=row.get("alwaysOnTop") is not False,
         click_through=row.get("clickThrough") is True,
@@ -222,7 +234,7 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
             kind = str(raw_state.get("type") or "")
             urls = raw_state.get("assets") if isinstance(raw_state.get("assets"), list) else []
             asset_urls = tuple(str(url) for url in urls if isinstance(url, str) and url.startswith("/"))
-            if kind not in {"gif", "png-sequence"} or not asset_urls:
+            if kind not in {"gif", "webp", "png-sequence"} or not asset_urls:
                 continue
             states[name] = DesktopPetState(
                 name=name,
@@ -392,7 +404,7 @@ class DesktopPetClient:
 
     def _get(self, path_or_url: str) -> bytes:
         url = urljoin(f"{self.manager_url}/", path_or_url.lstrip("/"))
-        request = Request(url, method="GET", headers={"accept": "application/json, image/gif, image/png"})
+        request = Request(url, method="GET", headers={"accept": "application/json, image/gif, image/png, image/webp"})
         for attempt in range(6):
             try:
                 with urlopen(request, timeout=get_timeout_seconds("desktop.pet.request", self.timeout_seconds)) as response:

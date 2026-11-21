@@ -246,7 +246,7 @@ export function importDesktopPetPack(
         if (entry.directory) fs.mkdirSync(target, { recursive: true });
         else {
           const ext = path.extname(target).toLowerCase();
-          if (!new Set([".json", ".gif", ".png"]).has(ext)) throw new Error(`Unsupported desktop pet archive file: ${entry.name}`);
+          if (!new Set([".json", ".gif", ".png", ".webp"]).has(ext)) throw new Error(`Unsupported desktop pet archive file: ${entry.name}`);
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, entryPayload(payload, entry));
         }

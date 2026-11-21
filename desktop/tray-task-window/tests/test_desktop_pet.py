@@ -413,7 +413,7 @@ class DesktopPetWindowTest(unittest.TestCase):
             finally:
                 controller.close()
 
-    def test_unprepared_right_click_actions_are_disabled(self) -> None:
+    def test_uncached_right_click_actions_can_be_requested(self) -> None:
         states = {
             "idle": DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True),
             "idle-wave": DesktopPetState("idle-wave", "png-sequence", ("/wave.png",), 12, False, "idle"),
@@ -430,8 +430,11 @@ class DesktopPetWindowTest(unittest.TestCase):
             try:
                 controller._show_context_menu(QPoint(30, 40))
                 play_menu = controller._context_menu._desktop_pet_action_menu
-                self.assertEqual(play_menu.actions()[0].text(), "正在预载动作（0/2）")
-                self.assertFalse(play_menu.actions()[-1].isEnabled())
+                self.assertEqual([item.text() for item in play_menu.actions()], ["待机", "挥手"])
+                self.assertTrue(play_menu.actions()[-1].isEnabled())
+                with patch.object(controller, "set_state") as requested:
+                    play_menu.actions()[-1].trigger()
+                requested.assert_called_once_with("idle-wave")
             finally:
                 controller.close()
 

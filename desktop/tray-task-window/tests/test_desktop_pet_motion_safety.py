@@ -136,6 +136,10 @@ class PetMotionSafetyTest(unittest.TestCase):
         with patch.object(self.controller, "_enqueue_animation_preloads",
                           side_effect=lambda: self.enqueue_preloads(self.controller)):
             self.controller._apply_binding(replace(self.binding, scale=0.75))
+        for _ in range(100):
+            if self.controller._is_action_ready("move"):
+                break
+            QTest.qWait(20)
         self.assertTrue(self.controller._is_action_ready("move"))
 
     def test_arrival_turns_in_place_toward_current_window_center(self):

@@ -278,6 +278,35 @@ test("desktop pet API promotes a validated shared-source pack into the runtime c
   }]);
 });
 
+test("runtime cache and asset route preserve declared transparent WebP", async t => {
+  const roleDir = roleFixture(), cacheRoot = roleFixture();
+  const folder = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default");
+  writePack(roleDir);
+  const manifestFile = path.join(folder, "pet-pack.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+  manifest.states.idle = { type: "webp", source: "idle.webp", fps: 24 };
+  const asset = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQ/Y/+BwAA", "base64");
+  fs.writeFileSync(path.join(folder, "idle.webp"), asset);
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    dispatchDesktopPet(request, url, response, () => roleDir, undefined, cacheRoot);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  const base = `http://127.0.0.1:${port}/api/desktop-pet/roles/YeYu/packs`;
+  assert.equal((await fetch(base + "/yeyu-library-default/cache", { method: "POST" })).status, 201);
+  const catalog = await (await fetch(base + "?scope=runtime")).json() as { data: DesktopPetPackCatalog };
+  const idle = catalog.data.packs[0].states.idle;
+  assert.equal(idle.type, "webp");
+  assert.equal(idle.fps, 24);
+  const result = await fetch(new URL(idle.assets[0], base));
+  assert.equal(result.headers.get("content-type"), "image/webp");
+  assert.deepEqual(Buffer.from(await result.arrayBuffer()), asset);
+});
+
 test("slow pet image metadata does not block independent health requests", async t => {
   const roleDir = roleFixture(), cacheRoot = roleFixture();
   writePack(roleDir);
@@ -371,7 +400,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75,
+      personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75, displayHeightPx: 256,
       randomIdleEnabled: false, idleAnimations: ["idle-reading", "idle-reading", "invalid/path"],
       clickAnimations: ["idle-reading"], workAnimations: { reviewing: ["thinking"], invalid: ["idle"] },
       bubbleStyle: { maxVisible: 3, displaySeconds: 12 }
@@ -383,6 +412,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(bindingPayload.data.binding.packId, "yeyu-library-default");
   assert.equal(bindingPayload.data.binding.scale, 0.75);
   const saved = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`)).json() as { data: { binding: DesktopPetBinding } };
+  assert.equal(saved.data.binding.displayHeightPx, 256);
   assert.equal(saved.data.binding.bubbleStyle.maxVisible, 3);
   assert.equal(saved.data.binding.bubbleStyle.displaySeconds, 12);
   assert.equal(saved.data.binding.randomIdleEnabled, false);

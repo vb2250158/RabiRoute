@@ -64,13 +64,13 @@ class PixelSizeTest(unittest.TestCase):
         self.ratio=1.5
         with patch.object(self.window,'_decode_png_frames',side_effect=AssertionError('Preview redecoded frames')):
             for scale in (.75,1,.25):
-                self.window.set_scale_preview(scale)
                 expected=round(512*scale)
+                self.window.set_height_preview(expected)
                 self.assertEqual(self.bounds[2:],[expected,expected])
                 self.assertAlmostEqual(self.window._label.pixmap().deviceIndependentSize().width(),expected / self.ratio,delta=1)
                 self.assertEqual(self.window._png_index,2)
                 self.assertIs(self.window._png_frames,frames)
-        self.window.set_scale_preview(None)
+        self.window.set_height_preview(None)
         self.assertEqual(self.bounds[2:],[256,256])
         self.assertEqual(self.window._scale,.5)
 

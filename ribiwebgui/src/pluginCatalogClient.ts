@@ -1,4 +1,5 @@
 import { isPluginCapabilityReference } from "../../src/plugin-kernel/capabilityReference.js";
+import { getTimeoutMs } from "./timeoutSettingsClient";
 
 export type WebPluginCatalogRevision = Readonly<{
   plugins: number;
@@ -164,6 +165,7 @@ export function parseWebPluginCatalogResponse(value: unknown): WebPluginCatalog 
 async function readWebPluginCatalog(): Promise<WebPluginCatalog> {
   const response = await fetch("/api/plugins/catalog?host=web", {
     method: "GET",
+    signal: AbortSignal.timeout(getTimeoutMs("webgui.plugins.read", 15000)),
     headers: { accept: "application/json" }
   });
 

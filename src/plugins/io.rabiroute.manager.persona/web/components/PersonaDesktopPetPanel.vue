@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { DESKTOP_PET_CORNERS, DESKTOP_PET_WORK_PHASES, type DesktopPetBinding } from "@shared/desktopSettingsContract";
+import { DESKTOP_PET_BASE_HEIGHT_PX, DESKTOP_PET_CORNERS, DESKTOP_PET_WORK_PHASES, type DesktopPetBinding } from "@shared/desktopSettingsContract";
 import { createDesktopPetClient, type DesktopPetPackSummary } from "../../../../../ribiwebgui/src/desktopPetClient";
 import { usePersonaService } from "../persona/personaServiceClient";
 import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
@@ -26,6 +26,27 @@ const importing = ref(false);
 const dirty = computed(() => store.dirty || petDirty.value);
 const ready = computed(() => !petDirty.value || loaded.value);
 const selectedPack = computed(() => packs.value.find(pack => pack.id === binding.value?.packId));
+const displayHeightPx = computed(() => {
+  const height = selectedPack.value?.canvas?.height ?? DESKTOP_PET_BASE_HEIGHT_PX;
+  return binding.value?.displayHeightPx ?? Math.max(1, Math.min(1024, Math.floor(height * (binding.value?.scale ?? 0.5))));
+});
+const sizePercent = computed({
+  get: () => Math.round(displayHeightPx.value * 100 / DESKTOP_PET_BASE_HEIGHT_PX),
+  set: (percent: number) => {
+    if (binding.value && percent !== sizePercent.value) {
+      binding.value.displayHeightPx = percent * DESKTOP_PET_BASE_HEIGHT_PX / 100;
+    }
+  }
+});
+
+function choosePack(packId: string | null): void {
+  if (!binding.value || binding.value.packId === (packId ?? "")) return;
+  if (packId && binding.value.displayHeightPx == null) {
+    binding.value.displayHeightPx = displayHeightPx.value;
+  }
+  binding.value.packId = packId ?? "";
+}
+
 const idleBehavior = computed(() => selectedPack.value?.idleBehavior);
 const hasRandomIdle = computed(() => Boolean(idleBehavior.value?.randomStates.length || binding.value?.idleAnimations?.length)
   || Object.values(selectedPack.value?.modeAnimationSets || {}).some(group => group.randomStates.length));
@@ -100,7 +121,7 @@ async function importDesktopPetPack(): Promise<void> {
       name: importName.value.trim() || packId
     });
     packs.value = [...packs.value.filter(item => item.id !== pack.id), pack];
-    if (binding.value) binding.value.packId = pack.id;
+    choosePack(pack.id);
     importFile.value = null;
     importPackId.value = "";
     importName.value = "";
@@ -181,7 +202,8 @@ onBeforeUnmount(() => {
 
       <template v-if="binding">
         <v-select
-          v-model="binding.packId"
+          :model-value="binding.packId"
+          @update:model-value="choosePack"
           label="动作包"
           :items="packs"
           item-title="name"
@@ -210,7 +232,7 @@ onBeforeUnmount(() => {
                 <strong>{{ action.name }}</strong> <small data-no-i18n>{{ action.id }}</small>
                 <div class="section-note"><span v-for="use in action.uses" :key="use" class="mr-2">{{ use }}</span></div>
                 <div class="section-note">
-                  <span>{{ action.staticImage ? "静态 PNG" : action.animation.type === "gif" ? "GIF 动画" : "PNG 序列动画" }}</span>
+                  <span>{{ action.staticImage ? "静态 PNG" : action.animation.type === "gif" ? "GIF 动画" : action.animation.type === "webp" ? "WebP 动画" : "PNG 序列动画" }}</span>
                   · <span>{{ action.animation.loop ? "循环播放" : "单次播放" }}</span>
                   <span v-if="action.animation.type === 'png-sequence'"> · {{ action.animation.assets.length }} <span>帧</span> · {{ action.animation.fps }} FPS</span>
                   <span v-if="!action.animation.loop"> · <span>结束后</span>：<span data-no-i18n>{{ action.animation.next || 'idle' }}</span></span>
@@ -263,8 +285,9 @@ onBeforeUnmount(() => {
       >
         <div class="desktop-pet-slider-grid">
           <div>
-            <div class="virtual-avatar-field-label">大小：{{ Math.round(binding.scale * 100) }}%</div>
-            <v-slider v-model="binding.scale" :min="0.1" :max="2" :step="0.05" color="secondary" hide-details :disabled="!binding.enabled" />
+            <div class="virtual-avatar-field-label">大小：{{ sizePercent }}%（{{ Math.round(displayHeightPx) }} px 高）</div>
+            <v-slider v-model="sizePercent" :min="10" :max="200" :step="1" color="secondary" hide-details :disabled="!binding.enabled" />
+            <div class="section-note">100% = {{ DESKTOP_PET_BASE_HEIGHT_PX }} px 高</div>
           </div>
           <div>
             <div class="virtual-avatar-field-label">透明度：{{ Math.round(binding.opacity * 100) }}%</div>

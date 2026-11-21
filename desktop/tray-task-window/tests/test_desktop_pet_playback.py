@@ -454,10 +454,10 @@ class PetPlaybackTest(unittest.TestCase):
             menu.aboutToHide.emit()
             self.assertEqual(self.controller._scale, 0.5)
             self.app.processEvents()
-            self.assertEqual(self.controller._scale, 0.1)
+            self.assertEqual(self.controller._display_height_px, 51.2)
             self.assertIsNone(self.window._scale_preview)
             decode.assert_called_once()
-            self.controller._persist.assert_called_once_with({"scale": 0.1, "placement": self.window.placement()})
+            self.controller._persist.assert_called_once_with({"displayHeightPx": 51.2, "placement": self.window.placement()})
             self.controller._enqueue_animation_preloads.assert_called_once()
         menu.deleteLater()
 
@@ -492,15 +492,45 @@ class PetPlaybackTest(unittest.TestCase):
         slider.setValue(20)
         menu.aboutToHide.emit()
         self.controller._closed = True
-        with patch.object(self.controller, "_set_scale") as apply:
+        with patch.object(self.controller, "_set_display_height") as apply:
             self.app.processEvents()
             apply.assert_not_called()
         menu.deleteLater()
 
     def test_ten_percent_size_is_not_clamped_to_sixty_four_pixels(self):
-        self.controller._set_scale(0.1)
+        self.controller._set_display_height(51.2)
         target = self.window._target_size(replace(self.pack, canvas_width=512, canvas_height=512))
         self.assertEqual((target.width(), target.height()), (51, 51))
+
+    def test_fixed_height_keeps_different_canvas_sizes_at_same_percentage(self):
+        square = replace(self.pack, canvas_width=512, canvas_height=512)
+        wide = replace(self.pack, canvas_width=320, canvas_height=180)
+        self.controller._pack = wide
+        menu = QMenu(self.window)
+        action = self.controller._add_scale_control(menu)
+        self.assertEqual(action.title(), "大小：18%")
+        self.assertEqual(self.window._target_size(wide).height(), 90)
+        self.controller._set_display_height(256)
+        self.assertEqual(self.window._target_size(square).toTuple(), (256, 256))
+        self.assertEqual(self.window._target_size(wide).toTuple(), (455, 256))
+        menu.deleteLater()
+
+    def test_transparent_webp_keeps_both_frames_when_the_cache_evicts_another_action(self):
+        buf = io.BytesIO()
+        first = Image.new("RGBA", (32, 32))
+        first.putpixel((8, 8), (20, 70, 190, 110))
+        second = first.copy()
+        second.putpixel((18, 18), (100, 150, 210, 200))
+        first.save(buf, format="WEBP", save_all=True, append_images=[second],
+                   lossless=True, duration=[40, 70])
+        state = replace(self.animations["attention"].state, kind="webp", asset_urls=("/attention.webp",))
+        webp = LoadedDesktopPetAnimation(state, (buf.getvalue(),))
+        with patch("rabiroute_tray.desktop_pet_window._PREPARED_FRAME_BUDGET", 1):
+            self.assertTrue(self.window.play(self.pack, webp))
+        self.assertEqual(tuple(self.window._png_frame_delays), (40, 70))
+        self.assertEqual(len(self.window._png_frames), 2)
+        self.assertEqual(list(key[1] for key in self.window._prepared_png_frames), ["attention"])
+        self.assertTrue(self.window._png_frames[0].toImage().hasAlphaChannel())
 
     def test_loop_restarts_after_last_frame_without_stopping_timer(self):
         count = len(self.window._png_frames)

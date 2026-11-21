@@ -1,5 +1,6 @@
 import { h, ref, type Component } from "vue";
 import { webReleaseQuery } from "./webRelease";
+import { getTimeoutMs } from "./timeoutSettingsClient";
 import { checkWebRuntime } from "./webRuntime";
 import { managerResourceUrl } from "./managerApi";
 import type { WebRuntimeImports } from "../../plugins/contracts/plugin-sdk/web-runtime.mjs";
@@ -145,8 +146,11 @@ export function sameWebPluginModuleInstances(
   return leftIds.size === right.length && right.every(instance => leftIds.has(instance.instanceId));
 }
 
-async function list(signal?: AbortSignal): Promise<{ modules: readonly WebPluginModuleDescriptor[]; invalidIds: ReadonlySet<string>; unidentified: boolean; failures: unknown[] }> {
-  const response = await fetch(`/api/plugins/modules${webReleaseQuery()}`, { cache: "no-store", signal });
+async function list(signal: AbortSignal): Promise<{ modules: readonly WebPluginModuleDescriptor[]; invalidIds: ReadonlySet<string>; unidentified: boolean; failures: unknown[] }> {
+  const response = await fetch(`/api/plugins/modules${webReleaseQuery()}`, {
+    cache: "no-store",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("webgui.plugins.read", 15000))])
+  });
   if (!response.ok) throw new Error(`Unable to load Web plugin modules: ${response.status}.`);
   const body = await response.json() as { code?: unknown; data?: { modules?: unknown } };
   if (body.code !== 0 || !Array.isArray(body.data?.modules)) {

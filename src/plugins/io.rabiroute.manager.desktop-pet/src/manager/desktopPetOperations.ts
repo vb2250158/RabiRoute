@@ -79,7 +79,7 @@ export function createDesktopPetOperations(owner: DesktopPetOwner): readonly Api
     };
     const params = ["roleId", ...(operation.tail.includes("{packId}") ? ["packId"] : []), ...(operation.tail.includes("{assetPath}") ? ["assetPath"] : []), ...(operation.tail.includes("{requestId}") ? ["requestId"] : [])];
     const queryFields = operation.action === "catalog" ? ["scope"] : operation.action === "import" ? ["fileName", "packId", "state", "name"] : [];
-    const response200 = operation.action === "asset" ? { mediaType: "image/gif", binary: { maxBytes: DESKTOP_PET_LIMITS.assetBytes }, alternatives: [{ mediaType: "image/png", binary: { maxBytes: DESKTOP_PET_LIMITS.assetBytes } }] } : { mediaType: "application/json", schema: envelope };
+    const response200 = operation.action === "asset" ? { mediaType: "image/gif", binary: { maxBytes: DESKTOP_PET_LIMITS.assetBytes }, alternatives: ["image/png", "image/webp"].map(mediaType => ({ mediaType, binary: { maxBytes: DESKTOP_PET_LIMITS.assetBytes } })) } : { mediaType: "application/json", schema: envelope };
     return { contract: {
       operationId: "manager.desktop-pet." + operation.id, ...(["motion", "receipt"].includes(operation.action) ? { aliases: ["desktop-pet:" + operation.method + ":" + pathTemplate] } : {}), contractVersion: "1.0.0", method: operation.method, pathTemplate, exposure: "public", transport: "http", description: operation.description,
       request: { path: { type: "object", required: params, additionalProperties: false, properties: Object.fromEntries(params.map(key => [key, { type: "string" }])) }, ...(operation.action === "asset" ? { pathTails: ["assetPath"] } : {}),

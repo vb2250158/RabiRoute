@@ -155,6 +155,7 @@ class DesktopPetAgentMotion(QObject):
             if controller._pack is None or not all(controller._is_action_ready(state) for state in required):
                 if controller._pack is not None and any(state not in controller._pack.states for state in required):
                     raise ValueError(f"Active pet pack does not provide the required travel animations: {', '.join(required)}.")
+                controller._queue_action_preloads(required)
                 if time.monotonic() - self.wait_started > 10:
                     raise ValueError("Travel animations are not ready.")
                 self.timer.start(200)

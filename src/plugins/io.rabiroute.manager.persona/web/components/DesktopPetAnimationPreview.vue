@@ -47,7 +47,7 @@ onBeforeUnmount(stop);
       <v-btn size="small" variant="tonal" @click="play">{{ playing ? "重新播放" : "播放预览" }}</v-btn>
       <v-btn size="small" variant="text" :disabled="!playing" @click="stop">停止</v-btn>
     </div>
-    <small v-if="animation.type === 'gif'">GIF 按文件自身的帧率和循环设置预览。</small>
+    <small v-if="animation.type !== 'png-sequence'">按文件自身的帧率和循环设置预览。</small>
   </div>
 </template>
 
