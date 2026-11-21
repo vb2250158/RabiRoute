@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { deliveryIdFromPrompt, deliveryUserMessagesFromRollout } from "@rabiroute/host-api/shared/deliveryIdentity";
 import { findRolloutDeliveryReceipt } from "./agentRequests/rolloutReceipt.js";
-import { CodexDesktopProgress, type CodexDesktopProgressMessage } from "./codexDesktopProgress.js";
+import { CodexDesktopProgress, type CodexDesktopProgressMessage, type CodexDesktopTurnOutcome } from "./codexDesktopProgress.js";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -664,6 +664,7 @@ export class CodexDesktopBridge {
   private readonly progressWatchers = new Map<string, {
     reader: CodexDesktopProgress;
     onMessage: (message: CodexDesktopProgressMessage) => void;
+    onOutcome?: (outcome: CodexDesktopTurnOutcome) => void;
   }>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
@@ -735,7 +736,10 @@ export class CodexDesktopBridge {
           try {
             const result = watcher.reader.read(message);
             for (const item of result.messages) watcher.onMessage(item);
-            if (result.closed) this.unfollowProgress(threadId);
+            if (result.closed) {
+              this.unfollowProgress(threadId);
+              if (result.outcome) watcher.onOutcome?.(result.outcome);
+            }
             else if (result.resubscribe) {
               this.setProgressFollowing(threadId, false);
               this.setProgressFollowing(threadId, true);
@@ -964,11 +968,12 @@ export class CodexDesktopBridge {
     if (this.socket?.writable) this.setProgressFollowing(threadId, false);
   }
 
-  async watchProgress(threadId: string, turnId: string, onMessage: (message: CodexDesktopProgressMessage) => void): Promise<void> {
+  async watchProgress(threadId: string, turnId: string, onMessage: (message: CodexDesktopProgressMessage) => void,
+    onOutcome?: (outcome: CodexDesktopTurnOutcome) => void): Promise<void> {
     await this.connect();
     if (this.progressWatchers.get(threadId)?.reader.turnId === turnId) return;
     if (this.progressWatchers.has(threadId)) this.unfollowProgress(threadId);
-    this.progressWatchers.set(threadId, { reader: new CodexDesktopProgress(threadId, turnId), onMessage });
+    this.progressWatchers.set(threadId, { reader: new CodexDesktopProgress(threadId, turnId), onMessage, onOutcome });
     try { this.setProgressFollowing(threadId, true); }
     catch (error) { this.progressWatchers.delete(threadId); throw error; }
   }

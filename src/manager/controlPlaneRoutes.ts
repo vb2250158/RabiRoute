@@ -120,6 +120,7 @@ import { readChatDeliveryParties } from "./personaChatDeliveryLookup.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestParty } from "../agentRequests/store.js";
 import { planBindingMatchesSource, planBindingTargetKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
+import { desktopPetWorkKey, desktopPetWorkSessionKey } from "../shared/desktopPetWorkIdentity.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
@@ -1848,15 +1849,28 @@ function observeCodexProgress(request: CodexHookContextRequest): void {
   });
   // A progress observation never vetoes the original prompt or starts a second runtime.
   const subscribe = async () => {
-    if (!agentCompletionDelivery.beginCodexProgress(request)) return;
+    if (!request.turnId?.trim()) return;
+    const progress = agentCompletionDelivery.beginCodexProgress(request);
+    const binding = codexHookContextService.getBinding(request.sessionId, request.sourceInstance, request.agentType);
+    const pet = binding ? desktopSettings.read().pets[binding.roleId] : undefined;
+    const watchPet = Boolean(pet?.enabled && (pet.workAnimationsEnabled || pet.workBubblesEnabled));
+    if (!progress && !watchPet) return;
     const generation = publishedPluginGeneration();
     const onProgress = (message: import("../plugins/io.rabiroute.agent.codex/src/codexDesktopProgress.js").CodexDesktopProgressMessage) => {
-      if (generation !== publishedPluginGeneration() || message.threadId !== request.sessionId || message.turnId !== request.turnId) return;
+      if (!progress || generation !== publishedPluginGeneration() || message.threadId !== request.sessionId || message.turnId !== request.turnId) return;
       void deliverAgentRuleEvent({ agentType: "codex", sessionId: message.threadId, turnId: message.turnId, cwd: request.cwd,
         eventName: "AssistantProgress", nativeProgress: true, messageId: message.messageId, observedAt: message.completedAtMs,
         lastAssistantMessage: message.text }).catch(recordFailure);
     };
-    await invokePublishedAgentOperation("codex", "progress.observe", { threadId: request.sessionId, turnId: request.turnId }, { onProgress });
+    const onOutcome = (outcome: import("../plugins/io.rabiroute.agent.codex/src/codexDesktopProgress.js").CodexDesktopTurnOutcome) => {
+      if (!watchPet || !binding || outcome === "completed" || generation !== publishedPluginGeneration()) return;
+      const current = codexHookContextService.getBinding(request.sessionId, request.sourceInstance, request.agentType);
+      if (current?.roleId !== binding.roleId) return;
+      const sessionKey = desktopPetWorkSessionKey(request);
+      publishManagerEvent("desktop_pet_work", { roleId: binding.roleId, sessionKey,
+        turnKey: desktopPetWorkKey(sessionKey, request.turnId), phase: outcome === "failed" ? "failed" : "cleared" });
+    };
+    await invokePublishedAgentOperation("codex", "progress.observe", { threadId: request.sessionId, turnId: request.turnId }, { onProgress, onOutcome });
   };
   void subscribe().catch(recordFailure);
 }

@@ -315,13 +315,16 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   }
 }
 
-test("Desktop follows the original turn and emits only a live completed commentary item", async t => {
+test("Desktop progress and terminal outcome come from the original live turn", async t => {
   const router = await createMockDesktopRouter(request => ({ type: "response", requestId: request.requestId,
     resultType: "success", result: { clientId: "test-client" } }), null);
   const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });
   t.after(async () => { bridge.close(); await router.close(); });
   const sent: string[] = [];
-  await bridge.watchProgress("thread", "turn", message => { sent.push(`${message.turnId}:${message.messageId}:${message.text}`); });
+  const outcomes: string[] = [];
+  await bridge.watchProgress("thread", "turn", message => {
+    sent.push(`${message.turnId}:${message.messageId}:${message.text}`);
+  }, outcome => { outcomes.push(outcome); });
   const key = "tail:0:local:active";
   const entityPath = ["turnHistory", "history", "entitiesByKey", key];
   const state = (change: unknown, options: { source?: string; conversation?: string; host?: string } = {}) => router.broadcast({
@@ -348,10 +351,12 @@ test("Desktop follows the original turn and emits only a live completed commenta
   state(patch(5, 6, item(1, text("real-native-id", 40)), item(3, text("unproven-replay", 35), "add")));
   state(patch(9, 10, item(4, text("gap", null), "add"), item(4, text("gap", 50))));
   snapshot(11, [text("real-native-id", 40), text("gap", 50)]);
-  state(patch(11, 12, { op: "replace", path: [...entityPath, "status"], value: "completed" }));
+  state(patch(11, 12, { op: "replace", path: [...entityPath, "status"], value: "failed" }), { source: "another-owner" });
+  state(patch(11, 12, { op: "replace", path: [...entityPath, "status"], value: "failed" }));
   state(patch(12, 13, item(5, text("late", null), "add"), item(5, text("late", 60))));
   await wait(35);
   assert.deepEqual(sent, ["turn:real-native-id:Public text"]);
+  assert.deepEqual(outcomes, ["failed"]);
   assert.deepEqual(router.methods, ["initialize"]);
 });
 

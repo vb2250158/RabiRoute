@@ -61,7 +61,7 @@ export const activate = definePlugin({
         }, "activate executable Agent communication contracts");
         ctx.effect(async () => {
             const registration = await runtime.managerPluginRoutes.registerOperationsAsync(context.identity.instanceId,
-                runtime.createCodexHookOperations(runtime.codexHookContextService), context.lifecycle.signal);
+                runtime.createCodexHookOperations(runtime.codexHookContextService, runtime.publishManagerEvent), context.lifecycle.signal);
             return () => registration.dispose();
         }, "activate executable Hook contracts");
 

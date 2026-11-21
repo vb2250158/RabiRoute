@@ -43,6 +43,7 @@ class DesktopPetWindow(QWidget):
     clicked = Signal()
     double_clicked = Signal()
     animation_finished = Signal(str)
+    animation_looped = Signal(str)
     placement_changed = Signal(object)
     context_menu_requested = Signal(object)
     drag_started = Signal()
@@ -145,6 +146,8 @@ class DesktopPetWindow(QWidget):
         self._bubble_timer.setSingleShot(True)
         self._bubble_timer.timeout.connect(self._expire_bubbles)
         self._bubble = DesktopPetBubble(self.windowFlags())
+        self._work_bubble = DesktopPetBubble(self.windowFlags())
+        self._work_bubble_text = ""
         self._bubble_style = normalize_bubble_style({})
         self._previous_bubbles: list[tuple[DesktopPetBubble, float]] = []
         self._bubble_key: str | None = None
@@ -257,8 +260,8 @@ class DesktopPetWindow(QWidget):
             self.travel_result.emit(completed)
             self.travel_finished.emit()
 
-    def face_toward(self, target: QPoint) -> None:
-        """Turn in place toward a logical desktop point after arrival."""
+    def face_toward(self, target: QPoint, *, arrival: bool = True) -> None:
+        """Turn in place toward a logical desktop point."""
         if self.travelling or self._locked or self.pointer_engaged or not self.isVisible():
             return
         delta = target.x() - (self.x() + self.width() / 2)
@@ -274,7 +277,13 @@ class DesktopPetWindow(QWidget):
         self._turn_animation.setStartValue(previous_scale)
         self._turn_animation.setEndValue(final_scale)
         self._turn_animation.start()
-        qInfo(f"rabiroute.desktop-pet.motion desktop_pet_arrival_turn facing={'left' if self._facing_left else 'right'}")
+        event = "desktop_pet_arrival_turn" if arrival else "desktop_pet_idle_turn"
+        qInfo(f"rabiroute.desktop-pet.motion {event} facing={'left' if self._facing_left else 'right'}")
+
+    def turn_around(self) -> None:
+        center = self.frameGeometry().center()
+        offset = 32 if self._facing_left else -32
+        self.face_toward(center + QPoint(offset, 0), arrival=False)
 
     def _display_turn(self, value: object) -> None:
         self._turn_scale = float(value)
@@ -454,6 +463,14 @@ class DesktopPetWindow(QWidget):
             self._placed = True
         self.show()
         self.raise_()
+        self._place_bubble()
+
+    def set_work_bubble(self, text: str) -> None:
+        if text != self._work_bubble_text:
+            self._work_bubble_text = text
+            if text:
+                self._work_bubble.set_content(text)
+        self._place_bubble()
 
     def show_bubble(self, text: str, duration_ms: int | None = None) -> None:
         if not self._bubble_enabled or self._speech_active:
@@ -525,15 +542,17 @@ class DesktopPetWindow(QWidget):
             return
         self._bubble_style = normalized
         self._bubble.apply_style(self._bubble_style)
+        self._work_bubble.apply_style(self._bubble_style)
         for bubble, _ in self._previous_bubbles:
             bubble.apply_style(self._bubble_style)
         self._trim_bubbles()
-        if self._bubble.isVisible():
+        if self._bubble.isVisible() or self._work_bubble.isVisible():
             self._place_bubble()
 
     def hide_bubble(self) -> None:
         self._bubble_timer.stop()
         self._bubble.hide()
+        self._work_bubble.hide()
         self._bubble_displayed = False
         self._bubble_deadline = None
         self._bubble_key = None
@@ -554,6 +573,11 @@ class DesktopPetWindow(QWidget):
         if screen is None:
             return
         bubbles = [bubble for bubble, _ in self._previous_bubbles] + ([self._bubble] if self._bubble_displayed else [])
+        show_work = bool(self._work_bubble_text and not bubbles and self._bubble_enabled and self.isVisible()
+                         and not self.travelling and not self.pointer_engaged)
+        self._work_bubble.setVisible(show_work)
+        if show_work:
+            bubbles.append(self._work_bubble)
         if not bubbles:
             return
         area = screen.availableGeometry()
@@ -569,7 +593,7 @@ class DesktopPetWindow(QWidget):
         for bubble in (list(reversed(bubbles)) if upward else bubbles):
             x = max(area.left(), min(anchor.center().x() - bubble.width() // 2, area.right() - bubble.width() + 1))
             bubble.set_tail_anchor(anchor.center().x() - x, upward)
-            bubble.set_tail_visible(bubble is self._bubble)
+            bubble.set_tail_visible(bubble is self._bubble or bubble is self._work_bubble)
             bubble.transition_to(QPoint(x, y))
             y += bubble.height() + 8
 
@@ -659,6 +683,7 @@ class DesktopPetWindow(QWidget):
         if bool(self.windowFlags() & flag) != bool(always_on_top):
             self.setWindowFlag(flag, bool(always_on_top))
             self._bubble.setWindowFlag(flag, bool(always_on_top))
+            self._work_bubble.setWindowFlag(flag, bool(always_on_top))
             for bubble, _ in self._previous_bubbles:
                 visible = bubble.isVisible()
                 bubble.setWindowFlag(flag, bool(always_on_top))
@@ -678,6 +703,7 @@ class DesktopPetWindow(QWidget):
             if abs(self._scale - previous_scale) > 0.001:
                 self.clear_prepared_animations()
             self.play(self._active_pack, self._active_animation)
+        self._place_bubble()
 
     def restore_placement(self, placement: object) -> None:
         if self.pointer_engaged:
@@ -826,7 +852,8 @@ class DesktopPetWindow(QWidget):
         if not self._png_frames:
             return
         next_index = self._png_index + 1
-        if next_index >= len(self._png_frames):
+        looped = next_index >= len(self._png_frames)
+        if looped:
             if not self._png_loop and self._travel_kind not in {"move", "run"}:
                 self._png_timer.stop()
                 self.animation_finished.emit(self._png_next_state)
@@ -836,6 +863,8 @@ class DesktopPetWindow(QWidget):
         if self._png_frame_delays and self._active_animation and self._travel_kind not in {"move", "run"}:
             self._png_timer.start(self._frame_interval(self._active_animation.state.fps))
         self._display_png_frame()
+        if looped and not self.travelling and len(self._png_frames) > 1:
+            self.animation_looped.emit(self.active_state)
 
     @staticmethod
     def _measure_soles(pixmap: QPixmap) -> SoleFrame:
@@ -1011,6 +1040,7 @@ class DesktopPetWindow(QWidget):
         self.stop_animation()
         self._bubble_timer.stop()
         self._bubble.close()
+        self._work_bubble.close()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:

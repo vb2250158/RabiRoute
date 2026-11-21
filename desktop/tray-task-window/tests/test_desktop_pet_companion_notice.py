@@ -56,6 +56,7 @@ class CompanionFailureNoticeTest(unittest.TestCase):
         controller = SimpleNamespace(persona_id="one", _companion_session={}, _companion=Mock(),
             _binding_snapshot=None, _idle_scheduler=Mock(), _configure_idle_scheduler=Mock(),
             _wander_timer=Mock(), window=Mock(travelling=False, pointer_engaged=False),
+            _present_work_bubble=Mock(),
             _context_menu=None, _resume_context=Mock(), _arm_wander=Mock(), visible=True,
             _muted_until=0, _companion_failure_notice=CompanionFailureNotice(), _dialogue=DesktopPetDialogue())
         failed = {"status": "failed", "error": "catalog unavailable", "errorCode": "COMPANION_CONTEXT_FAILED"}

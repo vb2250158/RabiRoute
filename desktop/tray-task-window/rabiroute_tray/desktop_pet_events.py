@@ -39,6 +39,7 @@ class DesktopPetEventStream(QObject):
     """Reconnectable Manager SSE adapter; it never owns work-event policy."""
 
     work_ended = Signal(object)
+    work_changed = Signal(object)
     role_panel_message = Signal(object)
     settings_changed = Signal(object)
     catalog_changed = Signal(object)
@@ -99,6 +100,8 @@ class DesktopPetEventStream(QObject):
                             return
                         if event_name == "work_ended" and isinstance(payload, dict):
                             self.work_ended.emit(payload)
+                        elif event_name == "desktop_pet_work" and isinstance(payload, dict):
+                            self.work_changed.emit(payload)
                         elif event_name == "role_panel_message" and isinstance(payload, dict):
                             self.role_panel_message.emit(payload)
                         elif event_name == "desktop_pet_motion_requested" and isinstance(payload, dict):

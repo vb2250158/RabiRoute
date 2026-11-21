@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.34",
+      "version": "0.1.35",
       "enabled": true,
       "config": {},
       "grants": []
@@ -162,7 +162,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -202,7 +202,7 @@
     {
       "id": "manager:desktop-pet",
       "package": "io.rabiroute.manager.desktop-pet",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": []
@@ -313,7 +313,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "enabled": true,
       "config": {},
       "grants": []

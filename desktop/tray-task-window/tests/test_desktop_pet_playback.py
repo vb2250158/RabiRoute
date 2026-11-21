@@ -43,7 +43,8 @@ class PetPlaybackTest(unittest.TestCase):
         self.pack = replace(pack, states={name: action.state for name, action in self.animations.items()})
         self.controller._pack = self.pack
         self.controller._animation_cache = self.animations.copy()
-        self.controller._binding_snapshot = DesktopPetBinding(enabled=True, pack_id=self.pack.pack_id, wander_enabled=True)
+        self.controller._binding_snapshot = DesktopPetBinding(
+            enabled=True, pack_id=self.pack.pack_id, wander_enabled=True, idle_rotation_enabled=False)
         self.controller._preferred_pack_id = self.pack.pack_id
         self.window = self.controller.window
         self.window.show_on_desktop()
@@ -59,6 +60,96 @@ class PetPlaybackTest(unittest.TestCase):
     def finish_reaction(self):
         for _ in range(4):
             self.window._advance_png_frame()
+
+    def test_a_full_idle_loop_can_start_a_random_gesture_without_the_pack_delay(self):
+        self.pack = replace(self.pack, idle_behavior=DesktopPetIdleBehavior(75, 180, ("attention",), 0, ""))
+        self.controller._pack = self.pack
+        self.controller._apply_binding(replace(self.controller._binding_snapshot, idle_rotation_enabled=True))
+        self.controller.set_state("idle", restart=True)
+        self.assertFalse(self.controller._idle_scheduler._random_timer.isActive())
+        with patch.object(self.controller._idle_scheduler._random, "uniform", return_value=0.5):
+            for _ in range(len(self.window._png_frames)):
+                self.window._advance_png_frame()
+        self.assertEqual(self.window.active_state, "attention")
+        self.controller.set_state("idle")
+        was_facing_left = self.window._facing_left
+        with patch.object(self.controller._idle_scheduler._random, "uniform", return_value=0.82):
+            for _ in range(len(self.window._png_frames)):
+                self.window._advance_png_frame()
+        self.assertNotEqual(self.window._facing_left, was_facing_left)
+
+    def test_bound_work_switches_animation_and_bubble_and_finishes_cleanly(self):
+        def emit(phase, **extra):
+            self.controller._events.work_changed.emit({
+                "roleId": "sample", "sessionKey": "session", "turnKey": "turn", "phase": phase, **extra,
+            })
+        emit("thinking", roleId="another")
+        self.assertEqual(self.window.active_state, "idle")
+        emit("thinking")
+        self.assertEqual(self.window.active_state, "thinking")
+        self.assertTrue(self.window._work_bubble.isVisible())
+        emit("working", activity="editing", toolKey="first")
+        emit("working", activity="command", toolKey="second")
+        self.assertEqual(self.window._work_bubble_text, "正在运行命令")
+        emit("reviewing", toolKey="second")
+        self.assertEqual(self.window._work_bubble_text, "正在修改文件")
+        emit("reviewing", toolKey="first")
+        self.assertEqual(self.window._work_bubble_text, "正在整理结果")
+        self.controller._companion_session = {"status": "active"}
+        self.controller._present_work_bubble()
+        self.assertFalse(self.window._work_bubble.isVisible())
+        self.controller._companion_session = {}
+        self.controller._present_work_bubble()
+        self.assertTrue(self.window._work_bubble.isVisible())
+        emit("cleared")
+        self.assertEqual(self.window.active_state, "idle")
+        self.assertFalse(self.window._work_bubble.isVisible())
+        emit("working", toolKey="late")
+        self.assertFalse(self.window._work_bubble.isVisible())
+        emit("failed")
+        self.assertEqual(self.window._work_bubble_text, "这轮遇到了问题")
+        self.assertTrue(self.window._work_bubble.isVisible())
+
+    def test_bound_work_wakes_automatic_rest_but_preserves_manual_rest(self):
+        sleep = replace(self.animations["idle"], state=replace(self.animations["idle"].state, name="sleep"))
+        self.pack = replace(self.pack, states={**self.pack.states, "sleep": sleep.state},
+                            idle_behavior=DesktopPetIdleBehavior(0, 0, (), 60, "sleep"))
+        self.controller._pack = self.pack
+        self.controller._animation_cache["sleep"] = sleep
+        self.controller._configure_idle_scheduler()
+
+        def start_work(turn):
+            self.controller._events.work_changed.emit({
+                "roleId": "sample", "sessionKey": "session", "turnKey": turn, "phase": "thinking",
+            })
+
+        self.controller._idle_scheduler._request_sleep()
+        self.assertEqual(self.window.active_state, "sleep")
+        start_work("one")
+        self.assertEqual(self.window.active_state, "thinking")
+        self.assertTrue(self.window._work_bubble.isVisible())
+
+        self.controller._toggle_sleep()
+        self.assertEqual(self.window.active_state, "sleep")
+        start_work("two")
+        self.assertEqual(self.window.active_state, "sleep")
+        self.assertFalse(self.window._work_bubble.isVisible())
+        self.controller._toggle_sleep()
+        self.assertEqual(self.window.active_state, "thinking")
+        self.assertTrue(self.window._work_bubble.isVisible())
+
+    def test_saved_click_pool_rotates_and_ignores_unavailable_actions(self):
+        wave = LoadedDesktopPetAnimation(replace(self.animations["attention"].state, name="idle-wave"),
+                                        self.animations["attention"].assets)
+        self.pack = replace(self.pack, states={**self.pack.states, "idle-wave": wave.state})
+        self.controller._pack = self.pack
+        self.controller._animation_cache["idle-wave"] = wave
+        self.controller._apply_binding(replace(self.controller._binding_snapshot,
+                                               click_animations=("missing", "idle-wave", "attention")))
+        self.controller._clicked()
+        self.assertEqual(self.window.active_state, "idle-wave")
+        self.controller._clicked()
+        self.assertEqual(self.window.active_state, "attention")
 
     def test_lift_throw_and_airborne_loop_restore_context_only_after_landing(self):
         for name, loop, next_state in (("lift", False, "drag"), ("throw", False, "airborne"), ("airborne", True, "")):

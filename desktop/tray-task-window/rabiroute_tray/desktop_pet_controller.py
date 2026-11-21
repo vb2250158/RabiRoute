@@ -21,12 +21,14 @@ from .desktop_pet_dialogue import DesktopPetDialogue
 from .desktop_pet_bubble_settings import DesktopPetBubbleSettings
 from .desktop_pet_fullscreen import is_foreground_fullscreen
 from .desktop_pet_idle import DesktopPetIdleScheduler
+from .desktop_pet_work import DesktopPetWork, WORK_PHASE_ACTIONS, WORK_TERMINAL_PHASES
 from .desktop_pet_motion import corner_positions, foreground_window, logical_bounds, matches_monitor, travel_kind
 from .desktop_pet_window import DesktopPetWindow
 from .desktop_pet_agent_motion import DesktopPetAgentMotion
 from .qt_async import QtAsyncTask, start_qt_task
 
 _LOGGER = logging.getLogger(__name__)
+_DEFAULT_CLICK_ANIMATIONS = ("attention", "idle-wave", "idle-pout", "idle-cover-mouth")
 
 
 DESKTOP_PET_STATE_LABELS = {
@@ -83,6 +85,7 @@ class DesktopPetController(QObject):
         self.window.clicked.connect(self._clicked)
         self.window.double_clicked.connect(self._double_clicked)
         self.window.animation_finished.connect(self._animation_finished)
+        self.window.animation_looped.connect(self._animation_looped)
         self.window.placement_changed.connect(lambda placement: self._persist({"placement": placement}))
         self.window.context_menu_requested.connect(self._show_context_menu)
         self.window.drag_started.connect(self._drag_started)
@@ -109,6 +112,14 @@ class DesktopPetController(QObject):
         self._speech.changed.connect(self._speech_changed)
         self._owns_events = event_stream is None
         self._events.work_ended.connect(self._work_ended)
+        self._work = DesktopPetWork()
+        self._work_phase = ""
+        self._work_text = ""
+        self._work_played_completion = False
+        self._work_timer = QTimer(self)
+        self._work_timer.setSingleShot(True)
+        self._work_timer.timeout.connect(self._refresh_work)
+        self._events.work_changed.connect(self._work_changed)
         self._seen_panel_messages: deque[str] = deque(maxlen=128)
         self._pending_panel_messages: deque[str] = deque(maxlen=32)
         self._panel_message_timer = QTimer(self)
@@ -130,6 +141,7 @@ class DesktopPetController(QObject):
         self._pack: DesktopPetPack | None = None
         self._idle_scheduler = DesktopPetIdleScheduler(self)
         self._idle_scheduler.animation_requested.connect(self._idle_action)
+        self._idle_scheduler.turn_requested.connect(self.window.turn_around)
         self._idle_behavior_snapshot: DesktopPetIdleBehavior | None = None
         self._last_click_state = ""
         self._catalog_task: QtAsyncTask | None = None
@@ -139,6 +151,7 @@ class DesktopPetController(QObject):
         self._animation_cache: dict[str, LoadedDesktopPetAnimation] = {}
         self._preload_queue: deque[str] = deque()
         self._requested_state = "idle"
+        self._auto_rest_active = False
         self._animation_retry_delay = 1500
         self._animation_retry_timer = QTimer(self)
         self._animation_retry_timer.setSingleShot(True)
@@ -235,6 +248,8 @@ class DesktopPetController(QObject):
         self._closed = True
         self._events.voice_assistant_presentation.disconnect(self._assistant_changed)
         self._events.role_panel_message.disconnect(self._role_panel_message)
+        self._events.work_changed.disconnect(self._work_changed)
+        self._work_timer.stop()
         self._panel_message_timer.stop()
         self._pending_panel_messages.clear()
         self._animation_retry_timer.stop()
@@ -284,12 +299,15 @@ class DesktopPetController(QObject):
             return
         self._animation_retry_timer.stop()
         state_name = state_name or "idle"
+        if self._auto_rest_active and state_name != self._sleep_state():
+            self._auto_rest_active = False
         if (not restart and self.window.is_playing(self._pack, state_name)
                 and self._requested_state == state_name and self.window.animation_running):
             return
         if self.window.travelling and state_name not in {"move", "run", "teleport-out", "teleport-in"}:
             self.window.cancel_travel()
         self._requested_state = state_name or "idle"
+        self._present_work_bubble()
         self._idle_scheduler.state_requested(self._requested_state)
         if self._pack is None or not self.visible:
             return
@@ -391,6 +409,7 @@ class DesktopPetController(QObject):
         group = self._companion_animation_set()
         mode_random = group is not None and state in group.random_states
         if (not self._companion_session or mode_random) and not self._passive_action_blocked():
+            self._auto_rest_active = state == self._sleep_state()
             self.set_state(state)
         else:
             self._idle_scheduler.action_deferred(self.window.active_state or "idle")
@@ -429,21 +448,39 @@ class DesktopPetController(QObject):
         group = self._companion_animation_set()
         return group.idle_state if group else ""
 
+    def _ordinary_gestures(self, candidates: tuple[str, ...]) -> tuple[str, ...]:
+        if not self._pack:
+            return ()
+        approved = []
+        for name in candidates:
+            state = self._pack.states.get(name)
+            if state and not state.loop and (state.next_state or "idle") == "idle":
+                approved.append(name)
+        return tuple(approved)
+
     def _configure_idle_scheduler(self) -> None:
         group = self._companion_animation_set()
         behavior = group.idle_behavior() if group else self._pack.idle_behavior if self._pack else DesktopPetIdleBehavior()
         binding = self._binding_snapshot
-        if binding and (not binding.random_idle_enabled or not binding.auto_sleep_enabled):
+        if binding:
+            idle = self._pack.states.get(behavior.idle_state) if self._pack else None
+            custom_idle = self._ordinary_gestures(binding.idle_animations) if group is None else ()
             behavior = replace(
                 behavior,
-                random_states=behavior.random_states if binding.random_idle_enabled else (),
+                random_states=(custom_idle or behavior.random_states) if binding.random_idle_enabled else (),
+                random_min_seconds=(behavior.random_min_seconds or 75) if custom_idle else behavior.random_min_seconds,
+                random_max_seconds=(behavior.random_max_seconds or 180) if custom_idle else behavior.random_max_seconds,
                 sleep_after_seconds=behavior.sleep_after_seconds if binding.auto_sleep_enabled else 0,
+                rotate_each_loop=bool(group is None and binding.idle_rotation_enabled and idle
+                                      and idle.loop and len(idle.asset_urls) > 1),
             )
         if self._idle_behavior_snapshot != behavior:
             self._idle_scheduler.set_active(False)
             self._idle_scheduler.configure(behavior)
             self._idle_behavior_snapshot = behavior
-        self._idle_scheduler.set_active(self.visible and (not self._companion_session or bool(group and behavior.random_states)))
+        work_active = bool(self._work_phase and self._work_phase not in WORK_TERMINAL_PHASES)
+        idle_active = bool(group and behavior.random_states) if self._companion_session else not work_active
+        self._idle_scheduler.set_active(self.visible and idle_active)
 
     def _sleep_state(self) -> str:
         return self._pack.idle_behavior.sleep_state if self._pack else ""
@@ -487,11 +524,75 @@ class DesktopPetController(QObject):
             self.set_state(scene)
         elif self._speech_job.get("status") == "playing" and time.monotonic() >= self._muted_until:
             self.set_state("talking")
+        elif work := self._pick_work_animation():
+            if self._work_phase in WORK_TERMINAL_PHASES:
+                self._work_played_completion = True
+            self.set_state(work)
         else:
             mode_idles = {group.idle_state for group in self._pack.mode_animation_sets.values()} if self._pack else set()
             if self._pack and (fallback in self._pack.companion_states.values() or fallback in mode_idles):
                 fallback = "idle"
             self.set_state(fallback if fallback not in {"talking", "drag", "lift", "throw", "airborne", "move", "run", "teleport-out", "teleport-in"} else "idle")
+
+    def _animation_looped(self, state: str) -> None:
+        if state != self._requested_state or self._passive_action_blocked():
+            return
+        if self._work_phase and not self._companion_session and not self._sleeping():
+            if action := self._pick_work_animation(rotate=True):
+                if action != state:
+                    self.set_state(action)
+            return
+        self._idle_scheduler.animation_looped(state)
+
+    def _pick_work_animation(self, *, rotate: bool = False) -> str:
+        binding = self._binding_snapshot
+        if (not self._pack or not binding or not binding.work_animations_enabled or not self._work_phase
+                or time.monotonic() < self._muted_until):
+            return ""
+        if self._work_phase in WORK_TERMINAL_PHASES and (rotate or self._work_played_completion):
+            return ""
+        configured = binding.work_animations.get(self._work_phase, ())
+        available = tuple(state for state in configured if state in self._pack.states)
+        if not available:
+            available = tuple(state for state in WORK_PHASE_ACTIONS[self._work_phase] if state in self._pack.states)
+        if not available:
+            return ""
+        if self.window.active_state in available and len(available) > 1:
+            return self._random.choice([state for state in available if state != self.window.active_state])
+        return available[0]
+
+    def _present_work_bubble(self) -> None:
+        binding = self._binding_snapshot
+        text = self._work_text if (binding and binding.work_bubbles_enabled and not self._companion_session and not self._sleeping()
+                                  and time.monotonic() >= self._muted_until) else ""
+        self.window.set_work_bubble(text)
+
+    def _work_changed(self, payload: object) -> None:
+        if isinstance(payload, dict) and payload.get("roleId") == self.persona_id:
+            if self._work.accept(payload, time.monotonic()):
+                self._refresh_work()
+
+    def _refresh_work(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        phase, self._work_text, deadline = self._work.current(now)
+        changed = phase != self._work_phase
+        if changed:
+            self._work_phase = phase
+            self._work_played_completion = False
+            self._idle_scheduler.note_activity()
+            self._configure_idle_scheduler()
+            self._arm_wander()
+        self._work_timer.stop()
+        if deadline:
+            self._work_timer.start(max(1, math.ceil((deadline - now) * 1000)))
+        self._present_work_bubble()
+        binding = self._binding_snapshot
+        wake_for_work = (self._auto_rest_active and phase and phase not in WORK_TERMINAL_PHASES
+                         and binding and (binding.work_animations_enabled or binding.work_bubbles_enabled)
+                         and now >= self._muted_until)
+        if ((changed or force or wake_for_work) and self.visible and not self._companion_session
+                and (not self._sleeping() or wake_for_work) and not self._passive_action_blocked()):
+            self._resume_context()
 
     def _animation_finished(self, next_state: str) -> None:
         if self.window.travelling or not self.window.is_playing(self._pack, self._requested_state):
@@ -549,10 +650,15 @@ class DesktopPetController(QObject):
                 self._resume_context()
                 return
             group = self._companion_animation_set()
-            choices = group.click_states if self._configured_mode_animation_set() else ("attention",)
+            if self._configured_mode_animation_set():
+                choices = group.click_states
+            else:
+                binding = self._binding_snapshot
+                custom = self._ordinary_gestures(binding.click_animations) if binding else ()
+                choices = custom or self._ordinary_gestures(_DEFAULT_CLICK_ANIMATIONS) or ("attention",)
             if choices:
                 fresh = [state for state in choices if state != self._last_click_state]
-                state = self._random.choice(fresh or list(choices))
+                state = self._random.choice(fresh or list(choices)) if self._last_click_state else choices[0]
                 self._last_click_state = state
             else:
                 state = group.idle_state
@@ -702,8 +808,14 @@ class DesktopPetController(QObject):
             self._load_catalog()
         elif previous is not None:
             if (previous.random_idle_enabled != binding.random_idle_enabled
+                    or previous.idle_rotation_enabled != binding.idle_rotation_enabled
+                    or previous.idle_animations != binding.idle_animations
                     or previous.auto_sleep_enabled != binding.auto_sleep_enabled):
                 self._configure_idle_scheduler()
+            if (previous.work_animations_enabled != binding.work_animations_enabled
+                    or previous.work_bubbles_enabled != binding.work_bubbles_enabled
+                    or previous.work_animations != binding.work_animations):
+                self._refresh_work(force=bool(self._work_phase))
             if previous.scale != binding.scale:
                 self._enqueue_animation_preloads()
 
@@ -761,7 +873,7 @@ class DesktopPetController(QObject):
         event = payload if isinstance(payload, dict) else {}
         if str(event.get("personaId") or "") != self.persona_id:
             return
-        if self._companion_session:
+        if self._companion_session or self._work_phase:
             return
         if not self.visible or time.monotonic() < self._muted_until:
             return
@@ -769,9 +881,11 @@ class DesktopPetController(QObject):
         if self._passive_action_blocked():
             return
         status = str(event.get("status") or "")
-        self._request_reaction("success" if status == "completed" else "concerned")
+        binding = self._binding_snapshot
+        if not binding or binding.work_animations_enabled:
+            self._request_reaction("success" if status == "completed" else "concerned")
         summary = str(event.get("summary") or "").strip()
-        if summary:
+        if summary and (not binding or binding.work_bubbles_enabled):
             self.window.show_bubble(summary)
 
     def _companion_changed(self, payload: object) -> None:
@@ -785,6 +899,7 @@ class DesktopPetController(QObject):
         if previous.get("id") == session.get("id") and int(session.get("version") or 0) < int(previous.get("version") or 0):
             return
         self._companion_session = session if session.get("status") in ("active", "paused") else {}
+        self._present_work_bubble()
         self._companion.accept(session)
         if self._binding_snapshot is not None:
             self._apply_binding(self._binding_snapshot, force=True)
@@ -832,6 +947,8 @@ class DesktopPetController(QObject):
             if self.visible and self._requested_state == "concerned":
                 self.set_state("idle")
             return
+        self._work.clear()
+        self._refresh_work()
         self._companion_session = {}
         self._companion.disconnect()
         if self._binding_snapshot is not None:
@@ -877,7 +994,7 @@ class DesktopPetController(QObject):
 
     def _arm_wander(self) -> None:
         binding = self._binding_snapshot
-        if self._closed or self._companion_session or self._speech_job.get("status") == "playing" or not binding or not binding.enabled or not binding.wander_enabled:
+        if self._closed or self._companion_session or self._work_phase or self._speech_job.get("status") == "playing" or not binding or not binding.enabled or not binding.wander_enabled:
             self._wander_timer.stop()
             return
         seconds = self._random.uniform(binding.wander_wait_min_seconds, binding.wander_wait_max_seconds)
@@ -1148,6 +1265,7 @@ class DesktopPetController(QObject):
             return
         self._idle_scheduler.note_activity()
         if state_name == self._sleep_state():
+            self._auto_rest_active = False
             self._reaction_timer.stop()
             self._transient_state = ""
             self.set_state(state_name)

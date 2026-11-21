@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.62 - 2026-11-21
+
+- Desktop pets rotate idle actions in normal mode. Persona-bound Codex sessions can trigger work animations and status bubbles, and the appearance settings expose click actions and work-state action pools.
+
 ## 0.15.61 - 2026-11-21
 
 - Add mobile voice submission and late-loading local voice support, with updated phone and glasses interactions and tests.

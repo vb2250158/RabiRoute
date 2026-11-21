@@ -24,6 +24,7 @@ class DesktopPetIdleScheduler(QObject):
     """Owns idle presentation timing; the controller still owns animation state."""
 
     animation_requested = Signal(str)
+    turn_requested = Signal()
 
     def __init__(
         self,
@@ -127,10 +128,19 @@ class DesktopPetIdleScheduler(QObject):
 
     def _arm_random_timer(self) -> None:
         behavior = self._behavior
-        if not behavior.random_states or behavior.random_max_seconds <= 0:
+        if behavior.rotate_each_loop or not behavior.random_states or behavior.random_max_seconds <= 0:
             return
         seconds = self._random.uniform(behavior.random_min_seconds, behavior.random_max_seconds)
         self._random_timer.start(max(1, round(seconds * 1000)))
+
+    def animation_looped(self, state_name: str) -> None:
+        if (self._active and self._behavior.rotate_each_loop and not self._sleep_due
+                and self._behavior.random_states and state_name == self._behavior.idle_state):
+            roll = self._random.uniform(0, 1)
+            if roll < 0.80:
+                self._request_random_animation()
+            elif roll < 0.85:
+                self.turn_requested.emit()
 
     def _arm_sleep_timer(self) -> None:
         behavior = self._behavior

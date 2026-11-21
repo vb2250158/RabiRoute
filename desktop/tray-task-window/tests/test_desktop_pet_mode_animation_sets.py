@@ -56,7 +56,8 @@ class DesktopPetModeAnimationSetsTest(unittest.TestCase):
         buffer.close()
         self.controller._pack = self.pack
         self.controller._preferred_pack_id = self.pack.pack_id
-        self.controller._binding_snapshot = DesktopPetBinding(enabled=True, pack_id=self.pack.pack_id)
+        self.controller._binding_snapshot = DesktopPetBinding(
+            enabled=True, pack_id=self.pack.pack_id, idle_rotation_enabled=False)
         for state in states.values():
             animation = LoadedDesktopPetAnimation(state, (payload, payload))
             self.assertTrue(self.controller.window.prepare_animation(self.pack, animation))

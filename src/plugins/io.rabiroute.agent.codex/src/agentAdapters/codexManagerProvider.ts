@@ -1,6 +1,6 @@
 import { CodexNativeHistoryReader, createCodexNativeOperations } from "../manager/providerNativeOperations.js";
 import { CodexRemoteTaskOwner } from "./codexRemoteTask.js";
-import type { CodexDesktopProgressMessage } from "../codexDesktopProgress.js";
+import type { CodexDesktopProgressMessage, CodexDesktopTurnOutcome } from "../codexDesktopProgress.js";
 import * as endpointOwner from "./codexOwnerExecution.js";
 import { createCodexRuntime } from '../codexRuntime.js';
 import { resolveCodexSession } from '../codexSessionResolver.js';
@@ -34,9 +34,12 @@ export function createManager(options: AgentManagerImplementationOptions, descri
       "remote.task": (payload, invocation) => remoteTasks.execute(payload, invocation),
       "progress.observe": async (payload, invocation) => {
         const observe = invocation?.onProgress as ((message: CodexDesktopProgressMessage) => void) | undefined;
-        if (!observe || signal.aborted || options.host.readOnly()) return;
+        const onOutcome = invocation?.onOutcome as ((outcome: CodexDesktopTurnOutcome) => void) | undefined;
+        if ((!observe && !onOutcome) || signal.aborted || options.host.readOnly()) return;
         await runtime.watchCodexProgress(payload.threadId, payload.turnId, message => {
-          if (!signal.aborted) observe(message);
+          if (!signal.aborted) observe?.(message);
+        }, outcome => {
+          if (!signal.aborted) onOutcome?.(outcome);
         });
       },
       "endpoint.execute": (_payload, invocation) => {

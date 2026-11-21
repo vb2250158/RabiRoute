@@ -62,6 +62,17 @@ export function normalizeDesktopPetBubbleStyle(value: unknown): DesktopPetBubble
   };
 }
 
+export const DESKTOP_PET_WORK_PHASES = [
+  { id: "thinking", label: "正在思考" },
+  { id: "working", label: "正在动手" },
+  { id: "reviewing", label: "正在整理结果" },
+  { id: "waiting", label: "等待你的输入" },
+  { id: "completed", label: "本轮结束" },
+  { id: "failed", label: "本轮失败" }
+] as const;
+
+type DesktopPetWorkAnimations = Partial<Record<typeof DESKTOP_PET_WORK_PHASES[number]["id"], string[]>>;
+
 export type DesktopPetBinding = {
   enabled: boolean;
   packId: string;
@@ -76,6 +87,12 @@ export type DesktopPetBinding = {
   bubbleStyle: DesktopPetBubbleStyle;
   fpsCap: 6 | 12 | 15 | 24;
   randomIdleEnabled: boolean;
+  idleRotationEnabled: boolean;
+  idleAnimations: string[];
+  clickAnimations: string[];
+  workAnimationsEnabled: boolean;
+  workBubblesEnabled: boolean;
+  workAnimations: DesktopPetWorkAnimations;
   autoSleepEnabled: boolean;
   wanderEnabled: boolean;
   wanderToActiveWindow: boolean;
@@ -135,6 +152,12 @@ export const DEFAULT_DESKTOP_PET_BINDING: DesktopPetBinding = {
   bubbleStyle: { ...DEFAULT_DESKTOP_PET_BUBBLE_STYLE },
   fpsCap: 15,
   randomIdleEnabled: true,
+  idleRotationEnabled: true,
+  idleAnimations: [],
+  clickAnimations: [],
+  workAnimationsEnabled: true,
+  workBubblesEnabled: true,
+  workAnimations: {},
   autoSleepEnabled: true,
   wanderEnabled: false,
   wanderToActiveWindow: false,
@@ -194,6 +217,13 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     ? row.packId.trim()
     : "";
   const wanderWaitMinSeconds = boundedNumber(row.wanderWaitMinSeconds, 45, 5, 3600);
+  const rawWork = row.workAnimations && typeof row.workAnimations === "object" && !Array.isArray(row.workAnimations)
+    ? row.workAnimations as Record<string, unknown> : {};
+  const workAnimations: DesktopPetWorkAnimations = {};
+  for (const { id } of DESKTOP_PET_WORK_PHASES) {
+    const states = desktopPetAnimationIds(rawWork[id], 32);
+    if (states.length) workAnimations[id] = states;
+  }
   return {
     enabled: row.enabled === true && Boolean(packId),
     packId,
@@ -208,6 +238,12 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     bubbleStyle: normalizeDesktopPetBubbleStyle(row.bubbleStyle),
     fpsCap: fps,
     randomIdleEnabled: row.randomIdleEnabled !== false,
+    idleRotationEnabled: row.idleRotationEnabled !== false,
+    idleAnimations: desktopPetAnimationIds(row.idleAnimations, 128),
+    clickAnimations: desktopPetAnimationIds(row.clickAnimations, 128),
+    workAnimationsEnabled: row.workAnimationsEnabled !== false,
+    workBubblesEnabled: row.workBubblesEnabled !== false,
+    workAnimations,
     autoSleepEnabled: row.autoSleepEnabled !== false,
     wanderEnabled: row.wanderEnabled === true,
     wanderToActiveWindow: row.wanderToActiveWindow === true,
@@ -217,6 +253,12 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
     wanderWaitMinSeconds,
     wanderWaitMaxSeconds: boundedNumber(row.wanderWaitMaxSeconds, 90, wanderWaitMinSeconds, 3600)
   };
+}
+
+function desktopPetAnimationIds(value: unknown, limit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((state): state is string =>
+    typeof state === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(state)))].slice(0, limit);
 }
 
 function normalizeDesktopPets(value: unknown): Record<string, DesktopPetBinding> {

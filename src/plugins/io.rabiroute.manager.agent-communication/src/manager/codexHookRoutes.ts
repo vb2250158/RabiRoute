@@ -4,6 +4,7 @@ import { getTrustedLanAgentSource, validateLanAgentRequestBody } from "@rabirout
 import { assertTrustedLanAgentPrincipal } from "@rabiroute/host-api/manager/lanAgentRequestAccess";
 import { CODEX_HOOK_OPERATIONS, codexHookOperationContract, type CodexHookOperationKey } from "@rabiroute/host-api/manager/codexHookContract";
 import type { ApiOperationDefinition, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
+import { desktopPetWorkDetached, desktopPetWorkEvent } from "./desktopPetWorkEvent.js";
 import {
   CodexHookContextService,
   type CodexHookEventName
@@ -55,7 +56,8 @@ function hookFailure(error: unknown): ApiOperationResult {
 
 /** Dispatch the registered operation to the existing Hook owner. */
 async function runCodexHookOperation(key: CodexHookOperationKey, request: http.IncomingMessage,
-  service: CodexHookContextService, sessionId?: string, body?: unknown): Promise<ApiOperationResult> {
+  service: CodexHookContextService, publish?: (event: string, data: unknown) => void,
+  sessionId?: string, body?: unknown): Promise<ApiOperationResult> {
   try {
     let data: unknown;
     if (key === "context" || key === "bind") validateLanAgentRequestBody(request, body);
@@ -63,19 +65,50 @@ async function runCodexHookOperation(key: CodexHookOperationKey, request: http.I
     const sourceInstance = principal ? { instanceId: principal.nodeId } : undefined;
     const sourceAgentType = principal?.source?.provider;
     switch (key) {
-      case "context": data = await service.handleHook(hookContextRequest(body as Record<string, unknown>, request)); break;
+      case "context": {
+        const hook = hookContextRequest(body as Record<string, unknown>, request);
+        const previous = publish && hook.eventName === "UserPromptSubmit" && hook.sessionId.trim()
+          ? service.getBinding(hook.sessionId, hook.sourceInstance, hook.agentType) : null;
+        const result = await service.handleHook(hook);
+        if (publish) {
+          if (previous && previous.roleId !== result.binding?.roleId) {
+            publish("desktop_pet_work", desktopPetWorkDetached(hook, previous.roleId));
+          }
+          const event = desktopPetWorkEvent(hook, result);
+          if (event) publish("desktop_pet_work", event);
+        }
+        data = result;
+        break;
+      }
       case "roles": data = { roleIds: service.listRoles() }; break;
       case "doctor": data = service.doctor(); break;
       case "sessions": data = { sessions: service.listBindings() }; break;
       case "session": data = service.getBinding(sessionId!, sourceInstance, sourceAgentType); break;
-      case "bind": data = service.bindSession(sessionId!, String((body as Record<string, unknown>).roleId || ""), sourceInstance, sourceAgentType); break;
-      case "unbind": data = { removed: service.unbindSession(sessionId!, sourceInstance, sourceAgentType) }; break;
+      case "bind": {
+        const newRole = String((body as Record<string, unknown>).roleId || "");
+        const previous = publish ? service.getBinding(sessionId!, sourceInstance, sourceAgentType) : null;
+        const binding = service.bindSession(sessionId!, newRole, sourceInstance, sourceAgentType);
+        if (previous && previous.roleId !== binding.roleId) {
+          publish?.("desktop_pet_work", desktopPetWorkDetached({ sessionId: sessionId!, agentType: sourceAgentType, sourceInstance }, previous.roleId));
+        }
+        data = binding;
+        break;
+      }
+      case "unbind": {
+        const previous = service.unbindSession(sessionId!, sourceInstance, sourceAgentType);
+        if (previous) {
+          publish?.("desktop_pet_work", desktopPetWorkDetached({ sessionId: sessionId!, agentType: sourceAgentType, sourceInstance }, previous.roleId));
+        }
+        data = { removed: previous };
+        break;
+      }
     }
     return { status: 200, body: { code: 0, data } };
   } catch (error) { return hookFailure(error); }
 }
 
-export function createCodexHookOperations(service: CodexHookContextService): readonly ApiOperationDefinition[] {
+export function createCodexHookOperations(service: CodexHookContextService,
+  publish?: (event: string, data: unknown) => void): readonly ApiOperationDefinition[] {
   return CODEX_HOOK_OPERATIONS.map(definition => ({ contract: codexHookOperationContract(definition), handler: input =>
-    runCodexHookOperation(definition.key, input.request, service, input.path.sessionId, input.body) }));
+    runCodexHookOperation(definition.key, input.request, service, publish, input.path.sessionId, input.body) }));
 }

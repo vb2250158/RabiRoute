@@ -15,7 +15,8 @@ import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../../.
 import { captureTrustedLanAgentSource, registerLanAgentBodyGuard } from "../../../../manager/lanAgentBodyAuthority.js";
 
 async function fixture(beforeRequest?: (request: http.IncomingMessage, response: http.ServerResponse) => boolean,
-  deliverAgentCompletion?: ConstructorParameters<typeof CodexHookContextService>[0]["deliverAgentCompletion"]) {
+  deliverAgentCompletion?: ConstructorParameters<typeof CodexHookContextService>[0]["deliverAgentCompletion"],
+  publish?: Parameters<typeof createCodexHookOperations>[1]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
   fs.mkdirSync(roleDir, { recursive: true });
@@ -26,7 +27,7 @@ async function fixture(beforeRequest?: (request: http.IncomingMessage, response:
     deliverAgentCompletion
   });
   const registry = new ManagerPluginRouteRegistry();
-  const registration = registry.registerOperations("hook-test", createCodexHookOperations(service));
+  const registration = registry.registerOperations("hook-test", createCodexHookOperations(service, publish));
   const server = http.createServer((request, response) => {
     if (beforeRequest && !beforeRequest(request, response)) return;
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -45,6 +46,34 @@ async function fixture(beforeRequest?: (request: http.IncomingMessage, response:
     close: async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   };
 }
+
+test("bound Hook lifecycle publishes desktop pet states without forwarding conversation or tool contents", async t => {
+  const events: Array<{ phase: string; roleId: string; sessionKey: string; turnKey: string; activity?: string; toolKey?: string }> = [];
+  const app = await fixture(undefined, undefined, (name, event) => {
+    assert.equal(name, "desktop_pet_work");
+    events.push(event as typeof events[number]);
+  });
+  t.after(async () => { await app.close(); fs.rmSync(app.root, { recursive: true, force: true }); });
+  async function send(sessionId: string, eventName: string, extra: Record<string, unknown> = {}): Promise<void> {
+    await json(await fetch(`${app.baseUrl}/api/codex-hook/context`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentType: "codex", sessionId, eventName, turnId: "turn-1", ...extra })
+    }));
+  }
+  await send("unbound", "UserPromptSubmit");
+  app.service.bindSession("pet-session", "YeYu", undefined, "codex");
+  await send("pet-session", "UserPromptSubmit", { prompt: "Fixture confidential prompt" });
+  await send("pet-session", "PreToolUse", { toolName: "functions__exec_command", toolUseId: "tool-1", toolInput: "Fixture command" });
+  await send("pet-session", "PostToolUse", { toolUseId: "tool-1", toolResponse: "Fixture output" });
+  await send("pet-session", "PreToolUse", { toolName: "functions__request_user_input", toolUseId: "tool-2" });
+  await send("pet-session", "Stop", { lastAssistantMessage: "Fixture final message" });
+  assert.deepEqual(events.map(event => event.phase), ["thinking", "working", "reviewing", "waiting", "completed"]);
+  assert.ok(events.every(event => event.roleId === "YeYu" && event.sessionKey === events[0].sessionKey
+    && event.turnKey === events[0].turnKey));
+  assert.equal(events[1].activity, "command");
+  assert.equal(events[1].toolKey, events[2].toolKey);
+  assert.doesNotMatch(JSON.stringify(events), /Fixture|pet-session|tool-1|turn-1/);
+});
 
 test("progress Hook HTTP ingress uses the selected session and message ID without changing lifecycle state", async t => {
   const forwarded: unknown[] = [];

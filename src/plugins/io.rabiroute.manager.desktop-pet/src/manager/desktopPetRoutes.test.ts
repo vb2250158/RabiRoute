@@ -372,7 +372,9 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75,
-      randomIdleEnabled: false, bubbleStyle: { maxVisible: 3, displaySeconds: 12 }
+      randomIdleEnabled: false, idleAnimations: ["idle-reading", "idle-reading", "invalid/path"],
+      clickAnimations: ["idle-reading"], workAnimations: { reviewing: ["thinking"], invalid: ["idle"] },
+      bubbleStyle: { maxVisible: 3, displaySeconds: 12 }
     })
   });
   assert.equal(bindingResponse.status, 200);
@@ -385,6 +387,11 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(saved.data.binding.bubbleStyle.displaySeconds, 12);
   assert.equal(saved.data.binding.randomIdleEnabled, false);
   assert.equal(saved.data.binding.autoSleepEnabled, true);
+  assert.equal(saved.data.binding.workAnimationsEnabled, true);
+  assert.equal(saved.data.binding.workBubblesEnabled, true);
+  assert.deepEqual(saved.data.binding.idleAnimations, ["idle-reading"]);
+  assert.deepEqual(saved.data.binding.clickAnimations, ["idle-reading"]);
+  assert.deepEqual(saved.data.binding.workAnimations, { reviewing: ["thinking"] });
   assert.deepEqual(publishedEvents[0], {
     eventType: "desktop_settings_changed",
     data: { scope: "desktop-pet", personaId: "YeYu" }

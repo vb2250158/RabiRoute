@@ -134,7 +134,11 @@ Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for 
 
 Animation assets live under the current role's `desktop-pet/packs/` directory and are retained after synchronization retirement. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate are display preferences for this PC rather than role data.
 
-Under **Display on this PC → Idle behavior**, you can turn off random idle actions and automatic rest independently. The animation pack provides the action interval and inactivity timeout. If it includes a sleep animation, right-click the pet and choose **Rest now**. Click or drag the pet, or choose **Wake up**, to return it to idle. Task completion feedback for the current role can also wake it.
+Under **Display on this PC → Idle behavior**, you can control random idle actions, continuous rotation, and automatic rest independently. In ordinary mode with a compatible pack, the pet picks a gesture, turns in place, or keeps idling when its standing loop finishes. Wandering follows its own interval. Turning off rotation uses the action pack's random-action interval. The pack also defines the inactivity timeout. If it includes a sleep animation, right-click the pet and choose **Rest now**. Click or drag the pet, or choose **Wake up**, to wake it.
+
+Expand the idle and click controls to choose action pools from the current pack's one-shot actions.
+
+Under **Agent work activity**, work animations and status bubbles are on by default and can be turned off separately. In ordinary mode, when a session bound to this role reports Hook events, the pet shows thinking, tool use, result review, waiting for input, and the end of the turn. It plays a failure reaction when Codex Desktop reports a failed turn. Expand the animation controls to choose one or more actions from the current pack for each phase. When a phase has multiple actions, they rotate as clips finish. Bubbles show the phase and a general tool category.
 
 After selecting a pack, the page lists the total number of actions, animation entries, and static images, grouped by idle and sleep, task and connection feedback, mouse interactions, random idle actions, and other actions. Each entry shows its trigger, format, and looping behavior; PNG sequences also show frame count and frame rate. Counts refer to available action entries. Single-frame PNG entries count as static images; GIF frame counts are not guessed.
 

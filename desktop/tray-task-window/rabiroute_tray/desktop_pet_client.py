@@ -32,6 +32,7 @@ class DesktopPetIdleBehavior:
     sleep_after_seconds: float = 0.0
     sleep_state: str = ""
     idle_state: str = "idle"
+    rotate_each_loop: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,12 @@ class DesktopPetBinding:
     wander_wait_max_seconds: float = 90.0
     random_idle_enabled: bool = True
     auto_sleep_enabled: bool = True
+    idle_rotation_enabled: bool = True
+    idle_animations: tuple[str, ...] = ()
+    click_animations: tuple[str, ...] = ()
+    work_animations_enabled: bool = True
+    work_bubbles_enabled: bool = True
+    work_animations: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,9 @@ def _bounded_number(value: object, fallback: float, minimum: float, maximum: flo
 def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
     row = value if isinstance(value, dict) else {}
     pack_id = str(row.get("packId") or "").strip()
+    raw_work_animations = row.get("workAnimations")
+    def animation_ids(value: object, limit: int = 128) -> tuple[str, ...]:
+        return tuple(state for state in value[:limit] if isinstance(state, str)) if isinstance(value, list) else ()
     return DesktopPetBinding(
         enabled=row.get("enabled") is True and bool(pack_id),
         pack_id=pack_id,
@@ -132,6 +142,15 @@ def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
                                                _bounded_number(row.get("wanderWaitMinSeconds"), 45, 5, 3600), 3600),
         random_idle_enabled=row.get("randomIdleEnabled") is not False,
         auto_sleep_enabled=row.get("autoSleepEnabled") is not False,
+        idle_rotation_enabled=row.get("idleRotationEnabled") is not False,
+        idle_animations=animation_ids(row.get("idleAnimations")),
+        click_animations=animation_ids(row.get("clickAnimations")),
+        work_animations_enabled=row.get("workAnimationsEnabled") is not False,
+        work_bubbles_enabled=row.get("workBubblesEnabled") is not False,
+        work_animations={
+            phase: animation_ids(states, 32)
+            for phase, states in raw_work_animations.items() if isinstance(states, list)
+        } if isinstance(raw_work_animations, dict) else {},
     )
 
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { DESKTOP_PET_CORNERS, type DesktopPetBinding } from "@shared/desktopSettingsContract";
+import { DESKTOP_PET_CORNERS, DESKTOP_PET_WORK_PHASES, type DesktopPetBinding } from "@shared/desktopSettingsContract";
 import { createDesktopPetClient, type DesktopPetPackSummary } from "../../../../../ribiwebgui/src/desktopPetClient";
 import { usePersonaService } from "../persona/personaServiceClient";
 import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
@@ -27,9 +27,11 @@ const dirty = computed(() => store.dirty || petDirty.value);
 const ready = computed(() => !petDirty.value || loaded.value);
 const selectedPack = computed(() => packs.value.find(pack => pack.id === binding.value?.packId));
 const idleBehavior = computed(() => selectedPack.value?.idleBehavior);
-const hasRandomIdle = computed(() => Boolean(idleBehavior.value?.randomStates.length)
+const hasRandomIdle = computed(() => Boolean(idleBehavior.value?.randomStates.length || binding.value?.idleAnimations?.length)
   || Object.values(selectedPack.value?.modeAnimationSets || {}).some(group => group.randomStates.length));
 const actions = computed(() => selectedPack.value ? desktopPetActions(selectedPack.value) : []);
+const gestureActions = computed(() => actions.value.filter(item =>
+  !item.animation.loop && (!item.animation.next || item.animation.next === "idle")));
 const actionGroups = computed(() => [...new Set(actions.value.map(action => action.group))]);
 const staticCount = computed(() => actions.value.filter(action => action.staticImage).length);
 const previewId = ref("");
@@ -309,7 +311,19 @@ onBeforeUnmount(() => {
           hide-details
           :disabled="!binding.enabled || !hasRandomIdle"
         />
-        <div v-if="idleBehavior?.randomMaxSeconds && idleBehavior.randomStates.length" class="section-note">
+        <v-switch v-if="idleBehavior?.randomStates.length || binding.idleAnimations?.length" v-model="binding.idleRotationEnabled"
+          label="待机动作连续轮播" color="secondary" density="compact" hide-details
+          :disabled="!binding.enabled || !binding.randomIdleEnabled" />
+        <details v-if="gestureActions.length && binding.idleAnimations && binding.clickAnimations" class="mt-2">
+          <summary>选择待机和点击动作</summary>
+          <v-select v-model="binding.idleAnimations" label="随机待机动作" :items="gestureActions"
+            item-title="name" item-value="id" multiple chips clearable density="compact"
+            placeholder="使用动作包默认池" :disabled="!binding.enabled || !binding.randomIdleEnabled" />
+          <v-select v-model="binding.clickAnimations" label="点击回应动作" :items="gestureActions"
+            item-title="name" item-value="id" multiple chips clearable density="compact"
+            placeholder="使用默认动作" :disabled="!binding.enabled" />
+        </details>
+        <div v-if="!binding.idleRotationEnabled && idleBehavior?.randomMaxSeconds && idleBehavior.randomStates.length" class="section-note">
           动作包间隔 {{ idleBehavior.randomMinSeconds }}–{{ idleBehavior.randomMaxSeconds }} 秒
         </div>
         <v-switch
@@ -324,6 +338,18 @@ onBeforeUnmount(() => {
           <template v-if="binding.autoSleepEnabled && idleBehavior.sleepAfterSeconds">空闲 {{ idleBehavior.sleepAfterSeconds }} 秒后休息。 </template>
           可右键选择「现在休息」，点一下桌宠即可唤醒。
         </div>
+        <div class="section-title small-title mt-6">Agent 工作联动</div>
+        <v-switch v-model="binding.workAnimationsEnabled" label="播放工作动画" color="secondary"
+          density="compact" hide-details :disabled="!binding.enabled" />
+        <v-switch v-model="binding.workBubblesEnabled" label="显示工作气泡" color="secondary"
+          density="compact" hide-details :disabled="!binding.enabled || !binding.bubbleEnabled" />
+        <details v-if="binding.workAnimationsEnabled && binding.workAnimations && actions.length" class="mt-2">
+          <summary>选择各阶段的动画</summary>
+          <v-select v-for="phase in DESKTOP_PET_WORK_PHASES" :key="phase.id"
+            v-model="binding.workAnimations[phase.id]" :label="phase.label" :items="actions"
+            item-title="name" item-value="id" multiple chips clearable
+            density="compact" placeholder="使用默认动作" :disabled="!binding.enabled" />
+        </details>
         <div class="section-title small-title mt-6">移动与传送</div>
         <v-switch v-model="binding.wanderEnabled" label="桌宠闲逛" color="secondary" density="compact" hide-details :disabled="!binding.enabled" />
         <div v-if="binding.wanderEnabled" class="pet-wander-settings">
