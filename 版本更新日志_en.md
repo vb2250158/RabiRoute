@@ -8,6 +8,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.75 - 2026-11-24
+
+- Accept WAV uploads for mobile transcription fallback. The endpoint reads the audio within its existing size limit before passing it to the PC recognizer.
+- Keep the higher-energy channel from stereo microphones so wake detection and recognition can hear a transmitter assigned to the right channel.
+
 ## 0.15.74 - 2026-11-24
 
 - Restore detection of local speech recognition on the PC for the Android assistant. Once the recognizer is ready, Android can send speech after the wake word to the PC for local transcription.

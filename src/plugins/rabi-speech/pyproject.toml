@@ -1,6 +1,6 @@
 [project]
 name = "rabi-speech"
-version = "0.1.4"
+version = "0.1.5"
 description = "Local-only provider gateway for RabiLink TTS and ASR"
 requires-python = ">=3.10,<3.13"
 dependencies = [

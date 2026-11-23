@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ import pytest
 
 from rabispeech.assistant_capture import AssistantCaptureWindow
 from rabispeech import assistant_wake
-from rabispeech.microphone import MicrophoneService
+from rabispeech.microphone import MicrophoneConfig, MicrophoneService, _sounddevice_stream
 from test_microphone import FakeStream
 
 
@@ -82,6 +83,68 @@ def test_resident_microphone_stream_and_replay_share_exact_sample_positions(tmp_
             await service.stop(persist=False)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("active_channel", [0, 1])
+def test_resident_capture_keeps_voice_on_either_hardware_channel(tmp_path: Path, active_channel: int):
+    async def exercise():
+        async def unused(*_args):
+            pytest.fail("This fixture tests the capture stream without requesting ASR")
+
+        callbacks = []
+
+        def stream_factory(_config, callback):
+            callbacks.append(callback)
+            return FakeStream()
+
+        service = MicrophoneService(
+            state_path=tmp_path / "mic.json", temp_dir=tmp_path, transcriber=unused,
+            submitter=unused, playback_active=lambda: False, stream_factory=stream_factory,
+        )
+        await service.start({"record_threshold": 0.5}, persist=False)
+        capture = service.assistant_audio(None, None)
+        try:
+            frames = np.zeros((3, 2), dtype=np.float32)
+            frames[:, active_channel] = [0.0625, -0.0625, 0.125]
+            callbacks[0](frames, len(frames), None, None)
+            audio = await asyncio.wait_for(anext(capture.chunks), timeout=2)
+            expected = (frames[:, active_channel] * 32767).astype("<i2")
+            np.testing.assert_array_equal(np.frombuffer(audio, dtype="<i2"), expected)
+
+            replay = service.assistant_audio(capture.capture_id, 1)
+            try:
+                assert await asyncio.wait_for(anext(replay.chunks), timeout=2) == audio[2:]
+            finally:
+                await replay.chunks.aclose()
+        finally:
+            await capture.chunks.aclose()
+            await service.stop(persist=False)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(("device_channels", "stereo_supported", "expected_channels"), [
+    (1, False, 1), (2, True, 2), (2, False, 1),
+])
+def test_sounddevice_opens_both_channels_when_supported(monkeypatch, device_channels, stereo_supported, expected_channels):
+    class UnsupportedFormat(Exception):
+        pass
+
+    def check_input_settings(**options):
+        assert options["device"] == 1 and options["samplerate"] == 16000 and options["channels"] == 2
+        if not stereo_supported:
+            raise UnsupportedFormat("unsupported stereo format")
+
+    sounddevice = SimpleNamespace(
+        PortAudioError=UnsupportedFormat,
+        query_devices=lambda device, kind: {"max_input_channels": device_channels},
+        check_input_settings=check_input_settings,
+        InputStream=lambda **options: options,
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+    stream = _sounddevice_stream(MicrophoneConfig(device=1), lambda *_args: None)
+
+    assert stream["device"] == 1 and stream["samplerate"] == 16000 and stream["channels"] == expected_channels
 
 
 def test_lagging_capture_fails_without_replaying_an_audio_gap():

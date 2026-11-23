@@ -547,7 +547,13 @@ class MicrophoneService:
             return
         chunk = np.asarray(indata, dtype=np.float32)
         if chunk.ndim > 1:
-            chunk = chunk[:, 0]
+            if chunk.shape[1] > 1:
+                # A stereo receiver can place each transmitter on a separate channel.
+                # Keep the dominant channel at its original level for the mono speech pipeline.
+                energy = np.einsum("ij,ij->j", chunk, chunk)
+                chunk = chunk[:, int(np.argmax(energy))]
+            else:
+                chunk = chunk[:, 0]
         copied = chunk.copy()
         try:
             loop.call_soon_threadsafe(self._ingest, copied, str(status or ""), time.time())
@@ -1054,9 +1060,18 @@ def _sounddevice_stream(config: MicrophoneConfig, callback: Callable[..., None])
     except ImportError as exc:
         raise RuntimeError("sounddevice is not installed. Run scripts/install.ps1.") from exc
     blocksize = max(1, round(config.sample_rate * config.chunk_ms / 1000))
+    channels = 1
+    device_info = sd.query_devices(config.device, "input")
+    if device_info["max_input_channels"] >= 2:
+        try:
+            sd.check_input_settings(device=config.device, channels=2, samplerate=config.sample_rate, dtype="float32")
+        except sd.PortAudioError:
+            pass  # Some stereo devices only expose mono at the configured sample rate.
+        else:
+            channels = 2
     return sd.InputStream(
         device=config.device,
-        channels=1,
+        channels=channels,
         samplerate=config.sample_rate,
         blocksize=blocksize,
         dtype="float32",

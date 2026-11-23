@@ -2,6 +2,29 @@ import {mobileAsrAudioLimit,mobileAsrDurationMs} from './mobile-asr-stream.mjs';
 
 const object={type:'object'},response={mediaType:'application/json',schema:{type:'object',additionalProperties:true}};
 const mobileSessionId={type:'string',minLength:1,maxLength:128};
+const mobileTranscribeLimit=2_100_000;
+
+async function readMobileAudio(body, signal) {
+  signal?.throwIfAborted();
+  if (body instanceof Uint8Array) return body.byteLength <= mobileTranscribeLimit ? body : null;
+  const chunks = [];
+  let length = 0;
+  const abort = () => body.destroy(signal.reason);
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    for await (const chunk of body.iterator({ destroyOnReturn: false })) {
+      signal?.throwIfAborted();
+      length += chunk.byteLength;
+      if (length > mobileTranscribeLimit) return null;
+      chunks.push(chunk);
+    }
+    signal?.throwIfAborted();
+    return Buffer.concat(chunks, length);
+  } finally {
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
 export function createVoiceAssistantOperations(owner,run){
   const operations=[['state','GET'],['messages','GET'],['command','POST'],['scan','GET']].map(([action,method])=>({
     discovery:{title:'语音助手 · '+action,category:{id:'voice-assistant',title:'语音助手'},provider:'voice-assistant'},
@@ -35,15 +58,19 @@ export function createVoiceAssistantOperations(owner,run){
     contract:{operationId:'manager.voice-assistant.mobile-transcribe',contractVersion:'1.0.0',method:'POST',pathTemplate:'/api/voice-assistant/mobile-transcribe',exposure:'public',transport:'http',
       description:'Transcribe one WAV with the active assistant settings, or with the host-local recognizer for passive listening and fallback.',
       request:{path:object,query:{...object,required:['sessionId','source'],properties:{sessionId:mobileSessionId,source:{enum:['active','local']}},additionalProperties:false},
-        headers:object,body:{kind:'binary',mediaType:'audio/wav',maxBytes:2100000}},
-      responses:{200:response,409:response},
+        headers:object,body:{kind:'binary',mediaType:'audio/wav',maxBytes:mobileTranscribeLimit}},
+      responses:{200:response,409:response,413:response},
       effects:{mode:'native-assistant-recognition',description:'Send audio to the configured recognition provider. Local requests use the current Manager-owned private transcription channel with a verified local worker.'},
       recovery:{strategy:'no-automatic-replay',description:'Start a new utterance after a failed request.'},
       validators:[{id:'current-assistant-owner',description:'The original session and activation must remain current.'}]},
     async handler(input){
       try {
-        const body=await run(()=>owner.transcribeMobile({audio:input.body,...input.query,signal:input.signal}));
-        return {status:200,headers:{'cache-control':'no-store'},body};
+        return await run(async()=>{
+          const audio=await readMobileAudio(input.body,input.signal);
+          if(audio===null) return {status:413,body:{code:-1,message:'MOBILE_ASR_AUDIO_TOO_LARGE'}};
+          const body=await owner.transcribeMobile({audio,...input.query,signal:input.signal});
+          return {status:200,headers:{'cache-control':'no-store'},body};
+        });
       } catch(error) {
         const message=/^(?:ASSISTANT|MOBILE)_[A-Z_]+$/.test(error?.message)?error.message:'MOBILE_ASR_FAILED';
         return {status:409,body:{code:-1,message}};
