@@ -6,6 +6,30 @@ const owners = new WeakMap();
 const fail = code => Object.assign(new Error(code), { code });
 const sentenceBoundary = /[。！？!?；;\n؟؛۔।॥]|\.(?=\s)/g;
 
+/** Return an eligible voice session to standby after quiet and after its work settles. */
+export function createVoiceIdleTimer({ isEligible, isBusy, onIdle, timeoutMs = 60_000 }) {
+  let timer;
+
+  function clear() {
+    clearTimeout(timer);
+    timer = undefined;
+  }
+
+  function renew() {
+    clear();
+    if (!isEligible()) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!isEligible()) return;
+      if (isBusy()) renew();
+      else onIdle();
+    }, timeoutMs);
+    timer?.unref?.();
+  }
+
+  return { clear, renew };
+}
+
 /** A period at the end of a stream chunk may be part of a decimal or URL. */
 export function splitSpeechText(text, flush = false) {
   const parts = [];

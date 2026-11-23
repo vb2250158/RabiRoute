@@ -36,7 +36,7 @@ test('writes ordered signed PCM16 chunks and retires old stream callbacks', () =
   assert.deepEqual([...sent[0][1]],[0,128,0,0,255,127]);
 });
 
-function microphone(t, applyConstraints = async () => {}) {
+function microphone(t, applyConstraints = async () => {}, actualSampleRate = 16000) {
   let calls = 0, processor;
   const openedWith = [], processingUpdates = [];
   const descriptions = Object.fromEntries(['navigator','AudioContext'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
@@ -62,7 +62,7 @@ function microphone(t, applyConstraints = async () => {}) {
   }}});
   function endpoint() { return {connect(){},disconnect(){}}; }
   globalThis.AudioContext = class {
-    sampleRate = 16000;
+    sampleRate = actualSampleRate;
     destination = {};
     async resume() {}
     async close() {}
@@ -186,6 +186,40 @@ test('disconnect after a nonempty interim recovers the full sentence from the sa
   assert.equal(fallbackCount, 1);
   assert.equal(mic.calls(), 1);
   adapter.stop(round);
+});
+
+test('48 kHz capture preserves speech buffered during keyword handoff when streaming cannot start', async t => {
+  const mic = microphone(t, undefined, 48000);
+  const output = [], recognized = [];
+  let finishWake;
+  const wake = new Promise(resolve => { finishWake = resolve; });
+  let fallbacks = 0;
+  const adapter = createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
+    getPolicy:()=>({ kind:'wake', model:'local', aliases:['小助手'] }), matchWake:matchWakeWord,
+    onWake:()=>({ kind:'streaming', fallbackModel:'local' }),
+    onFallback() { fallbacks++; },
+    async transcribe(wave, _signal, policy) {
+      if (policy.kind === 'wake') return wake;
+      const pcm = new DataView(wave.buffer, wave.byteOffset);
+      recognized.push([pcm.getUint32(24, true), pcm.getInt16(44, true)]);
+      return { text:'接续指令' };
+    },
+    openStream() { assert.fail('48 kHz audio cannot go directly to realtime recognition'); },
+  });
+  const round = adapter.createRound({ onFinal:value=>output.push(value.text) });
+  await adapter.start(round);
+  t.after(()=>adapter.stop(round));
+  mic.frames(.1, 7);
+  mic.frames(0, 29);
+  mic.frames(.25, 10);
+  mic.frames(0, 29);
+  finishWake({ text:'小助手' });
+  await round.queue;
+  await round.queue;
+  assert.equal(fallbacks, 1);
+  assert.deepEqual(recognized, [[16000, 8192]]);
+  assert.deepEqual(output, ['接续指令']);
+  assert.equal(mic.calls(), 1);
 });
 
 test('a timed final acknowledges only its audio, even if the next words are already buffered', async t => {

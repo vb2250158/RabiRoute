@@ -61,6 +61,13 @@ export interface VoiceInteraction<Round extends object, Result, Event, Job exten
   /** Releases voice only; the assistant owner separately disposes its model/session. */
   dispose(): void;
 }
+/** Schedule return to standby while the session remains eligible. */
+export function createVoiceIdleTimer(options: {
+  isEligible(): boolean;
+  isBusy(): boolean;
+  onIdle(): void | Promise<void>;
+  timeoutMs?: number;
+}): { clear(): void; renew(): void };
 export function splitSpeechText(text: string, flush?: boolean): { parts: string[]; rest: string };
 export {createSpeechExpressionDecoder,speechExpressionInstruction,normalizeSpeechExpression} from './speech-expression.js';
 export function createVoiceInteraction<Round extends object, Result, Event, Job extends PlaybackJob, Timer = unknown>(

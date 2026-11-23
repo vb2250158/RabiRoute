@@ -123,6 +123,42 @@ test('voice switch gates manual and host wake entry and preserves the chosen mod
   }
 });
 
+test('keyword sessions release native recognition after quiet and keep active work alive', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let starts = 0;
+  let stops = 0;
+  class Recognition {
+    start() { starts++; this.onstart?.(); }
+    abort() { stops++; this.onend?.(); }
+  }
+  const p = page();
+  p.asrAdapter = createAiuiAsrInputAdapter({ SpeechRecognitionCtor: Recognition });
+  p.data.voiceAssistantEnabled = true;
+  p.data.voiceWakeEnabled = true;
+  try {
+    p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+    assert.equal(starts, 1);
+    assert.equal(p.data.transcriptionListening, true);
+    p.deviceAgentTurnActive = true;
+    t.mock.timers.tick(60_000);
+    assert.equal(stops, 0);
+    p.deviceAgentTurnActive = false;
+    t.mock.timers.tick(60_000);
+    assert.equal(stops, 1);
+    assert.equal(p.data.transcriptionListening, false);
+    assert.equal(p.data.transcriptionDesired, false);
+    assert.equal(p.data.transcriptionState, '等待唤醒');
+    p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+    assert.equal(starts, 2);
+    p.data.voiceWakeEnabled = false;
+    t.mock.timers.tick(60_000);
+    assert.equal(stops, 1);
+    assert.equal(p.data.transcriptionListening, true);
+  } finally {
+    p.stopRecognition();
+  }
+});
+
 test('unrelated keyboard input cannot silence a pending answer or steal browser navigation', () => {
   const p = page();
   p.data.assistantModelBusy = true;

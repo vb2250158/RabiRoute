@@ -1,5 +1,6 @@
 import { createWakeListener } from './wake-listener.mjs';
 import { createResidentRecording } from './resident-recording.mjs';
+import { createVoiceIdleTimer } from '@rabilink/assistant-runtime/voice';
 
 export function normalizeWakeAliases(value) {
   return Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string')
@@ -15,8 +16,22 @@ export function parseWakeAliases(value) {
 }
 
 /** Desktop assistants borrow the same sample timeline and use the resident voice loop. */
-export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent, canStart, shouldUseFallback, sleepAfterMs = 60_000 }) {
-  let active, idleTimer, wakeError, handoffWrites = Promise.resolve();
+export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent, canStart, shouldUseFallback, sleepAfterMs }) {
+  let active, wakeError, handoffWrites = Promise.resolve();
+  const idle = createVoiceIdleTimer({
+    timeoutMs: sleepAfterMs,
+    isEligible: () => Boolean(active),
+    isBusy() {
+      const { host, conversation } = active.target;
+      return conversation.activity().pending || host.captureHasWork() || host.captureState().phase === 'starting';
+    },
+    async onIdle() {
+      const { host } = active.target;
+      captureStopped();
+      try { await host.command({ action: 'stop' }); }
+      catch (error) { wakeError = error.message || 'ASSISTANT_WAKE_STOP_FAILED'; }
+    }
+  });
 
   function setPassiveHandoff(lease, enabled) {
     handoffWrites = handoffWrites.then(async () => {
@@ -26,28 +41,10 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
   }
 
   function captureStopped() {
-    clearTimeout(idleTimer);
+    idle.clear();
     const lease = active;
     active = undefined;
     if (lease?.handoffRequested) setPassiveHandoff(lease, false);
-  }
-
-  function renew() {
-    const lease = active;
-    if (!lease) return;
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(async () => {
-      if (active !== lease) return;
-      const { host, conversation } = lease.target;
-      if (conversation.activity().pending || host.captureHasWork() || host.captureState().phase === 'starting') {
-        renew();
-        return;
-      }
-      captureStopped();
-      try { await host.command({ action: 'stop' }); }
-      catch (error) { wakeError = error.message || 'ASSISTANT_WAKE_STOP_FAILED'; }
-    }, sleepAfterMs);
-    idleTimer.unref?.();
   }
 
   async function startBorrowed(target, { createRecording, createFallbackRecording, recentSpeech, captureId, signal }) {
@@ -55,7 +52,7 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
     if (!target.host.voiceEnabled() || !canStart(target)) throw Error('ASSISTANT_WAKE_CONFIGURATION_REQUIRED');
     const lease = { target, captureId, handoffRequested: false, usingFallback: false };
     active = lease;
-    renew();
+    idle.renew();
     try {
       const fallback = shouldUseFallback(target) ? {
         createRecording: createFallbackRecording,
@@ -71,7 +68,7 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
       } : undefined;
       await target.host.startWithRecording(createRecording, { fallback, recentSpeech });
       signal?.throwIfAborted();
-      renew();
+      idle.renew();
     } catch (error) {
       if (active === lease) captureStopped();
       throw error;
@@ -95,7 +92,7 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
       wake.arm(aliases);
     },
     captureActivity(hasText) {
-      renew();
+      idle.renew();
       const lease = active;
       // Raw audio energy and empty recognition must not stop local transcription.
       if (hasText && lease && !lease.usingFallback && !lease.handoffRequested) {

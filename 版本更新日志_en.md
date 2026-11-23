@@ -8,6 +8,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.71 - 2026-11-23
+
+- Keep the speech buffered after the wake word for local transcription when Android capture runs at 48 kHz or another rate unsupported by 16 kHz streaming.
+- Share a one-minute idle timer across desktop voice, Android and Rokid. Wait for capture, replies and playback to settle before returning to wake standby.
+
 ## 0.15.70 - 2026-11-23
 
 - Persona 0.1.39 recovers original native receipts after unconfirmed WorkBuddy sends and manual status checks without resending uncertain messages. The selected package remains compatible with running Host 0.15.69.

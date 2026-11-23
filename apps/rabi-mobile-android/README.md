@@ -12,6 +12,8 @@
 
 在电脑的人格设置中填写唤醒词。回到手机，选「手动或关键词唤醒」，再点「开启关键词监听」。带本机模型的 APK 用手机 CPU 检测中英唤醒词。命中后用同一麦克风把唤醒词后面的语音接给实时识别。开启「通过电脑转写待机语音」后，超过音量门限的整句会送到所选电脑的本机识别服务。唤醒后的首句可带上最近 90 秒内最多 6 条背景转写。结束对话或暂时空闲后回到关键词待机。
 
+已配置电脑本机识别时，如果手机实际采样率无法用于实时识别，唤醒切换期间的语音会保留并转交电脑本机识别。
+
 离线构建时，可同时传入 `-PmobileWakeAar=<官方 sherpa-onnx 2.0.2 AAR>` 和 `-PmobileWakeModelDir=<本机中英 Zipformer 关键词模型目录>`。Gradle 会核对运行库、权重和词表的哈希。普通构建提供手动实时语音和用户主动开启的电脑转写唤醒。 [官方 Android 运行库](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.2) · [中英关键词模型](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/)
 
 调试与验收使用独立的 APK 应用 ID。先构建 :app:assembleDebug 和 :app:assembleDebugAndroidTest，附加 -PmobileSlim -PmobileAssistantAcceptance -PmobileTestRunner=com.rabi.link.test.MobileAssistantInstrumentation。将两个 APK 安装到测试模拟器后执行 adb shell am instrument -w com.rabi.link.assistantacceptance.test/com.rabi.link.test.MobileAssistantInstrumentation。测试使用 Android 真权限和浏览器实际收音与播放，另以生成信号和测试夹具验证识别、模型回执与合成。

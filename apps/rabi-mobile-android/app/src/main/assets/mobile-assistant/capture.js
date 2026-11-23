@@ -94,7 +94,6 @@ export function createPhoneCapture({
 
   function startStream(round, buffered) {
     try {
-      if (round.context.sampleRate !== 16000) throw new Error('MOBILE_STREAM_SAMPLE_RATE_UNAVAILABLE');
       const policy = round.policy;
       const backup = round.backup;
       const first = buffered[0];
@@ -103,6 +102,7 @@ export function createPhoneCapture({
       let awaitingFinal = false;
       phase('正在连接实时识别');
       if (backup) for (const { frame, after } of buffered) captureLocal(round, frame, after);
+      if (round.context.sampleRate !== 16000) throw new Error('MOBILE_STREAM_SAMPLE_RATE_UNAVAILABLE');
       const session = openStream({
         receive(event) {
           if (!active()) return;

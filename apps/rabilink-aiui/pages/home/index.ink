@@ -154,7 +154,7 @@ import { guidancePageMethods } from "../../utils/guidance-page.js";
 import { inputReviewPageMethods } from "../../utils/input-review-page.js";
 import { requestTimeout } from "../../utils/timeout-settings.js";
 import { createAiuiAssistantRuntime } from "../../../../packages/assistant-runtime/src/aiui-runtime.js";
-import { createVoiceInteraction } from "../../../../packages/assistant-runtime/src/voice-interaction.js";
+import { createVoiceIdleTimer, createVoiceInteraction } from "../../../../packages/assistant-runtime/src/voice-interaction.js";
 import { rabiAgentProtocol, getAgentProtocolFailureReason } from "../../utils/agent-decision-protocol.js";
 import { rabiAgentToolPolicy } from "../../utils/rabi-agent-tool-policy.js";
 import { installHudDisplay, toolProgressLabel } from "../../utils/hud-text.js";
@@ -4206,7 +4206,11 @@ export default {
       return;
     }
     this.setData({ voiceAssistantEnabled: enabled, voiceWakeEnabled: wakeEnabled });
-    if (enabled === previous) return;
+    if (enabled === previous) {
+      if (enabled && wakeEnabled) this.renewRealtimeIdle();
+      else this.voiceIdle?.clear();
+      return;
+    }
     if (enabled) {
       this.setData({ transcriptionState: "等待开始实时语音", assistantStatus: "等待开始实时语音" });
       return;
@@ -4233,6 +4237,25 @@ export default {
     const source = origin === "wakeup" ? "wakeup" : "button";
     if (this.data.isConfigurationMode) this.resumeConfigurationListening(source);
     else this.resumeTranscription(source);
+  },
+
+  renewRealtimeIdle() {
+    this.voiceIdle ??= createVoiceIdleTimer({
+      isEligible: () => this.pageVisible && !this.destroyed && this.data.voiceAssistantEnabled
+        && this.data.voiceWakeEnabled && (this.data.transcriptionDesired || this.data.assistantListeningDesired),
+      isBusy: () => {
+        const state = this.voiceInteraction?.getState();
+        return this.deviceAgentTurnActive || this.data.busy || this.data.assistantModelBusy
+          || this.speechActive || state?.listening.starting || state?.inputPending || state?.playback.active;
+      },
+      onIdle: () => {
+        this.setData({ transcriptionDesired: false, assistantListeningDesired: false });
+        this.stopTranscriptionClock();
+        this.stopRecognition(false);
+        this.setData({ transcriptionState: "等待唤醒", assistantStatus: "等待唤醒", agentStatus: "等待唤醒" });
+      }
+    });
+    this.voiceIdle.renew();
   },
 
   pauseTranscription() {
@@ -4426,6 +4449,7 @@ export default {
         ? this.handleConfigurationSpeechResult(text) : this.handleTranscriptionResult(text),
       onError: error => console.warn("AIUI voice failed:", cloudSafeMessage(error?.message || error)),
       onEvent: event => {
+        if (event.type === "transcript" || event.type === "input") this.renewRealtimeIdle();
         if(event.type==='transcript'&&event.text?.trim())this.beginVisualCanvasInput();
         if(event.type==='input'){this.beginVisualCanvasInput();this.visualCanvasInputPending=false;}
         if (event.type === "speech-started") this.setData({ transcriptionState: "正在收音" });
@@ -4489,6 +4513,7 @@ export default {
       if (event.type === "paused") return;
       console.info(`[RabiLink AIUI] ${purpose}-asr:${event.reason}`);
       if (event.reason === "end") return;
+      this.voiceIdle?.clear();
       const errorCode = String(event.error?.nativeCode || event.error?.code || "unknown");
       const fatal = ["not-allowed", "service-not-allowed", "audio-capture"].includes(errorCode);
       const labels = { "create-error": "麦克风初始化失败", "start-error": "麦克风启动失败",
@@ -4502,6 +4527,7 @@ export default {
       return;
     }
     if (event.type === "activation-required") {
+      this.voiceIdle?.clear();
       this.setData(configuration
         ? { assistantListeningDesired: false, assistantListening: false, assistantStatus: "点击或唤醒以继续聆听" }
         : { transcriptionDesired: false, transcriptionListening: false, transcriptionState: "点击或唤醒以继续聆听" });
@@ -4540,6 +4566,7 @@ export default {
         }
       }
     });
+    this.renewRealtimeIdle();
   },
 
   handleConfigurationSpeechResult(text) {
@@ -4903,6 +4930,7 @@ export default {
   },
 
   stopRecognition(graceful = false) {
+    this.voiceIdle?.clear();
     this.listeningLifecycle?.pause({ graceful });
     this.recognition = null;
     this.recognitionPurpose = "";

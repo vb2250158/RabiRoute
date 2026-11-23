@@ -1,5 +1,5 @@
 import { createAiuiAssistantRuntime } from './sdk/aiui-runtime.js';
-import { createVoiceInteraction } from './sdk/voice-interaction.js';
+import { createVoiceIdleTimer, createVoiceInteraction } from './sdk/voice-interaction.js';
 import { snapshotRecentSpeech } from './sdk/speech-observation.js';
 import { createPhoneCapture } from './capture.js';
 import { createStreamingRecognition, matchWakeWord } from './asr-stream.js';
@@ -14,7 +14,6 @@ let backgroundTranscription = native.backgroundTranscription?.() === true;
 let capturing = false;
 let wakeArmed = false;
 let fallback = false;
-let idleTimer;
 let pendingWakeContext;
 let visible = true;
 let running = false;
@@ -200,11 +199,12 @@ const voice = createVoiceInteraction({
     if (event.type === 'transcript') {
       ui.transcript.textContent = event.text;
       ui.transcript.hidden = !event.text;
+      idle.renew();
     }
     if (event.type === 'input') {
       ui.transcript.hidden = true;
       phase('正在聆听');
-      renewIdle();
+      idle.renew();
     }
   },
   onError: error => {
@@ -264,16 +264,14 @@ function renderControls() {
   if (!running) ui.playing.hidden = true;
 }
 
-function clearIdle() { clearTimeout(idleTimer); }
-
-function renewIdle() {
-  clearIdle();
-  if (!wakeArmed || !running) return;
-  idleTimer = setTimeout(() => {
-    if (submitted.size || voice.getState().inputPending || voice.getState().playback.active) renewIdle();
-    else returnToWake();
-  }, 45000);
-}
+const idle = createVoiceIdleTimer({
+  isEligible: () => wakeArmed && running,
+  isBusy() {
+    const { inputPending, playback } = voice.getState();
+    return submitted.size > 0 || inputPending || playback.active;
+  },
+  onIdle: returnToWake,
+});
 
 function enterRealtime() {
   generation++;
@@ -281,13 +279,13 @@ function enterRealtime() {
   running = true;
   fallback = false;
   voice.setOutputEnabled(!muted);
-  renewIdle();
+  idle.renew();
   renderControls();
 }
 
 function returnToWake() {
   if (!wakeArmed) { stopVoice(); return; }
-  clearIdle();
+  idle.clear();
   running = false;
   generation++;
   pendingWakeContext = undefined;
@@ -299,7 +297,7 @@ function returnToWake() {
 }
 
 function stopVoice() {
-  clearIdle();
+  idle.clear();
   pendingWakeContext = undefined;
   capturing = false;
   wakeArmed = false;
