@@ -1,4 +1,4 @@
-import { roleLifecyclePresentation, RoleLifecycleError, beginRoleWork } from "../roleLifecycle.js";
+import { roleLifecyclePresentation, RoleLifecycleError, beginRoleWork, type RoleStorageFailureCode } from "../roleLifecycle.js";
 import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextResolution, type RabiContextTrigger } from "../context/rabiContextManager.js";
@@ -21,6 +21,8 @@ export type CodexHookContextReadRequest =
 export type CodexHookContextReadReply =
   | { kind: "role_source"; source: CodexHookRoleSource }
   | { kind: "knowledge"; resolution: RabiContextResolution };
+
+export type CodexHookContextWorkerReply = CodexHookContextReadReply | { kind: "role_storage_failure"; code: RoleStorageFailureCode };
 
 function readText(filePath: string): string {
   try {

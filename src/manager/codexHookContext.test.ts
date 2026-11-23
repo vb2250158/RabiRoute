@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import http from "node:http";
-import { readCodexHookContextInput, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
+import { readCodexHookContextInput, readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
 import { planJsonFile } from "../planStorageLayout.js";
 import {
   listRecentMemories,
@@ -98,6 +98,18 @@ test("async hook reads keep HTTP health responsive through both physical read ph
   assert.match(result.additionalContext, /plan-hook/);
   assert.ok(service.getBinding("async-health")?.baseFingerprint);
   assert.deepEqual(reads.map(input => input.kind), ["role_source", "knowledge"]);
+});
+
+test("96 independent sessions can enter the same role together", async t => {
+  const { root, service } = fixture({ readContext: readCodexHookContextInputAsync });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sessions = Array.from({ length: 96 }, (_, index) => `concurrent-${index}`);
+  for (const sessionId of sessions) service.bindSession(sessionId, "YeYu");
+  const results = await Promise.all(sessions.map(sessionId => service.handleHook({
+    sessionId, eventName: "SessionStart", managerBaseUrl: "http://127.0.0.1:8790"
+  })));
+  assert.deepEqual(results.map(result => result.binding?.sessionId), sessions);
+  assert.ok(results.every(result => result.binding?.roleId === "YeYu" && result.additionalContext.length > 0));
 });
 
 test("unbind during an async read fences the late reply and the queue recovers", async t => {

@@ -1062,6 +1062,8 @@ export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({ timeou
   maxQueue: 32,
   timeoutMs: 30_000
 });
+/** Session starts can arrive in bursts without filling the knowledge page's queue. */
+export const managerHookContextWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 4, maxQueue: 128 });
 /** One resident reader keeps validated memory bodies across page and context requests. */
 export const managerMemoryCatalogWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.memoryCatalog",
   maxConcurrency: 1,
@@ -1092,6 +1094,7 @@ const builtinManagerReadWorkerPools = [
   managerMessageSearchWorkerPool,
   managerMessageIndexWorkerPool,
   managerKnowledgePageWorkerPool,
+  managerHookContextWorkerPool,
   managerMemoryCatalogWorkerPool,
   managerKnowledgeIndexWorkerPool,
   managerCatalogWorkerPool,

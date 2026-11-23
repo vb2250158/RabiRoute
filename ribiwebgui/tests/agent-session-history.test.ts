@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
-import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
+import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, latestAgentConversationPage } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
 import { createAgentSessionClient, personaSessionAgents, agentSessionProject, agentSessionMembersAvailable } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
@@ -182,7 +182,7 @@ test('returning to an Agent tab resumes the original cancelled first task/histor
   const bindings = { computed, nextTick, ref, watch, onBeforeUnmount: (callback: () => void) => cleanups.push(callback),
     defineProps: () => props, usePersonaService: () => ({ fetch, deviceId: '' }), createAgentSessionClient: () => client,
     useI18n: () => ({ t: (text: string) => text, locale: ref('en') }), pluginCatalogStore: { agentAdapters: ref([]) },
-    userFacingError: String, agentSessionMembersAvailable, agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor,
+    userFacingError: String, agentSessionMembersAvailable, agentHistoryMessages, latestAgentConversationPage,
     chatHistoryScroller: () => pane, chatHistoryViewport: () => ({ top: 0, bottom: 100 }), waitForChatHistoryFrame: async () => false };
   const scope = effectScope();
   const state = scope.run(() => new Function(...Object.keys(bindings), emitted + ';return {tasks,selectedId,messages,members,chooseMember,chooseRoot,currentSession};')(...Object.values(bindings)))!;
@@ -256,6 +256,51 @@ test('WorkBuddy native messages preserve page order and skip tools, reasoning, m
   const merged=[...new Map([...first,...next].map(event=>[event.id,event])).values()];
   assert.deepEqual(agentHistoryMessages('workbuddy',merged).map(item=>[item.role,item.text]),[['user','Question'],['assistant','First reply'],['user','Next question'],['assistant','Final reply']]);
   assert.equal(agentHistoryNextCursor('workbuddy',{nextCursor:'native-workbuddy-cursor'}),'native-workbuddy-cursor');
+});
+
+for (const provider of ['workbuddy', 'codex']) {
+  test(`${provider} opens the latest visible page and reads earlier pages in reverse page order`, async () => {
+    const row = (sequence: number, text: string) => provider === 'codex'
+      ? native(sequence, 'event_msg', { type: 'user_message', message: text })
+      : { sequence, record: { type: 'message', role: 'user', content: text } };
+    const pages = new Map([
+      [undefined, { entries: [row(1, 'first')], nextCursor: 'middle' }],
+      ['middle', { entries: [row(2, 'middle')], nextCursor: 'latest' }],
+      ['latest', { entries: [row(3, 'newest')], nextCursor: 'tail' }],
+      ['tail', { entries: [row(4, '')], nextCursor: 'tail', coverage: { pendingTail: true, partial: true } }]
+    ]);
+    const calls: (string | undefined)[] = [];
+    const initialSignal = new AbortController().signal, olderSignal = new AbortController().signal;
+    const latest = await latestAgentConversationPage(provider, async (cursor, signal) => {
+      assert.equal(signal, calls.length < 4 ? initialSignal : olderSignal);
+      calls.push(cursor);
+      return pages.get(cursor)!;
+    }, initialSignal);
+
+    assert.deepEqual(latest.events.map(event => event.text), ['newest']);
+    assert.equal(latest.partial, true);
+    const middle = await latest.older!(olderSignal);
+    const first = await middle.older!(olderSignal);
+    assert.equal(first.older, null);
+    assert.deepEqual(calls, [undefined, 'middle', 'latest', 'tail', 'middle', undefined]);
+    assert.deepEqual(agentHistoryMessages(provider, [...latest.events, ...middle.events, ...first.events]).map(message => message.text),
+      ['first', 'middle', 'newest']);
+  });
+}
+
+test('DSH opens its newest page without reading older ones until requested', async () => {
+  const calls: (string | undefined)[] = [];
+  const signal = new AbortController().signal;
+  const latest = await latestAgentConversationPage('dsh', async cursor => {
+    calls.push(cursor);
+    const event = dsh(cursor ? 1 : 5, 'user/message', { source: {kind:'user'}, content: cursor ? 'Older' : 'Newest' });
+    return { records: [event], hasMore: !cursor };
+  }, signal);
+  assert.deepEqual(calls, [undefined]);
+  const early = await latest.older!(signal);
+  assert.deepEqual(calls, [undefined, '5']);
+  assert.equal(early.older, null);
+  assert.deepEqual(agentHistoryMessages('dsh', [...latest.events, ...early.events]).map(message => message.text), ['Older', 'Newest']);
 });
 
 

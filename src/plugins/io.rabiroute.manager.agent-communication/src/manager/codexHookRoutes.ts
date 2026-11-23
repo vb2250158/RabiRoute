@@ -4,6 +4,7 @@ import { getTrustedLanAgentSource, validateLanAgentRequestBody } from "@rabirout
 import { assertTrustedLanAgentPrincipal } from "@rabiroute/host-api/manager/lanAgentRequestAccess";
 import { CODEX_HOOK_OPERATIONS, codexHookOperationContract, type CodexHookOperationKey } from "@rabiroute/host-api/manager/codexHookContract";
 import type { ApiOperationDefinition, ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
+import { RoleLifecycleError } from "@rabiroute/host-api/roleLifecycle";
 import { desktopPetWorkDetached, desktopPetWorkEvent } from "./desktopPetWorkEvent.js";
 import {
   CodexHookContextService,
@@ -49,6 +50,10 @@ export function hookContextRequest(body: Record<string, unknown>, request: http.
 }
 
 function hookFailure(error: unknown): ApiOperationResult {
+  if (error instanceof RoleLifecycleError && (error.code === "ROLE_STORAGE_WAIT_TIMEOUT" || error.code === "ROLE_STORAGE_UNAVAILABLE")) {
+    return { status: error.status, body: errorResponsePresentation({ code: -1, error: error.code,
+      message: error.message }, error.status) };
+  }
   const status = 400;
   return { status, body: errorResponsePresentation({ code: -1,
     message: error instanceof Error ? error.message : String(error) }, status) };

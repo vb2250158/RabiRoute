@@ -1,5 +1,10 @@
 export const pluginTranslations = {
   "en": {
+    "聊天快捷键": "Chat shortcuts",
+    "发送快捷键": "Send shortcut",
+    "换行快捷键": "New line shortcut",
+    "适用于 Agent 会话。修改后立即生效，保存在当前浏览器。": "Applies to Agent conversations. Changes take effect immediately and are saved in this browser.",
+    "无法保存聊天快捷键。": "Could not save chat shortcuts.",
     "每批操作后归还原前台": "Restore the foreground window after each batch",
     "提示条位置": "Status bar position",
     "结果提示时长": "Result notification duration",
@@ -371,6 +376,11 @@ export const pluginTranslations = {
     "修改已提交，回读待确认": "Changes submitted; readback unconfirmed"
   },
   "ja": {
+    "聊天快捷键": "チャットのショートカット",
+    "发送快捷键": "送信のショートカット",
+    "换行快捷键": "改行のショートカット",
+    "适用于 Agent 会话。修改后立即生效，保存在当前浏览器。": "エージェントの会話に適用されます。変更はすぐに反映され、このブラウザーに保存されます。",
+    "无法保存聊天快捷键。": "チャットのショートカットを保存できませんでした。",
     "每批操作后归还原前台": "操作バッチごとに元のウィンドウを前面に戻す",
     "提示条位置": "ステータスバーの位置",
     "结果提示时长": "結果通知の表示時間",

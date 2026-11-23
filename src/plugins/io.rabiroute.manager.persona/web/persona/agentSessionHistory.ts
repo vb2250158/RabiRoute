@@ -92,3 +92,55 @@ export function agentHistoryNextCursor(provider: string, page: JsonRecord): stri
   }
   return null;
 }
+
+type ReadAgentHistoryPage = (cursor: string | undefined, signal: AbortSignal) => Promise<JsonRecord>;
+export type LoadOlderAgentHistory = (signal: AbortSignal) => Promise<AgentConversationPage>;
+type AgentConversationPage = {
+  events: AgentHistoryEvent[];
+  older: LoadOlderAgentHistory | null;
+  partial: boolean;
+};
+
+/** The conversation opens at the latest page even for native files read forwards. */
+export async function latestAgentConversationPage(
+  provider: string, read: ReadAgentHistoryPage, signal: AbortSignal
+): Promise<AgentConversationPage> {
+  const isPartial = (page: JsonRecord) => Boolean(page.warnings?.length || page.coverage?.partial);
+  const next = (page: JsonRecord, cursor?: string) => {
+    const position = agentHistoryNextCursor(provider, page);
+    if (position !== null && position === cursor) throw new Error('历史分页位置未前进，请刷新后重试。');
+    return position;
+  };
+  if (provider !== 'codex' && provider !== 'workbuddy') {
+    async function readBackwards(cursor: string | undefined, requestSignal: AbortSignal): Promise<AgentConversationPage> {
+      const page = await read(cursor, requestSignal);
+      const position = next(page, cursor);
+      return { events: agentHistoryEvents(provider, page), partial: isPartial(page),
+        older: position === null ? null : olderSignal => readBackwards(position, olderSignal) };
+    }
+    return readBackwards(undefined, signal);
+  }
+
+  // Keep page positions so older pages can be read on demand without retaining the whole transcript.
+  const positions: (string | undefined)[] = [];
+  let cursor: string | undefined, latest: AgentHistoryEvent[] = [], partial = false;
+  while (true) {
+    signal.throwIfAborted();
+    const page = await read(cursor, signal);
+    const events = agentHistoryEvents(provider, page);
+    partial ||= isPartial(page);
+    if (events.length) {
+      positions.push(cursor);
+      latest = events;
+    }
+    if (page.coverage?.pendingTail) break;
+    const position = next(page, cursor);
+    if (position === null) break;
+    cursor = position;
+  }
+  const olderPage = (index: number): LoadOlderAgentHistory | null => index < 0 ? null : async requestSignal => {
+    const page = await read(positions[index], requestSignal);
+    return { events: agentHistoryEvents(provider, page), partial: isPartial(page), older: olderPage(index - 1) };
+  };
+  return { events: latest, partial, older: olderPage(positions.length - 2) };
+}

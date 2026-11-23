@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import { WEB_CHAT_ATTACHMENT_COUNT, WEB_CHAT_ATTACHMENT_MAX_BYTES, WEB_CHAT_ATTACHMENTS_MAX_BYTES } from '@shared/agentWebChat';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
+import { chatComposerAction, readChatComposerShortcuts } from '../../../../../ribiwebgui/src/chatComposerShortcuts';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { canAttachToWebChat, createAgentWebChatClient, createWebChatIntent, type WebChatIntent, type WebChatTarget } from '../persona/agentWebChatClient';
 
@@ -80,9 +81,20 @@ async function submit() {
 }
 
 function handleKey(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.isComposing || (!event.ctrlKey && !event.metaKey)) return;
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+  const action = chatComposerAction(event, readChatComposerShortcuts());
   event.preventDefault();
-  void submit();
+  if (!action || event.repeat) return;
+  if (action === 'send') {
+    void submit();
+    return;
+  }
+  const input = event.target;
+  if (input instanceof HTMLTextAreaElement && !input.readOnly
+    && (input.maxLength < 0 || input.value.length - (input.selectionEnd - input.selectionStart) < input.maxLength)) {
+    input.setRangeText('\n', input.selectionStart, input.selectionEnd, 'end');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
 </script>
 

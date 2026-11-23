@@ -34,7 +34,11 @@
 
 正文读取返回的 `revision` 覆盖元数据、完整配置和 `persona.md`，用于 PUT `/document`；其中 `configurationRevision` 与 GET `/configuration` 的原 revision 相同，用于配置 PUT/PATCH 和自动化命令。正文修改不会改变配置 revision；配置修改会使旧正文 revision 失效。正文只操作规范 `persona.md`，不接受任意路径。正文与配置复用 `RABIROUTE_PERSONA_DOCUMENT_MAX_BYTES`、`RABIROUTE_PERSONA_CONFIG_MAX_BYTES`；默认 0 表示没有应用层额度，实际运行时容量仍适用。配置额度按正式文件的实际 UTF-8 字节判断；HTTP JSON 和操作回执不附加另一组固定额度。显式额度超限返回 413，非法设置返回 503 `READ_SETTING_INVALID` 并指出字段与修改入口。
 
-同一操作键先获取操作锁，再获取角色锁；并发占用返回 409 `ROLE_BUSY`。原生角色锁与 Gateway 工作准入共用 `.role-state/locks`。回执保存在角色根下 `.role-state/operations`；原始操作键经 SHA-256 后用作文件名。配置、正文或元数据写入前保存 pending 回执，原子 JSON 写入及目录刷新完成后保存 committed 结果。相同键和载荷可按原生流程核对 pending 结果，或读取已提交结果；不得换键重放结果未知的写入。
+同一操作键先获取操作锁，再获取角色写锁。管理写入遇到冲突立即返回 409 `ROLE_BUSY`，表示本次资料修改未取得锁。Gateway 与会话 Hook 在共享锁内并行检查状态并创建各自的工作记录，登记后释放共享锁。遇到写入时，登记在服务端短暂等待，超时返回 409 `ROLE_STORAGE_WAIT_TIMEOUT`，无法访问锁存储返回 503 `ROLE_STORAGE_UNAVAILABLE`。
+
+锁由操作系统管理，持锁进程退出会释放。锁文件保留在 `.role-state/locks`，旧版同目录的空锁目录不再参与新版协调。升级或回滚时，先排空使用同一角色根的旧进程，再统一切换各写入者和准入入口。共享存储须提供所有写入者之间一致的文件锁语义。
+
+回执保存在角色根下 `.role-state/operations`，原始操作键经 SHA-256 后用作文件名。配置、正文或元数据写入前保存 pending 回执，原子 JSON 写入及目录刷新完成后保存 committed 结果。相同键和载荷可按原生流程核对 pending 结果，或读取已提交结果。结果未知时沿用原操作键。
 
 删除还检查已禁用路线、其他角色自动化、未确认工作租约、角色目录边界和递归链接。删除标记保存在 `.role-state/deleted`，防止同 ID 无声重建。整个删除过程没有跨文件原子事务；中途失败需保留原操作键并核对原回执。
 

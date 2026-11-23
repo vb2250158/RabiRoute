@@ -489,6 +489,7 @@ export class CodexHookContextService {
   private readonly onHookStage?: CodexHookContextServiceOptions["onHookStage"];
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
   private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
+  private pendingContexts = 0;
   private storeSnapshot?: { revision: string; value: CodexHookSessionStoreFile; legacyRaw?: Buffer };
   private readonly rolesRoot: () => string;
   private readonly storePath: string;
@@ -681,13 +682,16 @@ export class CodexHookContextService {
     const sessionId = planBindingSourceKey(request);
     this.requireSessionId(request.sessionId);
     const queue = this.contextQueues.get(sessionId) ?? { tail: Promise.resolve(), pending: 0 };
-    if (queue.pending >= 8 || (!queue.pending && this.contextQueues.size >= 32)) {
-      return Promise.reject(new Error("Codex hook context queue is full; retry."));
+    // Keep the original total backlog bound while admitting more independent sessions.
+    if (queue.pending >= 8 || this.pendingContexts >= 256 || (!queue.pending && this.contextQueues.size >= 128)) {
+      return Promise.reject(new Error("Rabi 会话处理队列已满，请稍后重试。"));
     }
     queue.pending++;
+    this.pendingContexts++;
     this.contextQueues.set(sessionId, queue);
     const result = queue.tail.then(() => this.handleContextAsync(request));
     queue.tail = result.then(() => undefined, () => undefined).finally(() => {
+      this.pendingContexts--;
       if (--queue.pending === 0) this.contextQueues.delete(sessionId);
     });
     return result;

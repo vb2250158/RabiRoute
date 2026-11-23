@@ -55,7 +55,7 @@ export function codexHookOperationContract(definition: typeof CODEX_HOOK_OPERATI
         { type: "object", properties: Object.fromEntries((key === "context" ? bodyFields : "roleId").split(" ").map(name => [name, true])), additionalProperties: true },
         { type: "array" }, { type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }
       ] } } : { kind: "none" } },
-    responses: { "200": response(data), "400": error, ...(key === "context" ? { "503": error } : {}) },
+    responses: { "200": response(data), "400": error, ...(key === "context" ? { "409": error, "503": error } : {}) },
     effects: { mode: key === "context" ? "owner-event" : method === "GET" ? "owner-read" : "binding-write",
       description: key === "context" ? "The existing Hook owner may change the original binding, plan/follow-up state and event deliveries. AssistantProgress carries a live public assistant message with its original session, provider, turn and message ID and observedAt in Unix milliseconds. It does not write plan or request state. This contract creates no execution Runtime."
         : method === "GET" ? "Reads the current Hook owner. Existing cold-store initialization may persist its empty store; no prompt or completion is delivered." : "Changes only the original session's persona binding through the existing owner. It does not create a session or execute a prompt." },

@@ -2,12 +2,23 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { roleFolderPath } from "./shared/routePaths.js";
 import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
+import { tryRoleFileLock } from "./shared/roleFileLock.js";
 
 export type RoleMetadata = { schemaVersion: 1; revision: number; archivedAt: string | null };
 export class RoleLifecycleError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); }
+}
+
+export type RoleStorageFailureCode = "ROLE_STORAGE_UNAVAILABLE" | "ROLE_STORAGE_WAIT_TIMEOUT";
+
+/** Restore the same storage error after a Hook read crosses the worker boundary. */
+export function roleStorageFailure(code: RoleStorageFailureCode, cause?: unknown): RoleLifecycleError {
+  return code === "ROLE_STORAGE_WAIT_TIMEOUT"
+    ? new RoleLifecycleError(code, "Rabi 等待角色资料访问超时。")
+    : Object.assign(new RoleLifecycleError(code, "Rabi 无法访问角色资料。", 503), { cause });
 }
 
 function parseRoleMetadata(text: string): RoleMetadata {
@@ -57,22 +68,35 @@ export async function assertRoleAcceptsWork(roleDirectory: string): Promise<void
   if ((await readRoleMetadata(roleDirectory)).archivedAt) throw new RoleLifecycleError("ROLE_ARCHIVED", "角色已归档，已暂停新任务。");
 }
 
-/** The lock is shared by Manager commands and Gateway admission on the same role storage. */
-export async function withRoleLock<T>(roleDirectory: string, operation: () => Promise<T>): Promise<T> {
+async function withRoleStorageLock<T>(roleDirectory: string, mode: "shared" | "exclusive", operation: () => Promise<T>): Promise<T> {
   const locks = path.join(roleStateRoot(roleDirectory), "locks");
-  await fs.mkdir(locks, { recursive: true });
-  const lock = path.join(locks, path.basename(roleDirectory));
-  try { await fs.mkdir(lock); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new RoleLifecycleError("ROLE_BUSY", "角色正在执行另一项操作，请稍后重试。");
-    throw error;
+  const lock = path.join(locks, `${path.basename(roleDirectory)}.lock`);
+  const deadline = performance.now() + 5_000;
+  async function acquire() {
+    try { return await tryRoleFileLock(lock, mode); }
+    catch (cause) { throw roleStorageFailure("ROLE_STORAGE_UNAVAILABLE", cause); }
   }
+  try { await fs.mkdir(locks, { recursive: true }); }
+  catch (cause) { throw roleStorageFailure("ROLE_STORAGE_UNAVAILABLE", cause); }
+  let release = await acquire();
+  while (!release && mode === "shared" && performance.now() < deadline) {
+    await delay(15 + Math.random() * 15);
+    release = await acquire();
+  }
+  if (!release) throw mode === "shared"
+    ? roleStorageFailure("ROLE_STORAGE_WAIT_TIMEOUT")
+    : new RoleLifecycleError("ROLE_BUSY", "Rabi 暂时无法修改角色资料，请稍后重试。");
   try { return await operation(); }
-  finally { await fs.rmdir(lock); }
+  finally { await release(); }
+}
+
+/** Serialize changes to the same role or operation key across Manager and Gateway processes. */
+export async function withRoleLock<T>(roleDirectory: string, operation: () => Promise<T>): Promise<T> {
+  return withRoleStorageLock(roleDirectory, "exclusive", operation);
 }
 
 export async function beginRoleWork(roleDirectory: string): Promise<() => Promise<void>> {
-  return withRoleLock(roleDirectory, async () => {
+  return withRoleStorageLock(roleDirectory, "shared", async () => {
     await assertRoleAcceptsWork(roleDirectory);
     const directory = path.join(roleStateRoot(roleDirectory), "work", path.basename(roleDirectory));
     await fs.mkdir(directory, { recursive: true });

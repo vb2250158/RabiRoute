@@ -55,6 +55,8 @@ This document covers queries, discovery and delivery, and records the goals and 
 
 ### Agent thread bridge and pagination boundary
 
+Rabi opens Agent conversations in Message History at the latest message. Scrolling to the top loads earlier messages and keeps the current reading position. Native history queries retain their existing cursor order.
+
 The WorkBuddy thread bridge implements listing, reading and gateway delivery to existing tasks; receipt evidence is limited to the original process's primary session in the table above. Creation, renaming, opening and initialization still need a WorkBuddy Desktop-owner entry. The adapter claims no plan-assistant, memory-consolidation or lost-delivery-receipt recovery capability and remains `experimental`.
 
 The store intersects `allowedWorkspaces` with the optional single `workspace`, using one shared path-normalization rule, then orders by latest activity descending and task ID ascending. Workspace selection precedes both the 10,000-row read cap and `offset` / `limit` pagination. An empty allowlist adds no restriction. Query and archive filtering operate within that bounded inventory, so this is not an unlimited task catalog. Interleaved workspaces, identical titles, and larger offsets no longer produce holes caused by filtering a page in the bridge. Detail reads and exact-ID resolution use a parameterized single-row lookup independent of the discovery inventory's 10,000-row cap; workspace-conflict and archived-task checks remain in place.

@@ -604,43 +604,61 @@ export async function readPersonaPlanWorkflowAsync(
   return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
 }
 
+function requirePersonaDirectory(roleDir: string): void {
+  if (!fs.existsSync(roleDir) || !fs.statSync(roleDir).isDirectory()) {
+    throw new Error(`Persona directory does not exist: ${roleDir}`);
+  }
+}
+
+function personaPlanWorkflowLockPath(roleDir: string): string {
+  return path.join(roleDir, ".personaConfig.planWorkflow.lock");
+}
+
+function persistPersonaPlanWorkflow(
+  configPath: string, config: Record<string, unknown> | null, workflow: PersonaPlanWorkflow
+): PersonaPlanWorkflowReadResult {
+  const next = mergePersonaPlanWorkflowConfig(config, workflow);
+  atomicWriteFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`);
+  return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
+}
+
 export function writePersonaPlanWorkflow(
   roleDir: string,
   workflow: PersonaPlanWorkflow,
   expectedRevisionOrOptions: string | { expectedRevision?: string } = {}
 ): PersonaPlanWorkflowReadResult {
-  if (!fs.existsSync(roleDir) || !fs.statSync(roleDir).isDirectory()) {
-    throw new Error(`Persona directory does not exist: ${roleDir}`);
-  }
+  requirePersonaDirectory(roleDir);
   const validated = validatePersonaPlanWorkflow(workflow);
   const expectedRevision = typeof expectedRevisionOrOptions === "string"
     ? expectedRevisionOrOptions
     : expectedRevisionOrOptions.expectedRevision;
   const configPath = personaConfigPath(roleDir);
-  const lockPath = path.join(roleDir, ".personaConfig.planWorkflow.lock");
-  return withFileLockSync(lockPath, () => {
+  return withFileLockSync(personaPlanWorkflowLockPath(roleDir), () => {
     const current = readPersonaConfig(configPath);
     const currentWorkflow = current?.planWorkflow == null ? null : validatePersonaPlanWorkflow(current.planWorkflow);
     const currentRevision = currentWorkflow ? personaPlanWorkflowRevision(currentWorkflow) : "";
     if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
       throw new Error(`PERSONA_PLAN_WORKFLOW_REVISION_CONFLICT: expected=${expectedRevision}; current=${currentRevision}.`);
     }
-    const next = mergePersonaPlanWorkflowConfig(current, validated);
-    atomicWriteFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`);
-    return {
-      workflow: validated,
-      revision: personaPlanWorkflowRevision(validated),
-      materialized: true
-    };
+    return persistPersonaPlanWorkflow(configPath, current, validated);
   });
 }
 
 export function ensurePersonaPlanWorkflow(roleDir: string): PersonaPlanWorkflowReadResult {
-  const existing = readPersonaPlanWorkflow(roleDir);
-  if (existing) {
-    const rawSchemaVersion = readPersonaConfig(personaConfigPath(roleDir))?.planWorkflow;
-    if (isRecord(rawSchemaVersion) && rawSchemaVersion.schemaVersion === 5) return existing;
-    return writePersonaPlanWorkflow(roleDir, existing.workflow, { expectedRevision: existing.revision });
+  const configPath = personaConfigPath(roleDir);
+  const existing = readPersonaConfig(configPath)?.planWorkflow;
+  if (isRecord(existing) && existing.schemaVersion === 5) {
+    const workflow = validatePersonaPlanWorkflow(existing);
+    return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
   }
-  return writePersonaPlanWorkflow(roleDir, loadDefaultPersonaPlanWorkflow(), "");
+  requirePersonaDirectory(roleDir);
+  return withFileLockSync(personaPlanWorkflowLockPath(roleDir), () => {
+    const config = readPersonaConfig(configPath);
+    const stored = config?.planWorkflow;
+    const workflow = stored == null ? loadDefaultPersonaPlanWorkflow() : validatePersonaPlanWorkflow(stored);
+    if (isRecord(stored) && stored.schemaVersion === 5) {
+      return { workflow, revision: personaPlanWorkflowRevision(workflow), materialized: true };
+    }
+    return persistPersonaPlanWorkflow(configPath, config, workflow);
+  });
 }

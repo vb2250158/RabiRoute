@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.37",
+      "version": "0.1.38",
       "enabled": true,
       "config": {},
       "grants": []
@@ -162,7 +162,7 @@
     {
       "id": "manager:agent-communication",
       "package": "io.rabiroute.manager.agent-communication",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "enabled": true,
       "config": {},
       "grants": []

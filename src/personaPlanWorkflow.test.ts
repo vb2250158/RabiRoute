@@ -194,6 +194,27 @@ test("first materialization preserves unrelated persona settings and is idempote
   assert.equal(fs.readFileSync(configPath, "utf8"), firstBytes);
 });
 
+test("workflow initialization uses the configuration materialized by a concurrent writer", t => {
+  const roleDir = roleFixture(t);
+  const configPath = path.join(roleDir, "personaConfig.json");
+  fs.writeFileSync(configPath, JSON.stringify({ avatar: "before.png" }));
+  const workflow = loadDefaultPersonaPlanWorkflow();
+  const committed = JSON.stringify({ avatar: "after.png", planWorkflow: workflow });
+  const read = fs.readFileSync;
+  let changed = false;
+  t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
+    const result = read(...args);
+    if (!changed && args[0] === configPath) {
+      changed = true;
+      fs.writeFileSync(configPath, committed);
+    }
+    return result;
+  });
+  assert.equal(ensurePersonaPlanWorkflow(roleDir).revision, personaPlanWorkflowRevision(workflow));
+  assert.ok(changed);
+  assert.equal(fs.readFileSync(configPath, "utf8"), committed);
+});
+
 test("schema v1 workflows migrate once without restoring removed statuses later", (t) => {
   const roleDir = roleFixture(t);
   const configPath = path.join(roleDir, "personaConfig.json");

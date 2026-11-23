@@ -522,6 +522,9 @@
     "./shared/desktopPetModeAnimationSets": {
       "types": "./types/src/shared/desktopPetModeAnimationSets.d.ts"
     },
+    "./shared/desktopPetWorkIdentity": {
+      "types": "./types/src/shared/desktopPetWorkIdentity.d.ts"
+    },
     "./shared/desktopSettingsContract": {
       "types": "./types/src/shared/desktopSettingsContract.d.ts"
     },
@@ -584,6 +587,9 @@
     },
     "./shared/npmCli": {
       "types": "./types/src/shared/npmCli.d.ts"
+    },
+    "./shared/pathPolicy": {
+      "types": "./types/src/shared/pathPolicy.d.ts"
     },
     "./shared/performanceContract": {
       "types": "./types/src/shared/performanceContract.d.ts"

@@ -3,14 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { CodexHookContextReadReply } from "./codexHookContextRead.js";
-import { managerKnowledgePageWorkerPool } from "./managerReadWorkerPool.js";
+import type { CodexHookContextReadReply, CodexHookContextWorkerReply } from "./codexHookContextRead.js";
+import { managerHookContextWorkerPool } from "./managerReadWorkerPool.js";
 import { readRoleMemoryCatalogsInWorker } from "../roleKnowledge.js";
 import { readCodexHookContextInputAsync } from "./codexHookContextRead.js";
 
 test("Hook context consumes the current shared physical catalog without rereading memory bodies", async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hook-shared-memory-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hook-shared-memory-"));
+  const root = path.join(fixtureRoot, "Demo");
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
   const directory = path.join(root, "memory", "recent");
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "memory-demo.json"), JSON.stringify({ id: "memory-demo", title: "Needle",
@@ -45,17 +46,17 @@ test("physical hook worker reads current role source and storage knowledge witho
     createdAt: timestamp, updatedAt: timestamp, keywords: ["worker recall"]
   }));
   try {
-    const readSource = () => managerKnowledgePageWorkerPool.run<CodexHookContextReadReply>({
+    const readSource = () => managerHookContextWorkerPool.run<CodexHookContextReadReply>({
       type: "codex_hook_context_read", input: { kind: "role_source", rolesRoot: root, roleId: "DemoPersona" }
     });
-    let source = await readSource();
+    const source = await readSource();
     assert.equal(source.kind, "role_source");
     if (source.kind !== "role_source") throw new Error("Unexpected worker reply");
     assert.equal(source.source.persona, "Current demo persona");
     fs.writeFileSync(personaPath, "Updated demo persona");
-    source = await readSource();
-    assert.equal(source.kind === "role_source" && source.source.persona, "Updated demo persona");
-    const knowledge = await managerKnowledgePageWorkerPool.run<CodexHookContextReadReply>({
+    const parallel = await Promise.all(Array.from({ length: 96 }, readSource));
+    assert.ok(parallel.every(reply => reply.kind === "role_source" && reply.source.persona === "Updated demo persona"));
+    const knowledge = await managerHookContextWorkerPool.run<CodexHookContextReadReply>({
       type: "codex_hook_context_read", input: { kind: "knowledge", trigger: {
         kind: "user_prompt", source: "codex_hook", roleId: "DemoPersona", roleDir, signalText: "worker recall"
       } }
@@ -64,15 +65,20 @@ test("physical hook worker reads current role source and storage knowledge witho
     if (knowledge.kind !== "knowledge") throw new Error("Unexpected worker reply");
     assert.ok(knowledge.resolution.knowledge.requiredReadItems.some(item => item.id === "memory-demo"));
     assert.equal(knowledge.resolution.policy.touchViewedAt, true);
+    const badRole = "InvalidStorage";
+    fs.mkdirSync(path.join(root, ".role-state", "locks", `${badRole}.lock`));
+    assert.deepEqual(await managerHookContextWorkerPool.run<CodexHookContextWorkerReply>({
+      type: "codex_hook_context_read", input: { kind: "role_source", rolesRoot: root, roleId: badRole }
+    }), { kind: "role_storage_failure", code: "ROLE_STORAGE_UNAVAILABLE" });
     fs.writeFileSync(path.join(roleDir, "roleMetadata.json"), JSON.stringify({ schemaVersion: 1, revision: 1, archivedAt: timestamp }));
     await assert.rejects(readSource, /归档|无法读取/);
-    await assert.rejects(() => managerKnowledgePageWorkerPool.run({
+    await assert.rejects(() => managerHookContextWorkerPool.run({
       type: "codex_hook_context_read", input: { kind: "knowledge", trigger: {
         kind: "user_prompt", source: "codex_hook", roleId: "DemoPersona", roleDir, signalText: "worker recall"
       } }
     }), /归档|无法读取/);
   } finally {
-    await managerKnowledgePageWorkerPool.stop();
+    await managerHookContextWorkerPool.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

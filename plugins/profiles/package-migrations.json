@@ -293,9 +293,10 @@
         "0.1.7",
         "0.1.8",
         "0.1.9",
-        "0.1.10"
+        "0.1.10",
+        "0.1.11"
       ],
-      "toVersion": "0.1.11"
+      "toVersion": "0.1.12"
     },
     {
       "packageId": "io.rabiroute.manager.agent-state-control",
@@ -349,9 +350,10 @@
         "0.1.12",
         "0.1.13",
         "0.1.14",
-        "0.1.15"
+        "0.1.15",
+        "0.1.16"
       ],
-      "toVersion": "0.1.16"
+      "toVersion": "0.1.17"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
@@ -489,9 +491,10 @@
         "0.1.33",
         "0.1.34",
         "0.1.35",
-        "0.1.36"
+        "0.1.36",
+        "0.1.37"
       ],
-      "toVersion": "0.1.37"
+      "toVersion": "0.1.38"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",

@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getEventListeners } from "node:events";
-import { waitForChatHistoryFrame } from "../src/personaChatHistoryLayout";
+import { bindChatHistoryLoadOlder, waitForChatHistoryFrame } from "../src/personaChatHistoryLayout";
+
+test("older history loads on arrival at the top or an upward scroll there", () => {
+  const pane = Object.assign(new EventTarget(), { scrollTop: 0, clientHeight: 200 });
+  const scroll = new EventTarget();
+  let reads = 0;
+  const dispose = bindChatHistoryLoadOlder(pane as unknown as HTMLElement, () => reads++, scroll);
+  const moveTo = (top: number) => { pane.scrollTop = top; scroll.dispatchEvent(new Event("scroll")); };
+  const wheel = (deltaY: number) => pane.dispatchEvent(Object.assign(new Event("wheel"), { deltaY }));
+
+  moveTo(0);
+  wheel(10);
+  moveTo(200);
+  moveTo(20);
+  wheel(-10);
+  assert.equal(reads, 0);
+  moveTo(1);
+  moveTo(0);
+  assert.equal(reads, 1);
+  wheel(-10);
+  assert.equal(reads, 2);
+  pane.clientHeight = 0;
+  wheel(-10);
+  assert.equal(reads, 2);
+  dispose();
+  assert.equal(getEventListeners(scroll, "scroll").length, 0);
+  assert.equal(getEventListeners(pane, "wheel").length, 0);
+});
 
 test("a paused layout frame is released on abort, hiding, or completion", async () => {
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { createAgentSessionClient, agentSessionProject, agentSessionMembersAvailable, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
-import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, type AgentHistoryEvent, type AgentSessionMessage } from '../persona/agentSessionHistory';
+import { agentHistoryMessages, latestAgentConversationPage, type AgentHistoryEvent, type AgentSessionMessage, type LoadOlderAgentHistory } from '../persona/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
@@ -12,6 +12,7 @@ import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vu
 import HistoryConversationLayout from './HistoryConversationLayout.vue';
 import PersonaAgentSessionComposer from './PersonaAgentSessionComposer.vue';
 import ChatMessageBody from './ChatMessageBody.vue';
+import LoadOlderHistory from './LoadOlderHistory.vue';
 
 const props = defineProps<{ roleId: string; active: boolean }>();
 const service = usePersonaService(), client = createAgentSessionClient(service.fetch, service.deviceId);
@@ -32,7 +33,7 @@ function refreshAfterSend(key: string) {
 }
 const memberOffset = ref<number|null>(null), loadingMembers = ref(false), memberError = ref(''), membersOpen = ref(false);
 const sessionTitle = (task:PersonaAgentTask) => task.agentNickname || task.title || task.id;
-const offset = ref<number | null>(null), cursor = ref<string | null>(null);
+const offset = ref<number | null>(null), olderHistory = ref<LoadOlderAgentHistory | null>(null);
 const events = ref<AgentHistoryEvent[]>([]), expanded = ref(new Set<string>());
 const listElement = ref<HTMLElement>(), virtualList = ref<{scrollToIndex(index:number):void}>();
 const messages = computed(() => agentHistoryMessages(agent.value?.provider || '', events.value));
@@ -108,25 +109,22 @@ function chooseRoot(id:string) { selectedMember.value = undefined; selectedId.va
 function chooseMember(task:PersonaAgentTask) { selectedMember.value = task; membersOpen.value = false; }
 function back() { if (selectedMember.value) selectedMember.value = undefined; else selectedId.value = ''; }
 async function loadHistory(more = false) {
-  if (!agent.value || !currentSessionId.value) return;
+  const owner = agent.value, sessionId = currentSessionId.value, loadOlder = olderHistory.value;
+  if (!owner || !sessionId || (more && (loadingHistory.value || !loadOlder))) return;
   historyRequest?.abort(); const request = new AbortController(); historyRequest = request;
   loadingHistory.value = true; historyError.value = '';
   try {
-    const previousCursor = more ? cursor.value ?? undefined : undefined;
-    const page = await client.history(agent.value, currentSessionId.value, previousCursor, request.signal);
+    const page = more && loadOlder ? await loadOlder(request.signal)
+      : await latestAgentConversationPage(owner.provider, (cursor, signal) => client.history(owner, sessionId, cursor, signal), request.signal);
     if (request.signal.aborted) return;
-    const nextCursor = agentHistoryNextCursor(agent.value.provider, page);
-    if (nextCursor !== null && nextCursor === previousCursor) throw new Error(t('历史分页位置未前进，请刷新后重试。'));
-    const incoming = agentHistoryEvents(agent.value.provider, page);
     const scroller = chatHistoryScroller(listElement.value), viewport = chatHistoryViewport(scroller);
-    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 80;
     const anchor = [...(listElement.value?.querySelectorAll<HTMLElement>('.session-message') ?? [])]
       .find(element => element.getBoundingClientRect().bottom > viewport.top && element.getBoundingClientRect().top < viewport.bottom);
     const anchorId = anchor?.dataset.entryId, anchorTop = anchor?.getBoundingClientRect().top ?? 0;
-    const followBottom = !more || agent.value.provider !== 'dsh' && atBottom;
-    events.value = [...new Map([...(more ? events.value : []), ...incoming].map(event => [event.id, event])).values()];
-    cursor.value = nextCursor;
-    partialHistory.value = Boolean(more && partialHistory.value || page.warnings?.length || page.coverage?.partial);
+    const followBottom = !more;
+    events.value = [...new Map([...page.events, ...(more ? events.value : [])].map(event => [event.id, event])).values()];
+    olderHistory.value = page.older;
+    partialHistory.value = page.partial || more && partialHistory.value;
     await nextTick();
     const interrupt = () => request.abort(), interruptionEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     for (const event of interruptionEvents) scroller.addEventListener(event, interrupt, {passive:true});
@@ -181,7 +179,7 @@ watch(selectedId, () => {
   if (selectedId.value) void loadMembers();
 });
 watch(currentSessionId, () => {
-  historyRequest?.abort(); events.value = []; cursor.value = null; historyError.value = ''; partialHistory.value = false; expanded.value = new Set();
+  historyRequest?.abort(); events.value = []; olderHistory.value = null; historyError.value = ''; partialHistory.value = false; expanded.value = new Set();
   if (currentSessionId.value) void loadHistory();
 });
 onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); previewRequest?.abort(); });
@@ -218,7 +216,7 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
         <v-alert v-if="partialHistory" type="warning" variant="tonal" class="mb-3">{{ t('部分历史记录暂时无法读取，已加载的消息仍可查看。') }}</v-alert>
         <v-progress-linear v-if="loadingHistory" indeterminate :aria-label="t('正在加载历史记录')" />
         <div v-if="!messages.length && !loadingHistory && !historyError" class="pa-4 text-medium-emphasis">{{ t('当前页暂无用户输入或最终回复。') }}</div>
-        <v-btn v-if="cursor !== null && agent.provider === 'dsh'" class="mb-3" variant="text" :loading="loadingHistory" @click="loadHistory(true)">{{ t('加载更早的消息') }}</v-btn>
+        <LoadOlderHistory v-if="olderHistory" :active="active" :loading="loadingHistory" @load="loadHistory(true)" />
         <div ref="listElement" class="session-messages" aria-live="polite" :aria-busy="loadingHistory">
           <v-virtual-scroll ref="virtualList" :items="messages" :item-height="160" renderless><template #default="{ item, itemRef }: { item: AgentSessionMessage; itemRef?: VNodeRef }">
             <article v-if="item.instructionHeading" :ref="itemRef" :key="item.id" class="session-message session-instruction" :data-entry-id="item.id">
@@ -237,7 +235,6 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
             </article>
           </template></v-virtual-scroll>
         </div>
-        <v-btn v-if="cursor !== null && agent.provider !== 'dsh'" class="mt-3" variant="tonal" :loading="loadingHistory" @click="loadHistory(true)">{{ t(agent.provider === 'dsh' ? '加载更早的消息' : '继续加载消息') }}</v-btn>
       </template>
       <div v-else class="pa-6 text-medium-emphasis">{{ t('选择会话查看用户输入和最终回复。') }}</div>
       <template #details>

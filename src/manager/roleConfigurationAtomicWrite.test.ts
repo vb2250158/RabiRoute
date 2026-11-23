@@ -88,7 +88,6 @@ for (const boundary of ["connection", "root", "generation", "read-only"] as cons
       assert.deepEqual((await fs.readdir(f.role)).filter(name => name.startsWith("personaConfig.json.") && name.endsWith(".tmp")), []);
       assert.equal(f.events(), 0);
       assert.equal(records.some(record => record.event === "role_file_committed" && record.target.id === "personaConfig.json"), false);
-      assert.deepEqual(await fs.readdir(path.join(path.dirname(f.role), ".role-state/locks")), []);
       write.mock.restore(); rename.mock.restore(); f.reconnect();
       const recovered = await f.call("PUT", payload, key);
       assert.equal(recovered.status, 200, JSON.stringify(recovered.body));

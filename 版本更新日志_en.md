@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.69 - 2026-11-23
+
+- Core 0.1.17 and Persona provide browser-local chat shortcut settings: Enter sends and Alt+Enter inserts a newline by default, preserving IME and repeated-key handling.
+- Use cross-process role locks and isolated Hook read workers; verify 96 managed Hook sessions while preserving transactions and identity checks.
+- Persona 0.1.38 fixes newest-page ordering and loads earlier messages at the top across chat histories. Agent Communication 0.1.12 updates the Hook read contract.
+
 ## 0.15.68 - 2026-11-23
 
 - Retry timed-out role configuration reads once and reject capture and wake requests that select a retired companion device.

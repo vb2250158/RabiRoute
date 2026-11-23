@@ -32,6 +32,29 @@ export function chatHistoryViewport(scroller: HTMLElement): { top: number; botto
   return { top: bounds.top, bottom: bounds.bottom };
 }
 
+/** Read one older page when the reader reaches the top of their message pane. */
+export function bindChatHistoryLoadOlder(
+  scroller: HTMLElement, load: () => void, scrollTarget: EventTarget = scroller
+): () => void {
+  const topThreshold = 2;
+  let previousTop = scroller.scrollTop;
+  const onScroll = () => {
+    const top = scroller.scrollTop;
+    const reachedTop = top <= topThreshold && previousTop > topThreshold;
+    previousTop = top;
+    if (reachedTop && scroller.clientHeight > 0) load();
+  };
+  const onWheel = (event: Event) => {
+    if ((event as WheelEvent).deltaY < 0 && scroller.scrollTop <= topThreshold && scroller.clientHeight > 0) load();
+  };
+  scrollTarget.addEventListener('scroll', onScroll, { passive: true });
+  scroller.addEventListener('wheel', onWheel, { passive: true });
+  return () => {
+    scrollTarget.removeEventListener('scroll', onScroll);
+    scroller.removeEventListener('wheel', onWheel);
+  };
+}
+
 
 /** Keep measured virtual rows at the bottom until the reader scrolls away. */
 export function bindChatHistoryScroll(scroller: HTMLElement, content: HTMLElement): { dispose(): void; restorePosition(top: number): void } {

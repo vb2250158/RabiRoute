@@ -59,7 +59,8 @@ import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerificationInput } from "../messageProcessing/criticalFactRecord.js";
-import { readCodexHookContextInputAsync, type CodexHookContextReadRequest } from "./codexHookContextRead.js";
+import { readCodexHookContextInputAsync, type CodexHookContextReadRequest, type CodexHookContextWorkerReply } from "./codexHookContextRead.js";
+import { RoleLifecycleError } from "../roleLifecycle.js";
 
 export type ManagerReadWorkerTask =
   | { type: "role_recent_memory_catalog"; roleDir: string }
@@ -326,8 +327,15 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
     case "critical_fact_record_verify":
       verifyCriticalProjectFactRecord(task.input);
       return true;
-    case "codex_hook_context_read":
-      return readCodexHookContextInputAsync(task.input);
+    case "codex_hook_context_read": {
+      try { return await readCodexHookContextInputAsync(task.input); }
+      catch (error) {
+        if (error instanceof RoleLifecycleError && (error.code === "ROLE_STORAGE_WAIT_TIMEOUT" || error.code === "ROLE_STORAGE_UNAVAILABLE")) {
+          return { kind: "role_storage_failure", code: error.code } satisfies CodexHookContextWorkerReply;
+        }
+        throw error;
+      }
+    }
     case "role_knowledge_catalog_snapshot":
       return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
     case "role_plan_catalog": {

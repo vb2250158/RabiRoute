@@ -18,9 +18,25 @@ import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAc
 import { pluginCatalogStore } from "../../../../../ribiwebgui/src/pluginCatalogStore";
 import TrustedWebRendererHost from "../../../../../ribiwebgui/src/components/TrustedWebRendererHost.vue";
 import { webRenderersAt } from "../../../../../ribiwebgui/src/pluginRenderers";
+import {
+  chatComposerKeys, readChatComposerShortcuts, saveChatComposerShortcuts, validChatComposerShortcuts,
+  type ChatComposerShortcuts
+} from "../../../../../ribiwebgui/src/chatComposerShortcuts";
 
 const store = useGatewayStore();
 const settingsRenderers = computed(() => webRenderersAt(pluginCatalogStore.settingsRenderers.value, "global.settings.sections"));
+const chatShortcuts = ref(readChatComposerShortcuts());
+const chatShortcutError = ref(false);
+
+function updateChatShortcut(action: keyof ChatComposerShortcuts, key: unknown) {
+  const next = { ...chatShortcuts.value, [action]: key };
+  if (!validChatComposerShortcuts(next)) return;
+  try {
+    saveChatComposerShortcuts(next);
+    chatShortcuts.value = next;
+    chatShortcutError.value = false;
+  } catch { chatShortcutError.value = true; }
+}
 
 const routeDir = ref("");
 const rolesDir = ref("");
@@ -251,6 +267,20 @@ onBeforeUnmount(() => {
       <TrustedWebRendererHost :renderers="settingsRenderers" />
       <ResourceCacheSettings />
       <TimeoutSettings />
+
+      <v-card class="app-card glass-card section-card">
+        <div class="section-title-row">
+          <div>
+            <div class="section-title">{{ translateText('聊天快捷键') }}</div>
+            <div class="section-note">{{ translateText('适用于 Agent 会话。修改后立即生效，保存在当前浏览器。') }}</div>
+          </div>
+        </div>
+        <v-alert v-if="chatShortcutError" type="error" variant="tonal" density="compact" class="mb-3">{{ translateText('无法保存聊天快捷键。') }}</v-alert>
+        <div class="form-grid">
+          <v-select :model-value="chatShortcuts.send" :items="chatComposerKeys.filter(key => key !== chatShortcuts.newline)" :label="translateText('发送快捷键')" density="compact" hide-details @update:model-value="updateChatShortcut('send', $event)" />
+          <v-select :model-value="chatShortcuts.newline" :items="chatComposerKeys.filter(key => key !== chatShortcuts.send)" :label="translateText('换行快捷键')" density="compact" hide-details @update:model-value="updateChatShortcut('newline', $event)" />
+        </div>
+      </v-card>
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

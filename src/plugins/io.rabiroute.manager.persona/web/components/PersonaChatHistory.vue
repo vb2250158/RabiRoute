@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LoadOlderHistory from './LoadOlderHistory.vue';
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch, type VNodeRef } from "vue";
 import ChatMessageBody from './ChatMessageBody.vue';
@@ -222,7 +223,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load();});
       <v-btn variant="text" :disabled="loading" @click="load(false, true)">{{ t('继续加载') }}</v-btn>
     </v-alert>
     <v-alert v-if="invalidRecords" type="warning" variant="tonal" class="mb-3">{{ t('部分消息记录损坏，其他消息仍可浏览。') }}</v-alert>
-    <v-btn v-if="nextCursor !== null" class="mb-3" variant="text" :disabled="loading" @click="load(true)">{{t('加载更早的消息')}}</v-btn>
+    <LoadOlderHistory v-if="nextCursor !== null" :active="active !== false" :loading="loading" @load="load(true)" />
     <div ref="listElement" class="chat-history-list" aria-live="polite" :aria-busy="loading">
       <v-virtual-scroll v-if="entries.length" ref="virtualList" :items="displayedEntries" item-key="id" :renderless="true" :item-height="180">
       <template #default="{ item: entry, itemRef }: { item: PersonaChatReply; itemRef?: VNodeRef }">

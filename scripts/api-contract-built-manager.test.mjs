@@ -266,6 +266,54 @@ async function startBuiltManager(t, readOnly = true, bridgeFixture, peerFixture,
   return { root, stateRoot, generation, ready, get, worker, output: () => output };
 }
 
+test("built Manager starts 96 sessions on one persona and reports inaccessible role storage", { timeout: 90_000 }, async t => {
+  const { root, ready } = await startBuiltManager(t, false);
+  const roles = path.join(root, "roles");
+  const roleId = "ConcurrentPersona";
+  const role = path.join(roles, roleId);
+  await fs.mkdir(role, { recursive: true });
+  await fs.writeFile(path.join(role, "persona.md"), "# Concurrent persona fixture\n");
+  const locks = path.join(roles, ".role-state", "locks");
+  await fs.mkdir(path.join(locks, roleId), { recursive: true });
+  const hook = (route, method, body) => fetch(ready.baseUrl + "/api/codex-hook" + route, {
+    method, headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(45_000)
+  });
+  const sessions = Array.from({ length: 96 }, (_, index) => `hook-boot-${index}`);
+  for (const session of sessions) {
+    const bound = await hook(`/sessions/${session}`, "PUT", { roleId });
+    assert.equal(bound.status, 200, await bound.text());
+  }
+  await Promise.all(sessions.map(async sessionId => {
+    const response = await hook("/context", "POST", { sessionId, eventName: "SessionStart", source: "startup" });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify({ sessionId, error: body.error, message: body.message }));
+    assert.equal(body.data.binding.roleId, roleId);
+    assert.match(body.data.additionalContext, /Concurrent persona fixture/);
+  }));
+  assert.deepEqual(await fs.readdir(path.join(roles, ".role-state", "work", roleId)), []);
+
+  const { withRoleLock } = await import(pathToFileURL(path.join(packageRoot, "dist/roleLifecycle.js")).href);
+  await withRoleLock(role, async () => {
+    const blocked = await hook("/context", "POST", { sessionId: sessions[0], eventName: "SessionStart", source: "resume" });
+    const body = await blocked.json();
+    assert.equal(blocked.status, 409, JSON.stringify(body));
+    assert.equal(body.error, "ROLE_STORAGE_WAIT_TIMEOUT");
+    assert.match(body.message, /角色资料访问超时/);
+  });
+
+  const invalidRole = "UnavailablePersona";
+  await fs.mkdir(path.join(roles, invalidRole));
+  await fs.writeFile(path.join(roles, invalidRole, "persona.md"), "# Unavailable fixture\n");
+  const bound = await hook("/sessions/storage-error", "PUT", { roleId: invalidRole });
+  assert.equal(bound.status, 200, await bound.text());
+  await fs.mkdir(path.join(locks, `${invalidRole}.lock`));
+  const failed = await hook("/context", "POST", { sessionId: "storage-error", eventName: "SessionStart", source: "startup" });
+  const body = await failed.json();
+  assert.equal(failed.status, 503, JSON.stringify(body));
+  assert.equal(body.error, "ROLE_STORAGE_UNAVAILABLE");
+  assert.match(body.message, /Rabi 无法访问角色资料/);
+});
+
 test("compiled original Gateway supervisor retains native publication through failed candidates and replacement", { timeout: 120_000 }, async t => {
   const reservation = http.createServer();
   await new Promise(resolve => reservation.listen(0, "127.0.0.1", resolve));

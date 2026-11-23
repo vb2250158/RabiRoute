@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LoadOlderHistory from './LoadOlderHistory.vue';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch, type VNodeRef } from 'vue';
 import HistoryEndpointMessage from './HistoryEndpointMessage.vue';
 import type { MessageContextRecord } from '../../../../messageContextStore';
@@ -165,7 +166,7 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
     <v-alert v-if="connectionLost" type="warning" variant="tonal" class="mb-3">{{ t('QQ 连接已断开，保留已加载的消息。') }}</v-alert>
     <div v-if="skippedCount" class="d-flex align-center ga-2 my-2 text-caption text-medium-emphasis" role="status"><v-icon icon="mdi-information-outline" size="16" /><span>{{ t(unreadablePage?'本页消息无法读取，历史记录可能不完整。':'部分消息无法读取，其他消息仍可查看。') }}</span></div>
     <v-progress-linear v-if="loading" indeterminate :aria-label="t('正在读取消息记录')" />
-    <v-btn v-if="cursor!==null&&(!nativeWindow||qqLive)" variant="tonal" :disabled="loading" class="mb-3" @click="load(true)">{{ t('加载更早的消息') }}</v-btn>
+    <LoadOlderHistory v-if="cursor!==null&&(!nativeWindow||qqLive)" :active="active" :loading="loading" @load="load(true)" />
     <v-alert v-if="showEmptyHistory" type="info" variant="tonal">{{ t('此渠道暂无消息记录。') }}</v-alert>
     <div ref="listElement" class="endpoint-history-list" :class="{'qq-history':bubble}" :aria-busy="loading" aria-live="polite">
       <template v-if="bubble">
