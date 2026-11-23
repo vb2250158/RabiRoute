@@ -197,6 +197,7 @@ export async function callNapCat<T>(action: string, payload: unknown, endpoint?:
   const readResponse = async (): Promise<T> => {
     const response = await fetch(`${target.httpUrl.replace(/\/$/, "")}/${action}`, {
       method: "POST",
+      redirect: "error",
       headers,
       body: JSON.stringify(payload),
       signal: controller?.signal

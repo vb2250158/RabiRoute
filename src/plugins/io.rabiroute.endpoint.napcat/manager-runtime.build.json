@@ -1,6 +1,10 @@
 {
   "exports": [
     {
+      "name": "diagnoseNapcatSendFailure",
+      "source": "src/plugins/io.rabiroute.endpoint.napcat/src/sendFailure.ts"
+    },
+    {
       "name": "createNapcatManagerOwner",
       "source": "src/plugins/io.rabiroute.endpoint.napcat/src/integrations/napcat/managerOwner.ts"
     },

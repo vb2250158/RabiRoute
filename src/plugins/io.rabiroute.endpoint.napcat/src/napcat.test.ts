@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getLoginInfo, getMessage } from "./napcat.js";
+import http from "node:http";
+import { getLoginInfo, getMessage, sendGroupMessage } from "./napcat.js";
 
 for (const blockedStage of ["headers", "body"] as const) {
   test(`NapCat login deadline bounds stalled ${blockedStage}, including transports ignoring abort`, async (t) => {
@@ -19,6 +20,26 @@ for (const blockedStage of ["headers", "body"] as const) {
     assert.equal(signal?.aborted, true);
   });
 }
+
+test("OneBot never redirects a send to another endpoint", async t => {
+  let redirectedSends = 0;
+  const server = http.createServer((request, response) => {
+    request.resume();
+    if (request.url === "/send_group_msg") {
+      response.writeHead(307, { location: "/redirected" });
+      response.end();
+    } else {
+      redirectedSends++;
+      response.end(JSON.stringify({ status: "ok", data: { message_id: 1 } }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await assert.rejects(sendGroupMessage({ groupId: "12345", message: "fixture" }, { httpUrl: `http://127.0.0.1:${address.port}`, accessToken: "fixture-token" }));
+  assert.equal(redirectedSends, 0);
+});
 
 test("NapCat login remains compatible without options and accepts bounded reads", async (t) => {
   const originalFetch = globalThis.fetch;

@@ -1,5 +1,7 @@
 # NapCat / OneBot
 
+Failed sends expose `deliveryError.code` for `NAPCAT_LOGIN_REQUIRED`, `QQ_PERMISSION_DENIED`, `NAPCAT_AUTHENTICATION_FAILED`, `NAPCAT_CONNECTION_FAILED`, and `RABI_ROUTE_PERMISSION_DENIED`, with a Chinese `message` and a machine-readable `recoveryAction`. A login error requires verified expired login on the same instance and a connection failure proving that the request was not sent. Timeouts retain `platformResult=unknown`. The initial response and original-ID receipt preserve the same diagnostics. Restoring login does not resend a completed failed delivery.
+
 [中文](README.md)
 
 This endpoint package owns its settings card, transport, protocol and lifecycle. Shared routing, history, configuration and API listener owners are host ports.

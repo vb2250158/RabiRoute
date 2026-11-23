@@ -10,6 +10,8 @@
 
 兼容 Manager 在发送能力目录公布 `napcat.group-forward`。指定实际群号和实例，提交 `data.nodes` 文本条目。条目使用当前机器人署名，回执沿原 `deliveryId` 读取。
 
+发送失败的 `deliveryError.code` 区分 `NAPCAT_LOGIN_REQUIRED`、`QQ_PERMISSION_DENIED`、`NAPCAT_AUTHENTICATION_FAILED`、`NAPCAT_CONNECTION_FAILED` 与 `RABI_ROUTE_PERMISSION_DENIED`，并提供中文 `message` 和 `recoveryAction`。只有同一实例取得已失效的登录证据，且原连接失败能证明请求未发出时，才返回登录错误。超时的 `platformResult` 保持 `unknown`。首次响应和原编号回执使用相同诊断；已结束的失败不会因恢复登录而重新发送。
+
 图片已有所选原消息或转发节点提供的地址时，直接按原读取预算和字节配额下载，不先等待文件解析。图片没有地址时使用 `get_image`；视频、语音和文件仍使用 `get_file`。地址不接受调用方传入，下载请求不携带 OneBot 凭据。
 
 读取旧消息遇到 NapCat 返回缓存失效错误时，先尝试原 ID 附近的历史页；该锚点同样失效时，只补读同一会话最近一页（最多 100 条），并重新匹配原消息 ID 与会话。沿用本次超时、取消和并发预算；页内未找到时仍报告未找到，不能据此判定完整历史中不存在。

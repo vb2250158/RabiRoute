@@ -64,12 +64,35 @@ export const activate = definePlugin({ async activate(context) {
   };
   const nativeProducers = implementation.createNapcatNativeEgressProducers(nativeEgressContext);
   const quickReply = implementation.createNapcatQuickReplyProducer(nativeEgressContext);
+  const failureBinding = args => {
+    const endpoint = args[1];
+    const variant = args[0];
+    const matches = host.manager.readRoutes().flatMap(route => (route.napcatInstances ?? [])
+      .filter(instance => instance.enabled !== false && (endpoint
+        ? instance.id === endpoint.id && instance.httpUrl === endpoint.httpUrl && (instance.accessToken ?? "") === (endpoint.accessToken ?? "")
+        : route.id === variant?.gatewayId && instance.id === variant?.target?.instanceId))
+      .map(instance => ({ gatewayId: route.id, instanceId: instance.id, key: JSON.stringify(instance) })));
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const diagnoseSend = operation => (...args) => {
+    const binding = failureBinding(args);
+    return implementation.diagnoseNapcatSendFailure(() => operation(...args), async () => {
+      if (!binding || failureBinding(args)?.key !== binding.key) return undefined;
+      const health = await implementation.testNapcatHealth(controlContext, {
+        gatewayId: binding.gatewayId, instanceId: binding.instanceId,
+        inspectProcesses: false, readWebuiLoginInfo: true
+      });
+      return failureBinding(args)?.key === binding.key ? health : undefined;
+    });
+  };
   const publicEgress = Object.fromEntries(["readReplySource", "getLoginInfo", "sendGroupMessage", "sendPrivateMessage",
     "uploadGroupFile", "uploadPrivateFile", "readNapCatGroupFiles", "napcatStickerMessage"].map(name => [name, egress[name]]));
   ownMessageEndpointEgress(context, { type: "napcat", operations: {
-    ...publicEgress, sendGroupForwardVariant: groupForward.sendGroupForwardVariant,
-    ...Object.fromEntries(nativeProducers.map(producer => [producer.variant.operation, producer.send])),
-    [quickReply.variant.operation]: quickReply.send
+    ...Object.fromEntries(Object.entries(publicEgress).map(([name, operation]) => [name,
+      ["sendGroupMessage", "sendPrivateMessage", "uploadGroupFile", "uploadPrivateFile"].includes(name) ? diagnoseSend(operation) : operation])),
+    sendGroupForwardVariant: diagnoseSend(groupForward.sendGroupForwardVariant),
+    ...Object.fromEntries(nativeProducers.map(producer => [producer.variant.operation, diagnoseSend(producer.send)])),
+    [quickReply.variant.operation]: diagnoseSend(quickReply.send)
   }, sendVariants: [groupForward.variant, ...nativeProducers.map(producer => producer.variant), quickReply.variant],
     async dispose() {
       await dispose();

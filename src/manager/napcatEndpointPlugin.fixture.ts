@@ -27,7 +27,7 @@ async function template() {
   })();
 }
 
-export async function napcatEndpointFixture() {
+export async function napcatEndpointFixture({ observeRoutes = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "napcat-endpoint-owner-"));
   const source = await template();
   await fs.writeFile(path.join(root, "manager-runtime.mjs"), source.runtime);
@@ -48,9 +48,9 @@ export async function napcatEndpointFixture() {
     } },
     manager: { rootDir: root, managerPort: 0, readOnly: false, shouldAutostart: false, ready: true,
       resourceObjects: resources, protectedResourceObjects: protectedResources,
-      readRuntimes: () => [], appendRouteLog() {}, checkHttpEndpoint: async () => false,
+      readRuntimes: () => observeRoutes ? routes.map(definition => ({ definition, running: false, status: {} })) : [], appendRouteLog() {}, checkHttpEndpoint: async () => false,
       normalizeDefinition: (value: unknown) => value, readRoutes: () => routes, writeRoutes: async () => {}, saveRoute: async () => {},
-      readRoute: () => undefined, readGatewayStatus: () => ({}), routeRunning: () => false, routeStartedAt: () => undefined, requestIsLoopback: () => true, jsonResponse() {},
+      readRoute: () => undefined, readListener: () => undefined, readGatewayStatus: () => ({}), routeRunning: () => false, routeStartedAt: () => undefined, requestIsLoopback: () => true, jsonResponse() {},
       routeVersion: () => "test", syncRoutes() {}, gatewayPayload: () => ({}), log() {} }
   };
   const modules = new Map<PluginCandidate, PluginModule>();

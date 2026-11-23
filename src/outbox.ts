@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { NapCatEndpoint, OneBotMessage } from "./plugins/io.rabiroute.endpoint.napcat/src/napcat.js";
-import { NapCatRequestError } from "./shared/napcatDeliveryError.js";
+import { NapCatRequestError, napcatFailureAdvice, projectNapCatDeliveryError } from "./shared/napcatDeliveryError.js";
 import type { MessageEndpointEgressProvider, MessageEndpointEgressLease } from "@rabiroute/plugin-sdk";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import type { WeComEndpoint } from "./plugins/io.rabiroute.endpoint.wecom/src/wecom.js";
@@ -1196,6 +1196,8 @@ export function projectAgentReplyHistoryResult(data: Readonly<Record<string, unk
     throw new Error("Original Outbox result is invalid.");
   }
   const result: AgentReplyResult = { ok: data.ok, status: data.status as AgentReplyResult["status"] };
+  const deliveryError = projectNapCatDeliveryError(data.deliveryError);
+  if (deliveryError) result.deliveryError = deliveryError;
   if (data.targetType !== undefined) {
     if (data.targetType !== "group" && data.targetType !== "private" && data.targetType !== "role_panel"
       && data.targetType !== "plan_feedback" && data.targetType !== "voice_transcript" && data.targetType !== "rabilink") {
@@ -2288,13 +2290,17 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
 
   if (!policy.outputEnabled) {
     const result: AgentReplyResult = { ...draft("NapCat message sending is disabled by this route policy.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+    result.deliveryError = { action: "route_policy", kind: "rejected", ...napcatFailureAdvice("RABI_ROUTE_PERMISSION_DENIED"), platformResult: "not_sent" };
+    result.reason = result.deliveryError.message;
+    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", withDeliveryTrace(result));
     return result;
   }
 
   if (!policy.supportedOutputs.includes(content.kind)) {
     const result: AgentReplyResult = { ...draft(`NapCat route policy does not allow ${content.kind} payloads.`, text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
-    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
+    result.deliveryError = { action: "route_policy", kind: "rejected", ...napcatFailureAdvice("RABI_ROUTE_PERMISSION_DENIED"), platformResult: "not_sent" };
+    result.reason = result.deliveryError.message;
+    appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", withDeliveryTrace(result));
     return result;
   }
 
@@ -2458,7 +2464,7 @@ async function handleAgentReplyWithEgress(request: AgentReplyRequest, options: A
     const deliveryError = error instanceof NapCatRequestError ? error.diagnostic : undefined;
     let reason = content.managedFileId
       ? (options.withManagedGroupFile ? "Managed group file delivery failed." : "Managed group file resolver is unavailable.")
-      : deliveryError ? "NapCat delivery failed." : error instanceof Error ? error.message : String(error);
+      : deliveryError ? deliveryError.message ?? "NapCat delivery failed." : error instanceof Error ? error.message : String(error);
     if (deliveryError) {
       const details = [deliveryError.kind,
         ...(deliveryError.httpStatus === undefined ? [] : [`HTTP ${deliveryError.httpStatus}`]),

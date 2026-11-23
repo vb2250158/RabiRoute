@@ -9,6 +9,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ## Unreleased
 
 
+## 0.15.66 - 2026-11-23
+
+- NapCat 0.1.27 distinguishes verified login expiry on the same instance, QQ permissions, OneBot authentication, and connection errors using stable diagnostic codes and recovery actions. Unknown login state remains a connection error. Timeouts retain an unknown delivery outcome.
+- Preserve safe delivery diagnostics in Outbox historical receipts and the original delivery trace when Route output policy denies a send. Keep original IDs and idempotency state.
+
 ## 0.15.65 - 2026-11-23
 
 - Restore mobile state, streaming and utterance recognition, and dictionary settings in io.rabiroute.manager.voice-assistant 1.1.23. Bump the desktop assistant to 0.2.4.

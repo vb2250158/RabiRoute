@@ -241,7 +241,7 @@
     {
       "id": "endpoint:napcat",
       "package": "io.rabiroute.endpoint.napcat",
-      "version": "0.1.26",
+      "version": "0.1.27",
       "enabled": true,
       "config": {},
       "grants": []
