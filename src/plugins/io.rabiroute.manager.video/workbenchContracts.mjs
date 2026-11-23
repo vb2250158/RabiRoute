@@ -18,6 +18,8 @@ const revision = object({ revision: integer });
 
 export const workbenchResponses = Object.freeze({
   "workbench.definition": object({ version: integer, capabilities: { type: "object", additionalProperties: object({ label: string, executable: { type: "boolean" }, ports: object({ in: array(string), out: array(string) }) }) }, edgeConditions: array(string), variableTypes: array(string), freshness: array(string), templates: array(opaque), runStates: object({}), nodeStates: object({}) }),
+  "workbench.cli-list": object({ providers: array(object({ id: string, label: string, installUrl: string,
+    installed: { type: "boolean" }, ready: { type: "boolean" }, models: array(object({ id: string, label: string })) })) }),
   "workbench.projects-create": project,
   "workbench.project-read": project,
   "workbench.project-save": project,

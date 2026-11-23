@@ -12,6 +12,7 @@ try:
                          cpu_threads=4, local_files_only=True)
     segments, _ = model.transcribe(
         io.BytesIO(audio), language="zh", beam_size=5,
+        initial_prompt=request.get("prompt") or None,
         condition_on_previous_text=False, vad_filter=True,
         vad_parameters={"min_speech_duration_ms": 180, "min_silence_duration_ms": 300},
     )

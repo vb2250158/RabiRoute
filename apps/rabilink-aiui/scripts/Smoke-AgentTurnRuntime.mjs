@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createAgentTurnRuntime } from '../utils/agent-turn-runtime.js';
-import { AGENT_PROTOCOL, agentLoopModelOptions } from '../utils/agent-decision-protocol.js';
+import { AGENT_PROTOCOL, agentLoopModelOptions, getAgentProtocolFailureReason } from '../utils/agent-decision-protocol.js';
 import { createApiToolRuntime } from '../utils/api-tool-runtime.js';
+import { toolProgressLabel } from '../utils/hud-text.js';
 import { createPageAssistantFixture } from './AssistantSessionFixture.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
@@ -219,9 +220,11 @@ test('local exit ends the turn without another model request and flushes its spo
 });
 
 test('step limits and oversized output stop execution with actionable errors', async () => {
-  let calls = 0;
-  const host = { prompt: async input => action(input,'rabi_api_call',{method:'GET',path:'/api/future'}) };
-  await assert.rejects(createAgentTurnRuntime({ model: host, tools:['rabi_api_call'], maxSteps:2, executeTool:async()=>{ calls++;return ok({}); } }).run('查询'),/TURN_STEP_LIMIT/); assert.equal(calls,2);
+  let calls = 0, requests = 0;
+  const host = { prompt: async input => action(input,'rabi_api_call',{method:'GET',path:'/api/future?page=' + (++requests)}) };
+  await assert.rejects(createAgentTurnRuntime({ model: host, tools:['rabi_api_call'], maxSteps:2, executeTool:async()=>{ calls++;return ok({}); } }).run('查询'),/TURN_STEP_LIMIT/);
+  assert.equal(requests, 2);
+  assert.equal(calls, 1, 'The final step is reserved for an answer');
   const shown=[]; await assert.rejects(createAgentTurnRuntime({ model:{prompt:async()=> 'x'.repeat(16001)},executeTool:async()=>ok({}),onText:value=>shown.push(value.text)}).run('查询'),/TURN_RESPONSE_LIMIT/);assert.deepEqual(shown,[]);
 });
 
@@ -229,7 +232,10 @@ test('main page stays busy across the application loop and applies persona chang
   const source=fs.readFileSync(new URL('../pages/home/index.ink',import.meta.url),'utf8'); const start=source.indexOf('  async executeChatTool('), end=source.indexOf('  cleanupChatModel()',start);
   const profileSource=fs.readFileSync(new URL('../utils/agent-profile-page.js',import.meta.url),'utf8');
   const readiness=profileSource.slice(profileSource.indexOf('  isAiuiVoiceContextReady() {'),profileSource.indexOf('  invalidateAiuiVoiceContext() {')).trim().replace(/,$/,'');
-  const methods=vm.runInNewContext('({'+readiness+','+source.slice(start,end).trim().replace(/,$/,'')+'})',{createAgentTurnRuntime,requestTimeout:(_config,_target,_key,fallback)=>fallback,console,navigator:{onLine:true},wx:{}});
+  const methods=vm.runInNewContext('({'+readiness+','+source.slice(start,end).trim().replace(/,$/,'')+'})',{
+    createAgentTurnRuntime, getAgentProtocolFailureReason, toolProgressLabel,
+    requestTimeout:(_config,_target,_key,fallback)=>fallback, console, navigator:{onLine:true}, wx:{}
+  });
   const pending=deferred();let requests=0,applied=0;
   const host={prompt:async input=> ++requests===1?action(input,'rabi_api_call',{method:'GET',path:'/api/future'}):'已查询。'};
   const page={...methods,config:()=>({}),currentAgentProfileScope:()=>'',pageVisible:true,data:{},chatModelAgentTools:['rabi_api_call'],setData(patch){Object.assign(this.data,patch);},speakText(){},applyPendingDeviceAgentProfile(){applied++;},applyPendingApiTools(){},chatModelApiRuntime:{ handleToolCall:async()=>{await pending.promise;return ok({});} }};

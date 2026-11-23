@@ -39,7 +39,9 @@ Configure trusted machine-local tools and roots in the video component's `workbe
 
 Commands use toolKey, an argv string array, optional timeoutMs and validationOnly. Environment variables are referenced from trusted machine configuration. Processes use the existing ProcessLeaseRegistry with shell disabled and hidden windows. A working directory is not an OS sandbox.
 
-Agent nodes require an exact target (agentAdapter and threadId), source (sourceAgentType and sourceThreadId) and briefRef. Existing adapters own execution. Uncertain delivery queries the original ID. Formal result JSON must contain status=succeeded or status=failed and a reason. Acceptance is not completion. independentFromNodeId can require a reviewer task distinct from the author.
+In an Agent node, select a local CLI and then a model it offers. Open **Agent settings** to detect local installations or open official installation instructions. The Manager owns local CLI execution and checks the structured result and declared artifacts.
+
+To use an existing session, configure the exact target (agentAdapter and threadId), source (sourceAgentType and sourceThreadId), and briefRef. The original adapter owns delivery. Formal result JSON contains `status=succeeded` or `status=failed` and a reason. `independentFromNodeId` can require a reviewer task distinct from the author. If the connector confirms that the task has yet to be sent, the run waits for the Agent. After the connection is restored, checking the run can retry that delivery with its original ID and brief. If the outcome is uncertain, checking reads the original receipt.
 
 Generate nodes submit through the original media owner or reference an existing jobId, then await that owner's terminal receipt. Human completion includes the original attemptId, reviewer identity and evidence. All use the same artifact validator.
 

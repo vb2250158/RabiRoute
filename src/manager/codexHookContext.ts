@@ -6,7 +6,7 @@ import { type RabiContextTriggerKind } from "../context/rabiContextManager.js";
 import { readCodexHookContextInput, type CodexHookContextReadRequest, type CodexHookContextReadReply, type CodexHookRoleSource } from "./codexHookContextRead.js";
 import { ensurePlanStorageLayout, listPlans, RoleKnowledgeCacheUnavailableError, type PlanItem } from "../roleKnowledge.js";
 import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanWorkflow.js";
-import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
+import { buildRoleKnowledgeContextView, turnMemoryReview } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
@@ -872,6 +872,7 @@ export class CodexHookContextService {
     if (!dedicated && shouldRender && (!isReasoningCheckpoint || includeBase)) {
       blocks.push(section("记忆与计划", [
         `Rabi Manager API 基址：${managerBaseUrl}`,
+        turnMemoryReview(role.roleId),
         ...view.apiHintLines,
         "",
         ...(focusedContext ? [] : [

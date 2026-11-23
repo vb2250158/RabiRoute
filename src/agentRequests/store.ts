@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { AsyncResource } from "node:async_hooks";
 import { AgentRequestState, resolveAgentRequestReplyDestination, type AgentRequestRecord, type AgentRequestParty, type PrepareAgentCommunicationInput,
-  type AgentCommunicationPreparation, type EndpointDeliveryMetadata, type AgentRequestSnapshotMetadata } from "./state.js";
+  type AgentCommunicationPreparation, type EndpointDeliveryMetadata, type AgentRequestSnapshotMetadata, type FreezeUnsentEndpointDelivery, type UnsentEndpointDeliveryFreeze } from "./state.js";
 import { JsonFileAgentRequestPersistence, type AgentRequestPersistence } from "./persistence.js";
 import { AgentRequestPersistenceTransport } from "./persistenceTransport.js";
 import type { PreparedEndpointDelivery, EndpointDeliveryReceipt } from "./endpointDelivery.js";
@@ -18,7 +18,7 @@ import { currentOperationContext, recordDataMutationAudit, type RecordedDataMuta
 
 export { AGENT_REQUEST_SCHEMA_VERSION, agentDeliveryPromptHash } from "./state.js";
 export type { AgentResponsePolicy, AgentRequestStatus, AgentRequestParty, AgentRequestResponse, AgentRequestRecord,
-  AgentCommunicationPreparation, PrepareAgentCommunicationInput, EndpointDeliveryMetadata } from "./state.js";
+  AgentCommunicationPreparation, PrepareAgentCommunicationInput, EndpointDeliveryMetadata, FreezeUnsentEndpointDelivery } from "./state.js";
 export type { AgentRequestPersistence } from "./persistence.js";
 export type EndpointDeliverySnapshot = Omit<PreparedEndpointDelivery, "prompt">;
 type Model = { requests: AgentRequestRecord[]; deliveries: EndpointDeliverySnapshot[]; unavailableDeliveryIds: string[];
@@ -388,6 +388,7 @@ export class AgentRequestStore {
   }
   assertEndpointDeliveryActive(id: string): void {
     this.assertComplete(); const delivery = this.deliveries.get(id);
+    if (delivery?.state === "frozen") throw new Error("Original Agent delivery was frozen before sending.");
     if (!delivery || delivery.state === "cancelled") throw new Error("Endpoint delivery is missing or cancelled.");
     const preparation = delivery.preparation, request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined,
       original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
@@ -400,6 +401,9 @@ export class AgentRequestStore {
   }
   onEndpointDeliveryChange(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   bindEndpointDelivery(value: PreparedEndpointDelivery): Promise<void> { return this.mutate("bindEndpointDelivery", [value]); }
+  freezeUnsentEndpointDelivery(input: FreezeUnsentEndpointDelivery): Promise<UnsentEndpointDeliveryFreeze | undefined> {
+    return this.mutate("freezeUnsentEndpointDelivery", [structuredClone(input)]);
+  }
   markEndpointDispatching(id: string): Promise<string> { return this.mutate("markEndpointDispatching", [id]); }
   noteEndpointDeliveryFailure(id: string, error: unknown, options: { blocked?: boolean } = {}): Promise<void> {
     return this.mutate("noteEndpointDeliveryFailure", [id, error instanceof Error ? { __error: true, message: error.message, properties: { code: (error as any).code } } : error, options]);

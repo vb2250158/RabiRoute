@@ -21,6 +21,10 @@ export function roleApiBase(roleId: unknown): string {
   return `/api/roles/${id === ":roleId" ? id : encodeURIComponent(id)}`;
 }
 
+export function turnMemoryReview(roleId: string): string {
+  return `你当前绑定的人格是 ${roleId}。每轮结束前，通过拉比查阅这个人格与本轮有关的记忆，核对是否有下次值得记住的用户偏好、纠正、共同经历、决定或恢复线索。有新内容就当轮写入该人格的近期记忆（${roleApiBase(roleId)}/memory/recent），已有条目有变化就按 ID 更新，写后回读。已有记录足够或没有新事实时即可结束。`;
+}
+
 /** Stable discovery protocol; active operations and their inputs come from Manager. */
 export function planMemoryApiHint(roleId: unknown): string[] {
   return [

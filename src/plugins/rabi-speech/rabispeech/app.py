@@ -118,6 +118,11 @@ class AssistantWakeBody(BaseModel):
     aliases: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=1, max_length=64)
 
 
+class AssistantWakeCaptureBody(AssistantWakeBody):
+    # Recognize the retired selector so it cannot silently select the local microphone.
+    companionClientId: str | None = Field(default=None, max_length=128)
+
+
 class AssistantRealtimeBody(BaseModel):
     captureId: Annotated[str, Field(pattern="^[a-f0-9]{32}$")]
     enabled: bool
@@ -1057,17 +1062,19 @@ def create_app(
         except (ValueError, SpeakerRegistryNotFoundError, SpeakerRegistryStorageError) as exc:
             raise _speaker_http_error(exc) from exc
 
-    def require_assistant_capture(request: Request) -> None:
+    def require_assistant_capture(request: Request, *, retired_source_requested: bool = False) -> None:
         _require_loopback(request)
         supplied = request.headers.get("x-rabispeech-assistant-token", "")
         if (not assistant_audio_token or not assistant_audio_token.isascii() or not supplied.isascii()
                 or not compare_digest(supplied, assistant_audio_token)):
             raise HTTPException(status_code=403, detail="ASSISTANT_CAPTURE_ACCESS_DENIED")
+        if retired_source_requested:
+            raise HTTPException(status_code=409, detail="ASSISTANT_COMPANION_NOT_SELECTED")
 
     @api.get("/v1/internal/assistant-capture", include_in_schema=False)
     async def assistant_capture(request: Request, capture_id: str | None = None,
                                 from_sample: int | None = None) -> StreamingResponse:
-        require_assistant_capture(request)
+        require_assistant_capture(request, retired_source_requested="companion_client_id" in request.query_params)
         try:
             audio = microphone.assistant_audio(capture_id, from_sample)
         except ValueError as error:
@@ -1147,8 +1154,8 @@ def create_app(
             raise HTTPException(status_code=503, detail="ASSISTANT_WAKE_KEYWORDS_UNAVAILABLE") from error
 
     @api.post("/v1/internal/assistant-wake", include_in_schema=False)
-    async def assistant_wake(request: Request, body: AssistantWakeBody) -> StreamingResponse:
-        require_assistant_capture(request)
+    async def assistant_wake(request: Request, body: AssistantWakeCaptureBody) -> StreamingResponse:
+        require_assistant_capture(request, retired_source_requested=body.companionClientId is not None)
         directory = current.assistant_wake_model_dir
         if directory is None:
             raise HTTPException(status_code=503, detail="ASSISTANT_WAKE_MODEL_MISSING")

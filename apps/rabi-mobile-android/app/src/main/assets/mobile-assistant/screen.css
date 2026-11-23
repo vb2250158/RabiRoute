@@ -36,3 +36,9 @@ footer { border-top:1px solid #31434d; }
 #tool, #playing { font-size:13px; margin:0 0 6px; color:#a1e0d9; }
 [hidden] { display:none !important; }
 @media(prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none !important; } }
+
+.voice-mode { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:7px; }
+.voice-mode label { font-size:14px; color:#b0c4ce; }
+.voice-mode select { min-height:44px; font:inherit; padding:6px 9px; color:inherit; background:#243943; border:1px solid #496673; border-radius:8px; }
+#aliases { font-size:14px; color:#b0c4ce; }
+#transcript { color:#a5ffeb; margin:0 0 7px; overflow-wrap:anywhere; }

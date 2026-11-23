@@ -118,7 +118,7 @@ import { recordPersonaUserDelivery } from "./personaUserDeliveryHistory.js";
 import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { readChatDeliveryParties } from "./personaChatDeliveryLookup.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
-import { AgentRequestStore, type AgentRequestParty } from "../agentRequests/store.js";
+import { AgentRequestStore, type AgentRequestParty, type FreezeUnsentEndpointDelivery } from "../agentRequests/store.js";
 import { planBindingMatchesSource, planBindingTargetKey, type PlanBindingSource } from "../shared/planBindingOwner.js";
 import { desktopPetWorkKey, desktopPetWorkSessionKey } from "../shared/desktopPetWorkIdentity.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
@@ -8092,6 +8092,7 @@ agentTasks: Object.freeze({
     if(request.action !== "send" || !request.threadId || request.createIfMissing) throw new Error("An exact existing Agent task is required.");
     return handleAgentThreadRequest(request, agentThreadRequestOptions(request));
   },
+  freezeUnsent: (input: FreezeUnsentEndpointDelivery) => agentRequests.freezeUnsentEndpointDelivery(input),
   async inspect(callerDeliveryId: string, threadId: string, provider: string) {
     await agentRequests.ready();
     const delivery=agentRequests.listEndpointDeliveryMetadata().find(row=>row.callerDeliveryId===callerDeliveryId && row.target.sessionId===threadId && row.target.provider===provider);

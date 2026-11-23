@@ -25,6 +25,10 @@ export function validateGraph(graph, definition) {
   for (const node of graph.nodes) {
     if (!definition.capabilities[node.kind]) fail(`不支持的节点能力：${node.kind}`);
     if (!object(node.config)) fail(`节点 ${node.id} 缺少配置。`);
+    const cli = node.config.cli;
+    if (cli !== undefined && (node.kind !== "agent" || !object(cli) || !["workbuddy","codex"].includes(cli.provider)
+      || Object.keys(cli).some(key=>key!=="provider" && key!=="model")
+      || cli.model !== undefined && (typeof cli.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,119}$/.test(cli.model)))) fail("CLI 和模型选择无效。");
     if (node.textPreview !== undefined && (!object(node.textPreview) || typeof node.textPreview.attemptId !== "string"
       || typeof node.textPreview.text !== "string" || node.textPreview.text.length > 24000)) fail("文本预览无效。");
     if(node.config.independentFromNodeId&&!ids.has(node.config.independentFromNodeId))fail("独立核验节点引用无效。");

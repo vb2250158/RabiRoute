@@ -19,6 +19,21 @@ export async function roleRequest<T>(url: string, init: RequestInit = {}): Promi
   return body.data as T;
 }
 
+export async function readRoleConfiguration<T>(url: string, stillCurrent: () => boolean): Promise<T> {
+  try {
+    return await roleRequest<T>(url);
+  } catch (failure) {
+    if (!(failure instanceof Error) || failure.name !== "TimeoutError" || !stillCurrent()) throw failure;
+    // Retry only this read. Keep the retry short and leave mutation reconciliation to mutateRole.
+    try {
+      return await roleRequest<T>(url, { signal: AbortSignal.timeout(5000) });
+    } catch (retryFailure) {
+      if (!(retryFailure instanceof Error) || retryFailure.name !== "TimeoutError") throw retryFailure;
+      throw new Error("角色配置读取超时，请重试。");
+    }
+  }
+}
+
 export async function mutateRole<T>(roleId: string, action: string, body: unknown, source = ""): Promise<T> {
   const url = `/api/roles/${encodeURIComponent(roleId)}/${action}`;
   const key = `rabi:role-operation:${source}:${roleId}:${action}`;

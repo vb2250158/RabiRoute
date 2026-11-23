@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.20",
+      "version": "0.2.23",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.36",
+      "version": "0.1.37",
       "enabled": true,
       "config": {},
       "grants": []
@@ -385,7 +385,7 @@
     {
       "id": "manager:voice-assistant",
       "package": "io.rabiroute.manager.voice-assistant",
-      "version": "1.1.23",
+      "version": "1.1.24",
       "enabled": true,
       "config": {},
       "grants": []

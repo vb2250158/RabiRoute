@@ -3,7 +3,7 @@ import path from "node:path";
 import { config, type NotificationRule } from "../config.js";
 import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { rabiContextManager } from "../context/rabiContextManager.js";
-import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
+import { buildRoleKnowledgeContextView, turnMemoryReview } from "./roleKnowledgeContext.js";
 import {
   voiceIdentityReviewCapabilityHint,
   needsPlanAssistantHint,
@@ -1222,6 +1222,8 @@ function buildAgentMessage(
       ...memoryConsolidationResultMutationLines({ endpoint: `/api/roles/${roleId}/memory/consolidation-runs/${pending.run.id}/result`, runId: pending.run.id }),
       ...pending.memories.map(item => `- ${item.id}：${item.title}\n${item.content}`)
     ]));
+  } else if (roleId && roleDir && !remote) {
+    contexts.push(turnMemoryReview(roleId));
   }
   const sendRequest = values.sendRequestJson ? JSON.parse(String(values.sendRequestJson)) : null;
   const replyLocator = sendRequest ? JSON.stringify({ routeId: sendRequest.routeId, channel: sendRequest.channel, params: sendRequest.params }) : "";
@@ -1461,6 +1463,7 @@ function buildDetailedAgentMessage(
       `操作前读取当前接口合同：GET ${remotePersona.knowledgeApiBaseUrl}/api/agent/help。`,
       "此远端角色入口只读，不提供远端数据修改、消息外发或跨任务投递；这些操作须在来源 PC 使用Rabi 接口及其授权合同。离线、未授权或身份变化时停止，不改用本机数据。"
     ]) : hasPersona ? section("记忆与计划", [
+      shouldAttachMemoryConsolidation ? "" : turnMemoryReview(String(values.agentRoleId)),
       optionalLine("更新记忆与计划的说明文档", knowledgeAgentInterfaceDocPath ?? values.agentInterfaceDocPath),
       ...(knowledgeView?.apiHintLines ?? []),
       "",
@@ -1564,6 +1567,7 @@ export function buildAgentPacket(
   const templateValues = {
     ...templateValuesForDecision(decision, rule, roleContext),
     ...decision.extraValues,
+    agentRoleId: roleContext.roleId,
     routeKind: decision.routeKind
   };
   const userTemplateText = renderTemplate(rule.template, templateValues);

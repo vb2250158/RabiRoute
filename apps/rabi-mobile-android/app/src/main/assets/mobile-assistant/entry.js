@@ -1,11 +1,21 @@
 import { createAiuiAssistantRuntime } from './sdk/aiui-runtime.js';
 import { createVoiceInteraction } from './sdk/voice-interaction.js';
+import { snapshotRecentSpeech } from './sdk/speech-observation.js';
 import { createPhoneCapture } from './capture.js';
+import { createStreamingRecognition, matchWakeWord } from './asr-stream.js';
+import { createLocalWakeRecognition } from './wake-stream.js';
 
 const ui = Object.fromEntries([...document.querySelectorAll('[id]')].map(node => [node.id, node]));
 const native = globalThis.RabiMobile;
 let enabled = native.voiceEnabled();
 let muted = false;
+let startMode = native.startMode?.() ?? 'manual';
+let backgroundTranscription = native.backgroundTranscription?.() === true;
+let capturing = false;
+let wakeArmed = false;
+let fallback = false;
+let idleTimer;
+let pendingWakeContext;
 let visible = true;
 let running = false;
 let profile = null;
@@ -23,6 +33,14 @@ const label = { MOBILE_COMPUTER_REQUIRED: '请返回消息页，选择一台已�
   MOBILE_COMPUTER_UNAVAILABLE: '选中的电脑未在线。', MOBILE_COMPUTER_REQUEST_FAILED: '连接电脑失败，请检查 RabiLink 后重试。',
   MOBILE_MICROPHONE_IN_USE: '手机正在录音或通话。结束后再开始实时语音。',
   MOBILE_ASR_BACKLOG: '识别服务处理较慢，语音已暂停。',
+  MOBILE_ASR_FAILED: '转写失败，请检查电脑端识别设置。',
+  MOBILE_LOCAL_ASR_UNAVAILABLE: '电脑上的本机识别暂不可用。',
+  MOBILE_STREAM_BACKLOG: '实时识别连接处理较慢，请重新开启。',
+  MOBILE_STREAM_UNAVAILABLE: '当前电脑的实时识别连接不可用。',
+  MOBILE_STREAM_SAMPLE_RATE_UNAVAILABLE: '此设备无法以 16 kHz 采集。',
+  MOBILE_WAKE_UNAVAILABLE: '手机暂时无法检测唤醒词。请刷新连接或开启电脑转写。',
+  MOBILE_WAKE_ENGINE_FAILED: '手机唤醒模型启动失败。请重新开启关键词监听。',
+  MOBILE_WAKE_BACKLOG: '手机唤醒处理延迟，请重新开启关键词监听。',
   ASSISTANT_VOICE_DISABLED: '所选电脑的语音助手已关闭。',
   ASSISTANT_CONTEXT_CHANGED: '电脑端已切换对话，请刷新连接。',
   MOBILE_REPLY_TIMEOUT: '这条消息仍在处理中。请稍后刷新查看结果。',
@@ -82,15 +100,41 @@ function observationOf(result) {
 
 const levels = new Float32Array(bars.length);
 function waveform(value) {
-  if (!running) return;
+  if (!capturing || ui.waveform.hidden) return;
   levels.copyWithin(0, 1);
   levels[levels.length - 1] = value;
   bars.forEach((bar, index) => { bar.style.setProperty('--level', Math.min(1, levels[index] * 8)); });
 }
 
+const recognition = createStreamingRecognition(native);
+window.mobileRecognitionEvent = recognition.receive;
+const localWake = createLocalWakeRecognition(native);
+window.mobileWakeEvent = localWake.receive;
 const asr = createPhoneCapture({
-  transcribe: (bytes, signal) => request('asr', { model: profile.asrModel, audio: encode(bytes) }, signal),
+  transcribe: (bytes, signal, policy) => request('asr', { sessionId:connection,
+    source:policy.kind === 'wake' || policy.local ? 'local' : 'active', audio:encode(bytes) }, signal),
   waveform, phase, mayRecord: () => native.microphoneAvailable(),
+  getPolicy: () => running ? activePolicy() : wakePolicy(),
+  openStream: events => recognition.open(connection, events),
+  openWake: (config, count, events) => localWake.open(config, count, events),
+  matchWake: matchWakeWord,
+  onWake: (_alias, recentSpeech) => {
+    if (!capturing || running || !wakeArmed) return null;
+    enterRealtime();
+    pendingWakeContext = recentSpeech;
+    return activePolicy();
+  },
+  onFallback() {
+    fallback = true;
+    ui.transcript.hidden = true;
+    ui.issue.textContent = '实时识别已断开，正在使用本机整句识别。';
+    ui.issue.hidden = false;
+    renderControls();
+  },
+  onWakeFallback() {
+    ui.issue.textContent = '手机唤醒遇到问题，正在使用已开启的电脑转写。';
+    ui.issue.hidden = false;
+  },
 });
 const tts = {
   adapterId: 'rabi-mobile-audio',
@@ -125,7 +169,11 @@ const tts = {
     audio.onerror = () => { stop(); failed?.(new Error('MOBILE_TTS_PLAYBACK_FAILED')); };
     return { task: { abort: stop }, player: {
       audioPlayer: { onEnded: callback => { ended = callback; }, onError: callback => { failed = callback; } },
-      play: () => audio.play(), stop, destroy: stop,
+      async play() {
+        await asr.beforePlayback();
+        if (!retired) await audio.play();
+      },
+      stop, destroy: stop,
     } };
   },
 };
@@ -149,19 +197,48 @@ const voice = createVoiceInteraction({
         if (status.type === 'error' && running) report(status.error);
       }
     }
-    if (event.type === 'input') phase('正在聆听');
+    if (event.type === 'transcript') {
+      ui.transcript.textContent = event.text;
+      ui.transcript.hidden = !event.text;
+    }
+    if (event.type === 'input') {
+      ui.transcript.hidden = true;
+      phase('正在聆听');
+      renewIdle();
+    }
   },
   onError: error => {
-    if (!running) return;
-    if (error?.name === 'NotAllowedError' || error?.name === 'NotReadableError' || error?.message === 'MOBILE_MICROPHONE_IN_USE') stopVoice();
+    if (!capturing) return;
+    if (error?.name === 'NotAllowedError' || error?.name === 'NotReadableError' || error?.message === 'MOBILE_MICROPHONE_IN_USE'
+      || error?.message?.startsWith('MOBILE_WAKE_')) stopVoice();
     report(error);
   },
 });
 
-const supported = state => state?.capabilities?.mobileVoiceSubmit === true
-  && state.hostSettings?.asrSource === 'host' && state.hostSettings?.ttsSource === 'host'
-  && state.hostSettings?.asrModel && state.hostSettings?.ttsModel && state.hostSettings?.voiceReady
-  && !state.hostSettings.asrIssue && !state.hostSettings.ttsIssue;
+const streaming = host => host?.mobileAudio?.recognition === 'streaming' && host.mobileAudio.sampleRate === 16000;
+const supported = state => {
+  const host = state?.hostSettings;
+  return state?.capabilities?.mobileVoiceSubmit === true && host?.ttsSource === 'host' && host.ttsModel && host.voiceReady
+    && !host.asrIssue && !host.ttsIssue && (streaming(host) || host.asrModel || state.settings?.asrModel);
+};
+const passiveModel = host => typeof host?.mobileAudio?.passiveModel === 'string' && host.mobileAudio.passiveModel || undefined;
+function edgeWakeConfig(host) {
+  const config = host?.mobileAudio?.kws;
+  if (typeof config?.model !== 'string' || typeof config.keywords !== 'string' || typeof config.tokensSha256 !== 'string') return;
+  if (native.wakeSupported?.(config.model, config.tokensSha256)) return config;
+}
+const wakeAvailable = host => Array.isArray(host?.mobileAudio?.wakeAliases) && host.mobileAudio.wakeAliases.length > 0
+  && Boolean(edgeWakeConfig(host) || backgroundTranscription && passiveModel(host));
+
+function activePolicy() {
+  if (!streaming(profile)) return { kind:'utterance' };
+  return { kind:'streaming', fallbackModel:profile.mobileAudio.passiveModel };
+}
+
+function wakePolicy() {
+  return { kind:'wake', model:backgroundTranscription ? passiveModel(profile) : undefined,
+    aliases:profile?.mobileAudio?.wakeAliases ?? [], kws:edgeWakeConfig(profile) };
+}
 
 function renderControls() {
   ui.enabled.checked = enabled;
@@ -169,11 +246,64 @@ function renderControls() {
   ui.start.textContent = running ? '结束实时语音' : '开始实时语音';
   ui.mute.disabled = !running;
   ui.mute.textContent = muted ? '恢复播报' : '播报静音';
-  ui.waveform.hidden = !running;
+  ui.mode.value = startMode;
+  ui.mode.disabled = capturing;
+  ui.wake.disabled = !enabled || !visible || !profile || !wakeAvailable(profile) || running;
+  ui.wake.hidden = startMode !== 'keyword';
+  ui.wake.textContent = wakeArmed ? '停止关键词监听' : '开启关键词监听';
+  ui.aliases.hidden = startMode !== 'keyword';
+  const aliases = Array.isArray(profile?.mobileAudio?.wakeAliases) ? profile.mobileAudio.wakeAliases : [];
+  const local = edgeWakeConfig(profile);
+  ui.aliases.textContent = aliases.length === 0 ? '请在电脑上的人格设置中添加唤醒词。' : wakeAvailable(profile)
+    ? `${local ? '手机检测' : '电脑转写'} · ${aliases.join('、')}`
+    : passiveModel(profile) ? '当前无法用手机检测唤醒词。打开电脑转写后可继续使用。' : '当前没有可用的关键词识别。';
+  ui['background-row'].hidden = startMode !== 'keyword' || !passiveModel(profile);
+  ui.background.checked = backgroundTranscription;
+  ui.background.disabled = capturing;
+  ui.waveform.hidden = !running || streaming(profile) && !fallback;
   if (!running) ui.playing.hidden = true;
 }
 
+function clearIdle() { clearTimeout(idleTimer); }
+
+function renewIdle() {
+  clearIdle();
+  if (!wakeArmed || !running) return;
+  idleTimer = setTimeout(() => {
+    if (submitted.size || voice.getState().inputPending || voice.getState().playback.active) renewIdle();
+    else returnToWake();
+  }, 45000);
+}
+
+function enterRealtime() {
+  generation++;
+  pendingWakeContext = undefined;
+  running = true;
+  fallback = false;
+  voice.setOutputEnabled(!muted);
+  renewIdle();
+  renderControls();
+}
+
+function returnToWake() {
+  if (!wakeArmed) { stopVoice(); return; }
+  clearIdle();
+  running = false;
+  generation++;
+  pendingWakeContext = undefined;
+  voice.setOutputEnabled(false);
+  asr.setPolicy(wakePolicy());
+  ui.transcript.hidden = true;
+  ui.tool.hidden = true;
+  renderControls();
+}
+
 function stopVoice() {
+  clearIdle();
+  pendingWakeContext = undefined;
+  capturing = false;
+  wakeArmed = false;
+  fallback = false;
   running = false;
   generation++;
   submitted.forEach(turn => turn.token?.finish({ speak: false }));
@@ -181,6 +311,7 @@ function stopVoice() {
   voice.suspend();
   levels.fill(0);
   ui.tool.hidden = true;
+  ui.transcript.hidden = true;
   phase(enabled ? '实时语音已结束' : '语音已关闭');
   renderControls();
 }
@@ -234,11 +365,11 @@ async function refresh() {
     if (serial !== refreshSerial || !visible) return;
     connection = state.sessionId;
     profile = supported(state) && connection && state.settings?.voiceEnabled !== false ? state.hostSettings : null;
-    ui.source.textContent = profile ? [profile.personaLabel, '整句识别', '手机播放'].filter(Boolean).join(' · ') : 'RabiLink';
+    ui.source.textContent = profile ? [profile.personaLabel, streaming(profile) ? '流式识别' : '整句识别', '手机播放'].filter(Boolean).join(' · ') : 'RabiLink';
     if (!profile) {
       ui.issue.textContent = state.settings?.voiceEnabled === false ? label.ASSISTANT_VOICE_DISABLED
         : state.capabilities?.mobileVoiceSubmit !== true ? '请更新所选电脑的语音助手插件。'
-        : '请在所选电脑的语音助手中选择人格、本机识别和本机播报服务。';
+        : '请在所选电脑的语音助手中选择人格、受支持的识别服务和本机播报。';
       ui.issue.hidden = false;
     }
     phase(enabled ? profile ? '可以开始实时语音' : '等待电脑配置' : '语音已关闭');
@@ -322,11 +453,17 @@ async function readOutstandingTurns() {
 async function sendSpeech(text, result) {
   if (!profile || !running || !visible) return;
   const requestId = crypto.randomUUID();
-  const turn = { generation, spoken: '', at: Date.now() };
+  const now = Date.now();
+  const context = pendingWakeContext;
+  pendingWakeContext = undefined;
+  const recentSpeech = snapshotRecentSpeech(context?.map(item => ({
+    text:item.text, ageMs:Math.max(0, now - item.capturedAt),
+  })).filter(item => item.ageMs <= 90_000 && item.text !== text.trim()));
+  const turn = { generation, spoken: '', at: now };
   submitted.set(requestId, turn);
   try {
     const response = await request('submit', { action: 'mobile-voice-submit', text, requestId,
-      sessionId: connection, observation: observationOf(result) });
+      sessionId: connection, observation: observationOf(result), recentSpeech });
     if (!response?.accepted || response.sessionId !== connection || response.requestId !== requestId) {
       throw new Error('MOBILE_ASSISTANT_RECEIPT_UNCONFIRMED');
     }
@@ -344,16 +481,47 @@ ui.enabled.addEventListener('change', () => {
   else phase(profile ? '可以开始实时语音' : '等待电脑配置');
   renderControls();
 });
-ui.start.addEventListener('click', () => {
-  if (running) { stopVoice(); return; }
-  if (!profile || !enabled || !visible) return;
-  if (!native.microphoneAvailable()) { report(new Error('MOBILE_MICROPHONE_IN_USE')); return; }
-  running = true;
-  ui.issue.hidden = true;
+function canCapture() {
+  if (!profile || !enabled || !visible) return false;
+  if (native.microphoneAvailable()) return true;
+  report(new Error('MOBILE_MICROPHONE_IN_USE'));
+  return false;
+}
+
+function startCapture() {
+  capturing = true;
   phase('正在打开麦克风');
-  voice.setOutputEnabled(!muted);
-  voice.activate({ continuous: true, interimResults: false });
+  voice.activate({ continuous: true, interimResults: streaming(profile) });
   renderControls();
+}
+
+ui.mode.addEventListener('change', () => {
+  startMode = ui.mode.value;
+  native.setStartMode?.(startMode);
+  renderControls();
+});
+
+ui.background.addEventListener('change', () => {
+  backgroundTranscription = ui.background.checked;
+  native.setBackgroundTranscription?.(backgroundTranscription);
+  renderControls();
+});
+
+ui.wake.addEventListener('click', () => {
+  if (wakeArmed) { stopVoice(); return; }
+  if (!canCapture() || !wakeAvailable(profile)) return;
+  wakeArmed = true;
+  ui.issue.hidden = true;
+  startCapture();
+});
+
+ui.start.addEventListener('click', () => {
+  if (running) { returnToWake(); return; }
+  if (!canCapture()) return;
+  ui.issue.hidden = true;
+  enterRealtime();
+  if (capturing) asr.setPolicy(activePolicy());
+  else startCapture();
 });
 ui.mute.addEventListener('click', () => {
   muted = !muted;
@@ -361,7 +529,7 @@ ui.mute.addEventListener('click', () => {
   renderControls();
 });
 ui.refresh.addEventListener('click', () => {
-  if (running) stopVoice();
+  if (capturing) stopVoice();
   void refresh();
 });
 ui.back.addEventListener('click', () => { stopVoice(); native.close(); });

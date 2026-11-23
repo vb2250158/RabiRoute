@@ -11,6 +11,7 @@ import type { SpeechModel } from "@shared/speechControlContract";
 import { readDraft, writeDraft } from "./videoDraftStorage";
 import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
+import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
 import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
@@ -631,6 +632,7 @@ const workbenchProjectTitle = ref("");
 const projectHome = ref(!projectId.value);
 const mediaCanvasId = ref("");
 const workflowPanel = ref<"settings" | "run">();
+const showCliSettings = ref(false);
 const selectedEdgeId = ref("");
 type PortKind = "step" | "content" | "input";
 const workflowWire = ref<{ from: string; kind: PortKind; point: Point; pointer?: number }>();
@@ -1341,9 +1343,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
 
 <template>
   <v-theme-provider with-background class="video-page">
+    <v-dialog v-model="showCliSettings" max-width="520"><WorkbenchCliSettings v-if="showCliSettings" @close="showCliSettings=false"/></v-dialog>
     <v-overlay :model-value="!draftLoaded" persistent class="align-center justify-center">正在恢复草稿…</v-overlay>
     <section v-if="projectHome" class="project-home">
-      <h1>我的项目</h1>
+      <div class="workbench-project-heading"><h1>我的项目</h1><v-btn variant="text" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></div>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <p v-if="projectsLoading" role="status" class="video-hint">正在加载项目…</p>
       <v-alert v-if="projectsError" type="error" variant="tonal">
@@ -1367,7 +1370,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
     <section v-else-if="catalogProjectId === projectId && workbenchProjectTitle" v-show="!mediaCanvasId" class="project-home">
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" :list-hidden="!!mediaCanvasId" :last-opened-canvas-id="lastOpenedCanvasId" mode="list" @back="action(showProjects)"
-        @media="(id,runId) => action(() => openMediaCanvas(id,runId))"/>
+        @media="(id,runId) => action(() => openMediaCanvas(id,runId))" @cli-settings="showCliSettings=true"/>
     </section>
     <section v-else-if="!mediaCanvasId && error" class="project-home">
       <v-btn prepend-icon="mdi-arrow-left" variant="text" @click="action(showProjects)">我的项目</v-btn>
@@ -1389,6 +1392,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
 
       <PeerServerSelect :model-value="serviceDeviceId" :disabled="serviceBusy" label="模型服务电脑" @changed="selectModelService" />
       <v-btn variant="text" size="small" prepend-icon="mdi-cube-outline" @click="action(openModels)">模型管理</v-btn>
+      <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
       <v-switch :model-value="snapshot?.online || false" :loading="busy" :disabled="busy || !snapshot || installing" hide-details color="primary" aria-label="视频生成服务开关" @update:model-value="value => action(() => request(value ? '/runtime/start' : '/runtime/stop', { method: 'POST' }))" />
     </div>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
@@ -1525,7 +1529,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         </div>
         <button class="canvas-resize-handle" :aria-label="`调整 ${node.title || '流程节点'} 的大小`" @pointerdown.stop="canvas.beginResize($event, node.id)" @keydown="resizeCardWithKeyboard($event, node.id)" />
         <div v-if="selectedWorkflowNode?.id === node.id" class="composer workflow-node-parameters" @pointerdown.stop @contextmenu.stop @wheel.stop>
-          <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + node.id" mode="node" :project-id="projectId" :canvas-id="mediaCanvasId"
+          <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + node.id" mode="node" @cli-settings="showCliSettings=true" :project-id="projectId" :canvas-id="mediaCanvasId"
             :node-id="node.id" :material-inputs="node.inputs" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(node.id)?.length">
             <template #references>
               <div v-if="pendingInput?.to === node.id" class="canvas-reference-chips" role="group" aria-label="选择上游材料">
@@ -1809,6 +1813,7 @@ summary { cursor:pointer; }
 .work-card p { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; padding:10px 12px 4px; font-size:13px; }
 .work-card time { padding:0 12px; font-size:11px; }
 .library-empty { padding:24px 8px; text-align:center; color:var(--rr-muted); font-size:14px; }
+.workbench-project-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .workspace-heading { height:64px; padding:0 24px; margin:0; gap:10px; }
 .workspace-heading>div:first-child { display:flex; align-items:center; gap:14px; }
 .workspace-heading h1 { font-size:16px; font-weight:600; }

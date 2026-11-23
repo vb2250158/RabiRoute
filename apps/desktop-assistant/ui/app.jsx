@@ -29,7 +29,37 @@ function SettingsPage({children,open,onClose,title}) {
     <div className="settings-content">{children}</div>
   </section>;
 }
-const Panel = createAssistantPanel(React, { Modal:SettingsPage,settingsPresentation:'page' });
+const wakeStatus = {
+  disabled: '手动开始实时语音',
+  starting: '正在连接本机麦克风',
+  armed: '正在等待唤醒词',
+  active: '实时语音进行中',
+  'local-fallback': '实时识别暂不可用，正在本机转写',
+  waiting: '本机唤醒连接已断开，正在重试',
+  unavailable: '本机唤醒不可用，请检查常驻语音服务',
+};
+function KeywordWakeSettings({state,settingsTab,command,dirty}) {
+  const current = state?.settings;
+  const [enabled,setEnabled] = React.useState(false);
+  const [aliases,setAliases] = React.useState('');
+  React.useEffect(()=>{
+    const {keywordWakeEnabled,keywordWakeAliases}=current || {};
+    setEnabled(Boolean(keywordWakeEnabled));
+    setAliases(keywordWakeAliases || '');
+  },[current?.keywordWakeEnabled,current?.keywordWakeAliases]);
+  if (settingsTab!=='devices'||!state?.keywordWake) return null;
+  const changed = enabled!==current.keywordWakeEnabled || aliases!==current.keywordWakeAliases;
+  return <fieldset>
+    <legend>实时语音启动方式</legend>
+    <label>启动模式<select value={enabled?'keyword':'manual'} onChange={event=>setEnabled(event.target.value==='keyword')}>
+      <option value="manual">手动开始</option><option value="keyword">手动或关键词唤醒</option>
+    </select></label>
+    {enabled&&<label>唤醒词<textarea rows={3} value={aliases} onChange={event=>setAliases(event.target.value)} placeholder="每行一个词，例如 星河" maxLength={4096}/></label>}
+    <p role="status">{current.voiceEnabled===false?'语音助手已关闭':wakeStatus[state.keywordWake.phase]}</p>
+    <button type="button" disabled={dirty||!changed||(enabled&&!aliases.trim())} onClick={()=>command({action:'settings',patch:{keywordWakeEnabled:enabled,keywordWakeAliases:aliases}},'启动模式已保存。')}>保存启动模式</button>
+  </fieldset>;
+}
+const Panel = createAssistantPanel(React, { Modal:SettingsPage,HostSettings:KeywordWakeSettings,settingsPresentation:'page' });
 function App() {
   const [authenticationRequired,setAuthenticationRequired]=React.useState(!access.hasToken());
   const [entryLink,setEntryLink]=React.useState(''),[connecting,setConnecting]=React.useState(false),[accessError,setAccessError]=React.useState('');

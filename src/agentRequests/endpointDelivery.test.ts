@@ -1608,3 +1608,64 @@ test("a persisted record-only reply reports lost post-write authority as uncerta
   assert.equal(restarted.get(original.id)?.response?.deliveryId, saved.response?.deliveryId);
   assert.equal(f.dispatched(), 1);
 });
+
+test("freezing a proven unsent request wins over a concurrent prepared retry and survives owner recovery", async () => {
+  const f = fixture();
+  const requestBody = { ...f.request, deliveryId: "freeze-original" };
+  const first = await executeEndpointAgentDelivery(requestBody, {
+    ...f.options,
+    refreshEndpoints: (_endpoints, phase) => {
+      if (phase === "dispatch") throw new Error("no connected transport");
+      return Promise.resolve();
+    },
+  });
+  assert.equal(first.statusCode, 503);
+  const delivery = f.store.listEndpointDeliveryMetadata()[0]!;
+  const previous = f.store.list()[0]!;
+  const input = {
+    callerDeliveryId: delivery.callerDeliveryId!, deliveryId: delivery.deliveryId, requestId: previous.id,
+    sourceThreadId: previous.source.threadId, targetThreadId: delivery.target.sessionId, targetProvider: delivery.target.provider,
+  };
+  assert.equal(await f.store.freezeUnsentEndpointDelivery({ ...input, sourceThreadId: "wrong-owner" }), undefined);
+  let release!: () => void, notify!: () => void;
+  const entered = new Promise<void>(resolve => { notify = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const retry = executeEndpointAgentDelivery(requestBody, {
+    ...f.options,
+    async refreshEndpoints(_endpoints, phase) { if (phase === "dispatch") { notify(); await gate; } },
+  });
+  await entered;
+  const sealed = await f.store.freezeUnsentEndpointDelivery(input);
+  release();
+  await retry;
+  assert.equal(sealed?.requestId, previous.id);
+  assert.equal(f.dispatched(), 0);
+  assert.deepEqual(f.store.get(previous.id), previous);
+  const recovered = new AgentRequestStore(f.persistence);
+  assert.equal(recovered.getEndpointDelivery(delivery.deliveryId)?.state, "frozen");
+  assert.deepEqual(await recovered.freezeUnsentEndpointDelivery(input), sealed);
+  await assert.rejects(() => recovered.markEndpointDispatching(delivery.deliveryId), /frozen/);
+  await assert.rejects(() => executeEndpointAgentDelivery(requestBody, { ...f.options, store: recovered }), /frozen/);
+  assert.equal(f.dispatched(), 0);
+});
+
+test("unconfirmed sends and prepared rows without exact no-frame proof cannot freeze", async () => {
+  for (const resetWithoutProof of [false, true]) {
+    const f = fixture();
+    const requestBody = { ...f.request, deliveryId: "freeze-unknown" };
+    const result = await executeEndpointAgentDelivery(requestBody, {
+      ...f.options,
+      async dispatch() { throw new Error("transport receipt unavailable"); },
+    });
+    assert.equal(result.statusCode, 202);
+    const delivery = f.store.listEndpointDeliveryMetadata()[0]!;
+    const request = f.store.list()[0]!;
+    if (resetWithoutProof) await f.store.markEndpointNotSent(delivery.deliveryId);
+    const proof = await f.store.freezeUnsentEndpointDelivery({
+      callerDeliveryId: delivery.callerDeliveryId!, deliveryId: delivery.deliveryId, requestId: request.id,
+      sourceThreadId: request.source.threadId, targetThreadId: delivery.target.sessionId, targetProvider: delivery.target.provider,
+    });
+    assert.equal(proof, undefined);
+    assert.equal(f.store.get(request.id)?.status, "pending_delivery");
+  }
+});

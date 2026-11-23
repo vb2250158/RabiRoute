@@ -14,6 +14,8 @@ The route template should stay thin. Users normally add only rule-specific instr
 
 ## Packet minimization boundaries
 
+Ordinary packets for a local persona and bound Codex turn prompts identify the persona and ask the agent to consult its relevant memories before finishing each turn. Agents are instructed to save new preferences, corrections, experiences or decisions in that persona’s recent memory, update an existing entry when it changes, and verify the write. An adequate existing record needs no duplicate.
+
 Default `focused` mode renders one required-reading list with IDs, summaries and GET endpoints, omitting empty indexes and duplicate recall summaries. Codex Hooks use the same view. Full instructions for plan and memory mutations, cross-persona delivery and remote tasks are read on demand from the corresponding sections of `rabi-agent-interfaces_en.md`; the operation stops if those instructions cannot be read. Packets retain authorization, dynamic Manager identity, idempotency, applicable strong ETag / If-Match and readback requirements. Explicit `legacy` configuration retains the previous index view for existing rollback workflows. Migrate through `contextInjection.mode=focused`; remove this compatibility branch once legacy configurations and their rollback requirement have been retired.
 
 The explicit send request appears only once, in `[回传参数]`; delivery requirements reference that template while retaining the current workflow, target, source credentials and requirement receipts. Focused or immediately addressed discussion references a message ID when the complete same-ID message already appears in recent history. Truncated, unnumbered or absent messages retain their excerpt. History limits and reply chains are unchanged.

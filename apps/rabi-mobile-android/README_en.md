@@ -12,9 +12,13 @@ This directory is the RabiLink phone companion and bundled glasses frontend proj
 
 ## Voice assistant
 
-Open **Voice assistant** from Messages. Enable it, tap **Start live voice**, and grant microphone permission. On the phone, foreground utterance recognition shows a live waveform and sends automatically when transcription finishes. Replies play on the phone. Leaving the page or sending the app to the background releases the phone’s audio resources. The PC continues work it already accepted.
+Open **Voice assistant** from Messages. Enable it, tap **Start live voice**, and grant microphone permission. In the foreground, utterance recognition shows a live waveform and streaming recognition shows live text. A finished transcript sends automatically. Replies play on the phone. Leaving the page or sending the app to the background releases the phone’s audio resources. The PC continues work it already accepted.
 
-Enable the assistant on the selected PC and choose a persona, local ASR, and local TTS. The phone uses the paired RabiLink connection and the persona’s persistent conversation, including its model and tools. A mobile turn plays through its own output binding. Mobile keyword wake and custom streaming providers are currently unavailable.
+Enable the assistant on the selected PC and choose a persona, a recognition service, and local TTS. The phone uses the paired RabiLink connection and the persona’s persistent conversation.
+
+Configure wake words in the PC persona settings. On the phone, choose keyword start mode and arm the listener while the page is visible. Builds that include the wake model detect Mandarin and English keywords on the phone CPU. On a match, live recognition uses the same microphone and receives the audio after the wake word. Enabling **PC standby transcription** sends audible utterances to the selected PC's local recognizer. The first turn after waking can include up to six background transcripts from the preceding 90 seconds. Ending the conversation or leaving it idle returns to keyword standby.
+
+For an offline build with handset wake detection, pass both `-PmobileWakeAar=<official sherpa-onnx 2.0.2 AAR>` and `-PmobileWakeModelDir=<locally provisioned bilingual Zipformer model directory>`. Gradle verifies the runtime, weights, and token-table hashes. Standard builds support manual live voice and opt-in PC-transcription wake. [Official Android runtime](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.2) · [Bilingual keyword model](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/)
 
 For emulator acceptance, assemble :app:assembleDebug and :app:assembleDebugAndroidTest with -PmobileSlim -PmobileAssistantAcceptance -PmobileTestRunner=com.rabi.link.test.MobileAssistantInstrumentation. Install both APKs on the test emulator and run adb shell am instrument -w com.rabi.link.assistantacceptance.test/com.rabi.link.test.MobileAssistantInstrumentation. The instrumented test uses Android’s actual permission, browser capture and playback with a generated input and fixture recognition, model and synthesis responses.
 

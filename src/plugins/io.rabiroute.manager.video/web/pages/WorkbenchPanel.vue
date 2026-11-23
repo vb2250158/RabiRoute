@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import WorkbenchCliPicker from "./WorkbenchCliPicker.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import WorkbenchRunPanel from "./WorkbenchRunPanel.vue";
@@ -22,7 +23,7 @@ const props = defineProps<{
   saveResult?: (nodeId: string, result: TextPreview) => Promise<WorkbenchCanvas>;
 
 }>();
-const emit = defineEmits<{back:[];media:[canvasId:string,runId?:string];runSelected:[runId:string]}>();
+const emit = defineEmits<{back:[];media:[canvasId:string,runId?:string];runSelected:[runId:string];cliSettings:[]}>();
 const project=ref<{title:string;revision:number;defaultCanvasId:string}>(),definition=ref<WorkbenchDefinition>();
 const rows=ref<CanvasSummary[]>([]),cursor=ref<string|null>(null),search=ref(""),trimmed=ref(0),listLoading=ref(false);
 const value=ref<WorkbenchCanvas>(),error=ref(""),busy=ref(false),dirty=ref(false),selected=ref(""),selectedEdge=ref("");
@@ -194,6 +195,7 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
         <v-btn :disabled="busy || project?.defaultCanvasId === value.id" variant="text" @click="action(setDefault)">设为默认</v-btn>
         <v-btn :disabled="busy || !dirty" color="primary" @click="action(save)">保存</v-btn>
       </template>
+      <v-btn v-if="mode === 'list'" variant="text" prepend-icon="mdi-robot-outline" @click="emit('cliSettings')">Agent 设置</v-btn>
       <v-btn v-if="mode === 'list'" :disabled="busy" @click="action(create)">新建画布</v-btn>
       <v-btn v-if="mode !== 'list'" :disabled="busy" variant="text" @click="action(backToProjects)">关闭</v-btn>
     </header>
@@ -230,11 +232,13 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
         <aside v-if="mode === 'settings'" class="tool-rail"><label>画布名称<input v-model="value.name" @input="dirty=true"/></label><v-btn variant="text" size="small" @click="action(async()=>autoLayout())">排列流程节点</v-btn><label>执行目录绑定<input v-model="value.workspaceBindingKey" @input="dirty=true"/></label><details><summary>变量</summary><textarea v-model="variables" rows="6" aria-label="画布变量 JSON" @input="dirty=true"/></details><h3>添加节点</h3><div class="node-palette"><button v-for="(entry,kind) in definition?.capabilities" :key="kind" @click="action(async()=>add(String(kind)))"><span aria-hidden="true">＋</span>{{entry.label}}</button></div><h3>阶段</h3><div class="stage-form"><input v-model="stageName" aria-label="新阶段名称" placeholder="阶段名称"/><button :disabled="!stageName.trim()" aria-label="添加阶段" @click="createStage">＋</button></div><details class="connection-tools"><summary>键盘连接</summary><select v-model="edgeFrom" aria-label="前置节点"><option value="">选择前置</option><option v-for="node in value.graph.nodes.filter(n=>ports(n,'out').length)" :key="node.id" :value="node.id">{{node.title}}</option></select><select v-model="edgeTo" aria-label="后继节点"><option value="">选择后继</option><option v-for="node in value.graph.nodes.filter(n=>ports(n,'in').length)" :key="node.id" :value="node.id">{{node.title}}</option></select><select v-model="edgeCondition" aria-label="连接条件"><option value="success">成功后</option><option value="completed">结束后</option></select><v-btn :disabled="!edgeFrom||!edgeTo" @click="action(async()=>connect())">连接</v-btn></details></aside>
         <aside v-if="mode === 'node' && activeNode" class="inspector" :class="{'creative-inspector':creativeNode}" aria-label="节点参数">
           <slot name="references"/>
+          <WorkbenchCliPicker v-if="parsedNode && activeNode.kind === 'agent'" :model-value="parsedNode.config.cli"
+            :bound="Boolean(parsedNode.config.agentBindingKey || parsedNode.config.target?.threadId)"
+            @update:model-value="selection=>updateConfig({...parsedNode!.config,cli:selection})" @settings="emit('cliSettings')"/>
           <template v-if="creativeNode && parsedNode">
             <textarea class="creative-prompt" :value="parsedNode.config.textPrompt" aria-label="生成提示词" maxlength="10000" rows="4"
               placeholder="写下你的要求…" @input="updateConfig({...parsedNode.config,textPrompt:($event.target as HTMLTextAreaElement).value})"/>
             <div class="creative-footer">
-              <span>{{ parsedNode.config.agentBindingKey || (parsedNode.config.target?.threadId ? '已选对话' : '配置 Agent') }}</span>
               <WorkbenchRunPanel :key="projectId+':'+value.id+':'+activeNode.id" :project-id="projectId" :canvas-id="value.id" :node-id="activeNode.id"
                 :revision="value.revision" :dirty="dirty||busy" :can-run="activeNode.enabled!==false && (!!String(parsedNode.config.textPrompt ?? '').trim() || !!contentCount)"
                 :save-before-run="saveBeforeRun" :save-result="storeResult" :states="definition?.nodeStates" :run-states="definition?.runStates"/>

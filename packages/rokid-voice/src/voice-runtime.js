@@ -24,6 +24,7 @@ function frozenCapability(input) {
     locales: Object.freeze([input.locale]),
     supportsPartial: input.kind === "asr" ? (input.available ? null : false) : undefined,
     supportsContinuous: input.kind === "asr" ? input.available : undefined,
+    supportsDictionary: input.kind === "asr" ? false : undefined,
     supportsCancel: input.supportsCancel,
     supportsPlaybackReceipt: input.kind === "tts" ? false : undefined,
     reason: input.reason || ""

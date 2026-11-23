@@ -1418,14 +1418,12 @@ export default {
   onVoiceWakeup(event) {
     if (this.data.modelProbe || !this.data.voiceAssistantEnabled) return;
     const keyword = String(event?.keyword || "").trim();
-    if (!this.data.voiceWakeEnabled && keyword !== "clickAiAssist") return;
+    const touchWake = keyword === "clickAiAssist";
+    if (!this.data.voiceWakeEnabled && !touchWake) return;
     this.appendLog(keyword ? `唤醒词：${keyword}` : "收到语音唤醒。");
     if (this.data.agentSpeaking || this.data.assistantModelBusy) {
-      this.interruptAiuiPlayback("wakeup");
-      if (!this.recognition) {
-        if (this.data.isTranscriptionMode) this.resumeTranscription("wakeup");
-        else if (this.data.isConfigurationMode) this.resumeConfigurationListening("wakeup");
-      }
+      if (touchWake) this.interruptAiuiPlayback("touch");
+      if (!this.recognition) this.startRealtimeVoice("wakeup");
       return;
     }
     if (this.data.needsDeviceSetup) {
@@ -1433,11 +1431,11 @@ export default {
     }
     if (this.data.isTranscriptionMode) {
       if (!this.data.transcriptionDesired || !this.data.transcriptionListening) {
-        this.resumeTranscription("wakeup");
+        this.startRealtimeVoice("wakeup");
       }
       return;
     }
-    if (this.data.isConfigurationMode) this.resumeConfigurationListening("wakeup");
+    if (this.data.isConfigurationMode) this.startRealtimeVoice("wakeup");
   },
 
   clearDeviceTokenClaimTimer() {
@@ -4230,9 +4228,11 @@ export default {
     this.saveVoicePreferences(this.data.voiceAssistantEnabled, !this.data.voiceWakeEnabled);
   },
 
-  startRealtimeVoice() {
-    if (this.data.isConfigurationMode) this.resumeConfigurationListening("button");
-    else this.resumeTranscription("button");
+  startRealtimeVoice(origin) {
+    if (this.data.modelProbe || !this.data.voiceAssistantEnabled) return;
+    const source = origin === "wakeup" ? "wakeup" : "button";
+    if (this.data.isConfigurationMode) this.resumeConfigurationListening(source);
+    else this.resumeTranscription(source);
   },
 
   pauseTranscription() {
@@ -5451,7 +5451,10 @@ export default {
         playbackCaptionText: event.text, playbackCaptionStart: 0, playbackCaptionLength: 0 });
     } else if (event.type === "cue") {
       const word = String(event.cue?.text || "").trim();
-      this.setData({ ...speechCaption(event.text, event.cue), agentSpeakingCue: word, agentStatus: `${activeName}播报中` });
+      const cue = Number.isInteger(event.cue?.charIndex)
+        ? { ...event.cue, charIndex: event.cue.charIndex - (event.textOffset ?? 0) }
+        : event.cue;
+      this.setData({ ...speechCaption(event.text, cue), agentSpeakingCue: word, agentStatus: `${activeName}播报中` });
     } else if (event.type === "play-requested") {
       this.setData({ agentSpeaking: true, transcriptionState: "正在播报" });
       console.info("[RabiLink AIUI] SpeechAudioPlayer playback requested");

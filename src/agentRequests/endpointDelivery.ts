@@ -23,7 +23,7 @@ export type PreparedEndpointDelivery = {
   executionOptionsHash: string;
   executionOptions: EndpointExecutionOptions;
   preparation: AgentCommunicationPreparation;
-  state: "prepared" | "dispatching" | "committed" | "cancelled";
+  state: "prepared" | "dispatching" | "committed" | "cancelled" | "frozen";
   createdAt?: string;
   updatedAt?: string;
   lastAttemptAt?: string;

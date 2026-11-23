@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { transformWindowsSecret } from '@rabilink/desktop-voice-service/windows-secrets';
-import { initialAssistantSettings, patchAssistantSettings, validateAssistantSettings, previewAssistantSettings } from '@rabilink/desktop-voice-service/settings';
+import { initialAssistantSettings, patchAssistantSettings, previewAssistantSettings } from '@rabilink/desktop-voice-service/settings';
 import { speechCredentialRef } from '@rabilink/desktop-voice-service/provider-profiles';
 import { modelCredentialRef } from '@rabilink/desktop-voice-service/model-providers';
 import {webSearchCredentialRef} from '@rabilink/desktop-voice-service/web-search-catalog';
@@ -14,7 +14,7 @@ export async function openSettingsStore(directory, { protect = value => transfor
   try {
     const document = JSON.parse(await readFile(path, 'utf8'));
     if (document.version !== 1 || !document.encrypted || typeof document.encrypted !== 'object') throw Error('ASSISTANT_SETTINGS_FILE_INVALID');
-    settings = validateAssistantSettings({ ...settings, ...document.settings }); encrypted = document.encrypted;
+    settings = initialAssistantSettings({overrides:document.settings}); encrypted = document.encrypted;
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const enqueue = action => { const operation = serial.then(action); serial = operation.catch(() => {}); return operation; };
   const commit = async (nextSettings, nextEncrypted) => {

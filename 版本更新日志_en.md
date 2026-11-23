@@ -8,6 +8,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.68 - 2026-11-23
+
+- Retry timed-out role configuration reads once and reject capture and wake requests that select a retired companion device.
+- Update recognition, wake and caption handling for the standalone web assistant, Android and Rokid.
+- Let workbench nodes select an agent CLI and model. Only release cancelled workbench runs when the original delivery is proven unsent.
+- Prompt sessions bound to a local persona to review relevant memories on ordinary turns.
+
 ## 0.15.67 - 2026-11-23
 
 - NapCat 0.1.28 fixes the first sign-in response being discarded during settings initialization and stale reads after switching Routes. The card loads with the plugin entry, bounds status reads and retains an existing QR code. Native QQ sign-in errors are displayed without repeating sign-in actions or messages.

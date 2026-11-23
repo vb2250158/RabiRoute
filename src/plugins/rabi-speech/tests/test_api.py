@@ -219,8 +219,9 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
         monkeypatch.setattr(MicrophoneService, "start", start)
         monkeypatch.setattr(MicrophoneService, "stop", stop)
 
-    def local_capture(_self, capture_id, from_sample, *, companion_client_id):
-        assert (capture_id, from_sample, companion_client_id) == (None, None, None)
+    def local_capture(_self, capture_id, from_sample):
+        assert (capture_id, from_sample) == (None, None)
+        lifecycle.append("local-capture")
 
         async def chunks():
             yield chunk
@@ -246,11 +247,12 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
         assert client.get("/health").status_code == 404
         assert client.get("/openapi.json").status_code == 404
         assert client.post("/v1/microphone/start").status_code == 404
-        response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"},
-                               json={**body, "companionClientId": "glasses-fixture"})
-        assert response.status_code == 409
-        assert response.json()["detail"] == "ASSISTANT_COMPANION_NOT_SELECTED"
-        assert lifecycle == []
+    retired_source = {**body, "companionClientId": "glasses-fixture"}
+    assert client.post(endpoint, json=retired_source).status_code == 403
+    response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"}, json=retired_source)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "ASSISTANT_COMPANION_NOT_SELECTED"
+    assert lifecycle == []
     for _ in range(2):
         response = client.post(endpoint, headers={"x-rabispeech-assistant-token": "owned-fixture"}, json=body)
         assert response.status_code == 200
@@ -261,7 +263,8 @@ def test_private_assistant_wake_exposes_only_configured_alias_indices_and_sample
              "aliasIndex": 1, "utteranceStartSample": 1220, "observedThroughSample": 2800,
              "keywordStartSample": 1280, "replayFromSample": 1600, "recentSpeech": []},
         ]
-    assert lifecycle == (["start", "stop"] * 2 if capture_only else [])
+    local_round = ["start", "local-capture", "stop"] if capture_only else ["local-capture"]
+    assert lifecycle == local_round * 2
 
 
 def test_private_assistant_fallback_uses_only_firered_without_retaining_raw_audio(tmp_path: Path, monkeypatch) -> None:

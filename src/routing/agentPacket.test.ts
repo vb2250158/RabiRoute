@@ -68,11 +68,15 @@ test("focused packets render one required item and gate optional remote instruct
       requiredReadItems: [{ id: "memory-example", type: "recent_memory", title: "唯一召回标题", summary: "唯一召回摘要",
         score: 100, endpoint: "/api/roles/TestRole/memory/recent/memory-example", revisionAt: "2026-09-08T00:00:00.000Z" }]
     };
-    const build = (rawMessage: string) => buildPublishedAgentPacket({
+    const build = (rawMessage: string, contextDetail: "brief" | "full" = "full") => buildPublishedAgentPacket({
       route, routeKind: "manual_trigger", record: { time: 1, source: "manual", rawMessage },
       extraValues: {}, matchedRules: [rule], routeVariables: {}, routeText: rawMessage
-    }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge, contextDetail: "full" });
+    }, rule, { roleId: "TestRole", roleDir, rolePath: path.join(roleDir, "persona.md"), dataDir: roleDir }, { roleKnowledge: knowledge, contextDetail });
     const ordinary = build("你好").content;
+    for (const content of [ordinary, build("你好", "brief").content]) {
+      assert.match(content, /当前绑定的人格是 TestRole。每轮结束前/);
+      assert.match(content, /\/api\/roles\/TestRole\/memory\/recent/);
+    }
     const directRule: NotificationRule = { ...rule, template: "{message}", agentTarget: {
       kind: "session", agentAdapter: "grokBot", agentTargetId: "local:grokBot", sessionId: "example-group",
       sessionName: "Example group", workspace: "", deliveryType: "group", sendMode: "identity",
@@ -154,6 +158,7 @@ test(`${mode} memory consolidation packet excludes non-candidates while ordinary
     assert.match(consolidation, /\[处理前上下文确认\][\s\S]*GET \/api\/roles\/ExampleRole\/memory\/recent\/candidate-memory/);
     assert.doesNotMatch(consolidation, /非候选|unrelated-/);
     assert.match(consolidation, /runId：run-example/);
+    assert.doesNotMatch(consolidation, /每轮结束前/);
     assert.match(consolidation, /memory\/consolidation-runs\/run-example\/result/);
     assert.match(consolidation, /Idempotency-Key/);
     assert.match(consolidation, /If-Match/);

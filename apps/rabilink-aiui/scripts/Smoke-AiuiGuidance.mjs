@@ -6,6 +6,7 @@ import { guidancePageMethods } from '../utils/guidance-page.js';
 import { createPageAssistantFixture } from './AssistantSessionFixture.mjs';
 import { requestTimeout } from '../utils/timeout-settings.js';
 import { getAgentProtocolFailureReason } from '../utils/agent-decision-protocol.js';
+import { toolProgressLabel } from '../utils/hud-text.js';
 import { createSpeechPlayback } from '../../../packages/assistant-runtime/src/speech-playback.js';
 import { attachPageVoiceFixture } from './VoicePageFixture.mjs';
 const source = await fs.readFile(new URL('../pages/home/index.ink', import.meta.url), 'utf8');
@@ -15,7 +16,7 @@ function extract(start, end) { const i = source.indexOf(start); const j = source
 function fixture() {
   const requests = [], resolvers = [], saved = [];
   const storage = new Map(); let storageFailure = false;
-  const context = vm.createContext({ console, requestTimeout, getAgentProtocolFailureReason, navigator: { onLine: true }, setTimeout, clearTimeout,
+  const context = vm.createContext({ console, requestTimeout, getAgentProtocolFailureReason, toolProgressLabel, navigator: { onLine: true }, setTimeout, clearTimeout,
     wx: { getStorageSync: key => storage.get(key), setStorageSync: (key, value) => { if (storageFailure) throw Error('full'); storage.set(key, JSON.parse(JSON.stringify(value))); } } });
   const methods = vm.runInContext(`({${readiness},${extract('  async executeChatTool(', '  cleanupChatModel()')},${extract('  onVoiceWakeup(', '  clearDeviceTokenClaimTimer()')}})`, context);
   const page = { ...methods, ...guidancePageMethods, currentAgentProfileScope: () => '', pageVisible: true, data: { agentSpeaking: true }, speechActive: true,
@@ -126,8 +127,14 @@ test('interim speech preserves inference; final guidance enters the next step of
 });
 test('wakeup preserves inference and playback echo does not interrupt', () => {
   const f = fixture(); f.page.deviceAgentTurnActive = true; f.page.aiuiPlaybackText = '已经查询完成。';
+  Object.assign(f.page.data, { voiceAssistantEnabled: true, voiceWakeEnabled: true });
+  f.page.recognition = {};
   assert.equal(f.page.stopAiuiPlaybackForInput('已经查询完成'), false); assert.equal(f.page.stops, undefined);
-  f.page.onVoiceWakeup({ keyword: '唤醒词' }); assert.equal(f.page.stops, 1); assert.equal(f.page.deviceAgentTurnActive, true);
+  f.page.onVoiceWakeup({ keyword: '唤醒词' });
+  assert.equal(f.page.stops, undefined);
+  assert.equal(f.page.stopAiuiPlaybackForInput('等一下，我还有个问题'), true);
+  assert.equal(f.page.stops, 1);
+  assert.equal(f.page.deviceAgentTurnActive, true);
   assert.equal(f.page.stopAiuiPlaybackForInput('已经查询完成'), true); // An old utterance is not an active playback echo.
   assert.equal(f.page.aiuiSpeechSuppressed, true); // Interim input during reasoning suppresses later old-turn speech too.
   f.page.destroyed = true; f.page.aiuiGuidanceQueue = [{ text: '等待引导' }]; f.page.drainAiuiGuidance(); assert.deepEqual(f.requests, []);

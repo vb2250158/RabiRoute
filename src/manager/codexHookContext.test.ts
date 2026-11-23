@@ -579,6 +579,10 @@ test("binding and base context are owned by Rabi Manager", (t) => {
   assert.doesNotMatch(result.additionalContext, /plan-hook/);
   assert.ok(fs.existsSync(storePath));
   assert.ok(result.additionalContext.length <= 6200);
+  const { sessionId, roleId } = result.binding;
+  const next = service.handleContext({ sessionId, eventName: "UserPromptSubmit", turnId: "next", prompt: "你好" });
+  assert.ok(next.additionalContext.includes(`当前绑定的人格是 ${roleId}。每轮结束前`));
+  assert.ok(next.additionalContext.includes(`/api/roles/${roleId}/memory/recent`));
 });
 
 test("default Codex hook context keeps unrelated plan and memory indexes on demand", (t) => {

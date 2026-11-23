@@ -12,7 +12,7 @@ export type RoleDetail = { roleId: string; archivedAt: string | null; revision: 
   runningWork: number; config: RoleConfiguration; routes: RoleConfigurationRoute[] };
 
 export { roleRequest, mutateRole } from "../roleConfigurationClient";
-import { roleRequest, mutateRole } from "../roleConfigurationClient";
+import { readRoleConfiguration, roleRequest, mutateRole } from "../roleConfigurationClient";
 
 export async function findFirstAvailableRole(source: string): Promise<RoleSummary | undefined> {
   if (source) await bootstrapRemotePersonaService(source);
@@ -99,8 +99,10 @@ export const useRoleStore = defineStore("roles", () => {
     error.value = "";
     try {
       if (source) await bootstrapRemotePersonaService(source);
-      const result = await roleRequest<RoleDetail>(endpoint(`/api/roles/${encodeURIComponent(id)}/configuration`));
-      if (generation !== requestVersion || id !== selectedRoleId.value || source !== sourceDeviceId.value) return;
+      const stillCurrent = () => generation === requestVersion && id === selectedRoleId.value && source === sourceDeviceId.value;
+      if (!stillCurrent()) return;
+      const result = await readRoleConfiguration<RoleDetail>(endpoint(`/api/roles/${encodeURIComponent(id)}/configuration`), stillCurrent);
+      if (!stillCurrent()) return;
       detail.value = result;
       draft.value = { id, gatewayPort: 0, enabled: true, agentRoleId: id, agentRoleFile: "persona.md",
         agentRoleDeviceId: source || undefined, ...result.config };

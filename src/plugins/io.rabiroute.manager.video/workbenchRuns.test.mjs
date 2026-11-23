@@ -116,6 +116,39 @@ test("restart preserves unknown execution locks instead of rerunning",async t=>{
   assert.equal((await next.read(run.id)).state,"interrupted");
   await assert.rejects(next.start(f.project.id,f.canvas.id,{id:randomUUID(),revision:run.canvasRevision}),error=>error.status===409);
 });
+test("selected Agent CLI receives the prompt on stdin and supplies text and fresh artifacts without a Desktop delivery", async t => {
+  const f = await fixture(t);
+  const target = path.join(f.output,"cli-output.txt");
+  const choices = [];
+  f.owner.cli = { resolve: async selection => {
+    choices.push(selection);
+    return { executable: process.execPath, argv: ["cli-fixture"], cwd: f.output, env: {} };
+  } };
+  f.owner.runtime.agentTasks = { send() { throw new Error("CLI execution called the Desktop transport"); } };
+  let launches = 0;
+  f.owner.runtime.launchWorkbenchProcess = (request,output) => {
+    launches++;
+    assert.equal(request.cwd,f.output);
+    assert.ok(request.stdin.startsWith("Write the isolated result"));
+    assert.deepEqual(request.argv,["cli-fixture"]);
+    const settled = (async () => {
+      await fs.writeFile(target,"this run");
+      const result = { type:"result", subtype:"success", result:JSON.stringify({status:"succeeded",text:"CLI answer"}) };
+      await output("stdout",JSON.stringify(result)+"\n");
+      return { exitCode:0, terminated:true };
+    })();
+    return { id:randomUUID(), settled };
+  };
+  const run = await f.run([{id:"cli",kind:"agent",config:{cli:{provider:"workbuddy",model:"fixture"},textPrompt:"Write the isolated result",textOutput:true},
+    requirements:[{key:"output",root:"output",path:"cli-output.txt",freshness:"produced",required:true}]}]);
+  assert.equal(run.state,"succeeded");
+  assert.equal(run.attempts.cli.outputText,"CLI answer");
+  assert.equal(run.attempts.cli.receipt.provider,"workbuddy");
+  assert.equal(run.attempts.cli.artifacts.length,1);
+  assert.equal(launches,1);
+  assert.ok(choices.every(choice => choice.provider === "workbuddy" && choice.model === "fixture"));
+});
+
 test("Agent delivery uncertainty queries the same request and requires a formal completion",async t=>{
   const f=await fixture(t);await fs.writeFile(path.join(f.output,"brief.txt"),"示例任务书");let sends=0,completed=false,requestId;
   f.owner.runtime.agentTasks={send:async request=>{sends++;requestId=request.deliveryId;assert.equal(request.threadId,"exact-task");throw new Error("response lost");},inspect:async id=>{
@@ -129,6 +162,74 @@ test("Agent delivery uncertainty queries the same request and requires a formal 
   const finished=await f.owner.read(run.id);
   assert.equal(finished.state,"succeeded");assert.equal(sends,1);
   assert.equal(finished.attempts.agent.reason,undefined);
+});
+
+test("a proven unsent Agent request can be recovered on an explicit refresh", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.output, "brief.txt"), "原任务书");
+  const sends = [];
+  const deliveryId = "native-delivery";
+  const requestId = "native-request";
+  let inspected = { deliveryId, state: "prepared", request: { id: requestId, status: "pending_delivery" } };
+  f.owner.runtime.agentTasks = {
+    async send(request) {
+      sends.push(request);
+      if (sends.length === 1) return {
+        statusCode: 503,
+        data: {
+          delivery: { deliveryId, status: "prepared", retryable: true },
+          communication: { deliveryId, requestId },
+          error: { stage: "target_verification" },
+        },
+      };
+      inspected = { deliveryId, state: "accepted", request: { id: requestId, status: "awaiting_response" } };
+      return { statusCode: 200, data: { status: "delivered" } };
+    },
+    async inspect(attemptId) {
+      assert.equal(attemptId, sends[0].deliveryId);
+      return inspected;
+    },
+  };
+  const node = { id: "agent", kind: "agent", config: {
+    target: { threadId: "original", agentAdapter: "test" },
+    source: { sourceThreadId: "source", sourceAgentType: "codex" },
+    briefRef: { root: "output", path: "brief.txt" },
+  } };
+  const original = await f.run([node]);
+  assert.equal(original.state, "waiting_agent");
+  assert.match(original.attempts.agent.reason, /尚未送达/);
+  await f.owner.pump(f.owner.runs.get(original.id));
+  assert.equal(sends.length, 1, "background observation cannot resend");
+
+  inspected = { ...inspected, deliveryId: "different-owner-receipt" };
+  await f.owner.refresh(original.id);
+  await f.owner.flights.get(original.id);
+  assert.equal(sends.length, 1, "the previous result cannot authorize a different receipt");
+
+  inspected = { ...inspected, deliveryId };
+  await fs.writeFile(path.join(f.output, "brief.txt"), "变更后的任务书");
+  await f.owner.refresh(original.id);
+  await f.owner.flights.get(original.id);
+  assert.equal(sends.length, 1, "the original identifier cannot authorize a changed prompt");
+  assert.match((await f.owner.read(original.id)).attempts.agent.reason, /原任务书内容已变化/);
+
+  await fs.writeFile(path.join(f.output, "brief.txt"), "原任务书");
+  await f.owner.refresh(original.id);
+  await f.owner.flights.get(original.id);
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends[1], sends[0]);
+  assert.equal((await f.owner.read(original.id)).attempts.agent.state, "running");
+
+  inspected = { deliveryId, state: "accepted", request: {
+    id: requestId, status: "responded",
+    response: { by: { threadId: "original", agentAdapter: "test" }, result: '{"status":"succeeded"}' },
+  } };
+  await f.owner.refresh(original.id);
+  await f.owner.flights.get(original.id);
+  const finished = await f.owner.read(original.id);
+  assert.equal(finished.state, "succeeded");
+  assert.equal(finished.attempts.agent.receipt.requestId, requestId);
+  assert.equal(sends.length, 2);
 });
 
 test("an invalid formal Agent result fails the gate and releases the run for retry", async t => {
@@ -296,6 +397,66 @@ test("cancel returns while original Agent and media submissions are in flight an
     assert.deepEqual(await fs.readdir(path.join(f.owner.root,"locks")),[]);
   });
 });
+test("cancelling a prepared Agent attempt retains its lock until the original delivery owner confirms a durable freeze", async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.output, "brief.txt"), "original brief");
+  const request = { id: "original-request", status: "pending_delivery" };
+  const deliveryId = "original-delivery";
+  const frozenAt = "2026-11-21T00:00:00.000Z";
+  let callerDeliveryId;
+  let sends = 0;
+  let ownerConfirmed = false;
+  let reservedState = "prepared";
+  const verificationCalls = [];
+  f.owner.runtime.agentTasks = {
+    async send(input) {
+      sends++;
+      callerDeliveryId = input.deliveryId;
+      return {
+        statusCode: 503,
+        data: {
+          delivery: { deliveryId, status: "prepared", retryable: true },
+          communication: { deliveryId, requestId: request.id },
+          error: { stage: "target_verification" },
+        },
+      };
+    },
+    async inspect(id) {
+      assert.equal(id, callerDeliveryId);
+      return { deliveryId, state: reservedState, request: { ...request } };
+    },
+    async freezeUnsent(binding) {
+      verificationCalls.push(binding);
+      if (!ownerConfirmed) return undefined;
+      reservedState = "frozen";
+      return { deliveryId, requestId: request.id, callerDeliveryId, frozenAt };
+    },
+  };
+  const run = await f.run([{ id: "agent", kind: "agent", config: {
+    target: { threadId: "original-target", agentAdapter: "test" },
+    source: { sourceThreadId: "original-source", sourceAgentType: "codex" },
+    briefRef: { root: "output", path: "brief.txt" },
+  } }]);
+  assert.equal((await f.owner.cancel(run.id)).state, "cancelling");
+  assert.equal((await f.owner.refresh(run.id)).state, "cancelling");
+  const locks = path.join(f.owner.root, "locks");
+  assert.ok((await fs.readdir(locks)).length > 0);
+
+  ownerConfirmed = true;
+  const finished = await f.owner.refresh(run.id);
+  assert.equal(finished.state, "cancelled");
+  assert.equal(finished.attempts.agent.state, "cancelled");
+  assert.deepEqual(await fs.readdir(locks), []);
+  const originalBinding = { deliveryId, requestId: request.id, callerDeliveryId,
+    sourceThreadId: "original-source", targetThreadId: "original-target", targetProvider: "test" };
+  assert.deepEqual(verificationCalls, [originalBinding, originalBinding]);
+  assert.deepEqual(finished.attempts.agent.cancellationEvidence, {
+    kind: "original_agent_delivery_frozen", deliveryId, requestId: request.id, callerDeliveryId, frozenAt,
+  });
+  assert.equal((await f.owner.runtime.agentTasks.inspect(callerDeliveryId)).request.status, "pending_delivery");
+  assert.equal(sends, 1);
+});
+
 test("queued or preparing starts recheck authorization and owner availability before durable acceptance",async t=>{
   for(const boundary of ["queued","bindings","input fingerprint","lock persistence"])for(const restriction of ["revoked","readOnly","closing"])await t.test(`${boundary} ${restriction}`,async t=>{
     const f=await fixture(t),entered=deferred(),resume=deferred();t.after(()=>resume.resolve());

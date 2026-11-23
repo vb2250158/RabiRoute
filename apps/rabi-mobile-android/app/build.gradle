@@ -3,6 +3,7 @@ plugins {
     id "org.jetbrains.kotlin.android"
 }
 
+
 def mobileSlim = project.hasProperty("mobileSlim")
 def rokidVideo = project.hasProperty("rokidVideo") || project.hasProperty("videoAcceptance")
 
@@ -123,6 +124,7 @@ tasks.register("copyMobileAssistantSdk", Sync) {
     into("$buildDir/generated/mobileAssistantSdk/mobile-assistant/sdk")
 }
 tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime", "generateMobileTheme", "copyMobileAssistantSdk") }
+apply from: 'mobile-wake.gradle'
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"

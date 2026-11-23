@@ -18,6 +18,8 @@
 
 默认数据目录为当前用户的 `%LOCALAPPDATA%/RabiAssistant`；可通过 `ASSISTANT_DATA_DIR` 指定其他私有目录，`ASSISTANT_PORT` 指定端口。密钥使用 Windows 当前用户 DPAPI 加密保存，不会返回给网页。关闭网页不会停止已开启的音频；使用“停止语音”结束收音，使用“退出助手”释放资源并退出后台服务。
 
+Windows 独立版可在“设置 → 设备”选择“手动或关键词唤醒”。在可信的本机启动环境设置 `ASSISTANT_RESIDENT_SPEECH_EXECUTABLE` 指向 RabiSpeech 运行程序，并把本地 FireRedASR2 配置保存到助手数据目录的 `resident-speech/config.json`。设置 `ASSISTANT_RESIDENT_SPEECH_MODEL_ROOT` 指向本机的模型根目录，其中包含 `asr/sherpa-onnx-kws`。如果运行程序、源码和依赖分开安装，通过 `ASSISTANT_RESIDENT_SPEECH_SERVICE_ROOT`、`ASSISTANT_RESIDENT_SPEECH_DEPS_ROOT` 和 `ASSISTANT_RESIDENT_SPEECH_PYTHON_HOME` 提供绝对路径。语音服务版本需要包含 `scripts/assistant_capture_host.py`。
+
 打开“设置 → 对话”，选择提供商并填写连接信息，点击“保存并刷新模型”后选择模型并保存。服务不提供模型列表时可手动填写；原始接口地址放在“高级连接设置”。“语音识别”和“语音播报”页分别设置对应服务；“设备”页选择麦克风和扬声器。
 
 “连接与测试 → 识别示例”使用随包附带的公开中文短句“今天天气怎么样？”，无需系统语音、PowerShell、Azure SDK 或联网下载。样本来自 Microsoft 官方 MIT 许可示例，来源和许可见 [诊断资源](assets/diagnostics/README.md)。它发送给当前选择的 ASR 服务，只有实际转写成功才通过；所选模型需要支持中文。样本缺失、损坏或识别失败时，完整测试仍分别检查对话模型和播报，语音链路标为未测试。正常麦克风识别不依赖此样本。

@@ -19,7 +19,32 @@ export type EndpointDeliveryMetadata = Pick<PreparedEndpointDelivery,
   "deliveryId" | "callerDeliveryId" | "state" | "source" | "target" | "receipt" | "createdAt" | "updatedAt"
   | "lastAttemptAt" | "nextAttemptAt" | "attemptCount" | "lastError" | "blockedReason">;
 
+export type FreezeUnsentEndpointDelivery = {
+  callerDeliveryId: string;
+  deliveryId: string;
+  requestId: string;
+  sourceThreadId: string;
+  targetThreadId: string;
+  targetProvider: string;
+};
+
+export type UnsentEndpointDeliveryFreeze = {
+  callerDeliveryId: string;
+  deliveryId: string;
+  requestId: string;
+  frozenAt: string;
+};
+
 export const AGENT_REQUEST_SCHEMA_VERSION = 1;
+
+function hasProvenUnsentTransport(delivery: PreparedEndpointDelivery): boolean {
+  if (delivery.receipt) return false;
+  if (delivery.attemptCount === 0) return !delivery.dispatchAttemptId && !delivery.lastAttemptAt && !delivery.lastNoFrameProof;
+  // Only the latest transport proof is retained. A larger history cannot be proven never sent.
+  if (delivery.attemptCount !== 1 || delivery.lastNoFrameProof?.attemptSequence !== 1) return false;
+  try { validateEndpointDeliveryNoFrameProof(delivery, delivery.lastNoFrameProof); return true; }
+  catch { return false; }
+}
 
 export function agentDeliveryPromptHash(prompt: string): string {
   return createHash("sha256").update(prompt.replace(/\r\n/g, "\n")).digest("hex");
@@ -246,7 +271,7 @@ export class AgentRequestState {
         if (value.source.kind === "connection" && !sameAgentDeliverySource(value.source, value.preparation?.source && agentDeliverySourceForParty(value.preparation.source))) throw new Error("Connection source evidence mismatch.");
         normalizeAgentRequestEndpoint(value.target);
         if (persistedId !== value.deliveryId || !value.generation || value.executionOptionsHash !== endpointExecutionOptionsHash(value.executionOptions)
-          || !["prepared", "dispatching", "committed", "cancelled"].includes(value.state)
+          || !["prepared", "dispatching", "committed", "cancelled", "frozen"].includes(value.state)
           || !sameAgentEndpoint(value.target, value.preparation.target?.endpoint)
           || value.preparation.target.threadId !== value.target.sessionId) throw new Error("Invalid delivery evidence.");
         if (value.callerDeliveryId !== undefined && (!callerAgentDeliveryId(value.callerDeliveryId) || !/^[a-f0-9]{64}$/.test(value.requestHash || ""))) throw new Error("Invalid caller delivery evidence.");
@@ -255,6 +280,10 @@ export class AgentRequestState {
           || value.receipt.generation !== value.generation || value.receipt.promptHash !== value.promptHash
           || value.receipt.executionOptionsHash !== value.executionOptionsHash
           || !sameAgentEndpoint(value.receipt.endpoint, value.target))) throw new Error("Invalid delivery receipt.");
+        if (value.state === "frozen" && (!value.callerDeliveryId || !value.preparation.requestId
+          || !Number.isFinite(Date.parse(value.updatedAt ?? "")) || !hasProvenUnsentTransport(value))) {
+          throw new Error("Invalid frozen delivery evidence.");
+        }
         this.deliveries.set(value.deliveryId, structuredClone(value));
         this.unavailableDeliveryIds.delete(value.deliveryId);
       } catch { this.quarantinedDeliveries.set(persistedId, structuredClone(value)); }
@@ -461,6 +490,7 @@ export class AgentRequestState {
 
   assertEndpointDeliveryActive(deliveryId: string): void {
     const delivery = this.deliveries.get(deliveryId);
+    if (delivery?.state === "frozen") throw new Error("Original Agent delivery was frozen before sending.");
     if (!delivery || delivery.state === "cancelled") throw new Error("Endpoint delivery is missing or cancelled.");
     const preparation = delivery.preparation;
     const request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined;
@@ -488,6 +518,31 @@ export class AgentRequestState {
     try { this.persist(); } catch (error) { this.deliveries.delete(delivery.deliveryId); throw error; }
   }
 
+  /** Close the dispatch reservation without changing the original pending Agent request. */
+  freezeUnsentEndpointDelivery(input: FreezeUnsentEndpointDelivery): UnsentEndpointDeliveryFreeze | undefined {
+    const delivery = this.deliveries.get(input.deliveryId);
+    const request = this.requests.get(input.requestId);
+    if (!delivery || !request || (delivery.state !== "prepared" && delivery.state !== "frozen")
+      || request.status !== "pending_delivery" || request.response || request.pendingResponseDeliveryId || request.pendingResponseEvidence
+      || delivery.callerDeliveryId !== input.callerDeliveryId || !input.callerDeliveryId
+      || delivery.preparation.requestId !== request.id || request.deliveryId !== delivery.deliveryId
+      || delivery.preparation.inReplyToRequestId || request.source.threadId !== input.sourceThreadId
+      || delivery.target.sessionId !== input.targetThreadId || delivery.target.provider !== input.targetProvider
+      || !sameAgentParty(request.source, delivery.preparation.source) || !sameAgentParty(request.target, delivery.preparation.target)
+      || !hasProvenUnsentTransport(delivery)) return undefined;
+    if (delivery.state === "prepared") {
+      const before = structuredClone(delivery);
+      delivery.state = "frozen";
+      delivery.updatedAt = nowIso(this.now);
+      delete delivery.nextAttemptAt;
+      try {
+        this.persistMutations([{ action: "unsent_delivery_frozen", requestId: request.id,
+          beforeStatus: request.status, afterStatus: request.status }]);
+      } catch (error) { this.deliveries.set(delivery.deliveryId, before); throw error; }
+    }
+    return { callerDeliveryId: input.callerDeliveryId, deliveryId: delivery.deliveryId, requestId: request.id, frozenAt: delivery.updatedAt! };
+  }
+
   markEndpointDispatching(deliveryId: string): string {
     this.assertEndpointDeliveryActive(deliveryId);
     const delivery = this.deliveries.get(deliveryId)!;
@@ -505,7 +560,7 @@ export class AgentRequestState {
 
   noteEndpointDeliveryFailure(deliveryId: string, error: unknown, options: { blocked?: boolean } = {}): void {
     const delivery = this.deliveries.get(deliveryId);
-    if (!delivery || delivery.state === "committed" || delivery.state === "cancelled") return;
+    if (!delivery || delivery.state === "committed" || delivery.state === "cancelled" || delivery.state === "frozen") return;
     const before = structuredClone(delivery);
     const message = cleanText(error instanceof Error ? error.message : String(error), 1_024);
     const code = error && typeof error === "object" && "code" in error ? cleanText(String(error.code), 100) : undefined;
@@ -915,7 +970,7 @@ export class AgentRequestState {
     const delivery = this.deliveries.get(deliveryId);
     if (!delivery) throw Object.assign(new Error("Original delivery evidence is unavailable."), { code: "DELIVERY_EVIDENCE_UNAVAILABLE" });
     if (delivery.state === "committed" || delivery.receipt) throw Object.assign(new Error("An accepted delivery cannot be cancelled."), { code: "DELIVERY_ALREADY_RECEIVED" });
-    if (delivery.state === "cancelled") return structuredClone(delivery);
+    if (delivery.state === "cancelled" || delivery.state === "frozen") return structuredClone(delivery);
     const preparation = delivery.preparation;
     const request = preparation.requestId ? this.requests.get(preparation.requestId) : undefined;
     const original = preparation.inReplyToRequestId ? this.requests.get(preparation.inReplyToRequestId) : undefined;
@@ -945,7 +1000,7 @@ export class AgentRequestState {
     const beforeStatus = record.status;
     const before = structuredClone(record);
     const affected = [...this.deliveries.values()].filter(delivery => delivery.state !== "committed" && !delivery.receipt
-      && delivery.state !== "cancelled" && (delivery.preparation.requestId === record.id || delivery.preparation.inReplyToRequestId === record.id));
+      && delivery.state !== "cancelled" && delivery.state !== "frozen" && (delivery.preparation.requestId === record.id || delivery.preparation.inReplyToRequestId === record.id));
     const deliveryBefore = affected.map(delivery => structuredClone(delivery));
     const timestamp = nowIso(this.now);
     for (const delivery of affected) {

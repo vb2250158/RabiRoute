@@ -16,10 +16,10 @@ import android.webkit.WebViewClient
 import com.rabi.link.RabiLinkRelaySettings
 import com.rabi.link.recording.AllDayRecordingSettings
 import com.rabi.link.transport.RabiManagerHttpTransport
+import com.rabi.link.transport.RabiSpeechTunnel
 import com.rabiroute.sdk.RabiRouteSdk
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
-import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Foreground-only mobile input and output. The selected PC remains the model and conversation owner. */
@@ -31,8 +31,12 @@ class MobileAssistantActivity : Activity() {
         RabiLinkRelaySettings.computers(this).singleOrNull { RabiLinkRelaySettings.isActive(this, it) }?.workerId
     }
     private val transports by lazy { List(3) { RabiManagerHttpTransport(this) } }
+    private val recognitionExecutor = Executors.newSingleThreadExecutor()
+    private val recognitionLock = Any()
+    @Volatile private var recognition: MobileRecognitionStream? = null
+    @Volatile private var localWake: MobileWakeSession? = null
     private var permission: PermissionRequest? = null
-    private var inForeground = false
+    @Volatile private var inForeground = false
     @Volatile private var closed = false
     private val localSwitch by lazy { getSharedPreferences("mobile_assistant", MODE_PRIVATE) }
 
@@ -100,6 +104,8 @@ class MobileAssistantActivity : Activity() {
 
     override fun onStop() {
         inForeground = false
+        stopLocalWake()
+        stopRecognition()
         permission?.deny()
         permission = null
         browser.evaluateJavascript("window.mobileHidden?.()", null)
@@ -111,6 +117,9 @@ class MobileAssistantActivity : Activity() {
         permission?.deny()
         permission = null
         transports.forEach { it.close() }
+        stopLocalWake()
+        stopRecognition()
+        recognitionExecutor.shutdownNow()
         executor.shutdownNow()
         browser.removeJavascriptInterface("RabiMobile")
         browser.destroy()
@@ -133,32 +142,101 @@ class MobileAssistantActivity : Activity() {
         "text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0))
     )
 
+    private fun currentComputer() = account == RabiLinkRelaySettings.load(this) &&
+        RabiLinkRelaySettings.computers(this)
+            .any { it.workerId == computerId && RabiLinkRelaySettings.isActive(this, it) }
+
+    private fun targetComputer(): com.rabiroute.sdk.RabiLinkPc {
+        check(account.configured && !computerId.isNullOrBlank()) { "MOBILE_COMPUTER_REQUIRED" }
+        check(currentComputer()) { "MOBILE_COMPUTER_CHANGED" }
+        return RabiRouteSdk().getMobileState(account.baseUrl, account.token).workers
+            .singleOrNull { it.id == computerId } ?: error("MOBILE_COMPUTER_UNAVAILABLE")
+    }
+
+    private fun stopRecognition(id: String? = null) {
+        synchronized(recognitionLock) {
+            val active = recognition ?: return
+            if (id != null && active.id != id) return
+            recognition = null
+            active.close()
+        }
+    }
+
+    private fun startRecognition(id: String, sessionId: String): Boolean {
+        if (!inForeground || closed || !id.matches(Regex("[a-zA-Z0-9-]{1,80}")) ||
+            !sessionId.matches(Regex("[a-zA-Z0-9._:-]{1,128}"))) return false
+        synchronized(recognitionLock) {
+            if (recognition != null || localWake != null) return false
+            val activate = MobileRecognitionStream(id) { value -> recognitionEvent(id, value) }
+            recognition = activate
+            recognitionExecutor.execute {
+                try {
+                    if (recognition !== activate) return@execute
+                    val endpoint = RabiSpeechTunnel(applicationContext, account, targetComputer(), "manager")
+                    activate.run(endpoint, "/api/voice-assistant/mobile-asr?sessionId=" + Uri.encode(sessionId)) {
+                        !closed && inForeground && recognition === activate && currentComputer()
+                    }
+                } catch (error: Exception) {
+                    val code = error.message.orEmpty().takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{1,100}")) }
+                    recognitionEvent(id, JSONObject().put("type", "error").put("code", code ?: "MOBILE_STREAM_FAILED"))
+                } finally {
+                    stopRecognition(id)
+                }
+            }
+        }
+        return true
+    }
+
+    private fun recognitionEvent(id: String, payload: JSONObject) {
+        runOnUiThread {
+            if (!closed && inForeground) browser.evaluateJavascript("window.mobileRecognitionEvent?.(" +
+                JSONObject.quote(id) + "," + JSONObject.quote(payload.toString()) + ")", null)
+        }
+    }
+
+    private fun startLocalWake(id: String, model: String, hash: String, keywords: String, count: Int): Boolean {
+        if (!inForeground || closed || !id.matches(Regex("[a-zA-Z0-9-]{1,80}")) ||
+            !MobileWakeSession.supports(model, hash) || !MobileWakeSession.validKeywords(keywords, count)) return false
+        synchronized(recognitionLock) {
+            if (recognition != null || localWake != null) return false
+            val activation = MobileWakeSession(id, applicationContext, keywords, count) { payload ->
+                runOnUiThread {
+                    if (!closed && inForeground && localWake?.id == id) browser.evaluateJavascript("window.mobileWakeEvent?.(" +
+                        JSONObject.quote(id) + "," + JSONObject.quote(payload.toString()) + ")", null)
+                }
+            }
+            localWake = activation
+            recognitionExecutor.execute(activation::run)
+        }
+        return true
+    }
+
+    private fun stopLocalWake(id: String? = null) {
+        synchronized(recognitionLock) {
+            val active = localWake ?: return
+            if (id != null && active.id != id) return
+            localWake = null
+            active.close()
+        }
+    }
+
     private fun request(id: String, operation: String, body: JSONObject) {
-        val computer = computerId
-        check(account.configured && !computer.isNullOrBlank()) { "MOBILE_COMPUTER_REQUIRED" }
-        val current = RabiLinkRelaySettings.load(this)
-        check(current == account && RabiLinkRelaySettings.computers(this)
-            .any { it.workerId == computer && RabiLinkRelaySettings.isActive(this, it) }) { "MOBILE_COMPUTER_CHANGED" }
-        val target = RabiRouteSdk().getMobileState(account.baseUrl, account.token).workers
-            .singleOrNull { it.id == computer } ?: error("MOBILE_COMPUTER_UNAVAILABLE")
+        val target = targetComputer()
         val (path, bytes, contentType, lane) = when (operation) {
-            "state" -> Request("/api/voice-assistant/state")
+            "state" -> Request("/api/voice-assistant/state?view=mobile")
             "messages" -> Request("/api/voice-assistant/messages?view=mobile")
             "submit" -> {
                 check(body.optString("action") == "mobile-voice-submit" && body.optString("requestId").isNotBlank())
                 Request("/api/voice-assistant/command", body.toString().toByteArray(Charsets.UTF_8), "application/json")
             }
             "asr" -> {
-                val model = body.getString("model")
-                require(model.length in 1..200 && model.none { it.isISOControl() })
+                val sessionId = body.getString("sessionId")
+                val source = body.getString("source")
+                require(sessionId.length in 1..128 && source in listOf("active", "local"))
                 val pcm = Base64.decode(body.getString("audio"), Base64.NO_WRAP)
                 require(pcm.size in 44..2_100_000)
-                val boundary = "rabi-mobile-" + UUID.randomUUID().toString()
-                val modelPart = "--$boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n$model\r\n"
-                val audioPart = "--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"mobile.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
-                val end = "\r\n--$boundary--\r\n"
-                Request("/api/speech/asr", (modelPart + audioPart).toByteArray(Charsets.UTF_8) + pcm + end.toByteArray(Charsets.UTF_8),
-                    "multipart/form-data; boundary=$boundary", lane = 1)
+                Request("/api/voice-assistant/mobile-transcribe?sessionId=" + Uri.encode(sessionId) + "&source=" + source,
+                    pcm, "audio/wav", lane = 1)
             }
             "tts" -> {
                 body.put("play", false).put("responseFormat", "wav")
@@ -210,6 +288,43 @@ class MobileAssistantActivity : Activity() {
                     resolve(id, false, code ?: "MOBILE_COMPUTER_REQUEST_FAILED")
                 }
             }
+        }
+
+        @JavascriptInterface fun recognitionStart(id: String, sessionId: String): Boolean = startRecognition(id, sessionId)
+
+        @JavascriptInterface fun recognitionPcm(id: String, sequence: Int, audio: String): Boolean {
+            if (!inForeground || audio.length > 4300) return false
+            val active = recognition?.takeIf { it.id == id } ?: return false
+            val bytes = runCatching { Base64.decode(audio, Base64.NO_WRAP) }.getOrNull() ?: return false
+            return active.offer(sequence, bytes)
+        }
+
+        @JavascriptInterface fun recognitionCancel(id: String) = stopRecognition(id)
+
+        @JavascriptInterface fun wakeSupported(model: String, hash: String): Boolean = MobileWakeSession.supports(model, hash)
+
+        @JavascriptInterface fun wakeStart(id: String, model: String, hash: String, keywords: String, count: Int): Boolean =
+            startLocalWake(id, model, hash, keywords, count)
+
+        @JavascriptInterface fun wakePcm(id: String, after: Double, audio: String): Boolean {
+            if (!inForeground || audio.length > 2732 || after !in 1.0..9_007_199_254_740_991.0 || after != after.toLong().toDouble()) return false
+            val active = localWake?.takeIf { it.id == id } ?: return false
+            val bytes = runCatching { Base64.decode(audio, Base64.NO_WRAP) }.getOrNull() ?: return false
+            return active.offer(after.toLong(), bytes)
+        }
+
+        @JavascriptInterface fun wakeCancel(id: String) = stopLocalWake(id)
+
+        @JavascriptInterface fun startMode(): String = localSwitch.getString("startMode", "manual") ?: "manual"
+
+        @JavascriptInterface fun setStartMode(mode: String) {
+            if (mode in listOf("manual", "keyword")) localSwitch.edit().putString("startMode", mode).apply()
+        }
+
+        @JavascriptInterface fun backgroundTranscription(): Boolean = localSwitch.getBoolean("backgroundTranscription", false)
+
+        @JavascriptInterface fun setBackgroundTranscription(enabled: Boolean) {
+            localSwitch.edit().putBoolean("backgroundTranscription", enabled).apply()
         }
 
         @JavascriptInterface fun microphoneAvailable(): Boolean {

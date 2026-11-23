@@ -67,7 +67,7 @@ export type VideoOperationsContext = {
     readMediaEditor(project: string, canvas: string, access: VideoRequestAccess): Promise<unknown>; saveMediaEditor(project: string, canvas: string, body: unknown, access: VideoRequestAccess): Promise<unknown>;
   };
   events: { compute(access: VideoRequestAccess): ApiOperationStream; job(service: VideoNativeService, job: VideoNativeJob, access: VideoRequestAccess): ApiOperationStream };
-  runs: {readTrigger(project:string,canvas:string,id:string):Promise<unknown>; trigger(project:string,canvas:string,body:unknown,access:VideoRequestAccess):Promise<unknown>; start(project:string,canvas:string,body:unknown,access:VideoRequestAccess):Promise<unknown>; list(project:string,canvas:string,query:unknown):Promise<unknown>; read(id:string):Promise<unknown>; refresh(id:string,access:VideoRequestAccess):Promise<unknown>; logs(id:string,after:number,limit:number):Promise<unknown>; cancel(id:string,access:VideoRequestAccess):Promise<unknown>; completeHuman(id:string,body:unknown,access:VideoRequestAccess):Promise<unknown>;artifactContent(id:string,artifactId:string,request:IncomingMessage,access:VideoRequestAccess,signal?:AbortSignal):Promise<VideoMediaContent>};
+  runs: {listCli(refresh?:boolean):Promise<unknown>;readTrigger(project:string,canvas:string,id:string):Promise<unknown>; trigger(project:string,canvas:string,body:unknown,access:VideoRequestAccess):Promise<unknown>; start(project:string,canvas:string,body:unknown,access:VideoRequestAccess):Promise<unknown>; list(project:string,canvas:string,query:unknown):Promise<unknown>; read(id:string):Promise<unknown>; refresh(id:string,access:VideoRequestAccess):Promise<unknown>; logs(id:string,after:number,limit:number):Promise<unknown>; cancel(id:string,access:VideoRequestAccess):Promise<unknown>; completeHuman(id:string,body:unknown,access:VideoRequestAccess):Promise<unknown>;artifactContent(id:string,artifactId:string,request:IncomingMessage,access:VideoRequestAccess,signal?:AbortSignal):Promise<VideoMediaContent>};
 };
 type ReadTiming = (stage: string, durationMs: number) => void;
 type Options = { body?: ApiOperationContract["request"]["body"]; status?: number; model?: boolean; compute?: boolean; noStore?: boolean; media?: boolean; assetMetadata?: boolean; rawRemainder?: string; listTiming?: boolean };
@@ -93,6 +93,7 @@ const videoPurposes: Record<string, string> = {
   "project.read": "读取视频项目",
   "project.save": "保存视频项目",
   "workbench.definition": "查询视频工作台能力与画布格式",
+  "workbench.cli-list": "检查本机 CLI 安装及模型列表",
   "workbench.projects-create": "创建工作台项目",
   "workbench.project-read": "读取工作台项目",
   "workbench.project-save": "保存工作台项目",
@@ -207,6 +208,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
   add("project.save", "PUT", "/projects/:mediaId", async (input, saved) => ({ revision: (await projects.save(input.path.mediaId, input.body, saved.access)).revision }), { body: json(64 * 1024 ** 2, contracts.requests.projectSave), noStore: true });
   const workbenchBody = { body: json(64 * 1024 ** 2, ignored), noStore:true };
   add("workbench.definition", "GET", "/v2/definition", () => projects.definition, { noStore:true });
+  add("workbench.cli-list", "GET", "/v2/cli", input => runs.listCli(input.url.searchParams.get("refresh") === "1"), { noStore:true });
   add("workbench.projects-create", "POST", "/v2/projects", (input,saved) => projects.createProjectV2(input.body,saved.access), workbenchBody);
   add("workbench.project-read", "GET", "/v2/projects/:projectId", (input,saved) => projects.readProject(input.path.projectId,saved.access), {noStore:true});
   add("workbench.project-save", "PUT", "/v2/projects/:projectId", (input,saved) => projects.saveProject(input.path.projectId,input.body,saved.access), workbenchBody);

@@ -99,6 +99,7 @@ test('voice switch gates manual and host wake entry and preserves the chosen mod
   try {
     p.onVoiceAssistantChange({ detail: { value: false } });
     p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+    p.onVoiceWakeup({ keyword: 'clickAiAssist' });
     p.startRealtimeVoice();
     assert.equal(starts, 0);
     p.toggleVoiceWake();
@@ -112,6 +113,11 @@ test('voice switch gates manual and host wake entry and preserves the chosen mod
     assert.equal(stops, 1);
     assert.deepEqual(fixtureWx.getStorageSync(key), { enabled: false, wakeEnabled: false });
     assert.equal(p.data.transcriptionDesired, false);
+    p.onVoiceAssistantChange({ detail: { value: true } });
+    p.onVoiceWakeup({ keyword: 'clickAiAssist' });
+    assert.equal(starts, 2, 'A physical callback remains a manual entry when keyword wake is off');
+    p.onVoiceAssistantChange({ detail: { value: false } });
+    assert.equal(stops, 2);
   } finally {
     fixtureWx.setStorageSync(key, saved ?? null);
   }
@@ -326,6 +332,19 @@ test('native player callbacks start once and finish without a destroy error beco
   player.audioPlayer.ended();
   assert.equal(p.data.agentStatus, '可以继续说话');
   assert.equal(p.data.voiceErrorText, ''); assert.equal(p.speechActive, false);
+});
+
+test('subtitle highlights stay aligned with the sentence after a tool response', () => {
+  const p = page();
+  const text = '检索完成，接下来播报实际找到的资料。';
+  const textOffset = 24;
+  p.onSpeechPlaybackEvent({
+    type: 'cue', text, textOffset,
+    cue: { text: '资料', charIndex: textOffset + text.indexOf('资料'), charLength: 2 },
+  });
+  assert.equal(p.data.playbackCaptionText, text);
+  assert.equal(p.data.playbackCaptionStart, text.indexOf('资料'));
+  assert.equal(p.data.playbackCaptionLength, 2);
 });
 
 test('queued speech preserves its voice options through actual playback completion', async () => {
@@ -999,7 +1018,7 @@ test('packaged page connects recognition input ownership to mailbox waiting', as
   }
 });
 
-test('only accepted ASR text stops playback; onset, empty and punctuation retain sound and work', () => {
+test('only accepted ASR text stops playback; host keyword, onset and punctuation retain sound and work', () => {
   let stopped = 0, cancelled = 0;
   class Recognition { start() { this.onstart?.(); } abort() {} }
   const p = page(); p.deviceAgentTurnActive = true; p.promptGeneration = 31;
@@ -1009,6 +1028,9 @@ test('only accepted ASR text stops playback; onset, empty and punctuation retain
   p.resumeTranscription('tap');
   const recognition = p.recognition;
   p.speechActive = true; p.data.agentSpeaking = true;
+  p.onVoiceWakeup({ keyword: '乐奇' });
+  assert.equal(stopped, 0, 'A host wake phrase is an activation, not a transcript');
+  assert.equal(p.recognition, recognition);
   assert.equal(typeof recognition.onspeechstart, 'function');
   recognition.onspeechstart({ type: 'speechstart' });
   assert.equal(stopped, 0, 'Raw VAD must not stop audio');

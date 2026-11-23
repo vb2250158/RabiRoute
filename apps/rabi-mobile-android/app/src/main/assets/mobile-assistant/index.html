@@ -15,6 +15,15 @@
 </header>
 <section class="control">
   <label class="switch">启用语音助手<input type="checkbox" id="enabled" role="switch"><span aria-hidden="true"></span></label>
+  <div class="voice-mode">
+    <label for="mode">启动方式</label>
+    <select id="mode"><option value="manual">手动</option><option value="keyword">手动或关键词唤醒</option></select>
+    <button id="wake" hidden>开启关键词监听</button>
+  </div>
+  <p id="aliases" hidden></p>
+  <div id="background-row" hidden>
+    <label class="switch">通过电脑转写待机语音<input type="checkbox" id="background" role="switch"><span aria-hidden="true"></span></label>
+  </div>
   <p id="status" role="status">正在连接电脑</p>
   <p id="issue" role="alert" hidden></p>
 </section>
@@ -23,6 +32,7 @@
   <ol id="history"></ol>
 </main>
 <footer>
+  <p id="transcript" aria-live="polite" hidden></p>
   <p id="tool" role="status" hidden></p>
   <p id="playing" role="status" hidden>正在播报 · 字幕跟随</p>
   <div id="waveform" aria-label="收音波形" hidden></div>

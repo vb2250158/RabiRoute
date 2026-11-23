@@ -1,9 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openSettingsStore } from '../src/settings-store.mjs';
+
+test('legacy model hotwords become one dictionary across provider changes and reloads', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'assistant-dictionary-fixture-'));
+  const file = join(directory,'settings.json');
+  const read = async () => JSON.parse(await readFile(file,'utf8'));
+  try {
+    const legacy = {
+      version:1, encrypted:{},
+      settings:{asrHotwords:' Rabi \r\n ', speechProfiles:{asr:{
+        volcengine:{asrHotwords:'ＲＡＢＩ\n专业词'}, 'volcengine::bigmodel':{asrHotwords:'工作流'},
+      }}},
+    };
+    await writeFile(file,JSON.stringify(legacy));
+    const store = await openSettingsStore(directory);
+    assert.deepEqual(await read(),legacy);
+    assert.equal(store.read().asrDictionary,'Rabi\n专业词\n工作流');
+    await store.saveBatch([{asrMode:'volcengine'},{asrModel:'bigmodel-1.0'},{asrMode:'compatible'}]);
+    const reopened = await openSettingsStore(directory);
+    assert.equal(reopened.read().asrDictionary,'Rabi\n专业词\n工作流');
+    assert.ok(!JSON.stringify(await read()).includes('asrHotwords'));
+    await assert.rejects(reopened.save({asrDictionary:'x'.repeat(16385)}),/SETTINGS_INVALID/);
+    assert.equal((await read()).settings.asrDictionary,'Rabi\n专业词\n工作流');
+    await reopened.save({asrHotwords:'旧客户端写入'});
+    assert.equal((await read()).settings.asrDictionary,'旧客户端写入');
+    await reopened.save({asrDictionary:''});
+    assert.equal((await openSettingsStore(directory)).read().asrDictionary,'');
+  } finally { await rm(directory,{recursive:true,force:true}); }
+});
 
 test('preview does not write and batch commits all model choices once without partial invalid saves',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'assistant-draft-fixture-'));

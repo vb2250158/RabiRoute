@@ -6,9 +6,13 @@
 
 ## 语音助手
 
-在「消息」中打开「语音助手」。手机调节启用开关，点击「开始实时语音」并授予麦克风权限。当前手机使用前台整句识别，边说边显示波形，识别完成后自动发送。回复在手机播报。退出或切到后台后释放手机采播，已提交任务仍由电脑处理。
+在「消息」中打开「语音助手」。手机调节启用开关，点击「开始实时语音」并授予麦克风权限。手机支持前台整句和流式识别。整句模式显示收音波形，流式模式实时显示文字。识别完成后自动发送。回复在手机播报。退出或切到后台后释放手机采播，已提交任务仍由电脑处理。
 
-先在对应电脑启用语音助手，并选择人格、本机 ASR 和本机 TTS。手机通过已配对的 RabiLink 调用对应电脑的识别、模型、工具及语音接口，沿用该人格的持久对话。手机语音回合使用独立播放绑定，电脑不会同时播这条回复。手机关键词唤醒和自定义流式服务当前不可用。
+先在对应电脑启用语音助手，并选择人格、识别服务和本机 TTS。手机通过已配对的 RabiLink 调用电脑端接口，沿用该人格的持久对话。
+
+在电脑的人格设置中填写唤醒词。回到手机，选「手动或关键词唤醒」，再点「开启关键词监听」。带本机模型的 APK 用手机 CPU 检测中英唤醒词。命中后用同一麦克风把唤醒词后面的语音接给实时识别。开启「通过电脑转写待机语音」后，超过音量门限的整句会送到所选电脑的本机识别服务。唤醒后的首句可带上最近 90 秒内最多 6 条背景转写。结束对话或暂时空闲后回到关键词待机。
+
+离线构建时，可同时传入 `-PmobileWakeAar=<官方 sherpa-onnx 2.0.2 AAR>` 和 `-PmobileWakeModelDir=<本机中英 Zipformer 关键词模型目录>`。Gradle 会核对运行库、权重和词表的哈希。普通构建提供手动实时语音和用户主动开启的电脑转写唤醒。 [官方 Android 运行库](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.2) · [中英关键词模型](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/)
 
 调试与验收使用独立的 APK 应用 ID。先构建 :app:assembleDebug 和 :app:assembleDebugAndroidTest，附加 -PmobileSlim -PmobileAssistantAcceptance -PmobileTestRunner=com.rabi.link.test.MobileAssistantInstrumentation。将两个 APK 安装到测试模拟器后执行 adb shell am instrument -w com.rabi.link.assistantacceptance.test/com.rabi.link.test.MobileAssistantInstrumentation。测试使用 Android 真权限和浏览器实际收音与播放，另以生成信号和测试夹具验证识别、模型回执与合成。
 

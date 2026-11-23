@@ -8,7 +8,7 @@ export function createLocalRecognizer(options = {}) {
     typeof options[key] === 'string' && isAbsolute(options[key]));
   return {
     configured,
-    async recognize(audio, signal) {
+    async recognize(audio, signal, prompt = '') {
       if (!configured) throw Error('LOCAL_ASR_NOT_CONFIGURED');
       if (!(audio instanceof Uint8Array) || audio.length > 4 * 1024 * 1024) throw Error('SPEECH_AUDIO_LIMIT');
       for (const path of [options.python, options.model, options.dependencies]) {
@@ -36,7 +36,7 @@ export function createLocalRecognizer(options = {}) {
             resolve({text:result.text});
           } catch { reject(Error('LOCAL_ASR_FAILED')); }
         });
-        child.stdin.end(JSON.stringify({audio:Buffer.from(audio).toString('base64')}));
+        child.stdin.end(JSON.stringify({audio:Buffer.from(audio).toString('base64'),...(prompt ? {prompt} : {})}));
       });
     },
   };

@@ -10,7 +10,9 @@ const projectRoot = path.resolve(import.meta.dirname, "..");
 const inkRoot = path.join(projectRoot, "node_modules", "@yodaos-pkg", "ink");
 const stagingRoot = path.join(os.tmpdir(), `rabilink-aiui-startup-safety-${process.pid}-${Date.now()}`);
 const soakMode = process.argv.includes("--soak");
-const testDurationMs = soakMode ? 21500 : 3200;
+// A slow first frame can delay the first host wake. Allow the following
+// gesture and its three empty recognition attempts to finish under load.
+const testDurationMs = soakMode ? 21500 : 6500;
 const reportPath = path.join(projectRoot, "dist", soakMode ? "ink-startup-soak.json" : "ink-startup-safety.json");
 
 function fail(message) {

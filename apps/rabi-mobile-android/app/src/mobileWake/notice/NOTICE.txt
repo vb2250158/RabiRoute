@@ -1,0 +1,14 @@
+Android keyword spotting includes sherpa-onnx 2.0.2 and the bilingual
+sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20 weights and token table.
+
+Sherpa-onnx contributors, including Xiaomi Corporation, provide the runtime
+under the Apache License, Version 2.0.
+https://github.com/k2-fsa/sherpa-onnx/tree/v2.0.2
+
+The model author, pkufool, provides the model under Apache-2.0.
+https://www.modelscope.cn/models/pkufool/icefall-kws-zipformer-zh-en-3M-2025-12-20
+https://github.com/k2-fsa/sherpa-onnx/issues/3802
+
+The sherpa-onnx AAR statically includes ONNX Runtime.
+Copyright (c) Microsoft Corporation. Licensed under the MIT License.
+https://github.com/microsoft/onnxruntime

@@ -172,6 +172,7 @@ class MobileAssistantInstrumentation : Instrumentation() {
             val output = when(operation) {
                 "state" -> """{"sessionId":"fixture-session","settings":{"voiceEnabled":true},"capabilities":{"mobileVoiceSubmit":true},"hostSettings":{"personaId":"voice","personaLabel":"测试人格","asrSource":"host","asrModel":"fixture","ttsSource":"host","ttsModel":"fixture","voiceReady":true}}"""
                 "asr" -> {
+                    check(input.getString("sessionId") == "fixture-session" && input.getString("source") == "active")
                     val data = Base64.decode(input.getString("audio"), Base64.NO_WRAP)
                     check(data.size in 45..100000 && String(data,0,4) == "RIFF")
                     """{"text":"测试语音${transcripts.incrementAndGet()}","additions":{"emotion":"happy","age":"31","confidence":"0.9"}}"""

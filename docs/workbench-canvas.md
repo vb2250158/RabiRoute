@@ -63,7 +63,9 @@ projects/<projectId>/
 
 命令节点配置 `toolKey`、字符串数组 `argv`、可选 timeoutMs 与 validationOnly。执行复用宿主 ProcessLeaseRegistry，关闭 shell、隐藏进程窗口；Python/Node 仍拥有进程账号权限，工作目录不是操作系统沙箱。
 
-Agent 节点配置精确 target（agentAdapter、threadId）、source（sourceAgentType、sourceThreadId）与 briefRef。投递只走原适配器，丢响应查询原 deliveryId；正式回复的 result 使用 JSON `{ "status": "succeeded" }` 或 `{ "status": "failed", "reason": "…" }`。接收回执不作为完成；可用 independentFromNodeId 约束核验者与作者不是同一任务。
+Agent 节点可在节点下方先选本机 CLI，再选该 CLI 提供的模型。右上角的「Agent 设置」显示本机检测结果，并在缺少 CLI 时提供官方安装入口。使用 CLI 的节点由 Manager 管理本机执行，仍会校验结构化结果与声明的产物。
+
+接入已有会话时，配置精确的 target（agentAdapter、threadId）、source（sourceAgentType、sourceThreadId）与 briefRef。投递由原适配器负责。正式回复的 result 使用 JSON `{ "status": "succeeded" }` 或 `{ "status": "failed", "reason": "…" }`。可用 independentFromNodeId 约束核验者与作者的会话身份。若连接器明确确认原任务尚未送出，工作台会显示等待 Agent。连接恢复后，「核对原执行」可使用同一投递编号和原任务书继续发送。结果不明时只查询原回执。
 
 generate 使用原媒体拥有者提交 command 或观察已有 jobId，等待原 job 的终结回执；不另存第二套媒体任务状态。human 通过原 attemptId、检查人身份及证据提交，使用同一产物验证器。
 

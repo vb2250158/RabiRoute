@@ -1,0 +1,55 @@
+import java.security.MessageDigest
+
+def modelId = 'sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20'
+def modelFiles = [
+    'encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx': '2ca84d6bfe73e1ea3c9c49f600f7cad1c9ddd423c53c906b8bfe802444dd78d5',
+    'decoder-epoch-13-avg-2-chunk-8-left-64.onnx': '63a22dd60f40fff082ac3e09afa507f6787da36df76ded2fbe145fa233e22c21',
+    'joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx': '190d4067b4cc20b72a42a1916e69d92052000fb7051a427ebb1bc72a69207dc1',
+    'tokens.txt': '2d3f32311f9b692b964da3c90e830258d3e78e013cb0c992dbfb15cd5a1a71b0',
+]
+def runtime = providers.gradleProperty('mobileWakeAar').orNull
+def model = providers.gradleProperty('mobileWakeModelDir').orNull
+if ((runtime == null) != (model == null)) {
+    throw new GradleException('Provide both mobileWakeAar and mobileWakeModelDir to bundle Android keyword spotting.')
+}
+
+def bundled = runtime != null
+android.defaultConfig.buildConfigField('String', 'MOBILE_WAKE_MODEL', '"' + modelId + '"')
+android.defaultConfig.buildConfigField('String', 'MOBILE_WAKE_TOKENS_SHA256', '"' + modelFiles['tokens.txt'] + '"')
+android.sourceSets.main.java.srcDir(bundled ? 'src/mobileWake/java' : 'src/noMobileWake/java')
+
+if (bundled) {
+    def aar = rootProject.file(runtime)
+    def modelDirectory = rootProject.file(model)
+    def generatedAssets = layout.buildDirectory.dir('generated/mobileWakeAssets')
+    def verify = { File input, String expected ->
+        if (!input.isFile()) throw new GradleException("Android keyword spotting input missing: ${input.name}")
+        def digest = MessageDigest.getInstance('SHA-256')
+        input.withInputStream { stream ->
+            byte[] block = new byte[64 * 1024]
+            for (int count = stream.read(block); count != -1; count = stream.read(block)) {
+                digest.update(block, 0, count)
+            }
+        }
+        if (digest.digest().encodeHex().toString() != expected) {
+            throw new GradleException("Android keyword spotting checksum mismatch: ${input.name}")
+        }
+    }
+    def verifyRuntime = tasks.register('verifyMobileWakeRuntime') {
+        doLast {
+            verify(aar, 'cb73564809268c8b96bf98f1a32b0b3b611e01d028d22f10beb57ef55418c0cb')
+            modelFiles.each { name, hash -> verify(new File(modelDirectory, name), hash) }
+        }
+    }
+    def prepare = tasks.register('prepareMobileWakeAssets', Sync) {
+        dependsOn(verifyRuntime)
+        into(generatedAssets)
+        into('mobile-wake') {
+            from(modelDirectory) { include(modelFiles.keySet()) }
+            from('src/mobileWake/notice')
+        }
+    }
+    android.sourceSets.main.assets.srcDir(generatedAssets)
+    tasks.named('preBuild').configure { dependsOn(prepare) }
+    dependencies.add('implementation', files(aar))
+}

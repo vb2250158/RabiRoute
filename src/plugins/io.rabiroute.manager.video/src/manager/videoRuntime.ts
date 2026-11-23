@@ -173,11 +173,11 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
         outcome: "failed", after: { revision: String(revision) }, changes: [{ field: "projectId", to: projectId }], error,
       });
     },
-    launchWorkbenchProcess(request: { attemptId:string; executable:string; argv:string[]; cwd:string; env:Record<string,string>; timeoutMs:number }, output: (stream:string, text:string)=>void|Promise<void>) {
+    launchWorkbenchProcess(request: { attemptId:string; executable:string; argv:string[]; cwd:string; env:Record<string,string>; timeoutMs:number; stdin?:string }, output: (stream:string, text:string)=>void|Promise<void>) {
       if (readOnly) throw new Error("当前服务只读。");
       if (workbenchProcesses.has(request.attemptId)) throw new Error("此 attempt 已有执行租约。");
       const owned = leases.launch(identity, `workbench:${request.attemptId}`, {kind:"spawn",command:request.executable,args:request.argv,
-        options:{cwd:request.cwd,env:request.env,shell:false,windowsHide:true,stdio:["ignore","pipe","pipe"]}}, {exclusiveAcrossOwners:true});
+        options:{cwd:request.cwd,env:request.env,shell:false,windowsHide:true,stdio:[request.stdin === undefined ? "ignore" : "pipe","pipe","pipe"]}}, {exclusiveAcrossOwners:true});
       workbenchProcesses.set(request.attemptId,owned);
       // Job-empty notification can precede Node's close event and exit-code projection.
       // Join both owners before publishing a completion receipt or validating outputs.
@@ -191,9 +191,18 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
         outputTasks.add(task);
       });
       observe(owned.child.stdout,"stdout");observe(owned.child.stderr,"stderr");
+      let inputError = false;
+      if (request.stdin !== undefined) {
+        const input = owned.child.stdin;
+        if (!input) inputError = true;
+        else {
+          input.on("error", () => { inputError = true; });
+          input.end(request.stdin, "utf8");
+        }
+      }
       let timeout = false;
       const timer = setTimeout(()=>{timeout=true;void leases.terminate(owned).catch(()=>{});}, request.timeoutMs);
-      const settled = Promise.all([owned.settled,closed]).then(async([,result])=>{await Promise.all([...outputTasks]);return {...result,timedOut:timeout,outputError,leaseId:owned.id,terminated:true};}).finally(()=>{
+      const settled = Promise.all([owned.settled,closed]).then(async([,result])=>{await Promise.all([...outputTasks]);return {...result,timedOut:timeout,outputError,inputError,leaseId:owned.id,terminated:true};}).finally(()=>{
         clearTimeout(timer);
         if(workbenchProcesses.size>64)for(const [id,lease]of workbenchProcesses){if(!leases.list(identity).some(active=>active.id===lease.id))workbenchProcesses.delete(id);if(workbenchProcesses.size<=64)break;}
       });
