@@ -202,7 +202,8 @@ export function createPhoneCapture({
     round.policy = policy;
     round.restoreAfterFinal = keepKeywordAudio;
     round.recentSpeech = [];
-    round.backup = policy.kind === 'streaming' && policy.fallbackModel ? { segments:[], lastTimedEnd:0 } : undefined;
+    round.backup = policy.kind === 'streaming' && (policy.fallbackModel || policy.fallbackWhileChecking)
+      ? { segments:[], lastTimedEnd:0 } : undefined;
     round.frames = [];
     round.preRoll = [];
     round.samples = 0;

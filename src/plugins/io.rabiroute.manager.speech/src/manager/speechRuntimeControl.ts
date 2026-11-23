@@ -20,6 +20,23 @@ import { prepareStableSpeechExecutable } from "./speechStableExecutable.js";
 import { packagedSpeechPython, speechPackageRoot, speechCoreDependencyFiles } from "./speechDependencies.js";
 
 const execFileAsync = promisify(execFile);
+const assistantLocalProvider = "fireredasr2";
+const assistantLocalModel = "fireredasr2-aed";
+const assistantTranscribePath = "/v1/internal/assistant-transcribe";
+
+async function readAssistantAudioJson(response: IncomingMessage, status: number, maximum: number): Promise<unknown> {
+  try {
+    if (response.statusCode !== status || response.headers["content-type"] !== "application/json") return undefined;
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of response) {
+      size += chunk.length;
+      if (size > maximum) return undefined;
+      chunks.push(chunk);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } finally { response.destroy(); }
+}
 
 // pip creates its --target directory before installing packages. Check the core
 // API and microphone modules before using that directory; startup health still
@@ -202,6 +219,7 @@ export class SpeechRuntimeControl {
   private launchServiceUrl: string | null = null;
   private launchOutput = "";
   private assistantAudioToken: string | null = null;
+  private assistantLocalAsrCheck?: { token: string; configurationEpoch: number; expiresAt: number; result: Promise<boolean> };
   private managedNonce: string | null = null;
   private managedCandidate: { pid: number; host: string; port: number } | null = null;
   private managedPublished = false;
@@ -269,11 +287,59 @@ export class SpeechRuntimeControl {
     } finally { response.destroy(); }
   }
 
+  /** Read the exact worker and private contract from the owning RabiSpeech launch. */
+  async assistantLocalAsrModel(signal: AbortSignal): Promise<string | undefined> {
+    signal.throwIfAborted();
+    const token = this.assistantAudioToken, child = this.launchChild;
+    if (!token || !this.managedPublished || !child || child.exitCode !== null || child.signalCode) return undefined;
+    const configurationEpoch = this.configurationEpoch;
+    let check = this.assistantLocalAsrCheck;
+    if (!check || check.token !== token || check.configurationEpoch !== configurationEpoch || check.expiresAt <= this.now()) {
+      const pending = { token, configurationEpoch, expiresAt: Infinity,
+        result: this.probeAssistantLocalAsr(AbortSignal.timeout(15_000), token).catch(() => false) };
+      // A short state read can stop waiting without cancelling the shared no-audio proof.
+      void pending.result.then(available => { pending.expiresAt = this.now() + (available ? 60_000 : 2_500); });
+      this.assistantLocalAsrCheck = pending;
+      check = pending;
+    }
+    const result = check.result;
+    const available = await new Promise<boolean>((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      void result.then(value => { signal.removeEventListener("abort", aborted); resolve(value); });
+    });
+    signal.throwIfAborted();
+    if (!available || !this.managedPublished || child !== this.launchChild || child.exitCode !== null || child.signalCode
+        || token !== this.assistantAudioToken || configurationEpoch !== this.configurationEpoch) return undefined;
+    return `${assistantLocalProvider}/${assistantLocalModel}`;
+  }
+
+  private async probeAssistantLocalAsr(signal: AbortSignal, token: string): Promise<boolean> {
+    const data = await readAssistantAudioJson(await this.requestAssistantAudio("/v1/capabilities", signal, ""), 200, 512 * 1024) as {
+      providers?: { asr?: Record<string, { transport?: unknown; enabled?: unknown; models?: unknown }> };
+    } | undefined;
+    const provider = data?.providers?.asr?.[assistantLocalProvider];
+    if (provider?.transport !== "loopback-http" || provider.enabled !== true || !Array.isArray(provider.models)
+        || !provider.models.some(item => item?.id === assistantLocalModel && item.installed === true && item.enabled !== false)
+        || token !== this.assistantAudioToken) return false;
+    // Negative probe checks the deployed private route without loading a model or writing audio.
+    const probe = await readAssistantAudioJson(await this.requestAssistantAudio(assistantTranscribePath, signal, "", Buffer.alloc(0)), 422, 1024);
+    return !!probe && typeof probe === "object" && "detail" in probe && probe.detail === "ASSISTANT_LOCAL_AUDIO_EMPTY";
+  }
+
+  async transcribeMobileAssistantAudio(audio: Uint8Array, signal: AbortSignal): Promise<{ text: string; [key: string]: unknown }> {
+    const token = this.assistantAudioToken;
+    if (!await this.assistantLocalAsrModel(signal) || token !== this.assistantAudioToken) {
+      throw new SpeechRuntimeControlError("MOBILE_LOCAL_ASR_UNAVAILABLE", 503);
+    }
+    return this.transcribeAssistantAudio(audio, signal);
+  }
+
   async transcribeAssistantAudio(audio: Uint8Array, signal: AbortSignal): Promise<{ text: string; [key: string]: unknown }> {
     if (!(audio instanceof Uint8Array) || audio.byteLength <= 44 || audio.byteLength > 44 + 35 * 16000 * 2) {
       throw new SpeechRuntimeControlError("本机回退音频长度无效。", 422);
     }
-    const response = await this.requestAssistantAudio("/v1/internal/assistant-transcribe", signal, "", Buffer.from(audio));
+    const response = await this.requestAssistantAudio(assistantTranscribePath, signal, "", Buffer.from(audio));
     try {
       if (response.statusCode !== 200 || response.headers["content-type"] !== "application/json") {
         throw new SpeechRuntimeControlError("本机识别未完成。", response.statusCode || 503);

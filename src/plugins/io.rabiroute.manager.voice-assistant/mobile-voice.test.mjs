@@ -14,9 +14,22 @@ test('mobile speech uses the original role conversation and leaves desktop audio
 }, async () => {
   const stateRoot=await mkdtemp(join(tmpdir(),'rabi-mobile-submit-'));
   const observations=[], nativeText=[], played=[], asrRequests=[], petEvents=[];
-  let owner, captureHandlers, localModel=true, localOnly=true, keywordCompiles=0, speechAvailable=true, captures=0;
+  let owner, captureHandlers, localModel=true, keywordCompiles=0, speechAvailable=true, allowActiveAsr=false, holdLocalCheck=false, captures=0;
   const keywords={model:'fixture-kws',keywords:'Y E @rabi-0/N AY T @rabi-1',tokensSha256:'1'.repeat(64)};
   const speech={speechRuntimeControl:{
+    async assistantLocalAsrModel(signal){
+      if (holdLocalCheck) await new Promise((resolve,reject)=>{
+        const timer=setTimeout(resolve,1000);
+        signal.addEventListener('abort',()=>{clearTimeout(timer);reject(signal.reason);},{once:true});
+      });
+      return localModel?'fireredasr2/fireredasr2-aed':undefined;
+    },
+    async transcribeMobileAssistantAudio(audio,signal){
+      signal.throwIfAborted();
+      if(!localModel)throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
+      asrRequests.push(Buffer.from(audio));
+      return {text:'Local speech',additions:{age:'31'}};
+    },
     get assistantKeywordProfile(){
       if(!speechAvailable)throw Error('Speech activation is not ready');
       return async aliases=>{
@@ -26,10 +39,11 @@ test('mobile speech uses the original role conversation and leaves desktop audio
       };
     },
   }, speechControl:{personas:()=>[],
-    status:async()=>({state:'online',localOnly}),
+    status:async()=>({state:'online',localOnly:false}),
     models:async()=>localModel?[{id:'local/fixture',capability:'asr',enabled:true,available:true,
       request:{properties:{prompt:{'x-rabi-dictionary':{format:'context',maxBytes:2048}}}}}]:[],
     async transcribe(contentType,body,guard){
+      assert(allowActiveAsr,'mobile local input must never reach the public or peer ASR');
       guard();
       const form=await new Response(body,{headers:{'content-type':contentType}}).formData();
       asrRequests.push([form.get('model'),form.get('prompt')]);
@@ -108,8 +122,11 @@ test('mobile speech uses the original role conversation and leaves desktop audio
     assert.equal(alreadyListening.voice.capture,'listening');
     assert.equal(captures,initialCaptures+1);
     assert.equal(state.capabilities.mobileVoiceSubmit,true);
-    assert.deepEqual(state.hostSettings.mobileAudio,{recognition:'streaming',sampleRate:16000,wakeAliases:[],passiveModel:'local/fixture',
-      dictionary:{format:'context',mode:'utterance',local:true}});
+    assert.deepEqual(state.hostSettings.mobileAudio,{recognition:'streaming',sampleRate:16000,wakeAliases:[],passiveModel:'fireredasr2/fireredasr2-aed',dictionary:null});
+    holdLocalCheck=true;
+    assert.deepEqual((await owner.state('mobile')).hostSettings.mobileAudio,
+      {recognition:'streaming',sampleRate:16000,wakeAliases:[],passiveAsrStatus:'checking'});
+    holdLocalCheck=false;
     const sessionId=state.sessionId;
     const wav=Buffer.alloc(46);wav.write('RIFF');wav.write('WAVE',8);
     const routes=createVoiceAssistantOperations(owner,operation=>operation());
@@ -119,10 +136,10 @@ test('mobile speech uses the original role conversation and leaves desktop audio
     assert.equal(Object.hasOwn(mobileState.body.data.settings,'asrDictionary'),false);
     const localRequest={query:{sessionId,source:'local'},body:wav};
     assert.deepEqual((await transcribe(localRequest)).body,{text:'Local speech',age:31});
-    assert.deepEqual(asrRequests,[['local/fixture','Rabi']]);
-    localOnly=false;
+    assert.deepEqual(asrRequests,[wav]);
+    localModel=false;
     assert.equal((await transcribe(localRequest)).body.message,'MOBILE_LOCAL_ASR_UNAVAILABLE');
-    localOnly=true;
+    localModel=true;
     assert.equal((await transcribe({...localRequest,query:{sessionId:'old',source:'local'}})).body.message,'ASSISTANT_CONTEXT_CHANGED');
     assert.equal(asrRequests.length,1);
     const requestId=randomUUID();
@@ -191,6 +208,7 @@ test('mobile speech uses the original role conversation and leaves desktop audio
     await owner.command({action:'settings',patch:{voiceEnabled:true}});
     const hostState=await owner.state();
     assert.equal(hostState.asrDictionary.recognition.format,'context');
+    allowActiveAsr=true;
     assert.equal((await transcribe({query:{sessionId:hostState.sessionId,source:'active'},body:wav})).body.text,'Local speech');
     assert.deepEqual(asrRequests.at(-1),['local/fixture','Rabi']);
   } finally {

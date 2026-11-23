@@ -143,15 +143,19 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const asrModel=bound.asrModel||hostSpeechDefaultModel('asr',models,serviceStatus);
       const readyModel=id=>models.some(item=>item.id===id&&item.enabled&&item.available);
       const aliases=normalizeWakeAliases(role?.personaConfig?.speechTriggerKeywords);
-      const passiveModel=serviceStatus?.state==='online'&&serviceStatus.localOnly===true
-        ? hostSpeechDefaultModel('asr',models,serviceStatus) : undefined;
       const wakeAliases=aliases.length<=64?aliases:[];
-      const mobileWake={wakeAliases:passiveModel?wakeAliases:[],...(passiveModel?{passiveModel}:{})};
+      async function mobileLocalState(){
+        const deadline=AbortSignal.timeout(200);
+        try{
+          const passiveModel=await speech.speechRuntimeControl?.assistantLocalAsrModel?.(AbortSignal.any([signal,deadline]));
+          return passiveModel?{passiveModel,dictionary:null}:{};
+        }catch(error){return error===deadline.reason&&!signal.aborted?{passiveAsrStatus:'checking'}:{};}
+      }
       const keywordOwner=speech.speechRuntimeControl;
       let keywordProfile, keywordRequest, keywordRetryAfter=0;
       async function mobileWakeSettings(){
-        if(!wakeAliases.length||!keywordOwner)return mobileWake;
-        if(!keywordProfile&&!keywordRequest&&Date.now()>=keywordRetryAfter){
+        const localState=mobileLocalState();
+        if(wakeAliases.length&&keywordOwner&&!keywordProfile&&!keywordRequest&&Date.now()>=keywordRetryAfter){
           const timeout=AbortSignal.any([signal,AbortSignal.timeout(2500)]);
           keywordRequest=Promise.resolve().then(()=>keywordOwner.assistantKeywordProfile?.(wakeAliases,timeout))
             .catch(()=>undefined).then(value=>{
@@ -160,8 +164,9 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
             })
             .finally(()=>{keywordRequest=undefined;});
         }
-        await keywordRequest;
-        return keywordProfile?{...mobileWake,wakeAliases,kws:keywordProfile}:mobileWake;
+        const [local]=await Promise.all([localState,keywordRequest]);
+        return {wakeAliases:local.passiveModel||keywordProfile?wakeAliases:[],...local,
+          ...(keywordProfile?{kws:keywordProfile}:{})};
       }
       const asrIssue=bound.asrSource!=='host'?null:modelsError?'无法连接本机识别服务':!asrModel?'未找到可用的本机识别模型':!readyModel(asrModel)?'所选本机识别模型不可用，请重新选择':null;
       const hostVoice=()=>{
@@ -254,13 +259,16 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const hostModelSummary=models.map(hostSpeechModelSummary);
       runtime={...next,mobileWakeSettings,
         setCompanionPresentation(enabled){companionPresentation=enabled;},
-        mobileDictionary:hostAsrDictionaryPolicy(models.find(item=>item.id===passiveModel)),
         recognizeMobileLocal:async(audio,abort)=>{
-          if (!passiveModel) throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
-          // Recheck locality before letting a passive request reach the speech service.
-          const status = await speech.speechControl.status?.();
-          if (status?.state !== 'online' || status.localOnly !== true) throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
-          return hostRecognize(passiveModel,next.recognitionDictionary(),audio,abort);
+          try{
+            const local=speech.speechRuntimeControl;
+            if(typeof local?.transcribeMobileAssistantAudio!=='function')throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
+            return await local.transcribeMobileAssistantAudio(audio,abort);
+          }catch(error){
+            abort.throwIfAborted();
+            if(error?.message==='MOBILE_LOCAL_ASR_UNAVAILABLE')throw error;
+            throw new Error('MOBILE_LOCAL_ASR_UNAVAILABLE',{cause:error});
+          }
         },
         get hostSources(){
         const {persona,model}=hostVoice();
@@ -360,8 +368,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         state.settings = settings;
       }
       return {...state,hostSettings:{...current.hostSources,wake:wakeSnapshot(),lastError:lastHostError,personas:people,
-        mobileAudio:{recognition:current.streamingAsr()?'streaming':'utterance',sampleRate:mobileAsrSampleRate,...mobileWake,
-          ...(mobileWake.passiveModel?{dictionary:current.mobileDictionary}:{}) }},
+        mobileAudio:{recognition:current.streamingAsr()?'streaming':'utterance',sampleRate:mobileAsrSampleRate,...mobileWake}},
         capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true}};
     },
     async transcribeMobile({audio,sessionId,source,signal:requestSignal}){

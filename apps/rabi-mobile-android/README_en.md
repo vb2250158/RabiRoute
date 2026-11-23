@@ -18,7 +18,7 @@ Enable the assistant on the selected PC and choose a persona, a recognition serv
 
 Configure wake words in the PC persona settings. On the phone, choose keyword start mode and arm the listener while the page is visible. Builds that include the wake model detect Mandarin and English keywords on the phone CPU. On a match, live recognition uses the same microphone and receives the audio after the wake word. Enabling **PC standby transcription** sends audible utterances to the selected PC's local recognizer. The first turn after waking can include up to six background transcripts from the preceding 90 seconds. Ending the conversation or leaving it idle returns to keyword standby.
 
-When the PC has a local recognizer configured and the phone's actual sample rate is incompatible with live recognition, the local recognizer receives the speech buffered during the wake transition.
+When the PC confirms its local recognizer is ready, it can transcribe speech buffered during wake-up if the phone's sample rate is incompatible with live recognition. The phone displays the check in progress and refreshes its controls when the recognizer becomes available.
 
 For an offline build with handset wake detection, pass both `-PmobileWakeAar=<official sherpa-onnx 2.0.2 AAR>` and `-PmobileWakeModelDir=<locally provisioned bilingual Zipformer model directory>`. Gradle verifies the runtime, weights, and token-table hashes. Standard builds support manual live voice and opt-in PC-transcription wake. [Official Android runtime](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.2) · [Bilingual keyword model](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/)
 

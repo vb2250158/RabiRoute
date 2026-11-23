@@ -18,6 +18,7 @@ function fixture(options: { nonceValid?: boolean; ownerMatches?: boolean; publis
     inspectOwner: async requestedPort => { assert.equal(requestedPort, port); return child.exitCode !== null ? null : { pid: options.ownerMatches === false ? 999 : 456, owned: true }; },
     inspect: async url => { probes++; assert.equal(url, `http://127.0.0.1:${port}`); return { state: "online", checkedAt: "fixture", configuredUrl: url, service: "RabiSpeech", defaults: {}, providers: { tts: [], asr: [] } } satisfies SpeechRuntimeStatus; },
     spawnRuntime: (_command, _args, launch) => {
+      child.exitCode = null;
       launches++; nonce = String(launch!.env!.RABISPEECH_ENDPOINT_NONCE);
       assistantAudioToken = String(launch!.env!.RABISPEECH_ASSISTANT_AUDIO_TOKEN);
       assert.equal(launch!.env!.RABISPEECH_PORT, "0"); assert.equal(launch!.env!.RABISPEECH_HOST, "127.0.0.1"); assert.equal(launch!.detached, false);
@@ -187,6 +188,106 @@ test("assistant PCM reads are scoped to the owning managed process and carry the
     }
     assert.throws(() => f.control.openAssistantCapture(signal), /尚未发布/);
   } finally {
+    await new Promise<void>(resolve => endpoint.close(() => resolve()));
+  }
+});
+
+
+test("mobile local ASR proves exact owned worker and authenticated private route before accepting bytes", async () => {
+  let modelAvailable = true, modelEnabled: boolean | undefined, providerEnabled = true;
+  let transport = "loopback-http", transcribeStatus = 422, redirectTargetHits = 0;
+  const calls: Array<{ path: string | undefined; token: unknown; bytes: number }> = [];
+  let announceProbe!: () => void, releaseProbe!: () => void;
+  const probeStarted = new Promise<void>(resolve => { announceProbe = resolve; });
+  const probeContinues = new Promise<void>(resolve => { releaseProbe = resolve; });
+  const endpoint = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const bytes = Buffer.concat(chunks).length;
+    calls.push({ path: request.url, token: request.headers["x-rabispeech-assistant-token"], bytes });
+    const send = (status: number, body: object) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+    if (request.url === "/v1/capabilities") {
+      announceProbe();
+      await probeContinues;
+      send(200, { relay_safe: false, providers: { asr: { fireredasr2: { transport, enabled: providerEnabled,
+        models: [{ id: "fireredasr2-aed", installed: modelAvailable, enabled: modelEnabled }] } } } });
+    } else if (request.url === "/untrusted") {
+      redirectTargetHits++;
+      send(200, { text: "untrusted" });
+    } else if (bytes && transcribeStatus === 307) {
+      response.writeHead(307, { location: "/untrusted" }).end();
+    } else if (bytes) {
+      send(200, { text: "local result" });
+    } else {
+      send(transcribeStatus, { detail: transcribeStatus === 422 ? "ASSISTANT_LOCAL_AUDIO_EMPTY" : "unavailable" });
+    }
+  });
+  try {
+    await new Promise<void>(resolve => endpoint.listen(0, "127.0.0.1", resolve));
+    const address = endpoint.address();
+    assert(address && typeof address === "object");
+    const signal = AbortSignal.timeout(10_000);
+    const wav = Buffer.alloc(46);
+    const f = fixture({ port: address.port });
+    assert.equal(await f.control.assistantLocalAsrModel(signal), undefined);
+    await assert.rejects(f.control.transcribeMobileAssistantAudio(wav, signal), /MOBILE_LOCAL_ASR_UNAVAILABLE/);
+    assert.equal(calls.length, 0);
+    await f.control.start();
+    const stateRead = new AbortController();
+    const initialCheck = f.control.assistantLocalAsrModel(stateRead.signal);
+    const initialRejected = assert.rejects(initialCheck, { name: "AbortError" });
+    await probeStarted;
+    stateRead.abort();
+    await initialRejected;
+    const rejectedSpeech = new AbortController();
+    const rejectedRequest = assert.rejects(f.control.transcribeMobileAssistantAudio(wav, rejectedSpeech.signal), { name: "AbortError" });
+    const validRequest = f.control.transcribeMobileAssistantAudio(wav, signal);
+    rejectedSpeech.abort();
+    await rejectedRequest;
+    assert.equal(calls.length, 1, "state timeout must not cancel or duplicate the shared probe");
+    releaseProbe();
+    assert.deepEqual(await validRequest, { text: "local result" });
+    assert.equal(await f.control.assistantLocalAsrModel(signal), "fireredasr2/fireredasr2-aed");
+    assert.deepEqual(calls.map(call => [call.path, call.bytes]), [
+      ["/v1/capabilities", 0], ["/v1/internal/assistant-transcribe", 0], ["/v1/internal/assistant-transcribe", 46],
+    ]);
+    assert(calls.every(call => call.token === f.assistantAudioToken()));
+    transcribeStatus = 307;
+    await assert.rejects(f.control.transcribeMobileAssistantAudio(wav, signal), /本机识别未完成/);
+    assert.equal(redirectTargetHits, 0);
+    await f.control.releaseOwnedRuntime();
+    assert.equal(await f.control.assistantLocalAsrModel(signal), undefined);
+    await assert.rejects(f.control.transcribeMobileAssistantAudio(wav, signal), /MOBILE_LOCAL_ASR_UNAVAILABLE/);
+    assert.equal(calls.length, 4);
+    const originalToken = f.assistantAudioToken();
+    transport = "https";
+    await f.control.start();
+    assert.notEqual(f.assistantAudioToken(), originalToken);
+    assert.equal(await f.control.assistantLocalAsrModel(signal), undefined);
+    await assert.rejects(f.control.transcribeMobileAssistantAudio(wav, signal), /MOBILE_LOCAL_ASR_UNAVAILABLE/);
+    assert.deepEqual(calls[4], { path: "/v1/capabilities", token: f.assistantAudioToken(), bytes: 0 });
+    assert.equal(calls.length, 5);
+    transcribeStatus = 422;
+    assert.deepEqual(await f.control.transcribeAssistantAudio(wav, signal), { text: "local result" });
+    assert.deepEqual(calls[5], { path: "/v1/internal/assistant-transcribe", token: f.assistantAudioToken(), bytes: 46 });
+    await f.control.releaseOwnedRuntime();
+
+    for (const failure of ["provider-transport", "provider-disabled", "model-disabled", "model-unavailable", "old-endpoint"]) {
+      const candidate = fixture({ port: address.port });
+      transport = failure === "provider-transport" ? "https" : "loopback-http";
+      providerEnabled = failure !== "provider-disabled";
+      modelEnabled = failure === "model-disabled" ? false : undefined;
+      modelAvailable = failure !== "model-unavailable";
+      transcribeStatus = failure === "old-endpoint" ? 404 : 422;
+      await candidate.control.start();
+      const start = calls.length;
+      assert.equal(await candidate.control.assistantLocalAsrModel(signal), undefined, failure);
+      await assert.rejects(candidate.control.transcribeMobileAssistantAudio(wav, signal), /MOBILE_LOCAL_ASR_UNAVAILABLE/);
+      assert(calls.slice(start).every(call => call.bytes === 0 && call.token === candidate.assistantAudioToken()));
+      await candidate.control.releaseOwnedRuntime();
+    }
+  } finally {
+    releaseProbe();
     await new Promise<void>(resolve => endpoint.close(() => resolve()));
   }
 });

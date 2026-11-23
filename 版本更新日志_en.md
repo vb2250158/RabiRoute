@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.74 - 2026-11-24
+
+- Restore detection of local speech recognition on the PC for the Android assistant. Once the recognizer is ready, Android can send speech after the wake word to the PC for local transcription.
+
 ## 0.15.73 - 2026-11-23
 
 - Use the existing local settings access check for Workbench CLI discovery. Preserve authenticated read-only access and verify that the original connection remains valid before returning the catalog.

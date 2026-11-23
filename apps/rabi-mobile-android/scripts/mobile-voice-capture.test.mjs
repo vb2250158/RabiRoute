@@ -132,7 +132,7 @@ test('before the first valid streaming result, disconnect recognizes the buffere
   let plugin, fallback=0;
   const adapter=createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
     getPolicy:()=>({kind:'wake',model:'local',aliases:['小助手']}),matchWake:matchWakeWord,
-    onWake:()=>({kind:'streaming',fallbackModel:'local'}),onFallback:()=>fallback++,
+    onWake:()=>({kind:'streaming',fallbackWhileChecking:true}),onFallback:()=>fallback++,
     async transcribe(){return {text:rows.shift()};},
     openStream(handlers) {plugin=handlers;return {write:()=>true,close(){}};},
   });

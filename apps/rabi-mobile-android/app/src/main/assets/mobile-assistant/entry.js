@@ -4,6 +4,7 @@ import { snapshotRecentSpeech } from './sdk/speech-observation.js';
 import { createPhoneCapture } from './capture.js';
 import { createStreamingRecognition, matchWakeWord } from './asr-stream.js';
 import { createLocalWakeRecognition } from './wake-stream.js';
+import { createLocalAsrAvailabilityRefresh } from './local-asr-availability.js';
 
 const ui = Object.fromEntries([...document.querySelectorAll('[id]')].map(node => [node.id, node]));
 const native = globalThis.RabiMobile;
@@ -70,6 +71,21 @@ window.mobileReply = (id, success, body) => {
   pending.delete(id);
   deliver?.(success, body);
 };
+
+const localAsrRefresh = createLocalAsrAvailabilityRefresh({
+  read: signal => request('state', {}, signal),
+  onAvailable(sessionId, audio) {
+    if (!visible || !enabled || sessionId !== connection || !profile?.mobileAudio) return;
+    const { passiveAsrStatus, ...current } = profile.mobileAudio;
+    profile = { ...profile, mobileAudio:{ ...current,
+      ...(audio?.passiveModel ? { passiveModel:audio.passiveModel, dictionary:audio.dictionary,
+        wakeAliases:audio.wakeAliases } : {}) } };
+    renderControls();
+  },
+});
+function syncLocalAsrRefresh() {
+  localAsrRefresh.sync(visible && enabled ? connection : null, profile?.mobileAudio?.passiveAsrStatus);
+}
 
 function report(error) {
   const code = error?.message || '';
@@ -232,7 +248,8 @@ const wakeAvailable = host => Array.isArray(host?.mobileAudio?.wakeAliases) && h
 
 function activePolicy() {
   if (!streaming(profile)) return { kind:'utterance' };
-  return { kind:'streaming', fallbackModel:profile.mobileAudio.passiveModel };
+  return { kind:'streaming', fallbackModel:passiveModel(profile),
+    fallbackWhileChecking:profile.mobileAudio.passiveAsrStatus === 'checking' };
 }
 
 function wakePolicy() {
@@ -254,7 +271,8 @@ function renderControls() {
   ui.aliases.hidden = startMode !== 'keyword';
   const aliases = Array.isArray(profile?.mobileAudio?.wakeAliases) ? profile.mobileAudio.wakeAliases : [];
   const local = edgeWakeConfig(profile);
-  ui.aliases.textContent = aliases.length === 0 ? '请在电脑上的人格设置中添加唤醒词。' : wakeAvailable(profile)
+  ui.aliases.textContent = profile?.mobileAudio?.passiveAsrStatus === 'checking' && !local
+    ? '正在检查电脑的本机语音识别…' : aliases.length === 0 ? '请在电脑上的人格设置中添加唤醒词。' : wakeAvailable(profile)
     ? `${local ? '手机检测' : '电脑转写'} · ${aliases.join('、')}`
     : passiveModel(profile) ? '当前无法用手机检测唤醒词。打开电脑转写后可继续使用。' : '当前没有可用的关键词识别。';
   ui['background-row'].hidden = startMode !== 'keyword' || !passiveModel(profile);
@@ -355,6 +373,7 @@ function renderMessages(payload) {
 
 async function refresh() {
   const serial = ++refreshSerial;
+  localAsrRefresh.stop();
   ui.refresh.disabled = true;
   ui.issue.hidden = true;
   phase('正在连接电脑');
@@ -363,6 +382,7 @@ async function refresh() {
     if (serial !== refreshSerial || !visible) return;
     connection = state.sessionId;
     profile = supported(state) && connection && state.settings?.voiceEnabled !== false ? state.hostSettings : null;
+    syncLocalAsrRefresh();
     ui.source.textContent = profile ? [profile.personaLabel, streaming(profile) ? '流式识别' : '整句识别', '手机播放'].filter(Boolean).join(' · ') : 'RabiLink';
     if (!profile) {
       ui.issue.textContent = state.settings?.voiceEnabled === false ? label.ASSISTANT_VOICE_DISABLED
@@ -376,6 +396,7 @@ async function refresh() {
   } catch (error) {
     if (serial !== refreshSerial || !visible) return;
     profile = null;
+    localAsrRefresh.stop();
     phase('未连接');
     report(error);
   } finally {
@@ -475,6 +496,7 @@ async function sendSpeech(text, result) {
 ui.enabled.addEventListener('change', () => {
   enabled = ui.enabled.checked;
   native.setVoiceEnabled(enabled);
+  syncLocalAsrRefresh();
   if (!enabled) stopVoice();
   else phase(profile ? '可以开始实时语音' : '等待电脑配置');
   renderControls();
@@ -530,9 +552,10 @@ ui.refresh.addEventListener('click', () => {
   if (capturing) stopVoice();
   void refresh();
 });
-ui.back.addEventListener('click', () => { stopVoice(); native.close(); });
+ui.back.addEventListener('click', () => { localAsrRefresh.stop(); stopVoice(); native.close(); });
 window.mobileHidden = () => {
   visible = false;
+  localAsrRefresh.stop();
   stopVoice();
 };
 window.mobileVisible = () => {
@@ -541,6 +564,6 @@ window.mobileVisible = () => {
   renderControls();
   void refresh().then(readOutstandingTurns);
 };
-window.addEventListener('pagehide', () => { voice.dispose(); runtime.dispose(); });
+window.addEventListener('pagehide', () => { localAsrRefresh.stop(); voice.dispose(); runtime.dispose(); });
 renderControls();
 void refresh();

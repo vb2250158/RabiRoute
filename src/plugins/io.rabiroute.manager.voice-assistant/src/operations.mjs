@@ -37,7 +37,7 @@ export function createVoiceAssistantOperations(owner,run){
       request:{path:object,query:{...object,required:['sessionId','source'],properties:{sessionId:mobileSessionId,source:{enum:['active','local']}},additionalProperties:false},
         headers:object,body:{kind:'binary',mediaType:'audio/wav',maxBytes:2100000}},
       responses:{200:response,409:response},
-      effects:{mode:'native-assistant-recognition',description:'Send audio to the configured recognition provider. Local requests require a local-only speech service.'},
+      effects:{mode:'native-assistant-recognition',description:'Send audio to the configured recognition provider. Local requests use the current Manager-owned private transcription channel with a verified local worker.'},
       recovery:{strategy:'no-automatic-replay',description:'Start a new utterance after a failed request.'},
       validators:[{id:'current-assistant-owner',description:'The original session and activation must remain current.'}]},
     async handler(input){

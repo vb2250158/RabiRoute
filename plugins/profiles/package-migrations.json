@@ -567,9 +567,10 @@
         "1.1.21",
         "1.1.22",
         "1.1.23",
-        "1.1.24"
+        "1.1.24",
+        "1.1.25"
       ],
-      "toVersion": "1.1.25"
+      "toVersion": "1.1.26"
     },
     {
       "packageId": "io.rabiroute.manager.speech",
@@ -585,9 +586,10 @@
         "0.1.8",
         "0.1.9",
         "0.1.10",
-        "0.1.11"
+        "0.1.11",
+        "0.1.12"
       ],
-      "toVersion": "0.1.12"
+      "toVersion": "0.1.13"
     },
     {
       "packageId": "io.rabiroute.manager.video",
