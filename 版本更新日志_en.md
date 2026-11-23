@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.70 - 2026-11-23
+
+- Persona 0.1.39 recovers original native receipts after unconfirmed WorkBuddy sends and manual status checks without resending uncertain messages. The selected package remains compatible with running Host 0.15.69.
+
 ## 0.15.69 - 2026-11-23
 
 - Core 0.1.17 and Persona provide browser-local chat shortcut settings: Enter sends and Alt+Enter inserts a newline by default, preserving IME and repeated-key handling.

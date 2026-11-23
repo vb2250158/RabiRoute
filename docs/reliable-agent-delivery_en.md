@@ -82,6 +82,8 @@ The real Desktop can provide positive receipt recovery through exact deliveryId 
 
 ## Read-only APIs
 
+In Message History → Agent Sessions, when WorkBuddy's desktop acknowledgement is pending, the browser checks the original delivery once. You can use Check delivery receipt to check again. A check reads native acceptance evidence and updates the original receipt without sending the message again.
+
 | API | Result |
 |---|---|
 | `GET /api/agent/deliveries?limit&cursor&state&query` | Redacted projection of current Manager records |

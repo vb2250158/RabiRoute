@@ -82,6 +82,8 @@ LAN taskResult 在客户端先持久保存，以 eventId 重传；Manager 将原
 
 ## 只读接口
 
+「消息记录 → Agent 会话」向 WorkBuddy 发送后，如果桌面回执待确认，网页会按原编号向原会话核对一次。你也可以点击「查询发送回执」再次核对。核对只读取原生接收证据并补记原回执，正文不会再次发送。
+
 | 接口 | 结果 |
 |---|---|
 | `GET /api/agent/deliveries?limit&cursor&state&query` | 当前 Manager 正式记录的脱敏投影 |
