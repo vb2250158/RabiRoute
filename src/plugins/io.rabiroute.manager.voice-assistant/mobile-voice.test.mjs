@@ -154,6 +154,7 @@ test('mobile speech uses the original role conversation and leaves desktop audio
     await owner.command({action:'text',text:'Desktop text',sessionId,requestId:desktopId});
     await finish(desktopId);
     await waitFor(()=>played.length>0);
+    await waitFor(async()=> (await owner.state()).activity.pending===0);
     await assert.rejects(owner.command({action:'start-for-persona',personaId:'B'}),/ASSISTANT_OTHER_PERSONA_ACTIVE/);
     assert.equal((await owner.state()).hostSettings.personaId,'A');
     await owner.command({action:'stop'});

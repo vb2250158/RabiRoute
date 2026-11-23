@@ -9,6 +9,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ## Unreleased
 
 
+## 0.15.65 - 2026-11-23
+
+- Restore mobile state, streaming and utterance recognition, and dictionary settings in io.rabiroute.manager.voice-assistant 1.1.23. Bump the desktop assistant to 0.2.4.
+- Publish io.rabiroute.manager.speech 0.1.12 with the local wake keyword profile endpoint.
+
 ## 0.15.64 - 2026-11-21
 
 - Local speech adds wake fallback, playback echo filtering, and a transcription dictionary. Desktop pets can display a separate transcription bubble.
