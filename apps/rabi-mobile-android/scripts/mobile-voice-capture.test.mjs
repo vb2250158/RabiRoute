@@ -212,6 +212,7 @@ test('48 kHz capture preserves speech buffered during keyword handoff when strea
   mic.frames(.1, 7);
   mic.frames(0, 29);
   mic.frames(.25, 10);
+  mic.frames(.1, 85);
   mic.frames(0, 29);
   finishWake({ text:'小助手' });
   await round.queue;
@@ -219,6 +220,38 @@ test('48 kHz capture preserves speech buffered during keyword handoff when strea
   assert.equal(fallbacks, 1);
   assert.deepEqual(recognized, [[16000, 8192]]);
   assert.deepEqual(output, ['接续指令']);
+  assert.equal(mic.calls(), 1);
+});
+
+test('slow text-based wake preserves the first command past the fast keyword replay window', async t => {
+  const mic = microphone(t);
+  const output = [];
+  let completeWake, live, firstSample;
+  const wake = new Promise(resolve => { completeWake = resolve; });
+  const adapter = createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
+    getPolicy:()=>({ kind:'wake', model:'local', aliases:['小助手'] }), matchWake:matchWakeWord,
+    onWake:()=>({ kind:'streaming', fallbackModel:'local' }),
+    openStream(handlers) { live=handlers; return { write:()=>true, close(){} }; },
+    async transcribe(wave, _signal, policy) {
+      if (policy.kind === 'wake') return wake;
+      firstSample = new DataView(wave.buffer, wave.byteOffset).getInt16(44, true);
+      return { text:'本地保留首句' };
+    },
+  });
+  const round = adapter.createRound({ onFinal:value=>output.push(value.text) });
+  await adapter.start(round);
+  t.after(()=>adapter.stop(round));
+  mic.frames(.1, 7);
+  mic.frames(0, 10);
+  mic.frames(.25, 12);
+  mic.frames(.15, 10);
+  mic.frames(0, 90);
+  completeWake({ text:'小助手' });
+  await round.queue;
+  live.error(new Error('disconnect'));
+  await round.queue;
+  assert.equal(firstSample, 8192);
+  assert.deepEqual(output, ['本地保留首句']);
   assert.equal(mic.calls(), 1);
 });
 

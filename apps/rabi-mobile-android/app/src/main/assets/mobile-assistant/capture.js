@@ -1,5 +1,7 @@
 const conversationalAudio = { echoCancellation:true, noiseSuppression:true, autoGainControl:true };
 const keywordAudio = { echoCancellation:false, noiseSuppression:false, autoGainControl:false };
+const keywordReplaySeconds = 4;
+const pendingWakeReplaySeconds = 35;
 const useConversationalAudio = policy => policy.kind !== 'wake' || !policy.kws;
 
 /** Phone PCM capture. The shared voice SDK owns recognition rounds, interruption and audio output. */
@@ -369,7 +371,10 @@ export function createPhoneCapture({
           }
           if (round.policy.kind === 'wake') {
             round.replay.push({ frame, after: round.position });
-            if (round.replay.length > 64) round.replay.shift();
+            // A text-only wake check can outlast the fast on-device keyword window.
+            const replaySeconds = !round.wakeSession && round.pending > 0 ? pendingWakeReplaySeconds : keywordReplaySeconds;
+            const firstSample = round.position - replaySeconds * round.context.sampleRate;
+            while (round.replay[0].after <= firstSample) round.replay.shift();
             if (round.wakeSession && !round.wakeSession.write(frame, round.position)) {
               wakeFailed(round, new Error('MOBILE_WAKE_BACKLOG'));
             }

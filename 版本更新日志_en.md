@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.72 - 2026-11-23
+
+- Buffer Android wake audio by elapsed sample time. While local transcription checks the wake word, keep up to 35 seconds so a 48 kHz microphone does not truncate a longer first utterance.
+
 ## 0.15.71 - 2026-11-23
 
 - Keep the speech buffered after the wake word for local transcription when Android capture runs at 48 kHz or another rate unsupported by 16 kHz streaming.
