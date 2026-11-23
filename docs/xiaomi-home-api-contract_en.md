@@ -4,6 +4,8 @@
 
 # Executable Xiaomi Home API contracts
 
+A local agent can run `scripts/review-xiaomi-event.py --host <installed Host executable> --role <role> --resource <resource ID> --event <original event ID>` to resolve a motion event. If the packet contains an artifact reference, pass `--artifact <artifact ID>` to check it. A complete catalog with no matching source, resource and role returns `no_matching_artifact`. Incomplete coverage returns a lookup error. The default reads metadata only. For authorized visual review, add `--frames` to extract timestamped images with FFmpeg and FFprobe. Open the returned images in the current turn and remove the temporary files after review.
+
 > Status: source migration and isolated HTTP/native-service tests. Full builds, installed applications, physical devices and cross-machine acceptance are confirmed separately.
 
 `io.rabiroute.manager.xiaomi-home` registers 54 exact endpoints through `createXiaomiHomeManagerOperations()`: 49 JSON operations, one HTML operation, one SSE operation and three native byte proxies. The same definitions execute requests and populate the active catalog. Original `home:METHOD:path` discovery IDs are derived as aliases, without adding routes. The old boolean HTTP handler, manual exact/prefix lists and dedicated HTTP tracker are removed.

@@ -4,6 +4,8 @@
 
 # Xiaomi Home 接口的可执行合同
 
+本机 Agent 可用 `scripts/review-xiaomi-event.py --host <已安装的 Host 程序> --role <角色> --resource <设备资源 ID> --event <原事件 ID>` 查询一次移动的录像。已有引用时加 `--artifact <产物 ID>` 交叉核对。缺少同一来源、设备及角色的匹配时，完整目录返回 `no_matching_artifact`，目录不完整时报告查询失败。仅在获准查看画面时加 `--frames`，使用 FFmpeg/FFprobe 抽取有时间标记的图片；处理端在当前轮打开返回的图片，用后清理这些临时文件。默认查询只读元数据。
+
 > 状态：源码迁移与隔离 HTTP、原生服务测试。整包构建、安装版、真实跨机与家居设备验收分别确认。
 
 `io.rabiroute.manager.xiaomi-home` 通过 `createXiaomiHomeManagerOperations()` 注册 54 个精确入口：49 个 JSON 操作、1 个 HTML 操作、1 个 SSE 操作和 3 个原生字节代理。相同定义用于请求执行与活动目录；原 `home:METHOD:路径` 发现 ID 从定义派生为别名，不创建第二条路由。旧 bool HTTP handler、手写 exact/prefix 清单和专属 HTTP Tracker 已移除。
