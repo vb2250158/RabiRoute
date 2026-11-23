@@ -15,6 +15,7 @@ import { LanAgentAuthority } from "../../../../manager/lanAgentAuthority.js";
 import { evaluateLanAgentRequest, assertTrustedLanAgentPrincipal } from "../../../../manager/lanAgentRequestAccess.js";
 import { markAuthenticatedConnectionRequest } from "../../../../manager/connectionRequestAccess.js";
 import { registerLanAgentBodyGuard } from "../../../../manager/lanAgentBodyAuthority.js";
+import { localModelSettingsRequestAllowed } from "../../../../manager/speechModelSettingsAccess.js";
 // @ts-ignore Native plugin owners, exercised with controlled runtime drivers only.
 import { VideoService } from "../../service.mjs";
 // @ts-ignore Native plugin owner.
@@ -41,7 +42,7 @@ const connectionChanges = [
   { name: "credential-revoked", denied: true, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => authority.revokeNode(credential.nodeId) },
   { name: "credential-replaced-with-same-token", denied: true, apply: (authority: LanAgentAuthority, credential: { nodeId: string; token: string }) => { authority.revokeNode(credential.nodeId); const replacement = authority.enroll(authority.issueBootstrapTicket().ticket, credential.nodeId, credential.token.split(":")[2]); assert.equal(replacement.token, credential.token); } }
 ] as const;
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, allowLoopback = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-contract-http-")), calls: unknown[] = [];
   const cleanup: Array<() => Promise<unknown>> = [], releases: Array<() => void> = [];
   t.after(async () => { for (const release of releases) release(); await Promise.allSettled(cleanup.map(dispose => dispose())); assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); assert.ok(path.basename(root).startsWith("video-contract-http-")); await fs.rm(root, { recursive: true, force: true }); });
@@ -61,7 +62,7 @@ async function fixture(t: test.TestContext) {
   const runtime = { stateRoot: root, componentRoot: path.join(root, "component"), defaultModelRoot: path.join(root, "models"), readOnly: false,
     workbenchRuntimeRoot:path.join(root,"workbench-runtime"),machineId:"fixture-machine",generation:"fixture-generation",
     workbenchBindings:async()=>({workspaces:{fixture:{roots:{runtime:root,output:root,materials:root}}}}),
-    requestAccess: createVideoRequestAccess, localSettingsAllowed: () => true, alive: () => alive, installed: async () => true,
+    requestAccess: createVideoRequestAccess, localSettingsAllowed: localModelSettingsRequestAllowed, alive: () => alive, installed: async () => true,
     validateModelRoot: async () => null, inspectAsset: async (_id: string, kind: string) => ({ width: 16, height: 16, ...(kind === "audio" ? { duration: 1, channels: 1 } : {}) }),
     start: async () => { throw new Error("No real inference process is permitted."); }, stop: async () => { alive = false; }, stopInstaller: async () => {}, stopMediaProbe: async () => {},
     install: async () => { throw new Error("No real installation is permitted."); },
@@ -86,9 +87,14 @@ async function fixture(t: test.TestContext) {
   const proxies = registry.registerHttpProxies("video-fixture", bundle.proxies); cleanup.push(() => proxies.dispose());
   const authority = new LanAgentAuthority({ statePath: path.join(root, "node-authority.json") }), credential = authority.enroll(authority.issueBootstrapTicket().ticket, "empty-video-node");
   const server = http.createServer((request, response) => {
-    if (evaluateLanAgentRequest(request, authority, true).kind !== "agent") { response.writeHead(403).end(); return; }
-    markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
-    registerLanAgentBodyGuard(request, () => {});
+    const connection = evaluateLanAgentRequest(request, authority, true);
+    if (connection.kind === "agent") {
+      markAuthenticatedConnectionRequest(request, () => { assertTrustedLanAgentPrincipal(request); });
+      registerLanAgentBodyGuard(request, () => {});
+    } else if (connection.kind !== "unrelated" || !allowLoopback) {
+      response.writeHead(403).end();
+      return;
+    }
     if (!registry.handle(request, new URL(request.url!, "http://fixture"), response)) response.writeHead(404).end();
   });
   cleanup.push(() => close(server)); const base = await bind(server);
@@ -113,10 +119,84 @@ async function fixture(t: test.TestContext) {
 test("original Video contracts and separate Workbench contracts register with public connection access", async t => {
   const f = await fixture(t), original = (row: { contract: { operationId: string } }) => !row.contract.operationId.startsWith("manager.video.workbench.");
   assert.equal(f.bundle.operations.filter(original).length, 25); assert.equal(f.bundle.proxies.filter(original).length, 10);
-  assert.equal(f.bundle.operations.filter(row => !original(row)).length, 25); assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
-  const rows = f.registry.catalogSnapshot().operations; assert.equal(rows.length, 61); assert.equal(new Set(rows.map(row=>row.contract.operationId)).size,61); assert.ok(rows.every(row => row.contract.exposure === "public"));
+  assert.equal(f.bundle.proxies.filter(row => !original(row)).length, 1);
+  const rows = f.registry.catalogSnapshot().operations;
+  assert.equal(new Set(rows.map(row => row.contract.operationId)).size, rows.length);
+  assert.ok(rows.every(row => row.contract.exposure === "public"));
   for (const path of ["/jobs/:mediaId", "/projects/:mediaId", "/assets/:mediaId"]) assert.ok(rows.some(row => row.contract.aliases?.includes("video:GET:/api/video" + path)));
   assert.equal((await f.request("/status")).status, 200); assert.equal((await f.request("/models/settings")).status, 200); assert.equal((await f.request("/compute/status")).status, 200);
+});
+
+test("Workbench CLI catalog registers the exact GET and serves only read-only discovery data", async t => {
+  const f = await fixture(t, true);
+  const operationId = "manager.video.workbench.cli-list", pathTemplate = "/api/video/v2/cli";
+  const rows = f.registry.catalogSnapshot().operations;
+  const matches = rows.map(row => row.contract).filter(contract =>
+    contract.operationId === operationId || contract.pathTemplate === pathTemplate);
+  assert.equal(matches.length, 1);
+  const [contract] = matches;
+  assert.equal(contract.operationId, operationId);
+  assert.equal(contract.method, "GET");
+  assert.equal(contract.pathTemplate, pathTemplate);
+  assert.deepEqual(contract.aliases, ["video:GET:/api/video/v2/cli"]);
+  assert.equal(contract.effects.mode, "native-read");
+  assert.equal(contract.request.body?.kind, "none");
+
+  const catalog = { providers: [{ id: "codex", label: "Codex CLI", installUrl: "https://example.invalid/install",
+    installed: true, ready: true, models: [{ id: "fixture-model", label: "Fixture Model" }] }] };
+  const refreshes: boolean[] = [];
+  t.mock.method(f.runs, "listCli", async (refresh: boolean) => {
+    refreshes.push(refresh);
+    return catalog;
+  });
+  f.runtime.readOnly = true;
+  const local = await f.request("/v2/cli", "GET", undefined, { authorization: "", origin: f.base });
+  const agent = await f.request("/v2/cli?refresh=1");
+  for (const response of [local, agent]) {
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), catalog);
+  }
+  assert.deepEqual(refreshes, [false, true]);
+  assert.equal(f.runs.runs.size, 0);
+  assert.deepEqual(f.calls, []);
+});
+
+test("Workbench CLI discovery rejects untrusted local origins and revoked Agent connections", async t => {
+  const f = await fixture(t, true);
+  let started!: () => void, finish!: () => void;
+  const probeStarted = new Promise<void>(resolve => { started = resolve; });
+  const probeFinished = new Promise<void>(resolve => { finish = resolve; });
+  f.releases.push(finish);
+  let holdProbe = false;
+  const discovery = t.mock.method(f.runs, "listCli", async () => {
+    if (holdProbe) {
+      started();
+      await probeFinished;
+    }
+    return { providers: [] };
+  });
+  const deniedHeaders: Record<string, string>[] = [
+    { authorization: "", origin: "https://example.invalid", "sec-fetch-site": "cross-site" },
+    { authorization: "", forwarded: "for=example.invalid" },
+  ];
+  for (const headers of deniedHeaders) {
+    const rejected = await f.request("/v2/cli?refresh=1", "GET", undefined, headers);
+    assert.equal(rejected.status, 403);
+    assert.equal(rejected.headers.get("cache-control"), "no-store");
+    assert.equal(discovery.mock.callCount(), 0);
+  }
+
+  holdProbe = true;
+  const response = f.request("/v2/cli?refresh=1");
+  await Promise.race([probeStarted, response.then(reply => { throw new Error(`CLI discovery did not begin (HTTP ${reply.status}).`); })]);
+  f.authority.revokeNode(f.credential.nodeId);
+  finish();
+  const revoked = await response;
+  assert.equal(revoked.status, 403);
+  assert.equal(Object.hasOwn(await revoked.json(), "providers"), false);
+  assert.equal((await f.request("/v2/cli?refresh=1")).status, 403);
+  assert.equal(discovery.mock.callCount(), 1);
 });
 
 test("native projects preserve original IDs, revisions, concurrent conflict and independent file readback", async t => {

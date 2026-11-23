@@ -208,7 +208,12 @@ export function createVideoOperations(context: VideoOperationsContext) {
   add("project.save", "PUT", "/projects/:mediaId", async (input, saved) => ({ revision: (await projects.save(input.path.mediaId, input.body, saved.access)).revision }), { body: json(64 * 1024 ** 2, contracts.requests.projectSave), noStore: true });
   const workbenchBody = { body: json(64 * 1024 ** 2, ignored), noStore:true };
   add("workbench.definition", "GET", "/v2/definition", () => projects.definition, { noStore:true });
-  add("workbench.cli-list", "GET", "/v2/cli", input => runs.listCli(input.url.searchParams.get("refresh") === "1"), { noStore:true });
+  add("workbench.cli-list", "GET", "/v2/cli", input => {
+    if (!context.runtime.localSettingsAllowed(input.request)) {
+      throw Object.assign(new Error("Workbench CLI discovery forbidden"), { code: "VIDEO_REQUEST_FORBIDDEN" });
+    }
+    return runs.listCli(input.url.searchParams.get("refresh") === "1");
+  }, { noStore: true });
   add("workbench.projects-create", "POST", "/v2/projects", (input,saved) => projects.createProjectV2(input.body,saved.access), workbenchBody);
   add("workbench.project-read", "GET", "/v2/projects/:projectId", (input,saved) => projects.readProject(input.path.projectId,saved.access), {noStore:true});
   add("workbench.project-save", "PUT", "/v2/projects/:projectId", (input,saved) => projects.saveProject(input.path.projectId,input.body,saved.access), workbenchBody);

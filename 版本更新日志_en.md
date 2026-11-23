@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.73 - 2026-11-23
+
+- Use the existing local settings access check for Workbench CLI discovery. Preserve authenticated read-only access and verify that the original connection remains valid before returning the catalog.
+
 ## 0.15.72 - 2026-11-23
 
 - Buffer Android wake audio by elapsed sample time. While local transcription checks the wake word, keep up to 35 seconds so a 48 kHz microphone does not truncate a longer first utterance.

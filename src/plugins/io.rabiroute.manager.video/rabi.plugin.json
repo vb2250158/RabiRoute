@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "io.rabiroute.manager.video",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "displayName": "工作台",
   "description": "管理项目、独立画布、媒体与流程任务",
   "icon": "mdi-movie-open",
