@@ -12,6 +12,8 @@ Enable “显示气泡” (Show bubbles) in the pet's context menu. Companion co
 
 The bubble shows text only. Long text scrolls, capped at 4,000 characters. It does not take focus. Click-through also applies to the bubble. Hiding the pet or disabling bubbles affects display; audio remains under the speech queue's controls.
 
+During live voice, a separate “你 · 正在转写” (You · Transcribing) bubble updates beside the pet. The final text stays for about four seconds. Long transcripts show their most recent portion. Pausing the microphone, stopping voice, switching personas or disconnecting clears the transcript. The persona's reply can stay visible alongside it. The live preview goes only to the local pet, and finalized speech follows the existing recording flow.
+
 Choose “气泡样式…” (Bubble style) from the context menu to preview and save the cat-paw or plain skin, system font, size (12–24 px), text color, width (220–480 px), opacity (50–100%), visible bubble count (1–6) and lifetime (2–30 seconds). The plain skin also supports background and outline colors. The persona's pet panel exposes the same settings. Each persona saves its own style, restored after restart. Nine-slice rendering keeps the bottom-right paw fixed in size. An independent pointer tracks the visible pet artwork’s horizontal center while the frame clamps to screen edges. If there is insufficient room above, the bubble moves below the pet with an upward pointer. Text remains clear of the decoration.
 
 Desktop subscribes to Manager `/api/speech/events` and reads `/api/speech/playback/status` to restore currently playing speech. Reconnection neither displays completed history nor replays audio. Qt renders only; RabiSpeech owns synthesis, playback, cache and queue state.
