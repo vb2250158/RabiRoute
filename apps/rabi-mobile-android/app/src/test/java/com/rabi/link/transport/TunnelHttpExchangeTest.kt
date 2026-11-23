@@ -7,9 +7,54 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TunnelHttpExchangeTest {
+    @Test(timeout = 6_000)
+    fun readerAndWriterNeverSendConcurrently() {
+        val writerEntered = CountDownLatch(1)
+        val windowSent = CountDownLatch(1)
+        val writerActive = AtomicBoolean(false)
+        val sendOverlapped = AtomicBoolean(false)
+        var requestId = ""
+        var responseIndex = 0
+        val exchange = TunnelHttpExchange(
+            send = { message ->
+                when (message.getString("type")) {
+                    "open" -> requestId = message.getString("id")
+                    "data" -> {
+                        writerActive.set(true)
+                        writerEntered.countDown()
+                        try { windowSent.await(1, TimeUnit.SECONDS) }
+                        finally { writerActive.set(false) }
+                    }
+                    "window" -> {
+                        sendOverlapped.set(writerActive.get())
+                        windowSent.countDown()
+                    }
+                }
+            },
+            read = {
+                val response = JSONObject().put("id", requestId)
+                when (responseIndex++) {
+                    0 -> response.put("type", "head").put("head", JSONObject().put("status", 200))
+                    1 -> {
+                        assertTrue(writerEntered.await(2, TimeUnit.SECONDS))
+                        response.put("type", "data").put("data", TunnelCrypto.b64(byteArrayOf(7)))
+                    }
+                    else -> response.put("type", "end")
+                }
+            },
+            assertCurrent = {},
+        )
+        exchange.run("manager", "POST", "/fixture", JSONObject(), ByteArrayInputStream(byteArrayOf(1)),
+            false, { status, _ -> assertEquals(200, status) }, { assertArrayEquals(byteArrayOf(7), it) }, 4_000)
+        assertEquals(0L, windowSent.count)
+        assertFalse(sendOverlapped.get())
+    }
+
     @Test(timeout=30000) fun actualEyeCipherCarriesFutureBinarySseAndUpgradeThroughPcManager() {
         val root=generateSequence(File(checkNotNull(System.getProperty("user.dir")))){it.parentFile}.first{File(it,"src/peerTunnel/runtime.ts").isFile}
         val script="""

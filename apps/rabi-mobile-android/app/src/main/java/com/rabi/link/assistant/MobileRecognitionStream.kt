@@ -17,7 +17,8 @@ internal class MobileRecognitionStream(
     private val input = AudioBlocks()
     @Volatile private var tunnel: RabiSpeechTunnel? = null
 
-    fun offer(sequence: Int, bytes: ByteArray): Boolean = !closed.get() && input.offer(sequence, bytes)
+    fun offer(sequence: Int, bytes: ByteArray, providerReady: Boolean): Boolean =
+        !closed.get() && input.offer(sequence, bytes, providerReady)
 
     fun run(connection: RabiSpeechTunnel, path: String, stillCurrent: () -> Boolean) {
         try {
@@ -87,15 +88,20 @@ internal class MobileRecognitionStream(
     }
 
     private class AudioBlocks : InputStream() {
-        private val blocks = ArrayBlockingQueue<ByteArray>(48)
+        private val blocks = ArrayBlockingQueue<ByteArray>(STARTUP_BLOCKS)
+        private var blockLimit = STARTUP_BLOCKS
         @Volatile private var ended = false
         private var expected = 0
         private var offset = 0
         private var current = ByteArray(0)
 
-        @Synchronized fun offer(sequence: Int, frame: ByteArray): Boolean {
+        @Synchronized fun offer(sequence: Int, frame: ByteArray, providerReady: Boolean): Boolean {
             if (ended || sequence != expected || frame.size !in 2..3200 || frame.size % 2 != 0) return false
-            if (!blocks.offer(frame)) return false
+            // Before readiness the queue also holds the wake replay and the audio captured during route setup.
+            // As that backlog drains, reduce the allowance to the normal short streaming queue.
+            val pending = blocks.size
+            if (providerReady) blockLimit = minOf(blockLimit, pending + LIVE_BLOCKS)
+            if (pending >= blockLimit || !blocks.offer(frame)) return false
             expected++
             return true
         }
@@ -123,6 +129,12 @@ internal class MobileRecognitionStream(
         override fun close() {
             ended = true
             blocks.clear()
+        }
+
+        companion object {
+            private const val LIVE_BLOCKS = 48
+            // 1024 samples per block at 16 kHz. Include up to 35 s of wake replay and route setup.
+            private const val STARTUP_BLOCKS = 960
         }
     }
 }

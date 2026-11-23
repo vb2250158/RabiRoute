@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.76 - 2026-11-24
+
+- Preserve the first utterance on Android while live recognition connects. Audio is sent in order once the recognizer is ready, and unfinished speech can fall back to local PC transcription if streaming disconnects.
+
 ## 0.15.75 - 2026-11-24
 
 - Accept WAV uploads for mobile transcription fallback. The endpoint reads the audio within its existing size limit before passing it to the PC recognizer.

@@ -292,11 +292,11 @@ class MobileAssistantActivity : Activity() {
 
         @JavascriptInterface fun recognitionStart(id: String, sessionId: String): Boolean = startRecognition(id, sessionId)
 
-        @JavascriptInterface fun recognitionPcm(id: String, sequence: Int, audio: String): Boolean {
+        @JavascriptInterface fun recognitionPcm(id: String, sequence: Int, audio: String, providerReady: Boolean): Boolean {
             if (!inForeground || audio.length > 4300) return false
             val active = recognition?.takeIf { it.id == id } ?: return false
             val bytes = runCatching { Base64.decode(audio, Base64.NO_WRAP) }.getOrNull() ?: return false
-            return active.offer(sequence, bytes)
+            return active.offer(sequence, bytes, providerReady)
         }
 
         @JavascriptInterface fun recognitionCancel(id: String) = stopRecognition(id)

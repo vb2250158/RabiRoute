@@ -20,19 +20,20 @@ test('writes ordered signed PCM16 chunks and retires old stream callbacks', () =
   let active;
   const bridge = {
     recognitionStart(id,sessionId) { active=id; assert.equal(sessionId,'session'); return true; },
-    recognitionPcm(id,sequence,wave) { assert.equal(id,active); sent.push([sequence,Buffer.from(wave,'base64')]); return true; },
+    recognitionPcm(id,sequence,wave,ready) { assert.equal(id,active); sent.push([sequence,Buffer.from(wave,'base64'),ready]); return true; },
     recognitionCancel(id) { assert.equal(active,id); },
   };
   const streams = createStreamingRecognition(bridge);
   const round = streams.open('session', { receive:value=>notices.push(value.type), end() {}, error() {} });
-  streams.receive(active, '{"type":"ready"}');
   assert.equal(round.write(Float32Array.of(-1,0,1)),true);
+  streams.receive(active, '{"type":"ready"}');
   assert.equal(round.write(Float32Array.of(0)),true);
   streams.receive(active, '{"type":"interim","text":"你好"}');
   round.close();
   streams.receive(active, '{"type":"final","text":"这是迟到结果"}');
   assert.deepEqual(notices,['ready','interim']);
   assert.deepEqual(sent.map(item=>item[0]),[0,1]);
+  assert.deepEqual(sent.map(item=>item[2]),[false,true]);
   assert.deepEqual([...sent[0][1]],[0,128,0,0,255,127]);
 });
 

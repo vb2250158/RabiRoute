@@ -11,7 +11,14 @@ internal class TunnelHttpExchange(private val send:(JSONObject)->Unit,private va
             onHead:(Int,JSONObject)->Unit,onData:(ByteArray)->Unit,timeoutMs:Long) {
         val id=UUID.randomUUID().toString();val lock=Object();var credit=65536;val done=java.util.concurrent.atomic.AtomicBoolean(false)
         val failure=AtomicReference<Throwable?>();val deadline=System.nanoTime()+timeoutMs*1_000_000
-        fun frame(value:JSONObject){assertCurrent();send(value)}
+        val sendLock = Any()
+        fun frame(value: JSONObject) {
+            // The reader and writer share one ordered encrypted output stream.
+            synchronized(sendLock) {
+                assertCurrent()
+                send(value)
+            }
+        }
         frame(JSONObject().put("type","open").put("id",id).put("request",JSONObject().put("service",service).put("method",method).put("path",path).put("headers",headers).put("upgrade",upgrade)))
         val writer=Thread({try {
             val bytes=ByteArray(12000)

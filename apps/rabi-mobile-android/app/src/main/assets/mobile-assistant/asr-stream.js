@@ -6,6 +6,7 @@ export function createStreamingRecognition(bridge) {
       const id = crypto.randomUUID();
       let sequence = 0;
       let closed = false;
+      let providerReady = false;
       const close = () => {
         if (closed) return;
         closed = true;
@@ -19,6 +20,7 @@ export function createStreamingRecognition(bridge) {
           else events.end();
           return;
         }
+        if (event.type === 'ready') providerReady = true;
         events.receive(event);
       };
       streams.set(id, receive);
@@ -29,7 +31,7 @@ export function createStreamingRecognition(bridge) {
       return {
         write(frame) {
           if (closed) return false;
-          if (bridge.recognitionPcm(id, sequence, encodeFrame(frame))) {
+          if (bridge.recognitionPcm(id, sequence, encodeFrame(frame), providerReady)) {
             sequence++;
             return true;
           }
