@@ -1,5 +1,8 @@
 export const pluginTranslations = {
   "en": {
+    "正在读取 QQ 登录状态…": "Checking QQ sign-in status…",
+    "读取 QQ 登录状态超时，正在继续检查；你可以关闭窗口稍后查看。": "Checking QQ sign-in timed out. Checks will continue; you can close this window and return later.",
+    "QQ 登录失败，请在手机 QQ 查看登录提示后重试。": "QQ sign-in failed. Check the sign-in instructions in QQ on your phone, then retry.",
     "账号密码": "Account and password",
     "等待监听就绪": "Waiting for the listener",
     "0 表示自动分配，监听就绪后显示实际地址。": "0 assigns a port automatically. The actual address appears when the listener is ready.",

@@ -1,5 +1,7 @@
 # NapCat / OneBot
 
+The sign-in card reads the current account state as it opens and retains an existing QR code during background checks. Native QQ failures, such as account security restrictions or an expired QR code, appear directly on the card. Follow any instructions in QQ on your phone. A timed-out read releases the loading state and checks continue; closing the card cancels its read without repeating sign-in actions or messages.
+
 Failed sends expose `deliveryError.code` for `NAPCAT_LOGIN_REQUIRED`, `QQ_PERMISSION_DENIED`, `NAPCAT_AUTHENTICATION_FAILED`, `NAPCAT_CONNECTION_FAILED`, and `RABI_ROUTE_PERMISSION_DENIED`, with a Chinese `message` and a machine-readable `recoveryAction`. A login error requires verified expired login on the same instance and a connection failure proving that the request was not sent. Timeouts retain `platformResult=unknown`. The initial response and original-ID receipt preserve the same diagnostics. Restoring login does not resend a completed failed delivery.
 
 [中文](README.md)

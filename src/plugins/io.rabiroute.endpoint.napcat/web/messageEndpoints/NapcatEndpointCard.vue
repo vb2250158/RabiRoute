@@ -8,6 +8,8 @@ import type { MessageAdapterType, MessageAdapterScanResult, NapCatInstance } fro
 import { adapterRuntimeKey, adapterErrorsFor, applyAdapterDefaults, gatewayAdapterTypes, isMessageInputsDisabled, messageAdapterPolicyFor, setMessageAdapterPolicy } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import MessageEndpointDependencyPanel from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
 import { isNapcatPortSetting, publishedNapcatWsUrl } from "../../../../../ribiwebgui/src/napcatRuntimeEndpoint";
+import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
+import { napcatLoginErrorMessage } from "../napcatLoginPresentation";
 
 const store = useGatewayStore();
 
@@ -128,9 +130,11 @@ const napcatLoginPanels = ref<Record<string, NapcatLoginUiState>>({});
 let napcatPanelPollTimer = 0;
 
 let napcatPanelDisposed = false;
+let napcatPanelRequest: AbortController | undefined;
 
 onBeforeUnmount(() => {
   napcatPanelDisposed = true;
+  napcatPanelRequest?.abort();
   window.clearTimeout(napcatPanelPollTimer);
 });
 
@@ -915,17 +919,21 @@ async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
   const gatewayId = gateway.value?.id;
   if (ui.loading || napcatPanelDisposed) return;
   ui.loading = true;
-  ui.error = "";
+  const request = new AbortController();
+  napcatPanelRequest = request;
+  const deadline = AbortSignal.timeout(getTimeoutMs("webgui.plugins.read", 15000));
   try {
     const response = await fetch("/api/message/napcat-login-panel", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: AbortSignal.any([request.signal, deadline]),
       body: JSON.stringify({ gatewayId, instanceId: target.id })
     });
-    const body = await response.json().catch(() => ({})) as NapcatLoginPanelData;
+    const body = await response.json() as NapcatLoginPanelData;
     if (!response.ok || body.ok === false) throw new Error(body.message || "NapCat 登录控制加载失败。");
-    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
+    if (gateway.value?.id !== gatewayId || napcatPanelDisposed || request.signal.aborted) return;
     ui.panel = body;
+    ui.error = body.loggedIn ? "" : napcatLoginErrorMessage(body.loginError);
     if (body.health) napcatInstanceHealthResult.value = { ...napcatInstanceHealthResult.value, [target.id]: body.health };
     ui.message = body.message || "";
     const expected = String(body.expectedUserId || target.botUserId || "");
@@ -942,12 +950,12 @@ async function loadNapcatLoginPanel(instance: NapCatInstance): Promise<void> {
       napcatLaunchResult.value = { ...napcatLaunchResult.value, [target.id]: { ok: body.state !== NapcatState.AccountMismatch, message: body.message || "QQ 已登录。" } };
     }
   } catch (error) {
-    if (gateway.value?.id !== gatewayId || napcatPanelDisposed) return;
-    ui.panel = null;
-    ui.error = userFacingError(error);
+    if (gateway.value?.id !== gatewayId || napcatPanelDisposed || request.signal.aborted) return;
+    ui.error = deadline.aborted ? "读取 QQ 登录状态超时，正在继续检查；你可以关闭窗口稍后查看。" : userFacingError(error);
   } finally {
     ui.loading = false;
-    if (!napcatPanelDisposed && gateway.value?.id === gatewayId && ui.visible) {
+    if (napcatPanelRequest === request) napcatPanelRequest = undefined;
+    if (!napcatPanelDisposed && !request.signal.aborted && gateway.value?.id === gatewayId && ui.visible) {
       window.clearTimeout(napcatPanelPollTimer);
       napcatPanelPollTimer = window.setTimeout(() => { void loadNapcatLoginPanel(target); }, 3000);
     }
@@ -1670,6 +1678,14 @@ async function refreshVisibleNapcatHealth(): Promise<void> {
   }
 }
 
+// Reset the old Route before the immediate refresh captures this Route's UI state.
+watch(() => gateway.value?.id, () => {
+  napcatPanelRequest?.abort();
+  window.clearTimeout(napcatPanelPollTimer);
+  napcatLoginPanels.value = {};
+  napcatInstanceHealthResult.value = {};
+}, { immediate: true });
+
 watch(
   () => [store.loading, store.dirty, gateway.value?.id, JSON.stringify((gateway.value?.napcatInstances ?? []).map(instance => ({
     id: instance.id,
@@ -1679,7 +1695,7 @@ watch(
     webuiUrl: instance.webuiUrl
   })))],
   ([loading, dirty, gatewayId, instancesKey]) => {
-    if (loading || dirty || autoCheckingNapcat.value || repairingNapcatAll.value) return;
+    if (loading || dirty || repairingNapcatAll.value) return;
     const key = `${gatewayId || ""}:${instancesKey || ""}`;
     if (key === lastAutoNapcatHealthKey.value) return;
     lastAutoNapcatHealthKey.value = key;
@@ -1688,8 +1704,6 @@ watch(
   { immediate: true }
 );
 onBeforeUnmount(() => { for (const timer of napcatNewDevicePollTimers.values()) window.clearTimeout(timer); napcatNewDevicePollTimers.clear(); });
-
-watch(() => gateway.value?.id, () => { window.clearTimeout(napcatPanelPollTimer); napcatLoginPanels.value = {}; napcatInstanceHealthResult.value = {}; }, { immediate: true });
 
 onMounted(() => { if (!loginRequested.value) void runMessageAdapterScan(); });
 
@@ -1717,11 +1731,12 @@ watch([() => context.value?.routeId, () => gateway.value?.id, () => napcatAccoun
   ui.mode = "qrcode";
   ui.visible = true;
   void loadNapcatLoginPanel(instance).then(() => {
-    if (ui.visible && ui.panel && !ui.panel.loggedIn && ui.mode === "qrcode" && !ui.panel.qrCodeDataUrl) {
+    if (ui.visible && !ui.error && ui.panel && !ui.panel.loggedIn && ui.mode === "qrcode" && !ui.panel.qrCodeDataUrl) {
       return selectLoginMode(instance, "qrcode");
     }
   });
   cleanup(() => {
+    napcatPanelRequest?.abort();
     ui.visible = false;
     ui.password = "";
     window.clearTimeout(napcatPanelPollTimer);
@@ -1875,6 +1890,8 @@ watch([() => context.value?.routeId, () => gateway.value?.id, () => napcatAccoun
                               <v-btn v-if="loginRequested && !napcatLoginUi(instance).panel" size="small" variant="text"
                                 @click="selectLoginMode(instance, napcatLoginUi(instance).mode ?? 'qrcode')">重试</v-btn>
                             </v-alert>
+                            <p v-if="napcatLoginUi(instance).loading && !napcatLoginUi(instance).panel"
+                              role="status" class="text-body-2 mb-3">正在读取 QQ 登录状态…</p>
                             <v-alert
                               v-if="!loginRequested && napcatLoginUi(instance).message && !napcatLoginUi(instance).panel?.loggedIn"
                               type="info"

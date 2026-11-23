@@ -8,6 +8,8 @@
 
 支持合并转发只读分页、嵌套节点与节点附件。所有读取沿原消息和会话授权范围进行；界面卡片由人格插件提供，不改共享消息存档格式。
 
+登录卡片打开时立即读取当前账号状态，后台检查不会清掉已显示的二维码。扫码后原生 QQ 返回的失败原因会直接显示，例如账号安全限制或二维码过期；请按手机 QQ 的提示处理。读取超时会结束当前等待并继续检查，关闭卡片会取消其读取，不会重复发起登录或重投消息。
+
 兼容 Manager 在发送能力目录公布 `napcat.group-forward`。指定实际群号和实例，提交 `data.nodes` 文本条目。条目使用当前机器人署名，回执沿原 `deliveryId` 读取。
 
 发送失败的 `deliveryError.code` 区分 `NAPCAT_LOGIN_REQUIRED`、`QQ_PERMISSION_DENIED`、`NAPCAT_AUTHENTICATION_FAILED`、`NAPCAT_CONNECTION_FAILED` 与 `RABI_ROUTE_PERMISSION_DENIED`，并提供中文 `message` 和 `recoveryAction`。只有同一实例取得已失效的登录证据，且原连接失败能证明请求未发出时，才返回登录错误。超时的 `platformResult` 保持 `unknown`。首次响应和原编号回执使用相同诊断；已结束的失败不会因恢复登录而重新发送。

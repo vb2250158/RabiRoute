@@ -8,6 +8,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.67 - 2026-11-23
+
+- NapCat 0.1.28 fixes the first sign-in response being discarded during settings initialization and stale reads after switching Routes. The card loads with the plugin entry, bounds status reads and retains an existing QR code. Native QQ sign-in errors are displayed without repeating sign-in actions or messages.
+
 
 ## 0.15.66 - 2026-11-23
 
