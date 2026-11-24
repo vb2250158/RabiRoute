@@ -212,6 +212,11 @@ export function createVoiceInteraction({ runtime, onInput, onEvent = () => {}, o
         onFinal(result, ...args) {
           recognizedInputPending = false;
           if (deliver(textOf(result), 'speech', result)) callbacks.onFinal?.(result, ...args);
+        },
+        onNoMatch(...args) {
+          if (recognizedInputPending) transcript = '';
+          recognizedInputPending = false;
+          callbacks.onNoMatch?.(...args);
         }
       } });
     },

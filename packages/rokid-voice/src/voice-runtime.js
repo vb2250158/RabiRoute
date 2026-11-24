@@ -122,6 +122,9 @@ export function createAiuiAsrInputAdapter(options = {}) {
       recognition.onspeechend = (event) => {
         if (!stoppedRounds.has(recognition)) handlers.onSpeechEnd?.(event);
       };
+      recognition.onnomatch = (event) => {
+        if (!stoppedRounds.has(recognition)) handlers.onNoMatch?.(event);
+      };
       const emitFinal = (text, event) => {
         sequence += 1;
         const capturedAt = Number(now());

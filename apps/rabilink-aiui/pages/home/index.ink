@@ -4555,7 +4555,17 @@ export default {
     this.listeningPurpose = purpose;
     this.ensureVoiceInteraction().activate({ continuous: purpose === "transcription", interimResults: true,
       startupTimeoutMs: this.recognitionStartupTimeoutMs(), handlers: {
-        onSpeechEnd: () => { if (this.recognition?.interimResults === false) this.setData({ transcriptionState: "正在转写" }); },
+        onSpeechEnd: () => {
+          if (this.recognition?.interimResults === false && this.aiuiRuntime.getState().inputPending)
+            this.setData({ transcriptionState: "正在转写" });
+        },
+        onNoMatch: () => {
+          if (purpose === "configuration") {
+            this.setData({ assistantStatus: "正在聆听", ...(this.data.assistantStatus === "正在识别..." ? { assistantUserText: "" } : {}) });
+          } else {
+            this.setData({ transcriptionState: "正在聆听", ...(this.data.transcriptionState === "正在识别" ? { transcriptionText: "" } : {}) });
+          }
+        },
         onInterim: result => {
           const text = String(result?.text || "").trim();
           if (!text) return;

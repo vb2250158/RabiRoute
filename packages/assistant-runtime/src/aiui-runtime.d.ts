@@ -3,6 +3,8 @@ import type { AssistantConversation, ConversationOptions } from './conversation-
 export interface AsrHandlers<Result = unknown, Event = unknown> {
   continuous?: boolean; interimResults?: boolean;
   onStart?(event?: Event): void; onSpeechStart?(event?: Event): void; onSpeechEnd?(event?: Event): void;
+  /** Native recognition rejected this utterance without returning text. */
+  onNoMatch?(event?: Event): void;
   onEnd?(event?: Event): void; onError?(error: unknown, event?: Event): void;
   onFinal?(result: Result, event?: Event): void; onInterim?(result: Result, event?: Event): void;
 }

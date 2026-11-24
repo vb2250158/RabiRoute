@@ -84,6 +84,7 @@ export function createListeningLifecycle({ asr, clock = defaultClock, canStart =
         },
         onSpeechStart: (...args) => invoke('onSpeechStart', args),
         onSpeechEnd: (...args) => invoke('onSpeechEnd', args),
+        onNoMatch: (...args) => invoke('onNoMatch', args),
         onError: error => { if (active(item)) finish(item, 'error', error); },
         onEnd: () => { if (active(item)) finish(item, 'end'); }
       });

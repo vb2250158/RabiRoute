@@ -95,13 +95,12 @@ export function createAiuiAssistantRuntime({ asr, tts, session: initialSession, 
         // The interaction owner filters ASR text before cancelling output.
         handlers.onSpeechStart?.(...args);
       };
-      for (const name of ['onSpeechEnd', 'onError']) {
+      for (const name of ['onSpeechEnd', 'onNoMatch', 'onError']) {
         callbacks[name] = (...args) => {
           if (!currentRound(owner)) return;
           owner.speaking = false;
-          // Silence can precede the final transcript. Only an error terminates
-          // that pending input without a transcript or a round-end receipt.
-          if (name === 'onError') owner.pendingTranscript = false;
+          // Silence can precede final text. A native rejection or error settles it.
+          if (name !== 'onSpeechEnd') owner.pendingTranscript = false;
           try { handlers[name]?.(...args); }
           finally { syncInputState(); }
         };

@@ -159,6 +159,108 @@ test('keyword sessions release native recognition after quiet and keep active wo
   }
 });
 
+function openNativeWakePage(t) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const rounds = [];
+  class Recognition {
+    stops = 0;
+    start() { rounds.push(this); this.onstart?.(); }
+    abort() { this.stops++; this.onend?.(); }
+    stop() { this.abort(); }
+  }
+  const preferenceKey = 'rabilink-aiui-voice-preferences';
+  const savedPreference = fixtureWx.getStorageSync(preferenceKey);
+  const nativeRecognition = Object.getOwnPropertyDescriptor(globalThis, 'SpeechRecognition');
+  const p = page();
+  t.after(() => {
+    p.onHide();
+    fixtureWx.setStorageSync(preferenceKey, savedPreference ?? null);
+    if (nativeRecognition) Object.defineProperty(globalThis, 'SpeechRecognition', nativeRecognition);
+    else delete globalThis.SpeechRecognition;
+  });
+  fixtureWx.setStorageSync(preferenceKey, { enabled: true, wakeEnabled: true });
+  Object.defineProperty(globalThis, 'SpeechRecognition', { value: Recognition, configurable: true });
+  p.installCloudConsoleCapture = () => {};
+  p.scheduleDeferredStartup = () => {};
+  p.paintVisualCanvas = () => {};
+  p.onLoad({});
+  p.onShow();
+  p.onReady();
+  prepareVisibilityLifecycle(p);
+  const accepted = [], interruptions = [];
+  p.handleTranscriptionResult = text => accepted.push(text);
+  p.interruptAiuiPlayback = reason => interruptions.push(reason);
+  return { p, rounds, accepted, interruptions };
+}
+
+test('native speech just before the idle deadline stays open until the final text', t => {
+  const { p, rounds, accepted } = openNativeWakePage(t);
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  assert.equal(rounds.length, 1);
+  const [round] = rounds;
+  t.mock.timers.tick(59_000);
+  round.onspeechstart({ type: 'speechstart' });
+  t.mock.timers.tick(1_000);
+  assert.equal(round.stops, 0);
+  assert.equal(p.data.transcriptionListening, true);
+  round.onspeechend({ type: 'speechend' });
+  assert.equal(p.aiuiRuntime.getState().inputPending, true);
+  t.mock.timers.tick(500);
+  round.onresult({ results: [result('完整原生语音', true)], resultIndex: 0 });
+  assert.deepEqual(accepted, ['完整原生语音']);
+  assert.equal(p.aiuiRuntime.getState().inputPending, false);
+  t.mock.timers.tick(60_001);
+  assert.equal(round.stops, 1);
+  assert.equal(p.data.transcriptionState, '等待唤醒');
+});
+
+test('native nomatch releases pending input without interrupting or submitting, then returns to standby', t => {
+  const { p, rounds, accepted, interruptions } = openNativeWakePage(t);
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  assert.equal(rounds.length, 1);
+  const [round] = rounds;
+  t.mock.timers.tick(59_000);
+  round.onspeechstart({ type: 'speechstart' });
+  round.onspeechend({ type: 'speechend' });
+  assert.equal(p.aiuiRuntime.getState().inputPending, true);
+  round.onnomatch?.({ type: 'nomatch' });
+  assert.equal(p.aiuiRuntime.getState().inputPending, false);
+  assert.equal(p.data.transcriptionState, '正在聆听');
+  assert.equal(round.stops, 0);
+  assert.deepEqual(accepted, []);
+  assert.deepEqual(interruptions, []);
+  t.mock.timers.tick(1_000);
+  assert.equal(round.stops, 1);
+  assert.equal(p.data.transcriptionState, '等待唤醒');
+});
+
+test('hiding fences late native events and repeated system wake opens one fresh recognition round', t => {
+  const { p, rounds, accepted } = openNativeWakePage(t);
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  assert.equal(rounds.length, 1);
+  const [old] = rounds;
+  const lateNoMatch = old.onnomatch;
+  const lateResult = old.onresult;
+  old.onspeechstart({ type: 'speechstart' });
+  p.onHide();
+  assert.equal(old.stops, 1);
+  assert.equal(p.data.transcriptionListening, false);
+  p.onShow();
+  assert.equal(rounds.length, 1);
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  p.onVoiceWakeup({ keyword: 'Hi Rokid' });
+  assert.equal(rounds.length, 2);
+  const fresh = rounds[1];
+  fresh.onspeechstart({ type: 'speechstart' });
+  lateNoMatch?.({ type: 'nomatch' });
+  lateResult({ results: [result('旧采集迟到文本', true)], resultIndex: 0 });
+  assert.equal(p.aiuiRuntime.getState().inputPending, true);
+  fresh.onspeechend({ type: 'speechend' });
+  fresh.onresult({ results: [result('新采集独立文本', true)], resultIndex: 0 });
+  assert.deepEqual(accepted, ['新采集独立文本']);
+});
+
 test('unrelated keyboard input cannot silence a pending answer or steal browser navigation', () => {
   const p = page();
   p.data.assistantModelBusy = true;

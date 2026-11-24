@@ -2,6 +2,10 @@ English | [简体中文](aiui-voice-current.md)
 
 # AIUI Conversation, Voice, and Device Troubleshooting
 
+## Local candidate 1.0.44 — November 25, 2026
+
+In wake mode, the idle timer leaves native recognition open while an utterance is being captured or awaiting final text. A native `nomatch` settles that utterance, so capture can continue and return to standby at the existing idle deadline. The event does not submit a turn or stop playback. Leaving the page releases its recognition instance, and a new wake starts one fresh instance.
+
 ## Current candidate 1.0.40 — November 16, 2026
 
 The submission application name is exactly **拉比小助手**. Application/page titles, `app.globalData.appName`, runtime reporting and default upload metadata match it. The configurable persona `agentName` remains independent. The original cloud project is still located by its historical name; it is not yet signed in or renamed, and no new draft is created.

@@ -17,7 +17,7 @@ export interface ListeningActivation<Result = unknown, Event = unknown> {
   interimResults?: boolean;
   startupTimeoutMs?: number;
   /** End and error are lifecycle events, not transcript callbacks. */
-  handlers?: Pick<AsrHandlers<Result, Event>, 'onStart' | 'onSpeechStart' | 'onSpeechEnd' | 'onInterim' | 'onFinal'>;
+  handlers?: Pick<AsrHandlers<Result, Event>, 'onStart' | 'onSpeechStart' | 'onSpeechEnd' | 'onNoMatch' | 'onInterim' | 'onFinal'>;
 }
 export interface ListeningOptions<Round extends object = object, Result = unknown, Event = unknown, Timer = unknown> {
   asr: AsrAdapter<Round, Result, Event>;
