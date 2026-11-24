@@ -18,6 +18,51 @@ async function fixture(overrides={}){
   let owner=await createVoiceAssistantOwner(args);
   return {requests,modelPrompts,modelRequests,args,get owner(){return owner},async restart(){await owner.dispose();owner=await createVoiceAssistantOwner(args)},async close(){await owner.dispose();await rm(stateRoot,{recursive:true,force:true})}};
 }
+test('mobile custom TTS capability and endpoint use saved provider and authoritative current reply without a desktop device',async()=>{
+  let calls=0;
+  const wave=Buffer.alloc(48);wave.write('RIFF');wave.writeUInt32LE(40,4);wave.write('WAVE',8);
+  const f=await fixture({deviceFactory:async()=>assert.fail('mobile synthesis must not acquire a desktop device'),customProviderFactory:()=>({async synthesize(input,_signal,expression){calls++;assert.equal(input,'真实公共循环的回答');assert.equal(expression,undefined);return wave}})});
+  try{
+    assert.equal((await f.owner.state('mobile')).capabilities.mobileCustomTts,false);
+    await f.owner.command({action:'host-settings',patch:{ttsSource:'custom'}});
+    await f.owner.command({action:'settings',patch:{ttsProvider:'compatible',ttsEndpoint:'https://fixture.test/speech',ttsModel:'fixture',ttsVoice:'fixture',voiceEnabled:true}});
+    assert.equal((await f.owner.state('mobile')).capabilities.mobileCustomTts,true);
+    await f.owner.command({action:'credential',kind:'tts',provider:'compatible',endpoint:'https://fixture.test/speech',key:'fixture-only-key'});
+    assert.equal((await f.owner.state('mobile')).capabilities.mobileCustomTts,true);
+    const session=await f.owner.session();await f.owner.submit('测试','mobile-tts');
+    const deadline=Date.now()+2000;
+    while(Date.now()<deadline){
+      if((await f.owner.messages()).some(row=>row.id==='reply-mobile-tts'&&row.status==='completed')&&(await f.owner.state()).activity.pending===0)break;
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+    assert.equal((await f.owner.state()).activity.pending,0);
+    const request={sessionId:session.id,responseId:'reply-mobile-tts',input:'真实公共循环的回答'};
+    assert.deepEqual(await f.owner.synthesizeMobile(request),wave);assert.deepEqual(await f.owner.synthesizeMobile(request),wave);assert.equal(calls,1);
+    await f.owner.command({action:'settings',patch:{ttsSpeed:1.1}});
+    assert.deepEqual(await f.owner.synthesizeMobile(request),wave);assert.equal(calls,2);
+    await f.owner.command({action:'clear-context',sessionId:session.id,confirm:true});
+    await assert.rejects(f.owner.synthesizeMobile(request),/CONTEXT_CHANGED/);
+  }finally{await f.close()}
+});
+
+test('mobile-only latest reply projection retains authoritative tool boundaries when polling misses the tool',async()=>{
+  let step=0;
+  const f=await fixture({createModel:()=>({async prompt(input){const value=JSON.parse(input[0].content);return step++===0?JSON.stringify({protocol:value.protocol,requestId:value.requestId,kind:'tool',name:'rabi_call',arguments:{operation:'manager.roles.list',input:{}},say:'我查一下'}):'结果好了。'},destroy(){}})});
+  async function complete(id){
+    await f.owner.submit('fixture',id);const deadline=Date.now()+2000;
+    while((await f.owner.state()).activity.pending&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));
+    assert.equal((await f.owner.state()).activity.pending,0);
+  }
+  try{
+    await complete('short-tool');
+    const projected=await f.owner.messages('mobile'),row=projected.messages.find(item=>item.id==='reply-short-tool');
+    assert.equal(projected.activity.status,'completed');assert.equal(row.text,'我查一下\n结果好了。');assert.deepEqual(row.speechSegmentEnds,[5]);assert.equal(row.details,undefined);
+    assert.equal((await f.owner.messages()).find(item=>item.id===row.id).speechSegmentEnds,undefined);
+    await complete('next');
+    const next=await f.owner.messages('mobile');assert.equal(next.messages.find(item=>item.id===row.id).speechSegmentEnds,undefined);assert.deepEqual(next.messages.at(-1).speechSegmentEnds,[]);
+  }finally{await f.close()}
+});
+
 test('plugin-owned session works without an external role route; refresh/restart preserves history and exact delivery identity',async()=>{
   const f=await fixture();try{const first=await f.owner.session();await f.owner.submit('你好','request-1');for(let n=0;n<80&&!(await f.owner.messages()).some(item=>item.status==='completed');n++)await new Promise(resolve=>setTimeout(resolve,5));
     assert.ok((await f.owner.messages()).some(item=>item.text==='真实公共循环的回答'),JSON.stringify(await f.owner.messages()));
@@ -117,6 +162,7 @@ test('read-only owner rejects every native command and delivery before opening m
       await assert.rejects(f.owner.command({action,text:'fixture'}),/ASSISTANT_READ_ONLY/);
     await assert.rejects(f.owner.submit('fixture','readonly-request'),/ASSISTANT_READ_ONLY/);
     await assert.rejects(f.owner.recover('readonly-request','fixture'),/ASSISTANT_READ_ONLY/);
+    await assert.rejects(f.owner.synthesizeMobile({sessionId:'unopened-session',responseId:'reply',input:'fixture'}),/ASSISTANT_READ_ONLY/);
     const agent=createVoiceAssistantAgent(f.owner,identity,()=>{},'fixture-authority');
     const sessionId='unopened-session',target={kind:'service',provider:'voice-assistant',managerInstanceId:'fixture-authority',agentId:'local:voice-assistant',sessionId,
       authorizationIncarnation:createHash('sha256').update(JSON.stringify([identity.applicationGenerationId,identity.managerInstanceId,identity.activationId,sessionId])).digest('hex')};

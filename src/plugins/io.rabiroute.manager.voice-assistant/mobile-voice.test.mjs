@@ -157,7 +157,8 @@ test('mobile speech uses the original role conversation and leaves desktop audio
     const original=await readMessages({query:{}});
     const mobile=await readMessages({query:{view:'mobile'}});
     assert.ok(Array.isArray(original.body.data));
-    assert.deepEqual(mobile.body.data.messages,original.body.data);
+    assert.deepEqual(mobile.body.data.messages.map(({speechSegmentEnds,...row})=>row),original.body.data);
+    assert.deepEqual(mobile.body.data.messages.at(-1).speechSegmentEnds,[]);
     assert.equal(mobile.body.data.sessionId,sessionId);
     assert.equal(mobile.body.data.activity.requestId,requestId);
     assert.equal(mobile.body.data.activity.status,'completed');

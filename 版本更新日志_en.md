@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.81 - 2026-11-25
+
+- The Rabi mobile voice assistant can play replies on the phone using the paired PC’s configured custom speech provider.
+
 ## 0.15.80 - 2026-11-24
 
 - Unify TTS, ASR and workbench service scopes; default to enabled, preserve explicit opt-outs, apply scope changes on the same Relay connection and retain accepted-task readback and cleanup.

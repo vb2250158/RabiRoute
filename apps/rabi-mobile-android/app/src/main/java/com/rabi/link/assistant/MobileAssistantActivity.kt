@@ -242,14 +242,28 @@ class MobileAssistantActivity : Activity() {
                 body.put("play", false).put("responseFormat", "wav")
                 Request("/api/speech/tts", body.toString().toByteArray(Charsets.UTF_8), "application/json", lane = 2)
             }
+            "assistant-tts" -> {
+                val sessionId = body.opt("sessionId") as? String
+                val responseId = body.opt("responseId") as? String
+                val input = body.opt("input") as? String
+                check(body.length() == 3 && sessionId != null && sessionId.length in 1..128 &&
+                    responseId != null && responseId.length in 1..256 && input != null &&
+                    input.isNotBlank() && input.length <= 16_000) { "MOBILE_ASSISTANT_TTS_REQUEST_INVALID" }
+                Request("/api/voice-assistant/mobile-tts", body.toString().toByteArray(Charsets.UTF_8), "application/json", lane = 2)
+            }
             else -> error("MOBILE_REQUEST_INVALID")
         }
         val method = if (bytes.isEmpty()) "GET" else "POST"
         val headers = if (contentType.isEmpty()) emptyMap() else mapOf("content-type" to contentType)
         val response = transports[lane].request(account.baseUrl, account.token, target, method, path, headers, bytes)
-        if (operation == "tts" && response.statusCode in 200..299) {
+        if ((operation == "tts" || operation == "assistant-tts") && response.statusCode in 200..299) {
             val responseType = response.headers.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }?.value.orEmpty()
-            check(responseType.startsWith("audio/") || responseType.startsWith("application/octet-stream")) { "MOBILE_AUDIO_RESPONSE_INVALID" }
+            val validAudio = if (operation == "assistant-tts") {
+                responseType.substringBefore(';').trim().equals("audio/wav", ignoreCase = true) &&
+                    response.body.size >= 44 && String(response.body, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+                    String(response.body, 8, 4, Charsets.US_ASCII) == "WAVE"
+            } else responseType.startsWith("audio/") || responseType.startsWith("application/octet-stream")
+            check(validAudio) { "MOBILE_AUDIO_RESPONSE_INVALID" }
             resolve(id, true, Base64.encodeToString(response.body, Base64.NO_WRAP))
             return
         }

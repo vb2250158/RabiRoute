@@ -1,4 +1,5 @@
 import {mobileAsrAudioLimit,mobileAsrDurationMs} from './mobile-asr-stream.mjs';
+import {mobileTtsAudioLimit,mobileTtsTextLimit} from './mobile-tts.mjs';
 
 const object={type:'object'},response={mediaType:'application/json',schema:{type:'object',additionalProperties:true}};
 const mobileSessionId={type:'string',minLength:1,maxLength:128};
@@ -75,6 +76,21 @@ export function createVoiceAssistantOperations(owner,run){
         const message=/^(?:ASSISTANT|MOBILE)_[A-Z_]+$/.test(error?.message)?error.message:'MOBILE_ASR_FAILED';
         return {status:409,body:{code:-1,message}};
       }
+    },
+  });
+  operations.push({
+    discovery:{title:'移动端助手语音播报',category:{id:'voice-assistant',title:'语音助手'},provider:'voice-assistant'},
+    contract:{operationId:'manager.voice-assistant.mobile-tts',contractVersion:'1.0.0',method:'POST',pathTemplate:'/api/voice-assistant/mobile-tts',exposure:'public',transport:'http',
+      description:'Synthesize one canonical segment of a current assistant reply through its saved custom TTS provider. No caller-selected text, voice, endpoint or credentials.',
+      request:{path:object,query:{...object,additionalProperties:false},headers:object,deadlineMs:65000,
+        body:{kind:'json',maxBytes:131072,schema:{type:'object',required:['sessionId','responseId','input'],properties:{sessionId:mobileSessionId,responseId:mobileSessionId,input:{type:'string',minLength:1,maxLength:mobileTtsTextLimit}},additionalProperties:false}}},
+      responses:{200:{mediaType:'audio/wav',binary:{minBytes:44,maxBytes:mobileTtsAudioLimit}},409:response},
+      effects:{mode:'native-assistant-synthesis',description:'Use the configured provider quota only for authoritative assistant reply segments; matching requests share the original receipt.'},
+      recovery:{strategy:'original-session-segment-readback',description:'Repeat only the same session, assistant row and segment to retrieve the cached result or original failure. Do not re-synthesize unknown provider outcomes.'},
+      validators:[{id:'current-assistant-owner',description:'The session, activation, saved configuration and authoritative reply remain current before and after synthesis.'}]},
+    async handler(input){
+      try{return await run(async()=>({status:200,headers:{'content-type':'audio/wav','cache-control':'no-store'},body:await owner.synthesizeMobile(input.body,input.signal)}));}
+      catch(error){const message=/^(?:ASSISTANT|MOBILE|SPEECH)_[A-Z0-9_]+$/.test(error?.message)?error.message:'MOBILE_TTS_FAILED';return{status:409,body:{code:-1,message}};}
     },
   });
   return operations;

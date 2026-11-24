@@ -153,7 +153,11 @@ export function createStandaloneConversation({ settings, credentials, onError, o
           begin();recordExecution(response.details,value);mark(response);
           const runningTool=['executing-tool','waiting-tool'].includes(value.state)?(value.tool||activity.tool):null;
           activity={...activity,status:runningTool?'executing-tool':value.state==='finishing'?'finishing':value.state==='responding'?'responding':'thinking',requestId,responseId:response.id,tool:runningTool?{callId:runningTool.callId,name:runningTool.name,operation:runningTool.arguments?.operation}:null};
-          if(value.state==='executing-tool')token?.finishSpeechSegment?.();
+          if(value.state==='executing-tool'){
+            const ends=response.details.speechSegmentEnds||=[];
+            if(response.text.length&&ends.at(-1)!==response.text.length)ends.push(response.text.length);
+            token?.finishSpeechSegment?.();
+          }
           if(activeSearchOwner?.requestId!==requestId)activeSearchOwner={requestId,response};
           publish();
         },

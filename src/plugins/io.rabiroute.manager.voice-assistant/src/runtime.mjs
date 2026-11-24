@@ -13,6 +13,7 @@ import {openDesktopDevice} from '@rabilink/desktop-voice-service/node';
 import {createRabiOperationTools} from './operation-tools.mjs';
 import {createResidentWake,normalizeWakeAliases} from '../../../../packages/desktop-voice-service/src/resident-wake.mjs';
 import {mobileAsrSampleRate,openMobileAsrStream} from './mobile-asr-stream.mjs';
+import {createMobileTts,mobileCustomTtsReady} from './mobile-tts.mjs';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.message||'RABI_OPERATION_FAILED'),{receipt:result});return result.data?.data??result.data};
@@ -256,8 +257,14 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true,mobileVoiceSubmit:true},
         discoverTools:async()=>{const connection=await manager();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');return createRabiOperationTools({sdk:connection.operations,sendAgent:sendAgent?request=>sendAgent(request,runtime.conversation.getSessionId()):undefined,assertCurrent:()=>{assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED')}})} });
       if(closed||epoch!==profileRevision){await next.dispose();throw Error('ASSISTANT_CONTEXT_CHANGED')}
+      const mobileTts=createMobileTts({conversation:next.conversation,settings:next.speechSettings,signal,
+        assertCurrent(){assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');},
+        ready:async config=>mobileCustomTtsReady(bound.ttsSource,config,await next.speechCredentialDescription(config)),
+        createProviders:next.speechProviders,
+      });
       const hostModelSummary=models.map(hostSpeechModelSummary);
-      runtime={...next,mobileWakeSettings,
+      runtime={...next,mobileWakeSettings,mobileTts,
+        async dispose(){await mobileTts.dispose();await next.dispose();},
         setCompanionPresentation(enabled){companionPresentation=enabled;},
         recognizeMobileLocal:async(audio,abort)=>{
           try{
@@ -369,7 +376,12 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       }
       return {...state,hostSettings:{...current.hostSources,wake:wakeSnapshot(),lastError:lastHostError,personas:people,
         mobileAudio:{recognition:current.streamingAsr()?'streaming':'utterance',sampleRate:mobileAsrSampleRate,...mobileWake}},
-        capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true}};
+        capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true,
+          mobileCustomTts:mobileCustomTtsReady(current.hostSources.ttsSource,state.settings,state.credentials?.tts)}};
+    },
+    async synthesizeMobile(request,requestSignal){
+      assertWritable();const current=await open();assertWritable();
+      return current.mobileTts.synthesize(request,requestSignal);
     },
     async transcribeMobile({audio,sessionId,source,signal:requestSignal}){
       assertWritable();
@@ -418,8 +430,14 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     },
     async messages(view){
       const current=await open();
-      const messages=current.messages();
+      let messages=current.messages();
       if(view!=='mobile')return messages;
+      const latest=messages.findLast(row=>row.role==='assistant'&&!row.notice);
+      if(latest?.hasDetails){
+        const ends=current.conversation.messageDetails(latest.id).speechSegmentEnds||[];
+        const speechSegmentEnds=ends.filter((end,index)=>Number.isSafeInteger(end)&&end>0&&end<=latest.text.length&&(index===0||end>ends[index-1]));
+        messages=messages.map(row=>row.id===latest.id?{...row,speechSegmentEnds}:row);
+      }
       const {status,requestId,responseId,tool}=current.conversation.activity();
       return {sessionId:current.conversation.getSessionId(),messages,activity:{status,requestId,responseId,tool}};
     },
@@ -441,6 +459,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       if(request.action==='clear-context'&&request.confirm===true&&request.sessionId===current.conversation.getSessionId()&&!current.conversation.activity().pending)await stopMobileAsr();
       if(request.action==='settings'){
         await stopMobileAsr();
+        current.mobileTts.invalidate();
         const previouslyEnabled=current.host.voiceEnabled();
         const result=await current.command(request);
         if(previouslyEnabled!==current.host.voiceEnabled()){
@@ -449,6 +468,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         }
         return result;
       }
+      if(request.action==='credential'&&request.kind==='tts')current.mobileTts.invalidate();
       return current.command(request);
     },
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},

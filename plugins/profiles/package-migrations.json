@@ -587,9 +587,10 @@
         "1.1.23",
         "1.1.24",
         "1.1.25",
-        "1.1.26"
+        "1.1.26",
+        "1.1.27"
       ],
-      "toVersion": "1.1.27"
+      "toVersion": "1.1.28"
     },
     {
       "packageId": "io.rabiroute.manager.speech",

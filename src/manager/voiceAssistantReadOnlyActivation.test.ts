@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+import { once } from "node:events";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import type { AgentAdapterProvider } from "@rabiroute/plugin-sdk";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { createVoiceAssistantHostAccess } from "./voiceAssistantHostAccess.js";
 import { createOwnedServiceAgentSender } from "./ownedServiceAgentSender.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+// @ts-expect-error The plugin exports operation definitions from ESM source.
+import { createVoiceAssistantOperations } from "../plugins/io.rabiroute.manager.voice-assistant/src/operations.mjs";
 // @ts-expect-error The formal ESM builder is also the CLI implementation.
 import { buildPluginPackages } from "../../scripts/build-plugin-packages.mjs";
 
@@ -51,6 +56,7 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
       "manager.voice-assistant.messages",
       "manager.voice-assistant.mobile-asr",
       "manager.voice-assistant.mobile-transcribe",
+      "manager.voice-assistant.mobile-tts",
       "manager.voice-assistant.scan",
       "manager.voice-assistant.state",
     ]);
@@ -64,6 +70,10 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
       assert.equal(blocked.status, 409);
       assert.deepEqual(blocked.body, { code: -1, message: "ASSISTANT_READ_ONLY" });
     }
+    const mobileTts = operations.find(item => item.contract.operationId === "manager.voice-assistant.mobile-tts");
+    const blockedTts = await mobileTts.handler({ body: { sessionId: "unopened", responseId: "reply", input: "fixture" } });
+    assert.equal(blockedTts.status, 409);
+    assert.deepEqual(blockedTts.body, { code: -1, message: "ASSISTANT_READ_ONLY" });
     assert.equal(endpointCalls, 0); assert.equal(dispatches, 0);
     assert.deepEqual(await fs.readdir(path.join(directory, "state/data/voice-assistant")), ["connection"]);
     assert.deepEqual(await fs.readdir(path.join(directory, "state/data/voice-assistant/connection")), []);
@@ -83,6 +93,48 @@ if (process.argv[2] === childFlag) {
     process.exitCode = 1;
   }
 } else {
+  test("mobile synthesis sends waveform bytes and rejects caller-supplied voices before execution", async t => {
+    const registry = new ManagerPluginRouteRegistry();
+    const wave = Buffer.alloc(46);
+    wave.write("RIFF");
+    wave.writeUInt32LE(wave.length - 8, 4);
+    wave.write("WAVE", 8);
+    const input = { sessionId: "fixture-session", responseId: "fixture-reply", input: "Hello." };
+    let calls = 0;
+    const operations = createVoiceAssistantOperations({ synthesizeMobile(body: unknown) {
+      calls++;
+      assert.deepEqual(body, input);
+      return wave;
+    } }, (run: () => unknown) => run());
+    const operation = operations.find((item: { contract: { operationId: string } }) => item.contract.operationId === "manager.voice-assistant.mobile-tts");
+    const registration = registry.registerOperations("voice-assistant-fixture", [operation]);
+    const server = http.createServer((request, response) => {
+      if (!registry.handle(request, new URL(request.url!, "http://localhost"), response)) response.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      await registration.dispose();
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const post = (body: unknown) => fetch(`http://127.0.0.1:${address.port}/api/voice-assistant/mobile-tts`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
+    });
+    const invalid = await post({ ...input, voice: "different-voice" });
+    assert.equal(invalid.status, 400);
+    await invalid.arrayBuffer();
+    assert.equal(calls, 0);
+    const reply = await post(input);
+    assert.equal(reply.status, 200);
+    assert.equal(reply.headers.get("content-type"), "audio/wav");
+    assert.equal(reply.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await reply.arrayBuffer()), wave);
+    assert.equal(calls, 1);
+  });
+
   // Exercises the SDK-built production entry, not a second activation implementation.
   test("SDK-built voice package initializes read-only and retires without admitting commands or native delivery", { timeout: 60000 }, async t => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rabi-voice-readonly-activation-"));

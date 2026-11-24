@@ -38,6 +38,7 @@ const label = { MOBILE_COMPUTER_REQUIRED: '请返回消息页，选择一台已�
   MOBILE_STREAM_BACKLOG: '实时识别连接处理较慢，请重新开启。',
   MOBILE_STREAM_UNAVAILABLE: '当前电脑的实时识别连接不可用。',
   MOBILE_STREAM_SAMPLE_RATE_UNAVAILABLE: '此设备无法以 16 kHz 采集。',
+  MOBILE_AUDIO_RESPONSE_INVALID: '电脑返回的播报音频无法播放。',
   MOBILE_WAKE_UNAVAILABLE: '手机暂时无法检测唤醒词。请刷新连接或开启电脑转写。',
   MOBILE_WAKE_ENGINE_FAILED: '手机唤醒模型启动失败。请重新开启关键词监听。',
   MOBILE_WAKE_BACKLOG: '手机唤醒处理延迟，请重新开启关键词监听。',
@@ -60,7 +61,7 @@ function request(operation, body = {}, signal) {
       signal?.removeEventListener('abort', stop);
       try {
         if (!ok) throw new Error(text);
-        resolve(operation === 'tts' ? text : JSON.parse(text));
+        resolve(operation === 'tts' || operation === 'assistant-tts' ? text : JSON.parse(text));
       } catch (error) { reject(error); }
     });
     native.send(id, operation, JSON.stringify(body));
@@ -154,11 +155,14 @@ const asr = createPhoneCapture({
 const tts = {
   adapterId: 'rabi-mobile-audio',
   supportsSynthesize: true,
-  async synthesize(text, { signal, onCue, expression = {} } = {}) {
-    const audioBytes = await request('tts', { model: profile.ttsModel, voice: profile.personaId, input: text,
-      sessionId: 'mobile.' + crypto.randomUUID(),
-      ...(typeof expression.instructions === 'string' ? { instructions: expression.instructions } : {}),
-      ...(typeof expression.speed === 'number' ? { speed: expression.speed } : {}) }, signal);
+  async synthesize(text, { signal, onCue, responseId, expression = {} } = {}) {
+    const operation = profile.ttsOperation;
+    const body = operation === 'assistant-tts'
+      ? { sessionId: connection, responseId, input: text }
+      : { model: profile.ttsModel, voice: profile.personaId, input: text, sessionId: 'mobile.' + crypto.randomUUID(),
+        ...(typeof expression.instructions === 'string' ? { instructions: expression.instructions } : {}),
+        ...(typeof expression.speed === 'number' ? { speed: expression.speed } : {}) };
+    const audioBytes = await request(operation, body, signal);
     signal?.throwIfAborted();
     const blob = new Blob([Uint8Array.from(atob(audioBytes), char => char.charCodeAt(0))], { type: 'audio/wav' });
     const source = URL.createObjectURL(blob);
@@ -232,11 +236,14 @@ const voice = createVoiceInteraction({
 });
 
 const streaming = host => host?.mobileAudio?.recognition === 'streaming' && host.mobileAudio.sampleRate === 16000;
-const supported = state => {
+function mobileVoiceProfile(state) {
   const host = state?.hostSettings;
-  return state?.capabilities?.mobileVoiceSubmit === true && host?.ttsSource === 'host' && host.ttsModel && host.voiceReady
-    && !host.asrIssue && !host.ttsIssue && (streaming(host) || host.asrModel || state.settings?.asrModel);
-};
+  if (!host || !state.sessionId || state.settings?.voiceEnabled === false || state.capabilities?.mobileVoiceSubmit !== true
+      || host.asrIssue || host.ttsIssue || !(streaming(host) || host.asrModel || state.settings?.asrModel)) return null;
+  if (host.ttsSource === 'custom' && state.capabilities.mobileCustomTts === true) return { ...host, ttsOperation: 'assistant-tts' };
+  if (host.ttsSource === 'host' && host.ttsModel && host.voiceReady) return { ...host, ttsOperation: 'tts' };
+  return null;
+}
 const passiveModel = host => typeof host?.mobileAudio?.passiveModel === 'string' && host.mobileAudio.passiveModel || undefined;
 function edgeWakeConfig(host) {
   const config = host?.mobileAudio?.kws;
@@ -381,13 +388,15 @@ async function refresh() {
     const state = await request('state');
     if (serial !== refreshSerial || !visible) return;
     connection = state.sessionId;
-    profile = supported(state) && connection && state.settings?.voiceEnabled !== false ? state.hostSettings : null;
+    profile = mobileVoiceProfile(state);
     syncLocalAsrRefresh();
     ui.source.textContent = profile ? [profile.personaLabel, streaming(profile) ? '流式识别' : '整句识别', '手机播放'].filter(Boolean).join(' · ') : 'RabiLink';
     if (!profile) {
       ui.issue.textContent = state.settings?.voiceEnabled === false ? label.ASSISTANT_VOICE_DISABLED
         : state.capabilities?.mobileVoiceSubmit !== true ? '请更新所选电脑的语音助手插件。'
-        : '请在所选电脑的语音助手中选择人格、受支持的识别服务和本机播报。';
+        : state.hostSettings?.ttsSource === 'custom' && state.capabilities.mobileCustomTts !== true
+          ? '自定义播报暂不可用，请检查所选电脑的播报设置和语音助手版本。'
+          : '请在所选电脑的语音助手中选择人格，并检查语音识别和播报设置。';
       ui.issue.hidden = false;
     }
     phase(enabled ? profile ? '可以开始实时语音' : '等待电脑配置' : '语音已关闭');
@@ -405,18 +414,65 @@ async function refresh() {
 }
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const replyTimeoutMs = 120_000;
+const recoverableMessageRead = code => code === 'MOBILE_COMPUTER_REQUEST_FAILED' || code === 'MOBILE_COMPUTER_UNAVAILABLE'
+  || /^MOBILE_ASSISTANT_HTTP_(408|429|500|502|503|504)$/.test(code);
+
+function appendSpeechText(turn, text, boundaries) {
+  if (!text?.startsWith(turn.spoken)) return;
+  let offset = turn.spoken.length;
+  for (const end of boundaries ?? []) {
+    if (!Number.isSafeInteger(end) || end <= (turn.speechBoundary ?? 0) || end < offset || end > text.length) continue;
+    if (end > offset) turn.token.append(text.slice(offset, end));
+    turn.token.finishSpeechSegment?.();
+    turn.speechBoundary = end;
+    offset = end;
+  }
+  if (offset < text.length) turn.token.append(text.slice(offset));
+  turn.spoken = text;
+}
+
 let reading = false;
 // The current Manager only publishes a request/reply read endpoint. Read only during locally submitted work.
 async function readOutstandingTurns() {
   if (reading || !visible) return;
   reading = true;
   let interval = 450;
+  let recoveryInterval = 450;
   try {
     while (submitted.size && visible) {
-      const payload = await request('messages');
+      const session = connection;
+      for (const [id, turn] of submitted) {
+        if (turn.session === session) continue;
+        submitted.delete(id);
+        turn.token?.finish({ speak: false });
+      }
+      if (!submitted.size) break;
+      let payload;
+      try {
+        payload = await request('messages');
+      } catch (error) {
+        if (!visible) break;
+        if (session !== connection) continue;
+        if (!recoverableMessageRead(error?.message)) throw error;
+        // A failed read does not change whether the Manager accepted the turn.
+        for (const [id, turn] of submitted) {
+          if (Date.now() - turn.at < replyTimeoutMs) continue;
+          submitted.delete(id);
+          turn.token?.finish({ speak: false });
+          report(new Error('MOBILE_REPLY_TIMEOUT'));
+        }
+        if (submitted.size) {
+          recoveryInterval = Math.min(recoveryInterval * 2, 5000);
+          await wait(recoveryInterval);
+        }
+        continue;
+      }
       if (!visible) break;
+      if (session !== connection) continue;
+      if (payload.sessionId && payload.sessionId !== session) throw new Error('ASSISTANT_CONTEXT_CHANGED');
+      recoveryInterval = 450;
       renderMessages(payload);
-      if (payload.sessionId && payload.sessionId !== connection) throw new Error('ASSISTANT_CONTEXT_CHANGED');
       let activeTool;
       for (const [id, turn] of submitted) {
         const row = messages.find(item => item.id === 'reply-' + id);
@@ -428,10 +484,9 @@ async function readOutstandingTurns() {
         if (row && running && turn.generation === generation) {
           turn.token ??= voice.beginResponse({ id: row.id });
           if (row.expression) turn.token.setSpeech({ expression: row.expression });
-          if (row.text?.startsWith(turn.spoken)) {
-            turn.token.append(row.text.slice(turn.spoken.length));
-            turn.spoken = row.text;
-          }
+          const boundaries = profile?.ttsOperation === 'assistant-tts' && Array.isArray(row.speechSegmentEnds)
+            ? row.speechSegmentEnds : null;
+          appendSpeechText(turn, row.text, boundaries);
           const activity = payload.activity;
           if (row.status === 'generating' && activity?.requestId === id &&
               ['executing-tool','searching'].includes(activity.status)) {
@@ -439,7 +494,7 @@ async function readOutstandingTurns() {
             const callKey = activity.tool?.callId ?? activeTool;
             if (turn.tool !== callKey) {
               turn.tool = callKey;
-              turn.token.finishSpeechSegment?.();
+              if (!boundaries) turn.token.finishSpeechSegment?.();
             }
           } else turn.tool = null;
         }
@@ -448,7 +503,7 @@ async function readOutstandingTurns() {
           submitted.delete(id);
           turn.token?.finish({ speak: terminal === 'completed' });
           if (terminal === 'failed') report(new Error('MOBILE_ASSISTANT_TURN_FAILED'));
-        } else if (Date.now() - turn.at > 120000) {
+        } else if (Date.now() - turn.at >= replyTimeoutMs) {
           submitted.delete(id);
           turn.token?.finish({ speak: false });
           report(new Error('MOBILE_REPLY_TIMEOUT'));
@@ -471,6 +526,7 @@ async function readOutstandingTurns() {
 
 async function sendSpeech(text, result) {
   if (!profile || !running || !visible) return;
+  const session = connection;
   const requestId = crypto.randomUUID();
   const now = Date.now();
   const context = pendingWakeContext;
@@ -478,17 +534,17 @@ async function sendSpeech(text, result) {
   const recentSpeech = snapshotRecentSpeech(context?.map(item => ({
     text:item.text, ageMs:Math.max(0, now - item.capturedAt),
   })).filter(item => item.ageMs <= 90_000 && item.text !== text.trim()));
-  const turn = { generation, spoken: '', at: now };
+  const turn = { generation, session, spoken: '', at: now };
   submitted.set(requestId, turn);
   try {
     const response = await request('submit', { action: 'mobile-voice-submit', text, requestId,
-      sessionId: connection, observation: observationOf(result), recentSpeech });
-    if (!response?.accepted || response.sessionId !== connection || response.requestId !== requestId) {
+      sessionId: session, observation: observationOf(result), recentSpeech });
+    if (!response?.accepted || response.sessionId !== session || response.requestId !== requestId) {
       throw new Error('MOBILE_ASSISTANT_RECEIPT_UNCONFIRMED');
     }
   } catch (error) {
     turn.uncertain = true;
-    report(error);
+    if (visible && connection === session) report(error);
   }
   void readOutstandingTurns();
 }

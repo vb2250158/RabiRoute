@@ -140,6 +140,9 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
   try { await host.initialize(); await syncWake(); }
   catch (error) { await bound.dispose(); throw error; }
   return { ...bound, messages:conversation.messages, conversation, host,
+    speechSettings:store.read,
+    speechCredentialDescription:config=>store.credentials.describe('tts',config.ttsEndpoint,config.ttsProvider),
+    speechProviders:config=>providers(config),
     recognitionDictionary: () => store.read().asrDictionary,
     recognizeAudio,
     streamingAsr: () => providers(store.read()).createAsr };

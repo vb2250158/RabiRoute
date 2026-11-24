@@ -10,6 +10,8 @@ Connection settings, encrypted credentials and onboarding are shared between per
 
 ASR and TTS independently select host services or custom providers. Host services reuse `manager.speech@1`, including the selected persona voice; synthesis requests `play:false` and the shared device owns the single player. Personas without a host voice can still chat and use custom TTS. Stop/disable removes registrations, subscriptions and owned audio resources without exiting Rabi or replaying accepted remote work.
 
+A paired Rabi mobile app can use the PC's selected custom TTS provider. The PC synthesizes segments of the assistant reply from the current conversation, and the phone plays the returned audio. The model can keep working during synthesis and playback.
+
 The dictionary in **Settings → Speech Recognition → Transcription Dictionary** is shared by Rabi PC and the Android assistant connected to that PC. During live and utterance recognition, the Manager supplies hotwords, a prompt, or context as supported by the selected model. Android's local fallback and passive transcription require a local-only speech service. Dictionary support depends on the local model. FireRedASR2-AED, on-device keyword spotting, and the native AIUI glasses recognizer have no dictionary input.
 
 The shared SDK interrupts speech after the first valid ASR text while model/tool work continues. Streaming recognition shows live text; utterance recognition shows input feedback. Desktop-pet presentation consumes the same real playback state, fenced by owner/persona/response/playback/revision. It does not start a second recorder or player.
