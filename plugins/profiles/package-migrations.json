@@ -507,9 +507,10 @@
         "0.1.41",
         "0.1.42",
         "0.1.43",
-        "0.1.44"
+        "0.1.44",
+        "0.1.45"
       ],
-      "toVersion": "0.1.45"
+      "toVersion": "0.1.46"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",

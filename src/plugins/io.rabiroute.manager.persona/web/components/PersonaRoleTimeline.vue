@@ -158,7 +158,6 @@ const position = ref<number>();
 const selectedId = ref<string>();
 const live = ref(false);
 const clock = ref(Date.now());
-let clockTimer: ReturnType<typeof setInterval> | undefined;
 const reviewTime = computed(() => live.value ? clock.value : position.value ?? rows.value[0]?.time ?? clock.value);
 const selected = computed(() => selectedId.value ? rows.value.find(row => row.id === selectedId.value) : position.value === undefined ? rows.value[0] : undefined);
 const unavailableImage = ref<string>();
@@ -205,7 +204,6 @@ const markers = computed(() => {
 });
 
 function stopLive(): void {
-  clearInterval(clockTimer);
   live.value = false;
 }
 
@@ -226,7 +224,6 @@ function goLive(): void {
   stopLive();
   clock.value = Date.now();
   live.value = true;
-  clockTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
   if (list.value) list.value.scrollTop = 0;
 }
 
@@ -284,6 +281,9 @@ function pan(event: PointerEvent): void {
   if (drag && drag.width) browseTime(drag.time - (event.clientX - drag.x) * span.value / drag.width);
 }
 
+watch([() => props.version, () => props.messageVersion, () => props.captureVersion], () => {
+  if (live.value) clock.value = Date.now();
+});
 watch(() => props.version, () => { void load("chat"); }, { immediate: true });
 watch(() => props.messageVersion, () => { void load("endpoint"); }, { immediate: true });
 watch(() => props.captureVersion, () => { void load("capture"); }, { immediate: true });
