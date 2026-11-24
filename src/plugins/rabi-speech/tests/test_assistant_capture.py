@@ -39,6 +39,86 @@ def test_wake_replay_skips_keyword_tail_without_advancing_beyond_capture(monkeyp
     assert hit.replay_from_sample == 24000 + expected_offset
 
 
+@pytest.mark.parametrize(("starts_quiet", "expected_start", "last_token_seconds"), [
+    (True, 2400, 0.55),
+    (False, 0, 0.85),
+])
+def test_wake_retains_quiet_keyword_audio(monkeypatch, tmp_path: Path, starts_quiet, expected_start, last_token_seconds):
+    streams = []
+
+    class Spotter:
+        def create_stream(self):
+            stream = []
+            streams.append(stream)
+            return stream
+
+        def accept(self, stream, _rate, frame):
+            stream.append(frame)
+
+        def detect(self, stream):
+            needed = 9 if starts_quiet else 10
+            if len(stream) < needed:
+                return None
+            return SimpleNamespace(alias_index=0, first_token_seconds=0.15, last_token_seconds=last_token_seconds)
+
+    monkeypatch.setattr(assistant_wake, "_model_paths", lambda _: dict.fromkeys(assistant_wake.MODEL_FILES, "fixture"))
+    monkeypatch.setattr(assistant_wake, "_encode_aliases", lambda *_: "fixture")
+    monkeypatch.setattr(assistant_wake, "SherpaWake", lambda *_: Spotter())
+    spotter = assistant_wake.AssistantWakeSpotter(tmp_path, ["小拉比"], 16000)
+    soft = np.full(1600, 128, dtype="<i2").tobytes()
+    voiced = np.full(1600, 12000, dtype="<i2").tobytes()
+
+    if not starts_quiet:
+        assert spotter.feed(voiced, 0.01) is None
+    for _ in range(8):
+        assert spotter.feed(soft, 0.01) is None
+    assert len(streams) == (0 if starts_quiet else 1)
+    hit = spotter.feed(voiced, 0.01)
+
+    assert hit is not None
+    assert hit.utterance_start_sample == expected_start
+    assert hit.replay_from_sample == round(last_token_seconds * 16000) + 640
+    assert spotter.feed(voiced, 0.01) is None
+    assert len(streams) == 1
+
+
+def test_wake_trims_only_the_part_of_a_frame_before_the_pre_roll_window(monkeypatch, tmp_path: Path):
+    rate = 16_000
+    frames = []
+
+    class Spotter:
+        def create_stream(self):
+            return frames
+
+        def accept(self, stream, _rate, frame):
+            stream.append(frame)
+
+        def detect(self, stream):
+            audio = np.concatenate(stream)
+            if len(audio) == 16_800 and audio[400] == 650 / 32768:
+                return SimpleNamespace(alias_index=0, first_token_seconds=400 / rate, last_token_seconds=3600 / rate)
+            return None
+
+    monkeypatch.setattr(assistant_wake, "_model_paths", lambda _: dict.fromkeys(assistant_wake.MODEL_FILES, "fixture"))
+    monkeypatch.setattr(assistant_wake, "_encode_aliases", lambda *_: "fixture")
+    monkeypatch.setattr(assistant_wake, "SherpaWake", lambda *_: Spotter())
+    spotter = assistant_wake.AssistantWakeSpotter(tmp_path, ["小拉比"], rate)
+    quiet = np.full(rate, 128, dtype="<i2")
+    quiet[500] = 700
+    quiet[1200] = 650
+    for offset in range(0, rate, 1600):
+        assert spotter.feed(quiet[offset:offset + 1600].tobytes(), 0.01) is None
+    gate_frame = np.full(1600, 12000, dtype="<i2")
+    hit = spotter.feed(gate_frame.tobytes(), 0.01)
+
+    assert hit is not None
+    assert hit.utterance_start_sample == 1200
+    assert hit.replay_from_sample == 5040
+    decoded = np.concatenate(frames)
+    assert len(decoded) == 16_800
+    assert not np.any(decoded == 700 / 32768)
+
+
 def test_resident_microphone_stream_and_replay_share_exact_sample_positions(tmp_path: Path):
     async def exercise():
         async def unused(*_args):

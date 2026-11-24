@@ -23,6 +23,8 @@ MODEL_FILES = {
     "en.phone": "f7000ec3a90544c0c7c16090d8951779c2b322e14dad5006290f498567d439ea",
 }
 _WORDS = re.compile(r"[一-鿿]+|[A-Za-z]+(?:'[A-Za-z]+)*")
+_PRE_ROLL_SECONDS = 0.95
+_ACTIVE_QUIET_SECONDS = 0.95
 _KEYWORD_TAIL_SECONDS = 0.04
 
 
@@ -103,6 +105,7 @@ class AssistantWakeSpotter:
         encoder, decoder, joiner = (paths[name] for name in tuple(MODEL_FILES)[:3])
         self._spotter = SherpaWake(paths["tokens.txt"], encoder, decoder, joiner, keywords)
         self._sample_rate = sample_rate
+        self._pre_roll_samples = round(sample_rate * _PRE_ROLL_SECONDS)
         self._position = start_sample
         self._stream = None
         self._waiting_for_quiet = False
@@ -129,8 +132,12 @@ class AssistantWakeSpotter:
             if not voiced:
                 self._pre.append(samples)
                 self._pre_size += len(samples)
-                while self._pre and self._pre_size > self._sample_rate * 0.32:
-                    self._pre_size -= len(self._pre.popleft())
+                while self._pre_size > self._pre_roll_samples:
+                    first_frame = self._pre.popleft()
+                    discard = min(len(first_frame), self._pre_size - self._pre_roll_samples)
+                    self._pre_size -= discard
+                    if discard < len(first_frame):
+                        self._pre.appendleft(first_frame[discard:].copy())
                 return None
             self._utterance_start = frame_position
             self._stream_origin = frame_position - self._pre_size
@@ -151,8 +158,8 @@ class AssistantWakeSpotter:
                 # The last token timestamp points into the keyword. Skip its first
                 # 40 ms while keeping any audio not yet observed available to replay.
                 replay = min(last + round(self._sample_rate * _KEYWORD_TAIL_SECONDS), self._position - 1)
-                return WakeDetection(hit.alias_index, self._utterance_start, self._position, first, replay)
-        if self._quiet_samples >= self._sample_rate * 0.65:
+                return WakeDetection(hit.alias_index, min(first, self._utterance_start), self._position, first, replay)
+        if self._quiet_samples >= self._sample_rate * _ACTIVE_QUIET_SECONDS:
             self._stream = None
             self._quiet_samples = 0
         return None
