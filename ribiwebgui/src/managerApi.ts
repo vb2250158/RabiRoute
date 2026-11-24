@@ -1,6 +1,7 @@
 import { translateText, useI18n } from "./i18n/index";
 import { errorResponsePresentation } from "../../src/shared/errorPresentation";
 import { appendWebguiTokenQuery, captureWebguiTokenFromHref } from "./webguiAccessToken";
+import { subscribeToManagerEvents } from "./sharedManagerEvents";
 
 declare global {
   interface Window {
@@ -87,7 +88,7 @@ function isSameOriginManagerUrl(value: string | URL): boolean {
 export function managerEventSource(pathname: string): EventSource {
   const prefixed = prefixedManagerUrl(pathname);
   const url = appendWebguiTokenQuery(prefixed, managerAccessToken(), window.location.href);
-  return new EventSource(url);
+  return pathname === "/api/events" ? subscribeToManagerEvents(url) : new EventSource(url);
 }
 
 export function managerResourceUrl(pathname: string): string {

@@ -25,7 +25,6 @@ import { automationQqDirectory, automationRuleConversation, automationPrivateCon
 import PersonaAvatar from "../../../../../ribiwebgui/src/components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
-import PersonaAllDayRecording from "../components/PersonaAllDayRecording.vue";
 import PersonaCompanionActivity from "../components/PersonaCompanionActivity.vue";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { pluginCatalogStore } from "../../../../../ribiwebgui/src/pluginCatalogStore";
@@ -54,7 +53,7 @@ import { useRoleStore } from "../../../../../ribiwebgui/src/stores/roleStore";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { MESSAGE_ENDPOINT_TYPES } from "@shared/messageEndpointTypes";
 import { useRoute, useRouter } from "vue-router";
-import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
+import { roleMessageHistoryPath } from "../../../../../ribiwebgui/src/roleScopedNavigation";
 import RoleManagementActions from "../../../../../ribiwebgui/src/components/RoleManagementActions.vue";
 import { useSpeechStore } from "../../../../../ribiwebgui/src/stores/speechStore";
 import type { CodexHookSettings, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
@@ -78,7 +77,6 @@ import {
   configNameFor,
   defaultHeartbeatSchedule,
   gatewayAdapterTypes,
-  isBuiltinRolePanelRule,
   isNonMessageEndpoint,
   notificationRulesForGateway,
   routeKindDefinitionsForGateway,
@@ -102,33 +100,12 @@ const remoteVoiceProfiles = ref<SpeechPersona[]>([]);
 const automationPreview = ref<PersonaAutomationRuleDefinition | null>(null);
 const automationTestOpen = ref(false);
 const dailyTimeDrafts = ref<Record<string, string[]>>({});
-const committedDailyTimeDrafts = computed(() => Object.entries(dailyTimeDrafts.value)
-  .filter(([id]) => id !== automationPreview.value?.id));
-const invalidDsBotTarget = computed(() => hasIncompleteDsBotTargetDraft(store.selectedGateway));
-const invalidDailyTimes = computed(() => committedDailyTimeDrafts.value.some(([, timeOfDays]) => normalizeDailyScheduleTimes({ timeOfDays }) === null));
-watch(() => [store.selectedRoleId, store.sourceDeviceId, store.draft], () => { dailyTimeDrafts.value = {}; }, { flush: "sync" });
+const automationEdit = ref<PersonaAutomationRuleDefinition | null>(null);
+watch([() => store.selectedRoleId, () => store.sourceDeviceId], () => {
+  automationDialog.value = false;
+  dailyTimeDrafts.value = {};
+}, { flush: "sync" });
 const PersonaMessages = defineAsyncComponent(() => import("../components/PersonaMessages.vue"));
-let speechRouteChanged = false;
-const releaseRoleSave = registerPageSaveAction({
-  dirty: computed(() => store.dirty || routeStore.dirty || committedDailyTimeDrafts.value.length > 0),
-  ready: computed(() => store.ready && !routeStore.loading && !invalidDailyTimes.value && !invalidDsBotTarget.value),
-  saving: computed(() => store.saving || routeStore.saving),
-  save: async () => {
-    if (invalidDailyTimes.value) throw new Error(translateText("请先补全有效的每日时间点。"));
-    if (invalidDsBotTarget.value) throw new Error(translateText("请先完成 DSBot 目标选择。"));
-    // Role saves refresh Route data, so commit Route drafts first.
-    const routesChanged = routeStore.dirty;
-    if (routesChanged) await routeStore.saveChangedRoutes();
-    if (routesChanged && speechRouteChanged) {
-      await speech.reconcileMicrophone();
-      speechRouteChanged = false;
-    }
-    if (store.dirty) await store.save();
-    else if (routesChanged) await store.refreshLinkedRoutes();
-    const id = automationPreview.value?.id;
-    dailyTimeDrafts.value = id && dailyTimeDrafts.value[id] ? { [id]: dailyTimeDrafts.value[id] } : {};
-  }
-});
 const speech = useSpeechStore();
 const { t } = useI18n();
 const ruleDialog = ref(false);
@@ -151,18 +128,24 @@ watch(automationCreationDialog, open => { if (!open) automationTemplateRequest?.
 watch(automationDialog, open => {
   if (open) return;
   automationTemplateRequest?.abort();
-  if (automationPreview.value) delete dailyTimeDrafts.value[automationPreview.value.id];
+  const editing = activeAutomation.value;
+  if (editing) delete dailyTimeDrafts.value[editing.id];
   automationPreview.value = null;
+  automationEdit.value = null;
 }, { flush: "sync" });
 const automationWorkspaceTab = ref<"messages" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
-type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation" | "all-day-recording";
+type PersonaPageTab = "profile" | "messages" | "expression" | "avatar" | "identity" | "automation";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
 function personaTabFromQuery(tab: unknown): PersonaPageTab | undefined {
   return tab === "messages" || tab === "automation" ? tab : undefined;
 }
 
 watch(() => route.query.tab, tab => {
+  if (tab === "all-day-recording" && typeof route.params.roleId === "string") {
+    void router.replace({ path: roleMessageHistoryPath(route.params.roleId), query: { ...route.query } });
+    return;
+  }
   const linked = personaTabFromQuery(tab);
   if (linked) activePersonaPageTab.value = linked;
   else if (personaTabFromQuery(activePersonaPageTab.value)) activePersonaPageTab.value = "profile";
@@ -180,7 +163,6 @@ watch(activePersonaPageTab, tab => {
   if (linked !== "messages" && linked !== "automation") delete query.route;
   void router.replace({ query });
 });
-const activeAutomationId = ref("");
 const activeRuleIndex = ref(0);
 const ruleMatchParamsOpen = ref(true);
 const ruleRouteKindsOpen = ref(true);
@@ -237,6 +219,9 @@ const automationTemplateChoices = computed(() => [
 ]);
 const automationActionChoices = computed(() => [
   { value: "deliver_agent", title: t("通知 Agent"), subtitle: "" },
+  ...(activeAutomation.value?.trigger.type === "message"
+    ? [{ value: "record_history", title: t("仅记录到角色记录"), subtitle: "" }]
+    : []),
   { value: "run_script", title: t("运行脚本"), subtitle: "" },
   ...automationTemplateChoices.value
 ]);
@@ -309,7 +294,7 @@ const storedUnassignedVoiceIdentities = computed(() => unassignedVoiceIdentities
 const unidentifiedVoiceCount = computed(() => unresolvedVoiceprints.value.length + storedUnassignedVoiceIdentities.value.length);
 const rules = computed(() => gateway.value ? notificationRulesForGateway(gateway.value) : []);
 const automations = computed(() => gateway.value ? automationRulesForGateway(gateway.value) : []);
-const activeAutomation = computed(() => automationPreview.value ?? automations.value.find(rule => rule.id === activeAutomationId.value) ?? null);
+const activeAutomation = computed(() => automationPreview.value ?? automationEdit.value);
 const automationPrimaryRoutes = computed(() => {
   const sourceIds = activeAutomation.value?.sourceRouteIds;
   const routes = store.detail?.routes ?? [];
@@ -384,15 +369,15 @@ const automationDeliveryIncomplete = computed(() => {
   return action?.type === "deliver_agent" && action.target?.kind === "session"
     && (!action.target.agentTargetId || !action.target.sessionId);
 });
-const previewDsBotIncomplete = computed(() => Boolean(automationPreview.value
-  && hasIncompleteDsBotTargetDraft({ automationRules: [automationPreview.value] })));
-const previewDailyTimeIncomplete = computed(() => {
-  const preview = automationPreview.value;
+const automationDsBotIncomplete = computed(() => Boolean(activeAutomation.value
+  && hasIncompleteDsBotTargetDraft({ automationRules: [activeAutomation.value] })));
+const automationDailyTimeIncomplete = computed(() => {
+  const preview = activeAutomation.value;
   return preview?.trigger.type === "schedule" && preview.trigger.schedule.type === "daily_time"
     && normalizeDailyScheduleTimes({ timeOfDays: dailyAutomationTimes() }) === null;
 });
-const automationPreviewIncomplete = computed(() =>
-  automationDeliveryIncomplete.value || previewDsBotIncomplete.value || previewDailyTimeIncomplete.value);
+const automationDraftIncomplete = computed(() =>
+  automationDeliveryIncomplete.value || automationDsBotIncomplete.value || automationDailyTimeIncomplete.value);
 const activeRule = computed(() => rules.value[activeRuleIndex.value] || null);
 const roleDirLabel = computed(() => runtime.value.roleInfo?.rolesDir || "./data/roles");
 const voiceProfilePath = computed(() => {
@@ -509,7 +494,7 @@ function patchRule(patch: Partial<NotificationRule>): void {
 function ruleDiagnostics(rule: NotificationRule): string[] {
   const issues: string[] = [];
   if (!Array.isArray(rule.routeKinds) || rule.routeKinds.length === 0) {
-    issues.push("未选择路由类型时会匹配全部入口；建议明确选择要接收的消息来源。");
+    issues.push("未选择触发场景时匹配常规消息。截图等采集事件需选择对应场景。");
   }
   if (rule.regex && !/\{[a-zA-Z0-9_]+\}/.test(rule.regex)) {
     try {
@@ -883,7 +868,7 @@ const selectedEndpoint = computed({
       }
       const option = automationEndpoints.find(o => o.value === endpoint);
       patchAutomationMessageTrigger({
-        routeKinds: option ? [...option.routeKinds] : [],
+        routeKinds: endpoint === "speech" ? ["voice_transcript"] : option ? [...option.routeKinds] : [],
         endpointType: endpoint
       });
       if (endpoint === "xiaomiHome") {
@@ -891,10 +876,6 @@ const selectedEndpoint = computed({
       }
     }
   }
-});
-
-watch(selectedEndpoint, endpoint => {
-  if (automationDialog.value && !automationPreview.value) selectedAutomationEndpoint.value = endpoint;
 });
 
 const activeMessageTrigger = computed(() => {
@@ -919,11 +900,14 @@ function automationEnabled(rule: PersonaAutomationRuleDefinition): boolean {
 }
 
 function openAutomation(ruleId: string): void {
-  activeAutomationId.value = ruleId;
   selectedAutomationTemplateId.value = "";
   automationTemplateError.value = "";
   editingAutomationTemplateName.value = false;
-  if (!automationPreview.value) selectedAutomationEndpoint.value = selectedEndpoint.value;
+  if (!automationPreview.value) {
+    const rule = automations.value.find(item => item.id === ruleId);
+    if (!rule) return;
+    automationEdit.value = JSON.parse(JSON.stringify(rule));
+  }
   automationDialog.value = true;
   routeKindQuery.value = "";
   if (selectedEndpoint.value === "xiaomiHome") {
@@ -1004,12 +988,19 @@ async function previewFromTemplate(): Promise<void> {
   });
 }
 
-function confirmAutomationPreview(): void {
-  const preview = automationPreview.value;
-  if (!automationDialog.value || !preview || !store.ready || store.saving || automationTemplateLoading.value || automationPreviewIncomplete.value) return;
-  if (!store.insertAutomation(preview)) return;
-  selectedAutomationEndpoint.value = automationEndpoint(preview);
+function confirmAutomation(): void {
+  const rule = activeAutomation.value;
+  if (!automationDialog.value || !rule || !store.ready || automationTemplateLoading.value || automationDraftIncomplete.value) return;
+  if (automationPreview.value) {
+    if (!store.insertAutomation(rule)) return;
+  } else {
+    const original = automations.value.find(item => item.id === rule.id);
+    if (!original) return;
+    store.updateAutomation(rule.id, rule.enabled === original.enabled ? { name: rule.name, trigger: rule.trigger, action: rule.action } : rule);
+  }
+  selectedAutomationEndpoint.value = automationEndpoint(rule);
   automationDialog.value = false;
+  void store.submitConfig();
 }
 
 function automationTemplateChoice(value: string): AutomationTemplateChoice | undefined {
@@ -1032,7 +1023,7 @@ async function selectAutomationAction(value: string | null): Promise<void> {
   const rule = activeAutomation.value;
   if (!rule || !value) return;
   editingAutomationTemplateName.value = false;
-  if (value === "deliver_agent" || value === "run_script") {
+  if (value === "deliver_agent" || value === "run_script" || value === "record_history") {
     automationTemplateRequest?.abort();
     automationTemplateError.value = "";
     selectedAutomationTemplateId.value = "";
@@ -1081,6 +1072,7 @@ function saveCustomAutomationTemplate(): void {
     : [...ownAutomationTemplates.value, template];
   selectedAutomationTemplateId.value = `custom:${template.id}`;
   editingAutomationTemplateName.value = false;
+  void store.submitConfig();
 }
 
 function removeCustomAutomationTemplate(): void {
@@ -1090,12 +1082,13 @@ function removeCustomAutomationTemplate(): void {
     draft.automationDeliveryTemplates = ownAutomationTemplates.value.filter(item => item.id !== selected.id);
     selectedAutomationTemplateId.value = "";
     editingAutomationTemplateName.value = false;
+    void store.submitConfig();
   }
 }
 
 function patchAutomation(patch: Partial<PersonaAutomationRuleDefinition>): void {
   if (automationPreview.value) automationPreview.value = applyAutomationPatch(automationPreview.value, patch);
-  else if (activeAutomation.value) store.updateAutomation(activeAutomation.value.id, patch);
+  else if (automationEdit.value) automationEdit.value = applyAutomationPatch(automationEdit.value, patch);
 }
 
 function removeActiveAutomation(): void {
@@ -1104,6 +1097,7 @@ function removeActiveAutomation(): void {
   delete dailyTimeDrafts.value[rule.id];
   store.removeAutomation(rule.id);
   automationDialog.value = false;
+  void store.submitConfig();
 }
 
 function setAutomationTriggerType(type: "message" | "schedule"): void {
@@ -1117,10 +1111,10 @@ function setAutomationTriggerType(type: "message" | "schedule"): void {
 
 }
 
-function setAutomationActionType(type: "deliver_agent" | "run_script"): void {
+function setAutomationActionType(type: "deliver_agent" | "run_script" | "record_history"): void {
   if (!activeAutomation.value || activeAutomation.value.action.type === type) return;
   patchAutomation({
-    action: type === "run_script"
+    action: type === "record_history" ? { type } : type === "run_script"
       ? { type: "run_script", scriptPath: "", arguments: [], timeoutSeconds: 300 }
       : { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" }, message: "", template: "" }
   });
@@ -1198,10 +1192,11 @@ function automationSourceSummary(rule: PersonaAutomationRuleDefinition): string 
     return `每 ${schedule.intervalSeconds || 0} 秒${window}`;
   }
   const kinds = rule.trigger.routeKinds || [];
-  return kinds.length > 0 ? kinds.map(kind => routeKindLabels[kind] || kind).join("、") : "所有收到的消息";
+  return kinds.length > 0 ? kinds.map(kind => routeKindLabels[kind] || kind).join("、") : "常规消息";
 }
 
 function automationActionSummary(rule: PersonaAutomationRuleDefinition): string {
+  if (rule.action.type === "record_history") return t("仅记录到角色记录");
   if (rule.action.type === "run_script") return rule.action.scriptPath ? `运行 ${rule.action.scriptPath}` : "脚本路径未设置";
   if (rule.trigger.type === "schedule") return rule.action.message?.trim() || "通知内容未填写";
   return rule.action.template?.trim() ? rule.action.template.trim().replace(/\s+/g, " ").slice(0, 90) : "使用基础消息内容，不附加额外说明";
@@ -1210,13 +1205,14 @@ function automationActionSummary(rule: PersonaAutomationRuleDefinition): string 
 function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] {
   const issues: string[] = [];
   if (rule.trigger.type === "message" && (rule.trigger.routeKinds?.length || 0) === 0) {
-    issues.push("没有选择消息来源时会匹配所有收到的消息。");
+    issues.push("未选择触发场景时匹配常规消息。截图等采集事件需选择对应场景。");
   }
   if (rule.trigger.type === "message" && rule.trigger.regex) {
     try { new RegExp(rule.trigger.regex); } catch { issues.push("消息匹配正则无法解析。"); }
   }
   if (rule.trigger.type === "schedule") {
     const schedule = rule.trigger.schedule;
+    if (rule.action.type === "record_history") issues.push(t("仅记录到角色记录需要消息或采集事件。"));
     if (schedule.type === "interval" && Number(schedule.intervalSeconds || 0) <= 0) issues.push("间隔必须大于 0 秒。");
     if (schedule.type === "daily_time" && !normalizeDailyScheduleTimes(schedule)) issues.push("请先补全有效的每日时间点。");
     if (schedule.type === "once_at" && !schedule.onceAt) issues.push("还没有设置执行日期和时间。");
@@ -1228,6 +1224,7 @@ function automationDiagnostics(rule: PersonaAutomationRuleDefinition): string[] 
 }
 
 function automationActionLabel(rule: PersonaAutomationRuleDefinition): string {
+  if (rule.action.type === "record_history") return t("仅记录到角色记录");
   return rule.action.type === "run_script" ? "运行脚本" : "通知 Agent";
 }
 
@@ -1402,7 +1399,7 @@ function setAgentHooks(hooks: CodexHookSettings): void {
   for (const other of store.gateways) {
     if (other.agentRoleDeviceId === gateway.value.agentRoleDeviceId && other.agentRoleId === gateway.value.agentRoleId) other.codexHooks = JSON.parse(JSON.stringify(hooks));
   }
-  store.touch();
+  void store.submitConfig();
 }
 
 const automationRecentMessageLimit = computed(() => {
@@ -1749,7 +1746,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   automationQqRequest?.abort();
-  releaseRoleSave();
   releaseSpeech?.();
   releaseSpeech = null;
   managerEvents?.close();
@@ -1771,8 +1767,6 @@ onBeforeUnmount(() => {
         <template v-if="hasPersona">
           <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
         </template>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', '', store.selectedRoleId)">打开角色配置</v-btn>
-        <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', '', store.selectedRoleId)">打开角色自动化配置</v-btn>
       </div>
     </div>
 
@@ -1782,33 +1776,26 @@ onBeforeUnmount(() => {
 
     <template v-if="gateway">
 
-      <v-card v-if="hasPersona" class="app-card glass-card overflow-hidden">
-        <v-tabs
-          v-model="activePersonaPageTab"
-          class="persona-page-tabs"
-          color="secondary"
-          show-arrows
-          :aria-label="t('角色配置分区')"
-        >
-          <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
-          <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息连接器</v-tab>
-          <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
-          <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
-          <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
-          <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
-          <v-tab value="all-day-recording" prepend-icon="mdi-timeline-clock-outline" :disabled="!hasPersona">{{ t('全天记录') }}</v-tab>
-        </v-tabs>
-      </v-card>
+      <v-tabs
+        v-if="hasPersona"
+        v-model="activePersonaPageTab"
+        class="persona-page-tabs"
+        color="secondary"
+        show-arrows
+        :aria-label="t('角色配置分区')"
+      >
+        <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
+        <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息连接器</v-tab>
+        <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
+        <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
+        <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
+        <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
+      </v-tabs>
 
       <div v-if="hasPersona && activePersonaPageTab === 'messages'" class="persona-tab-panel">
         <PersonaMessages />
       </div>
       <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
-        <v-window-item value="all-day-recording">
-          <div class="persona-tab-panel">
-            <PersonaAllDayRecording v-if="hasPersona && activePersonaPageTab === 'all-day-recording'" :role-id="gateway.agentRoleId || ''" />
-          </div>
-        </v-window-item>
         <v-window-item value="profile">
           <div class="persona-tab-panel">
 
@@ -1819,6 +1806,10 @@ onBeforeUnmount(() => {
               <div class="section-title">角色配置</div>
               <div class="section-note" data-no-i18n>{{ gateway.agentRoleId }}</div>
             </div>
+            <v-btn v-if="hasPersona" color="secondary" variant="tonal" prepend-icon="mdi-folder-open-outline"
+              @click="store.openConfigFile('role-folder', '', store.selectedRoleId)">
+              打开角色目录
+            </v-btn>
           </div>
           <template v-if="hasPersona">
             <div class="persona-identity-row mt-3">
@@ -2046,7 +2037,7 @@ onBeforeUnmount(() => {
         <v-window-item value="avatar">
           <div class="persona-tab-panel">
             <PersonaCompanionActivity v-if="hasPersona && activePersonaPageTab === 'avatar'" :role-id="gateway.agentRoleId || ''" :gateway-id="gateway.id" />
-            <PersonaDesktopPetPanel v-if="hasPersona" :persona-id="gateway.agentRoleId || ''" />
+            <PersonaDesktopPetPanel v-if="hasPersona" :key="`${store.sourceDeviceId}:${gateway.agentRoleId}`" :persona-id="gateway.agentRoleId || ''" />
           </div>
         </v-window-item>
 
@@ -2207,7 +2198,7 @@ onBeforeUnmount(() => {
                 <AutomationEndpointSettings v-if="automationRoute && configurableAutomationEndpoint"
                   :key="`${automationRoute.id}:${configurableAutomationEndpoint.value}`"
                   :gateway="automationRoute" :endpoint="configurableAutomationEndpoint.value"
-                  :expanded="automationSettingsExpanded" @speech-changed="speechRouteChanged = true" />
+                  :expanded="automationSettingsExpanded" auto-apply @route-saved="store.refreshLinkedRoutes" />
                 <div v-if="visibleAutomations.length === 0" class="empty-state">
                   <span>{{ automations.length ? '此类型还没有规则' : '还没有消息规则' }}</span>
                 </div>
@@ -2243,7 +2234,7 @@ onBeforeUnmount(() => {
             </div>
           </v-window-item>
           <v-window-item value="hooks">
-            <PersonaAgentHooks :model-value="gateway.codexHooks" :gateways="linkedAutomationRoutes" :gateway="gateway"
+            <PersonaAgentHooks :key="`${store.sourceDeviceId}:${gateway.agentRoleId}`" :model-value="gateway.codexHooks" :gateways="linkedAutomationRoutes" :gateway="gateway"
               :message-rules="automations" :qq-directories="automationQqDirectories" @update:model-value="setAgentHooks" />
           </v-window-item>
         </v-window>
@@ -2319,7 +2310,6 @@ onBeforeUnmount(() => {
           </div>
           <div class="rule-dialog-actions">
             <v-switch
-              v-if="activeAutomation.id !== 'role-panel-message'"
               :model-value="automationEnabled(activeAutomation)"
               label="启用"
               color="success"
@@ -2700,7 +2690,7 @@ onBeforeUnmount(() => {
                   <template v-if="activeAutomation.action.type === 'deliver_agent'">
                     <AutomationAgentTarget v-if="gateway" :gateway="gateway" :model-value="activeAutomation.action.target" :primary-routes="automationPrimaryRoutes"
                       @update:model-value="target => patchAutomationAction({ target })" />
-                    <p v-if="automationPreview ? previewDsBotIncomplete : invalidDsBotTarget" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
+                    <p v-if="automationDsBotIncomplete" class="text-error text-caption mt-2">{{ t('请先完成 DSBot 目标选择。') }}</p>
                     <div v-if="activeAutomation.trigger.type === 'message'" class="mt-4">
                       <v-switch
                         :model-value="automationRecentMessageLimit > 0"
@@ -2775,7 +2765,7 @@ onBeforeUnmount(() => {
                     </v-btn>
                   </template>
 
-                  <template v-else>
+                  <template v-else-if="activeAutomation.action.type === 'run_script'">
                     <v-alert type="warning" variant="tonal" density="compact" class="mt-4 mb-4">
                       脚本只能来自当前人格的 <code>scripts/</code> 目录，支持 .cmd、.bat 和 .py。不会执行任意命令文本，也不会把 Manager 中的 token 和密码传给脚本。
                     </v-alert>
@@ -2817,19 +2807,16 @@ onBeforeUnmount(() => {
 
         <v-card-actions class="px-6 pb-5">
           <v-btn
-            v-if="!automationPreview && activeAutomation.id !== 'role-panel-message'"
+            v-if="!automationPreview"
             color="error"
             variant="text"
             @click="removeActiveAutomation()"
           >删除规则</v-btn>
           <v-spacer />
           <span v-if="automationDeliveryIncomplete" class="text-caption mr-2">请选择 Agent 和会话</span>
-          <template v-if="automationPreview">
-            <v-btn variant="text" @click="automationDialog = false">{{ t('取消') }}</v-btn>
-            <v-btn color="primary" :disabled="!store.ready || store.saving || automationTemplateLoading || automationPreviewIncomplete"
-              @click="confirmAutomationPreview">{{ t('新建') }}</v-btn>
-          </template>
-          <v-btn v-else color="primary" :disabled="automationDeliveryIncomplete" @click="automationDialog = false">完成</v-btn>
+          <v-btn variant="text" @click="automationDialog = false">{{ t('取消') }}</v-btn>
+          <v-btn color="primary" :disabled="!store.ready || automationTemplateLoading || automationDraftIncomplete"
+            @click="confirmAutomation">{{ t(automationPreview ? '新建' : '确定') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -2844,18 +2831,9 @@ onBeforeUnmount(() => {
 .automation-card-conversation-label { display: grid; gap: 2px; min-width: 0; }
 .automation-card-conversation-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.persona-page-tabs {
-  min-height: 56px;
-  border-bottom: 1px solid var(--rr-border-faint);
-  background: var(--rr-subtle);
-}
-
 .persona-page-tabs :deep(.v-tab) {
-  min-width: 168px;
-  min-height: 56px;
-  font-weight: 850;
-  letter-spacing: 0;
   text-transform: none;
+  letter-spacing: normal;
 }
 
 .persona-page-window,
@@ -2871,12 +2849,6 @@ onBeforeUnmount(() => {
 
 .automation-rule-layout-empty {
   grid-template-columns: minmax(0, 1fr);
-}
-
-@media (max-width: 600px) {
-  .persona-page-tabs :deep(.v-tab) {
-    min-width: 144px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

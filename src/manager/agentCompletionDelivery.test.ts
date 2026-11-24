@@ -671,7 +671,7 @@ test("confirmed original attachment receipts survive corrupt derived cache; chan
   const bound = server.address(); assert.ok(bound && typeof bound === "object");
   let published = 0;
   const options = withTestEndpointEgress({ rootDir, routeRoot: path.join(rootDir, "route"), rolesRoot: path.join(rootDir, "roles"),
-    publishHtmlAttachment: async () => { published++; return "https://fixture.invalid/share/original#original-key"; },
+    publishHtmlAttachment: async () => { published++; return { url: "https://fixture.invalid/share/original#original-key" }; },
     runtimes: [{ id: "route", enabled: true, napcatInstances: [{ id: "qq", enabled: true, httpUrl: `http://127.0.0.1:${bound.port}`, accessToken: "" }] }] });
   const payloadPath = (id: string, file: string) => {
     const fileId = `${id}-file-${createHash("sha256").update(process.platform === "win32" ? file.toLowerCase() : file).digest("hex")}`;

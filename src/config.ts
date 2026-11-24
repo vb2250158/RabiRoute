@@ -57,7 +57,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "qqbot_private" | "qqbot_group" | "qqbot_channel" | "qqbot_dm" | "qqbot_event" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event" | CaptureEventRouteKind;
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "qqbot_private" | "qqbot_group" | "qqbot_channel" | "qqbot_dm" | "qqbot_event" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "voice_received" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event" | CaptureEventRouteKind;
 
 export type NotificationRule = {
   recentMessageLimit?: number;
@@ -182,6 +182,7 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "role_panel_message"
     || kind === "plan_feedback"
     || kind === "voice_transcript"
+    || kind === "voice_received"
     || kind === "rabilink"
     || kind === "wearable_health_alert"
     || kind === "wecom_message"

@@ -2,6 +2,16 @@ import { localSpeechEndpoint } from "../speech/localSpeechClient.js";
 
 /** A recording lease owns this subscription. Retries reconnect, never poll history. */
 export function watchAllDaySpeechEvents(url: () => string, changed: (id?: string) => void, failed: (error: string) => void): () => void {
+  return watchSpeechServiceEvents(url, (kind, data) => {
+    if (kind === "ready") changed();
+    if (kind === "records_changed") {
+      const value = JSON.parse(data);
+      if (value.kind === "asr" && typeof value.id === "string" && value.id.length <= 200) changed(value.id);
+    }
+  }, failed);
+}
+
+export function watchSpeechServiceEvents(url: () => string, event: (kind: string, data: string) => void, failed: (error: string) => void): () => void {
   const abort = new AbortController();
   let retry: NodeJS.Timeout | undefined;
   async function connect() {
@@ -19,11 +29,7 @@ export function watchAllDaySpeechEvents(url: () => string, changed: (id?: string
           for (let index; (index = buffer.indexOf("\n")) >= 0;) {
             const line = buffer.slice(0, index).replace(/\r$/, ""); buffer = buffer.slice(index + 1);
             if (!line) {
-              if (!abort.signal.aborted && kind === "ready") changed();
-              if (!abort.signal.aborted && kind === "records_changed") {
-                const value = JSON.parse(data);
-                if (value.kind === "asr" && typeof value.id === "string" && value.id.length <= 200) changed(value.id);
-              }
+              if (!abort.signal.aborted && kind) event(kind, data);
               kind = ""; data = "";
             } else if (line.startsWith("event:")) kind = line.slice(6).trim();
             else if (line.startsWith("data:")) data += line.slice(5).trimStart();

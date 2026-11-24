@@ -8,7 +8,7 @@ const settingsRoleStore = useRoleStore();
 import TimeoutSettings from "../components/TimeoutSettings.vue";
 import ResourceCacheSettings from "../components/ResourceCacheSettings.vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../../../../../ribiwebgui/src/routeScopedNavigation";
 import { configNameFor } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
@@ -42,10 +42,12 @@ const routeDir = ref("");
 const rolesDir = ref("");
 const dirSaving = ref(false);
 const dirError = ref("");
-const settingsDirty = ref(false);
-const settingsSaving = ref(false);
-const settingsHydrating = ref(true);
-const settingsReady = computed(() => !settingsHydrating.value);
+const directoriesLoaded = ref(false);
+const readDirectories = () => ({ routeDir: routeDir.value, rolesDir: rolesDir.value });
+const requestedDirectories = ref(readDirectories());
+const savedDirectories = ref(JSON.stringify(requestedDirectories.value));
+const directorySnapshot = computed(() => JSON.stringify(requestedDirectories.value));
+const directoryDirty = computed(() => directorySnapshot.value !== savedDirectories.value);
 type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
 type WebguiLanAccess = {
   enabled: boolean;
@@ -72,6 +74,10 @@ const webguiLanAccess = ref<WebguiLanAccess>({
   urls: []
 });
 const webguiLanSaving = ref(false);
+const lanLoaded = ref(false);
+const requestedLan = ref<boolean | null>(null);
+const lanDirty = computed(() => requestedLan.value !== null && requestedLan.value !== webguiLanAccess.value.enabled);
+const lanReady = computed(() => lanLoaded.value && webguiLanAccess.value.canManage && !webguiLanAccess.value.hostManagedByEnvironment);
 const webguiLanError = ref("");
 const webguiLanNotice = ref("");
 
@@ -81,10 +87,10 @@ async function loadDirConfig() {
     const data = await res.json();
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
-  } catch { /* ignore */ }
-  await loadWebguiLanAccess();
-  await nextTick();
-  settingsHydrating.value = false;
+    requestedDirectories.value = readDirectories();
+    savedDirectories.value = directorySnapshot.value;
+    directoriesLoaded.value = res.ok && data.code === 0;
+  } catch (error) { dirError.value = userFacingError(error); }
 }
 
 async function loadWebguiLanAccess(): Promise<void> {
@@ -93,6 +99,7 @@ async function loadWebguiLanAccess(): Promise<void> {
     const body = await response.json();
     if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "读取局域网 WebGUI 配置失败");
     webguiLanAccess.value = body.data as WebguiLanAccess;
+    lanLoaded.value = true;
     webguiLanError.value = "";
   } catch (error) {
     webguiLanError.value = userFacingError(error);
@@ -130,7 +137,7 @@ async function updateWebguiLanAccess(
 
 function toggleWebguiLanAccess(enabled: boolean | null): void {
   if (typeof enabled !== "boolean") return;
-  webguiLanAccess.value = { ...webguiLanAccess.value, enabled };
+  requestedLan.value = enabled;
 }
 
 async function regenerateWebguiLanToken(): Promise<void> {
@@ -183,15 +190,19 @@ async function saveDirConfig(): Promise<void> {
   dirSaving.value = true;
   dirError.value = "";
   try {
+    const submitted = requestedDirectories.value;
     const res = await fetch("/manager-config", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ routeDir: routeDir.value || undefined, rolesDir: rolesDir.value || undefined })
+      body: JSON.stringify({ routeDir: submitted.routeDir || undefined, rolesDir: submitted.rolesDir || undefined })
     });
     const data = await res.json();
     if (data.code !== 0) throw new Error(data.message || "保存失败");
-    routeDir.value = data.routeDir ?? "";
-    rolesDir.value = data.rolesDir ?? "";
+    const committed = { routeDir: data.routeDir ?? "", rolesDir: data.rolesDir ?? "" };
+    if (routeDir.value === submitted.routeDir) routeDir.value = committed.routeDir;
+    if (rolesDir.value === submitted.rolesDir) rolesDir.value = committed.rolesDir;
+    if (requestedDirectories.value === submitted) requestedDirectories.value = committed;
+    savedDirectories.value = JSON.stringify(committed);
   } catch (e) {
     dirError.value = userFacingError(e);
     throw e;
@@ -200,55 +211,20 @@ async function saveDirConfig(): Promise<void> {
   }
 }
 
-const trackedSettingValues = [
-  routeDir,
-  rolesDir,
-  () => webguiLanAccess.value.enabled
-];
-
-watch(trackedSettingValues, () => {
-  if (!settingsHydrating.value) settingsDirty.value = true;
-});
-
-
-async function saveSettings(): Promise<void> {
-  if (!settingsReady.value || settingsSaving.value) return;
-  settingsSaving.value = true;
-  settingsHydrating.value = true;
-  try {
-    const results = await Promise.allSettled([
-      saveDirConfig(),
-      webguiLanAccess.value.canManage && !webguiLanAccess.value.hostManagedByEnvironment
-        ? updateWebguiLanAccess({ enabled: webguiLanAccess.value.enabled }, false)
-        : Promise.resolve()
-    ]);
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
-    if (failures.length) throw new Error(failures.join("；"));
-    await nextTick();
-    settingsDirty.value = false;
-    redirectCurrentWebguiToLan(webguiLanAccess.value);
-  } finally {
-    settingsSaving.value = false;
-    settingsHydrating.value = false;
+const stopDirectorySave = registerPageSaveAction({
+  dirty: directoryDirty, ready: directoriesLoaded, saving: dirSaving, save: saveDirConfig
+}, 0, directorySnapshot);
+const stopLanSave = registerPageSaveAction({
+  dirty: lanDirty, ready: lanReady, saving: webguiLanSaving,
+  save: async () => {
+    const enabled = requestedLan.value;
+    if (enabled !== null) await updateWebguiLanAccess({ enabled });
+    if (requestedLan.value === enabled) requestedLan.value = null;
   }
-}
+}, 0, requestedLan);
 
-let unregisterPageSaveAction: (() => void) | undefined;
-
-onMounted(async () => {
-  unregisterPageSaveAction = registerPageSaveAction({
-    dirty: settingsDirty,
-    ready: settingsReady,
-    saving: settingsSaving,
-    save: saveSettings
-  });
-  await loadDirConfig();
-});
-onBeforeUnmount(() => {
-  unregisterPageSaveAction?.();
-});
+onMounted(() => { void Promise.all([loadDirConfig(), loadWebguiLanAccess()]); });
+onBeforeUnmount(() => { stopDirectorySave(); stopLanSave(); });
 </script>
 
 <template>
@@ -291,8 +267,8 @@ onBeforeUnmount(() => {
         </div>
         <v-alert v-if="dirError" type="error" variant="tonal" density="compact" class="mb-3">{{ dirError }}</v-alert>
         <div class="form-grid">
-          <v-text-field v-model="routeDir" label="路由数据目录" placeholder="data/route" density="compact" hide-details />
-          <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />
+          <v-text-field v-model="routeDir" :disabled="!directoriesLoaded" @blur="requestedDirectories = readDirectories()" label="路由数据目录" placeholder="data/route" density="compact" hide-details />
+          <v-text-field v-model="rolesDir" :disabled="!directoriesLoaded" @blur="requestedDirectories = readDirectories()" label="角色目录" placeholder="data/roles" density="compact" hide-details />
         </div>
         <v-divider class="my-4" />
         <div class="section-title-row compact-row mb-2">
@@ -301,14 +277,14 @@ onBeforeUnmount(() => {
             <div class="section-note">让同一局域网中的手机或电脑直接访问这台 Rabi PC；访问密钥由 Manager 统一校验。</div>
           </div>
           <v-switch
-            :model-value="webguiLanAccess.enabled"
+            :model-value="requestedLan ?? webguiLanAccess.enabled"
             label="允许局域网访问"
             color="success"
             density="compact"
             inset
             hide-details
             :loading="webguiLanSaving"
-            :disabled="webguiLanSaving || !webguiLanAccess.canManage || webguiLanAccess.hostManagedByEnvironment"
+            :disabled="webguiLanSaving || !lanReady"
             @update:model-value="toggleWebguiLanAccess"
           />
         </div>

@@ -39,12 +39,13 @@ import {
   claimAutomationRun,
   executeScriptAutomation,
   finishAutomationRun,
-  matchingMessageScriptAutomations
+  matchingMessageScriptAutomations,
+  matchesRecordOnlyAutomation
 } from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
 import { fetchRoleContextProjection } from "./manager/roleContextProjection.js";
 import { projectAllDayMessage } from "./manager/allDayMessageIngress.js";
-import { isCaptureEventRouteKind, messageEventCategory } from "./shared/personaEventTypes.js";
+import { requiresExplicitEventRule, messageEventCategory } from "./shared/personaEventTypes.js";
 import { fetchRemotePersonaSnapshot, routeWithRemotePersonaConfig, type RemotePersonaSnapshot } from "./routing/remotePersonaClient.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope, type RabiMessageSource } from "./shared/rabiMessage.js";
 import { observeIdentityEndpoint } from "./identityRelations.js";
@@ -109,7 +110,7 @@ export type {
 } from "./routing/types.js";
 
 export type ForwardDeliveryStatus = "delivered" | "routed" | "missed" | "failed" | "skipped";
-export type ForwardDeliveryReason = "role_archived" | "role_unavailable" | "no_active_route_profile" | "no_matching_rule" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy" | "remote_persona_unavailable" | "remote_persona_automation_remote_only";
+export type ForwardDeliveryReason = "role_archived" | "role_unavailable" | "no_active_route_profile" | "no_matching_rule" | "record_only" | "low_signal_voice_transcript" | "no_agent_adapter" | "agent_busy" | "remote_persona_unavailable" | "remote_persona_automation_remote_only";
 
 export type ForwardAdapterOutcome = {
   routeId: string;
@@ -1099,6 +1100,13 @@ async function forwardMessageToRouteInternal(
     }
   }
 
+  const recordOnly = !options.replayPackets && matchesRecordOnlyAutomation(route, routeKind, record, extraValues);
+  if (recordOnly) {
+    if (routeKind === "voice_received") {
+      appendRecordToPersonaConversation(route, routeKind, { ...record, messageId: `${recordId(record)}:received` });
+    }
+    route = { ...route, notificationRules: route.notificationRules.filter(rule => !rule.id.startsWith("default-")) };
+  }
   const processingRequirementId = options.messageGroup && options.messageGroup.endpoint !== "heartbeat"
     ? messageProcessingRequirementId(options.messageGroup, route.id)
     : undefined;
@@ -1119,6 +1127,7 @@ async function forwardMessageToRouteInternal(
     if (decision) decision.matchedRules = rules;
   }
   if (!decision) {
+    if (recordOnly) return routeResult(route, "skipped", { reason: "record_only" });
     logRouteMiss(routeKind, record, "no_matching_rule", route);
     return routeResult(route, "missed", { reason: "no_matching_rule" });
   }
@@ -1315,7 +1324,7 @@ async function forwardMessageAndWaitInternal(
   options: ForwardMessageOptions = {}
 ): Promise<ForwardDeliveryResult> {
   const candidates = routeProfilesForRecord(record);
-  const routes = options.scheduledAutomation ? [options.scheduledAutomation.route] : isCaptureEventRouteKind(routeKind)
+  const routes = options.scheduledAutomation ? [options.scheduledAutomation.route] : requiresExplicitEventRule(routeKind)
     ? candidates.filter(route => !route.agentRoleDeviceId && "routeProfileId" in record && rolePathsForRoute(route).roleId === record.routeProfileId)
     : candidates;
   const packets: DeliveryReplayPacket[] = [];

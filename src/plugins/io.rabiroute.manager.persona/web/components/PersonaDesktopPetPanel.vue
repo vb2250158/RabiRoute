@@ -5,13 +5,11 @@ import { DESKTOP_PET_BASE_HEIGHT_PX, DESKTOP_PET_CORNERS, DESKTOP_PET_WORK_PHASE
 import { createDesktopPetClient, type DesktopPetPackSummary } from "../../../../../ribiwebgui/src/desktopPetClient";
 import { usePersonaService } from "../persona/personaServiceClient";
 import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
-import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { desktopPetActions } from "../../../../../ribiwebgui/src/desktopPetActions";
 import DesktopPetAnimationPreview from "./DesktopPetAnimationPreview.vue";
 
 const props = defineProps<{ personaId: string }>();
 const desktopPetClient = createDesktopPetClient(usePersonaService().fetch);
-const store = useGatewayStore();
 const binding = ref<DesktopPetBinding | null>(null);
 const packs = ref<DesktopPetPackSummary[]>([]);
 const loaded = ref(false);
@@ -23,8 +21,7 @@ const importFile = ref<File | null>(null);
 const importPackId = ref("");
 const importName = ref("");
 const importing = ref(false);
-const dirty = computed(() => store.dirty || petDirty.value);
-const ready = computed(() => !petDirty.value || loaded.value);
+const bindingSnapshot = computed(() => JSON.stringify(binding.value));
 const selectedPack = computed(() => packs.value.find(pack => pack.id === binding.value?.packId));
 const displayHeightPx = computed(() => {
   const height = selectedPack.value?.canvas?.height ?? DESKTOP_PET_BASE_HEIGHT_PX;
@@ -134,22 +131,22 @@ async function importDesktopPetPack(): Promise<void> {
 }
 
 async function save(): Promise<void> {
-  if (!ready.value || saving.value) throw new Error("角色虚拟形象尚未加载完成。");
+  if (!loaded.value || saving.value || !binding.value) return;
+  const personaId = props.personaId;
+  const submitted = bindingSnapshot.value;
   saving.value = true;
   try {
-    if (store.dirty) await store.save();
-    if (petDirty.value && binding.value) {
-      const savedBinding = await desktopPetClient.update(props.personaId, binding.value);
-      hydrating.value = true;
-      try {
-        binding.value = savedBinding;
-        await nextTick();
-        petDirty.value = false;
-      } finally {
-        hydrating.value = false;
-      }
-      error.value = "";
+    const savedBinding = await desktopPetClient.update(personaId, JSON.parse(submitted));
+    if (personaId !== props.personaId || bindingSnapshot.value !== submitted) return;
+    hydrating.value = true;
+    try {
+      binding.value = savedBinding;
+      await nextTick();
+      petDirty.value = false;
+    } finally {
+      hydrating.value = false;
     }
+    error.value = "";
   } catch (cause) {
     error.value = userFacingError(cause);
     throw cause;
@@ -163,7 +160,7 @@ watch(binding, () => {
   if (!hydrating.value && loaded.value) petDirty.value = true;
 }, { deep: true });
 
-unregisterSaveAction = registerPageSaveAction({ dirty, ready, saving, save });
+unregisterSaveAction = registerPageSaveAction({ dirty: petDirty, ready: loaded, saving, save }, 350, bindingSnapshot);
 
 onBeforeUnmount(() => {
   loadRevision += 1;

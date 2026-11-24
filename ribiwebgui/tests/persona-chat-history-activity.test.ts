@@ -110,9 +110,57 @@ test("history page reads once on first event connection and refreshes after reco
   handlers.get('ready')!();
   assert.equal(model.version.value,0);
   assert.equal(model.messageVersion.value,0);
+  assert.equal(model.catalogVersion.value,0);
   handlers.get('ready')!();
   assert.equal(model.version.value,1);
   assert.equal(model.messageVersion.value,1);
+  assert.equal(model.catalogVersion.value,1);
   handlers.get('persona_chat_history_changed')!({data:JSON.stringify({roleId:'role-a'})});
   assert.equal(model.version.value,2);
+  assert.equal(model.catalogVersion.value,1);
+  handlers.get('message_endpoint_history_changed')!({data:JSON.stringify({roleId:'role-a'})});
+  assert.equal(model.messageVersion.value,2);
+  assert.equal(model.catalogVersion.value,1);
+  for (let repeat = 0; repeat < 2; repeat++) {
+    handlers.get('route_catalog_startup_changed')!({data:JSON.stringify({routeConfigHash:'current'})});
+  }
+  assert.equal(model.catalogVersion.value,2);
+});
+
+test("role timeline merges original messages and captures and refreshes only the invalidated source", async t => {
+  const component = new URL("../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaRoleTimeline.vue", import.meta.url);
+  const require = createRequire(component), vue = require("vue");
+  const captured = Date.parse("2026-11-24T08:00:01Z");
+  const requests: string[] = [];
+  const fetch = async (input: string) => {
+    const pathname = new URL(input, "http://fixture").pathname;
+    requests.push(pathname);
+    const data = pathname.endsWith("/chat-history")
+      ? { entries: [{ id: "chat", text: "Agent delivery", kind: "agent_delivery", receivedAt: new Date(captured + 1000).toISOString() }], nextCursor: null }
+      : pathname.endsWith("/message-endpoint-timeline")
+        ? { entries: [{ id: "endpoint", text: "Channel message", adapter: "napcat", conversationKey: "fixture", time: (captured - 1000) / 1000 }], nextCursor: null }
+        : { events: [{ id: "screen", source: "screen", kind: "image", startedAt: captured, media: "media/fixture.jpg" }], hasMore: false };
+    return Response.json({ code: 0, data });
+  };
+  const code = transformSync(compileScript(parse(fs.readFileSync(component, "utf8")).descriptor, { id: "role-timeline" }).content,
+    { loader: "ts", format: "cjs" }).code;
+  const module = { exports: {} as any };
+  vm.runInNewContext(code, { module, exports: module.exports, AbortController, URLSearchParams, require: (name: string) =>
+    name === "vue" ? { ...vue, onBeforeUnmount() {} } :
+    name.endsWith("personaServiceClient") ? { usePersonaService: () => ({ fetch, resource: (url: string) => url }) } :
+    name.endsWith("i18n/index") ? { useI18n: () => ({ t: (s: string) => s }) } :
+    name.endsWith("gatewayHelpers") ? { adapterLabel: (s: string) => s } :
+    name === "@shared/personaHistoryChannels" ? { chatHistoryCategory: () => "agent" } : require(name) });
+  const props = vue.reactive({ roleId: "role-a", version: 0, messageVersion: 0, captureVersion: 0 });
+  const scope = vue.effectScope();
+  t.after(() => scope.stop());
+  const model = scope.run(() => module.exports.default.setup(props, { expose() {} }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(model.rows.value, (row: { id: string }) => row.id),
+    ["chat:chat", "capture:screen", "endpoint:napcat:fixture:endpoint"]);
+  assert.equal(requests.length, 3);
+  props.captureVersion += 1;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.slice(3), ["/api/roles/role-a/all-day-recording/page"]);
+  assert.equal(model.rows.value.length, 3);
 });

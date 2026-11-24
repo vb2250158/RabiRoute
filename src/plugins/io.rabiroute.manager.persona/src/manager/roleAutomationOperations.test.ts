@@ -58,6 +58,16 @@ test("authenticated Agent lists, searches and reads the same message/schedule ru
   assert.equal((await f.call("/absent")).status, 404);
 });
 
+test("record-only screen rules persist without an Agent target", async t => {
+  const f = await fixture(t);
+  const action = { type: "record_history" };
+  const created = await f.call("", "POST", { expectedRevision: await f.revision(),
+    rule: { name: "Save screen", trigger: { type: "message", routeKinds: ["recording_screen"] }, action } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const saved = await f.call("/" + created.body.data.rule.id);
+  assert.deepEqual(saved.body.data.rule.action, action);
+});
+
 test("item create/patch/delete preserve neighbours and unrelated configuration; committed retries retain their original result", async t => {
   const f = await fixture(t), key = randomUUID(), expectedRevision = await f.revision();
   const request = { expectedRevision, rule: { ...rule("created"), id: undefined } };

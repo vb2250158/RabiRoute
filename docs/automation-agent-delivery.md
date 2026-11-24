@@ -79,7 +79,7 @@ node --import tsx scripts/migrate-agent-delivery-targets.ts --persona data/roles
 
 - **MD附件自动转换为图片**：本地 `.md`、`.markdown` 链接渲染成图片发送。
 - **图片附件转换为图片**：PNG、JPEG、GIF、WebP、BMP、AVIF 文件直接显示为图片。
-- **HTML转换为链接**：`.html`、`.htm` 由本机 HTML 分享插件（`io.rabiroute.manager.html-shares`）在其稳定私有存储目录保存快照，发送 RabiLink GUID 分享链接。相对引用的本地图片、样式及脚本嵌入快照；网络资源沿原 URL 加载。关闭某项后该类型仍作为原文件上传。
+- **HTML转换为链接**：`.html`、`.htm` 由本机 HTML 分享插件（`io.rabiroute.manager.html-shares`）保存快照。QQ 将文件名、静态首屏缩略图和 RabiLink 分享链接放在同一条消息中。缩略图生成失败时仍发送文件名和链接。相对引用的本地图片、样式及脚本嵌入快照，打开分享时网络资源沿原 URL 加载。关闭此项后上传原文件。
 
 规则参数为 `markdownFilesAsImages`、`imageFilesAsImages`、`htmlFilesAsLinks`。缺省或 `"true"` 开启，`"false"` 关闭；父选项 `includeFiles="false"` 时均不执行。
 

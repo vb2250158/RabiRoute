@@ -9,7 +9,7 @@ const pageSource = fs.readFileSync(
 
 test("speech page performs one initial runtime hydration and reuses its result", () => {
   const mountedBlock = pageSource.match(/onMounted\(async \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || "";
-  assert.match(mountedBlock, /releaseSpeech = await speech\.acquire\(\)/);
+  assert.match(mountedBlock, /await speech\.acquire\(unsubscribe => \{ releaseSpeech = unsubscribe; \}\)/);
   assert.doesNotMatch(mountedBlock, /hydrateRuntimeUi/);
   assert.match(mountedBlock, /await syncRuntimeUiFromStore\(\)/);
 

@@ -7,7 +7,8 @@ import ts from "typescript";
 import type { WebPluginCatalogStatus } from "../src/pluginContributions";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { refreshWebPluginModulesSafely, webPluginPageLoading } from "../src/pluginModuleBootstrap";
+import { refreshWebPluginCatalog, refreshWebPluginModulesSafely, webPluginPageLoading } from "../src/pluginModuleBootstrap";
+import { pluginCatalogStore } from "../src/pluginCatalogStore";
 
 test("Web plugin bootstrap waits for the initial module graph", async () => {
   const calls: string[] = [];
@@ -33,6 +34,20 @@ test("a failed optional Web Bundle leaves the fixed WebGUI host available", asyn
   }]);
 });
 
+test("the shell joins concurrent plugin reads and reads once more after a burst of changes", async t => {
+  let release!: () => void;
+  const first = new Promise<void>(resolve => { release = resolve; });
+  const refresh = t.mock.method(pluginCatalogStore, "refresh", () => refresh.mock.callCount() === 1 ? first : Promise.resolve());
+  const initial = refreshWebPluginCatalog();
+  assert.equal(initial, refreshWebPluginCatalog());
+  assert.equal(initial, refreshWebPluginCatalog(true));
+  assert.equal(initial, refreshWebPluginCatalog(true));
+  assert.equal(refresh.mock.callCount(), 1);
+  release();
+  await initial;
+  assert.equal(refresh.mock.callCount(), 2);
+});
+
 function actualRecovery(status: Ref<WebPluginCatalogStatus>) {
   const route=reactive({name:"plugin-recovery",meta:{title:"插件恢复"},query:{from:"/roles"}});
   const moved:string[]=[];
@@ -43,8 +58,8 @@ function actualRecovery(status: Ref<WebPluginCatalogStatus>) {
   const source=ts.createSourceFile("recovery.ts",descriptor.scriptSetup.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const body=source.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(source)).join("\n");
   const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-  const state=new Function("computed","ref","useRoute","useRouter","pluginCatalogStore","isWebPageRouteActive","webPluginPageLoading","useI18n",compile(body)+";return {loading,refreshing,requestedPath,retry,t};")(
-    computed,ref,()=>route,()=>router,catalog,()=>status.value==="ready",webPluginPageLoading,()=>({t:(text:string)=>text})
+  const state=new Function("computed","ref","useRoute","useRouter","pluginCatalogStore","isWebPageRouteActive","webPluginPageLoading","refreshWebPluginCatalog","useI18n",compile(body)+";return {loading,refreshing,requestedPath,retry,t};")(
+    computed,ref,()=>route,()=>router,catalog,()=>status.value==="ready",webPluginPageLoading,catalog.refresh,()=>({t:(text:string)=>text})
   ) as {loading:ComputedRef<boolean>;refreshing:Ref<boolean>;requestedPath:ComputedRef<string>;retry():Promise<void>;t(text:string):string};
   const template=compileTemplate({source:descriptor.template.content,filename:file.pathname,id:"recovery-test"});assert.deepEqual(template.errors,[]);
   const exports:{render?:RenderFunction}={};new Function("require","exports",compile(template.code))((name:string)=>{assert.equal(name,"vue");return Vue;},exports);assert.ok(exports.render);

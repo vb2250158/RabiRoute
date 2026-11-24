@@ -15,11 +15,22 @@ test("disk role projects healthy gateway rules before parsing malformed Manager 
   const repository = new ManagerConfigRepository({ rootDir: root, managerPort: 31337 });
   const target = { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: "local:dsh", botScopeId: "scope", botId: "bot", botName: "Bot", dshBaseUrl: "http://localhost:3000" };
   const scheduled = (id: string, destination: unknown) => ({ id, enabled: true, trigger: { type: "schedule", schedule: { id, type: "interval", intervalSeconds: 60 } }, action: { type: "deliver_agent", message: "Task", target: destination } });
+  const privateMessage = {
+    id: "private-dsbot", enabled: true,
+    trigger: { type: "message", routeKinds: ["private"] },
+    action: { type: "deliver_agent", target }
+  };
+  const panelRule = {
+    id: "role-panel-message", enabled: false,
+    trigger: { type: "message", routeKinds: ["role_panel_message"], regex: "^configured$" },
+    action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" } }
+  };
   const file = repository.personaConfigPath("Mixed");
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(path.join(path.dirname(file), "persona.md"), "# Mixed\n");
   await fs.writeFile(file, JSON.stringify({ automationScheduleSchemaVersion: 1, automationRules: [
-    scheduled("bad-manager", { ...target, dshBaseUrl: undefined }), scheduled("healthy-route", { kind: "recipient", recipientId: "primary" }), scheduled("healthy-manager", target)
+    scheduled("bad-manager", { ...target, dshBaseUrl: undefined }), scheduled("healthy-route", { kind: "recipient", recipientId: "primary" }), scheduled("healthy-manager", target),
+    privateMessage, panelRule
   ] }));
   const before = await fs.readFile(file);
   const routeFile = repository.adapterConfigPath("main");
@@ -29,6 +40,12 @@ test("disk role projects healthy gateway rules before parsing malformed Manager 
   assert.ok(definition.automationRules?.some(rule => rule.id === "healthy-route"));
   assert.equal(definition.automationRules?.some(rule => ["healthy-manager", "bad-manager"].includes(rule.id)), false);
   assert.ok(definition.routeProfiles?.[0]?.automationRules?.some(rule => rule.id === "healthy-route"));
+  const privateRule = definition.routeProfiles?.[0]?.notificationRules?.find(rule => rule.id === privateMessage.id);
+  assert.deepEqual(privateRule?.routeKinds, privateMessage.trigger.routeKinds);
+  assert.deepEqual(privateRule?.agentTarget, target);
+  const savedPanel = repository.readRoleMessageConfig("Mixed").notificationRules?.find(rule => rule.id === panelRule.id);
+  assert.equal(savedPanel?.enabled, false);
+  assert.equal(savedPanel?.regex, panelRule.trigger.regex);
   const tasks = collectScheduledAutomationTasks(definition.routeProfiles as Parameters<typeof collectScheduledAutomationTasks>[0]);
   assert.ok(tasks.some(task => task.rule.id === "healthy-route"));
   const source = createDsBotAutomationRuleOwner({ rolesRoot: () => repository.rolesRoot, identity: () => ({ applicationGenerationId: "fixture", managerInstanceId: "fixture" }) });
@@ -38,7 +55,7 @@ test("disk role projects healthy gateway rules before parsing malformed Manager 
   assert.ok(snapshot.warnings.some(warning => warning.code === "AUTOMATION_SCHEDULE_INVALID"));
   assert.deepEqual(await fs.readFile(file), before);
   const validRaw = JSON.parse(before.toString("utf8"));
-  validRaw.automationRules = validRaw.automationRules.filter((rule: { id: string }) => rule.id !== "bad-manager");
+  validRaw.automationRules = validRaw.automationRules.filter((rule: { id: string }) => !["bad-manager", panelRule.id].includes(rule.id));
   await fs.writeFile(file, JSON.stringify(validRaw));
   migrateLegacyConfigs({ rolesRoot: repository.rolesRoot, routeRoot: repository.routeRoot });
   const migrated = JSON.parse(await fs.readFile(file, "utf8"));
@@ -47,4 +64,5 @@ test("disk role projects healthy gateway rules before parsing malformed Manager 
   assert.equal(retained.action.message, "Task");
   assert.equal(retained.sourceRouteIds, undefined);
   assert.equal(readRouteCatalogDefinition(repository, "main")!.automationRules?.some(rule => rule.id === "healthy-manager"), false);
+  assert.equal(repository.readRoleMessageConfig("Mixed").notificationRules?.some(rule => rule.id === panelRule.id), false);
 });

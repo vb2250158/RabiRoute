@@ -57,7 +57,9 @@ test("creating a rule offers manual and template previews with an explicit Creat
   assert.match(page, /<v-select\s+:model-value="selectedAutomationTemplateId \|\| activeAutomation.action.type"[\s\S]*@update:model-value="selectAutomationAction"/);
   assert.doesNotMatch(page, /timerInputEnabled|enableTimerInput/);
   assert.match(page, /patchAutomationSchedule\(\{ skipWhenAgentBusy:/);
-  assert.match(page, /@click="confirmAutomationPreview"[^>]*>{{ t\('新建'\) }}/);
+  assert.match(page, /@click="confirmAutomation"[^>]*>{{ t\(automationPreview \? '新建' : '确定'\) }}/);
+  assert.match(page, /automationEdit\.value = JSON\.parse\(JSON\.stringify\(rule\)\)/);
+  assert.match(page, /if \(open\) return;[\s\S]*automationEdit\.value = null/);
   assert.match(page, /<AutomationEndpointNav v-model="selectedAutomationEndpoint"/);
   assert.match(page, /<AutomationEndpointNav v-model="selectedEndpoint"/);
 });

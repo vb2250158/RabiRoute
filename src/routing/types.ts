@@ -29,6 +29,7 @@ export type ForwardRouteKind =
   | "role_panel_message"
   | "plan_feedback"
   | "voice_transcript"
+  | "voice_received"
   | "rabilink"
   | "wearable_health_alert"
   | "wecom_message"

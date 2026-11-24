@@ -154,7 +154,17 @@ async function load(): Promise<void> {
   }
 }
 
+const desktopChanges = computed(() => JSON.stringify([
+  desktopScreenshotEnabled.value, desktopScreenshotShortcut.value, desktopScreenshotClipboardShortcut.value,
+  desktopScreenshotAutoCopy.value, desktopAutostart.value, desktopTheme.value
+]));
+const selectionChanges = computed(() => JSON.stringify([
+  selectionSpeechEnabled.value, selectionReadAloudEnabled.value, selectionSpeechAdvanced.value, selectionSpeechModel.value
+]));
+const settingsChanges = computed(() => desktopChanges.value + selectionChanges.value);
+
 async function saveDesktopSettings(): Promise<void> {
+  const submitted = desktopChanges.value;
   const selectedTheme = resolveWebThemeResource(pluginCatalogStore.themes.value, desktopTheme.value);
   const nextDesktopTheme = selectedTheme.desktopTheme ?? persistedDesktopTheme.value;
   try {
@@ -170,16 +180,23 @@ async function saveDesktopSettings(): Promise<void> {
       webTheme: selectedTheme.themeId,
       customThemes: customThemes.value
     });
-    desktopScreenshotEnabled.value = settings.screenshot.enabled;
-    desktopScreenshotShortcut.value = settings.screenshot.shortcut;
-    desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
-    desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
-    desktopAutostart.value = settings.autostart;
     persistedDesktopTheme.value = settings.theme;
     persistedWebTheme.value = settings.webTheme;
-    customThemes.value = [...replaceCustomWebThemeResources(settings.customThemes)];
-    desktopTheme.value = selectedTheme.themeId;
-    publishInterfaceTheme(selectedTheme.themeId);
+    if (desktopChanges.value === submitted) {
+      hydrating.value = true;
+      try {
+        desktopScreenshotEnabled.value = settings.screenshot.enabled;
+        desktopScreenshotShortcut.value = settings.screenshot.shortcut;
+        desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
+        desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
+        desktopAutostart.value = settings.autostart;
+        customThemes.value = [...replaceCustomWebThemeResources(settings.customThemes)];
+        desktopTheme.value = selectedTheme.themeId;
+        publishInterfaceTheme(selectedTheme.themeId);
+        await nextTick();
+        desktopDirty.value = false;
+      } finally { hydrating.value = false; }
+    }
     error.value = "";
   } catch (cause) {
     error.value = userFacingError(cause);
@@ -298,6 +315,7 @@ async function saveCustomTheme(): Promise<void> {
 }
 
 async function saveSelectionSpeechSettings(): Promise<void> {
+  const submitted = selectionChanges.value;
   const settings: SelectionSpeechSettings = {
     enabled: selectionSpeechEnabled.value,
     readAloudEnabled: selectionReadAloudEnabled.value,
@@ -306,10 +324,17 @@ async function saveSelectionSpeechSettings(): Promise<void> {
   };
   try {
     const saved = await speechControlClient.updateSelectionReaderSettings(settings);
-    selectionSpeechEnabled.value = saved.enabled;
-    selectionReadAloudEnabled.value = saved.readAloudEnabled;
-    selectionSpeechAdvanced.value = saved.advanced;
-    selectionSpeechModel.value = saved.model;
+    if (selectionChanges.value === submitted) {
+      hydrating.value = true;
+      try {
+        selectionSpeechEnabled.value = saved.enabled;
+        selectionReadAloudEnabled.value = saved.readAloudEnabled;
+        selectionSpeechAdvanced.value = saved.advanced;
+        selectionSpeechModel.value = saved.model;
+        await nextTick();
+        selectionSpeechDirty.value = false;
+      } finally { hydrating.value = false; }
+    }
     selectionSpeechError.value = "";
   } catch (cause) {
     selectionSpeechError.value = userFacingError(cause);
@@ -320,29 +345,15 @@ async function saveSelectionSpeechSettings(): Promise<void> {
 async function save(): Promise<void> {
   if (!ready.value || saving.value) throw new Error("桌面设置尚未加载完成。");
   const tasks = [
-    ...(desktopDirty.value ? [{ dirty: desktopDirty, run: saveDesktopSettings }] : []),
-    ...(selectionSpeechDirty.value ? [{ dirty: selectionSpeechDirty, run: saveSelectionSpeechSettings }] : [])
+    ...(desktopDirty.value ? [saveDesktopSettings] : []),
+    ...(selectionSpeechDirty.value ? [saveSelectionSpeechSettings] : [])
   ];
-  if (!tasks.length) return;
-
   saving.value = true;
-  hydrating.value = true;
   try {
-    const results = await Promise.allSettled(tasks.map(task => task.run()));
-    const failures: string[] = [];
-    results.forEach((result, index) => {
-      const task = tasks[index];
-      if (!task) return;
-      if (result.status === "fulfilled") {
-        task.dirty.value = false;
-        return;
-      }
-      failures.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
-    });
-    await nextTick();
+    const results = await Promise.allSettled(tasks.map(task => task()));
+    const failures = results.filter(result => result.status === "rejected").map(result => userFacingError(result.reason));
     if (failures.length) throw new Error(failures.join("；"));
   } finally {
-    hydrating.value = false;
     saving.value = false;
   }
 }
@@ -384,27 +395,13 @@ function captureShortcut(event: KeyboardEvent, target: "capture" | "clipboard"):
   }
 }
 
-watch([
-  desktopScreenshotEnabled,
-  desktopScreenshotShortcut,
-  desktopScreenshotClipboardShortcut,
-  desktopScreenshotAutoCopy,
-  desktopAutostart,
-  desktopTheme
-], () => {
+watch(desktopChanges, () => {
   if (!hydrating.value) desktopDirty.value = true;
 });
-
 watch(desktopTheme, theme => {
   if (!hydrating.value && loaded.value) publishInterfaceTheme(theme);
 });
-
-watch([
-  selectionSpeechEnabled,
-  selectionReadAloudEnabled,
-  selectionSpeechAdvanced,
-  selectionSpeechModel
-], () => {
+watch(selectionChanges, () => {
   if (!hydrating.value && selectionSpeechLoaded.value) selectionSpeechDirty.value = true;
 });
 
@@ -418,7 +415,7 @@ watch(themeOptions, options => {
 });
 
 onMounted(() => {
-  unregisterSaveAction = registerPageSaveAction({ dirty, ready, saving, save });
+  unregisterSaveAction = registerPageSaveAction({ dirty, ready, saving, save }, 350, settingsChanges);
   void load();
 });
 

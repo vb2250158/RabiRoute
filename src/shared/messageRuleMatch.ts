@@ -1,4 +1,4 @@
-import { isCaptureEventRouteKind } from "./personaEventTypes.js";
+import { requiresExplicitEventRule, VOICE_RECEIVED_ROUTE_KIND } from "./personaEventTypes.js";
 import type { NotificationRuleDefinition } from "./gatewayConfigModel.js";
 
 function escapeRegex(value: string): string {
@@ -47,7 +47,8 @@ export function notificationRuleMismatch(rule: NotificationRuleDefinition, sampl
   if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(sample.sourceRouteId)) return "来源路线不匹配";
   if (rule.triggerIds?.length && (!sample.triggerId || !rule.triggerIds.includes(sample.triggerId))) return "触发器不匹配";
   if (rule.routeKinds?.length && !rule.routeKinds.includes(sample.routeKind)) return "触发场景不匹配";
-  if (!rule.routeKinds?.length && isCaptureEventRouteKind(sample.routeKind)) return "此事件需要显式选择场景";
+  if (!rule.routeKinds?.length && requiresExplicitEventRule(sample.routeKind)) return "此事件需要显式选择场景";
+  if (sample.routeKind === VOICE_RECEIVED_ROUTE_KIND && (rule.regex?.trim() || rule.allowedSpeakerNames?.length)) return "收到语音时尚无转写和说话人";
   if (sample.selectedRouteId && sample.routeId !== sample.selectedRouteId) return "本次未指定此路线";
   if (sample.selectedRuleId && rule.id !== sample.selectedRuleId) return "本次未指定此规则";
   if (rule.targetGroupId?.trim() && sample.groupId !== rule.targetGroupId.trim()) return "群聊或频道不匹配";

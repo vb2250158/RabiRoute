@@ -23,7 +23,7 @@ test("attachment conversion flags round-trip booleans and retain legacy default-
   assert.equal(normalizeAgentCompletionDeliveries([base])[0].destination.params.htmlFilesAsLinks, undefined);
 });
 
-test("default attachment conversions send MD/images inline and HTML as a link, freeze payloads and isolate a missing file", async t => {
+test("default attachment conversions send MD/images inline and HTML as one thumbnail and link message", async t => {
   t.mock.method(globalThis, "fetch", nativeHttpTestFetch);
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-attachment-conversion-"));
   const calls: Array<{ url: string; body: any }> = [];
@@ -40,7 +40,7 @@ test("default attachment conversions send MD/images inline and HTML as a link, f
   fs.writeFileSync(html, "<!doctype html><h1>报告</h1>");
   let published = 0;
   const options = withTestEndpointEgress({ rootDir, routeRoot: path.join(rootDir, "data/route"), rolesRoot: path.join(rootDir, "data/roles"),
-    publishHtmlAttachment: async () => { published++; return "https://example.test/share/123#key"; },
+    publishHtmlAttachment: async () => { published++; return { url: "https://example.test/share/123#key", thumbnail: fs.readFileSync(image) }; },
     runtimes: [{ id: "route", enabled: true, napcatInstances: [{ id: "qq", enabled: true, httpUrl: `http://127.0.0.1:${address.port}`, accessToken: "" }] }] });
   const rule = { id: "rule", enabled: true, event: "task_completed", conditions: [], destination: { channel: "napcat", gatewayId: "route", params: { target: "group", targetId: "123", instanceId: "qq" } } };
   const hook = { eventName: "Stop" as const, sessionId: "attachment-test", turnId: "turn", lastAssistantMessage: `[MD](<${md}>) [missing](<${missing}>) [image](<${image}>) [HTML](<${html}>)` };
@@ -51,7 +51,12 @@ test("default attachment conversions send MD/images inline and HTML as a link, f
     assert.match(JSON.stringify(calls[1].body), /base64:\/\/iVBOR/);
     const sentImage = calls[2].body.message.find((segment: any) => segment.type === "image").data.file;
     assert.match(sentImage, /completion-attachments/); assert.deepEqual(fs.readFileSync(sentImage), fs.readFileSync(image));
-    assert.match(JSON.stringify(calls[3].body), /https:\/\/example.test\/share\/123#key/);
+    assert.equal(calls[3].url, "/send_group_msg");
+    assert.deepEqual(calls[3].body.message, [
+      { type: "text", data: { text: "report.html\n" } },
+      { type: "image", data: { file: `base64://${fs.readFileSync(image).toString("base64")}` } },
+      { type: "text", data: { text: "\nhttps://example.test/share/123#key" } }
+    ]);
     const count = calls.length;
     fs.unlinkSync(md); fs.unlinkSync(image); fs.unlinkSync(html);
     await assert.rejects(deliverCompletionToEndpoint(rule, hook, "conversion-default", "route", options), /部分附件未确认/);

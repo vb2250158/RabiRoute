@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { onBeforeRouteLeave } from "vue-router";
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
@@ -48,7 +47,6 @@ watch(() => [props.ready, store.meta.rabiGuid], async () => {
     if (!disposed && request === identityRequest && !request.signal.aborted) resetAvailability.value = "error";
   }
 }, { immediate: true });
-onBeforeRouteLeave(() => !dirty.value || window.confirm(translateText("RabiLink 配置尚未保存，确定离开并放弃修改吗？")));
 const claimWaitSeconds = computed({ get: () => draft.value.claimWaitMs / 1000, set: (value: number) => { draft.value.claimWaitMs = Number(value) * 1000; } });
 const replyIdleSeconds = computed({ get: () => draft.value.replyIdleTimeoutMs / 1000, set: (value: number) => { draft.value.replyIdleTimeoutMs = Number(value) * 1000; } });
 
@@ -58,6 +56,7 @@ async function save() {
   emit("saving", true);
   error.value = "";
   try {
+    const submitted = JSON.stringify(draft.value);
     const response = await fetch("/api/rabi/identity", {
       method: "PATCH", headers: { "content-type": "application/json" },
       body: JSON.stringify(rabiLinkIdentityPatch(draft.value))
@@ -70,8 +69,8 @@ async function save() {
     store.meta.rabiGuid = body.data.rabiGuid;
     store.meta.agentUploads = body.data.agentUploads;
     store.meta.rabiLinkRelay = relay;
-    hydrate();
-
+    if (JSON.stringify(draft.value) === submitted) hydrate();
+    else baseline.value = JSON.stringify(rabiLinkDraftFromMeta(store.meta));
   } catch (reason) {
     error.value = userFacingError(reason);
     throw reason;
@@ -91,7 +90,7 @@ async function confirmReset() {
   }
 }
 watch(() => props.active, (active, _previous, onCleanup) => {
-  if (active) onCleanup(registerPageSaveAction({ dirty, ready, saving: busy, save }));
+  if (active) onCleanup(registerPageSaveAction({ dirty, ready, saving: busy, save }, 350, computed(() => JSON.stringify(draft.value))));
 }, { immediate: true });
 onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose(); });
 </script>

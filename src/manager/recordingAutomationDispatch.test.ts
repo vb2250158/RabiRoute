@@ -4,12 +4,28 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import test from "node:test";
 import { notificationRuleMatches } from "../routing/routeDecision.js";
-import { RecordingAutomationDispatch, recordingAutomationInput } from "./recordingAutomationDispatch.js";
+import { RecordingAutomationDispatch, recordingAutomationInput, voiceReceivedAutomationInput } from "./recordingAutomationDispatch.js";
 import { SYSTEM_EVENT_RESULT_PREFIX } from "../shared/systemEventIngress.js";
 import { messageEventCategory, RECORDING_CAPTURE_TYPES } from "../shared/personaEventTypes.js";
 import type { AllDayEvent } from "../shared/allDayRecording.js";
 import { resolvePipeline } from "../pipelines.js";
 import type { RouteProfile } from "../config.js";
+import { notificationRuleMismatch } from "../shared/messageRuleMatch.js";
+
+test("a received voice segment uses its speech record ID and requires an explicit rule without transcript filters", () => {
+  const id = "speech-0123456789abcdef0123456789abcdef";
+  const input = voiceReceivedAutomationInput("fixture-role", JSON.stringify({ id, time: 5000, duration: 2.4, device_id: "microphone" }));
+  assert.ok(input);
+  assert.equal(input.record.messageId, id);
+  assert.equal(input.record.durationSeconds, 2.4);
+  const sample = { sourceRouteId: "fixture", routeKind: input.routeKind, text: input.record.rawMessage, variables: {} };
+  const rule = { id: "voice", name: "Voice received", enabled: true, template: "" };
+  assert.ok(notificationRuleMismatch({ ...rule, routeKinds: [] }, sample));
+  assert.ok(notificationRuleMismatch({ ...rule, routeKinds: ["voice_transcript"] }, sample));
+  assert.ok(notificationRuleMismatch({ ...rule, routeKinds: [input.routeKind], regex: "收到语音" }, sample));
+  assert.equal(notificationRuleMismatch({ ...rule, routeKinds: [input.routeKind] }, sample), undefined);
+  assert.equal(messageEventCategory(input.routeKind), undefined);
+});
 
 test("saved captures can trigger only an explicitly selected automation and never project back as messages", () => {
   const event: AllDayEvent = { id: "fixture", source: "screen", kind: "image", state: "saved", deviceId: "fixture", startedAt: 5000, endedAt: 5000, text: "", media: "private.jpg" };

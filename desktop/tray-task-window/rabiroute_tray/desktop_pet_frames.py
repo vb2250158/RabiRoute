@@ -2,13 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
+from typing import NamedTuple
 
 from PIL import Image
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRect, QSize, Qt
 from PySide6.QtGui import QImage, QImageReader
 
-from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
+from .desktop_pet_client import DesktopPetPack, DesktopPetState, LoadedDesktopPetAnimation
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
+
+
+MOTION_FRAME_STATES = frozenset({"move", "run", "teleport-in", "teleport-out"})
+
+
+class FrameSource(NamedTuple):
+    kind: str
+    asset_urls: tuple[str, ...]
+    motion_state: str
+
+
+def frame_source(state: DesktopPetState) -> FrameSource:
+    # Motion clips have their own preparation and retention rules.
+    motion_state = state.name if state.name in MOTION_FRAME_STATES else ""
+    return FrameSource(state.kind, state.asset_urls or (state.name,), motion_state)
 
 
 @dataclass(frozen=True)

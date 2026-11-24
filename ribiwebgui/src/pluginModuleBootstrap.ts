@@ -1,12 +1,30 @@
 import { ref } from "vue";
 import type { WebPluginCatalogStatus } from "./pluginContributions";
 import { refreshWebPluginModules, webPluginModulesPending } from "./pluginModules";
+import { pluginCatalogStore } from "./pluginCatalogStore";
 
 type Refresh = () => Promise<void>;
 type ReportFailure = (message: string, error: unknown) => void;
 
 const pendingRefreshes = ref(0);
 const initialRefreshSettled = ref(false);
+let catalogFlight: Promise<void> | undefined;
+let catalogChangedDuringRead = false;
+
+export function refreshWebPluginCatalog(catalogChanged = false): Promise<void> {
+  if (catalogFlight) {
+    catalogChangedDuringRead ||= catalogChanged;
+    return catalogFlight;
+  }
+  catalogFlight = (async () => {
+    do {
+      catalogChangedDuringRead = false;
+      await pluginCatalogStore.refresh();
+      if (pluginCatalogStore.status.value === "ready") await refreshWebPluginModulesSafely();
+    } while (catalogChangedDuringRead);
+  })().finally(() => { catalogFlight = undefined; });
+  return catalogFlight;
+}
 
 /** Reading a catalog and registering its module graph are distinct startup phases. */
 export function webPluginPageLoading(status: WebPluginCatalogStatus): boolean {

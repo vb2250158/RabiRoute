@@ -17,13 +17,13 @@ import RoleSourcePicker from "./components/RoleSourcePicker.vue";
 import RoleManagementActions from "./components/RoleManagementActions.vue";
 import RabiAccountDock from "./components/RabiAccountDock.vue";
 import { useI18n } from "./i18n/index";
-import { routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
+import { routeScopedPageFromPath, routeScopedPathForCurrentPage, routeKeyFromWebguiHash, showsRouteSwitcher } from "./routeScopedNavigation";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import { buildWebNavigation } from "./pluginNavigation";
 import { gatewayPersonaDisplayName } from "./personaPresentation";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
-import { pageSaveAction } from "./pageSaveAction";
+import { pageSaveAction, pageSaveFailure } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
 import { applyCatalogInterfaceTheme, applyVuetifyInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
 import {
@@ -39,7 +39,7 @@ import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 import { API_REFERENCE_CHANGED } from "./docs/apiReferenceClient";
 import { disposeWebPluginModules } from "./pluginModules";
-import { refreshWebPluginModulesSafely, webPluginPageLoading } from "./pluginModuleBootstrap";
+import { refreshWebPluginCatalog, webPluginPageLoading } from "./pluginModuleBootstrap";
 import {
   webCommandForHandler,
   webCommandsInSlot,
@@ -56,7 +56,6 @@ const roleCreation = ref<InstanceType<typeof RoleManagementActions> | null>(null
 const showRoleSwitcher = computed(() => isRolePage(route.path));
 const roleSourceQuery = computed(() => roles.sourceDeviceId ? { source: roles.sourceDeviceId } : {});
 const embeddedPlanView = computed(() => Boolean(route.params.planId) && window.self !== window.top);
-const isPluginManagementPage = computed(() => route.path === "/plugins");
 const bootstrapManagerConnected = ref(false);
 const dataUpgradeView = reactive<DataUpgradeView>({ status: null, open: false, pending: false, error: "", uncertain: false });
 const dataUpgradeController = createDataUpgradeController(dataUpgradeView);
@@ -70,8 +69,7 @@ const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
-  await pluginCatalogStore.refresh();
-  await refreshWebPluginModulesSafely();
+  await refreshWebPluginCatalog(true);
   if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
@@ -151,6 +149,7 @@ function ensurePageDiagnostics(force = false): Promise<void> {
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
+const commandError = ref("");
 const pageHeader = ref<HTMLElement | null>(null);
 const pageHeaderHeight = ref(88);
 const pageHeaderObserver = new ResizeObserver(entries => {
@@ -172,21 +171,19 @@ const pluginCatalogDiagnosticLabels = computed(() => pluginCatalogStore.diagnost
 }).filter(Boolean));
 const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value, roles.selectedRoleId));
 const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title), to: item.to.startsWith("/roles/") ? { path: item.to, query: roleSourceQuery.value } : item.to })));
-const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
+const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({
+  ...item,
+  title: t(routeScopedPageFromPath(item.to) === "overview" ? "角色列表" : item.title)
+})));
 const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
 const sidebarPrimaryCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer-primary"));
 const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer"));
-const managerConnected = computed(() => isPluginManagementPage.value ? bootstrapManagerConnected.value : !store.managerError);
+const managerConnected = computed(() => bootstrapManagerConnected.value);
 const activePageSaveAction = computed(() => pageSaveAction.value);
 const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
-// Save appears where a page owns savable state; any dirty or unconfirmed draft keeps it visible.
-const pageCanSave = computed(() => activePageSaveAction.value != null
-  || hasUnsavedChanges.value
-  || store.saveState === "confirming");
 const pageCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command =>
-  (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))
-  && (!isPluginManagementPage.value || command.handlerId !== "web.save-page")
-  && (command.handlerId !== "web.save-page" || pageCanSave.value)));
+  command.handlerId !== "web.save-page"
+  && (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))));
 const pageTitle = computed(() => t(route.name === PLUGIN_RECOVERY_ROUTE_NAME && webPluginPageLoading(pluginCatalogStore.status.value)
   ? "页面已切换，正在加载内容" : String(route.meta.title || "RibiWebGUI")));
 const pageContext = computed(() => {
@@ -199,45 +196,11 @@ const pageContext = computed(() => {
 const brandIconUrl = "/assets/rabiroute-icon.png";
 const SYSTEM_NAVIGATION_ORDER = 70;
 const firstSystemNavKey = computed(() => utilityNavItems.value.find(item => item.order >= SYSTEM_NAVIGATION_ORDER)?.key ?? "");
-const justSaved = ref(false);
-let justSavedTimer: ReturnType<typeof setTimeout> | undefined;
-function flashSaved(): void {
-  justSaved.value = true;
-  if (justSavedTimer) clearTimeout(justSavedTimer);
-  justSavedTimer = setTimeout(() => { justSaved.value = false; }, 2400);
-}
-const saveStatus = computed(() => {
-  if (store.saveState === "confirming") return { state: "confirming", label: "保存结果待确认" };
-  if (pageSaveState().loading) return { state: "saving", label: "正在保存" };
-  if (hasUnsavedChanges.value) return { state: "dirty", label: "有未保存的修改" };
-  return justSaved.value ? { state: "saved", label: "已保存" } : null;
-});
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
   const title = String(gateway.routeName || gateway.name || gateway.id);
   return { title, value: gateway.id };
 }));
-
-function pageSaveState(): WebCommandState {
-  return {
-    enabled: activePageSaveAction.value
-      ? activePageSaveAction.value.ready.value
-      : (!roles.dirty || roles.ready) && (roles.dirty || store.dirty),
-    loading: store.saving || roles.saving || activePageSaveAction.value?.saving.value === true,
-    dirty: hasUnsavedChanges.value
-  };
-}
-
-async function savePage(): Promise<void> {
-  if (activePageSaveAction.value) {
-    if (!activePageSaveAction.value.ready.value) return;
-    await activePageSaveAction.value.save();
-    return;
-  }
-  // Drafts can outlive their original page; save through their actual owners.
-  if (store.dirty) await store.saveChangedRoutes();
-  if (roles.dirty) await roles.save();
-}
 
 function commandContext(): WebCommandContext {
   return {
@@ -245,13 +208,8 @@ function commandContext(): WebCommandContext {
     openQuickSetup: () => store.openQuickSetup(),
     addRoute: () => store.addGatewayAndOpenQuickSetup(),
     openManagerConfig: () => store.openConfigFile("manager"),
-    savePage: async () => {
-      if (!pageSaveState().enabled || pageSaveState().loading) throw new Error(t("请先完成当前配置再保存。"));
-      const origin = route.fullPath;
-      await savePage();
-      if (origin === route.fullPath && store.saveState !== "confirming") flashSaved();
-    },
-    pageSaveState,
+    savePage: async () => { await activePageSaveAction.value?.save(); },
+    pageSaveState: () => ({ enabled: false }),
     notify: message => { snackbar.value = message; }
   };
 }
@@ -262,15 +220,22 @@ function commandState(command: WebCommandContribution): WebCommandState {
 
 async function executeCommand(command: WebCommandContribution): Promise<void> {
   if (commandState(command).enabled === false) return;
+  commandError.value = "";
   try {
     await command.execute(commandContext());
   } catch (error) {
-    store.error = userFacingError(error);
+    commandError.value = userFacingError(error);
   }
 }
 
-async function loadGatewayEditorInBackground(): Promise<void> {
-  await store.load();
+const pageNeedsRouteConfig = computed(() => Boolean(routeScopedPageFromPath(route.path))
+  || route.path === "/rabilink" || route.path === "/settings"
+  || /^\/roles\/[^/]+\/config$/.test(route.path));
+
+async function loadGatewayEditorInBackground(force = false): Promise<void> {
+  const path = route.path;
+  await (force ? store.load() : store.ensureRouteConfig());
+  if (route.path !== path) return;
   if (store.gateways.length === 0 && route.path.startsWith("/routes")) {
     const createRole = webCommandForHandler(pluginCatalogStore.commands.value, "web.create-role");
     if (createRole) await executeCommand(createRole);
@@ -278,19 +243,19 @@ async function loadGatewayEditorInBackground(): Promise<void> {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace({ path: scopedPath, query: route.query, hash: route.hash });
   }
-  void ensurePageDiagnostics();
+  if (!force) void ensurePageDiagnostics();
 }
 
-async function refreshManagementMetadata(): Promise<void> {
-  try { await store.loadMeta(true); bootstrapManagerConnected.value = true; }
-  catch { bootstrapManagerConnected.value = false; }
+let metadataRead: Promise<void> | undefined;
+function refreshManagementMetadata(): Promise<void> {
+  if (!metadataRead) {
+    metadataRead = store.loadMeta(true).then(
+      () => { bootstrapManagerConnected.value = true; },
+      () => { bootstrapManagerConnected.value = false; }
+    ).finally(() => { metadataRead = undefined; });
+  }
+  return metadataRead;
 }
-
-watch(() => route.path, (path, previous) => {
-  if (path === "/plugins") void refreshManagementMetadata();
-  else if (previous === "/plugins") void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
-});
-
 
 let roleNavigationVersion = 0;
 let roleSelectionWrite: Promise<void> = Promise.resolve();
@@ -315,7 +280,7 @@ function persistRoleSelection(roleId: string, sourceDeviceId: string): void {
 async function syncRolePage(): Promise<void> {
   const version = ++roleNavigationVersion;
   if (route.path === "/routes" || /^\/routes\/[^/]+(?:\/adapters)?$/.test(route.path)) {
-    await store.load();
+    await store.ensureRouteConfig();
     if (version !== roleNavigationVersion) return;
     const key = String(route.params.id || "");
     const original = key ? store.gateways.find(item => item.id === key || configNameFor(item) === key) : store.selectedGateway;
@@ -328,7 +293,7 @@ async function syncRolePage(): Promise<void> {
   const legacy = route.path.match(/^\/routes\/([^/]+)\/(persona(?:\/document)?|knowledge|plan\/(.+))$/)
     || route.path.match(/^\/persona\/([^/]+)$/);
   if (legacy) {
-    await store.load();
+    await store.ensureRouteConfig();
     if (version !== roleNavigationVersion) return;
     const key = decodeURIComponent(legacy[1]);
     const original = store.gateways.find(item => item.id === key || configNameFor(item) === key);
@@ -347,7 +312,7 @@ async function syncRolePage(): Promise<void> {
     let savedSelection = null;
     if (!("source" in route.query)) {
       try { savedSelection = (await desktopSettingsClient.read()).lastRoleSelection; }
-      catch (error) { if (version === roleNavigationVersion) roles.error = `角色选择读取失败：${userFacingError(error)}`; return; }
+      catch { /* Fall back to the first available role when a saved selection cannot be read. */ }
       if (version !== roleNavigationVersion) return;
     }
     if (savedSelection?.roleId) {
@@ -366,26 +331,26 @@ async function syncRolePage(): Promise<void> {
   await roles.select(id, source);
   if (version !== roleNavigationVersion) return;
   if (roles.detail?.roleId === id && !roles.detail.archivedAt) persistRoleSelection(id, source);
-  await roles.loadCatalog();
+  void roles.ensureCatalog().catch(() => {});
 }
-watch(() => route.fullPath, () => { void syncRolePage().catch(error => { roles.error = userFacingError(error); }); }, { immediate: true });
+watch([() => route.path, () => route.query.source], () => {
+  void syncRolePage().catch(error => { roles.error = userFacingError(error); });
+  if (!showRoleSwitcher.value && !roles.selectedRoleId) void restoreSidebarRole();
+}, { immediate: true });
 function selectRole(id: string, source = roles.sourceDeviceId): void {
-  if (!id || (id === roles.selectedRoleId && source === roles.sourceDeviceId) || !canLeaveDirtyState()) return;
+  if (!id || (id === roles.selectedRoleId && source === roles.sourceDeviceId)) return;
   const suffix = route.path.endsWith("/message-history") ? "message-history" : route.path.includes("/knowledge") || route.path.includes("/plan/") ? "knowledge" : "config";
   void router.push({ path: `/roles/${encodeURIComponent(id)}/${suffix}`, query: { ...(source ? { source } : {}), ...(route.query.tab === "messages" ? { tab: "messages" } : {}) } });
 }
-const releaseRoleGuard = router.beforeEach((to, from) => {
-  if (!roles.dirty || !isRolePage(from.path)) return true;
+const releaseRoleGuard = router.beforeEach(async to => {
+  if (!roles.dirty || !isRolePage(to.path)) return true;
   if (String(to.params.roleId || "") === roles.selectedRoleId && String(to.query.source || "") === roles.sourceDeviceId) return true;
-  return window.confirm(translateText("当前角色有未保存修改，确定离开？"));
+  await roles.flushConfig();
+  return !roles.dirty || window.confirm(translateText("当前角色有未保存修改，确定离开？"));
 });
 
 onMounted(() => {
   void loadInterfaceTheme();
-  if (isPluginManagementPage.value) void refreshManagementMetadata();
-  else void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
-  // The sidebar role switcher is visible on every page; role pages load their own catalog and selection.
-  if (!showRoleSwitcher.value) void restoreSidebarRole();
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
@@ -399,9 +364,24 @@ onMounted(() => {
     window.dispatchEvent(new Event(API_REFERENCE_CHANGED));
     void dataUpgradeController.reconnected();
   });
+  managerEvents.addEventListener("ready", () => { void refreshManagementMetadata(); });
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
-  managerEvents.addEventListener("role_catalog_changed", () => { void roles.loadCatalog(); if (!roles.dirty && showRoleSwitcher.value) void roles.load(); });
-  managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });
+  managerEvents.addEventListener("role_catalog_changed", raw => {
+    if (roles.sourceDeviceId) return;
+    void roles.loadCatalog().catch(() => {});
+    try {
+      const { roleId } = JSON.parse((raw as MessageEvent<string>).data);
+      if (roleId === roles.selectedRoleId && !roles.dirty && showRoleSwitcher.value) void roles.load();
+    } catch { /* An incomplete event can only invalidate the catalog. */ }
+  });
+  managerEvents.addEventListener("desktop_settings_changed", raw => {
+    try {
+      if (JSON.parse((raw as MessageEvent<string>).data).scope === "desktop-pet") return;
+    } catch { /* Refresh on older event payloads. */ }
+    desktopSettingsClient.invalidateRead();
+    void loadInterfaceTheme();
+  });
+  void refreshManagementMetadata();
 });
 
 watch(
@@ -410,15 +390,17 @@ watch(
 );
 
 watch(
-  () => route.meta.pluginRouteId,
-  () => { void ensurePageDiagnostics(); }
+  [() => route.path, pageNeedsRouteConfig, () => store.quickSetupDialogOpen, () => store.meta.managerInstanceId],
+  () => {
+    if (pageNeedsRouteConfig.value || store.quickSetupDialogOpen) void loadGatewayEditorInBackground();
+    else if (route.path.includes("/knowledge") || route.path.includes("/plan/")) void store.ensureRouteSummaries();
+  },
+  { immediate: true }
 );
 
 watch(
   () => route.path,
   path => {
-    justSaved.value = false;
-    if (justSavedTimer) clearTimeout(justSavedTimer);
     if (path === "/docs") {
       drawer.value = false;
       return;
@@ -437,7 +419,6 @@ onBeforeUnmount(() => {
   pageHeaderObserver.disconnect();
   dataUpgradeController.dispose();
   releaseRoleGuard();
-  if (justSavedTimer) clearTimeout(justSavedTimer);
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
@@ -454,17 +435,25 @@ async function restoreSidebarRole(): Promise<void> {
       roles.sourceDeviceId = saved.sourceDeviceId || "";
       roles.selectedRoleId = saved.roleId;
     }
-    await roles.loadCatalog();
+    await roles.ensureCatalog();
   } catch {
     // The switcher keeps its neutral label; role pages report their own read failures.
   }
 }
 
 async function refresh(): Promise<void> {
-  if (isPluginManagementPage.value) await Promise.all([refreshManagementMetadata(), pluginCatalogStore.refresh()]);
-  else await Promise.all([store.load(), roles.loadCatalog(), pluginCatalogStore.refresh()]);
-  if (showRoleSwitcher.value && (!roles.dirty || window.confirm(translateText("放弃当前角色未保存修改并刷新？")))) await roles.load();
-  await refreshWebPluginModulesSafely();
+  await Promise.all([
+    refreshManagementMetadata(),
+    refreshWebPluginCatalog(),
+    pageNeedsRouteConfig.value ? loadGatewayEditorInBackground(true) : Promise.resolve(),
+    route.path.includes("/knowledge") || route.path.includes("/plan/") ? store.loadRouteSummaries() : Promise.resolve(),
+    showRoleSwitcher.value || routeScopedPageFromPath(route.path) === "overview"
+      ? roles.loadCatalog().catch(() => {}) : Promise.resolve()
+  ]);
+  if (showRoleSwitcher.value) {
+    await roles.flushConfig();
+    if (!roles.dirty) await roles.load();
+  }
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
@@ -612,17 +601,12 @@ function selectGateway(id: string): void {
       </div>
       <div id="page-topbar-controls" class="topbar-page-controls" />
       <div class="page-bar-actions">
-        <Transition name="save-status">
-          <span v-if="saveStatus" :key="saveStatus.state" class="save-status" :data-state="saveStatus.state" role="status" :title="t(saveStatus.label)">
-            <span class="save-status-dot" aria-hidden="true" />
-            <span class="save-status-label">{{ t(saveStatus.label) }}</span>
-          </span>
-        </Transition>
+        <v-btn v-if="pageSaveFailure" variant="text" color="error" prepend-icon="mdi-alert-circle-outline"
+          :title="pageSaveFailure.failure.value" @click="pageSaveFailure.flush()">{{ t('保存失败，重试') }}</v-btn>
         <v-btn icon="mdi-refresh" variant="text" :loading="store.loading" aria-label="刷新状态" :title="t('刷新状态')" @click="refresh" />
         <template v-for="command in pageCommands" :key="command.key">
           <v-btn
             class="desktop-action"
-            :class="{ 'save-command': command.handlerId === 'web.save-page', 'is-dirty': command.handlerId === 'web.save-page' && hasUnsavedChanges }"
             :color="command.appearance === 'primary' ? 'secondary' : undefined"
             :prepend-icon="command.icon"
             :variant="command.appearance === 'primary' ? 'flat' : 'tonal'"
@@ -653,7 +637,7 @@ function selectGateway(id: string): void {
           <div v-for="(label, index) in pluginCatalogDiagnosticLabels" :key="index" data-no-i18n>{{ label }}</div>
         </details>
       </v-alert>
-      <v-alert v-if="store.error && !isPluginManagementPage" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
+      <v-alert v-if="commandError || (store.error && (pageNeedsRouteConfig || store.quickSetupDialogOpen))" type="error" variant="tonal" class="ma-4">{{ commandError || store.error }}</v-alert>
       <v-btn v-if="store.saveState === 'conflict'" class="ma-4" @click="store.reloadSelectedGateway().catch(error => { store.error = String(error); })">{{ t("重新加载当前路线") }}</v-btn>
       <v-alert v-else-if="store.saveMessage" :type="store.saveState === 'saved' ? 'success' : 'info'" variant="tonal" class="ma-4" role="status">{{ t(store.saveMessage) }}</v-alert>
       <v-alert v-if="store.routeSelectionMissing && !showRoleSwitcher" type="error" variant="tonal" class="ma-4">

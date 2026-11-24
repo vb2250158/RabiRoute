@@ -127,7 +127,7 @@ function pageFixture() {
     updateManagedPlugin: async (instanceId: string, expectedRevision: string, value: boolean) => {
       updates.push({ instanceId, expectedRevision, value }); if (fail) throw new Error("Toggle failed"); enabled = value; revision = "revision-2";
       return parsePluginInstances(instancesResponse(revision, enabled));
-    }, pluginCatalogStore: { contributions: { value: [] }, refresh: async () => { catalogRefreshes++; } }, refreshWebPluginModulesSafely: async () => {}
+    }, pluginCatalogStore: { contributions: { value: [] } }, refreshWebPluginCatalog: async () => { catalogRefreshes++; }
   });
   return { state, route, updates, lifecycle, fail: () => { fail = true; }, fetches: () => fetches, catalogRefreshes: () => catalogRefreshes, unmount: () => unmount() };
 }

@@ -10,9 +10,7 @@ import {
   createDefaultGateway,
   ensureActiveRoleRules,
   gatewayAdapterTypes,
-  isBuiltinRolePanelRule,
   isQuickSetupNeeded,
-  notificationRulesForGateway,
   normalizeRule,
   sanitizeConfigName,
   saveActiveRoleRules,
@@ -96,6 +94,9 @@ export const useGatewayStore = defineStore("gateway", () => {
   const selectedGatewayId = ref("");
   const requestedRouteKey = ref(routeKeyFromWebguiHash(window.location.hash));
   const routeConfigLoaded = ref(false);
+  let routeConfigRead: Promise<void> | undefined;
+  let routeSummaryRead: Promise<void> | undefined;
+  let routeSummariesLoaded = false;
   const loading = ref(false);
   const diagnosticsLoading = ref(false);
   const diagnosticsLoaded = ref(false);
@@ -241,7 +242,14 @@ export const useGatewayStore = defineStore("gateway", () => {
         throw new Error("Manager /meta did not publish applicationGenerationId and managerInstanceId.");
       }
       const nextLifecycleKey = `${applicationGenerationId}\u0000${managerInstanceId}`;
-      if (managerLifecycleKey.value !== nextLifecycleKey) routeCatalogRevisionHash.value = "";
+      if (managerLifecycleKey.value !== nextLifecycleKey) {
+        routeCatalogRevisionHash.value = "";
+        if (meta.value.managerInstanceId) {
+          routeConfigLoaded.value = false;
+          routeSummariesLoaded = false;
+          diagnosticsLoaded.value = false;
+        }
+      }
       managerLifecycleKey.value = nextLifecycleKey;
       meta.value = nextMeta;
       return nextLifecycleKey;
@@ -305,7 +313,9 @@ export const useGatewayStore = defineStore("gateway", () => {
       applyRouteCatalogVersion(body.routeCatalog);
       managerError.value = managerErrorOf(body.data.manager);
       routeSummaries.value = routeSummariesFrom(body.data.manager);
+      routeSummariesLoaded = true;
     } catch (loadError) {
+      routeSummariesLoaded = false;
       routeCatalogRevisionHash.value = "";
       routeBootstrapError.value = loadError instanceof Error ? loadError.message : String(loadError);
       managerError.value = routeBootstrapError.value;
@@ -313,6 +323,12 @@ export const useGatewayStore = defineStore("gateway", () => {
     } finally {
       routeBootstrapLoading.value = false;
     }
+  }
+
+  function ensureRouteSummaries(): Promise<void> {
+    if (routeSummariesLoaded) return Promise.resolve();
+    if (!routeSummaryRead) routeSummaryRead = loadRouteSummaries().finally(() => { routeSummaryRead = undefined; });
+    return routeSummaryRead;
   }
 
   async function load(options: LoadOptions = {}): Promise<void> {
@@ -329,6 +345,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       applyRouteCatalogVersion(body.routeCatalog);
       managerError.value = managerErrorOf(body.data.manager);
       routeSummaries.value = routeSummariesFrom(body.data.manager);
+      routeSummariesLoaded = true;
       diagnosticsLoaded.value = false;
       if (!dirty.value || options.replaceDirtyConfig) {
         gateways.value = body.data.config.gateways || [];
@@ -351,6 +368,12 @@ export const useGatewayStore = defineStore("gateway", () => {
       loading.value = false;
     }
     void loadNetworkOptions();
+  }
+
+  function ensureRouteConfig(): Promise<void> {
+    if (routeConfigLoaded.value) return Promise.resolve();
+    if (!routeConfigRead) routeConfigRead = load().finally(() => { routeConfigRead = undefined; });
+    return routeConfigRead;
   }
 
   async function ensureDiagnostics(force = false): Promise<void> {
@@ -803,7 +826,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     const entry = automations
       .map((rule, index) => ({ rule, index }))
       .filter(({ rule }) => rule.trigger.type === "message" && rule.action.type === "deliver_agent")[ruleIndex];
-    if (!entry || isBuiltinRolePanelRule(notificationRulesForGateway(gateway)[ruleIndex])) return;
+    if (!entry) return;
     automations.splice(entry.index, 1);
     syncAutomationRuleProjection(gateway);
     saveActiveRoleRules(gateway);
@@ -965,6 +988,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateways,
     managerRows,
     routeSummaries,
+    ensureRouteConfig,
+    ensureRouteSummaries,
     routeBootstrapLoading,
     routeBootstrapError,
     routeCatalogRevisionHash,

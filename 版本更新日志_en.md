@@ -8,6 +8,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.77 - 2026-11-24
+
+- Adopt the role list, underline tabs and role timeline; improve speech status refresh, page loading, HTML share thumbnails, connector icons, pet frame caching and screenshot target selection.
+- endpoint.rabilink 0.1.10; manager.core 0.1.18; manager.desktop 0.1.6; manager.html-shares 0.1.7; manager.message-adapter-control 0.1.12; manager.performance 0.1.11; manager.persona 0.1.41; manager.speech 0.1.14; manager.xiaomi-home 0.1.15.
+
+- Roles displays unarchived roles from the selected PC, three cards per row on desktop. Linked routes show their message connectors as icons.
+
+- QQ HTML shares include a thumbnail between the filename and link in one message.
+- WebGUI loads and reuses route data where needed. Each tab shares one Manager event stream to reduce request queues when several pages are open.
+- Desktop pets reuse artwork shared by multiple actions and mirror frames during painting, reducing repeated decoding and per-frame bitmap allocations.
+- Type directly in the screenshot destination field to search. Hover over an Agent channel to open its chat list, then click a chat to select it.
+- WebGUI settings save in the background. Automation and Agent rules update when confirmed in the editor. Cancelling discards those edits.
+- Restore message triggers targeting DS Bot. Edit rules under Automation and open the role folder from Profile.
+- Role panel message rules can be disabled or deleted. Reloads preserve the saved settings.
+
 ## 0.15.76 - 2026-11-24
 
 - Preserve the first utterance on Android while live recognition connects. Audio is sent in order once the recognizer is ready, and unfinished speech can fall back to local PC transcription if streaming disconnects.

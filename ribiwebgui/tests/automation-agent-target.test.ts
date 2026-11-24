@@ -195,8 +195,8 @@ test("the actual Persona parent accepts an incomplete DSBot edit without poisoni
   assert.equal(hasIncompleteDsBotTargetDraft(gateway), true);
   assert.throws(() => normalizePersonaAutomationRules(gateway.automationRules), /clean connection origin/);
   const page = readFileSync(new URL("../../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
-  assert.match(page, /ready: computed\([^\n]*!invalidDsBotTarget.value/);
-  assert.match(page, /if \(invalidDsBotTarget.value\) throw new Error/);
+  assert.match(page, /hasIncompleteDsBotTargetDraft\(\{ automationRules: \[activeAutomation\.value\] \}\)/);
+  assert.match(page, /function confirmAutomation[\s\S]*if \([^\n]*automationDraftIncomplete\.value\) return;/);
 });
 
 test("an unfinished message target keeps its draft while healthy notification projections stay usable", async () => {

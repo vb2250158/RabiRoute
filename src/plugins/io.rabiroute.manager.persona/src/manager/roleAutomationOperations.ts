@@ -25,7 +25,7 @@ const ruleFields = {
     }, additionalProperties: false }
   }, additionalProperties: false },
   action: { type: "object", properties: {
-    type: { enum: ["deliver_agent", "run_script"] }, target: object,
+    type: { enum: ["deliver_agent", "run_script", "record_history"] }, target: object,
     recentMessageLimit: { type: "integer", minimum: 0 }, message: text, template: text,
     scriptPath: text, arguments: stringList, timeoutSeconds: { type: "number", minimum: 5, maximum: 3600 }
   }, additionalProperties: false }
@@ -40,7 +40,7 @@ function rulesOf(config: RoleConfiguration): PersonaAutomationRuleDefinition[] {
   if (Array.isArray(config.automationRules)) for (const rule of config.automationRules) {
     if (!rule || typeof rule !== "object" || typeof rule.id !== "string" || !rule.id.trim()
       || !rule.trigger || !["message", "schedule"].includes(rule.trigger.type)
-      || !rule.action || !["deliver_agent", "run_script"].includes(rule.action.type)) {
+      || !rule.action || !["deliver_agent", "run_script", "record_history"].includes(rule.action.type)) {
       throw new RoleLifecycleError("AUTOMATION_STORED_RULE_INVALID", "现有自动化规则损坏，请通过角色配置 PATCH 修正；本次未修改规则。", 400);
     }
   }
@@ -89,14 +89,17 @@ function mergeRule(current: PersonaAutomationRuleDefinition, patch: RulePatch): 
 function validateRule(rule: PersonaAutomationRuleDefinition): void {
   if (!rule.id.trim()) throw new RoleLifecycleError("AUTOMATION_ID_INVALID", "自动化 ID 不能为空。", 400);
   if (!rule.trigger || !["message", "schedule"].includes(rule.trigger.type)
-    || !rule.action || !["deliver_agent", "run_script"].includes(rule.action.type)) {
-    throw new RoleLifecycleError("AUTOMATION_RULE_INVALID", "请提供消息或定时触发条件，以及 Agent 或脚本动作。", 400);
+    || !rule.action || !["deliver_agent", "run_script", "record_history"].includes(rule.action.type)) {
+    throw new RoleLifecycleError("AUTOMATION_RULE_INVALID", "请提供有效的触发条件和规则动作。", 400);
   }
   if (rule.trigger.type === "message" && rule.trigger.regex) {
     try { new RegExp(rule.trigger.regex); }
     catch { throw new RoleLifecycleError("AUTOMATION_REGEX_INVALID", "消息匹配表达式无效。", 400); }
   }
   if (rule.trigger.type === "schedule") {
+    if (rule.action.type === "record_history") {
+      throw new RoleLifecycleError("AUTOMATION_MESSAGE_REQUIRED", "仅记录到角色记录需要消息或采集事件。", 400);
+    }
     const schedule = rule.trigger.schedule;
     if (!schedule || !["interval", "daily_time", "once_at"].includes(schedule.type)) {
       throw new RoleLifecycleError("AUTOMATION_SCHEDULE_REQUIRED", "定时触发需要明确的 schedule 配置。", 400);

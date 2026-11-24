@@ -86,6 +86,7 @@ test("HTML shares persist PC snapshots/keys, use the existing priority, and deli
     const localFrames = receive(websocketChannel(localSocket));
     const localHtml = decrypt(await localFrames, key);
     assert.match(localHtml, /缓存内容/);
+    assert.equal(await store.readSnapshotForDelivery("original-delivery"), localHtml, "thumbnail input remains the original shared snapshot");
     let capture: Promise<Buffer[]> | undefined;
     const channel = await rtc.connect(async offer => {
       const response = await fetch(url + link.pathname + "/offer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "p2p", ...offer }) });

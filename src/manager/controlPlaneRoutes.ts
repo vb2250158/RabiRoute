@@ -53,7 +53,11 @@ import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnecti
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording } from "./allDayRecordingRoutes.js";
 import { ALL_DAY_MESSAGE_INGRESS, handleAllDayMessageIngress } from "./allDayMessageIngress.js";
-import { RecordingAutomationDispatch } from "./recordingAutomationDispatch.js";
+import { RecordingAutomationDispatch, voiceReceivedAutomationInput } from "./recordingAutomationDispatch.js";
+import { watchSpeechServiceEvents } from "./allDaySpeechEvents.js";
+import { VOICE_RECEIVED_ROUTE_KIND } from "../shared/personaEventTypes.js";
+import { DEFAULT_ALL_DAY_SETTINGS } from "../shared/allDayRecording.js";
+import { notificationRuleMismatch } from "../shared/messageRuleMatch.js";
 import { SYSTEM_EVENT_STDIN_FLAG } from "../shared/systemEventIngress.js";
 import { createPersonaRecordingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.js";
 import { CompanionActivity, companionSpeechScope, readCompanionPresets, recordCompanionInteraction, saveCompanionSummary, lastCompanionSummary } from "./companionActivity.js";
@@ -172,6 +176,7 @@ import { assertOriginalChatRoute, bindOriginalChatTurn, bindPeerOriginalChatComp
   savePeerOriginalChatAdmission, type OriginalChat } from "../automation/originalChat.js";
 import { resolveAgentSendRoute } from "../agentSendRoute.js";
 import { AgentCompletionDeliveryService, completionTaskContextFromPlans, deliverCompletionToEndpoint, planCompletionDeliveryRules } from "./agentCompletionDelivery.js";
+import { renderHtmlShareThumbnail } from "../markdownImage.js";
 import { inspectOriginalPlanFeedbackReceipt } from "./planFeedbackReceipt.js";
 import { remoteAgentTargetKey } from "../shared/routeAgentTargets.js";
 import { resolvePlanHistoryRequestActor } from "./planHistoryRequestActor.js";
@@ -1115,8 +1120,58 @@ const managerRuntimeLayout = resolveRuntimeLayout(
 const packageRoot = managerRuntimeLayout.packageRoot;
 const rootDir = managerRuntimeLayout.stateRoot;
 const resourceCacheKey = randomUUID();
+function rolesForMessageRule(definition: GatewayDefinition, routeKind: string, accepts = (_rule: PersonaAutomationRuleDefinition) => true): string[] {
+  if (definition.enabled === false) return [];
+  const profiles = definition.routeProfiles?.length ? definition.routeProfiles : [definition];
+  return profiles.flatMap(profile => {
+    if (profile.enabled === false || (profile.agentRoleDeviceId ?? definition.agentRoleDeviceId)) return [];
+    const rules = profile.automationRules ?? definition.automationRules ?? [];
+    const subscribed = rules.some(rule => rule.enabled !== false && rule.trigger.type === "message"
+      && rule.trigger.routeKinds?.includes(routeKind)
+      && (!rule.sourceRouteIds?.length || rule.sourceRouteIds.includes(definition.id)) && accepts(rule));
+    return subscribed ? [sanitizeRoleId(profile.agentRoleId) || roleIdForDefinition(definition)] : [];
+  });
+}
+
+function speechReceivedRoles(definition: GatewayDefinition): string[] {
+  if (!sharedGatewayAdapterTypes(definition).includes("speech") || !resolvePublishedPluginService("endpoint.speech@1")) return [];
+  return rolesForMessageRule(definition, VOICE_RECEIVED_ROUTE_KIND);
+}
+
+let screenRecordingRoles = new Set<string>();
+let screenRecordingTimer: ReturnType<typeof setTimeout> | undefined;
+let screenRecordingPending: Promise<void> | undefined;
+function reconcileScreenRecordingRules(definitions: readonly GatewayDefinition[]): void {
+  const roleIds = managerReadOnly ? [] : definitions.flatMap(definition => rolesForMessageRule(definition, "recording_screen", rule => {
+    if (rule.action.type !== "record_history" || rule.trigger.type !== "message") return false;
+    return !notificationRuleMismatch({ name: rule.name, id: rule.id, enabled: true, template: "", ...rule.trigger },
+      { sourceRouteId: definition.id, routeKind: "recording_screen", text: "屏幕", variables: definition.routeVariables ?? {} });
+  }));
+  screenRecordingRoles = new Set(roleIds);
+  if (!screenRecordingRoles.size) {
+    clearTimeout(screenRecordingTimer);
+    screenRecordingTimer = undefined;
+  } else if (!screenRecordingTimer && !screenRecordingPending) {
+    scheduleScreenRecording(0);
+  }
+}
+
+function scheduleScreenRecording(delayMs: number): void {
+  screenRecordingTimer = setTimeout(() => {
+    screenRecordingTimer = undefined;
+    screenRecordingPending = allDayRecording.service.recordScreensForRules(() => [...screenRecordingRoles]).catch(error => {
+      managerOperationalLog.record("warn", "screen_capture_recording", { error: managerOperationalError(error, rootDir) });
+    }).finally(() => {
+      screenRecordingPending = undefined;
+      if (screenRecordingRoles.size) scheduleScreenRecording(DEFAULT_ALL_DAY_SETTINGS.intervalSeconds * 1000);
+    });
+  }, delayMs);
+  screenRecordingTimer.unref();
+}
+
 const recordingAutomationDispatch = new RecordingAutomationDispatch(
   (roleId, kind) => [...runtimes.values()].flatMap(({ definition }) => {
+    if (kind === VOICE_RECEIVED_ROUTE_KIND) return speechReceivedRoles(definition).includes(roleId) ? [definition.id] : [];
     if (!definition.enabled || definition.agentRoleDeviceId || roleIdForDefinition(definition) !== roleId) return [];
     const rules = [...(definition.automationRules ?? []), ...(definition.routeProfiles ?? []).flatMap(profile => profile.automationRules ?? [])];
     return rules.some(rule => rule.enabled !== false && rule.trigger.type === "message" && rule.trigger.routeKinds?.includes(kind)
@@ -1125,6 +1180,32 @@ const recordingAutomationDispatch = new RecordingAutomationDispatch(
   gatewayId => spawnGatewayCommand(runtimes.get(gatewayId)!, childCommand([SYSTEM_EVENT_STDIN_FLAG])),
   (roleId, reason) => managerOperationalLog.record("warn", "recording_automation_delivery", { action: roleId, result: reason })
 );
+let stopSpeechAutomationEvents: (() => void) | undefined;
+
+function watchVoiceReceivedAutomation(): void {
+  stopSpeechAutomationEvents?.();
+  let reportedFailure = false;
+  stopSpeechAutomationEvents = watchSpeechServiceEvents(() => {
+    const endpoint = speechServiceUrl();
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(endpoint).hostname)) {
+      throw new Error("Voice automation events require the local speech service");
+    }
+    return endpoint;
+  }, (kind, data) => {
+    if (kind === "ready") reportedFailure = false;
+    if (kind !== VOICE_RECEIVED_ROUTE_KIND) return;
+    const roles = new Set([...runtimes.values()].flatMap(({ definition }) => speechReceivedRoles(definition)));
+    for (const roleId of roles) {
+      const input = voiceReceivedAutomationInput(roleId, data);
+      if (input) recordingAutomationDispatch.acceptInput(roleId, input);
+    }
+  }, error => {
+    if (reportedFailure) return;
+    reportedFailure = true;
+    managerOperationalLog.record("warn", "speech_automation_event_stream", { result: error });
+  });
+}
+
 const allDayRecording = createAllDayRecording({
   roleDirectory: roleDirForApi,
   hostId: os.hostname(),
@@ -1810,10 +1891,22 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
     if ((original?.channel ?? rule.destination.channel) === "napcat" && !instance) throw new Error("目标 QQ 账号未启用或已被移除。");
     const options = {
       endpointEgress: (capability: string) => resolvePublishedPluginService(capability) as import("@rabiroute/plugin-sdk").MessageEndpointEgressProvider | undefined,
-      publishHtmlAttachment: (file: string, id: string) => {
-        const shares = resolvePublishedPluginService("manager.html-shares@1") as { publish(file: string, id: string): Promise<string> } | undefined;
+      publishHtmlAttachment: async (file: string, id: string) => {
+        const shares = resolvePublishedPluginService("manager.html-shares@1") as {
+          publish(file: string, id: string): Promise<string>;
+          readSnapshotForDelivery?(id: string): Promise<string>;
+        } | undefined;
         if (!shares) throw new Error("HTML share plugin is unavailable; enable its dependencies or disable HTML-to-link conversion to send the original file.");
-        return shares.publish(file, id);
+        const url = await shares.publish(file, id);
+        if (shares.readSnapshotForDelivery) {
+          try {
+            const thumbnail = await renderHtmlShareThumbnail(await shares.readSnapshotForDelivery(id));
+            return { url, thumbnail };
+          } catch {
+            console.warn("HTML share thumbnail capture failed; sending the share link.");
+          }
+        }
+        return { url };
       },
       rootDir, routeRoot: managerRouteRoot(), rolesRoot: managerRolesRoot(), publishEvent: publishManagerEvent, speechServiceUrl: speechServiceUrl(),
       ...(assertOriginalChatCurrent ? { assertEndpointCurrent: assertOriginalChatCurrent } : {}),
@@ -2858,6 +2951,7 @@ async function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot, applica
   agentRequestRouteReconciliation.request();
   // The catalog CAS queue already serializes this await. Endpoint ownership supplies the only live candidate configuration.
   await gatewayRouteActivations.prepare(runtimes.values(), application.resolveOperationId ?? application.operationId, Boolean(application.resolveOperationId), application.kind !== "capture");
+  reconcileScreenRecordingRules(normalized);
   syncRunningGateways();
 }
 
@@ -3002,6 +3096,7 @@ function reconcileSpeechConfiguration(): void {
   if (managerReadOnly) return;
   const service = resolvePublishedPluginService("manager.speech@1") as PublishedSpeechService | undefined;
   service?.reconcileConfiguration();
+  if (stopSpeechAutomationEvents) watchVoiceReceivedAutomation();
 }
 
 function reconcileActiveSpeech(): void {
@@ -4756,6 +4851,7 @@ function parseReplayRouteKind(value: unknown): ForwardRouteKind | undefined {
     || value === "role_panel_message"
     || value === "plan_feedback"
     || value === "voice_transcript"
+    || value === "voice_received"
     ? value
     : undefined;
 }
@@ -9083,6 +9179,12 @@ createManagerEventOperationDefinition
     });
   }
   managerRuntimeOwner.register("all_day_recording", async () => {
+    screenRecordingRoles.clear();
+    clearTimeout(screenRecordingTimer);
+    screenRecordingTimer = undefined;
+    await screenRecordingPending;
+    stopSpeechAutomationEvents?.();
+    stopSpeechAutomationEvents = undefined;
     await recordingAutomationDispatch.dispose();
     await allDayRecording.dispose();
   });
@@ -9548,6 +9650,7 @@ createManagerEventOperationDefinition
   if (!managerReadOnly) {
     setImmediate(() => {
       if (managerRuntimeOwner.isTearingDown()) return;
+      watchVoiceReceivedAutomation();
       void allDayRecording.service.restore().catch(error => {
         console.error("All-day recording could not restore its saved intent:", error);
       });

@@ -37,7 +37,11 @@ test("Agent delivery selects bound conversations on the owning role and enabled 
   const other = { ...gateway, id: "other", agentRoleId: "Other" };
   const choices = completionTargetChoices(gateway, [gateway, other], [known, { ...known, id: "duplicate" },
     { ...rule(["group_message"], { targetGroupId: "20002" }), sourceRouteIds: ["other"] }], [directory()]);
-  assert.equal(choices.length, 2);
+  assert.equal(choices.length, 3);
+  assert.deepEqual(choices.filter(choice => choice.destination.channel !== "napcat").map(choice => choice.destination), [
+    { channel: "original_chat", gatewayId: "", params: {} },
+    { channel: "speech", gatewayId: "route-a", params: {} }
+  ]);
   const qq = choices.find(choice => choice.destination.channel === "napcat");
   assert.deepEqual(qq?.destination, { gatewayId: "route-a", channel: "napcat",
     params: { instanceId: "napcat-a", target: "group", targetId: "20001" } });

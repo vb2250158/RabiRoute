@@ -12,6 +12,7 @@ export const activate = definePlugin({
     context.effects.adopt(() => owner.stop(), "prepared HTML snapshot owner");
     context.services.provide("manager.html-shares@1", Object.freeze({
       publish: (file, deliveryId) => owner.publish(file, deliveryId),
+      readSnapshotForDelivery: deliveryId => owner.readSnapshotForDelivery(deliveryId),
       upgrade: (request, socket, head) => owner.upgrade(request, socket, head)
     }));
     context.effects.add(async () => {

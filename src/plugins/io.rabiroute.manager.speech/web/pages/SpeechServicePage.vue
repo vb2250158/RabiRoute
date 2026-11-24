@@ -105,6 +105,16 @@ const audioEventsHaveMore = ref(false);
 const audioTranscriptsHaveMore = ref(false);
 const runtimeToggling = ref(false);
 const serviceEnabled = computed(() => status.value?.state === "online");
+const runtimeStatusKnown = computed(() => status.value?.state === "online" || status.value?.state === "offline");
+const runtimeStatusLabel = computed(() => {
+  if (runtimeToggling.value) return "切换中";
+  if (!status.value) {
+    return !loading.value && (requestError.value || speech.error) ? "状态未知" : "检查中";
+  }
+  if (status.value.state === "online") return "已开启";
+  if (status.value.state === "invalid") return "配置无效";
+  return status.value.error ? "未连接" : "已关闭";
+});
 let playbackVolumeTimer = 0;
 let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
@@ -375,8 +385,7 @@ function checkedAtLabel(value: string | undefined): string {
 async function refreshStatus(): Promise<void> {
   clearRequestError();
   try {
-    await speech.refreshStatus();
-    if (serviceEnabled.value) await hydrateRuntimeUi();
+    if (await speech.refreshStatus() !== false && serviceEnabled.value) await hydrateRuntimeUi();
   } catch (error) {
     recordRequestError(error);
   }
@@ -387,7 +396,7 @@ async function hydrateRuntimeUi(): Promise<void> {
 }
 
 async function toggleRuntime(enabled: boolean | null): Promise<void> {
-  if (runtimeToggling.value || Boolean(enabled) === serviceEnabled.value) return;
+  if (runtimeToggling.value || loading.value || !runtimeStatusKnown.value || Boolean(enabled) === serviceEnabled.value) return;
   runtimeToggling.value = true;
   clearRequestError();
   actionMessage.value = enabled ? "正在启动本机 RabiSpeech，并等待健康检查……" : "正在停止本机 RabiSpeech……";
@@ -793,11 +802,18 @@ watch([
 ], scheduleMicrophoneSettingsSave);
 
 let releaseSpeech: (() => void) | undefined;
+let disposed = false;
 onMounted(async () => {
-  releaseSpeech = await speech.acquire();
+  const release = await speech.acquire(unsubscribe => { releaseSpeech = unsubscribe; });
+  if (disposed) {
+    release();
+    return;
+  }
+  releaseSpeech = release;
   await syncRuntimeUiFromStore();
 });
 onBeforeUnmount(() => {
+  disposed = true;
   window.clearTimeout(playbackVolumeTimer);
   window.clearTimeout(microphoneSettingsTimer);
   releaseSpeech?.();
@@ -818,13 +834,14 @@ onBeforeUnmount(() => {
       <div class="page-actions">
         <v-btn color="secondary" variant="tonal" prepend-icon="mdi-package-variant-closed" @click="modelManagementDialog = true">模型管理</v-btn>
         <v-btn v-if="serviceEnabled" color="secondary" variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
-        <v-btn icon="mdi-refresh" variant="text" :loading="loading" aria-label="刷新语音服务状态" @click="refreshStatus" />
+        <v-btn icon="mdi-refresh" variant="text" :loading="loading" :disabled="runtimeToggling" aria-label="刷新语音服务状态" @click="refreshStatus" />
         <div class="speech-runtime-switch">
           <div>
             <span>{{ speechServerId ? "远端 RabiSpeech" : "本机 RabiSpeech" }}</span>
-            <strong>{{ runtimeToggling ? "切换中" : serviceEnabled ? "已开启" : "已关闭" }}</strong>
+            <strong role="status">{{ runtimeStatusLabel }}</strong>
           </div>
           <v-switch
+            v-if="runtimeStatusKnown"
             :model-value="serviceEnabled"
             color="success"
             inset

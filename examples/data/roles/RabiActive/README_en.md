@@ -12,6 +12,8 @@ Rabi Active treats proactivity as maintaining an intent model, preparing useful 
 
 The persona shapes initiative and expression. Curiosity, humor, conversation, and shared experiences have value without a task output. Action and expression may be considered separately or blended naturally. L4 means executing, verifying, and following through; ask only when a material user decision is missing. The policy ranges from L0 silent observation to L5 emergency intervention and weighs user benefit, intent confidence, timeliness, interruption cost, and action risk. Upstream observations and proactive downstream replies use separate queues, while successful deliveries share one conversation ledger.
 
+The [character card](persona.md) describes Rabi Active’s identity, likes and dislikes, and how it relates to the user. The [role skills](skills.md) cover proactive assistance, conversation review, outbound delivery, and device actions.
+
 ## Use
 
 Set the Route's `agentRoleId` to `RabiActive` and enable:

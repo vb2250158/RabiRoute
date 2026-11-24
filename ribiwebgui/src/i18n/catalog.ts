@@ -392,6 +392,9 @@ export const englishCatalog: Record<string, string> = {
   "扫码登录": "QR sign-in",
 
   "控制台": "Console",
+  "角色列表": "Roles",
+  "暂无角色": "No roles",
+  "其他路由": "Other routes",
   "设置": "Settings",
 
   "新增路由": "Add route",
@@ -838,6 +841,12 @@ export const englishCatalog: Record<string, string> = {
   "可多选；下面只显示已选入口的参数": "Select one or more inputs. Only their settings are shown below.",
 
   "语音转写": "Voice transcripts",
+  "完成转写": "Transcription completed",
+  "收到语音": "Voice received",
+  "仅记录到角色记录": "Save to persona history only",
+  "画面采集": "Screen capture",
+  "部分记录暂不可用。": "Some records are temporarily unavailable.",
+  "仅记录到角色记录需要消息或采集事件。": "Choose a message or capture event to save to persona history.",
 
   "已满足": "Ready",
   "缺少": "Missing",
@@ -1008,6 +1017,8 @@ export const englishCatalog: Record<string, string> = {
   "导航": "Navigation",
   "本机服务": "Local services",
   "正在保存": "Saving",
+  "保存失败，重试": "Retry failed save",
+  "确定": "Confirm",
   "已发现": "Detected",
 
   "配置版本": "Configured version",

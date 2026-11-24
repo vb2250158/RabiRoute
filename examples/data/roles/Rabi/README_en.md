@@ -31,7 +31,8 @@ Version 0.3.25 connects mobile Agent calls to the existing recording, transcript
 
 ## Directory contents
 
-- `persona.md` defines identity, voice, boundaries, and routing behavior.
+- `persona.md` is the character card for Rabi’s identity, likes and dislikes, relationships, voice, and boundaries.
+- `skills/` contains [role skills](skills.md) for responding to messages, troubleshooting setup, and tracking plans.
 - `personaConfig.json` contains sample persona automation rules, recent-message limits, and may reference a same-directory persona image through `avatar`.
 - `growth.md` describes how Rabi reflects and evolves.
 - `skills.md` indexes the capabilities Rabi maintains.

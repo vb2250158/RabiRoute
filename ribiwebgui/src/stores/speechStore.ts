@@ -55,6 +55,8 @@ export const useSpeechStore = defineStore("speech-control", () => {
   const playbackBusy = computed(() => Boolean(playback.value?.current));
 
   let serverEpoch = 0;
+  let statusRequest = 0;
+  let foregroundStatusRequest = 0;
   let subscribers = 0;
   let eventSource: EventSource | null = null;
   let readyReceived = false;
@@ -65,18 +67,26 @@ export const useSpeechStore = defineStore("speech-control", () => {
     error.value = messageOf(cause);
   }
 
-  async function refreshStatus(silent = false): Promise<void> {
-    if (!silent) loading.value = true;
+  async function refreshStatus(silent = false): Promise<boolean> {
+    const request = ++statusRequest;
+    if (!silent) {
+      foregroundStatusRequest = request;
+      loading.value = true;
+    }
     const epoch = serverEpoch;
     try {
       const value = await speechControlClient.status();
-      if (epoch !== serverEpoch) return;
+      if (epoch !== serverEpoch || request !== statusRequest) return false;
       status.value = value;
       error.value = "";
       if (status.value.state === "online" && subscribers > 0) startEvents();
       if (status.value.state !== "online") stopEvents();
+      return true;
+    } catch (cause) {
+      if (epoch !== serverEpoch || request !== statusRequest) return false;
+      throw cause;
     } finally {
-      if (!silent && epoch === serverEpoch) loading.value = false;
+      if (!silent && request === foregroundStatusRequest) loading.value = false;
     }
   }
 
@@ -198,7 +208,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
   }
 
   async function refreshAll(): Promise<void> {
-    await refreshStatus();
+    if (!await refreshStatus()) return;
     if (status.value?.state !== "online") {
       clearRuntimeDetails();
       return;
@@ -224,7 +234,10 @@ export const useSpeechStore = defineStore("speech-control", () => {
   }
 
   async function startRuntime(): Promise<SpeechRuntimeControlResult> {
+    const epoch = serverEpoch;
     const result = await speechControlClient.startRuntime();
+    if (epoch !== serverEpoch) return result;
+    statusRequest++;
     status.value = result.status;
     error.value = "";
     await refreshAll();
@@ -232,11 +245,15 @@ export const useSpeechStore = defineStore("speech-control", () => {
   }
 
   async function stopRuntime(): Promise<SpeechRuntimeControlResult> {
+    const epoch = serverEpoch;
     stopEvents();
     error.value = "";
     try {
       const result = await speechControlClient.stopRuntime();
+      if (epoch !== serverEpoch) return result;
+      statusRequest++;
       status.value = result.status;
+      stopEvents();
       clearRuntimeDetails();
       return result;
     } catch (cause) {
@@ -302,21 +319,19 @@ export const useSpeechStore = defineStore("speech-control", () => {
     readyReceived = false;
   }
 
-  async function acquire(): Promise<() => void> {
+  async function acquire(onSubscribed?: (release: () => void) => void): Promise<() => void> {
     subscribers += 1;
-    if (subscribers === 1) {
-      await refreshAll().catch(cause => {
-        rememberError(cause);
-      });
-      if (status.value?.state === "online") startEvents();
-    }
+    const firstSubscriber = subscribers === 1;
     let released = false;
-    return () => {
+    const release = () => {
       if (released) return;
       released = true;
       subscribers = Math.max(0, subscribers - 1);
       if (subscribers === 0) stopEvents();
     };
+    onSubscribed?.(release);
+    if (firstSubscriber) await refreshAll().catch(rememberError);
+    return release;
   }
 
   async function startMicrophone(command: SpeechMicrophoneStartCommand): Promise<SpeechMicrophoneStatus> {

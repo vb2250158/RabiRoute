@@ -144,7 +144,7 @@ export function personaConfigFragmentFromValue(parsed: unknown, options: { gatew
     }
   }
   if (rules) {
-    fragment.notificationRules = defaultPersonaRules(rules);
+    fragment.notificationRules = isJsonObject(parsed) && Array.isArray(parsed.automationRules) ? rules : defaultPersonaRules(rules);
   }
   return fragment;
 }

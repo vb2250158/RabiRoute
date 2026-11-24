@@ -21,7 +21,7 @@ Built-in choices are persisted by the page save action. A custom theme is persis
 
 ## Page layout and motion
 
-The role and computer switcher sits at the top of the sidebar. Navigation groups separate the current role, local services and system settings. Page titles, refresh and save actions belong to the content area and scroll with it; there is no fixed application top bar. On narrow screens, use the navigation button beside the title to open the sidebar.
+The role and computer switcher sits at the top of the sidebar. Navigation groups separate the current role, local services and system settings. Page titles, and refresh actions belong to the content area and scroll with it; there is no fixed application top bar. On narrow screens, use the navigation button beside the title to open the sidebar.
 
 Save appears on editable pages or while drafts remain. Unsaved changes, saving, an unconfirmed result and a confirmed save have distinct feedback. Failed saves retain drafts; an unknown result is never shown as success. Page entrances, navigation selection, pressed buttons and loading skeletons share motion tokens. The system reduced-motion preference removes movement, breathing and looping animation without changing functionality or adding a delay.
 

@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Any
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap, QTextCursor
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
-                              QLabel, QLineEdit, QPlainTextEdit, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout,
+                              QLabel, QPlainTextEdit, QPushButton, QVBoxLayout)
 from .manager_client import ManagerClient
 from .qt_async import start_qt_task
 from .system_selection import SelectionDeliveryTarget
+from .screenshot_target_picker import ScreenshotTargetPicker
 from .screenshot_voice import ScreenshotVoiceInput
 
 
@@ -27,9 +28,6 @@ class ScreenshotComposer(QDialog):
         self._sending = False
         self._delivery_uncertain = False
         self._reconcile_callback = None
-        self._load_revision = 0
-        self._thread_loading = False
-        self._next_offset = None
         self._preferences_task = None
         self._pending_preferences: dict[str, Any] = {}
         self._preferences_loaded = manager is None
@@ -41,24 +39,7 @@ class ScreenshotComposer(QDialog):
         if not pixmap.isNull():
             self._preview.setPixmap(pixmap.scaled(720, 400, Qt.AspectRatioMode.KeepAspectRatio,
                                                  Qt.TransformationMode.SmoothTransformation))
-        self._target = QComboBox()
-        self._target.addItem("选择投递目标…", None)
-        for target in targets:
-            self._target.addItem(f"角色 · {target.label}", {"kind": "role", "gatewayId": target.gateway_id})
-        # Preserve the role-only constructor's existing selection behavior.
-        if manager is None:
-            self._target.removeItem(0)
-        self._thread = QComboBox()
-        self._thread.setMinimumContentsLength(24)
-        self._query = QLineEdit()
-        self._query.setPlaceholderText("搜索对话名称或工作目录")
-        self._search = QPushButton("搜索")
-        self._more = QPushButton("加载更多")
-        self._more.setEnabled(False)
-        self._session_row = QHBoxLayout()
-        self._session_row.addWidget(self._query)
-        self._session_row.addWidget(self._search)
-        self._session_row.addWidget(self._more)
+        self._target = ScreenshotTargetPicker(self, targets, manager)
         self._text = QPlainTextEdit()
         self._text.setPlaceholderText("输入随截图发送的文字，也可以打开语音输入…")
         self._text.setMinimumHeight(100)
@@ -84,21 +65,17 @@ class ScreenshotComposer(QDialog):
         self._reconcile.hide()
         layout = QVBoxLayout(self)
         layout.addWidget(self._preview, 1)
-        layout.addWidget(QLabel("投递至"))
+        target_label = QLabel("投递至")
+        target_label.setBuddy(self._target)
+        layout.addWidget(target_label)
         layout.addWidget(self._target)
-        layout.addWidget(self._thread)
-        layout.addLayout(self._session_row)
         layout.addWidget(self._text)
         layout.addLayout(voice_row)
         layout.addWidget(self._error)
         layout.addWidget(self._reconcile)
         layout.addWidget(self._buttons)
         self.resize(760, 720)
-        self._target.currentIndexChanged.connect(self._target_changed)
-        self._thread.currentIndexChanged.connect(self._remember_target)
-        self._search.clicked.connect(lambda: self._load_threads())
-        self._query.returnPressed.connect(lambda: self._load_threads())
-        self._more.clicked.connect(lambda: self._load_threads(self._next_offset))
+        self._target.selection_changed.connect(self._target_selected)
         self._voice_toggle.toggled.connect(self._toggle_voice)
         self._speech_settings.clicked.connect(self._open_speech_settings)
         self.finished.connect(self._finish)
@@ -106,7 +83,6 @@ class ScreenshotComposer(QDialog):
             self._voice.text_ready.connect(self._append_transcript)
             self._voice.failed.connect(self._voice_failed)
             self._voice.state_changed.connect(self._voice_state_changed)
-        self._show_sessions(False)
         if manager:
             start_qt_task(lambda: (manager.screenshot_preferences(), manager.screenshot_agents()), self._loaded)
 
@@ -116,15 +92,7 @@ class ScreenshotComposer(QDialog):
 
     @property
     def delivery_selection(self) -> dict[str, str] | None:
-        target = self._target.currentData()
-        if not isinstance(target, dict):
-            return None
-        if target["kind"] == "role":
-            return target
-        thread = self._thread.currentData()
-        if not isinstance(thread, dict):
-            return None
-        return {"kind": "agent", "provider": target["provider"], "threadId": thread["id"], "cwd": thread.get("cwd", "")}
+        return self._target.selection
 
     def _loaded(self, _task, result) -> None:
         if self._closed:
@@ -135,85 +103,15 @@ class ScreenshotComposer(QDialog):
         preferences, agents = result
         self._preferences_loaded = True
         self._voice_toggle.setEnabled(True)
-        for agent in agents:
-            self._target.addItem(f"Agent · {agent['label']}", {"kind": "agent", "provider": agent["provider"]})
-        selected = preferences.get("lastTarget")
-        if isinstance(selected, dict):
-            for index in range(self._target.count()):
-                row = self._target.itemData(index)
-                if row and row.get("kind") == selected.get("kind") and (
-                    row.get("gatewayId") == selected.get("gatewayId") if row["kind"] == "role"
-                    else row.get("provider") == selected.get("provider")):
-                    self._target.blockSignals(True)
-                    self._target.setCurrentIndex(index)
-                    self._target.blockSignals(False)
-                    self._target_changed(remembered=selected)
-                    break
-            else:
-                self.set_error("上次投递目标已不可用，请重新选择。")
+        if not self._target.load_agents(agents, preferences.get("lastTarget")):
+            self.set_error("上次投递目标已不可用，请重新选择。")
         if preferences.get("voiceInputEnabled") is True:
             self._voice_toggle.setChecked(True)
 
-    def _show_sessions(self, show: bool) -> None:
-        self._thread.setVisible(show)
-        for widget in (self._query, self._search, self._more):
-            widget.setVisible(show)
-
-    def _target_changed(self, _index=0, *, remembered=None) -> None:
-        self._load_revision += 1
-        target = self._target.currentData()
-        agent = isinstance(target, dict) and target.get("kind") == "agent"
-        self._show_sessions(agent)
-        self._query.clear()
-        self._thread.clear()
-        if agent:
-            self._load_threads(remembered=remembered)
-        else:
-            self._remember_target()
-
-    def _load_threads(self, offset=0, *, remembered=None) -> None:
-        target = self._target.currentData()
-        if not self._manager or not target or target.get("kind") != "agent":
-            return
-        self._load_revision += 1
-        revision = self._load_revision
-        provider, query = target["provider"], self._query.text().strip()
-        offset = offset or 0
-        self._thread_loading = True
-        self._search.setEnabled(False)
-        self._more.setEnabled(False)
-        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
-
-        def loaded(_task, result):
-            if self._closed or revision != self._load_revision:
-                return
-            self._thread_loading = False
-            self._search.setEnabled(True)
-            self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not self._sending and not self._delivery_uncertain)
-            if isinstance(result, Exception) or result.get("code") == -1:
-                self.set_error(f"读取对话失败：{result if isinstance(result, Exception) else result.get('message', '')}")
-                return
-            self._thread.blockSignals(True)
-            if not offset:
-                self._thread.clear()
-                self._thread.addItem("选择对话…", None)
-            for thread in result.get("threads", []):
-                if thread.get("archived") or not thread.get("id"):
-                    continue
-                label = f"{thread.get('title') or thread['id']} · {thread.get('cwd') or thread['id']}"
-                self._thread.addItem(label, thread)
-            if remembered:
-                match = next((index for index in range(self._thread.count()) if
-                    (self._thread.itemData(index) or {}).get("id") == remembered.get("threadId")), -1)
-                if match < 0:
-                    self._thread.addItem(f"上次对话 · {remembered['threadId']}（发送时核对）",
-                                         {"id": remembered["threadId"], "cwd": remembered.get("cwd", "")})
-                    match = self._thread.count() - 1
-                self._thread.setCurrentIndex(match)
-            self._thread.blockSignals(False)
-            self._next_offset = result.get("nextOffset")
-            self._more.setEnabled(self._next_offset is not None)
-        start_qt_task(lambda: self._manager.screenshot_threads(provider, query, offset), loaded)
+    def _target_selected(self) -> None:
+        if not self._delivery_uncertain:
+            self.set_error("")
+        self._remember_target()
 
     def _remember_target(self, *_args) -> None:
         selection = self.delivery_selection
@@ -298,7 +196,7 @@ class ScreenshotComposer(QDialog):
 
     def set_sending(self, sending: bool) -> None:
         self._sending = sending
-        for widget in (self._target, self._thread, self._query, self._search, self._more, self._text, self._voice_toggle):
+        for widget in (self._target, self._text, self._voice_toggle):
             widget.setEnabled(not sending)
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not sending)
         self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setEnabled(not sending)
@@ -319,7 +217,7 @@ class ScreenshotComposer(QDialog):
         self._reconcile.clicked.connect(reconcile)
 
     def _send(self) -> None:
-        if self._sending or self._thread_loading or self._delivery_uncertain:
+        if self._sending or self._delivery_uncertain:
             return
         selection = self.delivery_selection
         if not selection:
@@ -332,7 +230,7 @@ class ScreenshotComposer(QDialog):
     def _finish(self, _result) -> None:
         self._closed = True
         self._voice_revision += 1
-        self._load_revision += 1
+        self._target.dismiss()
         if self._voice:
             self._voice.stop()
 

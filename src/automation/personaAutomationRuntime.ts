@@ -4,14 +4,14 @@ import { beginRoleWork } from "../roleLifecycle.js";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { config, rolePathsForRoute, type NotificationRule, type RouteProfile } from "../config.js";
-import type { PersonaAutomationRuleDefinition } from "../shared/gatewayConfigModel.js";
+import type { PersonaAutomationActionDefinition, PersonaAutomationRuleDefinition } from "../shared/gatewayConfigModel.js";
 import { notificationRuleMatches } from "../routing/routeDecision.js";
 import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "../routing/types.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type ScheduledAutomationTask = {
   route: RouteProfile;
-  rule: PersonaAutomationRuleDefinition & { trigger: { type: "schedule" } };
+  rule: PersonaAutomationRuleDefinition & { trigger: { type: "schedule" }; action: Exclude<PersonaAutomationActionDefinition, { type: "record_history" }> };
 };
 
 export type ScriptAutomationTask = {
@@ -119,7 +119,7 @@ export function collectScheduledAutomationTasks(routes: RouteProfile[]): Schedul
       // Explicit DSBot destinations belong to the Manager's independent role scheduler.
       if (rule.action.type === "deliver_agent" && rule.action.target?.kind === "ds_bot") continue;
       if (rule.sourceRouteIds?.length && !rule.sourceRouteIds.includes(process.env.GATEWAY_ID || route.id)) continue;
-      if (rule.enabled === false || rule.trigger.type !== "schedule" || rule.trigger.schedule.enabled === false) continue;
+      if (rule.enabled === false || rule.trigger.type !== "schedule" || rule.trigger.schedule.enabled === false || rule.action.type === "record_history") continue;
       tasks.push({ route, rule: rule as ScheduledAutomationTask["rule"] });
     }
   }
@@ -159,6 +159,14 @@ export function matchingMessageScriptAutomations(
       return matcher ? notificationRuleMatches(matcher, routeKind, record, extraValues, route) : false;
     })
     .map((rule) => ({ route, rule }));
+}
+
+export function matchesRecordOnlyAutomation(route: RouteProfile, routeKind: ForwardRouteKind, record: ForwardRecord, extraValues: ForwardTemplateValues): boolean {
+  return (route.automationRules ?? []).some(rule => {
+    if (rule.action.type !== "record_history") return false;
+    const matcher = messageTriggerRule(rule);
+    return matcher ? notificationRuleMatches(matcher, routeKind, record, extraValues, route) : false;
+  });
 }
 
 function isInside(parent: string, candidate: string): boolean {

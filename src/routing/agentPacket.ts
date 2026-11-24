@@ -831,6 +831,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: Rout
   if (routeKind === "role_panel_message") return "角色面板消息";
   if (routeKind === "plan_feedback") return "计划反馈";
   if (routeKind === "voice_transcript") return "语音转写提醒";
+  if (routeKind === "voice_received") return "语音服务 · 收到语音";
   if (routeKind === "rabilink") return "RabiLink 消息";
   if (routeKind === "wearable_health_alert") return "智能手表/手环健康告警";
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";

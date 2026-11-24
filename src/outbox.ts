@@ -174,7 +174,7 @@ export type AgentReplyOptions = {
   /** Original Manager call authority. Rechecked after resolving any managed variant attachment. */
   assertVariantAuthority?: () => void;
   /** Published HTML feature owner; ordinary replies have no dependency on it. */
-  publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<string>;
+  publishHtmlAttachment?: (file: string, deliveryId: string) => Promise<{ url: string; thumbnail?: Buffer }>;
   /** Trusted native service owner; never accepted from request JSON. */
   endpointEgress?: (capability: string) => MessageEndpointEgressProvider | undefined;
   sendVariant?: Readonly<{ variant: AgentSendVariant; target: Readonly<Record<string, unknown>> }>;

@@ -43,10 +43,11 @@ test('the real unified entry receives explicit caller headers and query paramete
   assert.deepEqual(receipt.body, body);
 });
 
-test('invalid JSON never sends a request and message history places the test before Refresh channels', async () => {
+test('invalid JSON never sends a request and message history places the test before All-day recording', async () => {
   await assert.rejects(runSearchTest(async () => assert.fail('Unexpected request'), '[]', { agentType: 'role', sessionId: 'Role' }, new AbortController().signal), /JSON/);
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaMessageHistory.vue', import.meta.url), 'utf8');
-  assert.ok(source.indexOf("t('搜索接口测试')") < source.indexOf("t('刷新渠道')"));
+  assert.match(source, /t\('搜索接口测试'\)[\s\S]*t\('全天记录'\)/);
+  assert.doesNotMatch(source, /刷新渠道/);
 });
 
 test('JSON editing preserves additional query fields and rejects non-object parameters', () => {

@@ -319,57 +319,6 @@
 
 .mobile-action { display: none !important; }
 
-/* Save state: one compact status that changes in place. */
-.save-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding-inline: 10px;
-  border-radius: 999px;
-  font-size: var(--rr-text-xs);
-  font-weight: var(--rr-weight-medium);
-  white-space: nowrap;
-}
-
-.save-status[data-state="dirty"] { background: var(--rr-warning-surface); color: var(--rr-warning-text); }
-.save-status[data-state="saving"] { background: var(--rr-info-surface); color: var(--rr-info-text); }
-.save-status[data-state="confirming"] { background: var(--rr-warning-surface); color: var(--rr-warning-text); }
-.save-status[data-state="saved"] { background: var(--rr-success-surface); color: var(--rr-success-text); }
-
-.save-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.save-status[data-state="dirty"] .save-status-dot {
-  animation: rr-dirty-breathe 1.8s var(--rr-ease-in-out) infinite;
-}
-
-@keyframes rr-dirty-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .35; }
-}
-
-.save-status-enter-active,
-.save-status-leave-active {
-  transition: opacity var(--rr-duration-base) var(--rr-ease-out), transform var(--rr-duration-base) var(--rr-ease-out);
-}
-.save-status-enter-from { opacity: 0; transform: translateX(6px) scale(.96); }
-.save-status-leave-to { opacity: 0; transform: scale(.96); }
-
-.save-command.is-dirty {
-  box-shadow: 0 0 0 0 color-mix(in srgb, var(--rr-accent) 55%, transparent);
-  animation: rr-save-ready 1s var(--rr-ease-out) 1;
-}
-
-@keyframes rr-save-ready {
-  from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--rr-accent) 55%, transparent); }
-  to { box-shadow: 0 0 0 8px color-mix(in srgb, var(--rr-accent) 0%, transparent); }
-}
-
 /* ---------- Main content ---------- */
 .v-main .page-shell {
   padding-top: 12px;
@@ -507,8 +456,6 @@
   .topbar-page-controls { width: min(42vw, 200px); }
   .desktop-action { display: none !important; }
   .mobile-action { display: inline-grid !important; }
-  .save-status-label { display: none; }
-  .save-status { padding-inline: 9px; }
   .route-skeleton-row { grid-template-columns: 1fr; }
 }
 
@@ -520,8 +467,6 @@
   }
   .v-main .page-shell > *,
   .connection-dot.is-online::after,
-  .save-status-dot,
-  .save-command.is-dirty,
   .route-skeleton-block::after {
     animation: none !important;
   }

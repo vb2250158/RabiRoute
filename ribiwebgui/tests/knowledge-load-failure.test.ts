@@ -12,7 +12,8 @@ test("failed first page cannot show successful empty state or start background r
   assert.match(refresh, /catch \(loadError\)[\s\S]*!controller.signal.aborted && currentRequest === requestVersion[\s\S]*planError.value = userFacingError\(loadError\);[\s\S]*planListReady.value = false;[\s\S]*return;/);
   assert.match(page, /v-if="planListReady && !planError && !planPageError && !loading/);
   assert.match(page, /knowledgeListWarning \? 'warning' : 'success'/);
-  assert.match(page, /knowledgeCountsReady \? planCounts.plans : '—'/);
+  assert.doesNotMatch(page, /class="knowledge-metrics"/);
+  assert.match(page, /<v-tab value="plans"[^>]*>[\s\S]*?knowledgeCountsReady \|\| planListReady \? planPageCounts.plans : '—'/);
   assert.match(page, /planEventRefresh.running \|\| !planListReady.value \|\| Boolean\(planError.value\)/);
   assert.match(page, /if \(planError.value \|\| !planListReady.value\) \{ void refreshKnowledge\(\); return; \}/);
   const context = {

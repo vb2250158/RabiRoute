@@ -42,13 +42,15 @@ Open the role menu in the top bar, choose Local PC or another computer, then sel
 
 The role configuration page opens directly with section tabs. The current-role, message-rule count, scheduled-task count, and role-directory overview cards have been removed. View role details under Profile and rules and scheduled tasks under Automation.
 
+Open the role folder from Profile. Add and edit rules under Automation, where confirming saves them to the current role configuration. You can also disable or delete the role panel message rule. When the destination is a DS Bot, incoming messages are routed according to the rule's trigger conditions.
+
 ## Add message rules and scheduled tasks
 
 The Automation area starts with the Message rules / Agent Hook tabs, without a duplicate heading, description, or total rule count.
 
-In Role → Automation → Message rules, choose a message type on the left to view its rules and count. Select Add message rule and choose Create from template or Create manually. Edit the preview and select Create to add the rule. Closing or cancelling discards the preview. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Finish editing and save the role to apply changes. On narrow screens, the type bar moves to the top and scrolls horizontally.
+In Role → Automation → Message rules, choose a message type on the left to view its rules and count. Select Add message rule and choose Create from template or Create manually. Edit the preview and select Create to add the rule. Closing or cancelling discards the preview. Choose Scheduled tasks for an interval, daily time, or one-off time, then select Notify Agent or Run script. Select Confirm when editing an existing rule. Cancel or close discards those edits. Confirmed changes save in the background. On narrow screens, the type bar moves to the top and scrolls horizontally.
 
-Under the rule action, use **Type** to choose **Notify Agent**, **Run script**, or a delivery template. You can then edit the trigger, destination, and text. **Save as custom template** captures the current text and trigger type. Click **Save** at the top of the page to make the template available to other rules for this role.
+Under the rule action, use **Type** to choose **Notify Agent**, **Run script**, or a delivery template. You can then edit the trigger, destination, and text. **Save as custom template** captures the current text and trigger type. Once saved, the template is available to other rules for this role.
 
 **Trigger scenarios** shows the scenarios used by the rule. Use **Add scenario** to choose group replies, private messages, or other supported scenarios. Picking the first scenario from **All scenarios** narrows the rule to that scenario. Choose **All scenarios** in the same menu to restore all scenarios for the current channel. Use **Add restriction** to choose and configure a group, private contact, speaker, or message match as available.
 
@@ -62,13 +64,13 @@ In an automation rule, choose **Delivery target** under **Notify Agent**. Select
 
 In Role → Automation → Agent Hook, select an Agent card on the left to view and edit its settings; on narrow screens, the cards appear above the settings. Each card shows that Agent's enabled-item count. Choices come from the ends added to enabled local Routes bound to this role, filtered by lifecycle-hook capability. Add a missing end in Agent settings; installing or discovering software alone does not add a choice.
 
-Each Agent is configured independently, and settings for multiple Agents can take effect at the same time. Switching cards only changes which settings you view. Click Triggers and context to the right of the selected Agent heading to edit session context, tool context refresh, completion notifications, and Agent message delivery through Rabi in a dialog. Closing it retains the current edits; use Save in the page header to apply them. Plan task follow-up and Event delivery are collapsed by default; expand them to edit their parameters. Click Save to apply changes.
+Each Agent is configured independently, and settings for multiple Agents can take effect at the same time. Switching cards only changes which settings you view. Click Triggers and context to the right of the selected Agent heading to edit session context, tool context refresh, completion notifications, and Agent message delivery through Rabi in a dialog. Select Confirm to apply the settings. Cancel or close discards the edits. Plan follow-up and event delivery rules each have their own editor and confirmation.
 
 Existing role settings remain the default for ends without an override. Project and session conditions read only the selected end. Failed plan-status reads offer an explicit retry without replaying a save or delivery.
 
 ## Configure event delivery conditions
 
-Under **Role → Automation → Agent Hook → Event delivery**, expand a rule and click **Add condition**. The dialog starts with **Condition type**, followed by its explanation and parameters. Use **Edit condition** to change an existing condition. Confirming updates the current draft; cancelling leaves the original unchanged. Click **Save** at the top of the page to apply the configuration.
+Under **Role → Automation → Agent Hook → Event delivery**, expand a rule and click **Add condition**. The dialog starts with **Condition type**, followed by its explanation and parameters. Use **Edit condition** to change an existing condition. Confirming updates the rule draft. Cancelling keeps the original condition. Select **Confirm** in the rule editor to submit the full rule.
 
 | Condition | Meaning and parameters |
 | --- | --- |
@@ -105,7 +107,9 @@ One role can serve several Routes. Editing its text or rules affects every bound
 
 Open **Role Configuration**, select a computer and role in the top bar, then use the section tabs:
 
-- **Profile**: role binding, avatar, and the `persona.md` summary.
+The character card describes identity, appearance, personality, motivations, likes and dislikes, relationships, voice, and boundaries, with example dialogue. A first greeting is optional. Workflows live in [role skills](persona-skills_en.md). Manage delivery rules in the role configuration.
+
+- **Profile** includes the role binding, avatar, and a summary of the `persona.md` character card.
 - **Message adapters**: choose a message Route and configure its endpoint and handling Agent.
 - **Expression & voice**: language-style validation, role TTS settings, and speech wake-up keywords.
 - **Virtual avatar**: desktop-pet animation assets for the current role and whether this PC displays the pet.
@@ -278,9 +282,9 @@ Use the injected RabiRoute reply interface for external output.
 
 Conversational wording alone cannot grant send permission. Pipeline and message-adapter policy still gate real output.
 
-## Save and validate
+## Confirm and validate
 
-Close the rule dialog, then select **Save configuration**. The change applies to the next message or scheduled event. Legacy message-template rules appear automatically in the new interface; after saving, the role file uses the new `automationRules` structure.
+Select **Confirm** in the rule dialog. The list updates immediately and the change is sent in the background. Once accepted by the service, the next matching message or scheduled event uses the updated rule. Legacy message-template rules appear automatically in the new interface; after saving, the role file uses the new `automationRules` structure.
 
 The current WebGUI has no side-effect-free RouteDecision or AgentPacket preview. Use manual trigger for validation only when you intend to enter the real delivery path.
 

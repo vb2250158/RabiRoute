@@ -61,6 +61,36 @@ class PetPlaybackTest(unittest.TestCase):
         for _ in range(4):
             self.window._advance_png_frame()
 
+    def test_playing_alias_uses_inflight_preload_with_its_own_playback_rules(self):
+        attention = self.animations["attention"]
+        alias = replace(attention.state, name="aliased-attention", fps=6, next_state="thinking")
+        self.pack.states[alias.name] = alias
+        self.controller._animation_cache.clear()
+        self.window.clear_prepared_animations()
+        tasks = []
+
+        def schedule(operation, completed, **_):
+            task = object()
+            tasks.append((task, operation, completed))
+            return task
+
+        with (patch("rabiroute_tray.desktop_pet_controller.start_qt_task", side_effect=schedule),
+              patch.object(self.controller._client, "load_animation", return_value=attention) as load):
+            self.controller._queue_action_preloads(["attention", alias.name])
+            self.controller.set_state(alias.name)
+            self.assertEqual(len(tasks), 1)
+            task, operation, completed = tasks[0]
+            completed(task, operation())
+            self.assertEqual(len(tasks), 1)
+            load.assert_called_once()
+
+        self.assertEqual(self.window.active_state, alias.name)
+        self.assertEqual(self.window._frame_interval(alias.fps), 167)
+        self.assertFalse(self.window._png_loop)
+        self.assertEqual(self.window._png_next_state, "thinking")
+        self.assertIs(self.controller._animation_cache[alias.name].assets, attention.assets)
+        self.assertEqual(len(self.window._prepared_png_frames), 1)
+
     def test_a_full_idle_loop_can_start_a_random_gesture_without_the_pack_delay(self):
         self.pack = replace(self.pack, idle_behavior=DesktopPetIdleBehavior(75, 180, ("attention",), 0, ""))
         self.controller._pack = self.pack
@@ -333,7 +363,8 @@ class PetPlaybackTest(unittest.TestCase):
     def test_bad_action_preserves_current_frame_and_clock(self):
         self.window._advance_png_frame()
         old_frame = self.window._label.pixmap().cacheKey()
-        bad = replace(self.animations["attention"], assets=(b"bad png",))
+        bad_state = replace(self.animations["attention"].state, asset_urls=("/broken.png",))
+        bad = LoadedDesktopPetAnimation(bad_state, (b"bad png",))
         self.assertFalse(self.window.play(self.pack, bad))
         self.assertEqual(self.window.active_state, "idle")
         self.assertEqual(self.window._label.pixmap().cacheKey(), old_frame)
@@ -529,7 +560,8 @@ class PetPlaybackTest(unittest.TestCase):
             self.assertTrue(self.window.play(self.pack, webp))
         self.assertEqual(tuple(self.window._png_frame_delays), (40, 70))
         self.assertEqual(len(self.window._png_frames), 2)
-        self.assertEqual(list(key[1] for key in self.window._prepared_png_frames), ["attention"])
+        self.assertTrue(self.window.has_decoded_frames(self.pack, webp))
+        self.assertFalse(self.window.has_decoded_frames(self.pack, self.animations["idle"]))
         self.assertTrue(self.window._png_frames[0].toImage().hasAlphaChannel())
 
     def test_loop_restarts_after_last_frame_without_stopping_timer(self):

@@ -141,7 +141,7 @@ class DesktopPetMotionTest(unittest.TestCase):
         finish_walk(window)
         play_walk(window)
         # The red feature on the source's left is now on the display's right.
-        self.assertGreater(window._label.pixmap().toImage().pixelColor(240, 20).red(), 200)
+        self.assertGreater(window._label.grab().toImage().pixelColor(240, 20).red(), 200)
         self.assertTrue(window.travel_to(QPoint(400, 100), "move"))
         self.assertFalse(window._facing_left)
         window.close()
@@ -247,7 +247,7 @@ class DesktopPetMotionTest(unittest.TestCase):
         finish_walk(window)
         self.assertTrue(window.travel_to(QPoint(400, 100), "move"))
         self.assertEqual(window._facing_scale(), -1)
-        self.assertGreater(window._label.pixmap().toImage().pixelColor(240, 20).red(), 200)
+        self.assertGreater(window._label.grab().toImage().pixelColor(240, 20).red(), 200)
         window.close()
 
     def test_one_shared_clock_matches_measured_cycle_and_bounds_stall_catchup(self):

@@ -123,6 +123,12 @@ export class CompletionHtmlShares {
     if (share.id !== id) throw new Error("HTML share identity mismatch.");
     return share;
   }
+  async readSnapshotForDelivery(deliveryId: string): Promise<string> {
+    const intent = createHash("sha256").update(deliveryId).digest("hex");
+    const reference = JSON.parse(await fs.readFile(path.join(this.directory, "intents", intent + ".json"), "utf8")) as Share;
+    const share = await this.readShare(reference.id);
+    return fs.readFile(path.join(this.directory, share.id, "index.html"), "utf8");
+  }
   /** Each request returns one AEAD frame; pull-based delivery reuses channel backpressure without buffering a whole file. */
   private async serve(id: string, channel: HtmlShareChannel): Promise<void> {
     if (this.stopped) { await channel.close(); return; }

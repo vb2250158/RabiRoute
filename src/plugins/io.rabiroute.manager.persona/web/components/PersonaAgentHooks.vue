@@ -24,6 +24,8 @@ const emit = defineEmits<{ "update:modelValue": [value: CodexHookSettings] }>();
 const { t } = useI18n();
 const selected = ref("");
 const contextDialog = ref(false);
+const contextPatch = ref<Partial<Omit<CodexHookSettings, "byAgent">>>({});
+watch(contextDialog, open => { if (!open) contextPatch.value = {}; }, { flush: "sync" });
 const editorDialog = ref(false);
 const creating = ref(false);
 const draft = ref<Rule>();
@@ -52,6 +54,7 @@ function settingsFor(agent: AgentAdapterType) {
   return personaAgentHookDraft(props.modelValue, agent);
 }
 const settings = computed(() => selectedAgent.value ? settingsFor(selectedAgent.value.value) : agentHookSettingsFor(undefined));
+const contextSettings = computed(() => ({ ...settings.value, ...contextPatch.value }));
 const followup = computed(() => settings.value.planFollowup ?? normalizePlanFollowup(undefined));
 const previewFollowupEnabled = computed(() => editorAgent.value?.configured
   && settingsFor(editorAgent.value.value).planFollowup?.enabled === true);
@@ -75,8 +78,15 @@ function update(patch: Partial<Omit<CodexHookSettings, "byAgent">>, agent = sele
   emit("update:modelValue", { ...props.modelValue, ...agentHookSettingsFor({ ...props.modelValue, byAgent: undefined }),
     byAgent: { ...props.modelValue?.byAgent, [agent]: { ...current, ...patch } } });
 }
-function updateFollowup(patch: Partial<FollowupSettings>) {
-  update({ planFollowup: { ...followup.value, ...patch } });
+function updateContext(patch: typeof contextPatch.value): void {
+  contextPatch.value = { ...contextPatch.value, ...patch };
+}
+function updateFollowup(patch: Partial<FollowupSettings>): void {
+  updateContext({ planFollowup: { ...followup.value, ...contextPatch.value.planFollowup, ...patch } });
+}
+function confirmContext(): void {
+  if (Object.keys(contextPatch.value).length) update(contextPatch.value);
+  contextDialog.value = false;
 }
 function ruleLabel(rule: Rule) {
   if (rule.kind === "followup") return "自动追问";
@@ -132,7 +142,7 @@ function openEditor(rule?: Rule) {
   creating.value = !rule;
   previewAgent.value = selectedAgent.value?.value ?? supportedOptions.value[0]?.value ?? "";
   enableFollowup.value = false;
-  draft.value = rule ? { ...rule } : newRule("delivery");
+  draft.value = rule ? JSON.parse(JSON.stringify(rule)) : newRule("delivery");
   editorDialog.value = true;
 }
 function switchPreview(agent: AgentAdapterType) {
@@ -309,26 +319,26 @@ function saveRule(remove = false) {
             <p class="section-note">{{ field.note }}</p>
             <details class="agent-event-details"><summary>触发事件</summary><code>{{ field.events }}</code></details>
           </div>
-          <v-switch :model-value="settings[field.key]" :aria-label="field.title" color="primary" density="compact"
-            hide-details inset @update:model-value="value => update({ [field.key]: value === true })" />
+          <v-switch :model-value="contextSettings[field.key]" :aria-label="field.title" color="primary" density="compact"
+            hide-details inset @update:model-value="value => updateContext({ [field.key]: value === true })" />
         </div>
         <div class="agent-setting-row">
           <div>
             <strong>自动追问</strong>
             <p class="section-note">计划任务结束后，按标记状态匹配第一条规则。</p>
           </div>
-          <v-switch :model-value="followup.enabled" aria-label="启用自动追问" color="primary" density="compact"
+          <v-switch :model-value="contextSettings.planFollowup?.enabled ?? followup.enabled" aria-label="启用自动追问" color="primary" density="compact"
             hide-details inset @update:model-value="value => updateFollowup({ enabled: value === true })" />
         </div>
-        <v-text-field :model-value="followup.cooldownSeconds" class="mt-3" label="追问间隔（秒）"
+        <v-text-field :model-value="contextSettings.planFollowup?.cooldownSeconds ?? followup.cooldownSeconds" class="mt-3" label="追问间隔（秒）"
           type="number" min="0" max="86400" density="compact" hide-details
           @update:model-value="value => updateFollowup({ cooldownSeconds: Number(value) })" />
         <p class="section-note mt-2">同一轮最多追问一次；计划步骤、下一动作和规则均无变化时不重复追问。冷却时间不会自动唤醒任务。</p>
       </v-card-text>
       <v-card-actions class="pa-4 flex-wrap">
-        <span class="section-note">修改后点击保存生效。</span>
         <v-spacer />
-        <v-btn variant="tonal" @click="contextDialog = false">关闭</v-btn>
+        <v-btn variant="text" @click="contextDialog = false">取消</v-btn>
+        <v-btn color="primary" variant="tonal" @click="confirmContext">确定</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

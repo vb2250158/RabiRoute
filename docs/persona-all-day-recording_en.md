@@ -2,6 +2,12 @@ English | [简体中文](persona-all-day-recording.md)
 
 # Persona all-day recording
 
+Open **All-day recording** in the role's **Message history** toolbar. The timeline shows existing endpoint messages, Agent-to-Agent deliveries, persona panel messages, task replies, and saved captures in time order. Source changes refresh their existing records.
+
+To save screen captures, add a **Screen** message rule under **Role configuration → Automation** and select **Save to persona history only**. An enabled rule uses the established 60-second capture interval. Agents can search for **screen capture** and open the original image using its authenticated media link. Speech service rules expose **Voice received**, when an accepted segment is saved before transcription, and **Transcription completed**, when the transcript is available to match.
+
+The remaining capture settings, API and storage details cover historical records and compatibility callers.
+
 First use of computer capture prepares RabiSpeech dependencies automatically with the packaged Python. No separate Python installation or manual script is required. Offline startup checks an existing environment against the shipped `requirements.txt`, repairing missing or incompatible dependencies after upgrades. Model weights remain separate downloads in model management. Only version and core-import validation writes the readiness receipt; dependencies stay in the local stable directory and installation does not modify the immutable release.
 
 Preparation joins the single model-management installation job. Failures retain a concrete error and do not repeat downloads at each sample interval in the same Manager generation. Explicit installation retry in model management lets capture resume. The switch represents enable intent; status distinguishes preparation, first capture, failure, degraded sources and stale capture. `lastSampleAt` advances only on successful sampling. Preview timestamps belong to the displayed event, including an older frame retained while the next image loads. Live mode labels saved images as “Latest frame” rather than attaching the current clock.

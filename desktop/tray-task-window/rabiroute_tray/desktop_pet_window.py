@@ -5,11 +5,11 @@ from collections import OrderedDict
 import time
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QVariantAnimation, Signal, qInfo
-from PySide6.QtGui import QColor, QCursor, QImage, QMouseEvent, QPainter, QPen, QPixmap, QTransform
-from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
+from PySide6.QtGui import QColor, QCursor, QMouseEvent, QPainter, QPen, QPixmap, QTransform
+from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QStyle, QWidget
 
 from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
-from .desktop_pet_frames import DesktopPetFrames, decode_desktop_pet_frames, measure_sprite_soles
+from .desktop_pet_frames import DesktopPetFrames, FrameSource, decode_desktop_pet_frames, frame_source, measure_sprite_soles
 from .desktop_pet_gait import SoleFrame, WalkingGait, running_gait, walking_gait
 from .desktop_pet_drag import DragFollow, NativeDrag, preserve_dpi_size
 from .desktop_pet_physics import DisplayArea, PetFlight, ReleaseTrail
@@ -19,7 +19,31 @@ from .desktop_pet_bubble import (
 )
 
 _PREPARED_FRAME_BUDGET = 128 * 1024 * 1024
-_MOTION_FRAME_STATES = {"move", "run", "teleport-in", "teleport-out"}
+PreparedFrameKey = tuple[str, FrameSource, int, int]
+
+
+class _SpriteLabel(QLabel):
+    mirrored = False
+
+    def set_frame(self, frame: QPixmap, *, mirrored: bool) -> None:
+        direction_changed = self.mirrored != mirrored
+        self.mirrored = mirrored
+        self.setPixmap(frame)
+        if direction_changed:
+            self.update()
+
+    def paintEvent(self, event) -> None:
+        frame = self.pixmap() if self.mirrored else None
+        if frame is None or frame.isNull():
+            super().paintEvent(event)
+            return
+        size = frame.deviceIndependentSize().toSize()
+        aligned = QStyle.alignedRect(self.layoutDirection(), self.alignment(), size, self.contentsRect())
+        painter = QPainter(self)
+        painter.translate(aligned.left() + size.width(), aligned.top())
+        painter.scale(-1, 1)
+        painter.drawPixmap(0, 0, frame)
+        painter.end()
 
 
 class _TravelHalo(QWidget):
@@ -75,13 +99,13 @@ class DesktopPetWindow(QWidget):
         self._persona_name = str(persona_name or "角色")
         self._default_slot = max(0, int(default_slot))
         self.setWindowTitle(f"{self._persona_name}桌宠")
-        self._label = QLabel(self)
+        self._label = _SpriteLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._travel_opacity = QGraphicsOpacityEffect(self._label)
         self._travel_opacity.setOpacity(1)
         self._label.setGraphicsEffect(self._travel_opacity)
-        self._previous_frame = QLabel(self)
+        self._previous_frame = _SpriteLabel(self)
         self._previous_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._previous_frame.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._previous_opacity = QGraphicsOpacityEffect(self._previous_frame)
@@ -114,8 +138,8 @@ class DesktopPetWindow(QWidget):
         self._walk_frame_elapsed = 0.0
         self._walk_speed = 0.0
         self._gait: WalkingGait | None = None
-        self._prepared_gaits: dict[tuple[str, str, int, int], WalkingGait | None] = {}
-        self._prepared_gif_delays: dict[tuple[str, str, int, int], tuple[int, ...]] = {}
+        self._prepared_gaits: dict[PreparedFrameKey, WalkingGait | None] = {}
+        self._prepared_gif_delays: dict[PreparedFrameKey, tuple[int, ...]] = {}
         self._png_frame_delays: tuple[int, ...] = ()
         self._drag_offset: QPoint | None = None
         self._dragging = False
@@ -144,8 +168,8 @@ class DesktopPetWindow(QWidget):
         self._drag_timer.timeout.connect(self._advance_drag)
         self._double_click_release = False
         self._png_frames: tuple[QPixmap, ...] = ()
-        self._prepared_png_frames: OrderedDict[tuple[str, str, int, int], tuple[QPixmap, ...]] = OrderedDict()
-        self._prepared_bounds: dict[tuple[str, str, int, int], QRect] = {}
+        self._prepared_png_frames: OrderedDict[PreparedFrameKey, tuple[QPixmap, ...]] = OrderedDict()
+        self._prepared_bounds: dict[PreparedFrameKey, QRect] = {}
         self._png_index = 0
         self._png_loop = True
         self._png_next_state = ""
@@ -367,6 +391,7 @@ class DesktopPetWindow(QWidget):
         if not self.prepare_animation(pack, animation):
             return False
         previous = self._label.pixmap()
+        previous_mirrored = self._label.mirrored
         previous_state = self.active_state
         blend = (previous is not None and not previous.isNull() and self._active_pack is pack
                  and not self.travelling and not self.pointer_engaged and self._turn_scale is None
@@ -389,7 +414,7 @@ class DesktopPetWindow(QWidget):
         self._play_png_sequence(animation, target, start_clock=not blend)
         if blend:
             self._previous_frame.setGeometry(self.rect())
-            self._previous_frame.setPixmap(previous)
+            self._previous_frame.set_frame(previous, mirrored=previous_mirrored)
             self._previous_opacity.setOpacity(1)
             self._travel_opacity.setOpacity(0)
             self._previous_frame.show()
@@ -433,13 +458,13 @@ class DesktopPetWindow(QWidget):
         self._trim_prepared_frames(cache_key)
         return True
 
-    def _trim_prepared_frames(self, newest: tuple[str, str, int, int]) -> None:
+    def _trim_prepared_frames(self, newest: PreparedFrameKey) -> None:
         def size(frames: tuple[QPixmap, ...]) -> int:
             return frames[0].width() * frames[0].height() * 4 * len(frames)
 
         # Keep the bounded set of motion clips ready for pointer and Agent travel.
         regular = [(key, frames) for key, frames in self._prepared_png_frames.items()
-                   if key[1] not in _MOTION_FRAME_STATES]
+                   if not key[1].motion_state]
         total = sum(size(frames) for _, frames in regular)
         for key, frames in regular:
             if total <= _PREPARED_FRAME_BUDGET:
@@ -880,15 +905,16 @@ class DesktopPetWindow(QWidget):
         pack: DesktopPetPack | None,
         animation: LoadedDesktopPetAnimation,
         target: QSize,
-    ) -> tuple[str, str, int, int]:
-        return (pack.pack_id if pack is not None else "", animation.state.name, target.width(), target.height())
+    ) -> PreparedFrameKey:
+        return (pack.pack_id if pack is not None else "", frame_source(animation.state),
+                target.width(), target.height())
 
     def _decode_png_frames(self, animation: LoadedDesktopPetAnimation, target: QSize,
-                           cache_key: tuple[str, str, int, int]) -> tuple[QPixmap, ...]:
+                           cache_key: PreparedFrameKey) -> tuple[QPixmap, ...]:
         return self._accept_frames(decode_desktop_pet_frames(animation, target), cache_key)
 
     def _accept_frames(self, decoded: DesktopPetFrames,
-                       cache_key: tuple[str, str, int, int]) -> tuple[QPixmap, ...]:
+                       cache_key: PreparedFrameKey) -> tuple[QPixmap, ...]:
         if not decoded.images:
             return ()
         self._prepared_gif_delays[cache_key] = decoded.delays
@@ -933,7 +959,13 @@ class DesktopPetWindow(QWidget):
             frame = frame.scaled(preview_size, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.FastTransformation)
         horizontal_scale = self._facing_scale()
-        rendered = frame if horizontal_scale == 1.0 else frame.transformed(QTransform().scale(horizontal_scale, 1))
+        ratio = max(.1, self.devicePixelRatioF())
+        # Preserve Qt's pixmap alignment when the logical frame has a fractional edge.
+        mirrored = (horizontal_scale == -1.0 and not self._airborne_angle and self._squash_scale == 1.0
+                    and frame.width() % ratio == 0 and frame.height() % ratio == 0)
+        rendered = frame
+        if horizontal_scale != 1.0 and not mirrored:
+            rendered = frame.transformed(QTransform().scale(horizontal_scale, 1))
         if self._airborne_angle:
             tilted = QPixmap(frame.size())
             tilted.fill(Qt.GlobalColor.transparent)
@@ -954,8 +986,8 @@ class DesktopPetWindow(QWidget):
             painter.drawPixmap(0, -rendered.height(), rendered)
             painter.end()
             rendered = squashed
-        rendered.setDevicePixelRatio(max(.1, self.devicePixelRatioF()))
-        self._label.setPixmap(rendered)
+        rendered.setDevicePixelRatio(ratio)
+        self._label.set_frame(rendered, mirrored=mirrored)
         floor_offset = self._gait.floor_offsets[self._png_index] if self._travel_kind in {"move", "run"} and self._gait else 0
         self._label.move(0, round(floor_offset))
         if self._bubble.isVisible() or self._transcript_preview is not None:

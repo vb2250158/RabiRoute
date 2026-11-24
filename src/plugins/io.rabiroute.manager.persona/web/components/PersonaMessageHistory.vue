@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import type { MessageHistoryChannelCatalog } from '@shared/personaHistoryChannels';
 import { historyChannels } from '../../../../../ribiwebgui/src/personaHistoryChannels';
 import { messageEndpointCatalog } from '../../../../../ribiwebgui/src/messageEndpoints/messageEndpointCatalog';
@@ -12,9 +13,18 @@ import PersonaTaskHistory from './PersonaTaskHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
 import PersonaAgentSessions from './PersonaAgentSessions.vue';
 import PersonaSearchTestDialog from './PersonaSearchTestDialog.vue';
+import PersonaRoleTimeline from './PersonaRoleTimeline.vue';
 
-const props = defineProps<{ roleId: string; version: number; messageVersion?:number }>();
+const props = defineProps<{ roleId: string; version: number; messageVersion: number; catalogVersion: number; captureVersion: number }>();
 const { fetch } = usePersonaService(), { t } = useI18n();
+const route = useRoute(), router = useRouter();
+const recordingOpen = computed(() => route.query.tab === 'all-day-recording');
+function setRecordingOpen(open: boolean) {
+  const query = { ...route.query };
+  if (open) query.tab = 'all-day-recording';
+  else delete query.tab;
+  void router.push({ query });
+}
 const catalog = ref<MessageHistoryChannelCatalog>({ adapters: [], chatCategories: [] });
 const channels = computed(() => historyChannels(catalog.value,messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value)));
 const selected = ref(''), visited = ref(new Set<string>());
@@ -32,7 +42,7 @@ async function refreshCatalog() {
   } catch (cause) { if (!controller.signal.aborted) error.value = userFacingError(cause); }
   finally {if(request===controller)catalogLoading.value=false;}
 }
-watch(() => props.version, refreshCatalog);
+watch(() => props.catalogVersion, refreshCatalog);
 watch(() => props.roleId, () => { catalog.value = { adapters: [], chatCategories: [] }; visited.value = new Set<string>(); selected.value = ''; void refreshCatalog(); }, { immediate: true });
 watch(channels,list=>{
   const available=new Set(list.map(channel=>channel.id));
@@ -46,28 +56,31 @@ onBeforeUnmount(() => { request?.abort(); });
 <template>
   <div class="persona-message-history">
     <div class="history-channel-header">
-      <v-tabs v-model="selected" color="secondary" show-arrows class="history-channel-tabs" :aria-label="t('消息渠道')">
-        <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
+      <v-tabs :model-value="recordingOpen ? null : selected" @update:model-value="value => { if (typeof value === 'string') selected = value; }" color="secondary" show-arrows class="history-channel-tabs" :aria-label="t('消息渠道')">
+        <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon" @click="recordingOpen && setRecordingOpen(false)">{{ t(channel.label) }}</v-tab>
       </v-tabs>
       <div class="history-channel-toolbar">
         <v-btn variant="text" prepend-icon="mdi-magnify" :aria-label="t('搜索接口测试')" :title="t('搜索接口测试')" @click="searchTestOpen = true">
           <span class="history-channel-action-label">{{ t('搜索接口测试') }}</span>
         </v-btn>
-        <v-btn variant="text" prepend-icon="mdi-refresh" :aria-label="t('刷新渠道')" :title="t('刷新渠道')" @click="refreshCatalog">
-          <span class="history-channel-action-label">{{ t('刷新渠道') }}</span>
+        <v-btn variant="text" prepend-icon="mdi-timeline-clock-outline" :active="recordingOpen" :aria-pressed="recordingOpen" :aria-label="t('全天记录')" :title="t('全天记录')" @click="setRecordingOpen(!recordingOpen)">
+          <span class="history-channel-action-label">{{ t('全天记录') }}</span>
         </v-btn>
       </div>
     </div>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }} <v-btn variant="text" @click="refreshCatalog">{{ t('重试') }}</v-btn></v-alert>
-    <v-alert v-if="!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
-    <v-alert v-for="warning in warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
+    <div v-if="recordingOpen" class="history-recording-panel">
+      <PersonaRoleTimeline :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" />
+    </div>
+    <v-alert v-if="!recordingOpen && error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
+    <v-alert v-if="!recordingOpen&&!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
+    <v-alert v-for="warning in recordingOpen ? [] : warnings" :key="warning" type="warning" variant="tonal" class="mb-3">{{ t(warning) }}</v-alert>
     <template v-for="channel in channels" :key="channel.id">
-      <div v-if="visited.has(channel.id)" v-show="selected === channel.id" class="history-channel-panel" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
-        <PersonaAgentSessions v-if="channel.agentSessions" :role-id="roleId" :active="selected===channel.id" />
-        <PersonaTaskHistory v-else-if="channel.category" :role-id="roleId" :version="version" :active="selected===channel.id" :category="channel.category" />
-        <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="version" :active="selected===channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
-        <EndpointConversationHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="version" :message-version="messageVersion" :active="selected === channel.id" />
+      <div v-if="visited.has(channel.id)" v-show="!recordingOpen && selected === channel.id" class="history-channel-panel" :data-history-channel="channel.id" role="tabpanel" :aria-label="t(channel.label)">
+        <PersonaAgentSessions v-if="channel.agentSessions" :role-id="roleId" :active="!recordingOpen && selected === channel.id" />
+        <PersonaTaskHistory v-else-if="channel.category" :role-id="roleId" :version="version" :active="!recordingOpen && selected === channel.id" :category="channel.category" />
+        <NapcatConversationHistory v-else-if="channel.adapter==='napcat'" :role-id="roleId" :version="catalogVersion" :active="!recordingOpen && selected === channel.id" :routes="catalog.qqRoutes??[]" :message-version="messageVersion" />
+        <EndpointConversationHistory v-else-if="channel.adapter" :role-id="roleId" :adapter="channel.adapter" :title="channel.label" :version="catalogVersion" :message-version="messageVersion" :active="!recordingOpen && selected === channel.id" />
       </div>
     </template>
   </div>
@@ -79,6 +92,7 @@ onBeforeUnmount(() => { request?.abort(); });
 .history-channel-tabs{flex:1;min-width:0;}
 .history-channel-toolbar{display:flex;align-items:center;gap:8px;flex:none;}
 .history-channel-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;}
+.history-recording-panel{flex:1;min-height:0;min-width:0;overflow:auto;}
 .history-channel-tabs :deep(.v-tab) {text-transform:none;letter-spacing:normal;}
 @media(max-width:760px){
   .history-channel-header,.history-channel-toolbar{gap:4px;}

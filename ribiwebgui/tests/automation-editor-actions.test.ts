@@ -34,3 +34,18 @@ test("reenabling a legacy task restores its disabled schedule without changing i
   assert.equal(draft.automationRules[0].enabled, false);
   assert.equal(changes(), 2);
 });
+
+test("the role panel rule can be disabled and removed in the role editor", () => {
+  const { draft, actions } = fixture();
+  const id = "role-panel-message";
+  draft.automationRules = [{
+    id, enabled: true,
+    trigger: { type: "message", routeKinds: ["role_panel_message"] },
+    action: { type: "deliver_agent", target: { kind: "recipient", recipientId: "primary" } }
+  }];
+  actions.updateAutomation(id, { enabled: false });
+  assert.equal(draft.notificationRules?.[0]?.enabled, false);
+  actions.removeAutomation(id);
+  assert.deepEqual(draft.automationRules, []);
+  assert.deepEqual(draft.notificationRules, []);
+});

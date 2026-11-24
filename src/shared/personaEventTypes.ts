@@ -14,6 +14,12 @@ export function isCaptureEventRouteKind(value: string): value is CaptureEventRou
   return RECORDING_CAPTURE_TYPES.some(type => type.routeKind === value);
 }
 
+export const VOICE_RECEIVED_ROUTE_KIND = "voice_received";
+
+export function requiresExplicitEventRule(value: string): boolean {
+  return value === VOICE_RECEIVED_ROUTE_KIND || isCaptureEventRouteKind(value);
+}
+
 export const MESSAGE_EVENT_CATEGORIES = [
   { value: "napcat", title: "QQ (NapCat / OneBot)", english: "QQ (NapCat / OneBot)", icon: "mdi-qqchat", routeKinds: ["direct_at", "direct_reply", "indirect_reply", "group_message", "private"] },
   { value: "qqbot", title: "QQ 官方机器人", english: "Official QQ Bot", icon: "mdi-robot-outline", routeKinds: ["qqbot_private", "qqbot_group", "qqbot_channel", "qqbot_dm", "qqbot_event"] },
@@ -31,7 +37,7 @@ export const MESSAGE_EVENT_CATEGORIES = [
 
 export type MessageEventCategory = typeof MESSAGE_EVENT_CATEGORIES[number]["value"];
 export function messageEventCategory(routeKind: string, adapter?: string): MessageEventCategory | undefined {
-  if (routeKind === "plan_feedback" || isCaptureEventRouteKind(routeKind)) return;
+  if (routeKind === "plan_feedback" || requiresExplicitEventRule(routeKind)) return;
   if (routeKind === "voice_transcript" && adapter === "webhook") return "webhook";
   return MESSAGE_EVENT_CATEGORIES.find(category => category.routeKinds.some(kind => kind === routeKind))?.value ?? "webhook";
 }

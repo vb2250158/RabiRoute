@@ -143,17 +143,22 @@ async function load(): Promise<void> {
   }
 }
 
+const settingsSnapshot = computed(() => JSON.stringify([draft.value, cameraMotionEntities.value, cameraAllowedHosts.value, speechBindings.value]));
+
 async function save(): Promise<void> {
   if (!snapshot.value || !draft.value || saving.value) return;
   saving.value = true;
   try {
+    const submitted = settingsSnapshot.value;
     const settings: XiaomiHomeRuntimeSettings = {
       ...draft.value,
       speechBindings: speechBindings.value,
       cameraMotionEntityIds: parsedLines(cameraMotionEntities.value),
       cameraClipAllowedHosts: parsedLines(cameraAllowedHosts.value)
     };
-    hydrate(await xiaomiHomeSettingsClient.update(snapshot.value, settings));
+    const committed = await xiaomiHomeSettingsClient.update(snapshot.value, settings);
+    if (settingsSnapshot.value === submitted) hydrate(committed);
+    else snapshot.value = committed;
     error.value = "";
     await props.context?.refreshScan?.();
   } catch (cause) {
@@ -169,7 +174,7 @@ watch([draft, cameraMotionEntities, cameraAllowedHosts, speechBindings], () => {
 }, { deep: true });
 
 onMounted(() => {
-  unregisterSaveAction = registerPageSaveAction({ dirty, ready, saving, save });
+  unregisterSaveAction = registerPageSaveAction({ dirty, ready, saving, save }, 350, settingsSnapshot);
   void load();
 });
 

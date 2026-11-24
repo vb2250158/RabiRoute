@@ -13,10 +13,20 @@ async function request<T>(init: RequestInit = {}): Promise<T> {
 }
 
 export const desktopSettingsClient = {
-  read: (): Promise<DesktopSettings> => request(),
-  update: (patch: Partial<DesktopSettings>): Promise<DesktopSettings> => request({
+  read: readDesktopSettings,
+  invalidateRead: () => { readFlight = undefined; },
+  update: (patch: Partial<DesktopSettings>): Promise<DesktopSettings> => request<DesktopSettings>({
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(patch)
-  })
+  }).finally(() => { readFlight = undefined; })
 };
+
+let readFlight: Promise<DesktopSettings> | undefined;
+
+function readDesktopSettings(): Promise<DesktopSettings> {
+  if (readFlight) return readFlight;
+  const flight = request<DesktopSettings>().finally(() => { if (readFlight === flight) readFlight = undefined; });
+  readFlight = flight;
+  return readFlight;
+}

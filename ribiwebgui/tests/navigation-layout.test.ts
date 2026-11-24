@@ -27,7 +27,7 @@ test("sidebar renders only catalog navigation backed by activated pages", () => 
   assert.ok(utilityRenderIndex > footerIndex);
   assert.ok(footerRenderIndex > utilityRenderIndex);
   assert.ok(configDirectoryIndex > footerRenderIndex);
-  assert.match(mainSource, /await pluginCatalogStore\.refresh\(\)/);
+  assert.match(mainSource, /void refreshWebPluginCatalog\(\)/);
   assert.match(pluginCatalogStoreSource, /pluginCatalogClient\.readWeb\(\)/);
   assert.match(pluginCatalogStoreSource, /resolveWebPageCatalog/);
   assert.match(pluginCatalogStoreSource, /resolveWebThemeCatalog/);
@@ -54,22 +54,20 @@ test("sidebar brand shows only the version and route picker has no count or expl
   assert.doesNotMatch(appSource, /:subtitle="item\.raw\.subtitle"/);
 });
 
-test("console is route-card-only while host settings live on the Settings page", () => {
+test("the role list displays catalog roles while host settings live on the Settings page", () => {
   assert.match(overviewSource, /class="app-card glass-card route-card"/);
+  assert.match(overviewSource, /roles\.catalog\.map/);
+  assert.match(overviewSource, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(overviewSource, /Rabi 实例|目录配置|局域网访问 WebGUI|RabiLink 系统转接服务/);
   assert.match(settingsSource, /class="section-title">目录配置<\/div>/);
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });
 
-test("Route cards present only the persisted enabled state", () => {
-  const labelStart = overviewSource.indexOf("function gatewayRuntimeLabel");
-  const colorStart = overviewSource.indexOf("function gatewayRuntimeColor");
-  const label = overviewSource.slice(labelStart, colorStart);
-  const color = overviewSource.slice(colorStart, overviewSource.indexOf("</script>"));
-  assert.match(label, /"已禁用"/);
-  assert.match(label, /"已启用"/);
-  assert.doesNotMatch(label, /runtime\.running|运行中|已停止|启用中|禁用中/);
-  assert.doesNotMatch(color, /runtime\.running/);
+test("role cards show connector icons and use the configured route switch", () => {
+  assert.match(overviewSource, /<MessageConnectorIcon\b/);
+  assert.match(overviewSource, /:model-value="gw\.enabled !== false"/);
+  assert.match(overviewSource, /<v-menu\b/);
+  assert.doesNotMatch(overviewSource, /可接收消息|runtime\.running|route-card-selected|roles\.selectedRoleId/);
 });
 
 test("system selection settings render through the trusted Desktop renderer on Settings", () => {
@@ -91,6 +89,6 @@ test("system selection settings render through the trusted Desktop renderer on S
 test("WebGUI refreshes plugin contributions from Manager events", () => {
   assert.match(appSource, /managerEventSource\("\/api\/events"\)/);
   assert.match(appSource, /addEventListener\("plugin_catalog_changed"/);
-  assert.match(appSource, /pluginCatalogStore\.refresh\(\)/);
+  assert.match(appSource, /refreshWebPluginCatalog\(true\)/);
   assert.match(appSource, /managerEvents\?\.close\(\)/);
 });

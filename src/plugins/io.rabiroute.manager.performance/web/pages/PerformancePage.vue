@@ -134,17 +134,21 @@ async function refresh(): Promise<void> {
 async function saveConfig(): Promise<void> {
   if (!configLoaded.value || saving.value) return;
   saving.value = true;
-  configHydrating.value = true;
+  const submitted = JSON.stringify(config.value);
   error.value = "";
   saved.value = "";
   try {
     const next = await savePerformanceConfig(config.value);
-    config.value = { ...next };
+    if (JSON.stringify(config.value) === submitted) {
+      configHydrating.value = true;
+      config.value = { ...next };
+      await nextTick();
+      configDirty.value = false;
+      configHydrating.value = false;
+    }
     updateFrontendPerformanceConfig(next);
     saved.value = next.enabled ? "性能记录已开启" : "性能记录已关闭";
     await refresh();
-    await nextTick();
-    configDirty.value = false;
   } catch (saveError) {
     error.value = userFacingError(saveError);
     throw saveError;
@@ -166,7 +170,7 @@ onMounted(async () => {
     ready: configLoaded,
     saving,
     save: saveConfig
-  });
+  }, 350, computed(() => JSON.stringify(config.value)));
   try {
     config.value = { ...await loadPerformanceConfig() };
     configLoaded.value = true;

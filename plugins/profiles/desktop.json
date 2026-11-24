@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.17",
+      "version": "0.1.18",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.39",
+      "version": "0.1.41",
       "enabled": true,
       "config": {},
       "grants": []
@@ -38,7 +38,7 @@
     {
       "id": "manager:speech",
       "package": "io.rabiroute.manager.speech",
-      "version": "0.1.13",
+      "version": "0.1.14",
       "enabled": true,
       "config": {},
       "grants": []
@@ -46,7 +46,7 @@
     {
       "id": "manager:performance",
       "package": "io.rabiroute.manager.performance",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "enabled": true,
       "config": {},
       "grants": []
@@ -93,7 +93,7 @@
     },
     {
       "id": "manager:html-shares",
-      "version": "0.1.5",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": [],
@@ -146,7 +146,7 @@
     {
       "id": "manager:message-adapter-control",
       "package": "io.rabiroute.manager.message-adapter-control",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "enabled": true,
       "config": {},
       "grants": []
@@ -194,7 +194,7 @@
     {
       "id": "manager:desktop",
       "package": "io.rabiroute.manager.desktop",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "enabled": true,
       "config": {},
       "grants": []
@@ -221,7 +221,7 @@
     {
       "id": "manager:xiaomi-home",
       "package": "io.rabiroute.manager.xiaomi-home",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "enabled": true,
       "config": {
         "baseUrl": "http://127.0.0.1:8123",
@@ -305,7 +305,7 @@
     {
       "id": "endpoint:rabilink",
       "package": "io.rabiroute.endpoint.rabilink",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "enabled": true,
       "config": {},
       "grants": []

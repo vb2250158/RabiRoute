@@ -5,7 +5,7 @@ import { useI18n } from "../i18n/index";
 import { userFacingError } from "../userFacingError";
 import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, readAvailablePluginPackages, importPluginPackage, inspectPluginPackageUrl, importPluginPackageUrl, installManagedPlugin, uninstallManagedPlugin, type AvailablePluginPackage, type RemoteArchiveInspection, type ManagedPlugin } from "../pluginManagementClient";
 import { pluginCatalogStore } from "../pluginCatalogStore";
-import { refreshWebPluginModulesSafely } from "../pluginModuleBootstrap";
+import { refreshWebPluginCatalog } from "../pluginModuleBootstrap";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -101,7 +101,7 @@ async function togglePlugin(plugin: ManagedPlugin, enabled: boolean): Promise<vo
       if (catalog.plugins.find(item => item.instanceId === plugin.instanceId)?.enabled !== enabled) {
         rowErrors.value[plugin.instanceId] = t("插件状态未确认，请刷新后查看。");
       }
-      void pluginCatalogStore.refresh().then(() => refreshWebPluginModulesSafely());
+      void refreshWebPluginCatalog(true);
     } catch (cause) {
       if (live) {
         rowErrors.value[plugin.instanceId] = userFacingError(cause);
@@ -124,7 +124,7 @@ function acceptCatalog(catalog: Awaited<ReturnType<typeof readPluginManagementCa
 }
 async function refreshResources(): Promise<void> {
   try { packages.value = await readAvailablePluginPackages(); } catch (cause) { packageError.value = userFacingError(cause); }
-  void pluginCatalogStore.refresh().then(() => refreshWebPluginModulesSafely());
+  void refreshWebPluginCatalog(true);
 }
 async function importDirectory(): Promise<void> {
   if (importing.value || !sourceDirectory.value.trim()) return;
@@ -164,7 +164,7 @@ async function installUrlPackage(): Promise<void> {
     packages.value = result;
     urlDialog.value = false;
     packageNotice.value = t("插件包已下载并导入，可在下方安装。");
-    void pluginCatalogStore.refresh().then(() => refreshWebPluginModulesSafely());
+    void refreshWebPluginCatalog(true);
   } catch (cause) {
     urlError.value = userFacingError(cause);
   } finally { installingUrl.value = false; }

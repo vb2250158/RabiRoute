@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { useRoleStore, roleRequest, type RoleSummary } from "../stores/roleStore";
 import { useI18n } from "../i18n/index";
 import { RemotePersonaReferenceBrowser, bootstrapRemotePersonaService, remotePersonaServicePath } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
@@ -77,7 +77,9 @@ function choose(roleId: string): void {
   emit("select", roleId, source.value);
   toggle(false);
 }
-onMounted(() => { void remotePersona.refreshDevices(); });
+watch(() => store.sourceDeviceId, deviceId => {
+  if (deviceId && !open.value) void remotePersona.refreshDevices();
+}, { immediate: true });
 onBeforeUnmount(() => { ++epoch; remotePersona.invalidate(); });
 </script>
 

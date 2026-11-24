@@ -15,6 +15,7 @@ sys.path.insert(0, TRAY_ROOT)
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, Signal  # noqa: E402
 from PySide6.QtGui import QColor, QEnterEvent, QImage, QKeyEvent, QMouseEvent  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from rabiroute_tray.manager_client import DesktopSettings  # noqa: E402
@@ -1552,7 +1553,10 @@ class SystemScreenshotTest(unittest.TestCase):
         )
         emitted: list[tuple[str, str]] = []
         composer.send_requested.connect(lambda gateway_id, text: emitted.append((gateway_id, text)))
-        composer._target.setCurrentIndex(1)
+        composer.show()
+        QTest.mouseClick(composer._target, Qt.MouseButton.LeftButton)
+        channels = composer._target._channels
+        QTest.mouseClick(channels.viewport(), Qt.MouseButton.LeftButton, pos=channels.visualItemRect(channels.item(1)).center())
         composer._text.setPlainText("  请查看截图中的按钮布局。  ")
 
         composer._send()

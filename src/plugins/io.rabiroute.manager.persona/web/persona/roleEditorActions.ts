@@ -92,7 +92,7 @@ export function createRoleEditorActions(read: () => GatewayDefinition | null, to
 
   function removeAutomation(ruleId: string): void {
     const gateway = selectedGateway.value;
-    if (!gateway || ruleId === "role-panel-message") return;
+    if (!gateway) return;
     const automations = automationRulesForGateway(gateway);
     const index = automations.findIndex(rule => rule.id === ruleId);
     if (index < 0) return;

@@ -47,7 +47,8 @@ export const routeKindLabels: Record<string, string> = {
   manual_trigger: "手动触发",
   role_panel_message: "角色面板消息",
   plan_feedback: "计划审批",
-  voice_transcript: "语音转写",
+  voice_transcript: "完成转写",
+  voice_received: "收到语音",
   wearable_health_alert: "智能手表/手环健康告警",
   wecom_message: "企业微信消息",
   weixin_message: "微信机器人消息"
@@ -530,7 +531,7 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       adapter: "speech",
       title: "语音消息端",
       note: "本机语音转写入口；语音热投递或关键词模式仍由 Route 单独控制。",
-      groups: [{ title: "语音转写", routeKinds: ["voice_transcript"] }]
+      groups: [{ title: "语音服务", routeKinds: ["voice_transcript", "voice_received"] }]
     },
     {
       adapter: "xiaomiHome",

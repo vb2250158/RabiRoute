@@ -383,3 +383,24 @@ test("a failed local selection keeps the compiled chooser unselected and the sam
   assert.deepEqual(f.writes, [{ source: "local", client_id: null }, { source: "local", client_id: null }]);
   assert.equal(f.model.selectedAudioStream.value, "local");
 });
+
+test("the speech page distinguishes an unread status from a stopped service", t => {
+  const { model, speech } = selectionRecoveryWorkbench(t);
+  const online = speech.status.value;
+  speech.status.value = null;
+  assert.equal(model.runtimeStatusLabel.value, "检查中");
+  assert.equal(model.runtimeStatusKnown.value, false);
+
+  model.requestError.value = "status request failed";
+  assert.equal(model.runtimeStatusLabel.value, "状态未知");
+
+  speech.status.value = online;
+  speech.loading.value = true;
+  assert.equal(model.runtimeStatusLabel.value, "已开启");
+  assert.equal(model.runtimeStatusKnown.value, true);
+
+  speech.status.value = { ...online, state: "offline", configuredUrl: "" };
+  assert.equal(model.runtimeStatusLabel.value, "已关闭");
+  speech.status.value = { ...online, state: "offline", error: "probe timed out" };
+  assert.equal(model.runtimeStatusLabel.value, "未连接");
+});

@@ -1,10 +1,11 @@
-import { computed, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 import type { GatewayDefinition, RuntimeStatus } from "../types";
 import { roleConfigurationOf, type RoleConfiguration, type RoleConfigurationRoute } from "@shared/roleConfiguration";
 import { automationRulesForGateway } from "../utils/gatewayHelpers";
 import { createRoleEditorActions } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/roleEditorActions";
 import { useGatewayStore } from "./gatewayStore";
+import { registerPageSaveAction } from "../pageSaveAction";
 import { remotePersonaServicePath, bootstrapRemotePersonaService } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 export type RoleSummary = { roleId: string; title: string; archivedAt: string | null; avatarUrl?: string; avatarConfigured?: boolean; error?: string };
@@ -32,6 +33,8 @@ export const useRoleStore = defineStore("roles", () => {
   const catalog = ref<RoleSummary[]>([]);
   const catalogPartial = ref(false), catalogError = ref("");
   let catalogSource: string | undefined;
+  let catalogLoaded = false;
+  let catalogRead: { source: string; promise: Promise<void> } | undefined;
   const selectedRoleId = ref("");
   const sourceDeviceId = ref("");
   const detail = ref<RoleDetail | null>(null);
@@ -42,7 +45,8 @@ export const useRoleStore = defineStore("roles", () => {
   const error = ref("");
   let requestVersion = 0;
   let catalogVersion = 0;
-  const dirty = computed(() => draft.value !== null && JSON.stringify(roleConfigurationOf(draft.value)) !== saved.value);
+  const currentConfig = computed(() => draft.value === null ? "" : JSON.stringify(roleConfigurationOf(draft.value)));
+  const dirty = computed(() => draft.value !== null && currentConfig.value !== saved.value);
   const archived = computed(() => Boolean(detail.value?.archivedAt));
   const ready = computed(() => Boolean(draft.value && detail.value && !loading.value && !archived.value));
   const selectedGateway = computed(() => draft.value);
@@ -59,11 +63,12 @@ export const useRoleStore = defineStore("roles", () => {
   });
   const meta = computed(() => routes.meta);
   function endpoint(url: string) { return sourceDeviceId.value ? remotePersonaServicePath(sourceDeviceId.value, url) : url; }
-  async function loadCatalog(): Promise<void> {
+  async function readCatalog(): Promise<void> {
     const generation = ++catalogVersion;
     const source = sourceDeviceId.value;
     if (catalogSource !== undefined && catalogSource !== source) catalog.value = [];
     catalogSource = source;
+    catalogLoaded = false;
     const previous = [...catalog.value];
     catalogError.value = "";
     catalogPartial.value = false;
@@ -72,7 +77,7 @@ export const useRoleStore = defineStore("roles", () => {
     try {
       if (source) await bootstrapRemotePersonaService(source);
       do {
-      const url = `/api/roles?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const url = `/api/roles?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
       const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
       if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
       collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));
@@ -81,6 +86,7 @@ export const useRoleStore = defineStore("roles", () => {
         const received = new Set(collected.map(role => role.roleId));
         catalog.value = cursor ? [...collected, ...previous.filter(role => !received.has(role.roleId))] : [...collected];
       } while (cursor);
+      catalogLoaded = true;
     } catch (failure) {
       if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
       const status = (failure as { status?: number }).status;
@@ -89,6 +95,17 @@ export const useRoleStore = defineStore("roles", () => {
       catalogError.value = failure instanceof Error ? failure.message : String(failure);
       throw failure;
     }
+  }
+  function loadCatalog(): Promise<void> {
+    const source = sourceDeviceId.value;
+    const promise = readCatalog().finally(() => { if (catalogRead?.promise === promise) catalogRead = undefined; });
+    catalogRead = { source, promise };
+    return promise;
+  }
+  function ensureCatalog(): Promise<void> {
+    const source = sourceDeviceId.value;
+    if (catalogRead?.source === source) return catalogRead.promise;
+    return catalogLoaded && catalogSource === source ? Promise.resolve() : loadCatalog();
   }
   async function load(): Promise<void> {
     const id = selectedRoleId.value;
@@ -134,24 +151,39 @@ export const useRoleStore = defineStore("roles", () => {
     if (!ready.value || !draft.value || !detail.value || saving.value) return;
     const id = selectedRoleId.value;
     const source = sourceDeviceId.value;
-    const submitted = JSON.stringify(roleConfigurationOf(draft.value));
+    const submitted = currentConfig.value;
+    const current = draft.value;
     saving.value = true;
     try {
       const result = await mutateRole<RoleDetail>(id, "configuration", { expectedRevision: detail.value.revision, config: JSON.parse(submitted) }, source);
-      if (id !== selectedRoleId.value || source !== sourceDeviceId.value) return;
+      if (draft.value !== current) return;
       detail.value = result;
-      saved.value = JSON.stringify(result.config);
       // Preserve edits made while the submitted revision was in flight.
-      if (draft.value && JSON.stringify(roleConfigurationOf(draft.value)) === submitted) Object.assign(draft.value, result.config);
-      await routes.load();
+      if (currentConfig.value === submitted) {
+        for (const key of Object.keys(roleConfigurationOf(current)) as (keyof RoleConfiguration)[]) {
+          if (!(key in result.config)) delete current[key];
+        }
+        Object.assign(current, result.config);
+        saved.value = currentConfig.value;
+      } else {
+        saved.value = JSON.stringify(result.config);
+      }
     } catch (failure) {
       const confirmed = (failure as { confirmedRole?: RoleDetail }).confirmedRole;
-      if (confirmed?.roleId === id && confirmed.config && id === selectedRoleId.value && source === sourceDeviceId.value) {
+      if (confirmed?.roleId === id && confirmed.config && draft.value === current) {
         detail.value = confirmed;
         saved.value = JSON.stringify(confirmed.config);
+        return; // Drain the newer draft using the revision from the recovered receipt.
       }
       throw failure;
     } finally { saving.value = false; }
+  }
+  const saveInput = computed(() => JSON.stringify([detail.value?.revision, currentConfig.value]));
+  const backgroundSave = registerPageSaveAction({ dirty, ready, saving, save }, 350, saveInput);
+  onScopeDispose(backgroundSave);
+  const submitConfig = backgroundSave.flush;
+  function flushConfig(): Promise<void> {
+    return backgroundSave.failure.value ? Promise.resolve() : backgroundSave.flush();
   }
   function touch() { /* dirty is derived from the independent role draft. */ }
   const actions = createRoleEditorActions(() => draft.value, touch);
@@ -164,5 +196,5 @@ export const useRoleStore = defineStore("roles", () => {
     await routes.openConfigFile(type, "", roleId);
   }
   return { catalog, catalogPartial, catalogError, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,
-    selectedGateway, selectedRuntime, gateways, meta, loadCatalog, load, select, refreshLinkedRoutes, save, touch, openConfigFile, ...actions };
+    selectedGateway, selectedRuntime, gateways, meta, loadCatalog, ensureCatalog, load, select, refreshLinkedRoutes, submitConfig, flushConfig, touch, openConfigFile, ...actions };
 });

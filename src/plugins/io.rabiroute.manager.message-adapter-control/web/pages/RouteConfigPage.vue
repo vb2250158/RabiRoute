@@ -3,6 +3,7 @@ import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { agentDirectoryDiagnosticsForTarget, agentDirectoryFailure, readAgentInstanceDirectory, unassignedAgentDirectoryDiagnostics, type AgentDirectoryDiagnostic } from "../../../../../ribiwebgui/src/connectedAgentInstances";
 import RoleBindingEditor from "../components/RoleBindingEditor.vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
+import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpeechStore } from "../../../../../ribiwebgui/src/stores/speechStore";
@@ -20,7 +21,7 @@ import { agentInstanceDisplayName, type AgentInstance } from "@shared/agentInsta
 import { managerAccessToken, managerEventSource } from "../../../../../ribiwebgui/src/managerApi";
 import { pluginCatalogStore } from "../../../../../ribiwebgui/src/pluginCatalogStore";
 import { webRenderersAt } from "../../../../../ribiwebgui/src/pluginRenderers";
-import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, MessageAdapterScanResult } from "../../../../../ribiwebgui/src/types";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, GatewayDefinition, MessageAdapterScanResult } from "../../../../../ribiwebgui/src/types";
 import { isNonMessageEndpoint, adapterLabel, applyAdapterDefaults, isAdapterDisabled, setGatewayAdapters, toggleAdapterDisabled } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
 import { DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS } from "@shared/gatewayConfigModel";
@@ -230,6 +231,9 @@ const agentCardOpened = ref<Record<string, boolean>>({});
 const openEndpointType = ref<MessageAdapterType>();
 const endpointLoginRequested = ref(false);
 const endpointSettingsOpen = ref(false);
+const endpointDraft = ref<GatewayDefinition>();
+let endpointBaseline: GatewayDefinition | undefined;
+const endpointDraftDirty = computed(() => Boolean(endpointDraft.value && JSON.stringify(endpointDraft.value) !== JSON.stringify(endpointBaseline)));
 const endpointSpeechChanged = ref(false);
 const endpointDialogError = ref("");
 const endpointPreparing = ref(false);
@@ -251,6 +255,26 @@ const openEndpoint = computed(() => endpointCards.value.find(card => card.type =
 const endpointConnections = computed(() => new Map(endpointCards.value.map(card => [card.type, messageEndpointConnection(gateway.value, runtime.value, card.type)])));
 
 const gateway = computed(() => store.selectedGateway);
+const pendingRouteChanges = ref<string[]>([]);
+onBeforeUnmount(registerPageSaveAction({
+  dirty: computed(() => pendingRouteChanges.value.length > 0),
+  ready: computed(() => !store.loading),
+  saving: computed(() => store.saving),
+  save: async () => {
+    const routeId = pendingRouteChanges.value[0];
+    pendingRouteChanges.value = pendingRouteChanges.value.slice(1);
+    try {
+      await store.save(routeId);
+    } catch (error) {
+      pendingRouteChanges.value = [routeId, ...pendingRouteChanges.value.filter(id => id !== routeId)];
+      throw error;
+    }
+  }
+}, 0, pendingRouteChanges));
+function queueRouteChange(routeId: string): void {
+  if (!pendingRouteChanges.value.includes(routeId)) pendingRouteChanges.value = [...pendingRouteChanges.value, routeId];
+}
+
 watch([() => gateway.value?.id, () => route.query.tab, () => store.loading], requestConnectionRefresh);
 watch(() => store.diagnosticsLoading, flushConnectionRefresh);
 
@@ -286,6 +310,8 @@ async function setAdapterEnabled(type: MessageAdapterType, value: unknown): Prom
 function closeEndpoint(): void {
   if (openEndpointType.value) delete adapterLifecycleRevision.value[openEndpointType.value];
   endpointSettingsOpen.value = false;
+  endpointDraft.value = undefined;
+  endpointBaseline = undefined;
   endpointSpeechChanged.value = false;
   openEndpointType.value = undefined;
   endpointLoginRequested.value = false;
@@ -297,6 +323,8 @@ function openEndpointSettings(type: MessageAdapterType): void {
   if (!target) return;
   if (!target.agentRoleId) {
     openEndpointType.value = type;
+    endpointBaseline = JSON.parse(JSON.stringify(target));
+    endpointDraft.value = JSON.parse(JSON.stringify(target));
     endpointSettingsOpen.value = true;
     return;
   }
@@ -311,6 +339,7 @@ function addEndpoint(type: MessageEndpointType): void {
   applyAdapterDefaults(target);
   adapterLifecycleRevision.value[type] = 1;
   store.touch();
+  queueRouteChange(target.id);
 }
 
 async function connectEndpoint(type: MessageAdapterType): Promise<void> {
@@ -354,6 +383,13 @@ async function disconnectEndpoint(type: MessageAdapterType): Promise<void> {
 async function saveEndpoint(): Promise<void> {
   const id = gateway.value?.id;
   if (!id) return;
+  const draft = endpointDraft.value;
+  if (draft && gateway.value && endpointBaseline) {
+    const keys = new Set([...Object.keys(endpointBaseline), ...Object.keys(draft)] as (keyof GatewayDefinition)[]);
+    for (const key of keys) {
+      if (JSON.stringify(draft[key]) !== JSON.stringify(endpointBaseline[key])) Object.assign(gateway.value, { [key]: draft[key] });
+    }
+  }
   const reconcileSpeech = endpointSpeechChanged.value;
   endpointDialogError.value = "";
   try {
@@ -946,6 +982,7 @@ function selectPrimaryAgent(value: unknown): void {
   if (!gateway.value || typeof value !== "string") return;
   selectRouteAgent(gateway.value, value);
   store.touch();
+  queueRouteChange(gateway.value.id);
 }
 
 function openAgentSettings(type: AgentAdapterType): void {
@@ -1095,10 +1132,10 @@ watch(() => gateway.value?.id, () => {
             <v-card-text>
               <v-progress-linear v-if="endpointPreparing" indeterminate color="primary" />
               <p v-if="endpointDialogError" role="alert" class="text-error text-body-2 mt-2">{{ endpointDialogError }}</p>
-              <AutomationEndpointSettings v-if="endpointSettingsOpen" :gateway="gateway" :endpoint="openEndpoint.type" expanded @speech-changed="endpointSpeechChanged = true" />
+              <AutomationEndpointSettings v-if="endpointSettingsOpen && endpointDraft" :gateway="endpointDraft" :endpoint="openEndpoint.type" expanded @speech-changed="endpointSpeechChanged = true" />
               <v-switch v-if="openEndpoint.type === 'rabilink' && !endpointSettingsOpen && !endpointPreparing"
                 label="启用消息端" density="compact" hide-details :model-value="!isAdapterDisabled(gateway, openEndpoint.type)"
-                :disabled="adapterActionBusy[openEndpoint.type]" @update:model-value="value => setAdapterEnabled('rabilink', value)" />
+                :disabled="adapterActionBusy[openEndpoint.type]" @update:model-value="value => { setAdapterEnabled('rabilink', value); queueRouteChange(gateway.id); }" />
               <MessageEndpointCardHost v-if="!endpointSettingsOpen && !endpointPreparing && openEndpoint.available"
                 :renderers="settingsRenderersForMessageEndpoint(openEndpoint.type)"
                 :context="{ messageEndpointType: openEndpoint.type, routeId: gateway.id, loginRequested: endpointLoginRequested, scan: messageScanFor(openEndpoint.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
@@ -1108,10 +1145,11 @@ watch(() => gateway.value?.id, () => {
                 @busy="value => { if (openEndpoint) adapterActionBusy[openEndpoint.type] = value; }"
               />
             </v-card-text>
-            <v-card-actions v-if="endpointDialogError || (!endpointPreparing && (endpointSettingsOpen || openEndpoint.type !== 'weixin') && store.dirty)">
+            <v-card-actions v-if="endpointDialogError || (!endpointPreparing && (endpointSettingsOpen ? endpointDraftDirty : openEndpoint.type !== 'weixin' && store.dirty))">
               <v-spacer />
-              <v-btn v-if="endpointDialogError" color="primary" variant="tonal" @click="connectEndpoint(openEndpoint.type)">重试</v-btn>
-              <v-btn v-else color="primary" variant="tonal" :loading="store.saving" :disabled="adapterActionBusy[openEndpoint.type]" @click="saveEndpoint">保存</v-btn>
+              <v-btn v-if="endpointSettingsOpen" variant="text" @click="closeEndpoint">取消</v-btn>
+              <v-btn v-if="endpointDialogError" color="primary" variant="tonal" @click="endpointSettingsOpen ? saveEndpoint() : connectEndpoint(openEndpoint.type)">重试</v-btn>
+              <v-btn v-else color="primary" variant="tonal" :loading="store.saving" :disabled="adapterActionBusy[openEndpoint.type]" @click="saveEndpoint">确定</v-btn>
             </v-card-actions>
           </v-card>
         </v-dialog>
@@ -1459,7 +1497,7 @@ watch(() => gateway.value?.id, () => {
                 <v-card-actions>
                   <v-btn variant="text" size="small" @click="removeAgent(agent.type)">取消连接</v-btn>
                   <v-spacer />
-                  <v-btn v-if="store.dirty" size="small" variant="tonal" color="primary" :loading="store.saving" @click="saveAgentSettings">保存</v-btn>
+                  <v-btn v-if="store.dirty" size="small" variant="tonal" color="primary" :loading="store.saving" @click="saveAgentSettings">确定</v-btn>
                 </v-card-actions>
               </v-card>
             </v-dialog>
@@ -1502,7 +1540,7 @@ watch(() => gateway.value?.id, () => {
                 <v-card-actions>
                   <v-btn variant="text" size="small" @click="removeRemoteAgent(target.id)">取消连接</v-btn>
                   <v-spacer />
-                  <v-btn v-if="store.dirty" variant="tonal" size="small" color="primary" :loading="store.saving" @click="saveAgentSettings">保存</v-btn>
+                  <v-btn v-if="store.dirty" variant="tonal" size="small" color="primary" :loading="store.saving" @click="saveAgentSettings">确定</v-btn>
                 </v-card-actions>
               </v-card>
             </v-dialog>

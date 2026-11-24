@@ -21,6 +21,7 @@ Rabi 优先学习和维护这些能力：
 
 结构化技能放在 `skills/` 目录。RabiRoute 会读取每个 Markdown 文件的 frontmatter，按 `id`、`title`、`summary` 和 `keywords` 做轻量召回；技能正文只在 Agent 按 GET 路径读取时使用。
 
+- `message-response`：私聊、群聊、附件与心跳处理，按需进入以下技能。
 - `skills/companionship-response.md`：陪伴回应。
 - `skills/rabiroute-guide.md`：RabiRoute 定位和路由解释。
 - `skills/configuration-triage.md`：配置和链路排查。

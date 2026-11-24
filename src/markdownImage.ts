@@ -10,6 +10,7 @@ import { Marked } from "./vendor/marked.esm.js";
 import WebSocket from "ws";
 
 const IMAGE_WIDTH = 1000;
+const HTML_THUMBNAIL = { width: 640, height: 360 };
 /** Public quotas: zero means no application limit; browser/runtime failures remain visible. */
 function createMarkdownImageSettings(env: NodeJS.ProcessEnv = process.env) {
   const integer = (name: string, fallback = 0, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) => {
@@ -238,16 +239,17 @@ function diagramPageCuts(width: number, height: number, labels: DiagramLabelBoun
   return cuts;
 }
 
-async function captureHtml(port: number, html: string, prepareScript?: string, paginate = false): Promise<Buffer[]> {
+async function captureHtml(port: number, html: string, prepareScript?: string, paginate = false, thumbnail = false): Promise<Buffer[]> {
   const socket = new WebSocket(await pageWebSocketUrl(port), { handshakeTimeout: markdownImageSettings.timeoutMs });
-  return captureHtmlPagesOnSocket(socket, html, markdownImageSettings.timeoutMs, markdownImageSettings, prepareScript, paginate);
+  return captureHtmlPagesOnSocket(socket, html, markdownImageSettings.timeoutMs, markdownImageSettings, { prepareScript, paginate, thumbnail, ownsBrowser: true });
 }
 
 async function captureHtmlOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings, prepareScript?: string): Promise<Buffer> {
-  return (await captureHtmlPagesOnSocket(socket, html, timeoutMs, settings, prepareScript))[0];
+  return (await captureHtmlPagesOnSocket(socket, html, timeoutMs, settings, { prepareScript }))[0];
 }
 
-async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeoutMs = markdownImageSettings.timeoutMs, settings = markdownImageSettings, prepareScript?: string, paginate = false): Promise<Buffer[]> {
+async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeoutMs: number, settings: typeof markdownImageSettings,
+  { prepareScript, paginate = false, thumbnail, ownsBrowser }: { prepareScript?: string; paginate?: boolean; thumbnail?: boolean; ownsBrowser?: boolean }): Promise<Buffer[]> {
   type Waiter = { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void };
   let sequence = 0;
   let connectionError: Error | undefined;
@@ -323,13 +325,23 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
     else if (socket.readyState !== WebSocket.CONNECTING) onClose();
     await opened.promise;
     await send("Page.enable");
-    await send("Emulation.setDeviceMetricsOverride", { width: IMAGE_WIDTH, height: 100, deviceScaleFactor: 1, mobile: false });
-    const loaded = waitFor("Page.loadEventFired");
-    await Promise.all([
-      loaded,
-      send("Page.navigate", { url: `data:text/html;base64,${Buffer.from(html).toString("base64")}` })
-    ]);
-    let width = IMAGE_WIDTH;
+    let width = thumbnail ? HTML_THUMBNAIL.width : IMAGE_WIDTH;
+    await send("Emulation.setDeviceMetricsOverride", { width, height: thumbnail ? HTML_THUMBNAIL.height : 100, deviceScaleFactor: 1, mobile: false });
+    if (thumbnail) {
+      await send("Emulation.setScriptExecutionDisabled", { value: true });
+      await send("Network.enable");
+      await send("Network.setBlockedURLs", { urls: ["http://*", "https://*", "file://*", "ftp://*", "ws://*", "wss://*"] });
+      const { frameTree } = await send("Page.getFrameTree") as { frameTree: { frame: { id: string } } };
+      await Promise.all([
+        waitFor("Page.loadEventFired"),
+        send("Page.setDocumentContent", { frameId: frameTree.frame.id, html })
+      ]);
+    } else {
+      await Promise.all([
+        waitFor("Page.loadEventFired"),
+        send("Page.navigate", { url: `data:text/html;base64,${Buffer.from(html).toString("base64")}` })
+      ]);
+    }
     let labelBounds: DiagramLabelBounds[] = [];
     let paginateFlowchart = false;
     if (prepareScript) {
@@ -345,7 +357,7 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
         paginateFlowchart = paginate && (layout?.flowchart === true || layout?.document === true);
       }
     }
-    const metrics = await send("Page.getLayoutMetrics");
+    const metrics = thumbnail ? { cssContentSize: HTML_THUMBNAIL } : await send("Page.getLayoutMetrics");
     const size = (metrics.cssContentSize || metrics.contentSize || {}) as Record<string, unknown>;
     const height = Math.ceil(Number(size.height));
     if (!Number.isSafeInteger(height) || height < 1 || height > 2_147_483_647) {
@@ -356,7 +368,7 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
     const cuts = paginateFlowchart ? diagramPageCuts(width, height, labelBounds) : [0, height];
     const pages: Buffer[] = [];
     for (let page = 1; page < cuts.length; page++) {
-      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, fromSurface: true,
+      const screenshot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: !thumbnail, fromSurface: true,
         ...(paginateFlowchart ? { clip: { x: 0, y: cuts[page - 1], width, height: cuts[page] - cuts[page - 1], scale: 1 } } : {}) });
       const png = Buffer.from(String(screenshot.data || ""), "base64");
       if (png.length < 8 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
@@ -367,6 +379,10 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
     }
     return pages;
   } finally {
+    if (ownsBrowser && socket.readyState === WebSocket.OPEN) {
+      // Ask Chromium to close its renderer processes before joining the browser on Windows.
+      await send("Browser.close").catch(() => {});
+    }
     failAll(new Error("Markdown browser connection closed."));
     socket.off("message", onMessage);
     // Keep error handling until close, including errors caused by aborting a handshake.
@@ -381,6 +397,13 @@ async function captureHtmlPagesOnSocket(socket: WebSocket, html: string, timeout
 
 /** @internal Socket-level seam for deterministic CDP lifecycle tests. */
 export const markdownImageInternals = { captureHtmlOnSocket, browserCandidates, validateMarkdownSource, diagramPageCuts, removeBrowserProfile, stopMarkdownBrowser };
+
+/** Capture the first viewport from an already self-contained HTML share snapshot. */
+export async function renderHtmlShareThumbnail(snapshot: string): Promise<Buffer> {
+  const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline' data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'">`;
+  const html = "<!doctype html>" + policy + snapshot.replace(/^\s*<!doctype html\s*>/i, "");
+  return withRenderingBrowser(false, async port => (await captureHtml(port, html, undefined, false, true))[0]);
+}
 
 async function removeBrowserProfile(profileDir: string, tempRoot: string, remove = fs.promises.rm): Promise<void> {
   if (path.dirname(path.resolve(profileDir)) === tempRoot && path.basename(profileDir).startsWith("rabiroute-markdown-browser-")) {
@@ -432,26 +455,27 @@ export async function renderMarkdownFileToPngPages(file: string): Promise<Buffer
   return renderMarkdownImages(markdown, true, { images, diagrams: [] });
 }
 
-async function stopMarkdownBrowser(browser: ChildProcessWithoutNullStreams): Promise<void> {
+async function stopMarkdownBrowser(browser: ChildProcessWithoutNullStreams, graceful = false): Promise<void> {
   if (browser.pid === undefined || browser.exitCode !== null || browser.signalCode !== null) return;
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => { browser.off("close", onClose); reject(new Error("Markdown browser did not exit before cleanup.")); }, markdownImageSettings.timeoutMs);
-    const onClose = () => { clearTimeout(timeout); resolve(); };
+    const terminate = () => browser.kill();
+    const grace = graceful ? setTimeout(terminate, 1500) : undefined;
+    const timeout = setTimeout(() => {
+      clearTimeout(grace);
+      browser.off("close", onClose);
+      reject(new Error("Markdown browser did not exit before cleanup."));
+    }, markdownImageSettings.timeoutMs + (graceful ? 1500 : 0));
+    const onClose = () => { clearTimeout(grace); clearTimeout(timeout); resolve(); };
     browser.once("close", onClose);
-    browser.kill();
+    if (!graceful) terminate();
   });
 }
 
 async function renderMarkdownImages(markdown: string, paginate: boolean, document?: { images: ReadonlyMap<string, string>; diagrams: Array<{ id: string; source: string }> }): Promise<Buffer[]> {
   // File documents already validate before reading their image resources.
   if (!document) validateMarkdownSource(markdown);
-  const tempRoot = path.resolve(os.tmpdir());
-  const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
-  let browser: ChildProcessWithoutNullStreams | undefined;
-  try {
-    const diagram = mermaidDiagramSource(markdown);
-    const launched = await launchBrowser(profileDir, diagram !== undefined || document !== undefined);
-    browser = launched.process;
+  const diagram = mermaidDiagramSource(markdown);
+  return withRenderingBrowser(diagram !== undefined || document !== undefined, async port => {
     if (diagram !== undefined) {
       const bundlePath = path.join(path.dirname(createRequire(import.meta.url).resolve("mermaid")), "mermaid.min.js");
       const bundle = await fs.promises.readFile(bundlePath, "utf8");
@@ -475,7 +499,7 @@ async function renderMarkdownImages(markdown: string, paginate: boolean, documen
         });
         return { width: contentWidth + 32, labels, flowchart: svg.getAttribute("aria-roledescription")?.startsWith("flowchart") === true };
       })()`;
-      return await captureHtml(launched.port, html, script, paginate);
+      return captureHtml(port, html, script, paginate);
     }
     if (document) {
       const html = markdownImageHtml(markdown, document);
@@ -488,11 +512,22 @@ async function renderMarkdownImages(markdown: string, paginate: boolean, documen
         await Promise.all([...document.images].map(image => image.decode()));
         return {width:${IMAGE_WIDTH},document:true,labels:[...document.querySelectorAll('article > :not(.attachment-diagram), .node, .edgeLabel')].map(element=>{const rect=element.getBoundingClientRect();return {top:rect.top,bottom:rect.bottom};})};
       })()`;
-      return await captureHtml(launched.port, html, script, paginate);
+      return captureHtml(port, html, script, paginate);
     }
-    return await captureHtml(launched.port, markdownImageHtml(markdown));
+    return captureHtml(port, markdownImageHtml(markdown));
+  });
+}
+
+async function withRenderingBrowser<T>(scripts: boolean, render: (port: number) => Promise<T>): Promise<T> {
+  const tempRoot = path.resolve(os.tmpdir());
+  const profileDir = fs.mkdtempSync(path.join(tempRoot, "rabiroute-markdown-browser-"));
+  let browser: ChildProcessWithoutNullStreams | undefined;
+  try {
+    const launched = await launchBrowser(profileDir, scripts);
+    browser = launched.process;
+    return await render(launched.port);
   } finally {
-    if (browser) await stopMarkdownBrowser(browser);
+    if (browser) await stopMarkdownBrowser(browser, true);
     await removeBrowserProfile(profileDir, tempRoot);
   }
 }

@@ -288,7 +288,8 @@ export type PersonaAutomationActionDefinition =
     scriptPath?: string;
     arguments?: string[];
     timeoutSeconds?: number;
-  };
+  }
+  | { type: "record_history" };
 
 export type PersonaAutomationRuleDefinition = {
   id: string;
@@ -854,6 +855,7 @@ function normalizeAutomationAction(value: unknown): PersonaAutomationActionDefin
     target: _target, recentMessageLimit: _recentMessageLimit, message: _message, template: _template,
     ...extensions
   } = raw;
+  if (raw.type === "record_history") return { ...extensions, type: "record_history" };
   if (raw.type === "run_script") {
     return {
       ...extensions,
@@ -918,12 +920,14 @@ function personaAutomationRuleExtensions(raw: Partial<PersonaAutomationRuleDefin
   return extensions;
 }
 
-/** Gateway execution excludes explicit DSBot rules owned by the Manager role scheduler. */
+/** The Manager role scheduler owns scheduled DS Bot deliveries. */
 export function projectGatewayAutomationRules(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return value.filter((item: unknown) => {
-    const action = item && typeof item === "object" ? (item as { action?: { type?: unknown; target?: { kind?: unknown } } }).action : undefined;
-    return !(action?.type === "deliver_agent" && action.target?.kind === "ds_bot");
+    const rule = item && typeof item === "object" ? item as Partial<PersonaAutomationRuleDefinition> : undefined;
+    return !(rule?.trigger?.type === "schedule"
+      && rule.action?.type === "deliver_agent"
+      && rule.action.target?.kind === "ds_bot");
   });
 }
 

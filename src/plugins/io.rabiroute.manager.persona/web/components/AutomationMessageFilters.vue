@@ -23,7 +23,7 @@ const { t } = useI18n();
 
 const endpointKinds = computed(() => automationEndpoints.find(item => item.value === props.endpoint)?.routeKinds ?? []);
 const selectedKinds = computed(() => [...new Set(props.trigger.routeKinds ?? [])]);
-const allKindsSelected = computed(() => endpointKinds.value.length > 1
+const allKindsSelected = computed(() => props.endpoint !== "speech" && endpointKinds.value.length > 1
   && selectedKinds.value.length === endpointKinds.value.length
   && endpointKinds.value.every(kind => selectedKinds.value.includes(kind)));
 const visibleKinds = computed(() => allKindsSelected.value ? [] : selectedKinds.value);
@@ -46,13 +46,14 @@ const conditionTypes = computed<Array<{ key: Condition; title: string; available
   const qq = props.endpoint === "napcat";
   const speech = props.endpoint === "speech";
   const kinds = selectedKinds.value;
+  const transcript = kinds.includes("voice_transcript");
   return [
     { key: "targetUserId", title: "QQ 私聊对象", available: qq && kinds.includes("private") },
     { key: "targetGroupId", title: "指定群聊", available: qq
       ? kinds.some(kind => endpointKinds.value.includes(kind) && kind !== "private")
       : kinds.some(kind => kind === "wecom_message" || kind === "feishu_message") },
-    { key: "allowedSpeakerNames", title: "指定说话人", available: speech },
-    { key: "regex", title: speech ? "转写内容匹配" : "消息内容匹配", available: true }
+    { key: "allowedSpeakerNames", title: "指定说话人", available: speech && transcript },
+    { key: "regex", title: speech ? "转写内容匹配" : "消息内容匹配", available: !speech || transcript }
   ];
 });
 const activeConditions = computed(() => conditionTypes.value.filter(({ key }) =>
@@ -93,12 +94,12 @@ function updateQqTarget(key: "targetUserId" | "targetGroupId", value: unknown): 
     <section :aria-label="t('触发场景')">
       <div class="filter-list-heading">
         <span>{{ t('触发场景') }}</span>
-        <v-menu v-if="availableKinds.length || (visibleKinds.length && endpointKinds.length > 1)">
+        <v-menu v-if="availableKinds.length || (endpoint !== 'speech' && visibleKinds.length && endpointKinds.length > 1)">
           <template #activator="{ props: menuProps }">
             <v-btn v-bind="menuProps" variant="text" color="secondary" size="small" prepend-icon="mdi-plus">{{ t('添加场景') }}</v-btn>
           </template>
           <v-list density="compact">
-            <v-list-item v-if="visibleKinds.length && endpointKinds.length > 1" :title="t('全部场景')" @click="restoreAllScenes" />
+            <v-list-item v-if="endpoint !== 'speech' && visibleKinds.length && endpointKinds.length > 1" :title="t('全部场景')" @click="restoreAllScenes" />
             <v-list-item v-for="kind in availableKinds" :key="kind" :title="t(routeKindLabels[kind] || kind)" @click="addScene(kind)" />
           </v-list>
         </v-menu>

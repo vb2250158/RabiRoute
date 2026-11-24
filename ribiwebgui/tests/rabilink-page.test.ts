@@ -81,7 +81,8 @@ test("Settings retires identity editing; RabiLink has one persistent draft and l
   assert.match(page, /<RabiLinkSettings v-show=/);
   assert.match(page, /<LanAgentsPage v-if="tab === 'agents'"/);
   assert.match(source("components/RabiLinkSettings.vue"), /registerPageSaveAction/);
-  assert.match(source("components/RabiLinkSettings.vue"), /onBeforeRouteLeave/);
+  assert.doesNotMatch(source("components/RabiLinkSettings.vue"), /onBeforeRouteLeave/);
+  assert.match(source("components/RabiLinkSettings.vue"), /JSON\.stringify\(draft\.value\) === submitted/);
   assert.doesNotMatch(source("components/RabiLinkSettings.vue"), /store\.load|replaceDirtyConfig/);
   assert.match(fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8"), /path: "\/lan-agents", redirect:.*path: "\/rabilink".*tab: "agents"/);
   assert.match(source("contributions.ts"), /pages\/RabiLinkPage\.vue/);

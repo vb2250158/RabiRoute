@@ -1,9 +1,10 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { isReviewEvent, type AllDayEvent } from "../shared/allDayRecording.js";
-import { RECORDING_CAPTURE_TYPES, type CaptureEventRouteKind } from "../shared/personaEventTypes.js";
+import { RECORDING_CAPTURE_TYPES, VOICE_RECEIVED_ROUTE_KIND, type CaptureEventRouteKind } from "../shared/personaEventTypes.js";
 import { SYSTEM_EVENT_RESULT_PREFIX, type SystemEventIngress } from "../shared/systemEventIngress.js";
 
 type RecordingAutomationInput = SystemEventIngress & { routeKind: CaptureEventRouteKind };
+type ObservationAutomationInput = SystemEventIngress & { routeKind: CaptureEventRouteKind | typeof VOICE_RECEIVED_ROUTE_KIND };
 export function recordingAutomationInput(roleId: string, event: AllDayEvent): RecordingAutomationInput | undefined {
   const type = RECORDING_CAPTURE_TYPES.find(type => type.value === event.source);
   if (!type || event.state !== "saved" || !isReviewEvent(event)) return;
@@ -15,21 +16,40 @@ export function recordingAutomationInput(roleId: string, event: AllDayEvent): Re
   };
 }
 
+export function voiceReceivedAutomationInput(roleId: string, payload: string): ObservationAutomationInput | undefined {
+  const event = JSON.parse(payload);
+  if (!event || typeof event.id !== "string" || !/^speech-[a-f0-9]{32}$/.test(event.id)
+    || !Number.isFinite(event.time) || event.time <= 0
+    || !Number.isFinite(event.duration) || event.duration <= 0) return;
+  const deviceId = typeof event.device_id === "string" ? event.device_id : undefined;
+  const deviceName = typeof event.device_name === "string" ? event.device_name : undefined;
+  return {
+    routeKind: VOICE_RECEIVED_ROUTE_KIND,
+    record: { time: event.time, messageId: event.id, rawMessage: "收到语音", senderName: "语音服务",
+      source: "speech", adapterType: "speech", routeProfileId: roleId, durationSeconds: event.duration,
+      sourceDeviceId: deviceId, sourceDeviceName: deviceName },
+    templateValues: { durationSeconds: event.duration, sourceDeviceId: deviceId, sourceDeviceName: deviceName }
+  };
+}
+
 export class RecordingAutomationDispatch {
-  private readonly queue: { roleId: string; gatewayId: string; input: RecordingAutomationInput }[] = [];
+  private readonly queue: { roleId: string; gatewayId: string; input: ObservationAutomationInput }[] = [];
   private readonly children = new Map<ChildProcessWithoutNullStreams, Promise<void>>();
   private readonly admitted = new Set<string>();
   private disposed = false;
-  constructor(private readonly gateways: (roleId: string, routeKind: CaptureEventRouteKind) => string[],
+  constructor(private readonly gateways: (roleId: string, routeKind: ObservationAutomationInput["routeKind"]) => string[],
     private readonly spawn: (gatewayId: string) => ChildProcessWithoutNullStreams,
     private readonly report: (roleId: string, reason: string) => void) {}
 
   accept(roleId: string, event: AllDayEvent): void {
-    if (this.disposed) return;
     const input = recordingAutomationInput(roleId, event);
-    if (!input) return;
+    if (input) this.acceptInput(roleId, input);
+  }
+
+  acceptInput(roleId: string, input: ObservationAutomationInput): void {
+    if (this.disposed) return;
     for (const gatewayId of this.gateways(roleId, input.routeKind)) {
-      const key = JSON.stringify([roleId, gatewayId, event.id]);
+      const key = JSON.stringify([roleId, gatewayId, input.routeKind, input.record.messageId]);
       if (this.admitted.has(key)) continue;
       if (this.queue.length >= 32) { this.report(roleId, "queue_full"); break; }
       this.admitted.add(key);

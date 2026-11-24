@@ -40,6 +40,18 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 Write-Step "Copying the versioned Qt host source"
 Copy-Item -LiteralPath (Join-Path $hostSource "main.py") -Destination (Join-Path $OutputRoot "main.py") -Force
 Copy-Item -LiteralPath (Join-Path $hostSource "rabiroute_tray") -Destination (Join-Path $OutputRoot "rabiroute_tray") -Recurse -Force
+$agentIcons = Join-Path $OutputRoot "rabiroute_tray\assets\agent-icons"
+New-Item -ItemType Directory -Force -Path $agentIcons | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $repo "src\plugins") -Directory -Filter "io.rabiroute.agent.*" | ForEach-Object {
+    $provider = $_.Name.Substring("io.rabiroute.agent.".Length)
+    $assets = Join-Path $_.FullName "web\assets"
+    foreach ($extension in @("png", "svg", "ico", "jpg")) {
+        $icon = Join-Path $assets "$provider.$extension"
+        if (Test-Path -LiteralPath $icon -PathType Leaf) {
+            Copy-Item -LiteralPath $icon -Destination $agentIcons
+        }
+    }
+}
 Get-ChildItem -LiteralPath $OutputRoot -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 
 Write-Step "Creating portable Python $PythonVersion Qt runtime"

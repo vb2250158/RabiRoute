@@ -7,6 +7,7 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases } from ".
 import { copyTextToClipboard } from "../../../../../ribiwebgui/src/clipboard";
 import { publishedHttpCallbackUrl } from "../../../../../ribiwebgui/src/webhookRuntimeEndpoint";
 import MessageEndpointDependencyPanel from "../../../../../ribiwebgui/src/messageEndpoints/MessageEndpointDependencyPanel.vue";
+import { roleMessageHistoryPath } from "../../../../../ribiwebgui/src/roleScopedNavigation";
 
 const store = useGatewayStore();
 
@@ -156,7 +157,7 @@ watch([() => endpointProps.context?.routeId, () => endpointProps.context?.active
                     </div>
                     <div class="agent-action-bar mt-2">
                       <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-timeline-clock-outline" :to="`/routes/${encodeURIComponent(gateway?.agentRoleId || '')}/persona`">
+                        <v-btn v-if="gateway?.agentRoleId" size="small" variant="tonal" color="primary" prepend-icon="mdi-timeline-clock-outline" :to="{ path: roleMessageHistoryPath(gateway.agentRoleId), query: { tab: 'all-day-recording', ...(gateway.agentRoleDeviceId ? { source: gateway.agentRoleDeviceId } : {}) } }">
                           前往全天记录
                         </v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="mobileRecordingInfo.loading" @click="loadMobileRecordingInfo">

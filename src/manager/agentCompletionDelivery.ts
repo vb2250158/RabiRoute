@@ -237,8 +237,13 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
             part.payload = { type: "image", path: snapshot };
           } else if ([".html", ".htm"].includes(extension) && params.htmlFilesAsLinks !== "false") {
             if (!options.publishHtmlAttachment) throw new Error("HTML 分享服务尚未就绪；请检查 RabiLink 连接或关闭“HTML转换为链接”后发送原文件。");
-            const url = await options.publishHtmlAttachment(file, String(part.deliveryId));
-            part.payload = { type: "text", text: `${path.basename(file)}\n${url}` };
+            const { url, thumbnail } = await options.publishHtmlAttachment(file, String(part.deliveryId));
+            const name = path.basename(file);
+            part.payload = thumbnail ? { type: "image", segments: [
+              { type: "text", text: name + "\n" },
+              { type: "image", url: `base64://${thumbnail.toString("base64")}` },
+              { type: "text", text: "\n" + url }
+            ] } : { type: "text", text: `${name}\n${url}` };
           }
           await fs.promises.mkdir(path.dirname(preparedPath), { recursive: true });
           const tempPath = preparedPath + "." + process.pid + ".tmp";

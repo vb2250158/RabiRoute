@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import AutomationParameterHelp from "./AutomationParameterHelp.vue";
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { GatewayDefinition, MessageEndpointType } from "../../../../../ribiwebgui/src/types";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
+import { useSpeechStore } from "../../../../../ribiwebgui/src/stores/speechStore";
+import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
 import {
   adapterDefaultWebhookPath,
   applyAdapterDefaults,
@@ -15,9 +17,32 @@ import {
 import { messageAdapterUsesAutomaticGrouping, type MessageGroupingMode, type NapCatInstanceDefinition } from "@shared/gatewayConfigModel";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../../../io.rabiroute.manager.speech/web/speech/speechDeliveryMode";
 
-const props = defineProps<{ gateway: GatewayDefinition; endpoint: MessageEndpointType; expanded?: boolean }>();
-const emit = defineEmits<{ removed: []; speechChanged: [] }>();
+const props = defineProps<{ gateway: GatewayDefinition; endpoint: MessageEndpointType; expanded?: boolean; autoApply?: boolean }>();
+const emit = defineEmits<{ removed: []; speechChanged: []; routeSaved: [] }>();
 const store = useGatewayStore();
+const editVersion = ref(0);
+const syncedVersion = ref(0);
+if (props.autoApply) {
+  const routeId = props.gateway.id;
+  const speech = useSpeechStore();
+  onBeforeUnmount(registerPageSaveAction({
+    dirty: computed(() => editVersion.value !== syncedVersion.value),
+    ready: computed(() => !store.loading),
+    saving: computed(() => store.saving),
+    save: async () => {
+      const submitted = editVersion.value;
+      await store.save(routeId);
+      if (props.endpoint === "speech") await speech.reconcileMicrophone();
+      syncedVersion.value = submitted;
+      emit("routeSaved");
+    }
+  }, 350, editVersion));
+}
+
+function touch(): void {
+  store.touch();
+  editVersion.value += 1;
+}
 const configured = computed(() => (props.gateway.messageAdapters ?? [props.gateway.messageAdapterType ?? "napcat"]).includes(props.endpoint));
 const policy = computed(() => messageAdapterPolicyFor(props.gateway, props.endpoint));
 const napcat = computed(() => props.gateway.napcatInstances?.find(instance => instance.enabled !== false) ?? props.gateway.napcatInstances?.[0]);
@@ -33,7 +58,7 @@ const reviewFields = [
 
 function updateRoute<Key extends keyof GatewayDefinition>(key: Key, value: GatewayDefinition[Key]): void {
   props.gateway[key] = value;
-  store.touch();
+  touch();
 }
 
 function updateNumber(key: "qqbotCallbackPort" | "qqbotIntents" | "feishuWebhookPort" | "webhookPort", raw: unknown, max: number): void {
@@ -44,7 +69,7 @@ function updateNumber(key: "qqbotCallbackPort" | "qqbotIntents" | "feishuWebhook
 function setEnabled(enabled: boolean | null): void {
   if ((enabled === true) === !isAdapterDisabled(props.gateway, props.endpoint)) return;
   toggleAdapterDisabled(props.gateway, props.endpoint);
-  store.touch();
+  touch();
   if (props.endpoint === "speech") emit("speechChanged");
 }
 
@@ -52,7 +77,7 @@ function removeEndpoint(): void {
   const configured = props.gateway.messageAdapters ?? [props.gateway.messageAdapterType ?? "napcat"];
   setGatewayAdapters(props.gateway, configured.filter(type => type !== props.endpoint));
   applyAdapterDefaults(props.gateway);
-  store.touch();
+  touch();
   if (props.endpoint === "speech") emit("speechChanged");
   emit("removed");
 }
@@ -63,39 +88,39 @@ const groupingMode = computed(() => policy.value.messageGrouping.mode ?? (policy
 
 function setGroupingMode(mode: MessageGroupingMode): void {
   setMessageAdapterPolicy(props.gateway, props.endpoint, { messageGrouping: { ...policy.value.messageGrouping, mode } });
-  store.touch();
+  touch();
 }
 
 function setGrouping(field: typeof groupFields[number]["field"], raw: unknown): void {
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 1 || value > 300) return;
   setMessageAdapterPolicy(props.gateway, props.endpoint, { messageGrouping: { ...policy.value.messageGrouping, [field]: value } });
-  store.touch();
+  touch();
 }
 
 function setReviewEnabled(enabled: boolean | null): void {
   setMessageAdapterPolicy(props.gateway, props.endpoint, { conversationReview: { ...policy.value.conversationReview, enabled: enabled === true } });
-  store.touch();
+  touch();
 }
 
 function setReview(field: typeof reviewFields[number], raw: unknown): void {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < field.min || value > 500) return;
   setMessageAdapterPolicy(props.gateway, props.endpoint, { conversationReview: { ...policy.value.conversationReview, [field.field]: value } });
-  store.touch();
+  touch();
 }
 
 function setTextConfirmationThreshold(raw: unknown): void {
   const threshold = Number(raw);
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 200_000) return;
   setMessageAdapterPolicy(props.gateway, props.endpoint, { textConfirmationThreshold: threshold });
-  store.touch();
+  touch();
 }
 
 function setNapcat<Key extends keyof NapCatInstanceDefinition>(key: Key, value: NapCatInstanceDefinition[Key]): void {
   if (!napcat.value) return;
   napcat.value[key] = value;
-  store.touch();
+  touch();
 }
 
 function setNapcatPort(raw: unknown): void {

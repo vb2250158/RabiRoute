@@ -14,3 +14,5 @@ Use this skill when the user asks what RabiRoute is, how routing works, or where
 Keep the product boundary clear: RabiRoute receives events, records them, decides route policy, prepares context, and delivers to a handler. The downstream Agent, workflow, script, or human queue performs the actual work.
 
 Prefer small concrete explanations: input adapter, route decision, AgentPacket, agent adapter, and outbox/action gate.
+
+For route setup, walk through `data/route/<profile>/adapterConfig.json` and `data/roles/<roleId>/personaConfig.json` as needed. Explain the route kind, optional regex, and literal multiline template. Offer the smallest example the user can try.

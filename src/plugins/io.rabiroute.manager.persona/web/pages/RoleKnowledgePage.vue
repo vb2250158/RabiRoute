@@ -372,7 +372,6 @@ const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "
   minute: "2-digit"
 }));
 
-const planCounts = computed(() => planPageCounts.value);
 const normalizedQuery = computed(() => normalizeKnowledgeQuery(query.value));
 const planRequestView = computed<RolePlanPageFilter["view"]>(() =>
   activeView.value === "plans" || activeView.value === "archived"
@@ -2852,13 +2851,19 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       :role-id="roleId" :plan="planBindingDraft" :client="scopedRoleKnowledge()"
       @close="planBindingDraft = undefined" @saved="acceptPlanBinding"
     />
-    <!-- Single-plan mode has no catalog totals to report. -->
-    <div v-if="!focusedPlanId" class="knowledge-metrics">
-      <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ knowledgeCountsReady ? planCounts.plans : '—' }}</b><small>plans/active/&lt;planId&gt;</small></div>
-      <div class="knowledge-metric qa"><span>已归档计划文件</span><b>{{ knowledgeCountsReady ? planCounts.archived : '—' }}</b><small>plans/archive/&lt;planId&gt;</small></div>
-      <div class="knowledge-metric active"><span>近期记忆文件</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b><small>memory/recent</small></div>
-      <div class="knowledge-metric memory"><span>沉淀记忆文件</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b><small>memory/consolidated</small></div>
-    </div>
+    <v-tabs
+      v-if="!focusedPlanId && !embeddedPlanView"
+      v-model="activeView"
+      color="secondary"
+      show-arrows
+      class="knowledge-tabs"
+      :aria-label="t('计划与记忆')"
+    >
+      <v-tab value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-tab>
+      <v-tab value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b></v-tab>
+      <v-tab value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b></v-tab>
+      <v-tab value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-tab>
+    </v-tabs>
 
     <div
       ref="directoryLayout"
@@ -3132,13 +3137,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
       <v-card class="app-card knowledge-browser" :class="{ 'knowledge-focus-layout': feedbackFocusOpen && showsPlanList, 'editor-expanded': feedbackFocusExpanded }" variant="flat">
       <div v-if="!embeddedPlanView" ref="knowledgeToolbar" class="knowledge-toolbar">
-        <!-- One plan has no views to switch between and nothing to search within. -->
-        <v-btn-toggle v-if="!focusedPlanId" v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
-          <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-btn>
-          <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b></v-btn>
-          <v-btn value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b></v-btn>
-          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-btn>
-        </v-btn-toggle>
         <div class="knowledge-tools">
           <v-btn variant="text" prepend-icon="mdi-book-open-page-variant-outline" :disabled="!roleId" @click="skillsOpen = true">{{ isEnglish ? 'Persona Skills' : '角色技能' }}</v-btn>
           <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />

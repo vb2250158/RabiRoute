@@ -77,7 +77,7 @@ Unit and integration tests cover selection, concurrency, receipt recovery, migra
 
 - **Render Markdown attachments as images** renders local `.md` and `.markdown` links into images.
 - **Send image attachments as images** displays PNG, JPEG, GIF, WebP, BMP and AVIF files inline.
-- **Convert HTML to a link** uses the local HTML share plugin (`io.rabiroute.manager.html-shares`) to snapshot `.html` and `.htm` in its stable private plugin storage and sends a RabiLink GUID URL. Referenced local images, stylesheets and scripts are embedded; network resources retain their original URLs. Disabling an option uploads that type as its original file.
+- **Convert HTML to a link** uses the local HTML share plugin (`io.rabiroute.manager.html-shares`) to snapshot `.html` and `.htm`. QQ puts the filename, a static thumbnail of the first viewport, and the RabiLink URL in one message. If thumbnail capture fails, the message still contains the filename and URL. The snapshot embeds referenced local images, stylesheets, and scripts. External resources load from their original URLs when the recipient opens the share. Disable this option to upload the original file.
 
 Rule parameters are `markdownFilesAsImages`, `imageFilesAsImages` and `htmlFilesAsLinks`: omitted or `"true"` enables conversion, `"false"` disables it. The parent `includeFiles="false"` disables all attachment processing.
 

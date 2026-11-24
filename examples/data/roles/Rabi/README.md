@@ -29,7 +29,8 @@ Rabi 是 RabiRoute 的兔娘看板娘，也是 RabiRoute 的灵魂。
 
 ## 目录内容
 
-- `persona.md`：Rabi 的身份、语气、边界和路由行为。
+- `persona.md`：Rabi 的角色卡，包括身份、喜恶、关系、语气和相处边界。
+- `skills/`：按场景读取的[角色 Skill](skills.md)，包括消息回应、配置排查和计划追踪。
 - `personaConfig.json`：Rabi 的示例角色自动化规则，也可以用 `avatar` 引用同目录的角色头像。
 - `growth.md`：Rabi 如何复盘、学习和更新自己。
 - `skills.md`：Rabi 目前会优先维护的能力。

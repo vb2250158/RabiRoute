@@ -9,8 +9,11 @@ from urllib.error import HTTPError
 from array import array
 from types import SimpleNamespace
 from pathlib import Path
+from threading import Event
 from unittest.mock import patch
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QCursor, QInputMethodEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialogButtonBox
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -59,7 +62,8 @@ class FakeManager:
         return dict(self.preferences)
 
     def screenshot_agents(self):
-        return [{"provider": "workbuddy", "label": "WorkBuddy"}, {"provider": "codex", "label": "Codex"}]
+        return [{"provider": provider, "label": label}
+                for provider, label in (("workbuddy", "WorkBuddy"), ("codex", "Codex"), ("dsh", "DSH"))]
 
     def screenshot_threads(self, provider, query, offset):
         self.queries.append((provider, query, offset))
@@ -85,12 +89,14 @@ class ScreenshotComposerTest(unittest.TestCase):
         self.voice_patch.start()
         self.manager = FakeManager()
         self.composer = None
+        self.cursor_at_start = QCursor.pos()
 
     def tearDown(self):
         if self.composer:
             self.composer.set_sending(False)
             self.composer.close()
         self.voice_patch.stop()
+        QCursor.setPos(self.cursor_at_start)
         self.app.processEvents()
 
     def wait_for(self, predicate):
@@ -102,18 +108,38 @@ class ScreenshotComposerTest(unittest.TestCase):
 
     def open(self):
         self.composer = ScreenshotComposer(Path("missing.png"), [SelectionDeliveryTarget("role-route", "角色")], manager=self.manager)
-        self.wait_for(lambda: self.composer._target.count() == 4)
+        self.composer.show()
+        self.wait_for(lambda: self.composer._preferences_loaded)
         return self.composer
+
+    def click_item(self, view, row):
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.visualItemRect(view.item(row)).center())
 
     def test_remembers_exact_agent_conversation_and_supports_paging_and_search(self):
         c = self.open()
+        picker = c._target
         emitted = []
         c.send_requested.connect(lambda key, text: emitted.append((key, text)))
-        c._target.setCurrentIndex(2)
-        self.wait_for(lambda: c._thread.count() == 2)
-        c._more.click()
-        self.wait_for(lambda: c._thread.count() == 3)
-        c._thread.setCurrentIndex(2)
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        channels, threads = picker._channels, picker._threads
+        icon_keys = set()
+        for row, provider in enumerate(("workbuddy", "codex", "dsh"), start=1):
+            item = channels.item(row)
+            self.assertEqual(item.data(Qt.ItemDataRole.UserRole), provider)
+            self.assertFalse(item.icon().isNull())
+            icon_keys.add(item.icon().cacheKey())
+        self.assertEqual(len(icon_keys), 3)
+        QTest.mouseMove(channels.viewport(), channels.visualItemRect(channels.item(2)).center())
+        self.wait_for(lambda: ("codex", "", 0) in self.manager.queries)
+        self.assertIsNone(c.delivery_selection)
+        QTest.mouseMove(channels.viewport(), channels.visualItemRect(channels.item(1)).center())
+        self.wait_for(lambda: threads.count() == 2 and ("workbuddy", "", 0) in self.manager.queries)
+        QTest.mouseMove(threads.viewport(), threads.visualItemRect(threads.item(1)).center())
+        self.assertTrue(picker._panel.isVisible())
+        self.click_item(threads, 1)
+        self.wait_for(lambda: threads.count() == 2 and isinstance(threads.item(1).data(Qt.ItemDataRole.UserRole), dict))
+        self.click_item(threads, 1)
+        self.assertFalse(picker._panel.isVisible())
         c._text.setPlainText("请检查")
         c._send()
         self.assertEqual(emitted, [("agent:workbuddy:workbuddy-full-id-100", "请检查")])
@@ -123,9 +149,65 @@ class ScreenshotComposerTest(unittest.TestCase):
         self.wait_for(lambda: c.delivery_selection is not None)
         self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-100")
         self.assertEqual(c.delivery_selection["provider"], "workbuddy")
-        c._query.setText("old")
-        c._search.click()
+        QTest.mouseClick(c._target, Qt.MouseButton.LeftButton)
+        QTest.keyClicks(c._target, "old")
         self.wait_for(lambda: ("workbuddy", "old", 0) in self.manager.queries)
+        QTest.keyClick(c._target, Qt.Key.Key_Escape)
+        self.assertFalse(c._target._panel.isVisible())
+        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-100")
+
+    def test_focus_search_and_keyboard_confirm_without_sending(self):
+        c = self.open()
+        picker = c._target
+        emitted = []
+        c.send_requested.connect(lambda *args: emitted.append(args))
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        QTest.keyClicks(picker, "C:/workbuddy")
+        self.wait_for(lambda: picker._threads.count() == 2)
+        self.assertEqual(self.manager.queries, [("workbuddy", "C:/workbuddy", 0)])
+        QTest.keyClick(picker, Qt.Key.Key_Return)
+        self.assertIsNone(c.delivery_selection)
+        QTest.keyClick(picker, Qt.Key.Key_Down)
+        QTest.keyClick(picker._threads, Qt.Key.Key_Return)
+        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-0")
+        self.assertEqual(emitted, [])
+
+    def test_switching_channel_ignores_a_late_reply_and_keeps_search(self):
+        started, release, replied = Event(), Event(), Event()
+        request_threads = self.manager.screenshot_threads
+
+        def screenshot_threads(provider, query, offset):
+            if provider == "workbuddy":
+                started.set()
+                release.wait(3)
+                replied.set()
+            return request_threads(provider, query, offset)
+        self.manager.screenshot_threads = screenshot_threads
+        picker = self.open()._target
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        QTest.keyClicks(picker, "history")
+        try:
+            self.wait_for(started.is_set)
+            channels = picker._channels
+            QTest.mouseMove(channels.viewport(), channels.visualItemRect(channels.item(1)).center())
+            self.wait_for(lambda: picker._threads.count() == 2)
+            self.assertIn(("codex", "history", 0), self.manager.queries)
+        finally:
+            release.set()
+        self.wait_for(replied.is_set)
+        QTest.qWait(40)
+        self.click_item(picker._threads, 0)
+        self.assertEqual(picker.selection["threadId"], "codex-full-id-0")
+
+    def test_input_method_text_filters_roles_and_selects_a_role(self):
+        picker = self.open()._target
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        event = QInputMethodEvent()
+        event.setCommitString("角色")
+        QApplication.sendEvent(picker, event)
+        self.assertEqual(picker.text(), "角色")
+        self.click_item(picker._channels, 0)
+        self.assertEqual(picker.selection, {"kind": "role", "gatewayId": "role-route"})
 
     def test_missing_speech_opens_setup_without_enabling_or_saving_on(self):
         self.manager.voice_error = "没有可用模型"
@@ -159,7 +241,8 @@ class ScreenshotComposerTest(unittest.TestCase):
 
     def test_uncertain_delivery_only_reconciles_original_intent(self):
         c = self.open()
-        c._target.setCurrentIndex(1)
+        QTest.mouseClick(c._target, Qt.MouseButton.LeftButton)
+        self.click_item(c._target._channels, 0)
         emitted, reconciled = [], []
         c.send_requested.connect(lambda *args: emitted.append(args))
         c.set_delivery_uncertain(lambda: reconciled.append(True))

@@ -14,6 +14,9 @@ import { recordingOperationFixture } from "./personaRecordingOperationTestFixtur
 import { LanAgentAuthority } from "./lanAgentAuthority.js";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { assertTrustedLanAgentPrincipal, evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { createPersonaRecordingOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/personaRecordingOperations.js";
+import type { ApiCatalogSnapshot } from "./apiOperationCatalog.js";
+import { parseSearchQuery } from "./unifiedSearch.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -49,6 +52,42 @@ async function fixture(t: TestContext) {
 }
 const screenSettings = { ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true } };
 const hostDependencies = { capture: async () => [], startMicrophone: async () => {}, stopMicrophone: async () => {}, audio: async () => [], audioFile: async () => Buffer.from("RIFF"), changed: () => {} };
+
+test("screen rules save one captured image per enrolled role and search returns its original media", async t => {
+  const f = await fixture(t);
+  const frame = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  let captures = 0;
+  const changed: string[] = [];
+  f.runtime.service = new AllDayRecordingService(f.runtime.store, {
+    ...hostDependencies,
+    capture: async settings => {
+      captures += 1;
+      assert.deepEqual(settings.sources, { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true });
+      return [{ source: "screen", jpeg: frame.toString("base64") }];
+    },
+    changed: roleId => changed.push(roleId),
+  });
+  await f.runtime.service.recordScreensForRules(() => ["persona", "another"]);
+  assert.equal(captures, 1);
+  assert.deepEqual(changed.sort(), ["another", "persona"]);
+  const events = await f.runtime.store.recent("persona");
+  assert.equal(events.length, 1);
+  assert.equal((await f.runtime.store.recent("another"))[0]?.id, events[0]?.id);
+  assert.equal((await f.runtime.store.recent("other")).length, 0);
+  f.runtime.reads.page = async (...args) => ({ ...await f.runtime.store.page(...args), loading: false, pendingDays: [], readError: undefined });
+  const operation = createPersonaRecordingOperations({ runtime: f.runtime,
+    roleDirectory: roleId => path.join(f.root, roleId), local: () => true, readOnly: () => false })
+    .find(item => item.contract.searchable?.scope === "events");
+  assert.ok(operation?.searchLanes);
+  const snapshot = { searchSources: [operation.contract.searchable!] } as unknown as ApiCatalogSnapshot;
+  const query = parseSearchQuery(new URLSearchParams({ scope: "events", q: "画面采集" }), snapshot);
+  const [lane] = operation.searchLanes({ request: f.request(false), roles: [{ roleId: "persona", directory: path.join(f.root, "persona") }] });
+  const batch = await lane!.read({ signal: new AbortController().signal, deadlineAt: performance.now() + 1000, query, position: 0 });
+  assert.equal(batch.items[0]?.origin.recordId, events[0]?.id);
+  const link = batch.items[0]?.handle.detailUrl;
+  assert.ok(link);
+  assert.deepEqual((await f.invoke(f.request(false, "GET", link.split("/all-day-recording/")[1]))).body, frame);
+});
 
 test("safe local and authenticated custom-provider Agents share recording queries and settings", async t => {
   const f = await fixture(t);

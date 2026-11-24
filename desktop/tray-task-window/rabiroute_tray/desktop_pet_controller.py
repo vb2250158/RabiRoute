@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QSlider, QVBoxLayout, QWidget, QWidgetAction
 
 from .desktop_pet_client import DESKTOP_PET_BASE_HEIGHT_PX, DesktopPetBinding, DesktopPetClient, DesktopPetIdleBehavior, DesktopPetModeAnimationSet, DesktopPetPack, LoadedDesktopPetAnimation
-from .desktop_pet_frames import DesktopPetFrames, prepare_desktop_pet_frames
+from .desktop_pet_frames import DesktopPetFrames, FrameSource, frame_source, prepare_desktop_pet_frames
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_companion import DesktopPetCompanion
 from .desktop_pet_companion_notice import CompanionFailureNotice
@@ -152,6 +152,7 @@ class DesktopPetController(QObject):
         self._preload_queue: deque[str] = deque()
         self._preload_scope: tuple | None = None
         self._preloading_state = ""
+        self._preloading_source: tuple[DesktopPetPack, FrameSource] | None = None
         self._requested_state = "idle"
         self._auto_rest_active = False
         self._animation_retry_delay = 1500
@@ -324,9 +325,12 @@ class DesktopPetController(QObject):
             else:
                 self._animation_unavailable()
             return
-        if self._animation_task is not None:
-            return
         requested_pack = self._pack
+        source = frame_source(requested_pack.states[requested])
+        preloading = self._preloading_source
+        if (self._animation_task is not None or
+                (preloading is not None and preloading[0] is requested_pack and preloading[1] == source)):
+            return
         target = self.window._target_size(requested_pack)
 
         def completed(task: QtAsyncTask, result: object) -> None:
@@ -337,30 +341,36 @@ class DesktopPetController(QObject):
                 return
             if self._pack is not requested_pack:
                 self.set_state(self._requested_state)
-                return
-            pending_state = self._requested_state if self._requested_state in self._pack.states else "idle"
-            if pending_state != requested:
-                self.set_state(pending_state)
-                return
-            if not isinstance(result, tuple):
-                self._animation_unavailable()
-                return
-            animation, frames = result
-            if frames.target != self.window._target_size(requested_pack):
-                self.set_state(self._requested_state)
-                return
-            if self._cache_animation(animation, frames) and self._play_animation(requested_pack, animation):
-                self._animation_retry_delay = 1500
-                self._idle_scheduler.state_started(animation.state.name)
-                self._enqueue_animation_preloads()
             else:
-                self._animation_unavailable()
+                self._finish_animation_load(requested_pack, requested, result)
+            self._start_next_animation_preload()
 
         self._animation_task = start_qt_task(
             lambda: self._load_frames(requested_pack, requested, target),
             completed,
             on_error=lambda error: error,
         )
+
+    def _finish_animation_load(self, pack: DesktopPetPack, requested: str, result: object) -> None:
+        pending = self._requested_state if self._requested_state in pack.states else "idle"
+        if pending != requested:
+            if isinstance(result, tuple) and frame_source(pack.states[pending]) == frame_source(pack.states[requested]):
+                self._cache_animation(*result)
+            self.set_state(pending)
+            return
+        if not isinstance(result, tuple):
+            self._animation_unavailable()
+            return
+        animation, frames = result
+        if frames.target != self.window._target_size(pack):
+            self.set_state(pending)
+            return
+        if self._cache_animation(animation, frames) and self._play_animation(pack, animation):
+            self._animation_retry_delay = 1500
+            self._idle_scheduler.state_started(animation.state.name)
+            self._enqueue_animation_preloads()
+        else:
+            self._animation_unavailable()
 
     def _load_catalog(self) -> None:
         if self._catalog_task is not None:
@@ -757,6 +767,8 @@ class DesktopPetController(QObject):
             self._catalog_task = None
             self._animation_task = None
             self._preload_task = None
+            self._preloading_source = None
+            self._preloading_state = ""
             self._pack = None
             self._animation_cache.clear()
             self._preload_queue.clear()
@@ -1327,6 +1339,10 @@ class DesktopPetController(QObject):
         if not self.window.prepare_animation(self._pack, animation, frames):
             return False
         self._animation_cache[animation.state.name] = animation
+        source = frame_source(animation.state)
+        for state in self._pack.states.values():
+            if state.name != animation.state.name and frame_source(state) == source:
+                self._animation_cache[state.name] = LoadedDesktopPetAnimation(state, animation.assets)
         for state, previous in tuple(self._animation_cache.items()):
             if not self.window.has_decoded_frames(self._pack, previous):
                 self._animation_cache.pop(state)
@@ -1373,7 +1389,7 @@ class DesktopPetController(QObject):
         self._start_next_animation_preload()
 
     def _start_next_animation_preload(self) -> None:
-        if self._preload_task is not None or self._pack is None or not self.visible:
+        if self._preload_task is not None or self._animation_task is not None or self._pack is None or not self.visible:
             return
         while self._preload_queue:
             state_name = self._preload_queue.popleft()
@@ -1388,13 +1404,19 @@ class DesktopPetController(QObject):
                     return
                 self._preload_task = None
                 self._preloading_state = ""
-                if self._pack is requested_pack and isinstance(result, tuple):
-                    animation, frames = result
-                    if animation.state.name == requested_state:
-                        self._cache_animation(animation, frames)
+                self._preloading_source = None
+                if self._pack is requested_pack and not self._closed and self.visible:
+                    if isinstance(result, tuple):
+                        animation, frames = result
+                        if animation.state.name == requested_state:
+                            self._cache_animation(animation, frames)
+                    pending = requested_pack.states.get(self._requested_state) or requested_pack.states["idle"]
+                    if frame_source(pending) == frame_source(requested_pack.states[requested_state]):
+                        self.set_state(self._requested_state)
                 self._start_next_animation_preload()
 
             self._preloading_state = state_name
+            self._preloading_source = (pack, frame_source(pack.states[state_name]))
             self._preload_task = start_qt_task(
                 lambda: self._load_frames(pack, state_name, target, cached_animation),
                 completed,

@@ -1,12 +1,12 @@
 import type { PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
-import { MESSAGE_EVENT_CATEGORIES, RECORDING_CAPTURE_TYPES } from "../../../../shared/personaEventTypes";
+import { MESSAGE_EVENT_CATEGORIES, RECORDING_CAPTURE_TYPES, VOICE_RECEIVED_ROUTE_KIND } from "../../../../shared/personaEventTypes";
 
 // Shared by the rule list and editor so every category has the same meaning.
 export const automationEndpoints: Array<{ value: string; title: string; english: string; icon: string; routeKinds: string[] }> = [
   ...MESSAGE_EVENT_CATEGORIES.map(category => ({
     ...category,
     ...(category.value === "weixin" ? { title: "微信机器人", english: "WeChat Bot" } : {}),
-    routeKinds: [...category.routeKinds]
+    routeKinds: category.value === "speech" ? [...category.routeKinds, VOICE_RECEIVED_ROUTE_KIND] : [...category.routeKinds]
   })),
   ...RECORDING_CAPTURE_TYPES.map(type => ({ ...type, routeKinds: [type.routeKind] }))
 ];

@@ -569,6 +569,32 @@ export class AllDayRecordingService {
     }, authorize);
   }
   async dispose() { if (this.session) await this.stop(this.session.roleId, true); }
+
+  async recordScreensForRules(roles: () => readonly string[]): Promise<void> {
+    const eligible = () => roles().filter(roleId => this.session?.roleId !== roleId || !this.session.settings.sources.screen);
+    const requested = eligible();
+    if (!requested.length) return;
+    await this.dependencies.prepare?.();
+    if (!eligible().some(roleId => requested.includes(roleId))) return;
+    const id = randomUUID();
+    const time = Date.now();
+    const samples = await this.dependencies.capture({
+      ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true }
+    }, id);
+    const sample = samples.find(item => item.source === "screen");
+    if (!sample?.jpeg) throw new Error(sample?.error || "Screen capture returned no image");
+    const bytes = Buffer.from(sample.jpeg, "base64");
+    const committed = await Promise.allSettled(eligible().filter(roleId => requested.includes(roleId)).map(async roleId => {
+      await this.store.append(roleId, { id, startedAt: time, endedAt: time, source: "screen", deviceId: this.store.hostId,
+        kind: "image", text: sample.text || "", state: "saved" }, bytes, () => {
+        if (!eligible().includes(roleId)) throw new Error("Screen recording rule no longer applies");
+      });
+      this.dependencies.changed(roleId);
+    }));
+    const failures = committed.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "Some role screen captures could not be committed");
+  }
+
   captureAutomationRole(roleId: string | null, event: AllDayEvent): string | undefined {
     const session = this.session;
     if (!session || event.startedAt < session.startedAt || (session.stopping && event.source !== "session")) return;

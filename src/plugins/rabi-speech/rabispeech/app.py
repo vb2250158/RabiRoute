@@ -423,6 +423,11 @@ def create_app(
         persist_asr_record(TranscriptionResult(text="", language=config.language or "", duration=duration, provider="", model=config.asr_model, record_id=record_id),
             source="microphone", audio_path=audio_path, session_id=config.session_id, recorded_at=started_at,
             record_id=record_id, input_source=input_source, transcription_state=state)
+        if state == "processing" and input_source.processing_policy == "agent" and input_source.message_adapter_type == "speech":
+            event_hub.publish("voice_received", {
+                "id": record_id, "time": started_at, "duration": duration,
+                "device_id": input_source.device_id, "device_name": input_source.device_name,
+            })
         if state != "processing":
             pending_audio_ids.pop(key, None)
 

@@ -268,12 +268,11 @@ test("theme-sensitive tabs and deferred knowledge states use shared surface toke
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const persona = fs.readFileSync(path.join(root, "../src/plugins/io.rabiroute.manager.persona/web/pages/PersonaTemplatePage.vue"), "utf8");
 
-  assert.match(persona, /\.persona-page-tabs\s*\{[^}]*background:\s*var\(--rr-subtle\)/s);
+  assert.match(persona, /<v-tabs\b[^>]*class="persona-page-tabs"[^>]*color="secondary"/s);
   assert.match(styles, /\.automation-tabs\s*\{[^}]*background:\s*var\(--rr-subtle\)/s);
   assert.match(styles, /\.knowledge-plan-detail-pending\s*\{[^}]*background:\s*var\(--rr-subtle\)/s);
   assert.match(styles, /\.knowledge-load-more\s*\{[^}]*background:\s*var\(--rr-accent-surface\)/s);
   for (const selector of [
-    "persona-page-tabs",
     "automation-editor-head",
     "identity-workspace-record",
     "knowledge-plan-agent-session-state",

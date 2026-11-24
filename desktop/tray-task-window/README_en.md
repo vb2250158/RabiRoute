@@ -54,6 +54,8 @@ Submitting approval feedback, or triggering a rule is an explicit user action. T
 
 ## Pet wandering
 
+Actions that reference the same artwork share downloads and decoded frames. Each action keeps its own frame rate, looping, and next action. Qt mirrors ordinary left- and right-facing frames during painting.
+
 Enable **Pet wandering** under **Persona Configuration → Virtual avatar → Local display**; it is off by default. The nested **Try walking to the active window** option reveals four checkboxes for the bottom-right, bottom-left, top-right and top-left destination corners. Without that option, destinations are random within the current screen's work area. Set minimum and maximum wait in seconds (5–3600, default 45–90). Each departure waits a random duration and samples the foreground window only when departing; changing focus does not immediately move the pet.
 
 Travel on the same screen or a short distance across a monitor edge plays a preloaded looping `move` action while advancing the window. Cross-screen distances longer than the departure screen's diagonal fade out, show a portal halo, relocate and fade in; packs may supply `teleport-out` and `teleport-in` actions. Locking, pointer engagement or dragging, sleep, other actions, menus and fullscreen hiding pause wandering. Manual interaction pauses it for 30 seconds. Automatic travel does not overwrite manually saved placement or record foreground titles/content; minimized windows, the desktop and unrecognized monitors are skipped.

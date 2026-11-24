@@ -16,8 +16,7 @@ import { webguiRouteRenderOperation } from "@shared/performanceOperations";
 import { lazyRouteRecovery, router } from "./router";
 import { vuetify } from "./plugins/vuetify";
 import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
-import { pluginCatalogStore } from "./pluginCatalogStore";
-import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
+import { refreshWebPluginCatalog } from "./pluginModuleBootstrap";
 import webRuntimeModules from "virtual:rabi-web-runtime";
 import { installWebRuntime } from "./webRuntime";
 
@@ -39,11 +38,6 @@ router.onError((error, target) => {
   lazyRouteRecovery.recover(error, target.fullPath);
 });
 
-export async function refreshWebPluginCatalogInBackground(): Promise<void> {
-  await pluginCatalogStore.refresh();
-  await refreshWebPluginModulesSafely();
-}
-
 async function bootstrap(): Promise<void> {
   installManagerFetchPrefix();
   void loadTimeoutSettings().catch(error => console.warn("Timeout settings unavailable; using defaults.", error));
@@ -59,7 +53,7 @@ async function bootstrap(): Promise<void> {
   app.mount("#app");
 
   installDomLocalizer();
-  void refreshWebPluginCatalogInBackground();
+  void refreshWebPluginCatalog();
 }
 
 void bootstrap();
