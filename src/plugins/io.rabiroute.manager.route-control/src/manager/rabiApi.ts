@@ -957,13 +957,16 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
         const current = ctx.globalConfig.read();
         const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay) ? body.rabiLinkRelay as Record<string, unknown> : undefined;
         const nextRelay = relayPatch ? { ...current.rabiLinkRelay, ...relayPatch } : current.rabiLinkRelay;
-        if (nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
-        const beforeRelay = JSON.stringify(current.rabiLinkRelay);
+        const { provideModelServices: _previousOffering, modelScope: _previousScope, ...previousConnection } = current.rabiLinkRelay;
+        const { provideModelServices: _nextOffering, modelScope: _nextScope, ...nextConnection } = nextRelay;
+        if (JSON.stringify(previousConnection) !== JSON.stringify(nextConnection)
+          && nextRelay.enabled === true && (!String(nextRelay.url || "").trim() || !String(nextRelay.token || "").trim())) throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
         const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any, agentUploads: body.agentUploads });
         if (current.rabiLinkRelay.speechServiceMode !== config.rabiLinkRelay.speechServiceMode
           || current.rabiLinkRelay.speechServiceUrl !== config.rabiLinkRelay.speechServiceUrl) ctx.reconcileSpeechConfiguration?.();
         await ctx.syncRabiLinkRelay();
-        if (beforeRelay !== JSON.stringify(config.rabiLinkRelay)) {
+        const { provideModelServices: _savedOffering, modelScope: _savedScope, ...savedConnection } = config.rabiLinkRelay;
+        if (JSON.stringify(previousConnection) !== JSON.stringify(savedConnection)) {
           for (const runtime of ctx.runtimes()) if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) runtime.needsRestart = true;
           ctx.syncRunningGateways();
         }

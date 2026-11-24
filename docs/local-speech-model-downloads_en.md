@@ -10,7 +10,7 @@ This guide covers local models only. Paid speech APIs are archived. Installation
 
 ## On-demand downloads from Model Management
 
-Open **Model Management** at the top right of **Speech Service** in RibiWebGUI. The retired `/#/models` address redirects to Speech Service. The dialog uses a compact environment bar above search and the model table. The only categories are TTS, ASR, and speaker recognition, with TTS selected by default and search scoped to the selected category. A task row appears only when a job exists, and detailed guidance is collapsed by default.
+Open **Model Services → Speech Models** from the RibiWebGUI sidebar. The legacy `/#/models` address also opens this tab. The page uses a compact environment bar above search and the model table. The only categories are TTS, ASR, and speaker recognition, with TTS selected by default and search scoped to the selected category. A task row appears only when a job exists, and detailed guidance is collapsed by default.
 
 1. Select **Install speech environment** the first time. This prepares plugin-private dependencies and the Windows speech host without downloading weights.
 2. Select **Download model** in the model table. Manager runs only one install or download job at a time, and the page receives state changes through events instead of periodic queries.

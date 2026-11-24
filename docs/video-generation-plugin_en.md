@@ -23,6 +23,8 @@ First and last images may differ from the output dimensions and from each other.
 
 ## Choose a model-serving computer
 
+Use **RabiLink → Configuration → Model Services** to offer this computer’s models to authorized devices. Use **Model Scope** on the same page to configure TTS, ASR, and Workbench models individually. New installations enable these settings by default. Availability depends on connectivity and model readiness. Disabling a scope rejects new remote model requests. Submitted Workbench jobs still allow their original results to be retrieved.
+
 Opening a RabiPC's URL shows that computer's workbench, projects and work history. The selector only changes the models and compute used by that workbench. Existing direct URL and API access remains available.
 
 The Model-serving computer selector at the top of the workbench offers this computer and connected RabiPCs. The choice is saved in the current project and restored after refresh, independently of the Speech workspace server selection. When the chosen computer already has usable models, the workspace computer needs no CUDA, ComfyUI or model installation. Selection does not initialize models automatically.
@@ -31,7 +33,7 @@ The current Manager owns projects, assets, jobs and work history. Previews and d
 
 Both computers must support `computeProtocol: 1`. Temporary inputs and receipts live under `data/video/compute`. Successful work cleans up its inputs and outputs while retaining a minimal idempotency receipt without the prompt; replaying its key never executes again. Uncertain operations retain their copies. Later compute requests remove inputs and outputs of terminal jobs, and unreferenced inputs, older than 24 hours while preserving active inputs. Disconnects, timeouts and failures neither fall back to local inference nor replay work. The local failure record remains; resuming that target requires an explicit start. Reusing the original idempotency key reads the original local job. Switching computers does not migrate or delete saved work.
 
-Audio cards likewise use only the chosen computer's models and synthesis. Playback, pause insertion and project storage remain in the current workspace. Model management displays and operates on the chosen computer's directories and installation state.
+Audio cards likewise use only the chosen computer's models and synthesis. Playback, pause insertion and project storage remain in the current workspace. Open **Model Services → Workbench Models** and select a computer to manage its model directories, installation, and generation service.
 
 ## Request authority and revocation
 
@@ -43,7 +45,7 @@ Startup, stop, cancellation and pre-submission checks remain request-bound. Acce
 
 ## Local installation
 
-Models and inference dependencies are optional and never installed merely by opening the page. Open Media Workbench → Model Management, configure a local model directory, install the runtime, then download the model. An NVIDIA CUDA GPU is required. The current catalog defines the download set and model management displays its file sizes. Shared files are reused across routes. New downloads verify official SHA-256 hashes and sizes; existing files are checked for size and safetensors headers and are not downloaded again. Failed downloads retain unique temporary files; retries download missing models anew without overwriting existing files.
+Models and inference dependencies are optional and never installed merely by opening the page. Open **Model Services → Workbench Models**, configure a local model directory, install the runtime, then download the model. An NVIDIA CUDA GPU is required. The current catalog defines the download set and model management displays its file sizes. Shared files are reused across routes. New downloads verify official SHA-256 hashes and sizes; existing files are checked for size and safetensors headers and are not downloaded again. Failed downloads retain unique temporary files; retries download missing models anew without overwriting existing files.
 
 Configure one model root. The catalog maps H3 to `video/minimax-h3` and Z-Image to `image/comfyui` beneath it. Existing TTS/ASR configuration remains untouched. An empty setting retains `components/video/ComfyUI/models`. Old settings without a layout retain flat paths; saving the root in the page explicitly migrates to categorized paths without moving files.
 

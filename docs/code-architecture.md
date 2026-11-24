@@ -647,7 +647,7 @@ Gateway 配置的事实源 Module。
 - `src/speech/speechControlClient.ts`：浏览器语音 HTTP Adapter；唯一知道 `/api/speech/*` 路径和 `{ code, data }` envelope 的前端 Module。
 - `src/stores/speechStore.ts`：语音控制 read model、命令和共享事件流生命周期；RabiSpeech `/v1/events` 经 Manager `/api/speech/events` 推送麦克风、播放、音频流和记录落盘变化。每类事件只刷新自己的 read model，SSE 重连才做一次快照补漏，ASR 主机监视器与其他语音卡片不再周期请求后端。
 - `src/plugins/io.rabiroute.manager.speech/src/manager/speechModelManager.ts`：主机级语音环境和模型权重安装边界。它只读取 `src/plugins/rabi-speech/model-catalog.json` 的固定别名，串行启动仓库内安装脚本，不接受浏览器提供仓库、URL 或路径，也不向响应暴露私有绝对路径。
-- `src/shared/speechModelManagement.ts`、`src/pages/ModelManagementPage.vue` 与 `src/speech/speechModelManagementClient.ts`：模型管理 read model、弹窗内容和浏览器 Adapter。“语音服务”右上角按需加载该弹窗；即使 RabiSpeech 未运行，也能列出和下载权重。任务变化通过 Manager `/api/events` 的 `speech_model_management_changed` 推送，SSE 重连只补一次快照，不轮询安装状态。旧 `/#/models` 地址只兼容跳回语音服务，不再作为侧栏页面。
+- `src/shared/speechModelManagement.ts`、`src/pages/ModelManagementPage.vue` 与 `src/speech/speechModelManagementClient.ts`：模型管理 read model、语音模型页和浏览器 Adapter。「模型服务 → 语音模型」按需加载该页面；即使 RabiSpeech 未运行，也能列出和下载权重。任务变化通过 Manager `/api/events` 的 `speech_model_management_changed` 推送，SSE 重连只补一次快照，不轮询安装状态。旧 `/#/models` 地址跳转到「语音模型」标签。
 - `src/lazyRouteRecovery.ts`：处理 WebGUI 重新构建后，长时间未刷新的浏览器标签页仍请求旧页面文件的情况。Vue Router 确认是动态导入或 chunk 加载失败后，保留用户刚才点击的目标页面和现有 `webgui_token`，只自动重新加载一次；会话级标记阻止连续失败形成刷新循环，其他页面错误不触发恢复。
 - `src/i18n/index.ts`：唯一 locale 状态、浏览器偏好持久化、`<html lang>` 和切换事件。
 - `src/i18n/catalog.ts`：人工校准的英文界面词条和动态文案规则。
@@ -677,7 +677,7 @@ SpeechServicePage / SpeechHostMonitor
 
 `src/shared/speechControlContract.ts` 是 Manager 与 WebGUI 之间的稳定 camelCase Interface，也拥有 Route 语音默认值。`src/plugins/io.rabiroute.manager.speech/src/manager/speechControl.ts` 负责 Route policy、RabiSpeech payload 映射和 read model 正规化。`POST /api/speech/messages` 会等待 Gateway 子任务返回真实终态：Desktop owner `start/steer` 成功才是 `delivered`，关键词模式未命中则是 `recorded`，失败为 4xx/5xx；它不等 Agent 回答、Outbox 或 TTS 播放结束。Python 的 snake_case、模型进程状态和回环地址不能泄漏回 Vue 页面；RabiSpeech 仍是独立的回环 Provider Runtime，不合并进 Manager。本地 Provider 默认启用；外部 API Provider 必须在本机配置显式启用、从环境变量取密钥，并通过 capability 的 `local_only` / `relay_safe` 暴露边界。
 
-模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/plugins/io.rabiroute.manager.speech/src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。弹窗使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
+模型管理是独立的主机控制面，不属于某条 Route。`GET /api/speech/model-management` 返回环境、目录和任务状态；两个 POST 入口分别安装核心环境和单个允许清单模型，不接受任意下载仓库、地址或路径；设置入口复用连接鉴权并校验模型总目录覆盖值，目录路径只返回给已鉴权连接。Manager 同一时间只允许一个任务，并继续受只读模式的全局写操作门禁约束。`src/plugins/io.rabiroute.manager.speech/src/manager/speechModelFiles.ts` 核对管理目录及已配置模型路径中的代表文件，下载状态不再只取决于安装清单；文件存在不等于校验和或推理就绪。语音模型页使用紧凑环境栏、筛选搜索和表格，仅在存在当前或最近任务时显示任务行，说明默认折叠。模型清单中的 `runtime=core|isolated` 只说明运行环境要求，不代表已检测到环境缺失；“模型已下载”不能被展示为推理、波形或真实设备已经验收。
 
 `src/plugins/io.rabiroute.manager.speech/src/manager/speechEventOperation.ts` 的 `SpeechEventStreamOwner` 单独拥有 Manager SSE 客户端与 RabiSpeech 上游流的一对一生命周期。浏览器或验收客户端断开时只中止对应的上游 fetch；由此产生的 `AbortError` 是正常终态，必须在代理层消费，不能变成未处理 Node stream error 或拖垮 Manager。上游不是 `text/event-stream` 时在写入 SSE 响应头之前失败关闭，不把旧 Manager/WebGUI HTML 冒充事件流。
 

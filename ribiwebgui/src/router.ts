@@ -56,7 +56,7 @@ export const router = createRouter({
       component: PluginCatalogRecoveryPage,
       meta: { title: "插件恢复" }
     },
-    { path: "/models", redirect: "/speech" },
+    { path: "/models", redirect: { path: "/model-services", query: { tab: "speech" } } },
     // Bookmark compatibility only; remove after the legacy navigation migration ends.
     { path: "/lan-agents", redirect: to => ({ path: "/rabilink", query: { ...to.query, tab: "agents" } }) },
     {

@@ -77,6 +77,22 @@ export const activate = definePlugin({
                 }
             },
             {
+                kind: "page",
+                id: "model-services-page",
+                value: {
+                    surface: "web.pages", label: { fallback: "模型服务" }, routeId: "global.model-services",
+                    rendererId: "builtin.web-page.model-services.v1", slot: "global", hosts: ["web"], order: 66
+                }
+            },
+            {
+                kind: "navigation",
+                id: "model-services",
+                value: {
+                    surface: "web.navigation", label: { fallback: "模型服务" }, routeId: "global.model-services",
+                    icon: "mdi-cube-outline", slot: "utility", hosts: ["web"], order: 66
+                }
+            },
+            {
                 "kind": "page",
                 "id": "settings-page",
                 "value": {

@@ -5,6 +5,7 @@ import { issueInternalManagerHopHeaders } from '../shared/internalManagerHop.js'
 import { APPLICATION_ACCESS_CAPABILITY } from '../peerTunnel/runtime.js';
 import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
 import { normalizeRabiPcVersion, rabiPcVersionAdvertisement } from "../shared/rabiPcVersionContract.js";
+import { allowsRabiLinkSpeechModelRequest, providesRabiLinkModel, rabiLinkModelScope, type RabiLinkModelSettings } from "../shared/rabiLinkModelServices.js";
 type RelayProxyRequest = {
   remainingBudgetMs?: number;
   singleAttempt?: boolean;
@@ -19,7 +20,7 @@ type RelayProxyRequest = {
   bodyBase64?: string;
 };
 
-export type RabiLinkRelayRuntimeConfig = {
+export type RabiLinkRelayRuntimeConfig = RabiLinkModelSettings & {
   enabled: boolean;
   url: string;
   token: string;
@@ -436,7 +437,9 @@ async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, sign
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), asrAdvertisements.get(config)?.speechAvailable ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : "", config.accountTunnel ? "host-account-tunnel-v1" : ""]
+  const speech = asrAdvertisements.get(config);
+  const offersAsr = providesRabiLinkModel(config, "asr");
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), speech?.speechAvailable && (offersAsr || providesRabiLinkModel(config, "tts")) ? "speech" : "", speech?.available && offersAsr ? "asr" : "", config.accountTunnel ? "host-account-tunnel-v1" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -700,6 +703,15 @@ async function proxySpeechRequest(
     const method = stringValue(request.method).toUpperCase() || "GET";
     const requestedPath = stringValue(request.path) || "/";
     const localPath = requestedPath === "/messages" ? "/api/speech/messages" : requestedPath;
+    if (!allowsRabiLinkSpeechModelRequest(config, localPath)) {
+      await finishSpeechRequest(config, requestId, {
+        ok: true,
+        statusCode: 403,
+        headers: { "content-type": "application/json; charset=utf-8" },
+        bodyBase64: Buffer.from(JSON.stringify({ error: { message: "此电脑未提供该模型服务。" } })).toString("base64")
+      }, options, signal);
+      return;
+    }
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.headers || {})) {
       const lower = key.toLowerCase();
@@ -795,6 +807,8 @@ function normalizeConfig(config: RabiLinkRelayRuntimeConfig): RabiLinkRelayRunti
 
 export class RabiLinkRelayRuntime {
   private currentConfig: RabiLinkRelayRuntimeConfig | null = null;
+  private modelSettings: RabiLinkModelSettings = {};
+  private publishModelCapabilities?: () => void;
   private signature = "";
   private generation = 0;
   private controller: AbortController | null = null;
@@ -838,8 +852,14 @@ export class RabiLinkRelayRuntime {
 
   sync(input: RabiLinkRelayRuntimeConfig): Promise<void> {
     const config = normalizeConfig(input);
-    const signature = JSON.stringify(config);
+    const { provideModelServices, modelScope, ...connection } = config;
+    this.modelSettings = { provideModelServices, modelScope: rabiLinkModelScope(modelScope) };
+    const signature = JSON.stringify(connection);
     if (signature === this.signature) {
+      if (this.currentConfig) {
+        Object.assign(this.currentConfig, this.modelSettings);
+        this.publishModelCapabilities?.();
+      }
       return this.stopFlight?.then(() => undefined) ?? Promise.resolve();
     }
     this.signature = signature;
@@ -883,6 +903,7 @@ export class RabiLinkRelayRuntime {
     }
 
 
+    Object.assign(config, this.modelSettings);
     this.currentConfig = config;
     const generation = this.generation;
     const controller = new AbortController();
@@ -902,6 +923,7 @@ export class RabiLinkRelayRuntime {
 
   private stopLoop(): Promise<void> | null {
     this.currentConfig = null;
+    this.publishModelCapabilities = undefined;
     this.generation += 1;
     this.controller?.abort(new Error("RabiLink Relay runtime stopped."));
     this.controller = null;
@@ -951,7 +973,7 @@ export class RabiLinkRelayRuntime {
       if (webguiDrainFailures === 0
         && (!speechEndpointAvailable(config) || speechDrainFailures === 0)
         && this.active(generation, signal)) {
-        this.markOnline(asrAdvertisements.get(config)?.speechAvailable === true);
+        this.markOnline(asrAdvertisements.get(config)?.speechAvailable === true && allowsRabiLinkSpeechModelRequest(config, "/v1/capabilities"));
       }
     };
     const startWebguiEvents = (): void => {
@@ -1047,6 +1069,7 @@ export class RabiLinkRelayRuntime {
       this.onStatus?.(this.status());
       if (relayReady) { drainWebgui(); drainSpeech(); }
     };
+    this.publishModelCapabilities = publishCapabilities;
     // Manager/Speech own readiness. Coalesce their events; idle connections never poll business state.
     const refreshCapabilities = (): Promise<void> => {
       if (!this.active(generation, signal)) return Promise.resolve();

@@ -16,6 +16,7 @@ import {
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { deviceIdentityConfigField } from "./deviceIdentity.js";
 import { atomicWriteFileSync } from "../shared/filePersistence.js";
+import { rabiLinkModelScope, rabiLinkModelServices, type RabiLinkModelSettings } from "../shared/rabiLinkModelServices.js";
 
 export type RabiGlobalConfig = {
   rabiGuid: string;
@@ -29,7 +30,7 @@ export type RabiGlobalConfig = {
   updatedAt: string;
 };
 
-export type RabiLinkRelayGlobalConfig = {
+export type RabiLinkRelayGlobalConfig = RabiLinkModelSettings & {
   enabled: boolean;
   url: string;
   token: string;
@@ -186,6 +187,13 @@ export class RabiGlobalConfigStore {
     if (!current) throw new Error("The last saved global configuration cannot be confirmed. Repair or reload the original Config.json before changing this record.");
     const effectiveTimeoutOverrides = patch.timeoutOverrides === undefined ? current.timeoutOverrides : timeoutOverrides;
     const relayPatch = patch.rabiLinkRelay;
+    if (relayPatch?.provideModelServices !== undefined && typeof relayPatch.provideModelServices !== "boolean") {
+      throw new Error("Invalid provideModelServices.");
+    }
+    if (relayPatch?.modelScope !== undefined && (!relayPatch.modelScope || typeof relayPatch.modelScope !== "object" || Array.isArray(relayPatch.modelScope)
+      || Object.entries(relayPatch.modelScope).some(([id, enabled]) => !rabiLinkModelServices.some(service => service === id) || typeof enabled !== "boolean"))) {
+      throw new Error("Invalid modelScope.");
+    }
     if (relayPatch?.speechServiceMode !== undefined && !["managed", "configured"].includes(relayPatch.speechServiceMode)) throw new Error("Invalid speechServiceMode.");
     const explicitSpeechUrl = relayPatch && Object.hasOwn(relayPatch, "speechServiceUrl") && relayPatch.speechServiceMode === undefined;
     const next: RabiGlobalConfig = {
@@ -195,7 +203,12 @@ export class RabiGlobalConfigStore {
         ? patch.rabiName.trim()
         : current.rabiName,
       rabiLinkRelay: patch.rabiLinkRelay
-        ? normalizeRabiLinkRelayConfig({ ...current.rabiLinkRelay, ...patch.rabiLinkRelay, ...(explicitSpeechUrl ? { speechServiceMode: "configured" } : {}) })
+        ? normalizeRabiLinkRelayConfig({
+          ...current.rabiLinkRelay,
+          ...relayPatch,
+          modelScope: { ...current.rabiLinkRelay.modelScope, ...relayPatch?.modelScope },
+          ...(explicitSpeechUrl ? { speechServiceMode: "configured" } : {})
+        })
         : current.rabiLinkRelay,
       webguiLan: patch.webguiLan
         ? normalizeWebguiLanAccessConfig({ ...current.webguiLan, ...patch.webguiLan })
@@ -336,7 +349,9 @@ function defaultRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig {
     claimWaitMs: 60000,
     replyIdleTimeoutMs: 60000,
     speechServiceUrl: "",
-    speechServiceMode: "managed"
+    speechServiceMode: "managed",
+    provideModelServices: true,
+    modelScope: Object.freeze(rabiLinkModelScope())
   };
 }
 
@@ -358,6 +373,8 @@ function normalizeRabiLinkRelayConfig(raw: unknown): RabiLinkRelayGlobalConfig {
     claimWaitMs: normalizeNumber(source.claimWaitMs, defaults.claimWaitMs, 0, 60000),
     replyIdleTimeoutMs: normalizeNumber(source.replyIdleTimeoutMs, defaults.replyIdleTimeoutMs, 1000, 120000),
     speechServiceUrl,
+    provideModelServices: source.provideModelServices !== false,
+    modelScope: Object.freeze(rabiLinkModelScope(source.modelScope)),
     speechServiceMode: source.speechServiceMode === "managed" || source.speechServiceMode === "configured"
       ? source.speechServiceMode : !speechServiceUrl || legacyManagedDefault ? "managed" : "configured"
   };

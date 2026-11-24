@@ -495,6 +495,7 @@ import { createGatewayRouteActivationOwner } from "./gatewayRouteActivationOwner
 import { mergeEndpointRouteDeclarations, readEndpointRouteDeclarations, readInstalledEndpointRouteDeclarations, type EndpointRouteConfigDeclaration } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
 import type { RouteCatalogApplicationContext } from "./routeCatalogStartupLifecycle.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
+import { allowsRabiLinkSpeechModelRequest, isNewRabiLinkWorkbenchModelRequest, providesRabiLinkModel } from "../shared/rabiLinkModelServices.js";
 import { RuntimeRegistry, type GatewayRuntime } from "./runtimeRegistry.js";
 import {
   gatewayRuntimeStartDecision,
@@ -2512,14 +2513,13 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
   const url = definition.rabiLinkRelayUrl?.trim() || "";
   const token = definition.rabiLinkRelayToken?.trim() || "";
   return {
+    ...globalRelay,
     enabled: Boolean(url && token),
     url,
     token,
     deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalRelay.deviceId || globalConfig.rabiName || definition.id,
     claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalRelay.claimWaitMs,
-    replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs,
-    speechServiceUrl: globalRelay.speechServiceUrl,
-    speechServiceMode: globalRelay.speechServiceMode
+    replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalRelay.replyIdleTimeoutMs
   };
 }
 
@@ -2531,14 +2531,13 @@ function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null 
     const url = definition.rabiLinkRelayUrl?.trim() || "";
     const token = definition.rabiLinkRelayToken?.trim() || "";
     return {
+      ...globalConfig.rabiLinkRelay,
       enabled: Boolean(url && token),
       url,
       token,
       deviceId: definition.rabiLinkRelayDeviceId?.trim() || globalConfig.rabiLinkRelay.deviceId || globalConfig.rabiName || definition.id,
       claimWaitMs: definition.rabiLinkRelayClaimWaitMs ?? globalConfig.rabiLinkRelay.claimWaitMs,
-      replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs,
-      speechServiceUrl: globalConfig.rabiLinkRelay.speechServiceUrl,
-      speechServiceMode: globalConfig.rabiLinkRelay.speechServiceMode
+      replyIdleTimeoutMs: definition.rabiLinkRelayReplyIdleTimeoutMs ?? globalConfig.rabiLinkRelay.replyIdleTimeoutMs
     };
   }
   return null;
@@ -2710,6 +2709,8 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
   const lanEnabled = Boolean(accountRelay) || (relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim()));
   if (!lanEnabled) await peerLanServer.stop();
   const workerConfig = {
+    provideModelServices: globalConfig.rabiLinkRelay.provideModelServices,
+    modelScope: globalConfig.rabiLinkRelay.modelScope,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
     rabiPcVersion: rabiRoutePackageVersion(),
@@ -8466,6 +8467,7 @@ get webguiLanRequestAllowed() { return webguiLanRequestAllowed; },
 get managerBaseUrl() { return managerBaseUrl; },
 set managerBaseUrl(value) { managerBaseUrl = value; },
 get speechServiceUrl() { return speechServiceUrl; },
+get allowsSpeechModelRequest() { return (pathname: string) => allowsRabiLinkSpeechModelRequest(rabiGlobalConfig.read().rabiLinkRelay, pathname); },
 get resourceCacheKey() { return resourceCacheKey; },
 get createManagerApiOperationsService() { return createManagerApiOperationsService; },
 get activePeerTunnel() { return activePeerTunnel; },
@@ -9258,6 +9260,14 @@ createManagerEventOperationDefinition
       if (incomingRabiLink && !incomingScope) {
         jsonResponse(response, 403, { code: -1, error: "INTERNAL_TRANSPORT_AUTHORITY_INVALID" });
         return;
+      }
+      if (incomingScope) {
+        const settings = rabiGlobalConfig.read().rabiLinkRelay;
+        if (!allowsRabiLinkSpeechModelRequest(settings, pathname)
+          || (isNewRabiLinkWorkbenchModelRequest(pathname, method) && !providesRabiLinkModel(settings, "workbench"))) {
+          jsonResponse(response, 403, { code: -1, errorCode: "RABILINK_MODEL_SERVICE_DISABLED", message: "此电脑未提供该模型服务。" });
+          return;
+        }
       }
       const lanAgentAccess = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled,
         () => rabiGlobalConfig.getLanAgentAdmissionPolicy());

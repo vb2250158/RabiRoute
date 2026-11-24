@@ -17,6 +17,12 @@ export function activateCore(api: WebContributionApi): readonly (() => void)[] {
         navigation: { resolvePath: () => "/rabilink", allowedSlots: ["utility"], allowedIcons: ["mdi-lan-connect"] }
       },
       {
+        routeId: "global.model-services", rendererId: "builtin.web-page.model-services.v1",
+        loader: () => import("./pages/ModelServicesPage.vue"),
+        paths: [{ path: "/model-services", title: "模型服务" }],
+        navigation: { resolvePath: () => "/model-services", allowedSlots: ["utility"], allowedIcons: ["mdi-cube-outline"] }
+      },
+      {
         routeId: "global.settings", rendererId: "builtin.web-page.settings.v1",
         loader: () => import("./pages/SettingsPage.vue"),
         paths: [{ path: "/settings", title: "设置" }, { path: "/settings/archived-roles", title: "已归档角色" }],

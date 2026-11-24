@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { registerPageSaveAction } from "../../../../../ribiwebgui/src/pageSaveAction";
-import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch } from "../../../../../ribiwebgui/src/rabiLinkPresentation";
+import { rabiLinkDraftFromMeta, rabiLinkIdentityPatch, saveRabiLinkIdentity } from "../../../../../ribiwebgui/src/rabiLinkPresentation";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { InstanceIdentityResetClient, readResetIdentity } from "../../../../../ribiwebgui/src/instanceIdentityResetClient";
+import ModelServiceScope from "./ModelServiceScope.vue";
 
 const props = defineProps<{ ready: boolean; active: boolean }>();
 const emit = defineEmits<{ saving: [value: boolean] }>();
@@ -24,6 +26,17 @@ let disposed = false;
 const busy = computed(() => saving.value || resetting.value);
 const error = ref("");
 const ready = computed(() => props.ready);
+const sections = [
+  { id: "instance", label: "本机实例", icon: "mdi-monitor" },
+  { id: "connection", label: "服务器连接", icon: "mdi-lan-connect" },
+  { id: "models", label: "模型服务", icon: "mdi-cube-outline" },
+  { id: "uploads", label: "远端智能体上传", icon: "mdi-upload-outline" }
+];
+const section = ref("instance");
+const route = useRoute();
+watch(() => route.query.section, value => {
+  if (sections.some(item => item.id === value)) section.value = String(value);
+}, { immediate: true });
 function hydrate() {
   draft.value = rabiLinkDraftFromMeta(store.meta);
   baseline.value = JSON.stringify(draft.value);
@@ -57,18 +70,7 @@ async function save() {
   error.value = "";
   try {
     const submitted = JSON.stringify(draft.value);
-    const response = await fetch("/api/rabi/identity", {
-      method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify(rabiLinkIdentityPatch(draft.value))
-    });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "保存失败");
-    // Only the identity snapshot changes; unrelated Route drafts remain untouched.
-    const { token: _token, ...relay } = body.data.rabiLinkRelay || {};
-    store.meta.rabiName = body.data.rabiName;
-    store.meta.rabiGuid = body.data.rabiGuid;
-    store.meta.agentUploads = body.data.agentUploads;
-    store.meta.rabiLinkRelay = relay;
+    await saveRabiLinkIdentity(store.meta, rabiLinkIdentityPatch(draft.value, JSON.parse(baseline.value)));
     if (JSON.stringify(draft.value) === submitted) hydrate();
     else baseline.value = JSON.stringify(rabiLinkDraftFromMeta(store.meta));
   } catch (reason) {
@@ -96,9 +98,15 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
 </script>
 
 <template>
-  <v-card class="app-card glass-card pa-4 rabilink-settings">
-    <div class="section-title">本机实例</div>
-    <p class="section-note mb-3">配置这台电脑的身份与连接。修改后使用顶部保存按钮应用。</p>
+  <div class="rabilink-settings">
+    <v-card class="app-card glass-card pa-2">
+      <nav class="rabilink-config-nav" aria-label="RabiLink 配置分组">
+        <v-btn v-for="item in sections" :key="item.id" :prepend-icon="item.icon"
+          :variant="section === item.id ? 'tonal' : 'text'" :color="section === item.id ? 'primary' : undefined"
+          :aria-current="section === item.id ? 'true' : undefined" @click="section = item.id">{{ translateText(item.label) }}</v-btn>
+      </nav>
+    </v-card>
+    <v-card class="app-card glass-card pa-4">
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
     <v-alert v-if="reset.message" :type="reset.state === 'committed' ? 'success' : ['failed', 'rolled_back'].includes(reset.state) ? 'error' : 'info'" variant="tonal" density="compact" class="mb-3" role="status">
       {{ translateText(reset.message) }}
@@ -106,6 +114,9 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
     </v-alert>
     <v-progress-linear v-if="!ready" indeterminate class="mb-3" />
     <fieldset :disabled="!ready || busy" class="rabilink-fields">
+      <section v-show="section === 'instance'">
+      <h2 class="section-title">本机实例</h2>
+      <p class="section-note mb-3">配置这台电脑的身份。修改后使用顶部保存按钮应用。</p>
       <div class="form-grid">
         <v-text-field v-model="draft.rabiName" label="RabiRoute 实例名称" density="compact" hide-details="auto" />
         <div>
@@ -119,17 +130,15 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
           <p v-else-if="!resetSupported" class="section-note mt-2">当前 Host 不支持从页面重置实例 ID。</p>
         </div>
       </div>
-      <v-divider class="my-3" />
-      <div class="section-title">RabiLink 服务器连接</div>
+      </section>
+      <section v-show="section === 'connection'">
+      <h2 class="section-title">RabiLink 服务器连接</h2>
       <p class="section-note">保存服务器地址后，登录同一账号的电脑会自动连接。</p>
       <v-switch v-model="draft.enabled" label="连接服务器" color="success" inset density="compact" hide-details />
       <div class="form-grid">
         <v-text-field v-model="draft.url" label="服务器地址" placeholder="https://relay.example.com" density="compact" hide-details="auto" />
       </div>
-      <v-divider class="my-3" />
-      <div class="section-title mb-2">远端智能体上传</div>
-      <v-text-field v-model.number="draft.maxFileMiB" label="单文件上传上限（MiB）" type="number" min="1" :max="Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2)" step="1" density="compact" hint="正整数 MiB，可高于 2048；保存后重启 RabiRoute 生效。实际发送仍取决于目标平台支持的文件大小。" persistent-hint />
-      <v-expansion-panels variant="accordion" class="mt-3">
+      <v-expansion-panels variant="accordion" class="mt-4">
         <v-expansion-panel title="高级连接参数">
           <v-expansion-panel-text>
             <div class="form-grid">
@@ -143,6 +152,18 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>
+      </section>
+      <section v-show="section === 'models'">
+        <h2 class="section-title">模型服务</h2>
+        <p class="section-note mb-3">让已授权设备使用这台电脑提供的模型。</p>
+        <v-switch v-model="draft.provideModelServices" label="提供模型服务" color="success" inset density="compact" hide-details />
+        <v-divider class="my-3" />
+        <ModelServiceScope v-model="draft.modelScope" :providing="draft.provideModelServices" />
+      </section>
+      <section v-show="section === 'uploads'">
+        <h2 class="section-title mb-2">远端智能体上传</h2>
+        <v-text-field v-model.number="draft.maxFileMiB" label="单文件上传上限（MiB）" type="number" min="1" :max="Math.floor(Number.MAX_SAFE_INTEGER / 1024 ** 2)" step="1" density="compact" hint="正整数 MiB，可高于 2048；保存后重启 RabiRoute 生效。实际发送仍取决于目标平台支持的文件大小。" persistent-hint />
+      </section>
     </fieldset>
     <v-dialog :model-value="reset.dialogOpen" max-width="560" @update:model-value="value => { if (!value) reset.cancel(); }">
       <v-card class="pa-4">
@@ -155,10 +176,18 @@ onBeforeUnmount(() => { disposed = true; identityRequest?.abort(); reset.dispose
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-card>
+    </v-card>
+  </div>
 </template>
 
 <style scoped>
 .rabilink-fields { border: 0; padding: 0; min-width: 0; }
+.rabilink-settings { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(0, 4fr); gap: 12px; align-items: start; }
+.rabilink-config-nav { display: grid; gap: 4px; }
+.rabilink-config-nav .v-btn { justify-content: start; }
 .rabilink-settings .form-grid { gap: 12px; }
+@media (max-width: 720px) {
+  .rabilink-settings { grid-template-columns: minmax(0, 1fr); }
+  .rabilink-config-nav { display: flex; flex-wrap: wrap; }
+}
 </style>

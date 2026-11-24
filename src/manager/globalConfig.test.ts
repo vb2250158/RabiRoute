@@ -6,7 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { RabiGlobalConfigStore } from "./globalConfig.js";
 import { DeviceIdentityOwner, deviceIdentityConfigField } from "./deviceIdentity.js";
-import { publicRabiLinkRelayConfig } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
+import { createRabiApiOwner, publicRabiLinkRelayConfig, type RabiApiContext } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
+import { allowsRabiLinkSpeechModelRequest, isNewRabiLinkWorkbenchModelRequest, providesRabiLinkModel } from "../shared/rabiLinkModelServices.js";
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-global-config-"));
@@ -88,6 +89,59 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
 
   const enabled = store.patch({ rabiLinkRelay: { enabled: true } });
   assert.equal(enabled.rabiLinkRelay.enabled, true);
+});
+
+test("model services default on and persist independent scope updates", t => {
+  const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new RabiGlobalConfigStore(root);
+  const defaults = { tts: true, asr: true, workbench: true };
+  assert.deepEqual(store.read().rabiLinkRelay.modelScope, defaults);
+  assert.equal(store.read().rabiLinkRelay.provideModelServices, true);
+  const raw = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
+  delete raw.rabiLinkRelay.modelScope;
+  delete raw.rabiLinkRelay.provideModelServices;
+  fs.writeFileSync(store.configPath, JSON.stringify(raw));
+  assert.deepEqual(new RabiGlobalConfigStore(root).read().rabiLinkRelay.modelScope, defaults);
+
+  store.patch({ rabiLinkRelay: { modelScope: { asr: false } } });
+  store.patch({ rabiLinkRelay: { provideModelServices: false, modelScope: { workbench: false } } });
+  const settings = new RabiGlobalConfigStore(root).read().rabiLinkRelay;
+  assert.deepEqual(settings.modelScope, { tts: true, asr: false, workbench: false });
+  assert.equal(publicRabiLinkRelayConfig(settings).provideModelServices, false);
+  assert.equal(allowsRabiLinkSpeechModelRequest(settings, "/v1/audio/speech"), false);
+
+  const enabled = store.patch({ rabiLinkRelay: { provideModelServices: true } }).rabiLinkRelay;
+  assert.equal(allowsRabiLinkSpeechModelRequest(enabled, "/v1/audio/speech"), true);
+  assert.equal(allowsRabiLinkSpeechModelRequest(enabled, "/v1/audio/transcriptions?language=zh"), false);
+  assert.equal(allowsRabiLinkSpeechModelRequest(enabled, "/api/speech/messages"), true);
+  assert.equal(providesRabiLinkModel(enabled, "workbench"), false);
+  assert.equal(isNewRabiLinkWorkbenchModelRequest("/api/video/compute/jobs", "POST"), true);
+  assert.equal(isNewRabiLinkWorkbenchModelRequest("/api/video/compute/jobs/", "POST"), true);
+  assert.equal(isNewRabiLinkWorkbenchModelRequest("/api/video/compute/jobs/original/video", "GET"), false);
+  assert.throws(() => store.patch({ rabiLinkRelay: { modelScope: { tts: "false" as any } } }), /Invalid modelScope/);
+});
+
+test("identity API applies model settings without restarting Routes or disclosing credentials", async t => {
+  const root = tempRoot();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const globalConfig = new RabiGlobalConfigStore(root);
+  globalConfig.patch({ rabiLinkRelay: { enabled: true, url: "https://relay.example.test", token: "private-fixture-token" } });
+  let syncs = 0;
+  const owner = createRabiApiOwner({
+    globalConfig,
+    syncRabiLinkRelay: async () => { syncs++; },
+    runtimes: () => { assert.fail("Model policy changes should not mark Routes for restart."); }
+  } as Partial<RabiApiContext> as RabiApiContext);
+  const response = await owner.updateIdentity({ rabiLinkRelay: { provideModelServices: false, modelScope: { tts: false } } }, () => {});
+  assert.equal(response.status, 200);
+  assert.equal(syncs, 1);
+  assert.doesNotMatch(JSON.stringify(response.body), /private-fixture-token/);
+  const saved = new RabiGlobalConfigStore(root).read().rabiLinkRelay;
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.token, "private-fixture-token");
+  assert.equal(saved.provideModelServices, false);
+  assert.deepEqual(saved.modelScope, { tts: false, asr: true, workbench: true });
 });
 
 test("retired service permissions are removed without changing identity, credentials or local data", t => {

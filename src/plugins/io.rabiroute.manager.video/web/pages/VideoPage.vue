@@ -32,41 +32,7 @@ type Asset = { id: string; kind: AssetKind; width?: number; height?: number; dur
 type Job = VideoProgressJob & { quickGeneration?: boolean; workflowId?: string; samplingSteps?: number; id: string; prompt: string; model?: string; width?: number; height?: number; frames?: number; seed?: number; references?: string[]; generateAudio?: boolean; referenceVideoSound?: boolean; hasFirstFrame?: boolean; hasLastFrame?: boolean; progress: number; error?: string; videoUrl?: string; imageUrl?: string; mediaKind?: string };
 type Snapshot = { computeError?: string; availableWorkflows?: { model: string; workflowId: string; generateAudio: boolean }[]; online: boolean; availableModels?: string[]; models: Model[]; states: Record<string, { label: string; terminal: boolean }>; jobs: Job[] };
 const snapshot = ref<Snapshot>();
-type ModelFile = { name: string; bytes: number; installed: boolean; state: string };
-type ModelManagement = { runtimeInstalled: boolean; models: { id: string; label: string; bytes: number; installed: boolean; files: ModelFile[]; workflows?: { id: string; label: string; installed: boolean; missingFiles: string[] }[] }[]; job: { kind: string; state: string; bytes: number; total: number; message?: string; currentFile?: string } | null };
-type Directories = { revision: number; modelRoot: string | null; effectiveModelRoot: string; defaultModelRoot: string; layout: string };
-type InitializationPlan = { revision: number; modelRoot: string; downloadBytes: number; additionalBytes: number; availableBytes: number; canDownload: boolean; errors: string[]; files: (ModelFile & { relative: string })[] };
-const initialization = ref<InitializationPlan>();
-const directoryChanged = computed(() => modelDirectory.value.trim() !== (directories.value?.modelRoot || ""));
-const sizeLabel = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
-const management = ref<ModelManagement>();
-const directories = ref<Directories>();
-const modelDirectory = ref("");
-const showModels = ref(false);
 const showLibrary = ref(false);
-const installing = computed(() => management.value?.job?.state === "running");
-async function refreshModels() { management.value = await request<ModelManagement>("/models"); }
-async function openModels() {
-  showModels.value = true;
-  await refreshModels();
-  directories.value = await request<Directories>("/models/settings");
-  modelDirectory.value = directories.value.modelRoot || "";
-}
-async function saveDirectory() {
-  initialization.value = undefined;
-  directories.value = await request<Directories>("/models/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelRoot: modelDirectory.value.trim() || null, layout: "categorized", expectedRevision: directories.value?.revision }) });
-  await refreshModels();
-}
-async function previewInitialization() {
-  initialization.value = undefined;
-  initialization.value = await request<InitializationPlan>("/models/initialization");
-}
-async function initializeModels() {
-  await request("/models/initialize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: initialization.value?.revision }) });
-  initialization.value = undefined;
-  await refreshModels();
-}
-async function install(route: string) { await request(route, { method: "POST" }); await refreshModels(); }
 const error = ref("");
 const busy = ref(false);
 const prompt = ref("");
@@ -89,7 +55,7 @@ const availableModels = computed(() => (snapshot.value?.models || []).filter(ite
 const selectedWorkflow = computed(() => snapshot.value?.models.find(item => item.id === model.value)?.workflows?.[quickGeneration.value ? "fast" : "standard"]);
 const workflowProblem = computed(() => {
   if (!snapshot.value?.models.find(item => item.id === model.value)?.workflows) return "请更新视频服务以使用标准／快速工作流。";
-  if (snapshot.value.online && !snapshot.value.availableWorkflows?.some(item => item.model === model.value && (snapshot.value?.models.find(row => row.id === model.value)?.workflows?.[item.workflowId]?.kind || item.workflowId) === (quickGeneration.value ? "fast" : "standard") && item.generateAudio === generateAudio.value)) return "当前工作流或声音依赖未就绪，请检查模型管理。";
+  if (snapshot.value.online && !snapshot.value.availableWorkflows?.some(item => item.model === model.value && (snapshot.value?.models.find(row => row.id === model.value)?.workflows?.[item.workflowId]?.kind || item.workflowId) === (quickGeneration.value ? "fast" : "standard") && item.generateAudio === generateAudio.value)) return "当前工作流或声音依赖未就绪，请前往「模型服务 → 工作台模型」检查。";
   return "";
 });
 function setMode(value: string) {
@@ -503,7 +469,7 @@ const inputProblem = computed(() => {
   if (!model.value) return "当前模式没有可用的生成方案。";
   if (workflowProblem.value) return workflowProblem.value;
   if (mode.value === "reference" && !references.value.length) return "请添加图片、视频或音频参考。";
-  if (snapshot.value?.online && !snapshot.value.availableModels?.includes(model.value)) return "当前方案尚未就绪，请在模型管理中检查下载，并重启视频服务。";
+  if (snapshot.value?.online && !snapshot.value.availableModels?.includes(model.value)) return "当前方案尚未就绪，请前往「模型服务 → 工作台模型」检查下载，并启动视频服务。";
   if (mode.value === "image" && !firstFrame.value && !lastFrame.value) return "请添加首帧或尾帧。";
   if (![width.value, height.value].every(value => Number.isSafeInteger(value) && value >= 256 && value % 32 === 0) || width.value * height.value > 1032192) return "宽高须为 32 的倍数，总像素不超过 1032192。";
   if (!Number.isSafeInteger(frames.value) || frames.value < 22 || frames.value > 260 || (frames.value - 5) % 17 !== 0) return "帧数须为 17k+5，范围 22–260。";
@@ -1281,14 +1247,12 @@ async function connectModelService() {
     computeEvents.addEventListener("compute", event => {
       if (disposed || revision !== mediaService.selectionRevision()) return;
       const name = JSON.parse((event as MessageEvent).data).name;
-      if (name === "video.models" && showModels.value) void refreshModels().catch(() => {error.value="无法更新所选电脑的模型状态。";});
-      else if (name === "video.changed") void refresh().catch(() => {error.value="无法更新所选电脑的算力状态。";});
+      if (name === "video.changed") void refresh().catch(() => {error.value="无法更新所选电脑的算力状态。";});
     });
     computeEvents.onopen = () => {if (revision === mediaService.selectionRevision()) void refresh().catch(()=>{});};
     computeEvents.onerror = () => {if (revision === mediaService.selectionRevision() && snapshot.value) snapshot.value={...snapshot.value,online:false};};
   }
-  management.value = undefined; directories.value = undefined; initialization.value = undefined;
-  showModels.value = false; audioModels.value = []; audioCatalogError.value = "";
+  audioModels.value = []; audioCatalogError.value = "";
   void loadAudioModels(); await action(refresh);
 }
 onMounted(() => {
@@ -1326,7 +1290,6 @@ onMounted(() => {
         }
         return;
       }
-      if (value.name === "video.models") { if (showModels.value) void refreshModels().catch(() => { error.value = "无法更新模型状态。"; }); return; }
       if (value.name === "video.progress") {
         const job = snapshot.value?.jobs.find(item => item.id === value.data.jobId);
         if (job && ['queued', 'running'].includes(job.status)) {
@@ -1391,45 +1354,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
       <v-btn v-if="flowNodes.length" variant="text" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
 
       <PeerServerSelect :model-value="serviceDeviceId" :disabled="serviceBusy" label="模型服务电脑" @changed="selectModelService" />
-      <v-btn variant="text" size="small" prepend-icon="mdi-cube-outline" @click="action(openModels)">模型管理</v-btn>
       <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
-      <v-switch :model-value="snapshot?.online || false" :loading="busy" :disabled="busy || !snapshot || installing" hide-details color="primary" aria-label="视频生成服务开关" @update:model-value="value => action(() => request(value ? '/runtime/start' : '/runtime/stop', { method: 'POST' }))" />
     </div>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <v-dialog v-model="showModels" max-width="760">
-      <v-card :title="serviceDeviceId ? '所选电脑的媒体模型管理' : '本机媒体模型管理'" class="pa-4">
-        <v-card-text>
-          <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-          <v-text-field v-model="modelDirectory" label="模型主目录" :placeholder="directories?.defaultModelRoot" hint="视频使用 video/minimax-h3，图像使用 image/comfyui。留空使用程序默认目录。" persistent-hint :disabled="busy || installing || snapshot?.online" @update:model-value="initialization = undefined" />
-          <p v-if="directories" class="video-hint">当前目录：{{ directories.effectiveModelRoot }}</p>
-          <p v-if="directories?.modelRoot && directories.layout === 'flat'" class="video-hint">当前为旧版平铺目录；保存主目录后按图像、视频分类查找。已有文件不会移动。</p>
-          <v-btn variant="outlined" :disabled="busy || installing || snapshot?.online || !directories" @click="action(saveDirectory)">保存目录</v-btn>
-          <v-btn class="ml-2" color="primary" :disabled="busy || installing || snapshot?.online || !directories || directoryChanged" @click="action(previewInitialization)">初始化服务器环境所需模型</v-btn>
-          <p v-if="directoryChanged" class="video-hint">请先保存模型主目录。</p>
-          <v-card v-if="initialization" variant="outlined" class="mt-4 pa-3" aria-label="模型初始化空间确认">
-            <p>下载目录：{{ initialization.modelRoot }}</p>
-            <p>需要下载：{{ sizeLabel(initialization.downloadBytes) }} · 新增占用：{{ sizeLabel(initialization.additionalBytes) }} · 磁盘剩余：{{ sizeLabel(initialization.availableBytes) }}</p>
-            <p class="video-hint">只下载当前媒体服务清单中的缺失权重，共用文件只下载一次；不改动已有 TTS / ASR 配置。</p>
-            <v-alert v-for="message in initialization.errors" :key="message" type="error" variant="tonal" class="my-2">{{ message }}</v-alert>
-            <ul><li v-for="file in initialization.files.filter(file => !file.installed)" :key="file.relative">{{ file.relative }} · {{ sizeLabel(file.bytes) }} · {{ file.state === 'invalid' ? '文件损坏或大小不符' : '缺失' }}</li></ul>
-            <p v-if="!initialization.downloadBytes">所需模型已齐全，无需下载。</p>
-            <v-btn v-if="initialization.downloadBytes" color="primary" :disabled="busy || installing || snapshot?.online || !initialization.canDownload" @click="action(initializeModels)">开始下载</v-btn>
-          </v-card>
-          <v-divider class="my-5" />
-          <div class="video-heading"><strong>媒体运行环境</strong><v-btn :disabled="busy || installing || snapshot?.online || management?.runtimeInstalled" @click="action(() => install('/models/runtime'))">{{ management?.runtimeInstalled ? '已安装' : '安装运行环境' }}</v-btn></div>
-          <p class="video-hint">需要 NVIDIA CUDA 显卡。首次安装会下载 Python、ComfyUI 和推理依赖。</p>
-          <div v-for="item in management?.models || []" :key="item.id" class="video-heading"><div><strong>{{ item.label }}</strong><p>{{ sizeLabel(item.bytes) }} · {{ item.installed ? '已下载' : '部分依赖缺失' }}</p><p v-for="workflow in item.workflows || []" :key="workflow.id">{{ workflow.label }}：{{ workflow.installed ? '依赖齐全' : `缺少 ${workflow.missingFiles.join('、')}` }}</p><p v-for="file in item.files.filter(file => !file.installed)" :key="file.name" class="text-error">{{ file.state === 'invalid' ? '文件损坏或大小不符' : '缺失' }}：{{ file.name }}</p></div><v-btn :disabled="busy || installing || snapshot?.online || item.installed || directoryChanged" @click="action(() => install(`/models/${item.id}/download`))">{{ item.installed ? '已下载' : '下载模型' }}</v-btn></div>
-          <v-progress-linear v-if="installing" :model-value="management?.job?.total ? management.job.bytes / management.job.total * 100 : 0" :indeterminate="!management?.job?.total" color="primary" />
-          <p v-if="management?.job" role="status">{{ management.job.state === 'running' ? '正在安装，请保持程序运行' : management.job.state === 'completed' ? '安装完成' : management.job.message }}</p>
-          <p v-if="installing && management?.job?.currentFile" role="status">{{ management.job.currentFile }} · {{ sizeLabel(management.job.bytes) }} / {{ sizeLabel(management.job.total) }}</p>
-          <p v-if="snapshot?.online" class="video-hint">停止视频服务后可以修改目录或安装。</p>
-        </v-card-text>
-        <v-card-actions><v-btn @click="action(refreshModels)">刷新状态</v-btn><v-spacer /><v-btn @click="showModels = false">关闭</v-btn></v-card-actions>
-      </v-card>
-    </v-dialog>
     <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-content':workflowWire?.kind==='content','linking-step':workflowWire?.kind==='step','linking-input':workflowWire?.kind==='input'}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="cancelPort(); pendingInput=undefined; showLibrary=false; contextMenu=undefined; openPopover=''">
-      <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button><button aria-label="模型管理" @click="action(openModels)"><v-icon icon="mdi-cube-outline" size="23" /></button></nav>
+      <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button></nav>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
       <div class="canvas-world" :style="canvasTransform">
       <svg v-if="flowWires.length || wirePreview" class="workspace-flow-wires" aria-hidden="true">
@@ -1474,7 +1404,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
               <div class="image-generation-controls">
                 <span class="image-mode-label"><v-icon icon="mdi-image-outline" size="15" />图片生成</span>
                 <v-menu :model-value="openPopover===`image-model-${item.id}`" @update:model-value="updatePopover(`image-model-${item.id}`,$event)" location="bottom start" offset="8"><template #activator="{props}"><button v-bind="props" class="media-picker" aria-label="选择图片模型">{{ imageModels.find(row=>row.id===item.imageModel)?.label || imageModels[0]?.label || '选择模型' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template>
-                  <div class="media-model-menu" role="menu" aria-label="图片模型列表"><button v-for="option in imageModels" :key="option.id" role="menuitemradio" :aria-checked="(item.imageModel || imageModels[0]?.id)===option.id" @click="item.imageModel=option.id"><span><strong>{{ option.label }}</strong><small>文生图 · 快速生成场景与创作草图</small></span><v-icon v-if="(item.imageModel || imageModels[0]?.id)===option.id" icon="mdi-check" size="17" /></button><button class="model-manage-link" @click="action(openModels)">管理模型与下载<v-icon icon="mdi-arrow-top-right" size="15" /></button></div>
+                  <div class="media-model-menu" role="menu" aria-label="图片模型列表"><button v-for="option in imageModels" :key="option.id" role="menuitemradio" :aria-checked="(item.imageModel || imageModels[0]?.id)===option.id" @click="item.imageModel=option.id"><span><strong>{{ option.label }}</strong><small>文生图 · 快速生成场景与创作草图</small></span><v-icon v-if="(item.imageModel || imageModels[0]?.id)===option.id" icon="mdi-check" size="17" /></button><RouterLink class="model-manage-link" :to="{ path: '/model-services', query: { tab: 'workbench', deviceId: serviceDeviceId || undefined } }">管理模型与下载<v-icon icon="mdi-arrow-top-right" size="15" /></RouterLink></div>
                 </v-menu>
                 <v-menu :model-value="openPopover===`image-format-${item.id}`" @update:model-value="updatePopover(`image-format-${item.id}`,$event)" location="top" offset="8" :close-on-content-click="false"><template #activator="{props}"><button v-bind="props" class="media-picker" aria-label="图片比例与清晰度"><v-icon icon="mdi-rectangle-outline" size="16" />{{ imageRatio(item).label }} / {{ imageQuality(item) }}<v-icon icon="mdi-chevron-down" size="16" /></button></template>
                   <div class="image-format-menu"><div class="format-label">比例</div><div class="image-ratio-segments"><button v-for="ratio in imageRatios" :key="ratio.label" :class="{active:imageRatio(item).label===ratio.label}" :aria-label="`图片比例 ${ratio.label}`" :aria-pressed="imageRatio(item).label===ratio.label" @click="setImageFormat(item,ratio)"><span :style="{width:(ratio.w>=ratio.h ? 17 : 17*ratio.w/ratio.h)+'px',height:(ratio.h>=ratio.w ? 17 : 17*ratio.h/ratio.w)+'px'}" />{{ ratio.label }}</button></div><div class="format-label">清晰度 <small>{{ (item.imageSize || '1024x1024').replace('x',' × ') }}</small></div><div class="image-quality-segments"><button v-for="quality in ['480P','720P','1K','2K']" :key="quality" :class="{active:imageQuality(item)===quality}" :aria-pressed="imageQuality(item)===quality" @click="setImageFormat(item,imageRatio(item),quality)">{{ quality }}</button></div></div>

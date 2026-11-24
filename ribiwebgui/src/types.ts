@@ -249,6 +249,8 @@ export type MetaPayload = {
     replyIdleTimeoutMs?: number;
     speechServiceUrl?: string;
     speechServiceMode?: "managed" | "configured";
+    provideModelServices?: boolean;
+    modelScope?: Partial<Record<"tts" | "asr" | "workbench", boolean>>;
   };
   rabiLinkRelayRuntime?: {
     state?: "disabled" | "incomplete" | "connecting" | "online" | "error";

@@ -54,6 +54,27 @@ test("identity draft never echoes stored tokens; blank token preserves server cr
   draft.token = " fake-new-secret ";
   assert.equal(rabiLinkIdentityPatch(draft).rabiLinkRelay.token, "fake-new-secret");
 });
+test("the model service switch and scope use the same RabiLink settings draft", () => {
+  const settings = source("components/RabiLinkSettings.vue");
+  assert.match(settings, /v-show="section === 'models'"[\s\S]*v-model="draft\.provideModelServices"[\s\S]*<ModelServiceScope v-model="draft\.modelScope"/);
+  assert.doesNotMatch(source("pages/ModelServicesPage.vue"), /ModelServiceScope|value="scope"/);
+
+  const meta: MetaPayload = {
+    version: "test", githubUrl: "", managerPort: 0, rabiName: "Example PC",
+    rabiLinkRelay: { provideModelServices: true, modelScope: { tts: false } }
+  };
+  const baseline = rabiLinkDraftFromMeta(meta);
+  const draft = rabiLinkDraftFromMeta(meta);
+  assert.deepEqual(draft.modelScope, { tts: false, asr: true, workbench: true });
+  assert.equal("modelScope" in rabiLinkIdentityPatch(draft, baseline).rabiLinkRelay, false);
+  draft.provideModelServices = false;
+  draft.modelScope.asr = false;
+  assert.deepEqual(JSON.parse(JSON.stringify(rabiLinkIdentityPatch(draft, baseline))), {
+    rabiLinkRelay: { provideModelServices: false, modelScope: { asr: false } }
+  });
+  assert.deepEqual(baseline.modelScope, { tts: false, asr: true, workbench: true });
+});
+
 test("connected application settings have one save action without retired service permission forms", () => {
   const settings = source("components/RabiLinkSettings.vue");
   assert.match(settings, /保存服务器地址后，登录同一账号的电脑会自动连接。/);

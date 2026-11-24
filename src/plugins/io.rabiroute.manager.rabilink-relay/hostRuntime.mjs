@@ -34,7 +34,10 @@ export function createOwnedRuntime(ports) {
                         resources: { baseUrl: ports.managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": ports.resourceCacheKey, "x-rabilink-tunnel-local": generation } } };
                     try {
                         const endpoint = ports.speechServiceUrl();
-                        if (endpoint) services.speech = { baseUrl: endpoint, headers: { "x-rabilink-tunnel-local": generation } };
+                        if (endpoint) services.speech = {
+                            baseUrl: endpoint, headers: { "x-rabilink-tunnel-local": generation },
+                            requestAllowed: request => ports.allowsSpeechModelRequest(request.path)
+                        };
                     } catch (error) {
                         // An unavailable optional Speech owner cannot disable Manager or resource tunneling.
                         if (error?.status !== 409) throw error;

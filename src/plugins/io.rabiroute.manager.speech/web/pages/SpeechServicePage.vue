@@ -2,7 +2,7 @@
 import { translateText } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { playbackOutputLabel, playbackOutputError } from "../speech/playbackPresentation";
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -32,7 +32,6 @@ import { pluginCatalogStore } from "../../../../../ribiwebgui/src/pluginCatalogS
 import TrustedWebRendererHost from "../../../../../ribiwebgui/src/components/TrustedWebRendererHost.vue";
 import { webRenderersAt } from "../../../../../ribiwebgui/src/pluginRenderers";
 
-const ModelManagementPage = defineAsyncComponent(() => import("../../../../../ribiwebgui/src/pages/ModelManagementPage.vue"));
 
 type AudioInput = { title: string; value: number; default?: boolean };
 
@@ -55,7 +54,6 @@ async function onSpeechServerChanged(deviceId: string): Promise<void> {
   ttsModel.value = ""; asrModel.value = ""; ttsParameters.value = {};
   try { await speech.changeServer(); } catch (error) { requestError.value = error instanceof Error ? error.message : String(error); }
 }
-const modelManagementDialog = ref(false);
 const AUDIO_LOG_EXPANDED_STORAGE_KEY = "rabiroute:speech:audio-log-expanded";
 const audioLogExpanded = ref(loadAudioLogExpanded());
 const requestError = ref("");
@@ -832,7 +830,6 @@ onBeforeUnmount(() => {
         <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、角色 TTS 与整台电脑唯一的排队播放入口。</div>
       </div>
       <div class="page-actions">
-        <v-btn color="secondary" variant="tonal" prepend-icon="mdi-package-variant-closed" @click="modelManagementDialog = true">模型管理</v-btn>
         <v-btn v-if="serviceEnabled" color="secondary" variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
         <v-btn icon="mdi-refresh" variant="text" :loading="loading" :disabled="runtimeToggling" aria-label="刷新语音服务状态" @click="refreshStatus" />
         <div class="speech-runtime-switch">
@@ -861,23 +858,6 @@ onBeforeUnmount(() => {
       <div v-if="requestErrorResolution" class="mt-2"><strong>处理方法：</strong>{{ requestErrorResolution }}</div>
     </v-alert>
     <v-alert v-if="actionMessage" class="mb-4" type="success" variant="tonal" closable @click:close="actionMessage = ''">{{ actionMessage }}</v-alert>
-
-    <v-dialog v-model="modelManagementDialog" max-width="1480" scrollable>
-      <v-card class="model-management-dialog">
-        <v-card-title class="model-management-dialog-title">
-          <div>
-            <div class="section-title">模型管理</div>
-            <div class="section-note">查看本机支持的语音模型，按需安装运行环境和模型权重。</div>
-          </div>
-          <v-spacer />
-          <v-btn icon="mdi-close" variant="text" aria-label="关闭模型管理" @click="modelManagementDialog = false" />
-        </v-card-title>
-        <v-divider />
-        <v-card-text class="model-management-dialog-body pa-0">
-          <ModelManagementPage v-if="modelManagementDialog" />
-        </v-card-text>
-      </v-card>
-    </v-dialog>
 
     <template v-if="serviceEnabled">
     <v-card class="app-card glass-card speech-audio-stream-card">
@@ -1286,9 +1266,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .speech-page { max-width: 1540px; }
 .speech-page :deep(.v-list-item-subtitle) { color: var(--rr-muted-soft) !important; opacity: 1 !important; }
-.model-management-dialog { height: min(92vh, 1100px); overflow: hidden; }
-.model-management-dialog-title { display: flex; align-items: center; gap: 16px; padding: 18px 22px; }
-.model-management-dialog-body { overflow-y: auto; background: var(--rr-canvas); }
 .speech-runtime-switch { display: flex; align-items: center; gap: 12px; min-width: 190px; padding: 6px 10px 6px 14px; border: 1px solid var(--rr-accent-border); border-radius: 14px; background: var(--rr-surface); }
 .speech-runtime-switch > div { display: grid; min-width: 82px; }
 .speech-runtime-switch span { color: var(--rr-muted-faint); font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
@@ -1390,5 +1367,5 @@ onBeforeUnmount(() => {
 .speech-api-strip span { color: var(--rr-muted-faint); font-size: 11px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
 .speech-footnote { display: flex; align-items: flex-start; gap: 9px; margin: 18px 4px 0; color: var(--rr-muted); font-size: 12px; line-height: 1.6; }
 @media (max-width: 1100px) { .speech-console-grid { grid-template-columns: 1fr; } .speech-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .speech-api-strip { grid-template-columns: 1fr; } .speech-api-strip > div { border-right: 0; border-bottom: 1px solid var(--rr-border); } }
-@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row, .speech-audio-log-head, .speech-device-transcript-head { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid, .speech-audio-stream-card, .speech-audio-stream-controls, .speech-audio-log-row, .speech-unlinked-transcripts > div { grid-template-columns: 1fr; } .speech-audio-log-row code { text-align: left; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card-head, .playback-card-summary { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } .model-management-dialog { height: 96vh; } .model-management-dialog-title { padding: 14px 16px; } }
+@media (max-width: 700px) { .speech-page-header, .speech-panel-head, .speech-console-head, .speech-action-row, .speech-audio-log-head, .speech-device-transcript-head { align-items: stretch; flex-direction: column; } .speech-status-grid, .speech-form-grid, .speech-slider-grid, .speech-audio-stream-card, .speech-audio-stream-controls, .speech-audio-log-row, .speech-unlinked-transcripts > div { grid-template-columns: 1fr; } .speech-audio-log-row code { text-align: left; } .speech-console-card, .transcript-card { padding: 18px; } .playback-card-head, .playback-card-summary { align-items: stretch; flex-direction: column; } .speech-panel-head, .speech-provider-grid { padding-right: 18px; padding-left: 18px; } .speech-mode-tabs { padding: 0 8px; } .speech-tabs :deep(.v-btn__content) { font-size: 12px; } .speech-offline { margin-right: 18px; margin-left: 18px; } .speech-api-strip > div { padding: 17px 18px; } }
 </style>

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.80 - 2026-11-24
+
+- Unify TTS, ASR and workbench service scopes; default to enabled, preserve explicit opt-outs, apply scope changes on the same Relay connection and retain accepted-task readback and cleanup.
+
 ## 0.15.79 - 2026-11-24
 
 - Windows Host switches independent tray packages, verifies generation and READY, and restores the previous tray on failure while Manager stays online.

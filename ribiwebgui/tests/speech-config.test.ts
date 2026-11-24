@@ -134,17 +134,15 @@ test("speech workbench renders one mode switch and keeps device logs collapsed b
   assert.match(source, /v-if="audioLogExpanded"[\s\S]*id="speech-device-log-panel"[\s\S]*role="region"/);
 });
 
-test("speech workbench owns model management in a lazy dialog instead of the sidebar", () => {
+test("Model Services owns the lazy speech model page and legacy address", () => {
   const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue", import.meta.url), "utf8");
-  const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+  const models = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/ModelServicesPage.vue", import.meta.url), "utf8");
   const router = fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8");
 
-  assert.match(page, /defineAsyncComponent\(\(\) => import\("\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/ribiwebgui\/src\/pages\/ModelManagementPage\.vue"\)\)/);
-  assert.match(page, /prepend-icon="mdi-package-variant-closed"[^>]+@click="modelManagementDialog = true"[^>]*>模型管理<\/v-btn>/);
-  assert.match(page, /<v-dialog v-model="modelManagementDialog"[^>]+scrollable>/);
-  assert.match(page, /<ModelManagementPage v-if="modelManagementDialog" \/>/);
-  assert.doesNotMatch(app, /title: "模型管理"[^\n]+to: "\/models"/);
-  assert.match(router, /\{ path: "\/models", redirect: "\/speech" \}/);
+  assert.doesNotMatch(page, /modelManagementDialog|ModelManagementPage/);
+  assert.match(models, /defineAsyncComponent\(\(\) => import\("[^"]+\/ModelManagementPage\.vue"\)\)/);
+  assert.match(models, /<SpeechModels v-if="tab === 'speech'"/);
+  assert.match(router, /path: "\/models", redirect: \{ path: "\/model-services", query: \{ tab: "speech" \}/);
   assert.doesNotMatch(router, /const ModelManagementPage/);
 });
 

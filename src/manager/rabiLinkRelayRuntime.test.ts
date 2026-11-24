@@ -781,7 +781,8 @@ test("global Relay runtime bounds a stuck local GET and retries an uncertain Rel
   );
 });
 
-test("global Relay runtime proxies the independent speech plugin without exposing Relay credentials", async (t) => {
+for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled ? "proxies speech without exposing credentials" : "refuses ASR when excluded from model scope"}`, async (t) => {
+  let relayConnections = 0;
   const requestPayload = Buffer.from("fake-multipart-audio", "utf8");
   const wavPayload = Buffer.from("RIFF-test-wave", "utf8");
   const localState: Record<string, unknown> = {};
@@ -812,6 +813,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
   const relay = http.createServer((request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      relayConnections++;
       openRelayEvents(response);
       return;
     }
@@ -856,8 +858,9 @@ test("global Relay runtime proxies the independent speech plugin without exposin
 
   const runtime = new RabiLinkRelayRuntime({ localSpeechRequestTimeoutMs: 1000 });
   t.after(() => runtime.stop());
-  runtime.sync({
+  const config = {
     enabled: true,
+    modelScope: { asr: asrEnabled },
     url: `http://127.0.0.1:${relayPort}`,
     token: "relay-app-token",
     deviceId: "pc-a",
@@ -866,7 +869,8 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localSpeechPort}`,
     localSpeechUrl: `http://127.0.0.1:${localSpeechPort}`
-  });
+  };
+  await runtime.sync(config);
 
   await waitForRelayRuntime(
     runtime,
@@ -874,7 +878,12 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,speech,asr");
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,speech" + (asrEnabled ? ",asr" : ""));
+  if (!asrEnabled) {
+    assert.equal(localState.method, undefined);
+    assert.equal(relayState.finishedBody?.statusCode, 403);
+    return;
+  }
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);
@@ -882,6 +891,13 @@ test("global Relay runtime proxies the independent speech plugin without exposin
   assert.deepEqual(localState.body, requestPayload);
   assert.equal(relayState.finishedBody?.statusCode, 200);
   assert.deepEqual(Buffer.from(String(relayState.finishedBody?.bodyBase64), "base64"), wavPayload);
+  await runtime.sync({ ...config, modelScope: { asr: false } });
+  assert.equal(runtime.status().state, "online");
+  assert.equal(runtime.status().capabilities?.includes("asr"), false);
+  assert.equal(relayConnections, 1);
+  await runtime.sync(config);
+  assert.equal(runtime.status().capabilities?.includes("asr"), true);
+  assert.equal(relayConnections, 1);
 });
 
 test("global Relay runtime sends completed mobile ASR messages to Manager instead of the speech worker", async (t) => {
