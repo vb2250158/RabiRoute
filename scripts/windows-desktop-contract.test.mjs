@@ -12,6 +12,8 @@ const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), "
 const packageJson = JSON.parse(read("../package.json"));
 const retiredLauncherPath = fileURLToPath(new URL("../Start-RabiRoute-Desktop.bat", import.meta.url));
 const hostRuntime = read("../desktop/windows-host/HostRuntime.cs");
+const trayRuntimeSlot = read("../desktop/windows-host/TrayRuntimeSlot.cs");
+const trayRelease = read("../desktop/windows-host/TrayRelease.cs");
 const hostProtocol = read("../desktop/windows-host/HostProtocol.cs");
 const hostControlAudit = read("../desktop/windows-host/HostControlAudit.cs");
 const hostProgram = read("../desktop/windows-host/Program.cs");
@@ -188,18 +190,21 @@ test("Host owns one complete Manager and Tray application generation", () => {
   assert.match(hostRuntime, /ManagerPortPreference\.SaveSuccessfulEndpoint\(stateRoot, ready\.BaseUrl, log\)/);
   assert.match(hostRuntime, /RABIROUTE_MANAGER_READY/);
   assert.ok(
+    hostRuntime.includes("var trayStart = tray.StartAsync") &&
     hostRuntime.indexOf("var ready = await readiness.Task")
-      < hostRuntime.indexOf("tray = NativeChildProcess.StartSuspendedInJob"),
+      < hostRuntime.indexOf("var trayStart = tray.StartAsync"),
     "Tray must start only after this generation's structured Manager READY",
   );
   assert.match(hostRuntime, /"--manager-url", ready\.BaseUrl/);
   assert.match(hostRuntime, /"--host-lifecycle-pipe", lifecyclePipe/);
-  assert.match(hostRuntime, /BuildTrayArguments\([\s\S]{0,300}trayLifecycle\.PipeName\)/);
+  assert.match(trayRuntimeSlot, /BuildTrayArguments\([\s\S]{0,300}lifecycle\.PipeName\)/);
   assert.match(
-    hostRuntime,
-    /trayLifecycle\.WaitForReadyAsync\([\s\S]*generationId,[\s\S]*ready\.ManagerInstanceId,[\s\S]*tray\.ProcessId,[\s\S]*TrayReadyTimeout/,
+    trayRuntimeSlot,
+    /lifecycle\.WaitForReadyAsync\(generationId, manager\.ManagerInstanceId,\s*process\.ProcessId, ApplicationGeneration\.TrayReadyTimeout/,
   );
-  assert.match(hostRuntime, /Tray exited before publishing exact Host lifecycle READY/);
+  assert.match(trayRuntimeSlot, /childJob: job/);
+  assert.match(trayRuntimeSlot, /child\.Job\.WaitForEmptyAsync\(new\[\] \{ child\.Process \}/);
+  assert.match(trayRuntimeSlot, /Tray exited before exact lifecycle READY/);
   assert.match(hostRuntime, /\["RABIROUTE_HOST_CONTROL_TOKEN"\] = null/);
   assert.doesNotMatch(hostRuntime, /_tray\.TryCloseMainWindow/);
   assert.match(trayLifecycleChannel, /PipeOptions\.CurrentUserOnly/);
@@ -230,7 +235,8 @@ test("Hosted Tray is a thin surface and never acquires lifecycle ownership", () 
   assert.match(desktopRuntimeBuild, /--target \$sitePackages/);
   assert.match(desktopRuntimeBuild, /--ignore-installed/);
   assert.match(desktopRuntimeBuild, /--no-warn-conflicts/);
-  assert.match(hostRuntime, /"desktop-runtime", "python", "pythonw\.exe"/);
+  assert.match(trayRelease, /Path\.Combine\(packageRoot, "desktop-runtime"\)/);
+  assert.match(trayRuntimeSlot, /Path\.Combine\(release\.Root, "python", "pythonw\.exe"\)/);
   assert.match(hostRuntime, /BuildTrayArguments[\s\S]{0,800}"-B",\s*trayMain/);
   assert.equal(hostRuntime.match(/"-B"/g)?.length, 1, "Host must inject exactly one Python no-bytecode switch before the Tray script");
   assert.match(desktopRuntimeBuild, /\$runtimePython -B -I -c \$qtSmoke/);

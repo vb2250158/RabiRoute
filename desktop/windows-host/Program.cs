@@ -4,6 +4,8 @@ using System.Text.Json;
 
 public static class HostEntry
 {
+    private const string TraySwitchCommand = "tray-switch";
+
     [STAThread]
     public static async Task<int> RunAsync(string[] args, string packageRoot, string stateRoot)
     {
@@ -29,6 +31,13 @@ public static class HostEntry
         }
         HostTimeouts.Load(stateRoot);
         if (command == "self-test") return RunSelfTest();
+        var trayRelease = command == TraySwitchCommand ? ParseOption(effectiveArgs, "--tray-release") : null;
+        if (command == TraySwitchCommand && (string.IsNullOrWhiteSpace(generationId) ||
+                generationId.StartsWith("--", StringComparison.Ordinal) || !TrayRelease.IsSelection(trayRelease)))
+        {
+            if (jsonOutput) WriteJson(new HostResponse(false, "invalid_request", "Tray switching requires --application-generation-id and --tray-release <bundled|64 lowercase hex characters>."));
+            return 64;
+        }
         JsonElement? sourcePatch = null;
         JsonElement? identityReset = null;
         var isWebPatch = SourcePatchTransport.IsWebCommand(command);
@@ -61,7 +70,8 @@ public static class HostEntry
                 pipeName: acceptance?.Pipe,
                 sourcePatch: isWebPatch ? null : sourcePatch,
                 webPatch: isWebPatch ? sourcePatch : null,
-                identityReset: identityReset);
+                identityReset: identityReset,
+                trayRelease: trayRelease);
             if (jsonOutput) WriteJson(response ?? new HostResponse(false, "unreachable", "The Host control pipe did not respond."));
             return response?.Ok == true ? 0 : 2;
         }
@@ -71,10 +81,10 @@ public static class HostEntry
             if (jsonOutput) WriteJson(new HostResponse(false, "stopped", "Unknown Host command."));
             return 64;
         }
-        if (command is "quit" or "restart" or "status" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch)
+        if (command is "quit" or "restart" or "status" or TraySwitchCommand or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch)
         {
-            var staleFencedQuit = command is "quit" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch;
-            var response = staleFencedQuit
+            var requiresActiveGeneration = command is "quit" or TraySwitchCommand or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(command) || isWebPatch;
+            var response = requiresActiveGeneration
                 ? new HostResponse(false, "stale_generation", "No matching Host generation is running.")
                 : new HostResponse(true, "stopped", "No Host instance is running.");
             if (jsonOutput) WriteJson(response);
@@ -117,10 +127,12 @@ public static class HostEntry
         }
     }
 
-    internal static TimeSpan CommandTimeout(string command) =>
-        command is "activate" or "restart"
-            ? ApplicationGeneration.ManagerReadyTimeout + ApplicationGeneration.TrayReadyTimeout + HostTimeouts.Get("host.command.startGrace", TimeSpan.FromSeconds(90))
-            : HostTimeouts.Get("host.command.request", TimeSpan.FromSeconds(30));
+    internal static TimeSpan CommandTimeout(string command) => command switch
+    {
+        "activate" or "restart" => ApplicationGeneration.ManagerReadyTimeout + ApplicationGeneration.TrayReadyTimeout + HostTimeouts.Get("host.command.startGrace", TimeSpan.FromSeconds(90)),
+        TraySwitchCommand => 2 * ApplicationGeneration.TrayReadyTimeout + HostTimeouts.Get("host.command.startGrace", TimeSpan.FromSeconds(90)),
+        _ => HostTimeouts.Get("host.command.request", TimeSpan.FromSeconds(30))
+    };
 
     internal static string? ParseCommand(string[] args)
     {
@@ -131,7 +143,7 @@ public static class HostEntry
             {
                 if (index + 1 >= args.Length) return "invalid";
                 var value = args[index + 1].Trim().ToLowerInvariant();
-                return value is "quit" or "restart" or "status" or "activate" or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(value) || SourcePatchTransport.IsWebCommand(value) ? value : "invalid";
+                return value is "quit" or "restart" or "status" or "activate" or TraySwitchCommand or IdentityResetLifecycle.Command || SourcePatchTransport.IsCommand(value) || SourcePatchTransport.IsWebCommand(value) ? value : "invalid";
             }
         }
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase)) return "self-test";

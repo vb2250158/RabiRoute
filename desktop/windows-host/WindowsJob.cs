@@ -143,7 +143,8 @@ internal sealed class NativeChildProcess : IDisposable
         IReadOnlyList<string> arguments,
         string workingDirectory,
         IReadOnlyDictionary<string, string?> environmentOverrides,
-        bool isolatedEnvironment = false)
+        bool isolatedEnvironment = false,
+        WindowsJob? childJob = null)
     {
         SafeFileHandle? stdoutRead = null;
         SafeFileHandle? stdoutWrite = null;
@@ -198,6 +199,10 @@ internal sealed class NativeChildProcess : IDisposable
                 if (!NativeMethods.AssignProcessToJobObject(job.Handle, processHandle))
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+                }
+                if (childJob is not null && !NativeMethods.AssignProcessToJobObject(childJob.Handle, processHandle))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed for the child job.");
                 }
                 if (NativeMethods.ResumeThread(threadHandle) == uint.MaxValue)
                 {

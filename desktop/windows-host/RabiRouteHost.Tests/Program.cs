@@ -46,6 +46,8 @@ EnvironmentBlockTests.Run(Check);
 ManagerEndpointCacheTests.Run(Check);
 TimeoutSettingsTests.Run(Check);
 await ProcessTreeTests.RunAsync(Check);
+await ProcessTreeTests.RunNestedTrayJobAsync(Check);
+TrayReleaseTests.Run(Check);
 
 // The ACL must name the account, never an elevated token's Administrators owner.
 using (var identity = WindowsIdentity.GetCurrent())

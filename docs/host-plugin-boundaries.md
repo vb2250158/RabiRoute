@@ -50,6 +50,8 @@ Persona 的 `worker/plan-update.mjs` 拥有计划更新的准备、历史投影�
 
 选版保存在原 release store 下的桌面专用引用，带本 slot 的 revision 与 digest，不修改 common 或节点 SDK selection。重启后按该引用延迟恢复并核对实际能力。Qt 使用原插件包导入拥有者提供的 desktop 声明资源 Pin，官方 producer 从已验 desktop-runtime 封完整依赖和许可闭包。缺少独立 Qt 引用时继续使用 Host 内置资源。缺失或损坏的已选 Qt 资源只报告展示依赖问题，Native 输入与窗口查询继续。
 
+这一入口运行电脑控制覆盖层。桌宠播放代码随 Qt 托盘加载，托盘通过 Host 的 `tray-switch` 独立选版。托盘拥有应用 Job 下的子 Job，Host 核对完整包摘要及应用代际、Manager 实例和托盘 PID 的 READY 握手。换版与回退只收尾托盘 Job。包制作、命令和回读见[托盘生命周期](../desktop/tray-task-window/README.md#托盘单独换版)。
+
 提交响应丢失时读取原选版。确认已提交才报告采用；确认未提交才恢复旧 worker；读回仍未知时保留原候选及事实，只影响该桌面通道。原回执和无依赖功能继续可用。回退创建原资源的新 worker，不重置已经关闭的对象。
 
 ## Agent 会话与桌面连接器

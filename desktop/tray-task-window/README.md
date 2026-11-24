@@ -123,6 +123,12 @@ Desktop 不是可独立存活的应用。Host 先启动 Manager、验证结构�
 
 Manager 或 Host 持续不可达、Manager 身份变化或 Desktop 自身异常时，Desktop 退出。Host 将旧 Job 整体关闭，再按有界策略重建 Manager 与 Desktop；不存在托盘常驻重连或额外守护复活链。
 
+### 托盘单独换版
+
+用 `scripts/build-desktop-runtime.ps1` 构建完整 Qt 运行时，再用 `node scripts/build-tray-release.mjs --desktop-runtime <运行时目录> --output-root <本机安装状态根>` 生成按摘要保存的托盘包。只有当前 Host 支持 `tray-switch` 时才可采用独立托盘包。
+
+从 `RabiRouteHost.exe --command status --json` 取当前应用代际，用 `--command tray-switch --application-generation-id <代际> --tray-release <摘要> --json` 换版。Host 核验完整包，收尾旧托盘及其后代，然后等新托盘用本代、原 Manager 实例和新 PID 握手。成功后保存选择，启动失败则恢复上一托盘。显式回退可指定上一摘要或 `bundled`。状态以 `trayState`、`trayRelease` 和 `trayPid` 为准。
+
 ### 本机崩溃证据
 
 每次 Desktop 启动都会在本机 `%LOCALAPPDATA%\RabiRoute\diagnostics\desktop\YYYY-MM-DD\desktop-*` 创建一个独立证据包：`run.json` 记录启动、异常或正常退出状态，`events.jsonl` 记录未处理 Python/线程异常和 Qt 消息，`stdout.log`、`stderr.log` 保存窗口版进程原本会丢失的输出，`faulthandler.log` 保存 Python 可报告的低层故障信息。下一次启动会保留旧证据，并在新 `events.jsonl` 写入 `previous_run_unclosed`，用于标记上一次没有走完正常退出的进程；它不会篡改旧 `run.json`。

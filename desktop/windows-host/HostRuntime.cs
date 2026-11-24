@@ -231,6 +231,9 @@ internal interface IApplicationGeneration : IAsyncDisposable
     uint TrayPid { get; }
     string TrayBoundManagerInstanceId { get; }
     IReadOnlyList<uint> JobMemberPids { get; }
+    TrayRuntimeStatus TrayStatus => new("ready", Pid: TrayPid, ManagerInstanceId: TrayBoundManagerInstanceId);
+    Task<TraySwitchResult> SwitchTrayAsync(string selection, Action statusChanged, CancellationToken token) =>
+        Task.FromResult(new TraySwitchResult(false, "unsupported", "Tray switching is unavailable."));
     Task<HostResponse> ForwardSourcePatchAsync(JsonElement payload, bool reconcile, CancellationToken cancellationToken, bool webPatch = false);
     Task StopAndVerifyEmptyAsync(string reason, CancellationToken cancellationToken);
 }
@@ -244,13 +247,10 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
     private const int ConsecutiveProbeFailureLimit = 3;
     private readonly WindowsJob _job;
     private readonly NativeChildProcess _manager;
-    private readonly NativeChildProcess _tray;
+    private readonly TrayRuntimeSlot _tray;
     private readonly Task<int> _managerExit;
-    private readonly Task<int> _trayExit;
-    private readonly TrayLifecycleChannel _trayLifecycle;
     private readonly HostLog _log;
     private readonly string _controlToken;
-    private readonly TrayReady _trayReady;
     private readonly ManagerLifecycleClient _managerLifecycle = new();
     private readonly CancellationTokenSource _monitorCancellation = new();
     private readonly Action<string> _healthChanged;
@@ -264,11 +264,8 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         ManagerReady ready,
         WindowsJob job,
         NativeChildProcess manager,
-        NativeChildProcess tray,
+        TrayRuntimeSlot tray,
         Task<int> managerExit,
-        Task<int> trayExit,
-        TrayLifecycleChannel trayLifecycle,
-        TrayReady trayReady,
         string controlToken,
         Action<string> healthChanged,
         Action<string> failureObserved,
@@ -280,9 +277,6 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         _manager = manager;
         _tray = tray;
         _managerExit = managerExit;
-        _trayExit = trayExit;
-        _trayLifecycle = trayLifecycle;
-        _trayReady = trayReady;
         _controlToken = controlToken;
         _healthChanged = healthChanged;
         _failureObserved = failureObserved;
@@ -300,8 +294,11 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
             return Task.FromResult(new HostResponse(false, "source_patch_unconfirmed", "The source patch generation is stopping; query the original operation."));
         return SourcePatchTransport.SendAsync(Ready, _controlToken, payload, reconcile, cancellationToken, webPatch);
     }
-    public uint TrayPid => _tray.ProcessId;
-    public string TrayBoundManagerInstanceId => _trayReady.ManagerInstanceId;
+    public TrayRuntimeStatus TrayStatus => _tray.Status;
+    public uint TrayPid => TrayStatus.Pid ?? 0;
+    public string TrayBoundManagerInstanceId => TrayStatus.ManagerInstanceId ?? "";
+    public Task<TraySwitchResult> SwitchTrayAsync(string selection, Action statusChanged, CancellationToken token) =>
+        _tray.SwitchAsync(selection, statusChanged, token);
     public IReadOnlyList<uint> JobMemberPids
     {
         get
@@ -397,8 +394,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         var controlToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
         var job = new WindowsJob(generationId);
         NativeChildProcess? manager = null;
-        NativeChildProcess? tray = null;
-        TrayLifecycleChannel? trayLifecycle = null;
+        TrayRuntimeSlot? tray = null;
         try
         {
             var node = StableNodeRuntime.Resolve(packageRoot, stateRoot);
@@ -458,53 +454,19 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
                 }
             }
 
-            var trayExecutable = Path.Combine(packageRoot, "desktop-runtime", "python", "pythonw.exe");
-            var trayMain = Path.Combine(packageRoot, "desktop-runtime", "main.py");
-            if (!File.Exists(trayExecutable)) throw new FileNotFoundException("Qt runtime is missing.", trayExecutable);
-            if (!File.Exists(trayMain)) throw new FileNotFoundException("Qt entry is missing.", trayMain);
-            trayLifecycle = new TrayLifecycleChannel(generationId);
-            tray = NativeChildProcess.StartSuspendedInJob(
-                job,
-                trayExecutable,
-                BuildTrayArguments(
-                    trayMain,
-                    ready,
-                    generationId,
-                    Environment.ProcessPath ?? Path.Combine(stateRoot, "RabiRouteHost.exe"),
-                    trayLifecycle.PipeName),
-                stateRoot,
-                acceptanceMode
-                    ? BuildAcceptanceTrayEnvironment(packageRoot, stateRoot, generationId)
-                    : BuildTrayEnvironment(packageRoot, stateRoot, generationId),
-                isolatedEnvironment: acceptanceMode);
-            _ = PumpLinesAsync(tray.StandardOutput, "tray stdout", generationId, log);
-            _ = PumpLinesAsync(tray.StandardError, "tray stderr", generationId, log);
-            var trayExit = tray.WaitForExitAsync(cancellationToken);
-            var trayReady = trayLifecycle.WaitForReadyAsync(
-                generationId,
-                ready.ManagerInstanceId,
-                tray.ProcessId,
-                TrayReadyTimeout,
-                cancellationToken);
-            var trayFirst = await Task.WhenAny(managerExit, trayExit, trayReady);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (trayFirst == managerExit)
+            tray = new TrayRuntimeSlot(packageRoot, stateRoot, generationId, ready, job, log, acceptanceMode);
+            using (var trayStartCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                throw new InvalidOperationException($"Manager exited while waiting for Tray READY with code {await managerExit}.");
+                var trayStart = tray.StartAsync(trayStartCancellation.Token);
+                if (await Task.WhenAny(managerExit, trayStart) == managerExit)
+                {
+                    trayStartCancellation.Cancel();
+                    try { await trayStart; } catch (OperationCanceledException) { }
+                    throw new InvalidOperationException($"Manager exited while waiting for Tray READY with code {await managerExit}.");
+                }
+                await trayStart;
             }
-            if (trayFirst == trayExit)
-            {
-                throw new InvalidOperationException($"Tray exited before publishing exact Host lifecycle READY with code {await trayExit}.");
-            }
-            var acceptedTrayReady = await trayReady;
-            if (acceptedTrayReady is null)
-            {
-                throw new TimeoutException($"Tray did not publish exact Host lifecycle READY within {TrayReadyTimeout.TotalSeconds:0} seconds.");
-            }
-            if (manager.HasExited || tray.HasExited)
-            {
-                throw new InvalidOperationException("Manager or Tray exited during final generation admission.");
-            }
+
             using (var finalAdmission = new ManagerLifecycleClient())
             {
                 var admissionDeadline = DateTimeOffset.UtcNow + HostTimeouts.Get("host.process.admission", TimeSpan.FromSeconds(30));
@@ -512,19 +474,18 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
                 do
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (manager.HasExited || tray.HasExited) break;
+                    if (manager.HasExited || !tray.IsReady) break;
                     finalProbe = await finalAdmission.ProbeAsync(ready, generationId, cancellationToken);
                     if (finalProbe.State is ManagerProbeState.Healthy or ManagerProbeState.Degraded) break;
                     await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
                 } while (DateTimeOffset.UtcNow < admissionDeadline);
                 if (finalProbe?.State is not (ManagerProbeState.Healthy or ManagerProbeState.Degraded) ||
-                    manager.HasExited || tray.HasExited)
+                    manager.HasExited || !tray.IsReady)
                 {
                     throw new InvalidOperationException($"Manager failed final generation admission: {finalProbe?.Message ?? "process exited"}");
                 }
             }
             ManagerPortPreference.SaveSuccessfulEndpoint(stateRoot, ready.BaseUrl, log);
-            log.Write($"generation={generationId} tray pid={tray.ProcessId} published exact lifecycle READY after exact Manager READY");
             return new ApplicationGeneration(
                 generationId,
                 ready,
@@ -532,9 +493,6 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
                 manager,
                 tray,
                 managerExit,
-                trayExit,
-                trayLifecycle,
-                acceptedTrayReady,
                 controlToken,
                 healthChanged,
                 failureObserved,
@@ -545,11 +503,10 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
             async Task RetireFailedStartupAsync()
             {
                 job.Terminate();
-                var roots = new[] { manager, tray }.OfType<NativeChildProcess>().ToArray();
+                var roots = new[] { manager }.OfType<NativeChildProcess>().ToArray();
                 await job.WaitForEmptyAsync(roots, CancellationToken.None);
-                tray?.Dispose();
+                if (tray is not null) await tray.DisposeAsync();
                 manager?.Dispose();
-                if (trayLifecycle is not null) await trayLifecycle.DisposeAsync();
                 job.Dispose();
             }
             try { await RetireFailedStartupAsync(); }
@@ -571,22 +528,8 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         if (Interlocked.Exchange(ref _stopping, 1) != 0) return;
         _log.Write($"generation={Id} stopping reason={reason}");
         _monitorCancellation.Cancel();
-        try
-        {
-            if (!_tray.HasExited)
-            {
-                var sent = await _trayLifecycle.RequestShutdownAsync(HostTimeouts.Get("host.tray.shutdownRequest", TimeSpan.FromSeconds(3)), CancellationToken.None);
-                _log.Write($"generation={Id} Tray graceful shutdown sent={sent}");
-                if (sent)
-                {
-                    await Task.WhenAny(_tray.WaitForExitAsync(), Task.Delay(HostTimeouts.Get("host.tray.exit", TimeSpan.FromSeconds(5))));
-                }
-            }
-        }
-        catch (Exception exception)
-        {
-            _log.Write($"generation={Id} graceful tray close failed: {exception.Message}");
-        }
+        try { await _tray.StopAsync(); }
+        catch (Exception exception) { _log.Write($"generation={Id} Tray stop failed: {exception.Message}"); }
         try
         {
             if (!_manager.HasExited)
@@ -605,7 +548,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         }
         try
         {
-            if (!_manager.HasExited || !_tray.HasExited)
+            if (!_manager.HasExited || _job.MemberProcessIds().Count != 0)
             {
                 _log.Write($"generation={Id} forcing remaining generation processes through the Job boundary");
                 _job.Terminate(reason == "explicit-quit" ? 0u : 1u);
@@ -618,17 +561,17 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
     {
         await StopAsync(reason);
         if (_job.MemberProcessIds().Count != 0) _job.Terminate(1);
-        await _job.WaitForEmptyAsync(new[] { _manager, _tray }, cancellationToken);
+        await _job.WaitForEmptyAsync(new[] { _manager }, cancellationToken);
     }
 
     private async Task<string> ObserveFailureAsync()
     {
         var unhealthy = ObserveManagerHealthAsync(_monitorCancellation.Token);
-        var completed = await Task.WhenAny(_managerExit, _trayExit, unhealthy);
+        var completed = await Task.WhenAny(_managerExit, _tray.Failure, unhealthy);
         if (completed == unhealthy) return await unhealthy;
         return completed == _managerExit
             ? $"manager-exited:{await _managerExit}"
-            : $"tray-exited:{await _trayExit}";
+            : await _tray.Failure;
     }
 
     private async Task<string> ObserveFailureSafelyAsync()
@@ -699,7 +642,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         catch (IOException exception) { log.Write($"generation={generationId} manager stdout closed: {exception.Message}"); }
     }
 
-    private static async Task PumpLinesAsync(StreamReader reader, string source, string generationId, HostLog log)
+    internal static async Task PumpLinesAsync(StreamReader reader, string source, string generationId, HostLog log)
     {
         try
         {
@@ -717,8 +660,7 @@ internal sealed class ApplicationGeneration : IApplicationGeneration
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _monitorCancellation.Cancel(); } catch { }
         try { _managerLifecycle.Dispose(); } catch { }
-        try { await _trayLifecycle.DisposeAsync(); } catch { }
-        try { _tray.Dispose(); } catch { }
+        try { await _tray.DisposeAsync(); } catch { }
         try { _manager.Dispose(); } catch { }
         try { _job.Dispose(); } catch { }
         try { _monitorCancellation.Dispose(); } catch { }
@@ -732,7 +674,8 @@ internal sealed record QueuedCommand(
     TaskCompletionSource<HostResponse> Completion,
     TaskCompletionSource<bool> ResponseSent,
     JsonElement? SourcePatch = null,
-    IdentityResetRequest? IdentityReset = null);
+    IdentityResetRequest? IdentityReset = null,
+    string? TrayRelease = null);
 
 internal sealed record PendingIdentityReset(
     HostOperationContext Operation,
@@ -755,7 +698,8 @@ internal sealed record LifecyclePublication(
     uint? ManagerPid = null,
     uint? TrayPid = null,
     string? TrayBoundManagerInstanceId = null,
-    IReadOnlyList<uint>? JobMemberPids = null);
+    IReadOnlyList<uint>? JobMemberPids = null,
+    TrayRuntimeStatus? TrayStatus = null);
 
 internal static class GenerationFence
 {
@@ -1189,6 +1133,14 @@ internal sealed class HostRuntime
                     }
                     _ = ForwardSourcePatchCommandAsync(generation, command, sourcePatch, cancellationToken);
                     break;
+                case TrayRelease.Command:
+                    if (!CanQuit(command) || generation.Failure.IsCompleted)
+                    {
+                        command.Completion.TrySetResult(Response(false, "stale_generation", "The Tray switch does not match the active application generation."));
+                        break;
+                    }
+                    _ = SwitchTrayAsync(generation, command, cancellationToken);
+                    break;
                 case "restart":
                     if (!CanQuit(command))
                     {
@@ -1243,6 +1195,30 @@ internal sealed class HostRuntime
         catch (OperationCanceledException) when (commandCancellation.IsCancellationRequested)
         {
             return (true, null);
+        }
+    }
+
+    private async Task SwitchTrayAsync(IApplicationGeneration generation, QueuedCommand command, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await generation.SwitchTrayAsync(command.TrayRelease!, RefreshPublication, cancellationToken);
+            var state = CurrentTrayResponse(result.Ok, result.Message);
+            command.Completion.TrySetResult(state.ApplicationGenerationId != generation.Id
+                ? state with { Ok = false, State = "stale_generation" }
+                : state with
+            {
+                State = result.Ok ? state.State : result.State
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            command.Completion.TrySetResult(CurrentTrayResponse(false, "The application generation stopped during Tray switching."));
+        }
+        catch (Exception error)
+        {
+            _log.Write($"generation={generation.Id} Tray switch outcome could not be confirmed: {error.Message}");
+            command.Completion.TrySetResult(CurrentTrayResponse(false, "Query Host status for the active Tray release."));
         }
     }
 
@@ -1411,6 +1387,15 @@ internal sealed class HostRuntime
             publication.JobMemberPids);
     }
 
+    private HostResponse CurrentTrayResponse(bool ok, string? message = null)
+    {
+        lock (_publicationGate)
+        {
+            var tray = _publication.TrayStatus;
+            return CurrentResponse(ok, message) with { TrayRelease = tray?.Release, TrayState = tray?.State };
+        }
+    }
+
     private string CurrentState()
     {
         var publication = _publication;
@@ -1444,6 +1429,7 @@ internal sealed class HostRuntime
         // Required-ready degraded generations still own a valid Manager endpoint.
         // Keep the fenced identity published until the generation is stopping.
         var active = IsPublishedGenerationState(_state) ? _generation : null;
+        var tray = active?.TrayStatus;
         _publication = active is null
             ? new LifecyclePublication(_state, _fenceGenerationId)
             : new LifecyclePublication(
@@ -1453,9 +1439,10 @@ internal sealed class HostRuntime
                 active.Ready.ManagerInstanceId,
                 active.Ready.BaseUrl,
                 active.Ready.Pid,
-                active.TrayPid,
-                active.TrayBoundManagerInstanceId,
-                active.JobMemberPids.ToArray());
+                tray?.Pid,
+                tray?.ManagerInstanceId,
+                active.JobMemberPids.ToArray(),
+                tray);
         try { _endpointCache.Publish(_publication); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -1808,10 +1795,14 @@ internal sealed class HostRuntime
                     : request.Command.Trim().ToLowerInvariant();
                 if (!RequiresDurableAudit(requestedCommand) && request.IdentityReset is null)
                 {
-                    await HostProtocol.WriteAsync(server, CurrentResponse(true), cancellationToken);
+                    await HostProtocol.WriteAsync(server, CurrentTrayResponse(true), cancellationToken);
                     return;
                 }
                 operation = CaptureOperation();
+                if (requestedCommand == TrayRelease.Command
+                    ? !TrayRelease.IsSelection(request.TrayRelease) || request.SourcePatch is not null || request.WebPatch is not null || request.IdentityReset is not null
+                    : request.TrayRelease is not null)
+                    throw new InvalidDataException("Tray switch request envelope is invalid.");
                 IdentityResetRequest? identityReset = null;
                 if (requestedCommand == IdentityResetLifecycle.Command)
                 {
@@ -1862,7 +1853,8 @@ internal sealed class HostRuntime
                         completion,
                         responseSent,
                         SourcePatchTransport.IsWebCommand(normalizedCommand) ? request.WebPatch : request.SourcePatch,
-                        identityReset);
+                        identityReset,
+                        request.TrayRelease);
                 var mutationAccepted = false;
                 lock (_mutationAcceptanceGate)
                 {
@@ -2255,7 +2247,7 @@ internal sealed class HostRuntime
         var publication = _publication;
         if (publication.TrayPid is not null && peer.ParentPid == publication.TrayPid)
         {
-            var expectedTray = Path.GetFullPath(Path.Combine(_packageRoot, "desktop-runtime", "python", "pythonw.exe"));
+            var expectedTray = publication.TrayStatus?.Executable;
             if (!string.IsNullOrWhiteSpace(peer.ParentImagePath) &&
                 string.Equals(Path.GetFullPath(peer.ParentImagePath), expectedTray, StringComparison.OrdinalIgnoreCase))
             {

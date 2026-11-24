@@ -50,6 +50,8 @@ Files, terminals, uploads, the control service and WAL retain their owners. Reti
 
 A desktop-only reference in the original release store persists the slot revision and digest without modifying common or node SDK selection. Startup restores it lazily and checks actual capabilities. Qt uses a declarative desktop resource Pin imported by the original plugin package owner. The official producer packages the verified desktop-runtime with its dependency and notice closure. An absent Qt reference uses the packaged Host resources. A missing or damaged selected Qt package reports a presentation dependency issue while Native input and window queries remain available.
 
+This slot runs the desktop control overlay. The Qt tray loads desktop pet playback and supports independent selection through Host's `tray-switch` command. Tray owns a nested Job within the application Job. Host verifies the full package digest and a READY handshake bound to the application generation, Manager instance, and tray PID. Switching and rollback retire only the tray Job. See [tray lifecycle](../desktop/tray-task-window/README_en.md#independent-tray-updates) for packaging, commands, and readback.
+
 A lost commit acknowledgement is reconciled from the original selection. Report adoption only when committed; restore the old worker only when not committed. Unknown readback retains the original candidate and facts, affecting only the desktop channel. Receipts and independent functions remain available. Rollback constructs a new worker from the old resource instead of resetting a closed instance.
 
 ## Agent sessions and desktop connectors

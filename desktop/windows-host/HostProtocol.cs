@@ -15,7 +15,8 @@ internal sealed record HostRequest(
     string? ApplicationGenerationId = null,
     JsonElement? SourcePatch = null,
     JsonElement? WebPatch = null,
-    JsonElement? IdentityReset = null);
+    JsonElement? IdentityReset = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TrayRelease = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record HostResponse(
     bool Ok,
@@ -34,7 +35,9 @@ internal sealed record HostResponse(
     string? SourcePatchOperationId = null,
     JsonElement? SourcePatch = null,
     string? WebPatchOperationId = null,
-    JsonElement? WebPatch = null);
+    JsonElement? WebPatch = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TrayRelease = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TrayState = null);
 
 internal static class HostIdentity
 {
@@ -131,7 +134,8 @@ internal static class HostProtocol
         string? pipeName = null,
         JsonElement? sourcePatch = null,
         JsonElement? webPatch = null,
-        JsonElement? identityReset = null)
+        JsonElement? identityReset = null,
+        string? trayRelease = null)
     {
         using var timeoutSource = HostTimeouts.Deadline(timeout);
         await using var client = new NamedPipeClientStream(
@@ -143,7 +147,7 @@ internal static class HostProtocol
         try
         {
             await client.ConnectAsync(timeoutSource.Token);
-            await WriteAsync(client, new HostRequest(command, applicationGenerationId, sourcePatch, webPatch, identityReset), timeoutSource.Token);
+            await WriteAsync(client, new HostRequest(command, applicationGenerationId, sourcePatch, webPatch, identityReset, trayRelease), timeoutSource.Token);
             return await ReadAsync<HostResponse>(client, timeoutSource.Token);
         }
         catch (OperationCanceledException)

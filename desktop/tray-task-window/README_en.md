@@ -111,6 +111,12 @@ Desktop is not a separately persistent application. Host starts Manager, validat
 
 When Manager or Host remains unavailable, Manager identity changes, or Desktop itself fails, Desktop exits. Host closes the old Job and applies bounded whole-generation recovery. There is no resident tray reconnect loop or parallel guardian chain.
 
+### Independent tray updates
+
+Build the complete Qt runtime with `scripts/build-desktop-runtime.ps1`. Use `node scripts/build-tray-release.mjs --desktop-runtime <runtime-dir> --output-root <local-install-state-root>` to stage a digest-addressed tray release. Adoption requires a Host that supports `tray-switch`.
+
+Read the running generation with `RabiRouteHost.exe --command status --json`. Use `--command tray-switch --application-generation-id <generation> --tray-release <digest> --json` to switch. Host verifies the payload and drains the old tray and its descendants. The new tray then proves its generation, the existing Manager instance, and its new PID. Host saves the selection after READY and restores the previous tray if startup fails. For an explicit rollback, select the previous digest or `bundled`. Read back `trayState`, `trayRelease`, and `trayPid`.
+
 ## Code layout
 
 - `ManagerClient`: the shared Manager HTTP backend client for Routes, plans, memory, avatars, and business actions, including screenshot and selected-text delivery.

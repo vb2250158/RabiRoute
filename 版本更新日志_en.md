@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.79 - 2026-11-24
+
+- Windows Host switches independent tray packages, verifies generation and READY, and restores the previous tray on failure while Manager stays online.
+
 ## Unreleased
 
 - Route Control (io.rabiroute.manager.route-control) 0.1.8 declares toolbar page scopes; the Web shell renders plugin actions and preserves legacy packages.

@@ -91,6 +91,35 @@ internal static class ProcessTreeTests
         }
     }
 
+    internal static async Task RunNestedTrayJobAsync(Action<bool, string> check)
+    {
+        var directory = Directory.CreateTempSubdirectory("rabiroute-nested-tray-").FullName;
+        try
+        {
+            using var application = new WindowsJob($"application-test-{Guid.NewGuid():N}");
+            using var trayJob = new WindowsJob($"tray-test-{Guid.NewGuid():N}");
+            var environment = new Dictionary<string, string?> { ["RABIROUTE_TEST_SPEECH_EXE"] = null };
+            var managerRoot = Directory.CreateDirectory(Path.Combine(directory, "manager")).FullName;
+            using var manager = NativeChildProcess.StartSuspendedInJob(application, Environment.ProcessPath!,
+                new[] { "--tree-leaf", managerRoot }, managerRoot, environment);
+            using var tray = NativeChildProcess.StartSuspendedInJob(application, Environment.ProcessPath!,
+                new[] { "--tree-parent", directory, "normal" }, directory, environment, childJob: trayJob);
+
+            var leafFile = Path.Combine(directory, "leaf");
+            await WaitUntilAsync(() => File.Exists(leafFile));
+            var leaf = uint.Parse(File.ReadAllText(leafFile));
+            await WaitUntilAsync(() => trayJob.MemberProcessIds().Contains(leaf));
+            check(application.MemberProcessIds().Contains(leaf), "Tray descendants retain generation ownership");
+            check(!trayJob.MemberProcessIds().Contains(manager.ProcessId), "Manager is outside the nested Tray Job");
+            trayJob.Terminate();
+            await trayJob.WaitForEmptyAsync(new[] { tray }, CancellationToken.None);
+            check(!Running(leaf) && !manager.HasExited, "Retiring Tray drains descendants and preserves Manager");
+            application.Terminate();
+            await application.WaitForEmptyAsync(new[] { manager }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     private static ProcessStartInfo StartInfo(params string[] args)
     {
         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
