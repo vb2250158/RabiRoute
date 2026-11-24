@@ -143,7 +143,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       <v-tab value="config">配置</v-tab>
     </v-tabs>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <section v-if="tab === 'home'" aria-label="已授权设备" :aria-busy="home.phase === 'loading'">
+    <section v-if="tab === 'home'" class="rabilink-home" aria-label="已授权设备" :aria-busy="home.phase === 'loading'">
       <template v-if="!ready">
         <p v-if="!error" role="status" class="section-note">正在读取连接状态…</p>
       </template>
@@ -173,11 +173,16 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
           <h3 class="section-title">当前应用尚无已授权设备</h3>
         </div>
         <ul v-else-if="home.phase === 'ready'" class="rabilink-devices">
-          <li v-for="device in devices" :key="device.id" class="rabilink-device">
+          <li v-for="device in devices" :key="device.id" class="rabilink-device" :class="{ 'rabilink-device--linked': device.kind === 'desktop' }">
             <v-icon :icon="device.icon" class="rabilink-device-icon" />
             <div class="rabilink-device-content">
               <div class="d-flex flex-wrap align-center ga-2">
-                <strong>{{ device.displayName }}</strong>
+                <RouterLink
+                  v-if="device.kind === 'desktop'"
+                  class="rabilink-device-link"
+                  :to="{ path: '/rabilink', query: { tab: 'computer', deviceId: device.isLocal ? '' : device.id } }"
+                >{{ device.displayName }}</RouterLink>
+                <strong v-else>{{ device.displayName }}</strong>
                 <v-chip v-if="device.isLocal" size="x-small" variant="outlined">{{ t('本机') }}</v-chip>
                 <span v-if="device.versionLabel" class="section-note" data-no-i18n>{{ device.versionLabel }}</span>
                 <v-chip size="x-small" :color="device.online ? 'success' : 'default'" variant="tonal">{{ device.online ? '在线' : '离线' }}</v-chip>
@@ -186,7 +191,6 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
                 <v-chip v-for="label in device.services.known" :key="label" size="small" variant="outlined">{{ label }}</v-chip>
                 <span v-if="!device.services.known.length" class="section-note">{{ device.services.advanced.length ? '其他服务能力' : '未声明服务能力' }}</span>
               </div>
-              <v-btn v-if="device.kind === 'desktop'" class="mt-2" size="small" variant="tonal" prepend-icon="mdi-remote-desktop" :to="{ path: '/rabilink', query: { tab: 'computer', deviceId: device.isLocal ? undefined : device.id } }">查看电脑控制</v-btn>
               <details class="section-note mt-2">
                 <summary>高级信息</summary>
                 <dl class="rabilink-device-details">
@@ -196,6 +200,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
                 </dl>
               </details>
             </div>
+            <v-icon v-if="device.kind === 'desktop'" icon="mdi-chevron-right" size="20" class="rabilink-device-arrow" />
           </li>
         </ul>
       </template>
@@ -217,11 +222,38 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
 summary { cursor: pointer; width: fit-content; }
 summary:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
 .rabilink-empty { display: grid; justify-items: center; text-align: center; gap: 12px; padding: 36px 16px; }
-.rabilink-devices { list-style: none; margin: 16px 0 0; padding: 0; border-top: 1px solid var(--rr-border); }
-.rabilink-device { display: flex; gap: 14px; padding: 18px 4px; border-bottom: 1px solid var(--rr-border); }
+.rabilink-home { container-type: inline-size; }
+.rabilink-devices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.rabilink-device {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--rr-border);
+  border-radius: 12px;
+  background: var(--rr-surface);
+}
+.rabilink-device--linked:hover { border-color: var(--rr-accent-text); }
 .rabilink-device-icon { margin-top: 2px; color: var(--rr-text-muted); }
+.rabilink-device-arrow { margin-top: 2px; color: var(--rr-text-muted); }
 .rabilink-device-content { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.rabilink-device-link { color: inherit; font-weight: 700; text-decoration: none; }
+.rabilink-device-link::after { content: ""; position: absolute; inset: 0; border-radius: 12px; }
+.rabilink-device-link:focus-visible { outline: none; }
+.rabilink-device-link:focus-visible::after { outline: 2px solid var(--rr-accent-text); outline-offset: 2px; }
+.rabilink-device summary, .rabilink-device-details { position: relative; z-index: 1; }
 .rabilink-device-details { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 8px; }
 .rabilink-device-details dd { margin: 0; overflow-wrap: anywhere; }
+@container (max-width: 740px) { .rabilink-devices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 480px) { .rabilink-devices { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 600px) { .rabilink-toolbar-actions { width: 100%; margin-left: 0; } .rabilink-device-details { grid-template-columns: 1fr; } }
 </style>

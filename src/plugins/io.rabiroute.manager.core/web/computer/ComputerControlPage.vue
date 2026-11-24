@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { createComputerControlEvents } from "./computerControlEvents";
 import { managerAccessToken, managerEventSource } from "../../../../../ribiwebgui/src/managerApi";
@@ -14,15 +14,34 @@ const events = createComputerControlEvents(managerEventSource);
 const route = useRoute(); const client = new ComputerControlClient(undefined, managerAccessToken());
 const controller = createComputerControlState(reactive); const state = controller.state;
 const query = ref(""); const kind = ref("all"); const status = ref("all");
+const section = ref<HTMLElement>();
 const rows = computed(() => filterComputers(state.rows, query.value, kind.value, status.value));
 const visibleIds = computed(() => new Set(rows.value.map(row => row.id)));
-async function refresh() { await controller.refresh(signal => client.list(signal)); const id = computerDeepLink(route.query, state.rows); if (id) state.expanded.add(id); }
-watch(() => route.query, () => { const id = computerDeepLink(route.query, state.rows); if (id) state.expanded.add(id); });
+function openLinkedComputer() {
+  if (props.active === false) return;
+  const id = computerDeepLink(route.query, state.rows);
+  if (!id) return;
+  if (!visibleIds.value.has(id)) {
+    query.value = "";
+    kind.value = "all";
+    status.value = "all";
+  }
+  state.expanded.add(id);
+  void nextTick(() => {
+    if (props.active === false || computerDeepLink(route.query, state.rows) !== id) return;
+    section.value?.querySelector(`[data-computer-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" });
+  });
+}
+async function refresh() {
+  await controller.refresh(signal => client.list(signal));
+  openLinkedComputer();
+}
+watch([() => props.active, () => route.query], openLinkedComputer);
 function toggle(id: string) { if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id); }
 onMounted(() => { void refresh(); }); onBeforeUnmount(() => {events.dispose();controller.dispose();});
 </script>
 <template>
-  <section class="computer-page" aria-labelledby="computer-title">
+  <section ref="section" class="computer-page" aria-labelledby="computer-title">
     <header class="computer-heading"><div><h2 id="computer-title">{{ t('电脑控制') }}</h2><p>{{ t('本机、RabiPC 主机与远端节点平级展示。展开只读取设置，不开始操作。') }}</p></div><v-btn prepend-icon="mdi-refresh" :loading="state.loading" variant="tonal" @click="refresh">{{ t('刷新状态') }}</v-btn></header>
     <div class="computer-filters"><v-text-field v-model="query" :label="t('搜索电脑名称')" prepend-inner-icon="mdi-magnify" clearable hide-details density="compact" /><v-select v-model="kind" :label="t('类型')" :items="[{title:t('全部'),value:'all'},{title:t('主机'),value:'host'},{title:t('远端节点'),value:'node'}]" hide-details density="compact" /><v-select v-model="status" :label="t('在线状态')" :items="[{title:t('全部'),value:'all'},{title:t('在线'),value:'online'},{title:t('离线'),value:'offline'},{title:t('状态未知'),value:'unknown'}]" hide-details density="compact" /></div>
     <v-alert v-if="state.error" type="warning" variant="tonal">{{ state.error }}{{ t(' · 保留最近读取的信息。') }}</v-alert>

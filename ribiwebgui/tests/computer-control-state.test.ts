@@ -11,6 +11,18 @@ test("flat computer refresh preserves stable order and reliable identity",()=>{
  assert.equal(computerDeepLink({instanceId:"a"},[row("a")]),"a");
  assert.equal(computerDeepLink({deviceId:"wrong",instanceId:"a"},[row("a")]),undefined);
 });
+test("device cards expand the exact local or remote host", () => {
+ const rows: ComputerTarget[] = [
+  {...row("local-node"),kind:"node",local:true},
+  {...row("local-host"),local:true},
+  {...row("remote-node"),kind:"node",ownerDeviceId:"remote"},
+  {...row("remote-host","offline"),ownerDeviceId:"remote"}
+ ];
+ assert.equal(computerDeepLink({deviceId:""},rows),"local-host");
+ assert.equal(computerDeepLink({deviceId:"remote"},rows),"remote-host");
+ assert.equal(computerDeepLink({deviceId:"remote",instanceId:"remote-node"},rows),"remote-node");
+ assert.equal(computerDeepLink({},rows),undefined);
+});
 test("old directory success or error never replaces a later refresh",async()=>{
  const editor=createComputerControlState(); const old=deferred<ComputerTarget[]>(); const latest=deferred<ComputerTarget[]>();
  const first=editor.refresh(()=>old.promise); const second=editor.refresh(()=>latest.promise); latest.resolve([row("new")]);await second;old.reject(new Error("old"));await first;

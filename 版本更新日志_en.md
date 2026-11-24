@@ -16,6 +16,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Core (io.rabiroute.manager.core) 0.1.21 displays authorized devices as responsive cards and opens the exact computer control target by source.
+
 - Persona (io.rabiroute.manager.persona) 0.1.45 adds recording preview, event list and multitrack timeline with date paging, source filters, zoom and return to live; retains the 0.1.44 tab toolbars.
 
 - Route Control (io.rabiroute.manager.route-control) 0.1.8 declares toolbar page scopes; the Web shell renders plugin actions and preserves legacy packages.

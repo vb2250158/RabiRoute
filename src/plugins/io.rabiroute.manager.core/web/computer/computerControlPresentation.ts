@@ -20,9 +20,10 @@ export function filterComputers(rows: readonly ComputerTarget[], query: string, 
 }
 export function computerDeepLink(query: Record<string, unknown>, rows: readonly ComputerTarget[]): string | undefined {
   const instanceId = typeof query.instanceId === "string" ? query.instanceId : undefined;
-  const ownerDeviceId = typeof query.deviceId === "string" ? query.deviceId : "";
-  return rows.find(row => instanceId ? row.instanceId === instanceId && (row.ownerDeviceId || "") === ownerDeviceId
-    : !!ownerDeviceId && row.kind === "host" && row.ownerDeviceId === ownerDeviceId)?.id;
+  const ownerDeviceId = typeof query.deviceId === "string" ? query.deviceId : undefined;
+  if (instanceId) return rows.find(row => row.instanceId === instanceId && (row.ownerDeviceId || "") === (ownerDeviceId || ""))?.id;
+  if (ownerDeviceId === undefined) return undefined;
+  return rows.find(row => row.kind === "host" && (ownerDeviceId ? row.ownerDeviceId === ownerDeviceId : row.local))?.id;
 }
 export type ComputerFieldSchema = { type?: string | string[]; title?: string; description?: string; default?: unknown; enum?: unknown[];
   minimum?: number; maximum?: number; unit?: string; properties?: Record<string, ComputerFieldSchema>; items?: ComputerFieldSchema; required?: string[]; anyOf?: ComputerFieldSchema[]; oneOf?: ComputerFieldSchema[] };

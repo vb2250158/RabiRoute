@@ -355,9 +355,10 @@
         "0.1.16",
         "0.1.17",
         "0.1.18",
-        "0.1.19"
+        "0.1.19",
+        "0.1.20"
       ],
-      "toVersion": "0.1.20"
+      "toVersion": "0.1.21"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
