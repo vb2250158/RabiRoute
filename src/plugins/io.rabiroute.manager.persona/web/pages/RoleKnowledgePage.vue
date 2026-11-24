@@ -287,6 +287,7 @@ const planRenderLimit = ref(8);
 const memoryRenderLimit = ref(24);
 const memoryClock = ref(Date.now());
 const knowledgeToolbar = ref<HTMLElement | null>(null);
+const knowledgeBrowser = ref<{ $el: HTMLElement } | null>(null);
 const planDirectoryList = ref<HTMLElement | null>(null);
 const planLoadPreviousSentinel = ref<HTMLElement | null>(null);
 const planLoadMoreSentinel = ref<HTMLElement | null>(null);
@@ -610,6 +611,18 @@ function schedulePlanCardObserverRefresh(): void {
   planObserverRefreshFrame = window.requestAnimationFrame(rebuildPlanCardObserver);
 }
 
+function refreshKnowledgeToolbarLayout(): void {
+  const toolbarHeight = knowledgeToolbar.value?.offsetHeight ?? 0;
+  directoryLayout.value?.style.setProperty("--knowledge-toolbar-height", `${toolbarHeight}px`);
+  schedulePlanCardObserverRefresh();
+}
+
+watch(knowledgeToolbar, (toolbar, previous) => {
+  if (previous) toolbarResizeObserver?.unobserve(previous);
+  if (toolbar) toolbarResizeObserver?.observe(toolbar);
+  refreshKnowledgeToolbarLayout();
+}, { flush: "post" });
+
 function keepActiveDirectoryLinkVisible(): void {
   const list = planDirectoryList.value;
   if (!list || !activeDirectoryPlanId.value) return;
@@ -630,8 +643,8 @@ function keepActiveDirectoryLinkVisible(): void {
 }
 
 function updateFeedbackFocusHeight(): void {
-  const browser = knowledgeToolbar.value?.parentElement;
-  if (!browser || !feedbackFocusOpen.value) return;
+  const browser = knowledgeBrowser.value?.$el;
+  if (!knowledgeToolbar.value || !browser || !feedbackFocusOpen.value) return;
   const top = Math.max(0, browser.getBoundingClientRect().top);
   browser.style.setProperty("--feedback-focus-height", `${Math.max(0, window.innerHeight - top - 16)}px`);
 }
@@ -2630,14 +2643,14 @@ function activateKnowledgePage(): void {
   lastKnowledgeScrollY = cachedKnowledgeScrollY;
   document.addEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.addEventListener("scroll", handleKnowledgeWindowScroll, { passive: true });
-  window.addEventListener("resize", schedulePlanCardObserverRefresh, { passive: true });
+  window.addEventListener("resize", refreshKnowledgeToolbarLayout, { passive: true });
   if (typeof ResizeObserver !== "undefined" && !toolbarResizeObserver) {
-    toolbarResizeObserver = new ResizeObserver(schedulePlanCardObserverRefresh);
+    toolbarResizeObserver = new ResizeObserver(refreshKnowledgeToolbarLayout);
   }
   if (toolbarResizeObserver && knowledgeToolbar.value) {
     toolbarResizeObserver.observe(knowledgeToolbar.value);
   }
-  schedulePlanCardObserverRefresh();
+  refreshKnowledgeToolbarLayout();
   schedulePlanDetailObserverRefresh();
   scheduleProgressiveSentinelRefresh();
   connectManagerEvents();
@@ -2654,7 +2667,7 @@ function deactivateKnowledgePage(): void {
   planDirectoryMounted = false;
   document.removeEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.removeEventListener("scroll", handleKnowledgeWindowScroll);
-  window.removeEventListener("resize", schedulePlanCardObserverRefresh);
+  window.removeEventListener("resize", refreshKnowledgeToolbarLayout);
   releaseDirectoryJumpTarget(false, false);
   planCardObserver?.disconnect();
   toolbarResizeObserver?.disconnect();
@@ -2851,19 +2864,41 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       :role-id="roleId" :plan="planBindingDraft" :client="scopedRoleKnowledge()"
       @close="planBindingDraft = undefined" @saved="acceptPlanBinding"
     />
-    <v-tabs
-      v-if="!focusedPlanId && !embeddedPlanView"
-      v-model="activeView"
-      color="secondary"
-      show-arrows
-      class="knowledge-tabs"
-      :aria-label="t('计划与记忆')"
-    >
-      <v-tab value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-tab>
-      <v-tab value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b></v-tab>
-      <v-tab value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b></v-tab>
-      <v-tab value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-tab>
-    </v-tabs>
+    <div v-if="!embeddedPlanView" ref="knowledgeToolbar" class="knowledge-page-toolbar">
+      <v-tabs
+        v-if="!focusedPlanId"
+        v-model="activeView"
+        color="secondary"
+        show-arrows
+        class="knowledge-tabs"
+        :aria-label="t('计划与记忆')"
+      >
+        <v-tab value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-tab>
+        <v-tab value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b></v-tab>
+        <v-tab value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b></v-tab>
+        <v-tab value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-tab>
+      </v-tabs>
+      <div class="knowledge-page-actions">
+        <v-btn variant="text" prepend-icon="mdi-book-open-page-variant-outline" :disabled="!roleId" @click="skillsOpen = true">{{ isEnglish ? 'Persona Skills' : '角色技能' }}</v-btn>
+        <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />
+        <v-text-field
+          v-if="!focusedPlanId"
+          v-model="query"
+          class="knowledge-page-search"
+          :placeholder="isEnglish ? 'Search plans or memories' : '搜索计划或记忆'"
+          :aria-label="t('搜索计划或记忆的任意内容')"
+          prepend-inner-icon="mdi-magnify"
+          clearable
+          hide-details
+          density="compact"
+        >
+          <template #append-inner>
+            <v-btn class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" @click.stop="refreshKnowledge" />
+          </template>
+        </v-text-field>
+        <v-btn v-else class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || memoryLoading" @click="refreshKnowledge" />
+      </div>
+    </div>
 
     <div
       ref="directoryLayout"
@@ -3135,29 +3170,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         @keydown="directoryResizeKeydown"
       />
 
-      <v-card class="app-card knowledge-browser" :class="{ 'knowledge-focus-layout': feedbackFocusOpen && showsPlanList, 'editor-expanded': feedbackFocusExpanded }" variant="flat">
-      <div v-if="!embeddedPlanView" ref="knowledgeToolbar" class="knowledge-toolbar">
-        <div class="knowledge-tools">
-          <v-btn variant="text" prepend-icon="mdi-book-open-page-variant-outline" :disabled="!roleId" @click="skillsOpen = true">{{ isEnglish ? 'Persona Skills' : '角色技能' }}</v-btn>
-          <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />
-          <v-text-field
-            v-if="!focusedPlanId"
-            v-model="query"
-            :placeholder="isEnglish ? 'Search plans or memories' : '搜索计划或记忆'"
-            :aria-label="t('搜索计划或记忆的任意内容')"
-            prepend-inner-icon="mdi-magnify"
-            clearable
-            hide-details
-            density="compact"
-          >
-            <template #append-inner>
-              <v-btn class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" @click.stop="refreshKnowledge" />
-            </template>
-          </v-text-field>
-          <v-btn v-else class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新')" :title="t('刷新')" :loading="loading || memoryLoading" @click="refreshKnowledge" />
-        </div>
-      </div>
-
+      <v-card class="app-card knowledge-browser" ref="knowledgeBrowser" :class="{ 'knowledge-focus-layout': feedbackFocusOpen && showsPlanList, 'editor-expanded': feedbackFocusExpanded }" variant="flat">
       <v-dialog v-model="skillsOpen" max-width="900" scrollable>
         <v-card>
           <v-card-actions><v-spacer /><v-btn @click="skillsOpen = false">{{ isEnglish ? 'Close' : '关闭' }}</v-btn></v-card-actions>
@@ -4244,3 +4257,57 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
     </v-dialog>
   </div>
 </template>
+
+
+<style scoped>
+.knowledge-page-toolbar {
+  position: sticky;
+  top: var(--v-layout-top, 64px);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  background: rgb(var(--v-theme-background));
+}
+
+.knowledge-tabs {
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.knowledge-page-actions {
+  display: flex;
+  flex: 1 1 410px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(100%, 720px);
+}
+
+.knowledge-page-search {
+  flex: 1 1 180px;
+  min-width: min(180px, 100%);
+}
+
+@media (min-width: 961px) {
+  .knowledge-plan-directory {
+    top: max(80px, calc(var(--v-layout-top, 64px) + var(--knowledge-toolbar-height, 0px) + 8px));
+    max-height: calc(100dvh - max(104px, var(--v-layout-top, 64px) + var(--knowledge-toolbar-height, 0px) + 24px));
+  }
+
+  .knowledge-plan-card {
+    scroll-margin-top: max(152px, calc(var(--v-layout-top, 64px) + var(--knowledge-toolbar-height, 0px) + 12px));
+  }
+}
+
+@media (max-width: 960px) {
+  .knowledge-page-toolbar {
+    position: static;
+  }
+}
+</style>

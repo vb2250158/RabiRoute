@@ -353,7 +353,8 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(styles, /\.knowledge-plan-directory-list\s*\{[\s\S]*?overflow-x:\s*hidden[\s\S]*?overflow-y:\s*auto/);
   assert.doesNotMatch(styles, /\.knowledge-plan-cards\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(styles, /\.v-card\.knowledge-browser\s*\{[\s\S]*?overflow:\s*visible/);
-  assert.match(styles, /\.knowledge-toolbar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*var\(--v-layout-top, 64px\)[\s\S]*?z-index:\s*6/);
+  assert.match(page, /class="knowledge-page-toolbar">\s*<v-tabs[\s\S]*?<\/v-tabs>\s*<div class="knowledge-page-actions">[\s\S]*?openFeedbackFocus[\s\S]*?v-model="query"[\s\S]*?class="knowledge-browser-layout"/);
+  assert.match(page, /\.knowledge-page-toolbar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*var\(--v-layout-top, 64px\)[\s\S]*?z-index:\s*6/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?scroll-margin-top:\s*152px/);
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?min-height:\s*44px/);
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?overflow:\s*hidden/);
@@ -373,7 +374,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(styles, /@keyframes knowledge-plan-directory-marquee/);
   assert.doesNotMatch(styles, /knowledge-plan-directory-index|knowledge-plan-directory-copy small/);
   assert.match(styles, /@media \(max-width:\s*960px\)[\s\S]*?\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
-  assert.match(styles, /@media \(max-width:\s*960px\)[\s\S]*?\.knowledge-toolbar\s*\{[\s\S]*?position:\s*static/);
+  assert.match(page, /@media \(max-width:\s*960px\)[\s\S]*?\.knowledge-page-toolbar\s*\{[\s\S]*?position:\s*static/);
   assert.match(styles, /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.knowledge-plan-directory-link/);
 });
 

@@ -3632,17 +3632,6 @@ button.channel-topology-node:focus-visible {
   font-weight: 500;
 }
 
-.knowledge-toolbar {
-  position: sticky;
-  top: var(--v-layout-top, 64px);
-  z-index: 6;
-  border-bottom: 1px solid var(--rr-border-soft);
-  padding: 14px 16px;
-  background: var(--rr-surface-glass);
-  box-shadow: var(--rr-shadow-card);
-  backdrop-filter: blur(16px);
-}
-
 .knowledge-tabs {
   min-width: 0;
 }
@@ -3654,13 +3643,6 @@ button.channel-topology-node:focus-visible {
 
 .knowledge-tabs .v-btn__content {
   gap: 6px;
-}
-
-.knowledge-tools {
-  display: grid;
-  grid-template-columns: max-content max-content minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
 }
 
 .knowledge-progressive-status,
@@ -7126,12 +7108,6 @@ button.knowledge-plan-attachment.file {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .knowledge-toolbar {
-    position: static;
-    top: auto;
-    box-shadow: none;
-  }
-
   .v-card.knowledge-browser {
     overflow: clip;
   }
@@ -7334,7 +7310,6 @@ button.knowledge-plan-attachment.file {
     grid-template-columns: 1fr;
   }
 
-  .knowledge-tools,
   .knowledge-plan-summary {
     grid-template-columns: 1fr;
   }

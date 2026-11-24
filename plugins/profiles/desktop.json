@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.43",
+      "version": "0.1.44",
       "enabled": true,
       "config": {},
       "grants": []

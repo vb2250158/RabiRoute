@@ -1757,41 +1757,38 @@ onBeforeUnmount(() => {
 
 <template>
   <fieldset class="page-shell" :disabled="store.archived" style="border: 0; padding: 0; min-width: 0">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">角色配置</h1>
-
-      </div>
-      <div class="page-actions">
-        <RoleManagementActions hide-create />
-        <template v-if="hasPersona">
-          <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
-        </template>
-      </div>
-    </div>
-
     <v-alert v-if="store.error" type="error" variant="tonal">{{ store.error }}</v-alert>
     <v-alert v-if="store.archived" type="warning" variant="tonal">角色已归档，配置只读，新任务已暂停。</v-alert>
     <v-alert v-if="!gateway && !store.loading && !store.error" type="info" variant="tonal">请选择或新建角色。</v-alert>
 
+    <div class="page-header">
+      <h1 class="page-title">角色配置</h1>
+      <div class="persona-page-toolbar">
+        <v-tabs
+          v-if="gateway && hasPersona"
+          v-model="activePersonaPageTab"
+          class="persona-page-tabs"
+          color="secondary"
+          show-arrows
+          :aria-label="t('角色配置分区')"
+        >
+          <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
+          <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息连接器</v-tab>
+          <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
+          <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
+          <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
+          <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
+        </v-tabs>
+        <div class="persona-page-actions">
+          <RoleManagementActions hide-create />
+          <template v-if="hasPersona">
+            <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
+          </template>
+        </div>
+      </div>
+    </div>
+
     <template v-if="gateway">
-
-      <v-tabs
-        v-if="hasPersona"
-        v-model="activePersonaPageTab"
-        class="persona-page-tabs"
-        color="secondary"
-        show-arrows
-        :aria-label="t('角色配置分区')"
-      >
-        <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
-        <v-tab value="messages" prepend-icon="mdi-message-outline" :disabled="!hasPersona">消息连接器</v-tab>
-        <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
-        <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
-        <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
-        <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
-      </v-tabs>
-
       <div v-if="hasPersona && activePersonaPageTab === 'messages'" class="persona-tab-panel">
         <PersonaMessages />
       </div>
@@ -2830,6 +2827,29 @@ onBeforeUnmount(() => {
 .automation-card-source { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .automation-card-conversation-label { display: grid; gap: 2px; min-width: 0; }
 .automation-card-conversation-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.persona-page-toolbar {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-page-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.persona-page-actions {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .persona-page-tabs :deep(.v-tab) {
   text-transform: none;

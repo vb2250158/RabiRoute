@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Persona (`io.rabiroute.manager.persona`) 0.1.44 places archive and role actions, skills, search and refresh alongside their tabs, with wrapping on narrow screens.
+
 - Validate release versions by Host, plugin, Web and Android ownership; independent Web builds reuse packaged plugin assets and full builds finalize the complete bundle.
 
 ## 0.15.78 - 2026-11-24
