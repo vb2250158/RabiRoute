@@ -62,7 +62,7 @@
     {
       "id": "manager:route-control",
       "package": "io.rabiroute.manager.route-control",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "enabled": true,
       "config": {},
       "grants": []

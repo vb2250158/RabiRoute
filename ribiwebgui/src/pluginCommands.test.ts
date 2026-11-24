@@ -5,7 +5,8 @@ import {
   registerTrustedWebCommand,
   registeredWebCommands,
   resolveWebCommandCatalog,
-  webCommandHandler
+  webCommandHandler,
+  webCommandsInSlot
 } from "./pluginCommands";
 import { activateRouteControl } from "../../src/plugins/io.rabiroute.manager.route-control/web/contributions";
 import { activateWebPluginForTest } from "../tests/web-plugin-test-host";
@@ -47,11 +48,17 @@ test("trusted command registration resolves catalog contributions and unregister
     handlerId,
     allowedSlots: ["utility-action"],
     allowedIcons: ["mdi-shield-check-outline"],
+    routeRoot: "/settings/models",
     execute: () => undefined
   });
   try {
     assert.equal(webCommandHandler(handlerId).handlerId, handlerId);
-    assert.deepEqual(resolveWebCommandCatalog([contribution(handlerId)]).map(command => command.handlerId), [handlerId]);
+    const catalog = resolveWebCommandCatalog([contribution(handlerId, { routeRoot: "/untrusted" })]);
+    assert.deepEqual(catalog.map(command => command.handlerId), [handlerId]);
+    assert.deepEqual(webCommandsInSlot(catalog, "utility-action", "/settings/models"), catalog);
+    assert.deepEqual(webCommandsInSlot(catalog, "utility-action", "/settings/models/speech"), catalog);
+    assert.deepEqual(webCommandsInSlot(catalog, "utility-action", "/settings/models-extra"), []);
+    assert.deepEqual(webCommandsInSlot(catalog, "utility-action", "/untrusted"), []);
     assert.deepEqual(resolveWebCommandCatalog([contribution(handlerId, { slot: "topbar-primary" })]), []);
     assert.deepEqual(resolveWebCommandCatalog([contribution(handlerId, { instanceId: "manager:other" })]), []);
     assert.deepEqual(resolveWebCommandCatalog([contribution(handlerId, { pluginId: "package:other" })]), []);
@@ -71,4 +78,18 @@ test("trusted command registration rejects duplicate handlers", () => {
     allowedIcons: ["mdi-shield-check-outline"],
     execute: () => undefined
   }), /already registered/);
+});
+
+test("new and legacy Route Control packages show Add Route only in the routes area", () => {
+  const commands = resolveWebCommandCatalog([contribution("web.add-route", {
+    instanceId: "manager:route-control",
+    pluginId: "io.rabiroute.manager.route-control",
+    slot: "topbar-primary",
+    icon: "mdi-plus"
+  })]);
+  assert.equal(commands[0]?.routeRoot, "/routes");
+  for (const catalog of [commands, commands.map(command => ({ ...command, routeRoot: undefined }))]) {
+    assert.deepEqual(webCommandsInSlot(catalog, "topbar-primary", "/routes/main"), catalog);
+    assert.deepEqual(webCommandsInSlot(catalog, "topbar-primary", "/settings"), []);
+  }
 });

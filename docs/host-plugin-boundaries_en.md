@@ -32,6 +32,8 @@ The official selected-package producer consumes the native package evidence and 
 
 A candidate checks only runtime exports it actually uses. Missing exports preserve the verified page and explain that candidate's dependency; they do not disable unrelated pages or public CLI/MCP operations. CSS and asynchronous initialization belong to the candidate lifecycle. Cancellation cleans up its resources, and late results cannot register on a retired page. Content hashes establish integrity, not caller eligibility.
 
+Plugins register settings pages and navigation. The existing settings page receives plugin sections through `global.settings.sections`. A trusted Web command can declare a `routeRoot` and appear on that path and its descendants. The shell renders commands for the current path, and the operation still uses its normal authorization. Legacy Route Control packages retain the `/routes` scope for Add Route.
+
 ## Plan domain executor
 
 Persona owns plan-update preparation, history projection and result projection in `worker/plan-update.mjs`. The Host retains the existing write queue, leases, CAS, WAL, receipts and cache publication. This extraction covers `plan_update`. Other domains retain their existing owners.

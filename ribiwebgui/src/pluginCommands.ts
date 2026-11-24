@@ -25,6 +25,7 @@ export type TrustedWebCommandRegistration = Readonly<{
   handlerId: WebCommandHandlerId;
   allowedSlots: readonly WebCommandSlot[];
   allowedIcons: readonly string[];
+  routeRoot?: string;
   appearance?: "default" | "primary";
   execute: (context: WebCommandContext) => void | Promise<void>;
   state?: (context: WebCommandContext) => WebCommandState;
@@ -40,6 +41,7 @@ export type WebCommandContribution = Readonly<{
   icon: string;
   label: string;
   order: number;
+  routeRoot?: string;
   appearance: "default" | "primary";
   execute: TrustedWebCommandRegistration["execute"];
   state?: TrustedWebCommandRegistration["state"];
@@ -89,12 +91,18 @@ function normalizeRegistration(input: TrustedWebCommandRegistration): TrustedWeb
   if (!instanceId || !pluginId || !handlerId || typeof input.execute !== "function" || (input.state !== undefined && typeof input.state !== "function")) {
     throw new Error("Trusted Web command registration is invalid.");
   }
+  const routeRoot = input.routeRoot;
+  if (routeRoot !== undefined && (typeof routeRoot !== "string" || routeRoot.length > 160 ||
+    !/^\/[A-Za-z0-9_~-]+(?:\/[A-Za-z0-9_~-]+)*$/.test(routeRoot))) {
+    throw new Error("Trusted Web command routeRoot is invalid.");
+  }
   return Object.freeze({
     instanceId,
     pluginId,
     handlerId,
     allowedSlots: controlledSymbols(input.allowedSlots, "allowedSlots"),
     allowedIcons: controlledSymbols(input.allowedIcons, "allowedIcons"),
+    ...(routeRoot ? { routeRoot } : {}),
     appearance: input.appearance === "primary" ? "primary" : "default",
     execute: input.execute,
     ...(input.state ? { state: input.state } : {})
@@ -160,6 +168,7 @@ function parseWebCommandContribution(value: unknown): WebCommandContribution | u
     icon,
     label,
     order,
+    ...(registration.routeRoot ? { routeRoot: registration.routeRoot } : {}),
     appearance: registration.appearance ?? "default",
     execute: registration.execute,
     ...(registration.state ? { state: registration.state } : {})
@@ -180,9 +189,17 @@ export function resolveWebCommandCatalog(contributions: readonly unknown[] | nul
 
 export function webCommandsInSlot(
   commands: readonly WebCommandContribution[],
-  slot: WebCommandSlot
+  slot: WebCommandSlot,
+  currentPath?: string
 ): readonly WebCommandContribution[] {
-  return commands.filter(command => command.slot === slot);
+  return commands.filter(command => {
+    if (command.slot !== slot) return false;
+    if (currentPath === undefined) return true;
+    // Older Route Control packages did not include their route scope.
+    const legacyRouteControl = command.pluginId === "io.rabiroute.manager.route-control" && command.handlerId === "web.add-route";
+    const root = command.routeRoot ?? (legacyRouteControl ? "/routes" : undefined);
+    return !root || currentPath === root || currentPath.startsWith(root + "/");
+  });
 }
 
 export function webCommandForHandler(

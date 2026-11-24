@@ -181,9 +181,8 @@ const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.comm
 const managerConnected = computed(() => bootstrapManagerConnected.value);
 const activePageSaveAction = computed(() => pageSaveAction.value);
 const hasUnsavedChanges = computed(() => store.dirty || roles.dirty || activePageSaveAction.value?.dirty.value === true);
-const pageCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary").filter(command =>
-  command.handlerId !== "web.save-page"
-  && (command.handlerId !== "web.add-route" || route.path.startsWith("/routes"))));
+const pageCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary", route.path)
+  .filter(command => command.handlerId !== "web.save-page"));
 const pageTitle = computed(() => t(route.name === PLUGIN_RECOVERY_ROUTE_NAME && webPluginPageLoading(pluginCatalogStore.status.value)
   ? "页面已切换，正在加载内容" : String(route.meta.title || "RibiWebGUI")));
 const pageContext = computed(() => {
