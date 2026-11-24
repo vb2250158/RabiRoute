@@ -2,7 +2,7 @@ English | [简体中文](persona-all-day-recording.md)
 
 # Persona all-day recording
 
-Open **All-day recording** in the role's **Message history** toolbar. The timeline shows existing endpoint messages, Agent-to-Agent deliveries, persona panel messages, task replies, and saved captures in time order. Use **Source** to filter channels or captures, and select a channel tab to return to its conversations. Source changes refresh their existing records.
+Open **All-day recording** in the role's **Message history** toolbar. The preview is on the left, the draggable, zoomable timeline is below it, and the event list is on the right. Select a timeline marker or an event to preview it. The timeline brings together endpoint messages, Agent-to-Agent deliveries, persona panel messages, task replies, and saved captures. Use **Source** to filter the view, or select a channel tab to return to its conversations. Records update automatically as their sources change.
 
 To save screen captures, add a **Screen** message rule under **Role configuration → Automation** and select **Save to persona history only**. An enabled rule uses the established 60-second capture interval. Agents can search for **screen capture** and open the original image using its authenticated media link. Speech service rules expose **Voice received**, when an accepted segment is saved before transcription, and **Transcription completed**, when the transcript is available to match.
 

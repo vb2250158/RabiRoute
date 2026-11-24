@@ -83,7 +83,7 @@ onBeforeUnmount(() => { request?.abort(); });
     </div>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
     <div v-if="recordingOpen" class="history-recording-panel">
-      <PersonaRoleTimeline :key="timelineFilter.value" :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" :source-filter="timelineFilter.source" />
+      <PersonaRoleTimeline :key="timelineFilter.value" :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" :source-filter="timelineFilter.source" :channels="channels" />
     </div>
     <v-alert v-if="!recordingOpen && error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-alert v-if="!recordingOpen&&!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
