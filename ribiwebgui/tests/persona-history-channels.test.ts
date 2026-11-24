@@ -32,12 +32,17 @@ test('channel tabs and accessible actions share one responsive sticky header', (
   assert.ok(header);
   const children = header.children.filter(node => node.type === NodeTypes.ELEMENT) as ElementNode[];
   assert.deepEqual(children.map(node => node.tag), ['v-tabs', 'div']);
-  const buttons = children[1].children.filter(node => node.type === NodeTypes.ELEMENT) as ElementNode[];
+  const actions = children[1].children.filter(node => node.type === NodeTypes.ELEMENT) as ElementNode[];
+  assert.deepEqual(actions.map(node => node.tag), ['v-btn', 'v-btn', 'v-select']);
+  const buttons = actions.filter(node => node.tag === 'v-btn');
   assert.equal(buttons.length, 2);
   for (const button of buttons) {
     assert.equal(button.tag, 'v-btn');
     assert.ok(button.props.some(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === 'bind' && prop.arg?.type === NodeTypes.SIMPLE_EXPRESSION && prop.arg.content === 'aria-label'));
   }
+  assert.ok(buttons[1].props.some(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === 'if' && prop.exp?.type === NodeTypes.SIMPLE_EXPRESSION && prop.exp.content === '!recordingOpen'));
+  assert.ok(actions[2].props.some(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === 'else'));
+  assert.ok(actions[2].props.some(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === 'bind' && prop.arg?.type === NodeTypes.SIMPLE_EXPRESSION && prop.arg.content === 'label'));
   assert.match(source, /history-channel-header\{[^}]*display:flex[^}]*top:var\(--v-layout-top, 0px\)/);
   assert.match(source, /history-channel-tabs\{[^}]*flex:1;min-width:0/);
   assert.match(source, /history-channel-action-label\{display:none/);

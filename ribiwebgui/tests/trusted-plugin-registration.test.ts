@@ -33,7 +33,7 @@ test("built-in pages are installed through the trusted registration API", () => 
   assert.deepEqual(overview.paths.map(entry => entry.path), ["/overview", "/routes/:id/overview"]);
   assert.equal(webPageAllowsNavigation("route.overview", "route-primary", "mdi-view-dashboard-outline"), false);
   assert.equal(webPageAllowsNavigation("route.overview", "utility", "mdi-view-dashboard-outline"), true);
-  assert.deepEqual(webPageDataRequirements("route.overview"), ["gateway.diagnostics"]);
+  assert.deepEqual(webPageDataRequirements("route.overview"), []);
 });
 
 test("trusted registration publishes custom page contracts and removes them through its disposer", () => {

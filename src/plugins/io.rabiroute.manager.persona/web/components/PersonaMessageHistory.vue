@@ -19,15 +19,25 @@ const props = defineProps<{ roleId: string; version: number; messageVersion: num
 const { fetch } = usePersonaService(), { t } = useI18n();
 const route = useRoute(), router = useRouter();
 const recordingOpen = computed(() => route.query.tab === 'all-day-recording');
-function setRecordingOpen(open: boolean) {
+const recordingLocation = computed(() => ({ query: { ...route.query, tab: 'all-day-recording' } }));
+function selectChannel(channelId: string) {
+  selected.value = channelId;
+  if (!recordingOpen.value) return;
   const query = { ...route.query };
-  if (open) query.tab = 'all-day-recording';
-  else delete query.tab;
+  delete query.tab;
   void router.push({ query });
 }
 const catalog = ref<MessageHistoryChannelCatalog>({ adapters: [], chatCategories: [] });
 const channels = computed(() => historyChannels(catalog.value,messageEndpointCatalog(pluginCatalogStore.settingsRenderers.value)));
 const selected = ref(''), visited = ref(new Set<string>());
+const timelineSource = ref('all');
+const timelineFilters = computed(() => [
+  { value: 'all', title: t('全部'), source: undefined },
+  ...channels.value.filter(channel => channel.adapter || channel.category)
+    .map(channel => ({ value: channel.id, title: t(channel.label), source: channel })),
+  { value: 'capture', title: t('画面采集'), source: 'capture' as const },
+]);
+const timelineFilter = computed(() => timelineFilters.value.find(option => option.value === timelineSource.value) ?? timelineFilters.value[0]!);
 const searchTestOpen = ref(false);
 const error = ref(''), warnings = ref<string[]>([]), catalogLoading=ref(true);
 let request: AbortController | undefined;
@@ -49,6 +59,7 @@ watch(channels,list=>{
   visited.value=new Set([...visited.value].filter(id=>available.has(id)));
   if(!available.has(selected.value))selected.value=list[0]?.id??'';
 });
+watch(timelineFilter, option => { timelineSource.value = option.value; });
 watch(selected, id => { visited.value.add(id); });
 onBeforeUnmount(() => { request?.abort(); });
 </script>
@@ -56,21 +67,23 @@ onBeforeUnmount(() => { request?.abort(); });
 <template>
   <div class="persona-message-history">
     <div class="history-channel-header">
-      <v-tabs :model-value="recordingOpen ? null : selected" @update:model-value="value => { if (typeof value === 'string') selected = value; }" color="secondary" show-arrows class="history-channel-tabs" :aria-label="t('消息渠道')">
-        <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon" @click="recordingOpen && setRecordingOpen(false)">{{ t(channel.label) }}</v-tab>
+      <v-tabs :model-value="recordingOpen ? null : selected" :mandatory="recordingOpen ? false : 'force'" @update:model-value="value => { if (typeof value === 'string') selectChannel(value); }" color="secondary" show-arrows class="history-channel-tabs" :aria-label="t('消息渠道')">
+        <v-tab v-for="channel in channels" :key="channel.id" :value="channel.id" :prepend-icon="channel.icon">{{ t(channel.label) }}</v-tab>
       </v-tabs>
       <div class="history-channel-toolbar">
         <v-btn variant="text" prepend-icon="mdi-magnify" :aria-label="t('搜索接口测试')" :title="t('搜索接口测试')" @click="searchTestOpen = true">
           <span class="history-channel-action-label">{{ t('搜索接口测试') }}</span>
         </v-btn>
-        <v-btn variant="text" prepend-icon="mdi-timeline-clock-outline" :active="recordingOpen" :aria-pressed="recordingOpen" :aria-label="t('全天记录')" :title="t('全天记录')" @click="setRecordingOpen(!recordingOpen)">
+        <v-btn v-if="!recordingOpen" variant="text" prepend-icon="mdi-timeline-clock-outline" :aria-label="t('全天记录')" :title="t('全天记录')" :to="recordingLocation">
           <span class="history-channel-action-label">{{ t('全天记录') }}</span>
         </v-btn>
+        <v-select v-else v-model="timelineSource" :items="timelineFilters" :label="t('来源')" variant="outlined"
+          density="compact" hide-details class="history-timeline-filter" />
       </div>
     </div>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
     <div v-if="recordingOpen" class="history-recording-panel">
-      <PersonaRoleTimeline :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" />
+      <PersonaRoleTimeline :key="timelineFilter.value" :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" :source-filter="timelineFilter.source" />
     </div>
     <v-alert v-if="!recordingOpen && error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-alert v-if="!recordingOpen&&!catalogLoading&&!channels.length&&!error" type="info" variant="tonal" class="mb-3">{{ t('请先在角色配置中添加消息端。') }}</v-alert>
@@ -91,6 +104,7 @@ onBeforeUnmount(() => { request?.abort(); });
 .history-channel-header{display:flex;align-items:center;gap:8px;flex:none;min-width:0;margin-bottom:16px;position:sticky;top:var(--v-layout-top, 0px);z-index:5;background:rgb(var(--v-theme-background));}
 .history-channel-tabs{flex:1;min-width:0;}
 .history-channel-toolbar{display:flex;align-items:center;gap:8px;flex:none;}
+.history-timeline-filter{width:clamp(115px,20vw,210px);}
 .history-channel-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;}
 .history-recording-panel{flex:1;min-height:0;min-width:0;overflow:auto;}
 .history-channel-tabs :deep(.v-tab) {text-transform:none;letter-spacing:normal;}

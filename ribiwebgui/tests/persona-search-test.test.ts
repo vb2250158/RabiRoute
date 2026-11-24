@@ -48,6 +48,7 @@ test('invalid JSON never sends a request and message history places the test bef
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaMessageHistory.vue', import.meta.url), 'utf8');
   assert.match(source, /t\('搜索接口测试'\)[\s\S]*t\('全天记录'\)/);
   assert.doesNotMatch(source, /刷新渠道/);
+  assert.doesNotMatch(source, /aria-pressed|setRecordingOpen/);
 });
 
 test('JSON editing preserves additional query fields and rejects non-object parameters', () => {

@@ -5439,9 +5439,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { code: 0, data: { avatar } }, { 'cache-control': 'no-store' });
     }
     if (url.pathname === '/api/rabilink/host-account/profile' && (req.method === 'GET' || req.method === 'POST')) {
-      const body = req.method === 'POST' ? await readBody(req, { maxBytes: 4096, label: 'Host account profile' }) : undefined;
+      const body = req.method === 'POST' ? await readBody(req, { maxBytes: 1024 * 1024, label: 'Host account profile' }) : undefined;
+      if (req.method === 'POST' && (typeof body?.nickname !== 'string' || body.username !== undefined)) {
+        return sendJson(res, 400, { code: 'HOST_ACCOUNT_NICKNAME_INVALID' });
+      }
       const token = String(req.headers['x-rabilink-token'] || '');
-      const account = hostAccountService.profile(token, body === undefined ? undefined : body?.username);
+      const account = hostAccountService.profile(token, body?.nickname);
       return sendJson(res, 200, { code: 0, data: { account } }, { 'cache-control': 'no-store' });
     }
     const hostAccountAction = req.method === 'POST' && url.pathname.match(/^\/api\/rabilink\/host-account\/(login|register|migrate|logout|recover|confirm)$/)?.[1];

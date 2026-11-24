@@ -7,11 +7,13 @@ import { isLoopbackHostname } from "../webguiLanRedirect";
 
 const store = useGatewayStore();
 const accountPath = "/api/rabilink/host-account";
-const account = ref<{ id: string; username: string } | null>(null);
+type Account = { id: string; username: string; nickname?: string | null };
+const account = ref<Account | null>(null);
 const avatar = ref("");
 const avatarUnavailable = ref("");
 const draft = ref("");
-const draftName = ref("");
+const draftNickname = ref("");
+const originalNickname = ref("");
 const nameUnavailable = ref("");
 const nameError = ref("");
 const nameBusy = ref(false);
@@ -27,12 +29,14 @@ const choosingImage = ref(false);
 const menu = ref(false);
 const configuredServer = computed(() => store.meta.rabiLinkRelay?.url?.trim() || "");
 const previewAvatar = computed(() => draft.value || avatar.value);
-const initial = computed(() => Array.from(account.value?.username || "?")[0] || "?");
-const trimmedName = computed(() => draftName.value.trim());
-const profileDirty = computed(() => Boolean(draft.value)
-  || (!nameUnavailable.value && trimmedName.value !== (account.value?.username || "") && trimmedName.value.length > 0));
+const displayName = computed(() => account.value?.nickname || account.value?.username || "");
+const initial = computed(() => Array.from(displayName.value)[0] || "?");
+const nicknameDirty = computed(() => !nameBusy.value && !nameUnavailable.value
+  && draftNickname.value !== originalNickname.value);
+const profileDirty = computed(() => Boolean(draft.value) || nicknameDirty.value);
 let events: EventSource | undefined;
 let request: AbortController | undefined;
+let profileRequest: AbortController | undefined;
 let imageRevision = 0;
 let disposed = false;
 
@@ -47,31 +51,28 @@ async function refreshAccount() {
     const { account: next } = await response.json();
     if (controller.signal.aborted) return;
     if (account.value?.id !== next?.id) avatar.value = avatarUnavailable.value = "";
-    account.value = next;
+    account.value = next && account.value?.id === next.id ? { ...account.value, ...next } : next;
     if (!next) return;
-    const picture = await fetch(`${accountPath}/avatar`, { cache: "no-store", signal: controller.signal });
-    if (controller.signal.aborted) return;
-    if (picture.status === 404) {
-      const reason = await picture.json().catch(() => null);
-      if (!controller.signal.aborted && account.value?.id === next.id) {
-        avatarUnavailable.value = reason?.code === "RABILINK_RELAY_AVATAR_UNAVAILABLE" ? "当前服务器版本暂不支持头像。" : "当前主机版本暂不支持头像。";
-      }
-      return;
+    await Promise.allSettled([refreshAvatar(next.id, controller.signal), readProfile(next.id, controller.signal)]);
+  } catch { /* Keep the last account snapshot when the local Manager is unavailable. */ }
+}
+
+async function refreshAvatar(id: string, signal: AbortSignal) {
+  const picture = await fetch(`${accountPath}/avatar`, { cache: "no-store", signal });
+  if (signal.aborted) return;
+  if (picture.status === 404) {
+    const reason = await picture.json().catch(() => null);
+    if (!signal.aborted && account.value?.id === id) {
+      avatarUnavailable.value = reason?.code === "RABILINK_RELAY_AVATAR_UNAVAILABLE" ? "当前服务器版本暂不支持头像。" : "当前主机版本暂不支持头像。";
     }
-    if (!picture.ok) return;
-    const profile = await picture.json();
-    if (!controller.signal.aborted && profile.accountId === account.value?.id) {
-      avatarUnavailable.value = "";
-      avatar.value = avatarUrl(profile.avatar);
-    }
-    const identity = await fetch(`${accountPath}/profile`, { cache: "no-store", signal: controller.signal });
-    if (!identity.ok || controller.signal.aborted) return;
-    const saved = await identity.json();
-    const current = account.value;
-    if (!controller.signal.aborted && current && saved.accountId === current.id && typeof saved.username === "string" && saved.username) {
-      account.value = { ...current, username: saved.username };
-    }
-  } catch { /* A saved session can still be used when an avatar read is unavailable. */ }
+    return;
+  }
+  if (!picture.ok) return;
+  const profile = await picture.json();
+  if (!signal.aborted && profile.accountId === id && account.value?.id === id) {
+    avatarUnavailable.value = "";
+    avatar.value = avatarUrl(profile.avatar);
+  }
 }
 
 function avatarUrl(value: unknown) {
@@ -92,27 +93,47 @@ function openAccount() {
   open("configure");
 }
 
+function unavailableNickname(reason: unknown) {
+  return reason === "RABILINK_RELAY_PROFILE_UNAVAILABLE" ? "更新服务器后可编辑昵称。" : "更新 RabiRoute 后可编辑昵称。";
+}
+
+function applyProfile(saved: { accountId?: unknown; username?: unknown; nickname?: unknown }, id: string) {
+  if (!saved || saved.accountId !== id || account.value?.id !== id
+    || typeof saved.username !== "string" || (saved.nickname !== null && typeof saved.nickname !== "string")) return false;
+  account.value = { id, username: saved.username, nickname: saved.nickname };
+  return true;
+}
+
+async function readProfile(id: string, signal: AbortSignal) {
+  const response = await fetch(`${accountPath}/profile`, { cache: "no-store", signal });
+  const saved = await response.json().catch(() => null);
+  signal.throwIfAborted();
+  if (response.status === 404) return unavailableNickname(saved?.code);
+  if (!response.ok) throw new Error(saved?.message || "暂时无法读取昵称，请重新打开个人资料。");
+  if (saved?.nickname === undefined) return unavailableNickname(undefined);
+  if (!applyProfile(saved, id)) throw new Error("账号已更改，请重新打开个人资料。");
+  return "";
+}
+
 async function loadProfile() {
   const id = account.value?.id;
-  draftName.value = account.value?.username || "";
+  draftNickname.value = originalNickname.value = account.value?.nickname ?? "";
   nameUnavailable.value = "";
   if (!id) return;
+  profileRequest?.abort();
+  const controller = new AbortController();
+  profileRequest = controller;
   nameBusy.value = true;
   try {
-    const response = await fetch(`${accountPath}/profile`, { cache: "no-store" });
-    if (account.value?.id !== id) return;
-    if (response.status === 404) {
-      const reason = await response.json().catch(() => null);
-      nameUnavailable.value = reason?.code === "RABILINK_RELAY_PROFILE_UNAVAILABLE" ? "当前服务器版本暂不支持修改用户名。" : "当前主机版本暂不支持修改用户名。";
-      return;
-    }
-    if (!response.ok) return;
-    const saved = await response.json();
-    if (account.value?.id !== id || saved.accountId !== id || typeof saved.username !== "string" || !saved.username) return;
-    draftName.value = saved.username;
-    if (account.value.username !== saved.username) account.value = { ...account.value, username: saved.username };
-  } catch { /* Keep the locally known name; saving reports its own error. */ }
-  finally { nameBusy.value = false; }
+    const unavailable = await readProfile(id, AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]));
+    if (controller.signal.aborted || account.value?.id !== id) return;
+    nameUnavailable.value = unavailable;
+    draftNickname.value = originalNickname.value = account.value.nickname ?? "";
+  } catch {
+    if (!controller.signal.aborted) nameUnavailable.value = "暂时无法读取昵称，请重新打开个人资料。";
+  } finally {
+    if (profileRequest === controller) nameBusy.value = false;
+  }
 }
 
 async function saveServer() {
@@ -146,10 +167,14 @@ async function saveServer() {
 }
 
 watch(dialog, () => {
+  if (dialog.value !== "profile") profileRequest?.abort();
   password.value = confirmation.value = draft.value = "";
   imageRevision += 1;
   choosingImage.value = false;
 });
+watch(() => account.value?.id, () => {
+  if (dialog.value === "profile") dialog.value = null;
+}, { flush: "sync" });
 
 async function submit(action: "login" | "register" | "logout") {
   if (busy.value) return;
@@ -192,40 +217,40 @@ async function saveProfile() {
   if (busy.value || choosingImage.value || !current) return;
   error.value = "";
   nameError.value = "";
-  const rename = !nameUnavailable.value && trimmedName.value !== current.username;
+  const saveNickname = nicknameDirty.value;
   const uploadAvatar = Boolean(draft.value);
-  if (!rename && !uploadAvatar) { dialog.value = null; return; }
+  if (!saveNickname && !uploadAvatar) return;
+  request?.abort();
   busy.value = true;
   try {
-    if (rename) {
+    if (saveNickname) {
       const response = await fetch(`${accountPath}/profile`, {
         method: "POST",
         signal: AbortSignal.timeout(getTimeoutMs("webgui.rabilink.account.submit", 30000)),
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ accountId: current.id, username: trimmedName.value })
+        body: JSON.stringify({ accountId: current.id, nickname: draftNickname.value })
       });
       const data = await response.json().catch(() => null);
       if (response.status === 404) {
-        nameUnavailable.value = data?.code === "RABILINK_RELAY_PROFILE_UNAVAILABLE" ? "当前服务器版本暂不支持修改用户名。" : "当前主机版本暂不支持修改用户名。";
+        nameUnavailable.value = unavailableNickname(data?.code);
         throw new Error(nameUnavailable.value);
       }
       if (!response.ok) {
-        if (response.status === 400 || response.status === 409) {
-          nameError.value = data?.message || "请检查用户名后重试。";
+        if (response.status === 400) {
+          nameError.value = data?.message || "请检查昵称后重试。";
           return;
         }
-        throw new Error(data?.message || "用户名保存失败，请重试。");
+        throw new Error(data?.message || "昵称保存失败，请重试。");
       }
-      if (data?.accountId !== current.id || typeof data.username !== "string" || !data.username) throw new Error("账号已更改，请重试。");
-      account.value = { ...current, username: data.username };
-      draftName.value = data.username;
+      if (!applyProfile(data, current.id)) throw new Error("无法确认昵称已保存，请重新打开个人资料。");
+      draftNickname.value = originalNickname.value = data.nickname ?? "";
     }
     if (uploadAvatar) {
       const response = await fetch(`${accountPath}/avatar`, {
         method: "POST",
         signal: AbortSignal.timeout(getTimeoutMs("webgui.rabilink.account.submit", 30000)),
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ accountId: account.value?.id, avatar: draft.value.split(",")[1] })
+        body: JSON.stringify({ accountId: current.id, avatar: draft.value.split(",")[1] })
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.message || "头像保存失败，请重试。");
@@ -304,6 +329,7 @@ watch(() => [store.meta.applicationGenerationId, store.meta.rabiLinkRelay?.url, 
 onBeforeUnmount(() => {
   disposed = true;
   request?.abort();
+  profileRequest?.abort();
   events?.close();
   window.removeEventListener("focus", refreshAccount);
   imageRevision += 1;
@@ -312,31 +338,31 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="rabi-account-dock">
-    <v-menu v-if="account" v-model="menu" location="top start" :offset="8" :close-on-content-click="false">
+    <v-menu v-if="account" v-model="menu" location="top start" :offset="8" content-class="rabi-account-popover" :close-on-content-click="false">
       <template #activator="{ props }">
-        <v-btn v-bind="props" block variant="tonal" class="sidebar-footer-btn rabi-account-trigger">
-          <v-avatar size="28" color="secondary" variant="tonal" class="mr-2">
+        <v-btn v-bind="props" block variant="text" class="sidebar-footer-btn rabi-account-trigger" :class="{ 'is-open': menu }">
+          <v-avatar size="28" color="secondary" variant="tonal">
             <img v-if="avatar" :src="avatar" alt="">
             <template v-else>{{ initial }}</template>
           </v-avatar>
-          <span class="rabi-account-name" data-no-i18n>{{ account.username }}</span>
-          <v-icon icon="mdi-chevron-up" size="17" class="ml-auto" />
+          <bdi class="rabi-account-name" data-no-i18n>{{ displayName }}</bdi>
+          <v-icon icon="mdi-chevron-up" size="16" class="rabi-account-chevron" />
         </v-btn>
       </template>
-      <v-list density="comfortable" min-width="248" class="rabi-account-menu">
-        <v-list-item class="px-3 py-2">
-          <v-avatar size="40" color="secondary" variant="tonal">
+      <v-list density="compact" class="rabi-account-menu">
+        <div class="rabi-account-summary">
+          <v-avatar size="36" color="secondary" variant="tonal">
             <img v-if="avatar" :src="avatar" alt="">
             <template v-else>{{ initial }}</template>
           </v-avatar>
-          <div class="ml-3 rabi-account-menu-copy">
-            <div class="rabi-account-menu-name" data-no-i18n>{{ account.username }}</div>
-            <div class="text-caption text-medium-emphasis">Rabi 账号</div>
+          <div class="rabi-account-summary-copy">
+            <bdi class="rabi-account-menu-name" data-no-i18n>{{ displayName }}</bdi>
+            <bdi v-if="account.nickname" class="rabi-account-caption" :title="account.username" data-no-i18n>{{ account.username }}</bdi>
+            <div v-else class="rabi-account-caption">Rabi 账号</div>
           </div>
-        </v-list-item>
-        <v-divider class="my-1" />
-        <v-list-item prepend-icon="mdi-account-edit-outline" title="个人资料" subtitle="用户名与头像" @click="open('profile')" />
-        <v-list-item prepend-icon="mdi-logout" title="退出登录" :disabled="busy" @click="submit('logout')" />
+        </div>
+        <v-list-item class="rabi-account-action" prepend-icon="mdi-account-edit-outline" title="个人资料" @click="open('profile')" />
+        <v-list-item class="rabi-account-action" prepend-icon="mdi-logout" title="退出登录" :disabled="busy" @click="submit('logout')" />
         <p v-if="error" role="alert" class="text-error px-3 pb-2">{{ error }}</p>
       </v-list>
     </v-menu>
@@ -375,15 +401,18 @@ onBeforeUnmount(() => {
 
     <v-dialog :model-value="dialog === 'profile'" max-width="480" :persistent="busy" aria-label="个人资料"
       @update:model-value="value => { if (!value) dialog = null; }">
-      <v-card>
+      <v-card class="rabi-profile-card">
         <div class="rabi-profile-head">
           <div class="rabi-profile-heading">
-            <div class="text-subtitle-1 font-weight-medium">个人资料</div>
-            <div class="text-caption text-medium-emphasis">用户名和头像保存在 Rabi 服务器，同一账号的其他电脑也能看到。</div>
+            <h2>个人资料</h2>
+            <div class="rabi-profile-account">
+              <span>登录账号</span>
+              <bdi data-no-i18n>{{ account?.username }}</bdi>
+            </div>
           </div>
           <v-btn icon="mdi-close" variant="text" size="small" aria-label="关闭" :disabled="busy" @click="dialog = null" />
         </div>
-        <v-card-text class="pt-1">
+        <v-card-text class="rabi-profile-fields">
           <div class="rabi-profile-row">
             <button type="button" class="rabi-profile-avatar" :class="{ 'is-busy': choosingImage }"
               :disabled="busy || choosingImage || Boolean(avatarUnavailable)" aria-label="更换头像"
@@ -397,32 +426,27 @@ onBeforeUnmount(() => {
               <v-progress-circular v-if="choosingImage" indeterminate size="26" width="3" class="rabi-profile-spinner" />
             </button>
             <div class="rabi-profile-avatar-copy">
-              <div class="text-body-2 font-weight-medium mb-1">头像</div>
-              <p class="text-caption text-medium-emphasis mb-2">
-                {{ avatarUnavailable || "点击头像选择图片，或把图片拖到这里。支持 PNG、JPEG、WebP、GIF，最大 8 MB，自动裁成正方形。" }}
-              </p>
+              <div class="text-body-2 font-weight-medium mb-2">头像</div>
               <div class="d-flex flex-wrap ga-2">
-                <v-btn size="small" variant="tonal" prepend-icon="mdi-image-outline"
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-image-outline"
                   :disabled="busy || choosingImage || Boolean(avatarUnavailable)" @click="pickImage">选择图片</v-btn>
                 <v-btn v-if="draft" size="small" variant="text" :disabled="busy" @click="clearDraft">撤销更换</v-btn>
               </div>
+              <p class="rabi-profile-note">{{ avatarUnavailable || "支持拖放图片，最大 8 MB。" }}</p>
             </div>
           </div>
           <input ref="fileInput" class="rabi-profile-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
             tabindex="-1" aria-hidden="true" @change="selectImage">
-          <v-divider class="my-5" />
-          <v-text-field v-model="draftName" label="用户名" :disabled="busy || nameBusy || Boolean(nameUnavailable)"
-            :loading="nameBusy" maxlength="48" autocomplete="username" :error-messages="nameError ? [nameError] : []"
-            @update:model-value="nameError = ''" />
-          <p class="text-caption text-medium-emphasis mt-n1">
-            {{ nameUnavailable || "3-48 位，可包含中文、字母、数字、下划线、点、@ 或短横线。用户名同时是登录名，改完后在其他电脑登录请使用新用户名。" }}
-          </p>
-          <p v-if="error" role="alert" class="text-error text-body-2 mt-3">{{ error }}</p>
+          <v-text-field v-model="draftNickname" label="昵称" variant="outlined" autocomplete="nickname"
+            :disabled="busy || nameBusy || Boolean(nameUnavailable)" :loading="nameBusy"
+            :hint="nameUnavailable || '留空时显示登录账号。'" persistent-hint
+            :error-messages="nameError ? [nameError] : []" @update:model-value="nameError = ''" />
+          <p v-if="error" role="alert" class="text-error text-body-2">{{ error }}</p>
         </v-card-text>
-        <v-card-actions class="px-4 pb-3">
+        <v-card-actions class="rabi-profile-actions">
           <v-spacer />
           <v-btn :disabled="busy" @click="dialog = null">取消</v-btn>
-          <v-btn color="primary" variant="flat" :loading="busy" :disabled="!profileDirty || choosingImage" @click="saveProfile">保存</v-btn>
+          <v-btn class="rabi-profile-save" variant="flat" :loading="busy" :disabled="!profileDirty || choosingImage" @click="saveProfile">保存</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -447,26 +471,86 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.rabi-account-trigger :deep(.v-btn__content) { flex: 1; min-width: 0; }
-.rabi-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rabi-account-menu-copy { min-width: 0; }
-.rabi-account-menu-name { font-size: 0.9rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rabi-account-trigger.v-btn {
+  height: 40px;
+  padding-inline: 8px;
+  border-radius: 10px;
+}
+.rabi-account-trigger.is-open { background: var(--rr-accent-surface); }
+.rabi-account-trigger :deep(.v-btn__content) { flex: 1; min-width: 0; gap: 9px; }
+.rabi-account-name,
+.rabi-account-menu-name,
+.rabi-account-caption {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rabi-account-name { font-size: 13px; font-weight: 600; }
+.rabi-account-chevron { margin-inline-start: auto; color: var(--rr-muted); transition: transform 160ms ease; }
+.rabi-account-trigger.is-open .rabi-account-chevron { transform: rotate(180deg); }
+:global(.rabi-account-popover.v-overlay__content > .rabi-account-menu.v-list) {
+  width: min(232px, calc(100vw - 32px));
+  padding: 5px;
+  border: 1px solid var(--rr-border-soft);
+  border-radius: 14px;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 24%);
+}
+.rabi-account-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px 11px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--rr-border-soft);
+}
+.rabi-account-summary .v-avatar { flex: none; }
+.rabi-account-summary-copy { min-width: 0; }
+.rabi-account-menu-name { display: block; font-size: 14px; font-weight: 650; }
+.rabi-account-caption { display: block; color: var(--rr-muted); font-size: 12px; }
+.rabi-account-action.v-list-item {
+  min-height: 36px;
+  padding-inline: 8px;
+  border-radius: 8px;
+}
+.rabi-account-action :deep(.v-list-item__prepend .v-icon) {
+  --v-icon-size-multiplier: 0.8;
+}
+.rabi-account-action :deep(.v-list-item__prepend .v-list-item__spacer) { width: 10px; }
+.rabi-account-action :deep(.v-list-item-title) { font-size: 13px; }
 .v-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
+.rabi-profile-card.v-card { border-radius: 16px; border: 1px solid var(--rr-border-soft); }
 .rabi-profile-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 16px 8px 24px;
+  padding: 20px 16px 16px 24px;
 }
 .rabi-profile-heading { min-width: 0; }
-.rabi-profile-row { display: flex; align-items: flex-start; gap: 16px; }
+.rabi-profile-heading h2 { font-size: 18px; font-weight: 650; line-height: 1.4; }
+.rabi-profile-account { display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 5px; color: var(--rr-muted); font-size: 12px; }
+.rabi-profile-account bdi { color: var(--rr-text); overflow-wrap: anywhere; min-width: 0; }
+.rabi-profile-fields.v-card-text { display: grid; gap: 18px; padding: 0 24px 12px; }
+.rabi-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--rr-accent-surface);
+}
+.rabi-profile-note { color: var(--rr-muted); font-size: 12px; margin-top: 5px; }
+.rabi-profile-actions.v-card-actions { justify-content: flex-end; padding: 4px 24px 18px; }
+.rabi-profile-save.v-btn:not(:disabled) {
+  background: var(--rr-accent-strong);
+  color: var(--rr-on-accent-strong);
+}
 .rabi-profile-avatar {
   position: relative;
   flex: 0 0 auto;
-  width: 88px;
-  height: 88px;
+  width: 64px;
+  height: 64px;
   padding: 0;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 50%;
@@ -482,7 +566,7 @@ onBeforeUnmount(() => {
 .rabi-profile-avatar:focus-visible:not(:disabled) { box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18); }
 .rabi-profile-avatar:disabled { cursor: default; }
 .rabi-profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.rabi-profile-initial { font-size: 30px; font-weight: 600; line-height: 1; }
+.rabi-profile-initial { font-size: 23px; font-weight: 600; line-height: 1; }
 .rabi-profile-mask {
   position: absolute;
   inset: 0;
@@ -502,4 +586,7 @@ onBeforeUnmount(() => {
 .rabi-profile-spinner { position: absolute; color: #fff; }
 .rabi-profile-avatar-copy { min-width: 0; flex: 1; }
 .rabi-profile-file { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .rabi-account-chevron, .rabi-profile-avatar, .rabi-profile-mask { transition: none; }
+}
 </style>

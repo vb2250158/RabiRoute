@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, shallowReactive, watch } from "vue";
 import { defineStore } from "pinia";
 import type { GatewayDefinition, RuntimeStatus } from "../types";
 import { roleConfigurationOf, type RoleConfiguration, type RoleConfigurationRoute } from "@shared/roleConfiguration";
@@ -6,9 +6,13 @@ import { automationRulesForGateway } from "../utils/gatewayHelpers";
 import { createRoleEditorActions } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/roleEditorActions";
 import { useGatewayStore } from "./gatewayStore";
 import { registerPageSaveAction } from "../pageSaveAction";
+import { getTimeoutMs } from "../timeoutSettingsClient";
 import { remotePersonaServicePath, bootstrapRemotePersonaService } from "../../../src/plugins/io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 
 export type RoleSummary = { roleId: string; title: string; archivedAt: string | null; avatarUrl?: string; avatarConfigured?: boolean; error?: string };
+type RoleCatalog = { items: RoleSummary[]; partial: boolean; error: string; loading: boolean; loaded: boolean };
+type CatalogReadOptions = { signal?: AbortSignal; connect?: boolean };
+const emptyCatalog: Readonly<RoleCatalog> = { items: [], partial: false, error: "", loading: false, loaded: false };
 export type RoleDetail = { roleId: string; archivedAt: string | null; revision: string; roleDir: string; rolePath: string;
   runningWork: number; config: RoleConfiguration; routes: RoleConfigurationRoute[] };
 
@@ -30,13 +34,14 @@ export async function findFirstAvailableRole(source: string): Promise<RoleSummar
 
 export const useRoleStore = defineStore("roles", () => {
   const routes = useGatewayStore();
-  const catalog = ref<RoleSummary[]>([]);
-  const catalogPartial = ref(false), catalogError = ref("");
-  let catalogSource: string | undefined;
-  let catalogLoaded = false;
-  let catalogRead: { source: string; promise: Promise<void> } | undefined;
+  const catalogs = shallowReactive(new Map<string, RoleCatalog>());
+  const catalogReads = new Map<string, { controller: AbortController; signal: AbortSignal; promise: Promise<void> }>();
+  const catalogRefreshRevision = ref(0);
   const selectedRoleId = ref("");
   const sourceDeviceId = ref("");
+  const catalog = computed(() => catalogFor().items);
+  const catalogPartial = computed(() => catalogFor().partial);
+  const catalogError = computed(() => catalogFor().error);
   const detail = ref<RoleDetail | null>(null);
   const draft = ref<(GatewayDefinition & RoleConfiguration) | null>(null);
   const saved = ref("");
@@ -44,7 +49,6 @@ export const useRoleStore = defineStore("roles", () => {
   const saving = ref(false);
   const error = ref("");
   let requestVersion = 0;
-  let catalogVersion = 0;
   const currentConfig = computed(() => draft.value === null ? "" : JSON.stringify(roleConfigurationOf(draft.value)));
   const dirty = computed(() => draft.value !== null && currentConfig.value !== saved.value);
   const archived = computed(() => Boolean(detail.value?.archivedAt));
@@ -63,49 +67,69 @@ export const useRoleStore = defineStore("roles", () => {
   });
   const meta = computed(() => routes.meta);
   function endpoint(url: string) { return sourceDeviceId.value ? remotePersonaServicePath(sourceDeviceId.value, url) : url; }
-  async function readCatalog(): Promise<void> {
-    const generation = ++catalogVersion;
-    const source = sourceDeviceId.value;
-    if (catalogSource !== undefined && catalogSource !== source) catalog.value = [];
-    catalogSource = source;
-    catalogLoaded = false;
-    const previous = [...catalog.value];
-    catalogError.value = "";
-    catalogPartial.value = false;
+  function catalogFor(source = sourceDeviceId.value): Readonly<RoleCatalog> {
+    return catalogs.get(source) || emptyCatalog;
+  }
+  function clearCatalogs(): void {
+    for (const read of catalogReads.values()) read.controller.abort();
+    catalogReads.clear();
+    catalogs.clear();
+  }
+  watch(() => routes.meta.managerInstanceId, (_current, previous) => {
+    if (previous) clearCatalogs();
+  }, { flush: "sync" });
+  onScopeDispose(clearCatalogs);
+
+  async function readCatalog(source: string, entry: RoleCatalog, connect: boolean, signal: AbortSignal): Promise<void> {
+    const previous = entry.items;
     const collected: RoleSummary[] = [];
     let cursor = "";
     try {
-      if (source) await bootstrapRemotePersonaService(source);
+      if (source && connect) await bootstrapRemotePersonaService(source, AbortSignal.any([
+        signal, AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000))
+      ]));
       do {
-      const url = `/api/roles?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-      const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url);
-      if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
-      collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));
-      cursor = page.nextCursor || "";
-        catalogPartial.value = Boolean(cursor);
+        signal.throwIfAborted();
+        const url = `/api/roles?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const page = await roleRequest<{ roles: RoleSummary[]; nextCursor: string | null }>(source ? remotePersonaServicePath(source, url) : url, { signal });
+        signal.throwIfAborted();
+        collected.push(...page.roles.map(role => ({ ...role, avatarUrl: source && role.avatarUrl?.startsWith("/api/") ? remotePersonaServicePath(source, role.avatarUrl) : role.avatarUrl })));
+        cursor = page.nextCursor || "";
+        entry.partial = Boolean(cursor);
         const received = new Set(collected.map(role => role.roleId));
-        catalog.value = cursor ? [...collected, ...previous.filter(role => !received.has(role.roleId))] : [...collected];
+        entry.items = cursor ? [...collected, ...previous.filter(role => !received.has(role.roleId))] : [...collected];
       } while (cursor);
-      catalogLoaded = true;
+      entry.loaded = true;
     } catch (failure) {
-      if (generation !== catalogVersion || source !== sourceDeviceId.value) return;
+      if (signal.aborted && signal.reason?.name === "AbortError") return;
       const status = (failure as { status?: number }).status;
-      if (status === 401 || status === 403) { catalog.value = []; catalogPartial.value = false; }
-      else catalogPartial.value = catalog.value.length > 0;
-      catalogError.value = failure instanceof Error ? failure.message : String(failure);
+      if (status === 401 || status === 403) entry.items = [];
+      entry.partial = entry.items.length > 0;
+      entry.error = failure instanceof Error ? failure.message : String(failure);
       throw failure;
+    } finally {
+      entry.loading = false;
     }
   }
-  function loadCatalog(): Promise<void> {
-    const source = sourceDeviceId.value;
-    const promise = readCatalog().finally(() => { if (catalogRead?.promise === promise) catalogRead = undefined; });
-    catalogRead = { source, promise };
+  function loadCatalog(source = sourceDeviceId.value, options: CatalogReadOptions = {}): Promise<void> {
+    catalogReads.get(source)?.controller.abort();
+    const controller = new AbortController();
+    const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    const entry = shallowReactive({ ...emptyCatalog, items: catalogFor(source).items, loading: true });
+    catalogs.set(source, entry);
+    const promise = readCatalog(source, entry, options.connect !== false, signal).finally(() => {
+      if (catalogReads.get(source)?.promise === promise) catalogReads.delete(source);
+    });
+    catalogReads.set(source, { controller, signal, promise });
     return promise;
   }
-  function ensureCatalog(): Promise<void> {
-    const source = sourceDeviceId.value;
-    if (catalogRead?.source === source) return catalogRead.promise;
-    return catalogLoaded && catalogSource === source ? Promise.resolve() : loadCatalog();
+  function ensureCatalog(source = sourceDeviceId.value, options?: CatalogReadOptions): Promise<void> {
+    const active = catalogReads.get(source);
+    if (active && !active.signal.aborted) return active.promise;
+    return catalogFor(source).loaded ? Promise.resolve() : loadCatalog(source, options);
+  }
+  function requestCatalogRefresh(): void {
+    catalogRefreshRevision.value++;
   }
   async function load(): Promise<void> {
     const id = selectedRoleId.value;
@@ -195,6 +219,6 @@ export const useRoleStore = defineStore("roles", () => {
     }
     await routes.openConfigFile(type, "", roleId);
   }
-  return { catalog, catalogPartial, catalogError, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,
+  return { catalog, catalogPartial, catalogError, catalogFor, catalogRefreshRevision, requestCatalogRefresh, selectedRoleId, sourceDeviceId, detail, draft, dirty, archived, ready, loading, saving, error,
     selectedGateway, selectedRuntime, gateways, meta, loadCatalog, ensureCatalog, load, select, refreshLinkedRoutes, submitConfig, flushConfig, touch, openConfigFile, ...actions };
 });

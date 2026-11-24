@@ -8,6 +8,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.78 - 2026-11-24
+
+- Group roles by computer and show the local computer first. Load remote summaries incrementally without blocking on slow or offline computers.
+- Preserve source filters and pagination in the chat timeline, including redirects from existing recording links.
+- Support single-character and duplicate account nicknames, with login-name fallback when cleared, while preserving account identity and matching the updated public Relay.
+
+- Roles groups cards by computer. The local PC appears first, and remote role catalogs load independently in the background.
+
 ## 0.15.77 - 2026-11-24
 
 - Adopt the role list, underline tabs and role timeline; improve speech status refresh, page loading, HTML share thumbnails, connector icons, pet frame caching and screenshot target selection.

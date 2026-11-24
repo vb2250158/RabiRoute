@@ -132,13 +132,16 @@ test("role timeline merges original messages and captures and refreshes only the
   const require = createRequire(component), vue = require("vue");
   const captured = Date.parse("2026-11-24T08:00:01Z");
   const requests: string[] = [];
+  const parameters: URLSearchParams[] = [];
   const fetch = async (input: string) => {
-    const pathname = new URL(input, "http://fixture").pathname;
+    const { pathname, searchParams } = new URL(input, "http://fixture");
     requests.push(pathname);
+    parameters.push(searchParams);
     const data = pathname.endsWith("/chat-history")
       ? { entries: [{ id: "chat", text: "Agent delivery", kind: "agent_delivery", receivedAt: new Date(captured + 1000).toISOString() }], nextCursor: null }
       : pathname.endsWith("/message-endpoint-timeline")
-        ? { entries: [{ id: "endpoint", text: "Channel message", adapter: "napcat", conversationKey: "fixture", time: (captured - 1000) / 1000 }], nextCursor: null }
+        ? { entries: [{ id: "endpoint", text: "Channel message", adapter: "napcat", conversationKey: "fixture", time: (captured - 1000) / 1000 }],
+          nextCursor: searchParams.has("adapter") && !searchParams.has("cursor") ? "next-page" : null }
         : { events: [{ id: "screen", source: "screen", kind: "image", startedAt: captured, media: "media/fixture.jpg" }], hasMore: false };
     return Response.json({ code: 0, data });
   };
@@ -163,4 +166,19 @@ test("role timeline merges original messages and captures and refreshes only the
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(requests.slice(3), ["/api/roles/role-a/all-day-recording/page"]);
   assert.equal(model.rows.value.length, 3);
+
+  const filteredScope = vue.effectScope();
+  t.after(() => filteredScope.stop());
+  const filtered = vue.reactive({ ...props, sourceFilter: { adapter: "napcat" } });
+  const filteredModel = filteredScope.run(() => module.exports.default.setup(filtered, { expose() {} }));
+  await new Promise(resolve => setImmediate(resolve));
+  filtered.captureVersion += 1;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests.slice(4), ["/api/roles/role-a/message-endpoint-timeline"]);
+  assert.equal(parameters[4]!.get("adapter"), "napcat");
+  assert.equal(filteredModel.rows.value.length, 1);
+  filteredModel.loadOlder();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(parameters[5]!.get("adapter"), "napcat");
+  assert.equal(parameters[5]!.get("cursor"), "next-page");
 });

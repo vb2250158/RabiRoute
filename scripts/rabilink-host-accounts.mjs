@@ -76,20 +76,16 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
     return { store, account };
   }
   return {
-    profile(token, username) {
+    profile(token, nickname) {
       const { store, account } = ownerAccount(readStore(), token);
-      if (username === undefined) return { id: account.id, username: account.username };
-      const name = typeof username === 'string' ? username.trim() : '';
-      if (!/^[\p{L}\p{N}_@.-]{3,48}$/u.test(name)) fail(400, 'HOST_ACCOUNT_USERNAME_INVALID');
-      if (store.accounts.some(item => item.id !== account.id && item.username.toLowerCase() === name.toLowerCase())) {
-        fail(409, 'HOST_ACCOUNT_USERNAME_TAKEN');
-      }
-      if (account.username !== name) {
-        account.username = name;
+      if (nickname !== undefined && typeof nickname !== 'string') fail(400, 'HOST_ACCOUNT_NICKNAME_INVALID');
+      if (nickname !== undefined && nickname !== (account.nickname ?? '')) {
+        if (nickname === '') delete account.nickname;
+        else account.nickname = nickname;
         account.updatedAt = new Date().toISOString();
         writeStore(store);
       }
-      return { id: account.id, username: account.username };
+      return { id: account.id, username: account.username, nickname: account.nickname ?? null };
     },
     avatar(token, image) {
       const store = readStore();

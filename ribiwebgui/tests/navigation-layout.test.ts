@@ -56,7 +56,7 @@ test("sidebar brand shows only the version and route picker has no count or expl
 
 test("the role list displays catalog roles while host settings live on the Settings page", () => {
   assert.match(overviewSource, /class="app-card glass-card route-card"/);
-  assert.match(overviewSource, /roles\.catalog\.map/);
+  assert.match(overviewSource, /roles\.catalogFor\(computer\.source\)/);
   assert.match(overviewSource, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(overviewSource, /Rabi 实例|目录配置|局域网访问 WebGUI|RabiLink 系统转接服务/);
   assert.match(settingsSource, /class="section-title">目录配置<\/div>/);

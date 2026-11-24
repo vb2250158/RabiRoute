@@ -367,8 +367,8 @@ onMounted(() => {
   managerEvents.addEventListener("ready", () => { void refreshManagementMetadata(); });
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
   managerEvents.addEventListener("role_catalog_changed", raw => {
+    if (!roles.sourceDeviceId || routeScopedPageFromPath(route.path) === "overview") void roles.loadCatalog("").catch(() => {});
     if (roles.sourceDeviceId) return;
-    void roles.loadCatalog().catch(() => {});
     try {
       const { roleId } = JSON.parse((raw as MessageEvent<string>).data);
       if (roleId === roles.selectedRoleId && !roles.dirty && showRoleSwitcher.value) void roles.load();
@@ -435,20 +435,20 @@ async function restoreSidebarRole(): Promise<void> {
       roles.sourceDeviceId = saved.sourceDeviceId || "";
       roles.selectedRoleId = saved.roleId;
     }
-    await roles.ensureCatalog();
+    if (routeScopedPageFromPath(route.path) !== "overview") await roles.ensureCatalog();
   } catch {
     // The switcher keeps its neutral label; role pages report their own read failures.
   }
 }
 
 async function refresh(): Promise<void> {
+  if (routeScopedPageFromPath(route.path) === "overview") roles.requestCatalogRefresh();
   await Promise.all([
     refreshManagementMetadata(),
     refreshWebPluginCatalog(),
     pageNeedsRouteConfig.value ? loadGatewayEditorInBackground(true) : Promise.resolve(),
     route.path.includes("/knowledge") || route.path.includes("/plan/") ? store.loadRouteSummaries() : Promise.resolve(),
-    showRoleSwitcher.value || routeScopedPageFromPath(route.path) === "overview"
-      ? roles.loadCatalog().catch(() => {}) : Promise.resolve()
+    showRoleSwitcher.value ? roles.loadCatalog().catch(() => {}) : Promise.resolve()
   ]);
   if (showRoleSwitcher.value) {
     await roles.flushConfig();

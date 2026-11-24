@@ -94,6 +94,20 @@ export async function bootstrapRemotePersonaService(deviceId: string, signal = A
 }
 
 export const remotePersonaClient = {
+  async catalogDevices(caller: AbortSignal): Promise<PersonaSourceDevice[]> {
+    const timeout = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000));
+    const servers = await readJson("/api/rabilink/peer/servers", AbortSignal.any([caller, timeout]));
+    const peers = ((servers.data as { peers?: PeerConnectionStatus[] } | undefined)?.peers || servers.peers) as PeerConnectionStatus[];
+    if (!Array.isArray(peers)) throw new Error("远端 PC 目录格式无效。");
+    // The connection directory provides the device IDs accepted by the Manager tunnel.
+    return peers.map(peer => ({
+      deviceId: peer.deviceId,
+      name: peer.name || peer.deviceId,
+      online: peer.online === true,
+      supported: peer.personaSupported === true,
+      trusted: peer.trusted === true
+    }));
+  },
   async devices(): Promise<PersonaSourceDevice[]> {
     const signal = AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000));
     const [discovery, servers] = await Promise.all([

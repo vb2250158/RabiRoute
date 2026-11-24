@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { translateText, useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
 import { useRoleStore, type RoleSummary } from "../../../../../ribiwebgui/src/stores/roleStore";
 import PersonaAvatar from "../../../../../ribiwebgui/src/components/PersonaAvatar.vue";
@@ -14,32 +14,57 @@ import { routeScopedAdaptersPath } from "../../../../../ribiwebgui/src/routeScop
 import type { GatewayDefinition } from "../../../../../ribiwebgui/src/types";
 import { adapterLabel, gatewayAdapterTypes } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import { personaSourceKey } from "../../../io.rabiroute.manager.persona/web/persona/personaSourcePresentation";
+import { remotePersonaClient, type PersonaSourceDevice } from "../../../io.rabiroute.manager.persona/web/persona/remotePersonaReference";
+import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
 
 const store = useGatewayStore();
 const roles = useRoleStore();
 const { t } = useI18n();
-const catalogLoading = ref(true);
-const source = computed(() => roles.sourceDeviceId);
+const devices = ref<PersonaSourceDevice[]>([]);
+const devicesLoading = ref(false);
+const devicesError = ref("");
+let discovery: AbortController | undefined;
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
 
 type RoleCard = { key: string; role?: RoleSummary; routes: GatewayDefinition[] };
 
+const computers = computed(() => {
+  const name = store.meta.rabiName?.trim() || store.meta.computerName?.trim();
+  return [
+    { source: "", title: name ? `${t("本机")} · ${name}` : t("本机"), unavailable: "", trusted: true },
+    ...devices.value
+      .filter(device => personaSourceKey(store.meta, device.deviceId))
+      .map(device => ({
+        source: device.deviceId,
+        title: device.name,
+        trusted: device.trusted,
+        unavailable: !device.online ? "离线" : !device.trusted ? "未连接" : !device.supported ? "在线 · 需要更新" : ""
+      }))
+  ];
+});
+
 const groups = computed(() => {
-  const cards: RoleCard[] = roles.catalog.map(role => ({ key: role.roleId, role, routes: [] }));
-  const byRoleId = new Map(cards.map(card => [card.key, card]));
+  const computerGroups = computers.value.map(computer => {
+    const catalog = roles.catalogFor(computer.source);
+    const cards: RoleCard[] = computer.trusted ? catalog.items.map(role => ({ key: role.roleId, role, routes: [] })) : [];
+    return { ...computer, catalog, cards, byRoleId: new Map(cards.map(card => [card.key, card])) };
+  });
+  const bySource = new Map(computerGroups.map(group => [group.source, group]));
   const otherRoutes: RoleCard[] = [];
   for (const gateway of store.gateways) {
-    const sameSource = personaSourceKey(store.meta, gateway.agentRoleDeviceId || "") === personaSourceKey(store.meta, source.value);
-    const card = sameSource ? byRoleId.get(gateway.agentRoleId || "") : undefined;
+    const source = personaSourceKey(store.meta, gateway.agentRoleDeviceId || "");
+    const group = bySource.get(source);
+    const card = group?.byRoleId.get(gateway.agentRoleId || "");
     if (card) card.routes.push(gateway);
-    else otherRoutes.push({ key: gateway.id, routes: [gateway] });
+    else if (!gateway.agentRoleId || (group ? group.catalog.loaded || group.catalog.error || group.unavailable : !devicesLoading.value)) {
+      otherRoutes.push({ key: gateway.id, routes: [gateway] });
+    }
   }
-  return [
-    { key: "roles", title: "", cards },
-    { key: "routes", title: "其他路由", cards: catalogLoading.value || (roles.catalogPartial && !roles.catalogError) ? [] : otherRoutes }
-  ];
+  return [...computerGroups, ...(otherRoutes.length ? [{
+    source: null, title: t("其他路由"), unavailable: "", catalog: null, cards: otherRoutes
+  }] : [])];
 });
 
 const endpointCatalog = computed(() => new Map(
@@ -52,19 +77,51 @@ const fallbackIcons: Readonly<Record<string, string>> = {
   wearable: "mdi-watch"
 };
 
-watch([source, () => store.meta.managerInstanceId], async (_value, _previous, onCleanup) => {
-  let current = true;
-  onCleanup(() => { current = false; });
-  catalogLoading.value = true;
-  try { await roles.ensureCatalog(); }
-  catch { /* The catalog store exposes the read error and any partial results. */ }
-  finally { if (current) catalogLoading.value = false; }
-}, { immediate: true });
-
-async function retryCatalog(): Promise<void> {
-  try { await roles.loadCatalog(); }
-  catch { /* Keep the retry available through the catalog error. */ }
+function loadComputer(source: string, force: boolean, signal?: AbortSignal): Promise<void> {
+  const remoteSignal = signal && AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("webgui.persona.remote", 25000))]);
+  const options = { signal: source ? remoteSignal : undefined, connect: false };
+  const read = force ? roles.loadCatalog(source, options) : roles.ensureCatalog(source, options);
+  // Each catalog has its own status and retry. One failure does not affect the other computers.
+  return read.catch(() => {});
 }
+
+async function loadComputers(force = false): Promise<void> {
+  discovery?.abort();
+  const controller = new AbortController();
+  discovery = controller;
+  const { signal } = controller;
+  void loadComputer("", force);
+  devicesLoading.value = true;
+  devicesError.value = "";
+  try {
+    const peers = await remotePersonaClient.catalogDevices(signal);
+    signal.throwIfAborted();
+    devices.value = peers;
+  } catch (error) {
+    if (!signal.aborted) devicesError.value = userFacingError(error);
+    return;
+  } finally {
+    if (!signal.aborted) devicesLoading.value = false;
+  }
+
+  const sources = computers.value.filter(computer => computer.source && !computer.unavailable);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(3, sources.length) }, async () => {
+    while (!signal.aborted && next < sources.length) {
+      const source = sources[next++].source;
+      await loadComputer(source, force, signal);
+    }
+  }));
+}
+
+onMounted(() => void loadComputers());
+watch(() => roles.catalogRefreshRevision, () => void loadComputers(true));
+watch(() => store.meta.managerInstanceId, (_id, previous) => {
+  if (!previous) return;
+  devices.value = [];
+  void loadComputers();
+});
+onBeforeUnmount(() => discovery?.abort());
 
 onBeforeUnmount(registerPageSaveAction({
   dirty: computed(() => store.dirty),
@@ -118,28 +175,26 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
     </div>
 
     <v-alert v-if="gatewayActionError" type="error" variant="tonal">{{ gatewayActionError }}</v-alert>
-    <v-progress-linear v-if="catalogLoading || (roles.catalogPartial && !roles.catalogError)" indeterminate color="secondary" :aria-label="t('加载中')" />
-    <v-alert v-if="roles.catalogError" :type="roles.catalogPartial ? 'warning' : 'error'" variant="tonal">
-      <span v-if="roles.catalogPartial">{{ t('角色目录暂未完整更新，已有角色仍可选择。') }} </span>
-      {{ roles.catalogError }}
-      <v-btn variant="text" @click="retryCatalog">{{ t("重试") }}</v-btn>
-    </v-alert>
-    <v-card v-if="!catalogLoading && !roles.catalogError && !roles.catalog.length" class="app-card glass-card empty-state">
-      <strong>{{ t("暂无角色") }}</strong>
-    </v-card>
-
-    <template v-for="group in groups" :key="group.key">
-      <section v-if="group.cards.length">
-        <h2 v-if="group.title" class="other-route-title">{{ t(group.title) }}</h2>
-        <div class="route-card-grid">
+    <section v-for="group in groups" :key="group.source ?? 'other-routes'" class="role-computer-group">
+        <header class="role-computer-heading">
+          <h2 data-no-i18n>{{ group.title }}</h2>
+          <span v-if="group.unavailable">{{ t(group.unavailable) }}</span>
+        </header>
+        <v-progress-linear v-if="group.catalog && !group.unavailable && (group.catalog.loading || (!group.catalog.loaded && !group.catalog.error))" indeterminate color="secondary" :aria-label="t('加载中')" />
+        <v-alert v-if="group.catalog?.error && !group.unavailable" :type="group.catalog.partial ? 'warning' : 'error'" variant="tonal" density="compact">
+          {{ group.catalog.error }}
+          <v-btn variant="text" size="small" @click="loadComputer(group.source ?? '', true, discovery?.signal)">{{ t("重试") }}</v-btn>
+        </v-alert>
+        <div v-if="group.catalog?.loaded && !group.cards.length && !group.unavailable" class="role-computer-empty">{{ t("暂无角色") }}</div>
+        <div v-if="group.cards.length" class="route-card-grid">
           <v-card
             v-for="card in group.cards"
             :key="card.key"
             class="app-card glass-card route-card"
           >
             <component
-              :is="card.role && !card.role.error ? 'RouterLink' : 'div'"
-              :to="card.role && !card.role.error ? { path: roleConfigPath(card.role.roleId), query: source ? { source } : {} } : undefined"
+              :is="card.role && !card.role.error && !group.unavailable ? 'RouterLink' : 'div'"
+              :to="card.role && !card.role.error && !group.unavailable ? { path: roleConfigPath(card.role.roleId), query: group.source ? { source: group.source } : {} } : undefined"
               class="route-card-identity"
             >
               <PersonaAvatar :role-id="card.role?.roleId || card.routes[0]?.agentRoleId || ''" :avatar-url="card.role?.avatarUrl" :size="42" />
@@ -149,7 +204,7 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
                 <div v-else-if="card.role && card.role.title !== card.role.roleId" class="route-card-subtitle" data-no-i18n>{{ card.role.roleId }}</div>
                 <div v-else-if="!card.role && card.routes[0]?.agentRoleId" class="route-card-subtitle" data-no-i18n>{{ card.routes[0].agentRoleId }}</div>
               </div>
-              <v-icon v-if="!card.routes.length && card.role && !card.role.error" class="ms-auto" icon="mdi-chevron-right" size="20" aria-hidden="true" />
+              <v-icon v-if="!card.routes.length && card.role && !card.role.error && !group.unavailable" class="ms-auto" icon="mdi-chevron-right" size="20" aria-hidden="true" />
             </component>
             <div v-if="card.routes.length" class="route-card-tools">
               <div class="route-card-connector-summary">
@@ -235,8 +290,12 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
             </div>
           </v-card>
         </div>
-      </section>
-    </template>
+    </section>
+    <v-progress-linear v-if="devicesLoading && !devices.length" indeterminate color="secondary" :aria-label="t('加载中')" />
+    <v-alert v-if="devicesError" type="warning" variant="tonal" density="compact">
+      {{ devicesError }}
+      <v-btn variant="text" size="small" @click="loadComputers(true)">{{ t("重试") }}</v-btn>
+    </v-alert>
   </div>
 </template>
 
@@ -259,10 +318,29 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
   .route-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-.other-route-title {
-  margin: 0 0 12px;
+.role-computer-group {
+  display: grid;
+  gap: 10px;
+}
+
+.role-computer-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--rr-muted-soft);
+  font-size: 12px;
+}
+
+.role-computer-heading h2 {
+  margin: 0;
   font-size: 16px;
   color: var(--rr-heading);
+  overflow-wrap: anywhere;
+}
+
+.role-computer-empty {
+  color: var(--rr-muted-soft);
+  font-size: 13px;
 }
 
 .route-card,

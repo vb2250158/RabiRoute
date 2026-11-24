@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, reactive, watch } from "vue";
 import type { AllDayEvent } from "@shared/allDayRecording";
 import type { PersonaChatHistoryPage } from "@shared/personaChatHistory";
-import { chatHistoryCategory } from "@shared/personaHistoryChannels";
+import { chatHistoryCategory, type ChatHistoryCategory } from "@shared/personaHistoryChannels";
 import type { MessageContextRecord } from "../../../../../src/messageContextStore";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { adapterLabel } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
@@ -12,11 +12,21 @@ type Source = "endpoint" | "chat" | "capture";
 type Entry = { id: string; time: number; label: string; text?: string; image?: string; fullText?: string };
 type Cursor = string | number;
 type Page = { entries: Entry[]; cursor: Cursor | null; pending?: boolean };
-const props = defineProps<{ roleId: string; version: number; messageVersion: number; captureVersion: number }>();
+const props = defineProps<{
+  roleId: string;
+  version: number;
+  messageVersion: number;
+  captureVersion: number;
+  sourceFilter?: "capture" | { adapter?: string; category?: ChatHistoryCategory };
+}>();
 const { t } = useI18n();
 const service = usePersonaService();
 const base = `/api/roles/${encodeURIComponent(props.roleId)}`;
-const sources: Source[] = ["endpoint", "chat", "capture"];
+// Each filter mounts a timeline with its own source cursors.
+const sources: Source[] = props.sourceFilter === "capture" ? ["capture"]
+  : props.sourceFilter?.adapter ? ["endpoint"]
+  : props.sourceFilter?.category ? ["chat"]
+  : ["endpoint", "chat", "capture"];
 const lanes = reactive(Object.fromEntries(sources.map(source => [source, { entries: [] as Entry[], cursor: null as Cursor | null, loading: false, waiting: false, failed: false }])) as Record<Source, {
   entries: Entry[]; cursor: Cursor | null; loading: boolean; waiting: boolean; failed: boolean;
 }>);
@@ -42,6 +52,7 @@ async function readSource(source: Source, cursor: Cursor | null, signal: AbortSi
   const query = new URLSearchParams();
   if (cursor !== null) query.set("cursor", String(cursor));
   if (source === "endpoint") {
+    if (typeof props.sourceFilter === "object" && props.sourceFilter.adapter) query.set("adapter", props.sourceFilter.adapter);
     query.set("includeArchives", "1");
     query.set("limit", "50");
     const page = await read<{ entries: MessageContextRecord[]; nextCursor: string | null; coverage?: { indexCoverage?: string } }>("message-endpoint-timeline", query, signal);
@@ -51,6 +62,7 @@ async function readSource(source: Source, cursor: Cursor | null, signal: AbortSi
     })), cursor: page.nextCursor, pending: page.coverage?.indexCoverage === "partial" };
   }
   if (source === "chat") {
+    if (typeof props.sourceFilter === "object" && props.sourceFilter.category) query.set("category", props.sourceFilter.category);
     query.set("summary", "true");
     query.set("metadata", "recorded");
     const page = await read<PersonaChatHistoryPage>("chat-history", query, signal);
@@ -71,6 +83,7 @@ async function readSource(source: Source, cursor: Cursor | null, signal: AbortSi
 }
 
 async function load(source: Source, older = false): Promise<void> {
+  if (!sources.includes(source)) return;
   const lane = lanes[source];
   if (requests.has(source)) {
     if (!older) refreshPending.add(source);

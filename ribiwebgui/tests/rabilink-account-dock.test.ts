@@ -120,38 +120,39 @@ function mountDock(fetchImpl: (path: string, init: any) => Promise<any>) {
   return { dock, scope };
 }
 
-test("the profile dialog saves the username and a picked avatar together", async () => {
+test("the profile dialog saves a one-character nickname and a picked avatar without changing the login", async () => {
   const writes: Array<{ path: string; method: string; body: any }> = [];
   const { dock, scope } = mountDock(async (path: string, init: any) => {
     const method = init?.method || "GET";
     if (method === "GET" && path.endsWith("/profile")) {
-      return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "b2250158" }) };
+      return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "fixture-login", nickname: null }) };
     }
     if (method === "GET" && path.endsWith("/avatar")) {
       return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: null }) };
     }
-    if (method === "GET") return { ok: true, status: 200, json: async () => ({ account: { id: "fixture-id", username: "b2250158" } }) };
+    if (method === "GET") return { ok: true, status: 200, json: async () => ({ account: { id: "fixture-id", username: "fixture-login" } }) };
     writes.push({ path, method, body: JSON.parse(String(init.body)) });
-    if (path.endsWith("/profile")) return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "夜雨" }) };
+    if (path.endsWith("/profile")) return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", username: "fixture-login", nickname: "雨" }) };
     return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: "AAAA" }) };
   });
   try {
-    dock.account.value = { id: "fixture-id", username: "b2250158" };
+    dock.account.value = { id: "fixture-id", username: "fixture-login" };
     dock.open("profile");
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(dock.dialog.value, "profile");
-    assert.equal(dock.draftName.value, "b2250158");
+    assert.equal(dock.draftNickname.value, "");
     assert.equal(dock.nameUnavailable.value, "");
     assert.equal(dock.profileDirty.value, false);
-    dock.draftName.value = "夜雨";
+    dock.draftNickname.value = "雨";
     dock.draft.value = "data:image/png;base64,AAAA";
     assert.equal(dock.profileDirty.value, true);
     await dock.saveProfile();
     assert.deepEqual(writes, [
-      { path: "/api/rabilink/host-account/profile", method: "POST", body: { accountId: "fixture-id", username: "夜雨" } },
+      { path: "/api/rabilink/host-account/profile", method: "POST", body: { accountId: "fixture-id", nickname: "雨" } },
       { path: "/api/rabilink/host-account/avatar", method: "POST", body: { accountId: "fixture-id", avatar: "AAAA" } }
     ]);
-    assert.equal(dock.account.value.username, "夜雨");
+    assert.equal(dock.account.value.username, "fixture-login");
+    assert.equal(dock.displayName.value, "雨");
     assert.equal(dock.dialog.value, null);
     assert.equal(dock.error.value, "");
   } finally {
@@ -159,18 +160,18 @@ test("the profile dialog saves the username and a picked avatar together", async
   }
 });
 
-test("the profile dialog keeps the name field disabled when the server cannot rename", async () => {
+test("the profile dialog keeps the nickname field disabled on a server without nickname support", async () => {
   const { dock, scope } = mountDock(async (path: string) => {
     if (path.endsWith("/profile")) {
-      return { ok: false, status: 404, json: async () => ({ code: "RABILINK_RELAY_PROFILE_UNAVAILABLE", message: "此服务器版本暂不支持修改用户名。" }) };
+      return { ok: false, status: 404, json: async () => ({ code: "RABILINK_RELAY_PROFILE_UNAVAILABLE" }) };
     }
     return { ok: true, status: 200, json: async () => ({ accountId: "fixture-id", avatar: null }) };
   });
   try {
-    dock.account.value = { id: "fixture-id", username: "b2250158" };
+    dock.account.value = { id: "fixture-id", username: "fixture-login" };
     dock.open("profile");
     await new Promise(resolve => setTimeout(resolve, 20));
-    assert.equal(dock.nameUnavailable.value, "当前服务器版本暂不支持修改用户名。");
+    assert.equal(dock.nameUnavailable.value, "更新服务器后可编辑昵称。");
     dock.draft.value = "data:image/png;base64,AAAA";
     assert.equal(dock.profileDirty.value, true);
   } finally {

@@ -116,37 +116,40 @@ export class RabiLinkHostAccount {
     const session = this.session();
     if (!session) return json(401, { message: "请先登录 Rabi 账号。" });
     try {
-      const body = method === "POST" ? await this.options.readJson(request, 4096) as { accountId?: unknown; username?: unknown } | null : undefined;
+      const body = method === "POST" ? await this.options.readJson(request, 1024 * 1024) as { accountId?: unknown; nickname?: unknown; username?: unknown } | null : undefined;
       if (!authorize()) return json(403, { message: "WebGUI 访问授权已失效，请重新打开界面。" });
       if (this.session() !== session || (method === "POST" && body?.accountId !== session.account.id)) {
         return json(409, { message: "账号已更改，请重试。" });
       }
+      if (method === "POST" && (typeof body?.nickname !== "string" || body.username !== undefined)) {
+        return json(400, { message: "个人资料只接受昵称修改。" });
+      }
       const upstream = await (this.options.request ?? fetch)(`${session.server}/api/rabilink/host-account/profile`, {
         method, redirect: "error", signal: AbortSignal.timeout(8000),
         headers: { "content-type": "application/json", "x-rabilink-token": session.token },
-        ...(method === "POST" ? { body: JSON.stringify({ username: body?.username }) } : {})
+        ...(method === "POST" ? { body: JSON.stringify({ nickname: body?.nickname }) } : {})
       });
       if (!upstream.ok) {
         await upstream.body?.cancel();
-        if (upstream.status === 404) return json(404, { code: "RABILINK_RELAY_PROFILE_UNAVAILABLE", message: "此服务器版本暂不支持修改用户名。" });
-        if (upstream.status === 400) return json(400, { message: "用户名需要 3-48 位，可使用中文、字母、数字、下划线、点、@ 或短横线。" });
-        if (upstream.status === 409) return json(409, { message: "该用户名已被使用，请换一个。" });
+        if (upstream.status === 404) return json(404, { code: "RABILINK_RELAY_PROFILE_UNAVAILABLE", message: "请更新服务器以编辑昵称。" });
+        if (upstream.status === 400) return json(400, { message: "昵称格式无效，请重试。" });
         if (upstream.status === 401) return json(401, { message: "登录已失效，请重新登录。" });
         throw new Error("Relay profile request failed");
       }
-      const result = await upstream.json() as { code?: number; data?: { account?: { id?: unknown; username?: unknown } } };
+      const result = await upstream.json() as { code?: number; data?: { account?: { id?: unknown; username?: unknown; nickname?: unknown } } };
       if (this.session() !== session) return json(409, { message: "账号已更改，请重试。" });
       const account = result.data?.account;
       if (result.code !== 0 || account?.id !== session.account.id
         || typeof account?.username !== "string" || !account.username.trim() || account.username.length > 48) {
         throw new Error("Invalid Relay profile response");
       }
-      if (method === "POST" && account.username !== session.account.username) {
-        this.save({ ...this.state, session: { ...session, account: { id: session.account.id, username: account.username } } });
+      if (account.nickname === undefined) {
+        return json(404, { code: "RABILINK_RELAY_PROFILE_UNAVAILABLE", message: "请更新服务器以编辑昵称。" });
       }
-      return json(200, { accountId: session.account.id, username: account.username });
+      if (account.nickname !== null && typeof account.nickname !== "string") throw new Error("Invalid Relay nickname response");
+      return json(200, { accountId: session.account.id, username: account.username, nickname: account.nickname });
     } catch {
-      return json(502, { message: "暂时无法读取或保存用户名，请稍后重试。" });
+      return json(502, { message: "暂时无法读取或保存昵称，请稍后重试。" });
     }
   }
 

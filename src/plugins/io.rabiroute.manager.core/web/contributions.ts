@@ -8,7 +8,6 @@ export function activateCore(api: WebContributionApi): readonly (() => void)[] {
         routeId: "route.overview", rendererId: "builtin.web-page.overview.v1",
         loader: () => import("./pages/OverviewPage.vue"),
         paths: [{ path: "/overview", title: "角色列表" }, { path: "/routes/:id/overview", title: "角色列表" }],
-        requirements: ["gateway.diagnostics"],
         navigation: { resolvePath: routeScopedOverviewPath, allowedSlots: ["utility"], allowedIcons: ["mdi-view-dashboard-outline"] }
       },
       {

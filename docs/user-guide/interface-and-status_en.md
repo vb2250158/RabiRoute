@@ -68,7 +68,7 @@ If unconfigured, open Configuration. For connection, authentication, or read fai
 
 | Area | Primary purpose | Common actions |
 | --- | --- | --- |
-| Roles | View all unarchived roles on the selected PC, three cards per row on desktop | Open role settings, identify message connectors by icon, and manage linked routes |
+| Roles | Browse unarchived roles by computer. This PC appears first, and remote catalogs load in the background. Desktop shows three cards per row | Open role settings, identify message connectors by icon, and manage linked routes |
 | Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |
 | Role Configuration | Roles and message rules | Add rules, regexes, and schedules |
 | Plans & Memory | Plans, recent memory, consolidated memory, plan guidance, and approval records for the current role | Search, guide running plans, expand steps, review execution contracts, submit approval feedback, and refresh Manager data |
