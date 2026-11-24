@@ -7,6 +7,7 @@ import {
 import {
   reconcileDurableDelivery,
   receiptExecutionOwnerGone,
+  receiptExecutionSettled,
   type DurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
 import {
@@ -92,10 +93,14 @@ export async function reconcileManagerStorageMutationReceipt(
         if (request.expectedRevision !== null && request.expectedRevision !== recordedRevision) {
           return { state: "uncertain", reason: "The supplied expected revision differs from the original durable audit." };
         }
-        if (!receiptExecutionOwnerGone(receipt)) {
+        // A legacy sending receipt can still identify its original dead local
+        // process. New scoped receipts require the originating owner's proof.
+        const legacyProcessExited = !receipt.executionScope && receipt.state === "sending"
+          && Boolean(receipt.executionId) && receiptExecutionOwnerGone(receipt);
+        if (!receiptExecutionSettled(receipt) && !legacyProcessExited) {
           return {
             state: "uncertain",
-            reason: "The original execution owner has not been confirmed retired. Receipt expiry alone cannot prove it stopped."
+            reason: "The original execution has no verified settlement evidence."
           };
         }
         return {

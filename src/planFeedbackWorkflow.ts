@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendPlanHistoryRecord, orderedPlanHistoryPaths, readPlanHistoryBytes, setPlanHistoryCommitment } from "./planHistoryShards.js";
+import { isPlanHistoryPath, orderedPlanHistoryPaths, planHistoryFileDigest, preparePlanHistoryAppend, setPlanHistoryCommitmentFromDigests } from "./planHistoryShards.js";
 import { normalizePlanHistoryActor, type PlanHistoryActor } from "./shared/planHistoryActor.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import { planActivationStatus, planMarkerStatus } from "./planState.js";
@@ -22,19 +22,24 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
   if (phase === "saved" && (marker !== workflow.roles.approval && marker !== workflow.roles.approved
     || planApprovalGate(before).state !== "pending")) return unchanged;
   const historyFiles = new Map(readCanonicalPlanStoragePackageUnderLease(lease).files
-    .filter(file => file.path === "history.jsonl" || file.path.startsWith("history/"))
-    .map(file => [file.path, file.content] as const));
+    .filter(file => isPlanHistoryPath(file.path)).map(file => [file.path, file]));
   if (phase === "delivered") {
     if (feedback.deliveryStatus !== "delivered" || !feedback.approvalTransition || marker !== workflow.roles.approved) return unchanged;
-    const historyText = readPlanHistoryBytes(historyFiles).toString("utf8");
-    const history = historyText.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as { after: PlanItem });
-    const index = history.findIndex(row => row.after.storageRevision === feedback.approvalTransition!.planRevision);
-    if (index < 0) return unchanged;
     const signature = (plan: PlanItem) => JSON.stringify({ marker: planMarkerStatus(plan), activation: planActivationStatus(plan),
       currentStepId: plan.currentStepId, steps: plan.steps, title: plan.title, focus: plan.focus,
       nextAction: plan.nextAction, waitingFor: plan.waitingFor, attachments: plan.attachments, taskBinding: plan.taskBinding });
-    const expected = signature(history[index]!.after);
-    if (signature(before) !== expected || history.slice(index + 1).some(row => signature(row.after) !== expected)) return unchanged;
+    let expected: string | undefined;
+    for (const file of orderedPlanHistoryPaths(historyFiles.keys())) {
+      for (const line of historyFiles.get(file)!.content.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+        const { after } = JSON.parse(line) as { after: PlanItem };
+        if (expected !== undefined) {
+          if (signature(after) !== expected) return unchanged;
+        } else if (after.storageRevision === feedback.approvalTransition.planRevision) {
+          expected = signature(after);
+        }
+      }
+    }
+    if (expected === undefined || signature(before) !== expected) return unchanged;
   }
   const status = phase === "saved" ? workflow.roles.approved : workflow.roles.analysis;
   const after: PlanItem = { ...before, status, markerStatus: status,
@@ -44,10 +49,13 @@ export function feedbackPlanTransition(lease: PlanStorageLease, feedback: PlanFe
     ? { kind: "system" as const, displayName: "计划反馈投递", channel: "manager" }
     : normalizePlanHistoryActor(actor) ?? { kind: "unknown" as const };
   const row = { actor: historyActor, id: `history-${randomUUID()}`,  planId: before.id, kind: "updated", recordedAt: after.updatedAt, before, after };
-  appendPlanHistoryRecord(historyFiles, row);
-  const latestPath = orderedPlanHistoryPaths(historyFiles.keys()).at(-1)!;
+  const changed = preparePlanHistoryAppend([...historyFiles.values()], row);
+  historyFiles.delete(changed.path);
+  const digests = [...historyFiles.values()].map(file => ({ path: file.path, bytes: file.size, sha256: file.sha256 }));
+  digests.push(planHistoryFileDigest(changed.path, changed.content));
+  const committed = setPlanHistoryCommitmentFromDigests(after as unknown as Record<string, unknown>, digests);
   return { record, operations: [
-    { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(after as unknown as Record<string, unknown>, historyFiles), null, 2)}\n`) },
-    { type: "replace-file", relativePath: latestPath, content: historyFiles.get(latestPath)! }
+    { type: "replace-file", relativePath: "plan.json", content: Buffer.from(`${JSON.stringify(committed, null, 2)}\n`) },
+    { type: "replace-file", relativePath: changed.path, content: changed.content }
   ] };
 }

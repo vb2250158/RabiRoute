@@ -6,6 +6,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.87 - 2026-11-25
+
+- Give plan history its own finite budget, verify shards and retain complete snapshots so history growth does not consume the ordinary plan and attachment budget; preserve original archive recovery and strict revision checks.
+- Retain actual storage execution identity and settlement evidence, reject precommit capacity failures explicitly, and keep legacy receipts without proof uncertain without replaying the operation.
+
 ## 0.15.86 - 2026-11-25
 
 - Retain the last 950 ms of wake audio and allow brief quiet pauses in Windows and Android keyword detection so a quiet wake word can hand off the beginning of the following command.

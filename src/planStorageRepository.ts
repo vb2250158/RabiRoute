@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
-import { isPlanHistoryPath, orderedPlanHistoryPaths, validatePlanHistoryCommitment, planHistoryTransactionFence, planHistoryTransactionFenceAsync, planStorageTransactionFence, publishPlanHistoryWalState, PLAN_HISTORY_FILE } from "./planHistoryShards.js";
+import { hasActivePlanHistoryWal, isPlanHistoryPath, orderedPlanHistoryPaths, validatePlanHistoryCommitmentDigests, planHistoryTransactionFence, planHistoryTransactionFenceAsync, planStorageTransactionFence, publishPlanHistoryWalState, PLAN_HISTORY_FILE, PlanStorageCapacityError } from "./planHistoryShards.js";
 import { decodePlanIdentity } from "./planIdentityReadCache.js";
 import { assertPlanStoragePackageRecoveryReady, capturePlanStoragePackageRecoveryConflicts, readPlanPackageRecoveryIdentity, validatePlanPackageRecoveryIdentity, PlanStoragePackageRecoveryPendingError } from "./planStoragePackageFence.js";
 import {
@@ -82,6 +82,10 @@ export type PlanStoragePackageFile = {
   sha256: string;
   content: Buffer;
 };
+
+// Only a repository snapshot can supply an unchanged file-backed entry.
+const SNAPSHOT_FILE = Symbol("plan storage snapshot file");
+type SnapshotPackageFile = PlanStoragePackageFile & { [SNAPSHOT_FILE]?: true };
 
 export type CommitPlanStoragePackageInput = {
   roleDir: string;
@@ -272,6 +276,8 @@ type PackageTransactionReceipt = {
 const MAX_PACKAGE_FILES = 4_096;
 const MAX_PACKAGE_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_PACKAGE_BYTES = 96 * 1024 * 1024;
+const MAX_HISTORY_BYTES = 128 * 1024 * 1024;
+
 const commitListeners = new Set<(event: PlanStorageCommitEvent) => void>();
 const beforeMutationListeners = new Set<(event: Pick<PlanStorageCommitEvent, "roleDir" | "planId" | "storageId">) => void>();
 
@@ -344,7 +350,8 @@ export function inventoryPlanStorageDirectory(
 function readPlanStorageDirectoryInventory(
   directory: string,
   lease?: PlanStorageLease,
-  capture?: (entry: PlanStorageInventoryEntry, content: Buffer) => void
+  capture?: (entry: PlanStorageInventoryEntry, content?: Buffer) => void,
+  materialize = false
 ): PlanStorageInventory {
   const root = path.resolve(directory);
   const rootStat = fs.lstatSync(root);
@@ -352,6 +359,7 @@ function readPlanStorageDirectoryInventory(
     throw new Error(`Plan storage inventory root is not one plain directory: ${root}`);
   }
   const files: PlanStorageInventoryEntry[] = [];
+  const hashBuffer = materialize ? undefined : Buffer.allocUnsafe(64 * 1024);
   const visit = (current: string): void => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (lease) assertPlanStorageLeaseOwner(lease);
@@ -364,17 +372,39 @@ function readPlanStorageDirectoryInventory(
         continue;
       }
       if (!entry.isFile() || !before.isFile()) throw new Error(`Plan storage contains an unsupported entry: ${target}`);
-      const content = fs.readFileSync(target);
+      let content: Buffer | undefined;
+      let bytes: number;
+      let digest: string;
+      if (materialize) {
+        content = fs.readFileSync(target);
+        bytes = content.byteLength;
+        digest = sha256(content);
+      } else {
+        const source = fs.openSync(target, "r");
+        try {
+          const hash = createHash("sha256");
+          const buffer = hashBuffer!;
+          bytes = 0;
+          for (let count = fs.readSync(source, buffer); count; count = fs.readSync(source, buffer)) {
+            hash.update(buffer.subarray(0, count));
+            bytes += count;
+          }
+          digest = hash.digest("hex");
+        } finally {
+          fs.closeSync(source);
+        }
+      }
       const after = fs.lstatSync(target);
-      if (after.isSymbolicLink() || !after.isFile() || after.size !== before.size
+      if (after.isSymbolicLink() || !after.isFile() || after.size !== bytes || after.size !== before.size
+        || after.dev !== before.dev || after.ino !== before.ino
         || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
         throw new Error(`Plan storage entry changed during inventory: ${target}`);
       }
       const verifiedEntry = {
         path: relativePlanPath(target, root),
-        bytes: content.byteLength,
+        bytes,
         modifiedAt: after.mtime.toISOString(),
-        sha256: sha256(content)
+        sha256: digest
       };
       files.push(verifiedEntry);
       capture?.(verifiedEntry, content);
@@ -592,28 +622,46 @@ function assertPlainAncestors(root: string, target: string): void {
   }
 }
 
-function canonicalPackageFiles(files: PlanStoragePackageFile[]): PlanStoragePackageFile[] {
+function validatePackageCapacity(files: ReadonlyArray<Pick<PlanStoragePackageFile, "path" | "size">>, separateHistory: boolean): void {
+  if (files.length === 0 || files.length > MAX_PACKAGE_FILES) {
+    throw new PlanStorageCapacityError("Plan storage package has an invalid file count.");
+  }
+  const history = separateHistory ? new Set(orderedPlanHistoryPaths(files.map(file => file.path))) : new Set<string>();
+  let packageBytes = 0;
+  let historyBytes = 0;
+  for (const file of files) {
+    if (file.size > MAX_PACKAGE_FILE_BYTES) throw new PlanStorageCapacityError(`Plan storage package file is too large: ${file.path}`);
+    if (history.has(file.path)) historyBytes += file.size;
+    else packageBytes += file.size;
+  }
+  if (packageBytes > MAX_PACKAGE_BYTES) throw new PlanStorageCapacityError("Plan storage package is too large.");
+  if (historyBytes > MAX_HISTORY_BYTES) throw new PlanStorageCapacityError("Plan storage history exceeds the 128 MiB limit.");
+}
+
+function canonicalPackageFiles(files: SnapshotPackageFile[], separateHistory = false): PlanStoragePackageFile[] {
   if (!Array.isArray(files) || files.length === 0 || files.length > MAX_PACKAGE_FILES) {
-    throw new Error("Plan storage package has an invalid file count.");
+    throw new PlanStorageCapacityError("Plan storage package has an invalid file count.");
   }
   const keys = new Set<string>();
-  let total = 0;
   const canonical = files.map((file) => {
     const relativePath = canonicalRelativePath(file.path);
     const key = windowsPlanStoragePathCollisionKey(relativePath);
     if (keys.has(key)) throw new Error(`Plan storage package has a Windows path collision: ${relativePath}`);
     keys.add(key);
-    const content = Buffer.from(file.content);
     const size = Number(file.size);
+    if (separateHistory && file[SNAPSHOT_FILE] && relativePath === file.path) return file;
+    const content = Buffer.from(file.content);
+    if (size > MAX_PACKAGE_FILE_BYTES && size === content.byteLength) {
+      throw new PlanStorageCapacityError(`Plan storage package file is too large: ${relativePath}`);
+    }
     const contentHash = sha256(content);
     if (!Number.isSafeInteger(size) || size !== content.byteLength || size > MAX_PACKAGE_FILE_BYTES
       || String(file.sha256 || "").toLocaleLowerCase("en-US") !== contentHash) {
       throw new Error(`Plan storage package file metadata does not match its bytes: ${relativePath}`);
     }
-    total += size;
-    if (total > MAX_PACKAGE_BYTES) throw new Error("Plan storage package is too large.");
     return { path: relativePath, size, sha256: contentHash, content };
   });
+  validatePackageCapacity(canonical, separateHistory);
   return canonical.sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -621,46 +669,72 @@ function packageInventoryHash(files: Array<Pick<PlanStoragePackageFile, "path" |
   return sha256(JSON.stringify(files.map((file) => [file.path, file.size, file.sha256])));
 }
 
-function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, files: PlanStoragePackageFile[]): void {
-  const byPath = new Map(files.map((file) => [file.path, file.content]));
-  const planBytes = byPath.get("plan.json");
-  const historyBytes = byPath.get(PLAN_HISTORY_FILE);
-  if (!planBytes || !historyBytes) throw new Error("Plan storage package requires plan.json and history.jsonl.");
-  const historyPaths = orderedPlanHistoryPaths(byPath.keys());
+function validatePlanMetadata(
+  planId: string, bucket: PlanStorageBucket, planBytes: Buffer | undefined,
+  files: ReadonlyArray<Pick<PlanStoragePackageFile, "path" | "size" | "sha256">>
+): void {
+  if (!planBytes || !files.some(file => file.path === PLAN_HISTORY_FILE)) throw new Error("Plan storage package requires plan.json and history.jsonl.");
   const plan = JSON.parse(planBytes.toString("utf8")) as { id?: unknown; status?: unknown; archiveStatus?: unknown; activationStatus?: unknown };
-  validatePlanHistoryCommitment(plan as Record<string, unknown>, byPath);
+  const history = files.filter(file => isPlanHistoryPath(file.path)).map(file => ({ path: file.path, bytes: file.size, sha256: file.sha256 }));
+  validatePlanHistoryCommitmentDigests(plan as Record<string, unknown>, history);
   if (canonicalLogicalPlanId(plan.id) !== planId) throw new Error("Plan storage package plan.json identity mismatch.");
   if ((bucket === "archive") !== (plan.activationStatus !== undefined ? plan.activationStatus === "已归档" : plan.archiveStatus === "已归档" || plan.status === "已归档")) {
     throw new Error("Plan storage package bucket does not match plan status.");
   }
-  for (const historyPath of historyPaths) {
-    const bytes = byPath.get(historyPath)!;
-    // A complete legacy base row may omit LF even when later physical shards exist.
-    // The logical reader inserts a separator at that boundary; new shards require LF.
-    if (!bytes.byteLength || (historyPath !== PLAN_HISTORY_FILE && bytes.at(-1) !== 10)) {
-      throw new Error(`Plan storage package history shard must contain complete lines: ${historyPath}`);
-    }
-    const lines = bytes.toString("utf8").split(/\r?\n/);
-    if (bytes.at(-1) === 10) lines.pop(); // The final newline terminates the last complete record.
-    if (!lines.length || lines.some(line => !line)) {
-      throw new Error(`Plan storage package history shard must contain non-empty records: ${historyPath}`);
-    }
-    for (const line of lines) {
-      const record = JSON.parse(line) as { id?: unknown; planId?: unknown };
-      if (!record || typeof record !== "object" || typeof record.id !== "string" || record.planId !== planId) {
-        throw new Error(`Plan storage package history identity mismatch: ${historyPath}`);
-      }
+}
+
+function validateHistoryShardIdentity(planId: string, historyPath: string, bytes: Buffer): void {
+  // A complete legacy base row may omit LF even when later physical shards exist.
+  // The logical reader inserts a separator at that boundary; new shards require LF.
+  if (!bytes.byteLength || (historyPath !== PLAN_HISTORY_FILE && bytes.at(-1) !== 10)) {
+    throw new Error(`Plan storage package history shard must contain complete lines: ${historyPath}`);
+  }
+  const lines = bytes.toString("utf8").split(/\r?\n/);
+  if (bytes.at(-1) === 10) lines.pop(); // The final newline terminates the last complete record.
+  if (!lines.length || lines.some(line => !line)) {
+    throw new Error(`Plan storage package history shard must contain non-empty records: ${historyPath}`);
+  }
+  for (const line of lines) {
+    const record = JSON.parse(line) as { id?: unknown; planId?: unknown };
+    if (!record || typeof record !== "object" || typeof record.id !== "string" || record.planId !== planId) {
+      throw new Error(`Plan storage package history identity mismatch: ${historyPath}`);
     }
   }
 }
 
-function physicalPackageInventory(directory: string): { hash: string; files: PlanStoragePackageFile[] } {
+function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, files: PlanStoragePackageFile[]): void {
+  const byPath = new Map(files.map(file => [file.path, file]));
+  validatePlanMetadata(planId, bucket, byPath.get("plan.json")?.content, files);
+  for (const historyPath of orderedPlanHistoryPaths(byPath.keys())) {
+    validateHistoryShardIdentity(planId, historyPath, byPath.get(historyPath)!.content);
+  }
+}
+
+function physicalPackageInventory(directory: string, materialize = false): { hash: string; files: PlanStoragePackageFile[] } {
   const files: PlanStoragePackageFile[] = [];
   const inventory = readPlanStorageDirectoryInventory(directory, undefined, (entry, content) => {
-    files.push({ path: entry.path, size: entry.bytes, sha256: entry.sha256, content });
-  });
+    const metadata = { path: entry.path, size: entry.bytes, sha256: entry.sha256 };
+    if (content) {
+      files.push({ ...metadata, content });
+      return;
+    }
+    const file: SnapshotPackageFile = {
+      ...metadata,
+      [SNAPSHOT_FILE]: true,
+      get content() {
+        const source = path.join(directory, ...entry.path.split("/"));
+        assertPlainAncestors(directory, source);
+        const bytes = fs.readFileSync(source);
+        if (bytes.byteLength !== metadata.size || sha256(bytes) !== metadata.sha256) {
+          throw new Error(`Plan storage snapshot file changed: ${entry.path}`);
+        }
+        return bytes;
+      }
+    };
+    files.push(file);
+  }, materialize);
   files.sort((left, right) => left.path.localeCompare(right.path));
-  // The revision and response must describe the same verified bytes, not a second read.
+  // Snapshot-backed readers recheck the pinned digest every time they materialize a file.
   return { hash: inventory.hash, files };
 }
 
@@ -691,7 +765,7 @@ function ensurePackagePayloadUnderLease(
   const payload = path.join(transactionRoot, "payload");
   if (fs.existsSync(payload)) {
     try {
-      if (physicalPackageInventory(payload).hash === inventoryHash) return payload;
+      if (inventoryPlanStorageDirectory(payload, lease).hash === inventoryHash) return payload;
     } catch {
       // Preserve an incomplete/corrupt stage below before publishing the complete candidate.
     }
@@ -702,7 +776,7 @@ function ensurePackagePayloadUnderLease(
     assertPlanStorageLeaseOwner(lease);
     atomicWriteFileSync(path.join(candidate, ...file.path.split("/")), file.content);
   }
-  const staged = physicalPackageInventory(candidate);
+  const staged = inventoryPlanStorageDirectory(candidate, lease);
   if (staged.hash !== inventoryHash) throw new Error("Plan storage package candidate inventory changed while staging.");
   assertPlanStorageLeaseOwner(lease);
   if (fs.existsSync(payload)) {
@@ -1084,10 +1158,17 @@ export function readPlanStoragePackage(
   planId: string,
   bucket: PlanStorageBucket
 ): ReadPlanStoragePackageResult {
+  return readPlanStoragePackageSnapshot(roleDir, planId, bucket, true);
+}
+
+/** Hash-pinned snapshot for in-process consumers that only need part of a package. */
+export function readPlanStoragePackageSnapshot(
+  roleDir: string, planId: string, bucket: PlanStorageBucket, materialize = false
+): ReadPlanStoragePackageResult {
   const fence = planHistoryTransactionFence(roleDir, planId);
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (!location || location.bucket !== bucket) throw new Error(`Canonical ${bucket} plan package does not exist: ${planId}`);
-  const physical = physicalPackageInventory(location.directory);
+  const physical = physicalPackageInventory(location.directory, materialize);
   validatePackageIdentity(location.planId, bucket, physical.files);
   if (planHistoryTransactionFence(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
   return { ...location, inventoryHash: physical.hash, files: physical.files };
@@ -1103,7 +1184,8 @@ export async function readPlanStorageInventoryHash(
   const fence = await planHistoryTransactionFenceAsync(roleDir, planId);
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (!location || location.bucket !== bucket) throw new Error(`Canonical ${bucket} plan package does not exist: ${planId}`);
-  const files: PlanStoragePackageFile[] = [];
+  const files: Array<Pick<PlanStoragePackageFile, "path" | "size" | "sha256">> = [];
+  let planBytes: Buffer | undefined;
   const pending = [location.directory];
   while (pending.length) {
     const directory = pending.pop()!;
@@ -1145,11 +1227,13 @@ export async function readPlanStorageInventoryHash(
       revisionFileHashes.delete(target);
       revisionFileHashes.set(target, { fingerprint, hash: fileHash });
       if (revisionFileHashes.size > 8192) revisionFileHashes.delete(revisionFileHashes.keys().next().value!);
-      files.push({ path: relativePath, size: after.size, sha256: fileHash, content });
+      if (relativePath === "plan.json") planBytes = content;
+      if (isPlanHistoryPath(relativePath)) validateHistoryShardIdentity(location.planId, relativePath, content);
+      files.push({ path: relativePath, size: after.size, sha256: fileHash });
     }
   }
   files.sort((left, right) => left.path.localeCompare(right.path));
-  validatePackageIdentity(location.planId, bucket, files);
+  validatePlanMetadata(location.planId, bucket, planBytes, files);
   if (await planHistoryTransactionFenceAsync(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
   return packageInventoryHash(files);
 }
@@ -1204,16 +1288,17 @@ export function inspectPlanStorageMutationReceiptUnderLease(
     // The inspector must read a pending package itself. This synchronous scope
     // suppresses only the recovery fence while reusing the canonical reader.
     const current = withPackageCommitScope(lease, () => readCanonicalPlanStoragePackageUnderLease(lease));
-    const byPath = new Map(current.files.map(file => [file.path, file.content]));
-    const history = orderedPlanHistoryPaths(byPath.keys()).flatMap(file => byPath.get(file)!.toString("utf8").trimEnd().split(/\r?\n/)
-      .map(line => JSON.parse(line) as { after?: unknown }));
-    for (const record of history.reverse()) {
-      const after = record.after;
-      if (after && typeof after === "object" && !Array.isArray(after)
-        && (after as Record<string, unknown>).storageMutationRequestId === input.requestId) {
-        if (canonicalLogicalPlanId((after as Record<string, unknown>).id) !== lease.planId) throw new Error("The original history result has a different plan identity.");
-        assertPlanStorageLeaseOwner(lease);
-        return { state: "committed", value: structuredClone(after as Record<string, unknown>) };
+    const byPath = new Map(current.files.map(file => [file.path, file]));
+    for (const historyPath of orderedPlanHistoryPaths(byPath.keys()).reverse()) {
+      const lines = byPath.get(historyPath)!.content.toString("utf8").trimEnd().split(/\r?\n/);
+      for (const line of lines.reverse()) {
+        const { after } = JSON.parse(line) as { after?: unknown };
+        if (after && typeof after === "object" && !Array.isArray(after)
+          && (after as Record<string, unknown>).storageMutationRequestId === input.requestId) {
+          if (canonicalLogicalPlanId((after as Record<string, unknown>).id) !== lease.planId) throw new Error("The original history result has a different plan identity.");
+          assertPlanStorageLeaseOwner(lease);
+          return { state: "committed", value: structuredClone(after as Record<string, unknown>) };
+        }
       }
     }
     const quarantine = path.join(plansRoot(lease.roleDir), "quarantine");
@@ -1267,7 +1352,7 @@ export function inspectPlanStorageMutationReceiptUnderLease(
       if (receipt.schemaVersion !== 1 || receipt.kind !== "plan_storage_repository_transaction_receipt" || receipt.status !== "committed"
         || receipt.transactionId !== manifest.transactionId || receipt.transactionKind !== manifest.transactionKind || receipt.planId !== lease.planId || receipt.storageId !== lease.storageId || receipt.bucket !== manifest.bucket) throw new Error("Repository terminal receipt identity mismatch.");
     }
-    const plan = JSON.parse(byPath.get("plan.json")!.toString("utf8")) as Record<string, unknown>;
+    const plan = JSON.parse(byPath.get("plan.json")!.content.toString("utf8")) as Record<string, unknown>;
     if (committedCurrent && plan.storageMutationRequestId === input.requestId) {
       assertPlanStorageLeaseOwner(lease);
       return { state: "committed", value: structuredClone(plan) };
@@ -1466,7 +1551,7 @@ export function commitPlanLifecycleTransitionUnderLease(
   if (input.fromBucket !== null && !/^[a-f0-9]{64}$/.test(input.expectedSourceInventoryHash || "")) {
     throw new Error("Plan storage lifecycle expected source inventory is required.");
   }
-  const files = canonicalPackageFiles(input.files);
+  const files = canonicalPackageFiles(input.files, true);
   const finalInventoryHash = packageInventoryHash(files);
   validatePackageIdentity(lease.planId, input.toBucket, files);
   claimPlanStorageIdentity(lease);
@@ -1930,7 +2015,8 @@ function storedTransactionOperations(spec: PlanStorageTransactionSpec): StoredTr
 function validateProjectedTransactionPackage(
   directory: string,
   operations: StoredTransactionOperation[],
-  lease: PlanStorageLease
+  lease: PlanStorageLease,
+  beforeWal = false
 ): void {
   const inventory = inventoryPlanStorageDirectory(directory, lease);
   const files = new Map(inventory.files.map(file => [windowsPlanStoragePathCollisionKey(file.path), { path: file.path, size: file.bytes }]));
@@ -1970,12 +2056,11 @@ function validateProjectedTransactionPackage(
     }
     if (operation.type === "publish-directory") directoryRoots.add(rootKey);
   }
-  if (files.size > MAX_PACKAGE_FILES) throw new Error("Plan storage package has an invalid file count.");
-  let total = 0;
-  for (const { path: relativePath, size } of files.values()) {
-    if (size > MAX_PACKAGE_FILE_BYTES) throw new Error(`Plan storage package file is too large: ${relativePath}`);
-    total += size;
-    if (total > MAX_PACKAGE_BYTES) throw new Error("Plan storage package is too large.");
+  try {
+    validatePackageCapacity([...files.values()], true);
+  } catch (error) {
+    if (beforeWal || !(error instanceof PlanStorageCapacityError)) throw error;
+    throw new Error("Prepared plan storage transaction exceeds its storage budget.", { cause: error });
   }
 }
 
@@ -2226,12 +2311,13 @@ export function commitPlanStorageTransactionUnderLease(
   const location = resolveCanonicalPlanStorageLocation(lease.roleDir, lease.planId);
   if (!location) throw new Error(`Plan storage transaction requires a canonical plan: ${lease.planId}`);
   const operations = storedTransactionOperations(spec);
-  validateProjectedTransactionPackage(location.directory, operations, lease);
+  const transactionRoot = repositoryTransactionRoot(lease.roleDir, lease.storageId, spec.kind, spec.transactionId);
+  const manifestPath = path.join(transactionRoot, "manifest.json");
+  validateProjectedTransactionPackage(location.directory, operations, lease,
+    !fs.existsSync(manifestPath) && !hasActivePlanHistoryWal(lease.roleDir, lease.storageId));
   const specHash = transactionSpecHash(spec.kind, operations);
   const semanticHash = String(spec.semanticHash || specHash).toLocaleLowerCase("en-US");
   if (!/^[a-f0-9]{64}$/.test(semanticHash)) throw new Error("Plan storage transaction semanticHash is invalid.");
-  const transactionRoot = repositoryTransactionRoot(lease.roleDir, lease.storageId, spec.kind, spec.transactionId);
-  const manifestPath = path.join(transactionRoot, "manifest.json");
   planStorageTransactionFence(lease.roleDir, lease.storageId, { kind: spec.kind, transactionId: spec.transactionId });
   spec.hooks?.beforeWalActive?.();
   assertPlanStorageLeaseOwner(lease);

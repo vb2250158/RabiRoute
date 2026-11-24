@@ -37,7 +37,7 @@ import {
 } from "../roleKnowledge.js";
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
 import { listPlanFeedbackFromSnapshot } from "../planFeedbackStore.js";
-import { readPlanStorageInventoryHash, readPlanStoragePackage } from "../planStorageRepository.js";
+import { readPlanStorageInventoryHash, readPlanStoragePackageSnapshot } from "../planStorageRepository.js";
 import { readRolePanelTimeline } from "../rolePanelTimeline.js";
 import type { RecentMessageContextQuery } from "../messageContextStore.js";
 import { readMessageProcessingProjection, type MessageProcessingReadInput } from "./messageProcessingReadProjection.js";
@@ -405,7 +405,7 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
       });
       let value = null;
       if (plan) {
-        const storagePackage = readPlanStoragePackage(task.roleDir, plan.id,
+        const storagePackage = readPlanStoragePackageSnapshot(task.roleDir, plan.id,
           plan.archiveStatus === "已归档" ? "archive" : "active");
         const feedback = storagePackage.files.find(file => file.path === "feedback.jsonl");
         const directory = path.dirname(path.join(task.roleDir, "plans", storagePackage.bucket,

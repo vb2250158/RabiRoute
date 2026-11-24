@@ -33,6 +33,7 @@ import {
 } from "../roleKnowledge.js";
 import path from "node:path";
 import { RoleStorageValidationError } from "../shared/roleStorageValidationError.js";
+import { PlanStorageCapacityError } from "../planHistoryShards.js";
 import { acquireStorageMutationCommitAdmission, StorageMutationAdmissionError } from "./managerStorageMutationAdmission.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -49,7 +50,7 @@ import {
   type PersonaPlanWorkflowStatus
 } from "../personaPlanWorkflow.js";
 import {
-  readPlanStoragePackage,
+  readPlanStoragePackageSnapshot,
   resolveCanonicalPlanStorageLocation,
   recoverPlanLifecycleTransitions,
   recoverPlanStorageTransactions,
@@ -100,7 +101,7 @@ function currentPlanRevision(roleDir: string, planId: string | undefined): strin
   if (!planId) return null;
   const location = resolveCanonicalPlanStorageLocation(roleDir, planId);
   if (!location) return null;
-  return storageInventoryRevisionToken(readPlanStoragePackage(
+  return storageInventoryRevisionToken(readPlanStoragePackageSnapshot(
     roleDir,
     location.planId,
     location.bucket
@@ -265,7 +266,7 @@ type DomainDeliveryResult =
   | Readonly<{ domain: "rejected"; error: string }>;
 
 function deterministicDomainRejection(error: unknown): string | undefined {
-  if (error instanceof RoleStorageValidationError) {
+  if (error instanceof RoleStorageValidationError || error instanceof PlanStorageCapacityError) {
     return `STORAGE_MUTATION_VALIDATION_REJECTED: ${error.message}`;
   }
   if (error instanceof Error
@@ -608,6 +609,17 @@ async function execute(
       ...(validated.task.type === "plan_update" && executorPin !== undefined
         ? { planUpdateExecutor: executorPin } : {})
     },
+    // The child's validated generation and admission identify this invocation,
+    // outside the caller's business payload and original digest.
+    ...(validated.task.type === "plan_update" ? {
+      executionScope: JSON.stringify([
+        identity.applicationGenerationId, identity.managerInstanceId,
+        identity.storageGenerationLease, validated.admissionNonce ?? null
+      ])
+    } : {
+      recover: () => recoverDomainMutation(validated, roleDir),
+      recoverExistingUncertain: true
+    }),
     deliver: async (): Promise<DomainDeliveryResult> => {
       let batchWriteStarted = false;
       try {
@@ -620,9 +632,6 @@ async function execute(
         throw error;
       }
     },
-    // Prepared WAL already freezes its payload. Only a proven retry calls the original package's preparation.
-    recover: () => recoverDomainMutation(validated, roleDir),
-    recoverExistingUncertain: true,
     retryableRejection: result => result.domain === "rejected"
       && result.error.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:"),
     waitForCompletionMs: getTimeoutMs("storage.mutationReceiptWait", 250)
@@ -641,6 +650,18 @@ async function execute(
     }
     // Backward-compatible replay of receipts written before the domain envelope.
     return result;
+  }
+  if (originalReceipt && validated.task.type === "plan_update"
+    && (outcome.state === "uncertain" || outcome.state === "in_progress")) {
+    // Replaying a previous PATCH can prove and return its original result.
+    // It must never replace the previous execution or apply the patch again.
+    const result = await reconcileManagerStorageMutationReceipt({ ...validated, mode: "receipt_only" }, roleDir);
+    if (result.state === "completed") {
+      if (result.operationState === "succeeded") return result.value;
+      throw new Error(result.reason.startsWith("STORAGE_MUTATION_")
+        ? result.reason : `STORAGE_MUTATION_VALIDATION_REJECTED: ${result.reason}`);
+    }
+    throw new Error(`STORAGE_MUTATION_${result.state.toUpperCase()}: ${result.reason}`);
   }
   throw new Error(
     `STORAGE_MUTATION_${outcome.state.toUpperCase()}: ${outcome.reason}`

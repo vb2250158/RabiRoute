@@ -21,6 +21,8 @@ export type DurableDeliveryReceipt<TResult> = {
   result?: TResult;
   error?: string;
   executionId?: string;
+  executionScope?: string;
+  executionSettled?: string;
   ownerHost?: string;
   ownerPid?: number;
   leaseExpiresAt?: string;
@@ -38,6 +40,8 @@ export type DurableDeliveryOptions<TResult> = {
   deliveryId: unknown;
   payload: unknown;
   audit?: unknown;
+  /** Trusted execution owner identity for operations reconciled after the callback exits. */
+  executionScope?: string;
   /** Internal original-admission fence; never part of payload, audit or digest. */
   requestAuthority?: () => void;
   deliver: () => Promise<TResult>;
@@ -393,7 +397,8 @@ function reserveReceipt<TResult>(
   executionId: string,
   leaseMs: number,
   audit?: unknown,
-  requestAuthority?: () => void
+  requestAuthority?: () => void,
+  executionScope?: string
 ): { created: boolean; receipt: DurableDeliveryReceipt<TResult> | null } {
   requestAuthority?.();
   const filePath = durableDeliveryReceiptPath(rootDir, namespace, deliveryId);
@@ -407,6 +412,7 @@ function reserveReceipt<TResult>(
     createdAt: now,
     updatedAt: now,
     executionId,
+    ...(executionScope === undefined ? {} : { executionScope }),
     ownerHost: os.hostname(),
     ownerPid: process.pid,
     leaseExpiresAt: new Date(Date.now() + leaseMs).toISOString(),
@@ -514,6 +520,19 @@ function sameHostOwnerGone(receipt: DurableDeliveryReceipt<unknown>): boolean {
 
 export { sameHostOwnerGone as receiptExecutionOwnerGone };
 
+function executionSettlementDigest(receipt: DurableDeliveryReceipt<unknown>): string {
+  return createHash("sha256").update(JSON.stringify([
+    receipt.deliveryId, receipt.requestDigest, receipt.executionId,
+    receipt.executionScope, receipt.ownerHost, receipt.ownerPid
+  ])).digest("hex");
+}
+
+export function receiptExecutionSettled(receipt: DurableDeliveryReceipt<unknown>): boolean {
+  return receipt.state === "uncertain" && Boolean(receipt.executionId && receipt.executionScope
+    && receipt.ownerHost && Number.isInteger(receipt.ownerPid) && Number(receipt.ownerPid) > 0)
+    && receipt.executionSettled === executionSettlementDigest(receipt);
+}
+
 export function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boolean {
   if (receipt.state !== "sending" || !receipt.executionId) return false;
   if (sameHostOwnerAlive(receipt)) return true;
@@ -617,9 +636,13 @@ export async function reconcileDurableDelivery<TResult>(
         updatedAt: new Date().toISOString(),
         result: verification.result,
         error: undefined,
-        executionId: undefined,
-        ownerHost: undefined,
-        ownerPid: undefined,
+        ...(receiptExecutionSettled(latest.receipt) ? {} : {
+          executionId: undefined,
+          executionScope: undefined,
+          executionSettled: undefined,
+          ownerHost: undefined,
+          ownerPid: undefined
+        }),
         leaseExpiresAt: undefined,
         leaseDurationMs: undefined,
         renewal: undefined
@@ -653,7 +676,7 @@ function claimReceipt<TResult>(input: Readonly<{
     const current = readDurableDeliveryReceipt<TResult>(input.rootDir, input.namespace, input.deliveryId);
     input.requestAuthority?.();
     if (!current || current.requestDigest !== input.digest) return { claimed: false, receipt: current };
-    if (current.state === "completed") return { claimed: false, receipt: current };
+    if (current.state === "completed" || current.executionScope) return { claimed: false, receipt: current };
     if (current.state === "uncertain" && !input.allowUncertain) return { claimed: false, receipt: current };
     if (receiptExecutionActive(current)) return { claimed: false, receipt: current };
     const now = new Date().toISOString();
@@ -894,6 +917,8 @@ function settleOwnedResult<TResult>(
       result,
       error: undefined,
       executionId: undefined,
+      executionScope: undefined,
+      executionSettled: undefined,
       ownerHost: undefined,
       ownerPid: undefined,
       leaseExpiresAt: undefined,
@@ -934,9 +959,13 @@ function markOwnedUncertain<TResult>(
       state: "uncertain",
       updatedAt: new Date().toISOString(),
       error: reason,
-      executionId: undefined,
-      ownerHost: undefined,
-      ownerPid: undefined,
+      // The owning invocation has returned from its awaited domain callbacks.
+      // Persist proof with the owner CAS so a replacement cannot record it.
+      ...(current.executionScope ? { executionSettled: executionSettlementDigest(current) } : {
+        executionId: undefined,
+        ownerHost: undefined,
+        ownerPid: undefined
+      }),
       leaseExpiresAt: undefined,
       leaseDurationMs: undefined,
       renewal: undefined
@@ -1114,7 +1143,8 @@ export async function executeDurableDelivery<TResult>(
     executionId,
     leaseMs,
     options.audit,
-    options.requestAuthority
+    options.requestAuthority,
+    options.executionScope
   );
   options.requestAuthority?.();
   if (reservation.created) {

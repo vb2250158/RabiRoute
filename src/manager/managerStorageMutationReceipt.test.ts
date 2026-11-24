@@ -10,7 +10,7 @@ import test from "node:test";
 import {createPlan,listPlanHistory} from "../roleKnowledge.js";
 import {readPlanStoragePackage} from "../planStorageRepository.js";
 import {storageInventoryRevisionToken} from "../shared/storageRevision.js";
-import {durableDeliveryRequestDigest,durableDeliveryReceiptPath,readDurableDeliveryReceipt,receiptExecutionOwnerGone} from "./durableDeliveryIdempotency.js";
+import {durableDeliveryRequestDigest,durableDeliveryReceiptPath,readDurableDeliveryReceipt,receiptExecutionOwnerGone,receiptExecutionSettled} from "./durableDeliveryIdempotency.js";
 import {ManagerStorageMutationPool,ManagerStorageMutationError} from "./managerStorageMutationPool.js";
 import {MANAGER_STORAGE_MUTATION_PROTOCOL_VERSION,MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE,validateManagerStorageMutationRequest,type ManagerStorageMutationRequest} from "./managerStorageMutationProtocol.js";
 
@@ -59,6 +59,58 @@ test("receipt expiry alone cannot settle a live original process",async t=>{
  assert.equal(receiptExecutionOwnerGone({...f.record,ownerPid:process.pid} as any),false);
  assert.equal(receiptExecutionOwnerGone(f.record as any),true);
 });
+test("the original storage child persists scoped settlement after leaving its domain callback", async t => {
+ const f = await fixture(t);
+ fs.unlinkSync(f.receiptPath);
+ const owner = path.join(f.roleDir, "plans", "quarantine", "plan-storage-lifecycle-transactions", f.plan.id);
+ const saved = `${owner}.fixture`;
+ fs.renameSync(owner, saved);
+ fs.writeFileSync(owner, "fixture blocks transaction staging before WAL");
+ try {
+  await assert.rejects(f.pool.updatePlan("Fixture", f.plan.id, f.patch, { ...f.options, authorize() {} }),
+   error => error instanceof ManagerStorageMutationError && error.code === "indeterminate");
+ } finally {
+  fs.unlinkSync(owner);
+  fs.renameSync(saved, owner);
+ }
+ const bytes = fs.readFileSync(f.receiptPath);
+ const original = readDurableDeliveryReceipt(path.join(f.roleDir, "runtime"), MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, f.options.idempotencyKey)!;
+ assert.equal(original.state, "uncertain");
+ assert.equal(original.deliveryId, f.options.idempotencyKey);
+ assert.equal(original.requestDigest, f.record.requestDigest);
+ assert.notEqual(original.ownerPid, process.pid);
+ assert.match(original.executionScope!, /fixture-generation.*fixture-manager/);
+ assert.match(JSON.parse(original.executionScope!)[3], /^[a-f0-9]{64}$/);
+ assert.equal(receiptExecutionSettled(original), true);
+ fs.writeFileSync(f.receiptPath, JSON.stringify({ ...original, executionScope: "other generation" }));
+ const mismatchedProof = fs.readFileSync(f.receiptPath);
+ assert.equal((await f.pool.reconcilePlanUpdateReceipt("Fixture", f.plan.id, f.patch, f.options)).state, "uncertain");
+ assert.deepEqual(fs.readFileSync(f.receiptPath), mismatchedProof);
+ fs.writeFileSync(f.receiptPath, bytes);
+ const result = await f.pool.reconcilePlanUpdateReceipt("Fixture", f.plan.id, f.patch, f.options);
+ assert.equal(result.operationState, "failed");
+ assert.equal(result.commitState, "not_committed");
+ assert.equal(readPlanStoragePackage(f.roleDir, f.plan.id, "active").inventoryHash, f.original.inventoryHash);
+ const terminal = readDurableDeliveryReceipt(path.join(f.roleDir, "runtime"), MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, f.options.idempotencyKey)!;
+ assert.equal(terminal.executionSettled, original.executionSettled);
+ assert.equal(terminal.executionId, original.executionId);
+});
+test("an identity-less legacy receipt preserves the exact actor digest and remains unknown", async t => {
+ const f = await fixture(t);
+ const actor = { kind: "unknown" as const };
+ const requestDigest = durableDeliveryRequestDigest({
+  roleId: "Fixture", planId: f.plan.id, task: { type: "plan_update", patch: f.patch }, actor
+ });
+ const { executionId, ownerHost, ownerPid, leaseExpiresAt, ...legacy } = f.record;
+ fs.writeFileSync(f.receiptPath, JSON.stringify({ ...legacy, state: "uncertain", requestDigest }));
+ const original = fs.readFileSync(f.receiptPath);
+ assert.equal((await f.pool.reconcilePlanUpdateReceipt("Fixture", f.plan.id, f.patch, f.options)).state, "conflict");
+ const result = await f.pool.reconcilePlanUpdateReceipt("Fixture", f.plan.id, f.patch, { ...f.options, actor });
+ assert.equal(result.state, "uncertain");
+ assert.equal(result.commitState, "unknown");
+ assert.deepEqual(fs.readFileSync(f.receiptPath), original);
+ assert.equal(readPlanStoragePackage(f.roleDir, f.plan.id, "active").inventoryHash, f.original.inventoryHash);
+});
 test("committed plain legacy receipt remains a read-only terminal replay",async t=>{
  const f=await fixture(t);fs.writeFileSync(f.receiptPath,JSON.stringify({...f.record,state:"completed",result:{id:f.plan.id,title:"Legacy terminal value"}}));
  const before=fs.readFileSync(f.receiptPath),result=await f.pool.reconcilePlanUpdateReceipt("Fixture",f.plan.id,f.patch,f.options);
@@ -99,6 +151,7 @@ test("a real new worker rejects an old protocol command before domain access",as
 
 test("actual committed domain history restores an original result without changing a later plan",async t=>{
  const f=await fixture(t);
+ fs.unlinkSync(f.receiptPath);
  const committed=await f.pool.updatePlan("Fixture",f.plan.id,f.patch,f.options);
  assert.equal(committed.title,f.patch.title);
  fs.writeFileSync(f.receiptPath,JSON.stringify(f.record));
@@ -197,6 +250,7 @@ test("receipt-only missing or invalid audit anchor remains unknown without calle
 
 test("original committed history closes nonterminal receipts even when legacy audit anchors are missing or malformed",async t=>{
  const f=await fixture(t);
+ fs.unlinkSync(f.receiptPath);
  const committed=await f.pool.updatePlan("Fixture",f.plan.id,f.patch,f.options);
  assert.equal(committed.title,f.patch.title);
  const committedInventory=readPlanStoragePackage(f.roleDir,f.plan.id,"active").inventoryHash;

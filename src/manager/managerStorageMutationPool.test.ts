@@ -213,7 +213,7 @@ for (const mode of ["real-close", "unconfirmed"] as const) {
   });
 }
 
-test("terminal plan validation resolves legacy uncertain receipts without changing the plan", async t => {
+test("legacy uncertainty stays intact while a new plan validation rejection is terminal", async t => {
   const { rolesRoot, roleDir } = tempRolesRoot(t);
   const plan = createPlan(roleDir, {
     id: "terminal-validation", title: "Terminal validation", focus: "Report invalid completion accurately",
@@ -230,13 +230,19 @@ test("terminal plan validation resolves legacy uncertain receipts without changi
   });
   const pool = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "validation-generation", managerInstanceId: "validation-manager" });
   t.after(() => pool.stop());
+  const receiptPath = durableDeliveryReceiptPath(rootDir, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key);
+  const originalReceipt = fs.readFileSync(receiptPath);
+  await assert.rejects(pool.updatePlan("YeYu", plan.id, patch, operation(key, before)),
+    (error: unknown) => error instanceof ManagerStorageMutationError && error.code === "indeterminate");
+  assert.deepEqual(fs.readFileSync(receiptPath), originalReceipt);
+  const invalidKey = "new-terminal-validation";
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    await assert.rejects(pool.updatePlan("YeYu", plan.id, patch, operation(key, before)),
+    await assert.rejects(pool.updatePlan("YeYu", plan.id, patch, operation(invalidKey, before)),
       (error: unknown) => error instanceof ManagerStorageMutationError
         && error.code === "validation_rejected" && /forbids currentStepId/.test(error.message));
     assert.equal(planRevision(roleDir, plan.id), before);
   }
-  const receipt = readDurableDeliveryReceipt(rootDir, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, key);
+  const receipt = readDurableDeliveryReceipt(rootDir, MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, invalidKey);
   assert.equal(receipt?.state, "completed");
   assert.equal((receipt?.result as { domain: string }).domain, "rejected");
   const corrected = await pool.updatePlan("YeYu", plan.id, { status: "完成", currentStepId: null }, operation("corrected-terminal-validation", before));

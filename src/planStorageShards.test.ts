@@ -4,10 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readPlanStoragePackage, readPlanStorageInventoryHash, withPlanStorageLease, commitPlanLifecycleTransitionUnderLease, commitPlanStorageTransactionUnderLease, recoverPlanStorageTransactions, type PlanStoragePackageFile } from "./planStorageRepository.js";
+import { readPlanStoragePackage, readPlanStoragePackageSnapshot, readPlanStorageInventoryHash, withPlanStorageLease, commitPlanLifecycleTransitionUnderLease, commitPlanStorageTransactionUnderLease, recoverPlanLifecycleTransitions, recoverPlanStorageTransactions, type PlanStoragePackageFile } from "./planStorageRepository.js";
 import { archivedPlanDirectoryDominatesActive, validateCanonicalActivePlanDirectory, validateCanonicalArchivedPlanDirectory } from "./planStoragePolicy.js";
 import { canonicalizeRolePlanStorageDirectories, inspectPlanStorageConflict } from "./planStorageReconciliation.js";
-import { readPlanHistoryDirectory, setPlanHistoryCommitment } from "./planHistoryShards.js";
+import { PLAN_HISTORY_FILE_LIMIT, isPlanHistoryPath, planHistoryFileDigest, readPlanHistoryDirectory, setPlanHistoryCommitment, setPlanHistoryCommitmentFromDigests } from "./planHistoryShards.js";
+import { createPlan, listPlanHistory, updatePlan, type PlanHistoryRecord } from "./roleKnowledge.js";
+import { ManagerStorageMutationError, ManagerStorageMutationPool } from "./manager/managerStorageMutationPool.js";
+import { ManagerReadWorkerPool } from "./manager/managerReadWorkerPool.js";
+import { storageInventoryRevisionToken } from "./shared/storageRevision.js";
 
 const id = "history-shards-test";
 const createdAt = "2026-09-01T00:00:00.000Z";
@@ -35,6 +39,126 @@ function packageFile(filePath: string, content: string): PlanStoragePackageFile 
   const bytes = Buffer.from(content);
   return { path: filePath, content: bytes, size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
+
+function fullPlanFixture(t: test.TestContext, shards: number) {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "plan-history-capacity-"));
+  const roleDir = path.join(rolesRoot, "Fixture");
+  fs.mkdirSync(roleDir);
+  const writers = new ManagerStorageMutationPool({ rolesRoot, applicationGenerationId: "capacity-app",
+    managerInstanceId: "capacity-manager", timeoutMs: 30_000 });
+  const readers = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 30_000 });
+  t.after(async () => {
+    await Promise.all([writers.stop(), readers.stop()]);
+    fs.rmSync(rolesRoot, { recursive: true, force: true });
+  });
+  const plan = createPlan(roleDir, { id: "capacity-fixture", title: "Capacity fixture",
+    focus: "x".repeat(64 * 1024), keywords: ["capacity"], status: "完成",
+    steps: [{ id: "review", title: "Review" }] });
+  const active = path.join(roleDir, "plans", "active", plan.id);
+  const planFile = path.join(active, "plan.json");
+  const raw = JSON.parse(fs.readFileSync(planFile, "utf8"));
+  const note = path.join(active, "attachments", "proof.txt");
+  fs.mkdirSync(path.dirname(note), { recursive: true });
+  fs.writeFileSync(note, "evidence bytes");
+  const noteHash = createHash("sha256").update("evidence bytes").digest("hex");
+  fs.mkdirSync(path.join(active, "history"), { recursive: true });
+  const digests = [];
+  for (let index = 0; index < shards; index += 1) {
+    const file = index === 0 ? "history.jsonl" : `history/${String(index).padStart(6, "0")}.jsonl`;
+    const after = { ...plan, focus: "", attachments: [{ path: note, sha256: noteHash }] };
+    const record = { id: `fixture-history-${index}`, planId: plan.id, kind: index === 0 ? "created" : "updated",
+      recordedAt: plan.createdAt, after };
+    const tail = index === 0 ? "" : "\n";
+    const empty = `${JSON.stringify(record)}${tail}`;
+    after.focus = "界" + "x".repeat(PLAN_HISTORY_FILE_LIMIT - 16 * 1024 - Buffer.byteLength(empty) - 3);
+    const bytes = Buffer.from(`${JSON.stringify(record)}${tail}`);
+    fs.writeFileSync(path.join(active, file), bytes);
+    digests.push(planHistoryFileDigest(file, bytes));
+  }
+  fs.writeFileSync(planFile, JSON.stringify(setPlanHistoryCommitmentFromDigests(raw, digests)));
+  return { rolesRoot, roleDir, writers, readers, plan, digests, noteHash };
+}
+
+test("canonical writes cross the old total with intact history, CAS and recoverable archive", { timeout: 90_000 }, async t => {
+  const f = fullPlanFixture(t, 6);
+  const { roleDir, plan, writers, readers } = f;
+  const original = readPlanStoragePackageSnapshot(roleDir, plan.id, "active");
+  assert.ok(original.files.reduce((total, file) => total + file.size, 0) < 96 * 1024 * 1024);
+  const expectedRevision = storageInventoryRevisionToken(original.inventoryHash);
+  const patch = { title: "Updated large plan" };
+  const competitor = new ManagerStorageMutationPool({ rolesRoot: f.rolesRoot, applicationGenerationId: "other-capacity-app",
+    managerInstanceId: "other-capacity-manager", timeoutMs: 30_000 });
+  t.after(() => competitor.stop());
+  const results = await Promise.allSettled([
+    writers.updatePlan("Fixture", plan.id, patch, { expectedRevision, idempotencyKey: "capacity-update-one" }),
+    competitor.updatePlan("Fixture", plan.id, patch, { expectedRevision, idempotencyKey: "capacity-update-two" })
+  ]);
+  const successful = results.filter(result => result.status === "fulfilled");
+  const rejected = results.filter(result => result.status === "rejected");
+  assert.equal(successful.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0]!.reason instanceof ManagerStorageMutationError);
+  assert.equal(rejected[0]!.reason.code, "revision_conflict");
+  assert.equal(successful[0]!.value.title, patch.title);
+  const options = { expectedRevision, idempotencyKey: successful[0]!.value.storageMutationRequestId! };
+  assert.equal((await writers.updatePlan("Fixture", plan.id, patch, options)).storageMutationRequestId, options.idempotencyKey);
+  await assert.rejects(writers.updatePlan("Fixture", plan.id, patch, { expectedRevision, idempotencyKey: "stale-capacity-update" }),
+    error => error instanceof ManagerStorageMutationError && error.code === "revision_conflict");
+  const after = readPlanStoragePackageSnapshot(roleDir, plan.id, "active");
+  assert.ok(after.files.reduce((total, file) => total + file.size, 0) > 96 * 1024 * 1024);
+  assert.equal(await readPlanStorageInventoryHash(roleDir, plan.id, "active"), after.inventoryHash);
+  assert.deepEqual(after.files.filter(file => isPlanHistoryPath(file.path)).slice(0, 6).map(file => [file.path, file.sha256]),
+    f.digests.map(file => [file.path, file.sha256]));
+  withPlanStorageLease(roleDir, plan.id, lease => commitPlanStorageTransactionUnderLease(lease, {
+    transactionId: "capacity-feedback", kind: "plan-feedback",
+    operations: [{ type: "replace-file", relativePath: "feedback.jsonl", content: Buffer.from('{"fixture":true}\n') }]
+  }));
+  const history = await readers.run<{ records: PlanHistoryRecord[] }>({ type: "role_plan_history", roleDir, planId: plan.id });
+  assert.equal(history.records.length, 7);
+  assert.equal(history.records[0]?.after.attachments[0]?.sha256, f.noteHash);
+  assert.equal(history.records.at(-1)?.after.storageMutationRequestId, options.idempotencyKey);
+  const rename = fs.renameSync;
+  const publication = t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+    if (path.basename(String(from)) === "payload" && String(to).includes(`${path.sep}archive${path.sep}`)) {
+      throw new Error("fixture interrupted archive publication");
+    }
+    rename(from, to);
+  });
+  try {
+    assert.throws(() => updatePlan(roleDir, plan.id, { archiveStatus: "已归档", activationStatus: "已归档" }),
+      /fixture interrupted archive publication/);
+  } finally {
+    publication.mock.restore();
+  }
+  const recovered = recoverPlanLifecycleTransitions(roleDir, { planId: plan.id });
+  assert.deepEqual(recovered.failures, []);
+  assert.equal(recovered.results.length, 1);
+  const archived = readPlanStoragePackage(roleDir, plan.id, "archive");
+  assert.equal(archived.files.find(file => file.path === "attachments/proof.txt")?.sha256, f.noteHash);
+  const records = listPlanHistory(roleDir, plan.id);
+  assert.deepEqual(records.slice(0, 6).map(record => record.id), history.records.slice(0, 6).map(record => record.id));
+  assert.deepEqual(records.slice(0, 6).map(record => record.after.focus), history.records.slice(0, 6).map(record => record.after.focus));
+  assert.match(records[0]!.after.attachments[0]!.path, /[\\/]archive[\\/]/);
+  assert.equal(records[0]!.after.attachments[0]!.sha256, f.noteHash);
+  assert.equal(records.at(-1)?.kind, "archived");
+});
+
+test("a full independent history budget is a terminal pre-WAL rejection", { timeout: 45_000 }, async t => {
+  const { roleDir, plan, writers } = fullPlanFixture(t, 8);
+  const before = readPlanStoragePackageSnapshot(roleDir, plan.id, "active");
+  const wal = path.join(roleDir, "plans", "quarantine", "plan-storage-lifecycle-transactions", plan.id);
+  const transactions = fs.readdirSync(wal);
+  const patch = { title: "Over the finite history budget", focus: "q".repeat(128 * 1024) };
+  const options = { expectedRevision: storageInventoryRevisionToken(before.inventoryHash), idempotencyKey: "over-history-capacity" };
+  await assert.rejects(writers.updatePlan("Fixture", plan.id, patch, options),
+    error => error instanceof ManagerStorageMutationError && error.code === "validation_rejected"
+      && /128 MiB/.test(error.message));
+  const receipt = await writers.reconcilePlanUpdateReceipt("Fixture", plan.id, patch, options);
+  assert.equal(receipt.operationState, "failed");
+  assert.equal(receipt.commitState, "not_committed");
+  assert.equal(readPlanStoragePackageSnapshot(roleDir, plan.id, "active").inventoryHash, before.inventoryHash);
+  assert.deepEqual(fs.readdirSync(wal), transactions);
+});
 
 test("committed history rejects loss or alteration of the terminal shard", async (t) => {
   const { roleDir, active, archive } = fixture(t);

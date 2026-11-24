@@ -711,7 +711,9 @@ POST /api/roles/:roleId/plans/:planId/feedback
 
 ## 计划版本留痕
 
-计划 JSON 保存当前状态；每次创建、更新和归档都追加一次完整计划快照。历史从同一计划目录的 `history.jsonl` 开始，达到单文件容量后按追加顺序轮转到 `history/000001.jsonl`、`history/000002.jsonl` 等连续编号文件；读取时按这一顺序合并，旧计划仅有 `history.jsonl` 时继续正常读取。普通轮转只改变物理存放位置，不是计划归档、记忆沉淀或删除；普通轮转保留旧文件字节，不重新序列化旧记录。目录归档或旧名称迁移需要改写历史中的受管绝对路径，此时按完整记录重新分卷，保序且不丢记录；名称迁移预先暂存改写结果并留有恢复回执，中断后从暂存结果恢复，不从部分改写的文件重新生成。每个文件上限为 16 MiB，整个计划包上限为 96 MiB；超过包总限仍会拒绝写入，分卷不会放宽总限。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
+计划 JSON 保存当前状态。每次创建、更新和归档都追加完整快照，保留当时的步骤、审批合同、状态和时间。历史从 `history.jsonl` 开始，达到单文件容量后按追加顺序轮转到 `history/000001.jsonl`、`history/000002.jsonl` 等连续编号文件。读取按同一顺序返回完整记录，兼容只有 `history.jsonl` 的旧计划。普通写入在原计划租约下逐片核对并暂存未变文件，以原包 SHA-256 校验发布。归档和旧名称迁移转换历史中的受管绝对路径，按完整记录重新分卷，保留顺序、正文和附件 SHA。中断后由原存储事务使用已验证的暂存文件恢复。
+
+本机计划生命周期与反馈写入共享固定的容量校验。每个文件限 16 MiB，每个计划限 4,096 个文件，正文、附件和其它普通文件合计限 96 MiB，规范历史分片合计限 128 MiB。超过预算的写入在事务开始前明确拒绝，原计划仍可读取完整历史和附件。归档中断时，由原存储维护任务核对清单 SHA，恢复已准备的归档事务。旧整包同步和导入已退役，已准备的旧整包事务按原 96 MiB 总量合同恢复。
 
 ```http
 GET /api/roles/:roleId/plans/:planId/history
@@ -785,7 +787,7 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶�
 
 计划状态配置决定是否允许 `currentStepId`。转入 `currentStep=forbidden` 的完成状态时，PATCH 必须显式传 `currentStepId: null`；历史步骤可保留，不能把人工完成虚构成所有历史步骤都执行过。
 
-写入前的计划内容校验返回 HTTP 400、`state=invalid_request`、`commitState=not_started` 和具体原因；带幂等键的请求同时返回 `retry=correct_request_with_new_idempotency_key`。调用方确认拒绝后修正内容，使用新幂等键提交；不要无限重试旧内容。真实超时、进程丢失或提交结果无法证明时仍返回结果不确定，只能回读并使用原键和原内容恢复。历史上被误判为不确定的校验失败，可用原请求重放：存储拥有者先恢复事务、核对未变更的版本，再把确定拒绝写成终态回执；不得手改回执。
+写入前的计划内容和容量校验返回 HTTP 400、`state=invalid_request`、`commitState=not_started` 和具体原因。带幂等键的请求同时返回 `retry=correct_request_with_new_idempotency_key`。调用方确认拒绝后修正内容，使用新幂等键提交。超时、进程丢失或结果无法证明时，使用原键和原内容对账。原执行拥有者若已退出本次领域操作，可在原回执中保存与执行身份绑定的结束证据。旧回执缺少可信结束或提交证据时保留不确定状态。
 
 单计划写入的版本检查按规范存储位置定位目标计划，不读取全角色计划列表。当前存储写入池仍是一个有界串行队列（默认最多等待 32 项），不是无限并行写入；队列满时拒绝新增工作。客户端应限制在途请求、对临时繁忙退避，独立 GET 可使用有界并发。跨角色写入分片和批量接口需要另行验证锁、generation 隔离、过载公平性及 p95/p99 延迟后再启用。
 
@@ -821,6 +823,6 @@ Content-Type: application/json
 
 actor 使用原存储请求中的精确值。正常 HTTP 请求省略 messageSource 时，原解析结果为 `{kind: "unknown"}`。明确声明过来源的原请求继续保留当时的 actor，避免从当前已改名会话重新生成旧记录。
 
-响应的 `state: completed` 表示回执已终结。`operationState: succeeded` 与 `commitState: committed` 返回原成功结果。`operationState: failed` 与 `commitState: not_committed` 表示原操作已确证在提交前结束，结果带 `retryable: false`。相同原 key 继续读取这个终态。原正常 PATCH 若遇这个终态，返回 HTTP 409、`aborted_before_commit` 和 `not_committed`。
+响应的 `state: completed` 表示回执已终结。`operationState: succeeded` 与 `commitState: committed` 返回原成功结果。`operationState: failed` 与 `commitState: not_committed` 表示原操作已确证在提交前结束，结果带 `retryable: false`。相同原 key 继续读取这个终态。原 PATCH 重读已确认的提交前中止时返回 HTTP 409、`aborted_before_commit` 和 `not_committed`，重读确定的校验拒绝时返回原拒绝原因。
 
-活动执行返回 in_progress，prepared WAL 或证明不足返回 uncertain，payload 不匹配返回 conflict。该操作只更新已有 receipt，原计划、附件、历史、WAL 与临时 candidate 保留。需要继续恢复 prepared 事务时，由原存储维护任务处理该具体事务。
+活动执行返回 `in_progress`，已准备的 WAL 或证明不足返回 `uncertain`，原正文不匹配返回 `conflict`。同键 PATCH 读取或证明原结果，缺少证据时保留 `uncertain`。只有原提交证据，或者可信的执行结束证据与原版本、WAL 一致性核对，才会收口已有回执。需要继续恢复已准备事务时，由原存储维护任务处理该事务。

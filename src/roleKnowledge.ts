@@ -48,7 +48,7 @@ import {
   assertPlanStoragePackageRecoveryReady, assertPlanStoragePackageRecoveryReadyAsync,
   assertPlanStoragePackageRecoverySnapshot, PlanStoragePackageRecoveryPendingError, type PlanPackageRecoverySnapshot
 } from "./planStoragePackageFence.js";
-import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, readPlanHistoryDirectory, readPlanHistoryDirectoryAsync, setPlanHistoryCommitment, validatePlanHistoryCommitment, planHistoryTransactionFence, planHistoryTransactionFenceAsync, PLAN_HISTORY_FILE_LIMIT } from "./planHistoryShards.js";
+import { appendPlanHistoryRecord, isPlanHistoryPath, orderedPlanHistoryPaths, preparePlanHistoryAppend, readPlanHistoryDigestsAsync, setPlanHistoryCommitment, setPlanHistoryCommitmentFromDigests, validatePlanHistoryCommitmentDigests, visitPlanHistoryDirectory, planHistoryTransactionFence, planHistoryTransactionFenceAsync, PLAN_HISTORY_FILE_LIMIT, PlanStorageCapacityError } from "./planHistoryShards.js";
 import {
   memoryStorageCaseFold,
   memoryStorageCollisionKey,
@@ -1768,19 +1768,17 @@ function planFile(roleDir: string, plan: PlanItem): string {
   return planJsonFile(roleDir, plan.id, planBucketForArchiveStatus(plan.archiveStatus));
 }
 
-function planHistoryFileContents(roleDir: string, planId: string): Buffer[] {
+function visitPlanHistoryContents(roleDir: string, planId: string, visit: (content: Buffer) => void): void {
   const fence = planHistoryTransactionFence(roleDir, planId);
-  const result = (["active", "archive"] as const).flatMap(bucket => {
+  for (const bucket of ["active", "archive"] as const) {
     const directory = planDirectory(roleDir, planId, bucket);
-    const files = readPlanHistoryDirectory(directory);
-    if (files.size || fs.existsSync(path.join(directory, "plan.json"))) {
+    const files = visitPlanHistoryDirectory(directory, (_file, content) => visit(content));
+    if (files.length || fs.existsSync(path.join(directory, "plan.json"))) {
       const plan = JSON.parse(fs.readFileSync(path.join(directory, "plan.json"), "utf8")) as Record<string, unknown>;
-      validatePlanHistoryCommitment(plan, files);
+      validatePlanHistoryCommitmentDigests(plan, files);
     }
-    return orderedPlanHistoryPaths(files.keys()).map(relative => files.get(relative)!);
-  });
+  }
   if (planHistoryTransactionFence(roleDir, planId) !== fence) throw new Error(`Plan history transaction changed during read: ${planId}`);
-  return result;
 }
 
 function planLifecycleTransactionId(kind: "plan-create" | "plan-update" | "plan-archive", ...identity: string[]): string {
@@ -1814,7 +1812,7 @@ function createPlanHistoryRecord(before: PlanItem | undefined, after: PlanItem, 
 export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRecord[] {
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const records = new Map<string, PlanHistoryRecord>();
-  for (const content of planHistoryFileContents(roleDir, canonicalPlanId)) {
+  visitPlanHistoryContents(roleDir, canonicalPlanId, content => {
     for (const line of content.toString("utf8").split(/\r?\n/).filter(Boolean)) {
       try {
         const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
@@ -1833,7 +1831,7 @@ export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRec
         // A damaged audit line must not hide later valid history entries.
       }
     }
-  }
+  });
   return [...records.values()];
 }
 
@@ -2000,7 +1998,7 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
       if (raw?.historyCommitment !== undefined) {
         try {
           const id = canonicalLogicalPlanId(raw.id), fence = planHistoryTransactionFence(roleDir, id);
-          validatePlanHistoryCommitment(raw, readPlanHistoryDirectory(path.dirname(filePath)));
+          validatePlanHistoryCommitmentDigests(raw, visitPlanHistoryDirectory(path.dirname(filePath)));
           if (planHistoryTransactionFence(roleDir, id) !== fence) throw new Error("Plan changed during feedback transaction.");
         } catch (error) {
           diagnostic = { code: "invalid_plan_record", file: path.relative(roleDir, filePath).replaceAll(path.sep, "/"),
@@ -2160,7 +2158,7 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
       const roleDir = path.dirname(path.dirname(path.dirname(path.dirname(filePath))));
       try {
         const id = canonicalLogicalPlanId(raw.id), fence = await planHistoryTransactionFenceAsync(roleDir, id);
-        validatePlanHistoryCommitment(raw, await readPlanHistoryDirectoryAsync(path.dirname(filePath)));
+        validatePlanHistoryCommitmentDigests(raw, await readPlanHistoryDigestsAsync(path.dirname(filePath)));
         if (await planHistoryTransactionFenceAsync(roleDir, id) !== fence) throw new Error("Plan changed during feedback transaction.");
       } catch (error) {
         diagnostic = { code: "invalid_plan_record", file: path.relative(roleDir, filePath).replaceAll(path.sep, "/"),
@@ -2462,17 +2460,17 @@ function planRecordFromFile(filePath: string, planId: string): PlanRecord | null
 }
 
 function verifyPointPlanHistory(record: PlanRecord): void {
-  const files = readPlanHistoryDirectory(path.dirname(record.filePath));
+  const files = visitPlanHistoryDirectory(path.dirname(record.filePath));
   const raw = readJson<Record<string, unknown>>(record.filePath);
   if (!raw || raw.id !== record.plan.id) throw new Error(`Plan changed during history verification: ${record.plan.id}`);
-  validatePlanHistoryCommitment(raw, files);
+  validatePlanHistoryCommitmentDigests(raw, files);
 }
 
 async function verifyPointPlanHistoryAsync(record: PlanRecord, signal?: AbortSignal): Promise<void> {
-  const files = await readPlanHistoryDirectoryAsync(path.dirname(record.filePath), signal);
+  const files = await readPlanHistoryDigestsAsync(path.dirname(record.filePath), signal);
   const raw = record.historyRaw ?? JSON.parse(await fs.promises.readFile(record.filePath, { encoding: "utf8", signal })) as Record<string, unknown>;
   if (raw.id !== record.plan.id) throw new Error(`Plan changed during history verification: ${record.plan.id}`);
-  validatePlanHistoryCommitment(raw, files);
+  validatePlanHistoryCommitmentDigests(raw, files);
 }
 
 function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
@@ -3793,7 +3791,7 @@ function remapPreparedPlanAttachments(
 }
 
 function planStoragePackageFile(filePath: string, content: string | Buffer): PlanStoragePackageFile {
-  const body = Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(content, "utf8");
+  const body = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
   return {
     path: filePath.replace(/\\/g, "/"),
     size: body.byteLength,
@@ -3803,7 +3801,8 @@ function planStoragePackageFile(filePath: string, content: string | Buffer): Pla
 }
 
 function planStoragePackageMap(files: PlanStoragePackageFile[]): Map<string, Buffer> {
-  return new Map(files.map((file) => [file.path.replace(/\\/g, "/"), Buffer.from(file.content)]));
+  return new Map(files.filter(file => !isPlanHistoryPath(file.path))
+    .map(file => [file.path, file.content]));
 }
 
 function planStoragePackageFiles(files: Map<string, Buffer>): PlanStoragePackageFile[] {
@@ -3812,8 +3811,29 @@ function planStoragePackageFiles(files: Map<string, Buffer>): PlanStoragePackage
     .map(([filePath, content]) => planStoragePackageFile(filePath, content));
 }
 
+function appendLifecyclePlanHistory(
+  files: Map<string, Buffer>, existingHistory: PlanStoragePackageFile[],
+  plan: PlanItem, record: PlanHistoryRecord
+): PlanStoragePackageFile[] {
+  const retained = new Map(existingHistory.map(file => [file.path, file]));
+  for (const [filePath, content] of files) {
+    if (isPlanHistoryPath(filePath)) retained.set(filePath, planStoragePackageFile(filePath, content));
+  }
+  const changed = preparePlanHistoryAppend([...retained.values()], record);
+  retained.set(changed.path, planStoragePackageFile(changed.path, changed.content));
+  const committed = setPlanHistoryCommitmentFromDigests(plan as unknown as Record<string, unknown>,
+    [...retained.values()].map(file => ({ path: file.path, bytes: file.size, sha256: file.sha256 })));
+  const current = planStoragePackageFile("plan.json", `${JSON.stringify(committed, null, 2)}\n`);
+  return [
+    ...planStoragePackageFiles(new Map([...files].filter(([filePath]) => filePath !== "plan.json" && !isPlanHistoryPath(filePath)))),
+    ...retained.values(),
+    current
+  ];
+}
+
 function remapPlanStoragePackage(
   files: Map<string, Buffer>,
+  history: PlanStoragePackageFile[],
   roleDir: string,
   planId: string,
   fromBucket: PlanStorageBucket,
@@ -3822,38 +3842,32 @@ function remapPlanStoragePackage(
   const source = planDirectory(roleDir, planId, fromBucket);
   const destination = planDirectory(roleDir, planId, toBucket);
   const mappings = [{ from: source, to: destination }];
-  for (const filePath of [...orderedPlanHistoryPaths(files.keys()), "feedback.jsonl"]) {
-    const content = files.get(filePath);
-    if (content) files.set(filePath, rewriteJsonlContent(content, mappings));
-  }
+  const feedback = files.get("feedback.jsonl");
+  if (feedback) files.set("feedback.jsonl", rewriteJsonlContent(feedback, mappings));
   // A longer destination path can grow each serialized audit row. Repartition
   // complete rows inside the Repository transaction, never truncate an old row.
-  const historyPaths = orderedPlanHistoryPaths(files.keys());
-  const rows: string[] = [];
-  let previousEndedWithNewline = true;
-  for (const relativePath of historyPaths) {
-    const content = files.get(relativePath)!.toString("utf8");
-    if (!previousEndedWithNewline && rows.length) rows[rows.length - 1] += "\n";
-    rows.push(...content.split(/(?<=\n)/).filter(Boolean));
-    previousEndedWithNewline = content.endsWith("\n");
-  }
+  const byPath = new Map(history.map(file => [file.path, file]));
+  const historyPaths = orderedPlanHistoryPaths(byPath.keys());
   const shards: Buffer[] = [];
   let current: Buffer[] = [];
   let size = 0;
-  for (const text of rows) {
-    const row = Buffer.from(text, "utf8");
-    if (row.byteLength > PLAN_HISTORY_FILE_LIMIT) throw new Error("Plan history record exceeds the per-file limit after path migration.");
-    if (size + row.byteLength > PLAN_HISTORY_FILE_LIMIT) {
-      shards.push(Buffer.concat(current));
-      current = [];
-      size = 0;
+  for (const [index, relativePath] of historyPaths.entries()) {
+    const rewritten = rewriteJsonlContent(byPath.get(relativePath)!.content, mappings).toString("utf8");
+    for (const text of rewritten.split(/(?<=\n)/).filter(Boolean)) {
+      const needsSeparator = index < historyPaths.length - 1 && !text.endsWith("\n");
+      const row = Buffer.from(needsSeparator ? `${text}\n` : text, "utf8");
+      if (row.byteLength > PLAN_HISTORY_FILE_LIMIT) throw new PlanStorageCapacityError("Plan history record exceeds the per-file limit after path migration.");
+      if (size + row.byteLength > PLAN_HISTORY_FILE_LIMIT) {
+        shards.push(Buffer.concat(current, size));
+        current = [];
+        size = 0;
+      }
+      current.push(row);
+      size += row.byteLength;
     }
-    current.push(row);
-    size += row.byteLength;
   }
-  if (current.length) shards.push(Buffer.concat(current));
-  if (shards.length > 1_000_000) throw new Error("Plan history shard capacity exceeded after path migration.");
-  for (const relativePath of historyPaths) files.delete(relativePath);
+  if (current.length) shards.push(Buffer.concat(current, size));
+  if (shards.length > 1_000_000) throw new PlanStorageCapacityError("Plan history shard capacity exceeded after path migration.");
   shards.forEach((content, index) => {
     const relativePath = index === 0 ? "history.jsonl" : `history/${String(index).padStart(6, "0")}.jsonl`;
     files.set(relativePath, content);
@@ -3955,10 +3969,12 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
           storageRevision: createStorageRevision()
         }, normalized.id);
         if (!next) throw new Error("Canonical status migration produced an invalid plan.");
-        const files = planStoragePackageMap(sourcePackage.files);
         const destinationBucket = planBucketForArchiveStatus(next.archiveStatus);
+        const sameBucket = destinationBucket === sourcePackage.bucket;
+        const files = planStoragePackageMap(sourcePackage.files);
+        const sourceHistory = sourcePackage.files.filter(file => isPlanHistoryPath(file.path));
         if (destinationBucket !== sourcePackage.bucket) {
-          remapPlanStoragePackage(files, roleDir, next.id, sourcePackage.bucket, destinationBucket);
+          remapPlanStoragePackage(files, sourceHistory, roleDir, next.id, sourcePackage.bucket, destinationBucket);
           next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, sourcePackage.bucket, destinationBucket);
         }
         if (next.activationStatus === "已归档" && !next.archivedAt) next.archivedAt = recordedAt;
@@ -3967,15 +3983,13 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
           to: planDirectory(roleDir, next.id, destinationBucket)
         }]);
         const history = createPlanHistoryRecord(historyBefore as unknown as PlanItem, next);
-        appendPlanHistoryRecord(files, history);
-        files.set("plan.json", Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(next as unknown as Record<string, unknown>, files), null, 2)}\n`, "utf8"));
         commitPlanLifecycleTransitionUnderLease(lease, {
           transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v3", sourcePackage.inventoryHash),
           kind: destinationBucket === sourcePackage.bucket ? "plan-update" : "plan-archive",
           fromBucket: sourcePackage.bucket,
           toBucket: destinationBucket,
           expectedSourceInventoryHash: sourcePackage.inventoryHash,
-          files: planStoragePackageFiles(files)
+          files: appendLifecyclePlanHistory(files, sameBucket ? sourceHistory : [], next, history)
         });
         result.migrated += 1;
       });
@@ -4111,7 +4125,9 @@ export function updatePlanPrepared(
     if (sourcePackage.bucket !== currentBucket) {
       throw new Error(`Plan storage bucket changed while updating: ${canonicalPlanId}`);
     }
+    const sameBucket = currentBucket === destinationBucket;
     const files = planStoragePackageMap(sourcePackage.files);
+    const sourceHistory = sourcePackage.files.filter(file => isPlanHistoryPath(file.path));
     let preparedAttachments: PreparedPlanAttachment[] | undefined;
     if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {
       preparedAttachments = preparePlanAttachments(
@@ -4123,7 +4139,7 @@ export function updatePlanPrepared(
       );
     }
     if (currentBucket !== destinationBucket) {
-      remapPlanStoragePackage(files, roleDir, next.id, currentBucket, destinationBucket);
+      remapPlanStoragePackage(files, sourceHistory, roleDir, next.id, currentBucket, destinationBucket);
       next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, currentBucket, destinationBucket);
       if (preparedAttachments) {
         preparedAttachments = remapPreparedPlanAttachments(
@@ -4144,8 +4160,6 @@ export function updatePlanPrepared(
     }
     const { historyCommitment: _historyCommitment, ...storedBefore } = JSON.parse(sourcePackage.files.find((file) => file.path === "plan.json")?.content.toString("utf8") || "{}") as PlanItem & { historyCommitment?: unknown };
     const historyRecord = preparation.projectHistory({ roleDir, sourcePlan: storedBefore, next, currentBucket, destinationBucket, mutation });
-    appendPlanHistoryRecord(files, historyRecord);
-    files.set("plan.json", Buffer.from(`${JSON.stringify(setPlanHistoryCommitment(next as unknown as Record<string, unknown>, files), null, 2)}\n`, "utf8"));
     commitPlanLifecycleTransitionUnderLease(lease, {
       transactionId: planLifecycleTransactionId(
         currentBucket === destinationBucket ? "plan-update" : "plan-archive",
@@ -4157,7 +4171,7 @@ export function updatePlanPrepared(
       fromBucket: currentBucket,
       toBucket: destinationBucket,
       expectedSourceInventoryHash: sourcePackage.inventoryHash,
-      files: planStoragePackageFiles(files)
+      files: appendLifecyclePlanHistory(files, sameBucket ? sourceHistory : [], next, historyRecord)
     });
     const destination = planFile(roleDir, next);
     updatePlanListCacheAfterWrite(

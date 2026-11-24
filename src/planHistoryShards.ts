@@ -7,10 +7,18 @@ import { atomicWriteFileSync } from "./shared/filePersistence.js";
 // Physical rotation only: plan archival remains a separate lifecycle operation.
 export const PLAN_HISTORY_FILE = "history.jsonl";
 export const PLAN_HISTORY_FILE_LIMIT = 16 * 1024 * 1024;
+/** Definitive capacity rejection, raised during pre-publication validation. */
+export class PlanStorageCapacityError extends Error {}
 const SHARD_NAME = /^history\/(\d{6})\.jsonl$/;
+type HistoryFileDigest = { path: string; bytes: number; sha256: string };
+type HistorySource = { path: string; content: Buffer };
 
 export function isPlanHistoryPath(relativePath: string): boolean {
   return relativePath === PLAN_HISTORY_FILE || relativePath.startsWith("history/");
+}
+
+export function planHistoryFileDigest(path: string, content: Buffer): HistoryFileDigest {
+  return { path, bytes: content.byteLength, sha256: createHash("sha256").update(content).digest("hex") };
 }
 
 /** Return physical files in append order, refusing gaps and unknown files in the reserved directory. */
@@ -34,12 +42,18 @@ export function orderedPlanHistoryPaths(paths: Iterable<string>): string[] {
 
 /** The envelope belongs to storage, not to the plan's audit snapshots. */
 export function setPlanHistoryCommitment(plan: Record<string, unknown>, files: Map<string, Buffer>): Record<string, unknown> {
-  const paths = orderedPlanHistoryPaths(files.keys());
+  const shards = [...files].filter(([file]) => isPlanHistoryPath(file)).map(([file, content]) => planHistoryFileDigest(file, content));
+  return setPlanHistoryCommitmentFromDigests(plan, shards);
+}
+
+export function setPlanHistoryCommitmentFromDigests(plan: Record<string, unknown>, files: HistoryFileDigest[]): Record<string, unknown> {
+  const byPath = new Map(files.map(file => [file.path, file]));
+  const paths = orderedPlanHistoryPaths(byPath.keys());
   if (!paths.length) throw new Error("Plan history commitment requires a base file.");
   const shards = paths.map(file => {
-    const content = files.get(file)!;
-    if (!content.byteLength) throw new Error(`Plan history file is empty: ${file}`);
-    return { path: file, bytes: content.byteLength, sha256: createHash("sha256").update(content).digest("hex") };
+    const digest = byPath.get(file)!;
+    if (!digest.bytes) throw new Error(`Plan history file is empty: ${file}`);
+    return digest;
   });
   const { historyCommitment: _previous, ...body } = plan;
   return { ...body, historyCommitment: { schemaVersion: 1, shards } };
@@ -47,6 +61,12 @@ export function setPlanHistoryCommitment(plan: Record<string, unknown>, files: M
 
 export function validatePlanHistoryCommitment(plan: Record<string, unknown>, files: Map<string, Buffer>): void {
   const paths = orderedPlanHistoryPaths(files.keys());
+  validatePlanHistoryCommitmentDigests(plan, paths.map(file => planHistoryFileDigest(file, files.get(file)!)));
+}
+
+export function validatePlanHistoryCommitmentDigests(plan: Record<string, unknown>, files: HistoryFileDigest[]): void {
+  const byPath = new Map(files.map(file => [file.path, file]));
+  const paths = orderedPlanHistoryPaths(byPath.keys());
   const value = plan.historyCommitment;
   // Old uncommitted data has no promise to verify; do not invent one on reads.
   if (value === undefined) return;
@@ -61,8 +81,8 @@ export function validatePlanHistoryCommitment(plan: Record<string, unknown>, fil
       || typeof shard.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(shard.sha256)) {
       throw new Error(`Plan history commitment metadata mismatch: ${file}`);
     }
-    const bytes = files.get(file)!;
-    if (bytes.byteLength !== shard.bytes || createHash("sha256").update(bytes).digest("hex") !== shard.sha256) {
+    const actual = byPath.get(file)!;
+    if (actual.bytes !== shard.bytes || actual.sha256 !== shard.sha256) {
       throw new Error(`Plan history commitment bytes or hash mismatch: ${file}`);
     }
   }
@@ -82,20 +102,29 @@ export function readPlanHistoryBytes(files: Map<string, Buffer>): Buffer {
 }
 
 export function appendPlanHistoryRecord(files: Map<string, Buffer>, record: unknown): void {
+  const history = [...files.keys()].filter(isPlanHistoryPath).map(path => ({
+    path, get content() { return files.get(path)!; }
+  }));
+  const changed = preparePlanHistoryAppend(history, record);
+  files.set(changed.path, changed.content);
+}
+
+/** Read the current tail at most once, leaving all earlier bytes untouched. */
+export function preparePlanHistoryAppend(files: readonly HistorySource[], record: unknown): HistorySource {
   const row = Buffer.from(`${JSON.stringify(record)}\n`, "utf8");
-  if (row.byteLength > PLAN_HISTORY_FILE_LIMIT) throw new Error("Plan history record exceeds the per-file limit.");
-  const paths = orderedPlanHistoryPaths(files.keys());
+  if (row.byteLength > PLAN_HISTORY_FILE_LIMIT) throw new PlanStorageCapacityError("Plan history record exceeds the per-file limit.");
+  const byPath = new Map(files.map(file => [file.path, file]));
+  const paths = orderedPlanHistoryPaths(byPath.keys());
   const latest = paths.at(-1) ?? PLAN_HISTORY_FILE;
-  const current = files.get(latest) ?? Buffer.alloc(0);
+  const current = byPath.get(latest)?.content ?? Buffer.alloc(0);
   const separator = current.byteLength && current.at(-1) !== 10 ? Buffer.from("\n") : Buffer.alloc(0);
   if (current.byteLength + separator.byteLength + row.byteLength <= PLAN_HISTORY_FILE_LIMIT) {
-    files.set(latest, Buffer.concat([current, separator, row]));
-    return;
+    return { path: latest, content: Buffer.concat([current, separator, row]) };
   }
   if (!current.byteLength) throw new Error("Plan history base must contain a complete record.");
   const next = `history/${String(paths.length).padStart(6, "0")}.jsonl`;
-  if (paths.length > 999999 || files.has(next)) throw new Error("Plan history shard capacity exceeded.");
-  files.set(next, row);
+  if (paths.length > 999999 || byPath.has(next)) throw new PlanStorageCapacityError("Plan history shard capacity exceeded.");
+  return { path: next, content: row };
 }
 
 function existingHistoryEntry(location: string): fs.Stats | undefined {
@@ -119,43 +148,60 @@ function existingHistoryEntry(location: string): fs.Stats | undefined {
 }
 
 export async function readPlanHistoryDirectoryAsync(directory: string, signal?: AbortSignal): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>();
+  await readPlanHistoryDigestsAsync(directory, signal, (file, content) => files.set(file, content));
+  return files;
+}
+
+export async function readPlanHistoryDigestsAsync(
+  directory: string, signal?: AbortSignal, visit?: (file: string, content: Buffer) => void
+): Promise<HistoryFileDigest[]> {
   const stat = async (file: string) => {
     try { return await fs.promises.lstat(file); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   };
   signal?.throwIfAborted();
-  const files = new Map<string, Buffer>();
+  const paths: string[] = [];
   const owner = await stat(directory);
-  if (!owner) return files;
+  if (!owner) return [];
   if (!owner.isDirectory()) throw new Error(`Invalid plan history owner directory: ${directory}`);
   const base = path.join(directory, PLAN_HISTORY_FILE), baseEntry = await stat(base);
   if (baseEntry) {
     if (!baseEntry.isFile()) throw new Error(`Invalid plan history base: ${base}`);
-    files.set(PLAN_HISTORY_FILE, await fs.promises.readFile(base, { signal }));
+    paths.push(PLAN_HISTORY_FILE);
   }
   const shards = path.join(directory, "history"), shardEntry = await stat(shards);
   if (shardEntry) {
     if (!shardEntry.isDirectory()) throw new Error(`Invalid plan history directory: ${shards}`);
     for (const entry of await fs.promises.readdir(shards, { withFileTypes: true })) {
       if (!entry.isFile()) throw new Error(`Invalid plan history shard: ${entry.name}`);
-      files.set(`history/${entry.name}`, await fs.promises.readFile(path.join(shards, entry.name), { signal }));
+      paths.push(`history/${entry.name}`);
     }
   }
-  signal?.throwIfAborted();
-  orderedPlanHistoryPaths(files.keys());
-  return files;
+  const digests: HistoryFileDigest[] = [];
+  for (const file of orderedPlanHistoryPaths(paths)) {
+    signal?.throwIfAborted();
+    const content = await fs.promises.readFile(path.join(directory, file), { signal });
+    digests.push(planHistoryFileDigest(file, content));
+    visit?.(file, content);
+  }
+  return digests;
 }
 
 export function readPlanHistoryDirectory(directory: string): Map<string, Buffer> {
-  const files = new Map<string, Buffer>();
+  return new Map(planHistoryDirectoryPaths(directory).map(file => [file, fs.readFileSync(path.join(directory, file))]));
+}
+
+function planHistoryDirectoryPaths(directory: string): string[] {
+  const paths: string[] = [];
   const owner = existingHistoryEntry(directory);
   if (owner && !owner.isDirectory()) throw new Error(`Invalid plan history owner directory: ${directory}`);
-  if (!owner) return files;
+  if (!owner) return [];
   const base = path.join(directory, PLAN_HISTORY_FILE);
   const baseEntry = existingHistoryEntry(base);
   if (baseEntry) {
     if (!baseEntry.isFile()) throw new Error(`Invalid plan history base: ${base}`);
-    files.set(PLAN_HISTORY_FILE, fs.readFileSync(base));
+    paths.push(PLAN_HISTORY_FILE);
   }
   const shardDirectory = path.join(directory, "history");
   const shardEntry = existingHistoryEntry(shardDirectory);
@@ -163,11 +209,18 @@ export function readPlanHistoryDirectory(directory: string): Map<string, Buffer>
     if (!shardEntry.isDirectory()) throw new Error(`Invalid plan history directory: ${shardDirectory}`);
     for (const entry of fs.readdirSync(shardDirectory, { withFileTypes: true })) {
       if (!entry.isFile()) throw new Error(`Invalid plan history shard: ${entry.name}`);
-      files.set(`history/${entry.name}`, fs.readFileSync(path.join(shardDirectory, entry.name)));
+      paths.push(`history/${entry.name}`);
     }
   }
-  orderedPlanHistoryPaths(files.keys());
-  return files;
+  return orderedPlanHistoryPaths(paths);
+}
+
+export function visitPlanHistoryDirectory(directory: string, visit?: (file: string, content: Buffer) => void): HistoryFileDigest[] {
+  return planHistoryDirectoryPaths(directory).map(file => {
+    const content = fs.readFileSync(path.join(directory, file));
+    visit?.(file, content);
+    return planHistoryFileDigest(file, content);
+  });
 }
 
 const HISTORY_TRANSACTION_KINDS = ["plan-feedback", "plan-feedback-revision"] as const;
@@ -315,6 +368,10 @@ function readHistoryWalState(roleDir: string, storageId: string): string | undef
   if (!entry) return undefined;
   if (!entry.isFile()) throw new Error(`Invalid plan history active WAL state: ${file}`);
   return fs.readFileSync(file, "utf8");
+}
+export function hasActivePlanHistoryWal(roleDir: string, storageId: string): boolean {
+  const state = readHistoryWalState(roleDir, storageId);
+  return state !== undefined && parseHistoryWalState(state).active !== null;
 }
 function checkActiveWal(roleDir: string, storageId: string, text: string | undefined,
   except?: { kind: "plan-feedback" | "plan-feedback-revision"; transactionId: string }): void {
