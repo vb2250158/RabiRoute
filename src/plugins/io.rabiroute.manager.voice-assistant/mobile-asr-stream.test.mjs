@@ -5,7 +5,7 @@ import test from 'node:test';
 import { openMobileAsrStream } from './src/mobile-asr-stream.mjs';
 import { createVoiceAssistantOperations } from './src/operations.mjs';
 
-function fixture({ start, endSamples } = {}) {
+function fixture({ start, endSamples, speechActivity = false } = {}) {
   const request = new PassThrough();
   const signal = new AbortController();
   const pcm = [];
@@ -20,7 +20,9 @@ function fixture({ start, endSamples } = {}) {
           await start?.();
           await recording.start(round.onError, { onPcm: bytes => {
             pcm.push(bytes);
+            if (speechActivity) round.onSpeechStart();
             round.onInterim({ text: '今天天气' });
+            if (speechActivity) round.onSpeechEnd?.();
           } });
           round.onStart();
         },
@@ -49,6 +51,16 @@ test('mobile PCM streams partial results before EOF and filters provider metadat
   assert.deepEqual(Buffer.concat(run.pcm), Buffer.from([0, 1, 2, 3]));
   assert.deepEqual(tail.at(-1), { type: 'final', text: '今天天气怎么样？', observation: { emotion: 'neutral' } });
   assert.equal(run.stopped(), 1);
+});
+
+test('mobile PCM forwards the end of speech independently of the final transcript', async () => {
+  const run = fixture({ speechActivity: true });
+  const frames = run.stream.frames[Symbol.asyncIterator]();
+  await frames.next();
+  run.request.end(Buffer.alloc(2));
+  const events = [];
+  for await (const chunk of frames) events.push(...chunk.toString().trim().split('\n').map(JSON.parse));
+  assert.deepEqual(events.map(event => event.type), ['speech-start', 'interim', 'speech-end', 'final']);
 });
 
 test('final replay offsets are positive monotonic integer positions within forwarded PCM', async () => {

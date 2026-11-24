@@ -18,7 +18,7 @@ ASR、TTS 分别选择「本机服务」或「自定义」，允许混用。本�
 
 在「设置 → 语音识别 → 语音转写词典」保存词条，Rabi PC 和连接这台电脑的 Android 助手共用。使用当前识别模型实时或整句转写时，Manager 按模型能力提供热词、提示或上下文。安卓的本机回退和电脑被动转写只用本机识别，词典是否生效取决于本机模型。FireRedASR2-AED、设备端关键词检测和眼镜 AIUI 原生识别当前没有接入词典。
 
-`apps/desktop-assistant/src/runtime.mjs` 负责共享装配，`packages/assistant-runtime` 负责模型工具循环与模拟双工，`packages/desktop-voice-service` 负责协议、真实播放和字幕。识别到首个有效文字才打断播报，模型与工具继续。流式 ASR 显示临时文字，整段识别显示波形。
+`apps/desktop-assistant/src/runtime.mjs` 负责共享装配，`packages/assistant-runtime` 负责模型工具循环与模拟双工，`packages/desktop-voice-service` 负责协议、真实播放和字幕。识别到首个有效文字才打断播报，模型与工具继续。流式 ASR 显示临时文字，整段识别显示波形。移动端流式接口发出 `speech-start`、`speech-end` 和最终转写。结束事件只更新讲话状态，客户端仍等最终转写后关闭本轮输入。
 
 桌面语音会在播报期间及播报结束后的短窗口内，过滤与这段播报相同的转写。检测到新内容仍可打断播报。
 

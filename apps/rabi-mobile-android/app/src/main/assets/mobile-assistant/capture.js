@@ -114,6 +114,9 @@ export function createPhoneCapture({
               awaitingFinal = true;
               round.handlers.onSpeechStart?.();
               break;
+            case 'speech-end':
+              round.handlers.onSpeechEnd?.();
+              break;
             case 'interim':
               if (typeof event.text !== 'string' || !event.text.trim()) return;
               awaitingFinal = true;

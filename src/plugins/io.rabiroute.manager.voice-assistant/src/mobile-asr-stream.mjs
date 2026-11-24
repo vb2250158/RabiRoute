@@ -80,6 +80,7 @@ export function openMobileAsrStream({ request, createAsr, assertCurrent, signal,
       round = asr.createRound({
         onStart: () => emit({ type: 'ready' }),
         onSpeechStart: () => emit({ type: 'speech-start' }),
+        onSpeechEnd: () => emit({ type: 'speech-end' }),
         onInterim: result => {
           if (typeof result.text === 'string' && result.text.trim()) emit({ type: 'interim', text: result.text.slice(0, 16_000) });
         },

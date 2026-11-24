@@ -12,7 +12,7 @@ This directory is the RabiLink phone companion and bundled glasses frontend proj
 
 ## Voice assistant
 
-Open **Voice assistant** from Messages. Enable it, tap **Start live voice**, and grant microphone permission. In the foreground, utterance recognition shows a live waveform and streaming recognition shows live text. A finished transcript sends automatically. Replies play on the phone. Leaving the page or sending the app to the background releases the phone’s audio resources. The PC continues work it already accepted.
+Open **Voice assistant** from Messages. Enable it, tap **Start live voice**, and grant microphone permission. In the foreground, utterance recognition shows a live waveform and streaming recognition shows live text. A finished transcript sends automatically. Replies play on the phone. Streaming recognition tracks the end of each utterance. After the final transcript settles, the idle timer can return keyword mode to standby. Leaving the page or sending the app to the background releases the phone’s audio resources. The PC continues work it already accepted.
 
 Enable the assistant on the selected PC and choose a persona, a recognition service, and a speech provider. The phone uses the paired RabiLink connection and the persona’s persistent conversation. When the PC supports custom speech for mobile, the phone can use the custom TTS provider already configured on the PC. The PC synthesizes the reply, the phone plays it, and provider credentials stay on the PC.
 

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.83 - 2026-11-25
+
+- Forward the end of mobile streaming recognition so the assistant can return to standby after the final transcript and the existing idle timeout.
+
 ## 0.15.82 - 2026-11-25
 
 - Fix Rokid voice standby after a native recognition no-match while preserving long utterances and manual stop.

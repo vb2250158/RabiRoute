@@ -29,3 +29,5 @@ Other tools use the unified OperationSdk for current categories, pagination, sea
 On Windows, the assistant can look up the foreground application's name and window title when a request depends on what is open. It reads the current window on demand before looking for related plans.
 
 Build through the repository plugin/Web flow. The package includes shared-module closure, device scripts, Koffi, its Windows platform module and ws. Official CLI/Electron paths belong only in private host options; there is no dependency on the standalone Web server. Controlled-device four-source tests do not prove physical microphone, speaker, echo cancellation or remote-PC acceptance. Source, build, isolated preview, formal installation and live service results must be reported separately.
+
+The mobile streaming API emits `speech-start` and `speech-end` around speech and delivers the final transcript separately. The end event updates the speaking state. The client still waits for the final transcript before settling the input.

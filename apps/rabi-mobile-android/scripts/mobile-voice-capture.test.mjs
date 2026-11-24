@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createAiuiAssistantRuntime } from '../../../packages/assistant-runtime/src/aiui-runtime.js';
+import { createVoiceIdleTimer } from '../../../packages/assistant-runtime/src/voice-interaction.js';
 
 async function load(name) {
   const bytes = await readFile(new URL('../app/src/main/assets/mobile-assistant/' + name, import.meta.url));
@@ -83,6 +85,40 @@ function microphone(t, applyConstraints = async () => {}, actualSampleRate = 160
     processingUpdates,
   };
 }
+
+test('streaming speech and its final transcript release the mobile idle timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  microphone(t);
+  const output = [];
+  let live;
+  let standby = false;
+  const asr = createPhoneCapture({
+    waveform() {}, phase() {}, mayRecord: () => true,
+    getPolicy: () => ({ kind: 'streaming' }),
+    openStream(handlers) { live = handlers; return { write: () => true, close() {} }; },
+  });
+  const runtime = createAiuiAssistantRuntime({ asr, tts: { synthesize() {} } });
+  const idle = createVoiceIdleTimer({
+    timeoutMs: 100,
+    isEligible: () => !standby,
+    isBusy: () => runtime.getState().inputPending,
+    onIdle() { standby = true; },
+  });
+  const round = runtime.asr.createRound({ onFinal: result => output.push(result.text) });
+  await runtime.asr.start(round);
+  live.receive({ type: 'speech-start' });
+  idle.renew();
+  t.mock.timers.tick(100);
+  assert.equal(standby, false);
+
+  live.receive({ type: 'speech-end' });
+  assert.equal(runtime.getState().inputPending, true);
+  live.receive({ type: 'final', text: '已经说完' });
+  t.mock.timers.tick(100);
+  assert.deepEqual(output, ['已经说完']);
+  assert.equal(standby, true);
+  runtime.asr.stop(round);
+});
 
 test('wake keeps capture local and promotes the same microphone without duplicate delivery', async t => {
   const mic = microphone(t);
