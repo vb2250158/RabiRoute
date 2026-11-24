@@ -4,7 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { apiCatalogOpenApi } from "./apiOperationCatalog.js";
 import { compileApiOperation, type ApiOperationDefinition } from "./apiOperationContract.js";
@@ -30,6 +32,57 @@ test("a contract deadline bounds a partial request body before entering the owne
     request.write('{"value":');
   });
   await closed; await registration.dispose(); assert.equal(called, false); assert.equal(registration.activeOperationCount(), 0);
+});
+
+test("an admitted stream with a contract deadline keeps receiving after the default body deadline", { timeout: 5000 }, async t => {
+  const base = fixtureApiContract();
+  const registry = new ManagerPluginRouteRegistry();
+  const cancellations: unknown[] = [];
+  const registration = registry.registerOperations("duplex-deadline", [{
+    contract: {
+      ...base,
+      request: { ...base.request, body: { kind: "stream", mediaType: "application/octet-stream", maxBytes: 16, rules: ["Synthetic request bytes."] }, deadlineMs: 1000 },
+      responses: { 200: { mediaType: "application/octet-stream", stream: {
+        framing: "bytes", maxFrameBytes: 16, completion: "Request EOF.", cancellation: "Stop reading the request."
+      } } },
+    },
+    handler({ request, signal }) {
+      return { status: 200, stream: {
+        frames: (async function* () {
+          yield Buffer.from("ready:");
+          for await (const chunk of request) yield Buffer.from(chunk);
+        })(),
+        cancel: () => { cancellations.push(signal?.reason?.code); request.destroy(); },
+      } };
+    },
+  }]);
+  const server = http.createServer((request, response) => {
+    guardRequestBodyDeadline(request, response, { normalMs: 50, isAuthorizedUpload: false });
+    registry.handle(request, new URL(request.url!, "http://localhost"), response);
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await registration.dispose(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const url = `http://127.0.0.1:${address.port}/api/example/records/one`;
+  const exchange = (finishBody: boolean) => new Promise<string>((resolve, reject) => {
+    const request = http.request(url, {
+      method: "POST", headers: { "content-type": "application/octet-stream" },
+    }, response => {
+      void (async () => {
+        assert.equal(response.statusCode, 200);
+        if (finishBody) void delay(100).then(() => { if (!request.destroyed) request.end("b"); });
+        const chunks = [];
+        for await (const chunk of response) chunks.push(Buffer.from(chunk));
+        return Buffer.concat(chunks).toString();
+      })().then(resolve, reject);
+    });
+    request.on("error", reject);
+    request.write("a");
+  });
+  assert.equal(await exchange(true), "ready:ab");
+  assert.deepEqual(cancellations, []);
+  await assert.rejects(exchange(false), { code: "ECONNRESET" });
+  assert.deepEqual(cancellations, ["API_REQUEST_DEADLINE_EXCEEDED"]);
 });
 
 test("a declared SSE deadline closes the subscription and drains its operation lease", { timeout: 5000 }, async t => {

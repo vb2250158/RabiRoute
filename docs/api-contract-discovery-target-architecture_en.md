@@ -293,3 +293,5 @@ The criteria above remain the complete objective. Source progress in section 2 d
 - [Plugin platform architecture](manager-plugin-implementation-hot-swap_en.md): generations, shared SDK, and effect scopes.
 - [Source hot patches](source-hot-patches_en.md): actual compatibility matrix, state, and controlled switching.
 - [Code architecture](code-architecture_en.md) and [project function map](project-function-map_en.md): current modules and feature ownership.
+
+An admitted, authenticated streaming request uses its declared contract deadline after input validation. The ordinary body limit, authorized long uploads, and connection cleanup after an early response retain their existing behavior.

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.85 - 2026-11-25
+
+- Keep admitted mobile speech streams on their declared request deadline so the ordinary 30-second body timer cannot disconnect them early.
+
 ## 0.15.84 - 2026-11-25
 
 - Persona 0.1.47 adds source and receiving device selection to Agent rules and session delivery, preserving legacy device scopes and existing local settings and correcting project conditions, remote plan identity and original receipt reconciliation.

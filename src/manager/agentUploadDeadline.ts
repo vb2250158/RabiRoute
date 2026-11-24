@@ -7,6 +7,13 @@ export interface RequestBodyDeadlineOptions {
   isAuthorizedUpload: boolean;
 }
 
+const defaultBodyTimers = new WeakMap<IncomingMessage, () => void>();
+
+/** An admitted streaming operation already has its own deadline. Keep the connection cleanup. */
+export function cancelDefaultRequestBodyTimer(request: IncomingMessage): void {
+  defaultBodyTimers.get(request)?.();
+}
+
 /**
  * Bound body receipt, not response processing. Call after headers/authentication;
  * the caller owns route matching and authorization. Never consumes body bytes.
@@ -25,11 +32,15 @@ export function guardRequestBodyDeadline(
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const dispose = () => {
+  const clearTimer = () => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
+    if (defaultBodyTimers.get(req) === clearTimer) defaultBodyTimers.delete(req);
+  };
+  const dispose = () => {
+    clearTimer();
     req.off("end", dispose);
     req.off("aborted", dispose);
     req.off("close", dispose);
@@ -61,6 +72,7 @@ export function guardRequestBodyDeadline(
     res.end("Request body deadline exceeded.\n");
   }, durationMs);
   timer.unref();
+  if (!options.isAuthorizedUpload) defaultBodyTimers.set(req, clearTimer);
   req.once("end", dispose);
   req.once("aborted", dispose);
   req.once("close", dispose);

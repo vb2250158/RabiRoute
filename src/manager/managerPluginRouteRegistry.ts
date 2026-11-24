@@ -19,6 +19,7 @@ import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import { businessConnectionRequestUrl, hasAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { writeApiOperationStream } from "./apiOperationStream.js";
+import { cancelDefaultRequestBodyTimer } from "./agentUploadDeadline.js";
 import { ApiStreamRetirementOwner, type ApiStreamRetirementSnapshot } from "./apiStreamRetirementOwner.js";
 import { registerApiHttpProxies } from "./apiHttpProxyBinding.js";
 import { createExternalListenerHttpProxy, NATIVE_LISTENER_HTTP_PREFIX, type NativeHttpRequestFactory } from "./apiExternalListenerHttpProxy.js";
@@ -515,6 +516,7 @@ export class ManagerPluginRouteRegistry {
             assertAuthority();
             assertDeadline();
             result = await invokeOwner(() => {
+              if (deadline && operation.contract.request.body.kind === "stream") cancelDefaultRequestBodyTimer(request);
               executionStarted = true;
               return prepared(input);
             }, `API execute ${operation.contract.operationId}`);

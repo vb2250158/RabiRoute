@@ -293,3 +293,5 @@ sequenceDiagram
 - [插件平台架构](manager-plugin-implementation-hot-swap.md)：generation、共享 SDK 和 effect scope。
 - [源码热补丁](source-hot-patches.md)：实际兼容矩阵、状态与受控切换。
 - [代码架构](code-architecture.md)、[项目功能手册](project-function-map.md)：当前模块与功能定位。
+
+通过鉴权、输入验证和操作接纳后，声明独立期限的流式请求由该合同计时。普通请求体限制继续适用；受授权的长上传与提前结束时的连接回收保持原有行为。
