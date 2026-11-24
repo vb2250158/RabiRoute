@@ -485,3 +485,142 @@ test('unsupported track updates leave manual voice and finalized wake audio usab
   assert.equal(mic.calls(),1);
   adapter.stop(round);
 });
+
+for (const delivery of ['streaming-buffered', 'streaming-live', 'utterance']) {
+  const kind = delivery === 'utterance' ? 'utterance' : 'streaming';
+  const livePrefix = delivery === 'streaming-live';
+  test('fast keyword wake preserves the low command prefix in local PCM (' + delivery + ')', async t => {
+    const mic = microphone(t);
+    const finals = [], localPcm = [];
+    let edge, stream;
+    let fallbackCount = 0;
+    const adapter = createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
+      getPolicy:()=>({ kind:'wake', aliases:['小助手'], kws:{} }),
+      onWake:()=>kind === 'streaming' ? { kind, fallbackModel:'verified-local' } : { kind, local:true },
+      openWake(_config, _count, handlers) {
+        edge = handlers;
+        return { write:()=>true, close(){} };
+      },
+      openStream(handlers) {
+        stream = handlers;
+        return { write:()=>true, close(){} };
+      },
+      onFallback() { fallbackCount++; },
+      async transcribe(wave, _signal, policy) {
+        assert.deepEqual(policy, { kind:'utterance', local:true });
+        const pcm = Buffer.from(wave);
+        assert.equal(pcm.toString('ascii', 0, 4), 'RIFF');
+        assert.equal(pcm.readUInt32LE(24), 16_000);
+        assert.equal(pcm.readUInt32LE(40), pcm.length - 44);
+        localPcm.push(Array.from({ length:(pcm.length - 44) / 2 }, (_, index) => pcm.readInt16LE(44 + index * 2)));
+        return { text:'完整的低声指令' };
+      },
+    });
+    const round = adapter.createRound({ onFinal:result=>finals.push(result.text) });
+    await adapter.start(round);
+    mic.frames(.04, 15);
+    mic.frames(.006, 1);
+    mic.frames(.013, livePrefix ? 3 : 7);
+    if (!livePrefix) mic.frames(.1, 1);
+    const wake = { aliasIndex:0, utteranceStartSample:10_912, replayFromSample:16_032 };
+    edge.hit(wake);
+    edge.hit(wake);
+    if (stream) {
+      stream.receive({ type:'interim', text:'指令' });
+      if (livePrefix) mic.frames(.013, 2);
+      stream.error(new Error('offline'));
+      stream.receive({ type:'final', text:'迟到的返回' });
+      stream.end();
+    }
+    if (livePrefix) {
+      mic.frames(.013, 2);
+      mic.frames(.1, 1);
+    }
+    mic.frames(.24, 2);
+    mic.frames(0, 10);
+    await round.queue;
+    assert.equal(localPcm.length, 1);
+    assert.equal(localPcm[0][0], 197, 'first WAV sample must be from the original replay offset');
+    assert.deepEqual(localPcm[0].slice(0, 10_592), [
+      ...Array(352).fill(197),
+      ...Array(7_168).fill(426),
+      ...Array(1_024).fill(3_277),
+      ...Array(2_048).fill(7_864),
+    ]);
+    assert.deepEqual(finals, ['完整的低声指令']);
+    assert.equal(fallbackCount, stream ? 1 : 0);
+    assert.equal(mic.calls(), 1);
+    adapter.stop(round);
+  });
+}
+
+test('fast keyword wake bounds quiet audio and keeps the ordinary gate', async t => {
+  const mic = microphone(t);
+  const localPcm = [];
+  let edge, speechStarts = 0;
+  const adapter = createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
+    getPolicy:()=>({ kind:'wake', aliases:['小助手'], kws:{} }),
+    openWake(_config, _count, handlers) {
+      edge = handlers;
+      return { write:()=>true, close(){} };
+    },
+    onWake:()=>({ kind:'utterance', local:true }),
+    async transcribe(wave) {
+      const pcm = Buffer.from(wave);
+      localPcm.push({ samples:pcm.readUInt32LE(40) / 2, first:pcm.readInt16LE(44) });
+      return { text:'完成' };
+    },
+  });
+  const round = adapter.createRound({ onSpeechStart(){ speechStarts++; } });
+  await adapter.start(round);
+  mic.frames(.018, 2);
+  edge.hit({ aliasIndex:0, utteranceStartSample:0, replayFromSample:900 });
+  mic.frames(.018, 90);
+  await round.queue;
+  assert.equal(speechStarts, 0);
+  assert.deepEqual(localPcm, []);
+  mic.frames(.2, 1);
+  mic.frames(0, 10);
+  await round.queue;
+  assert.equal(speechStarts, 1);
+  assert.deepEqual(localPcm, [{ samples:64_000 + 11 * 1_024, first:590 }]);
+  mic.frames(.013, 8);
+  mic.frames(.2, 1);
+  mic.frames(0, 10);
+  await round.queue;
+  assert.deepEqual(localPcm[1], { samples:15 * 1_024, first:426 });
+  adapter.stop(round);
+});
+
+test('a cloud final immediately restores the usual short pre-roll after a fast wake', async t => {
+  const mic = microphone(t);
+  const localPcm = [], finals = [];
+  let edge, stream;
+  const adapter = createPhoneCapture({ waveform(){}, phase(){}, mayRecord:()=>true,
+    getPolicy:()=>({ kind:'wake', aliases:['小助手'], kws:{} }),
+    openWake(_config, _count, handlers) {
+      edge = handlers;
+      return { write:()=>true, close(){} };
+    },
+    onWake:()=>({ kind:'streaming', fallbackModel:'verified-local' }),
+    openStream(handlers) { stream=handlers; return { write:()=>true, close(){} }; },
+    async transcribe(wave) {
+      const pcm = Buffer.from(wave);
+      localPcm.push({ samples:pcm.readUInt32LE(40) / 2, first:pcm.readInt16LE(44) });
+      return { text:'第二句' };
+    },
+  });
+  const round = adapter.createRound({ onFinal:result=>finals.push(result.text) });
+  await adapter.start(round);
+  mic.frames(.012, 2);
+  edge.hit({ aliasIndex:0, utteranceStartSample:0, replayFromSample:900 });
+  mic.frames(.018, 15);
+  stream.receive({ type:'final', text:'第一句', endSample:1_024 });
+  mic.frames(.2, 1);
+  stream.end();
+  mic.frames(0, 10);
+  await round.queue;
+  assert.deepEqual(localPcm, [{ samples:15 * 1_024, first:590 }]);
+  assert.deepEqual(finals, ['第一句', '第二句']);
+  adapter.stop(round);
+});

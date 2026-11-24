@@ -16,6 +16,8 @@ Android 关键词监听在内存中保留开门前最近 950 毫秒，并容许�
 
 电脑确认本机识别服务可用后，如果手机实际采样率无法用于实时识别，唤醒切换期间保留的语音会交由电脑本机识别。手机页面会短暂显示检查状态，并在服务就绪后自动更新。实时识别连接尚未就绪时，手机会暂存唤醒词之后的语音。连接建立后按顺序发送，尽量保留接在唤醒词后面的第一句。
 
+关键词唤醒后的首句若切到电脑本机转写，手机最多保留 4 秒低音量预录，在超过现有音量门限后连同句首一起转写。收到首个有效识别结果后恢复普通预录时长。
+
 离线构建时，可同时传入 `-PmobileWakeAar=<官方 sherpa-onnx 2.0.2 AAR>` 和 `-PmobileWakeModelDir=<本机中英 Zipformer 关键词模型目录>`。Gradle 会核对运行库、权重和词表的哈希。普通构建提供手动实时语音和用户主动开启的电脑转写唤醒。 [官方 Android 运行库](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.2) · [中英关键词模型](https://k2-fsa.github.io/sherpa/onnx/kws/pretrained_models/)
 
 调试与验收使用独立的 APK 应用 ID。先构建 :app:assembleDebug 和 :app:assembleDebugAndroidTest，附加 -PmobileSlim -PmobileAssistantAcceptance -PmobileTestRunner=com.rabi.link.test.MobileAssistantInstrumentation。将两个 APK 安装到测试模拟器后执行 adb shell am instrument -w com.rabi.link.assistantacceptance.test/com.rabi.link.test.MobileAssistantInstrumentation。测试使用 Android 真权限和浏览器实际收音与播放，另以生成信号和测试夹具验证识别、模型回执与合成。

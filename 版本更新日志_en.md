@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.88 - 2026-11-25
+
+- Preserve the quiet start of the first Android command when keyword wake falls back to local transcription. Retain up to four seconds of pre-roll and restore the usual short window after the first valid result.
+
 ## 0.15.87 - 2026-11-25
 
 - Give plan history its own finite budget, verify shards and retain complete snapshots so history growth does not consume the ordinary plan and attachment budget; preserve original archive recovery and strict revision checks.

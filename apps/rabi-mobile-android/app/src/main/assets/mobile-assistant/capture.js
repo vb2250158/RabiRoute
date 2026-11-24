@@ -47,6 +47,7 @@ export function createPhoneCapture({
   function finishInput(round, result) {
     if (round.restoreAfterFinal && typeof result?.text === 'string' && result.text.trim()) {
       round.restoreAfterFinal = false;
+      if (round.preRoll.length) limitPreRoll(round, round.preRoll.at(-1).length);
       setAudioProcessing(round, true);
     }
     round.handlers.onFinal?.(result);
@@ -291,6 +292,26 @@ export function createPhoneCapture({
     });
   }
 
+  function limitPreRoll(round, frameLength) {
+    const frames = round.preRoll;
+    const sampleRate = round.context.sampleRate;
+    if (!round.restoreAfterFinal) {
+      while (frames.length > Math.ceil(0.2 * sampleRate / frameLength)) frames.shift();
+      return;
+    }
+    // The first command may start below the gate just after the native keyword boundary.
+    // The first replay frame can be partial, so bound the accumulated PCM by sample count.
+    let drop = frames.reduce((samples, frame) => samples + frame.length, 0) - keywordReplaySeconds * sampleRate;
+    while (drop > 0) {
+      const first = frames[0];
+      if (drop < first.length) {
+        frames[0] = first.subarray(drop);
+        return;
+      }
+      drop -= frames.shift().length;
+    }
+  }
+
   function captureLocal(round, frame, after = round.position) {
     const sampleRate = round.context.sampleRate;
     const rms = Math.sqrt(frame.reduce((power, sample) => power + sample ** 2, 0) / frame.length);
@@ -298,7 +319,7 @@ export function createPhoneCapture({
     const audible = rms >= 0.025;
     if (!round.speaking && !audible) {
       round.preRoll.push(frame);
-      while (round.preRoll.length > Math.ceil(0.2 * sampleRate / frame.length)) round.preRoll.shift();
+      limitPreRoll(round, frame.length);
       return;
     }
     if (!round.speaking) {
