@@ -16,7 +16,7 @@
 
 1. 首次安装由唯一发布 owner 构建并安装支持本能力的版本，后续按实际兼容性选择发布路径。操作前通过 `RabiRouteHost.exe --command status --json` 动态发现 `managerBaseUrl`，核对 `/meta` 的 `applicationGenerationId`、`managerInstanceId`、`health.live=true` 及 `health.state=healthy|degraded`；`health.requiredReady` 用于诊断声明能力，实际依赖由目标接口判断，不以无关能力缺失阻断操作。
 2. 为 Host 配置受信任源码根 `RABIROUTE_HOT_PATCH_SOURCE_ROOT`；`RABIROUTE_HOT_PATCH_WATCH=0` 会关闭自动激活。不要指向其他任务正在清理的构建目录。
-3. 只构建一次运行 `npm run webgui:build`；持续开发运行 `npm run webgui:watch`。后者监听 Web 源码、共享契约、资源及文档，串行运行类型检查和正式 Vite **生产构建**，不启动开发服务器。停止监听不关闭 Manager。
+3. 独立构建 Web 壳运行 `npm run webgui:build`，持续构建运行 `npm run webgui:watch`。两者使用生产 Vite 构建并沿用现有插件包。完整构建的 `--finalize-plugin-build` 步骤才重新封装全部插件 Web 资源。停止监听不关闭 Manager。
 4. 构建器独占 `ribiwebgui/.web-patch-build.lock`。并发构建拒绝执行；进程异常终止留下锁时，核对记录 PID 已退出且无构建 owner 后再移除该锁，不能删除正在使用的锁。
 5. 输入在构建期间变化、类型错误、缺资源、错误 hash 或不兼容后端都不会发布完成标记。监听模式在下一次有效输入变化后重新构建；不会无限重试同一失败输入。
 6. 构建成功后写入 `dist/web-patches/<hash>`，最后原子替换 `dist/web-patches/latest.json`。Manager 只消费完整标记，校验后原子更新活动指针和操作回执。构建无需复制文件到安装目录。

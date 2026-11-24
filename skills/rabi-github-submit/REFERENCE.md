@@ -40,13 +40,15 @@ The user's current plugin architecture decision replaces the former mandatory Ho
 
 | Owner/change | Version and metadata |
 |---|---|
-| Host framework or extension point | Advance Host SemVer according to impact; patch, minor and major transitions are accepted. This architecture migration uses `0.7.0`. Synchronize root package/lock and both README versions. |
-| Plugin source, web UI, resource, test or documentation | Advance that plugin’s authoritative version; a plugin-only change keeps the Host version. |
-| Independently packaged application | A tracked `apps/<directory>/package.json` with a name and strict SemVer owns that application. Advance its version and synchronize an existing lock in the same scope; keep the Host version for application-only changes. Unowned application paths retain the Host rule. |
+| Host framework or extension point | Advance Host SemVer according to impact. Synchronize root package/lock and both README versions. |
+| Plugin implementation or resources | Advance the plugin's authoritative version. Validation-only files follow the production change. |
+| Independently packaged npm application | Advance its tracked `apps/<directory>/package.json` version and synchronize its existing lock metadata. |
+| Android APK | Use the affected module's Gradle `versionCode`. Advance the variant being shipped and preserve the other variant's installable upgrades. |
+| Web shell | Publish the Web resource revision and record it separately from Host SemVer. |
 | New native plugin | Initial version `0.1.1`. |
 | First legacy builtin source move | Accept exact old version → `0.1.1` only with the matching `package-migrations.json` declaration and original builtin identity. This exception is unavailable to an already canonical package or an external ecosystem. |
 | Existing external plugin | Continue its published version sequence; never reset it to the native baseline. |
-| Bilingual change record | Update both root change logs with concrete changes. Under an unchanged Host section, identify each changed plugin and its own new version. |
+| Bilingual change record | Use both root change logs. If the Host is unchanged, use Unreleased or the current Host section and identify each changed plugin and its new version. |
 
 `plugins/source-catalog.json` records each canonical source folder and authoritative `versionFile`. Compare that authority against `HEAD`, including its original manifest when the current change moves the source. Synchronize other versioned root/hidden manifests and plugin lock root metadata; do not substitute a secondary package version for the authority.
 

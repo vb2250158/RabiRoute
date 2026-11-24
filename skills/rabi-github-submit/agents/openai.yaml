@@ -1,4 +1,4 @@
 interface:
   display_name: "Rabi GitHub Submit"
-  short_description: "Submit RabiRoute with one patch version per commit."
-  default_prompt: "Use $rabi-github-submit to prepare a RabiRoute commit with the mandatory patch bump and bilingual version log."
+  short_description: "Submit RabiRoute changes with component-owned versions."
+  default_prompt: "Use $rabi-github-submit to validate the changed components, advance their own versions where required, and update the bilingual version log."

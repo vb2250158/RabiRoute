@@ -68,22 +68,13 @@ function Get-ScopedFileText {
     return [System.IO.File]::ReadAllText($absolutePath)
 }
 
-function Test-VersionSectionHasEntry {
+function Get-ChangeLogSection {
     param(
         [string]$Content,
-        [string]$Version
+        [string]$Heading
     )
 
-    if (-not $Content) {
-        return $false
-    }
-
-    $escapedVersion = [regex]::Escape($Version)
-    $match = [regex]::Match(
-        $Content,
-        "(?ms)^##\s+$escapedVersion\s+-\s+\d{4}-\d{2}-\d{2}\s*\r?\n(?<body>.*?)(?=^##\s+|\z)"
-    )
-    return $match.Success -and $match.Groups["body"].Value -match '(?m)^\s*-\s+\S'
+    return [regex]::Match($Content, "(?ms)^##[ \t]+$Heading[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]+|\z)").Groups["body"].Value
 }
 
 $repoRootLines = @(Invoke-GitText -Arguments @("rev-parse", "--show-toplevel"))
@@ -320,9 +311,24 @@ function Test-StrictVersion {
     param([string]$Version)
     return $Version -match '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$'
 }
+
+function Read-AndroidVersionCodes {
+    param([string]$Gradle)
+
+    $declarations = [regex]::Matches($Gradle, '(?m)^\s*versionCode\s+([^\r\n]+)')
+    if ($declarations.Count -ne 1) { return $null }
+    $value = $declarations[0].Groups[1].Value.Trim()
+    if ($value -match '^([1-9]\d*)$') { return @{ default = [long]$Matches[1] } }
+    if ($value -match '^mobileSlim\s*\?\s*([1-9]\d*)\s*:\s*([1-9]\d*)$') {
+        return @{ mobileSlim = [long]$Matches[1]; default = [long]$Matches[2] }
+    }
+    return $null
+}
+
 $pluginVersions = [System.Collections.Generic.List[object]]::new()
 $applicationVersions = [System.Collections.Generic.List[object]]::new()
 $hostVersionRequired = $false
+$webChanged = $false
 if ($versionGateApplicable) {
     $headPackage = Read-VersionJson -File "package.json" -Head
     $candidatePackage = Read-VersionJson -File "package.json"
@@ -387,11 +393,49 @@ if ($versionGateApplicable) {
         elseif ($source.ecosystem -eq "rabiroute" -and $current -ne "0.1.1") { Add-VersionFinding "plugin-initial-version-required" $versionPath "A new native plugin starts at 0.1.1." }
         $pluginVersions.Add([pscustomobject]@{ sourceId = $id; versionFile = $versionPath; headVersion = $previous; candidateVersion = $current; initialSourceMigration = $migrationAccepted })
     }
+    # The Android project builds its own APKs. Gradle owns each module's versionCode.
+    $androidRoot = 'apps/rabi-mobile-android'
+    $androidModules = @('app', 'glass-app', 'glass-video-app')
+    $androidOwned = [bool](Get-GitObjectText -ObjectPath "HEAD:$androidRoot/settings.gradle")
+    if ($androidOwned) {
+        foreach ($module in $androidModules) {
+            $directory = "$androidRoot/$module"
+            if (-not @($versionChanges | Where-Object {
+                $_.StartsWith("$directory/", [StringComparison]::Ordinal) -and
+                    $_ -notmatch '/src/(?:test|androidTest)/|\.md$' -and -not (Test-ValidationOnlyPath $_)
+            }).Count) { continue }
+
+            $versionPath = "$directory/build.gradle"
+            $previous = Read-AndroidVersionCodes (Get-GitObjectText -ObjectPath "HEAD:$versionPath")
+            $current = Read-AndroidVersionCodes (Get-ScopedFileText -RelativePath $versionPath)
+            if (-not $previous -or -not $current) {
+                Add-VersionFinding 'android-version-code-invalid' $versionPath 'Use the tracked Gradle versionCode declaration for the changed APK.'
+                continue
+            }
+            $increased = $false
+            foreach ($variant in $previous.Keys) {
+                if (-not $current.ContainsKey($variant) -or $current[$variant] -lt $previous[$variant]) {
+                    Add-VersionFinding 'android-version-code-regression' $versionPath "The Android $variant versionCode must preserve installable upgrades."
+                } elseif ($current[$variant] -gt $previous[$variant]) {
+                    $increased = $true
+                }
+            }
+            if (-not $increased) {
+                Add-VersionFinding 'android-version-code-increase-required' $versionPath 'Advance the versionCode of the APK variant being updated.'
+            }
+            $applicationVersions.Add([pscustomobject]@{
+                name = "rabi-mobile-android/$module"; directory = $directory; versionFile = $versionPath
+                headVersion = [string]$previous.default; candidateVersion = [string]$current.default
+                headVersionCodes = $previous; candidateVersionCodes = $current
+            })
+        }
+    }
+
     # An existing package-managed root application owns its implementation version.
     # HEAD establishes ownership; a new nested package cannot exempt an apps path.
     $applicationDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $changedApplicationRoots = @($versionChanges | Where-Object { -not (Test-ValidationOnlyPath $_) -and $_ -match '^apps/[^/]+/' } |
-        ForEach-Object { ($_ -split '/')[0..1] -join '/' } | Sort-Object -Unique)
+        ForEach-Object { ($_ -split '/')[0..1] -join '/' } | Where-Object { -not $androidOwned -or $_ -ne $androidRoot } | Sort-Object -Unique)
     foreach ($directory in $changedApplicationRoots) {
         $versionPath = "$directory/package.json"
         $previousMetadata = Read-VersionJson -File $versionPath -Head -OptionalHistorical
@@ -428,13 +472,22 @@ if ($versionGateApplicable) {
         # Validation files follow the production owner's version; their location alone is not a Host extension change.
         $testOnly = Test-ValidationOnlyPath $file
         $applicationOwned = @($applicationDirectories | Where-Object { $file.StartsWith("$_/", [StringComparison]::Ordinal) }).Count -gt 0
-        if (-not $owned -and -not $applicationOwned -and -not $testOnly -and $file -match '^(?:src/|scripts/|apps/|packages/|ribiwebgui/|plugins/contracts/)') { $hostVersionRequired = $true }
+        if ($testOnly) { continue }
+        if (($file -match '^ribiwebgui/' -and $file -notmatch '\.md$') -or $file -eq 'scripts/build-web-patch.mjs') {
+            $webChanged = $true
+            continue
+        }
+        if ($applicationOwned -or ($androidOwned -and $file.StartsWith("$androidRoot/", [StringComparison]::Ordinal))) { continue }
+        if (-not $owned -and $file -match '^(?:src/|scripts/|apps/|packages/|plugins/contracts/|desktop/windows-(?:host|bootstrap)/|installer/)') { $hostVersionRequired = $true }
     }
     $hostAdvanced = $false
     if ((Test-StrictVersion $headVersion) -and (Test-StrictVersion $candidateVersion)) {
         $hostAdvanced = [version]$candidateVersion -gt [version]$headVersion
         if ([version]$candidateVersion -lt [version]$headVersion) { Add-VersionFinding "commit-host-version-downgrade" "package.json" "The Host version cannot move backwards." }
         if ($hostVersionRequired -and -not $hostAdvanced) { Add-VersionFinding "commit-host-version-required" "package.json" "Host architecture or extension-point changes require a newer Host version; SemVer minor and major upgrades are allowed." }
+        if (-not $hostVersionRequired -and $hostAdvanced -and ($pluginVersions.Count -or $applicationVersions.Count -or $webChanged)) {
+            Add-VersionFinding 'commit-host-version-unrelated' 'package.json' 'Keep the Host version for an independently owned component change.'
+        }
     }
     $requiredVersionFiles = @("版本更新日志.md", "版本更新日志_en.md")
     if ($hostAdvanced) { $requiredVersionFiles += @("package.json", "package-lock.json", "README.md", "README_zh.md") }
@@ -452,13 +505,14 @@ if ($versionGateApplicable) {
         }
         foreach ($file in @("版本更新日志.md", "版本更新日志_en.md")) {
             $content = Get-ScopedFileText $file
-            if (-not (Test-VersionSectionHasEntry -Content $content -Version $candidateVersion)) { Add-VersionFinding "commit-changelog-entry-required" $file "Maintain a dated Host-version section with a concrete entry for the Host or independently versioned plugin changes." }
+            $section = Get-ChangeLogSection -Content $content -Heading "$escapedCandidate[ \t]+-[ \t]+\d{4}-\d{2}-\d{2}"
             if (-not $hostAdvanced) {
-                $section = [regex]::Match([string]$content, "(?ms)^##\s+$escapedCandidate\s+-\s+\d{4}-\d{2}-\d{2}\s*\r?\n(?<body>.*?)(?=^##\s+|\z)").Groups["body"].Value
+                $section += "`n" + (Get-ChangeLogSection -Content $content -Heading '(?:Unreleased|未发布)')
                 foreach ($plugin in $pluginVersions) {
                     if (-not $section.Contains($plugin.sourceId) -or $section -notmatch [regex]::Escape($plugin.candidateVersion)) { Add-VersionFinding "plugin-changelog-entry-required" $file "The plugin-only record must identify $($plugin.sourceId) and its new version $($plugin.candidateVersion)." }
                 }
             }
+            if ($section -notmatch '(?m)^\s*-\s+\S') { Add-VersionFinding "commit-changelog-entry-required" $file "Record a concrete change in the dated Host section or, when the Host is unchanged, in Unreleased." }
         }
     }
 }
@@ -470,6 +524,7 @@ $versionGate = [pscustomobject]@{
     policy = "independent-host-and-plugin-semver"
     candidateVersion = $candidateVersion
     hostVersionRequired = $hostVersionRequired
+    webChanged = $webChanged
     plugins = @($pluginVersions)
     applications = @($applicationVersions)
     findings = @($versionFindings)

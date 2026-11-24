@@ -96,9 +96,11 @@ Single-plan projections execute in read-only child processes. Feedback projectio
 
 1. Confirm issue ownership, existing user/peer changes, failure scope, and reproduction evidence.
 2. Reproduce or obtain evidence locating the failure. Make a minimal relevant fix and add meaningful behavioral regression coverage.
-3. Run appropriate tests and `npm run build` for functional changes, update necessary bilingual documentation, and retire obsolete entries touched by the change.
-4. For Manager, WebGUI, plugin, or startup changes, reload through Host and verify the new instance dynamically. Confirm that root HTML references the new asset hashes before retesting the original failure. Coordinate with the owner of an active build/reload.
+3. Run tests and builds for the owning component. Use the selected-package build for compatible plugins, the client build for standalone clients, the Web patch build for the shell, and the complete build for shared backend or Host dependencies. Update the relevant bilingual documentation and retire obsolete entries touched by the change.
+4. Validate and adopt the smallest release unit on the running baseline. Read back the target plugin version and hash, the assets served by Web, the client package identity, or the source patch receipt, then retest the original scenario. For a process switch, record the incompatible contract or the state that cannot migrate, then have the existing owner prepare rollback and switch through the supported lifecycle.
 5. Record implementation, tests, build, runtime verification, and remaining risks separately. Do not close an issue without required real-world acceptance. Keep the long-term plan open.
+
+The Windows package uses `release-manifest.json` to pin its version and file hashes. Its listed `dist/plugins/profiles/desktop.json` records the bundled plugins. Runtime acceptance checks each active component version, package hash, and served resource revision.
 
 Routine local fixes, tests, builds, and necessary local Host reloads are maintenance work. Production publication, business-group messages, credential changes, destructive cleanup, and unrelated project changes require their own authorization. Maintenance does not authorize bulk log deletion or arbitrary dependency upgrades.
 

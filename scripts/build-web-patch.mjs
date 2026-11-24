@@ -7,6 +7,7 @@ import { webPatchInputHash } from "./lib/web-patch-inputs.mjs";
 
 const root = process.cwd();
 const output = path.join(root, "dist/web-patches");
+const finalizePlugins = process.argv.includes("--finalize-plugin-build");
 let lock;
 const lockPath = path.join(root, "ribiwebgui", ".web-patch-build.lock");
 try {
@@ -14,11 +15,12 @@ if (process.argv.includes("--build")) {
   lock = await fs.open(lockPath, "wx", 0o600);
   await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
   process.env.RABIROUTE_WEB_PATCH_INPUT_HASH ||= await webPatchInputHash(root);
-  for (const argumentsList of [
+  const buildCommands = [
     ["node_modules/vue-tsc/bin/vue-tsc.js", "-p", "ribiwebgui/tsconfig.json", "--noEmit"],
-    ["node_modules/vite/bin/vite.js", "build", "--config", "ribiwebgui/vite.config.ts"],
-    ["scripts/sync-plugin-web-bundles.mjs"]
-  ]) {
+    ["node_modules/vite/bin/vite.js", "build", "--config", "ribiwebgui/vite.config.ts"]
+  ];
+  if (finalizePlugins) buildCommands.push(["scripts/sync-plugin-web-bundles.mjs"]);
+  for (const argumentsList of buildCommands) {
     await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, argumentsList, { cwd: root, windowsHide: true, stdio: "inherit" });
       child.once("error", reject);
@@ -30,7 +32,7 @@ const revision = await buildWebPatch(root, output);
 if (process.env.RABIROUTE_WEB_PATCH_INPUT_HASH && await webPatchInputHash(root) !== process.env.RABIROUTE_WEB_PATCH_INPUT_HASH) {
   throw new Error("Web sources changed during the build; the obsolete candidate was not published.");
 }
-if (process.argv.includes("--finalize-plugin-build")) {
+if (finalizePlugins) {
   const { finalizePluginBuildWebArtifacts } = await import("./build-plugin-packages.mjs");
   await finalizePluginBuildWebArtifacts(root, { webRevision: revision,
     webPatchRoot: path.join(output, revision), webSourceInputHash: await webPatchInputHash(root) });

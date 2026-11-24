@@ -553,9 +553,15 @@ test("independent Web CLI does not require native evidence and full finalization
   await put(path.join(root, "package.json"), '{"type":"module"}');
   for (const name of ["build-web-patch.mjs", "lib/web-patch-inputs.mjs", "lib/plugin-source-layout.mjs"]) await put(path.join(root, "scripts", name), await fs.readFile(path.join(sourceScripts, name)));
   await put(path.join(root, "dist/manager/webPatchCatalog.js"), `import fs from 'node:fs/promises';import path from 'node:path';export const buildWebPatch=async()=> '${"b".repeat(64)}';export async function writeWebPatchJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(value));}`);
+  for (const name of ["vue-tsc/bin/vue-tsc.js", "vite/bin/vite.js"]) await put(path.join(root, "node_modules", name), "");
+  await put(path.join(root, "scripts/sync-plugin-web-bundles.mjs"), "throw new Error('Native plugin evidence is missing');");
+  await put(path.join(root, "ribiwebgui/vite.config.ts"), "");
   const command = path.join(root, "scripts/build-web-patch.mjs"), marker = path.join(root, "dist/web-patches/latest.json");
-  const webOnly = await cli([command], root); assert.equal(webOnly.exitCode, 0, webOnly.stderr);
+  const webOnly = await cli([command, "--build"], root); assert.equal(webOnly.exitCode, 0, webOnly.stderr);
   const previous = await fs.readFile(marker); assert.equal(JSON.parse(previous).revision, "b".repeat(64));
+  const completeBuild = await cli([command, "--build", "--finalize-plugin-build"], root);
+  assert.equal(completeBuild.exitCode, 1); assert.match(completeBuild.stderr, /Native plugin evidence is missing/);
+  assert.deepEqual(await fs.readFile(marker), previous);
   const complete = await cli([command, "--finalize-plugin-build"], root);
   assert.equal(complete.exitCode, 1); assert.deepEqual(await fs.readFile(marker), previous);
   const packageScripts = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8")).scripts;

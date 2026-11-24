@@ -21,7 +21,7 @@ description: 用于 RabiRoute 构建、打包、重启、部署和运行验收�
 
 ## 场景对应命令
 
-构建验证与运行激活分别处理。普通功能修改按项目要求运行匹配测试及 `npm run build`；构建成功不会自动要求安装完整包或重启应用。
+构建验证与运行激活分别处理。按实际改动选包、构建 Web 或构建独立客户端。共享后端、宿主依赖和完整包使用 `npm run build`。在当前运行基线上验证候选并回读活动组件和目标行为。
 
 普通改动默认按[源码热补丁工作流](../source-hot-patch-development/SKILL.md)准备不可变候选，完成完整性、兼容性和状态迁移校验后热替换，再回读活动版本与原场景。原生热补丁不以额外开启开关、设置环境变量或另起 watcher 为使用前提；后端变化、新增模块和未来模块按同一发现与校验流程处理，不按名称或静态清单一律改走重启。当前运行版的能力缺口须交给原维护 owner 修复并验证，不能将目标能力写成已经上线。
 
@@ -37,6 +37,12 @@ description: 用于 RabiRoute 构建、打包、重启、部署和运行验收�
 cmd /c "cd /d <repo> && npm run webgui:build"
 ```
 该命令只生成前端产物；运行激活按 Web 热补丁合同验收。明确交付安装包时另走完整打包。
+
+### 兼容插件或独立 Android 客户端
+
+插件沿[原生与 Web 选包构建](../../docs/web-hot-patches.md#独立插件-web-资源包)生成候选，在当前 Manager 验证导入、选版、运行包哈希和回滚。带 Web 资源的插件使用当前 Web 壳的 runtime manifest。
+
+Android 精简手机包使用[独立 APK 导出入口](../../apps/rabi-mobile-android/README.md#构建)。对应 APK 用 Gradle `versionCode` 标识，通过导出 JSON 核对签名、体积和 SHA-256，再按需要验收目标设备。
 
 ### 仅后端构建
 ```powershell

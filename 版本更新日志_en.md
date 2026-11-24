@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Validate release versions by Host, plugin, Web and Android ownership; independent Web builds reuse packaged plugin assets and full builds finalize the complete bundle.
+
 ## 0.15.78 - 2026-11-24
 
 - Group roles by computer and show the local computer first. Load remote summaries incrementally without blocking on slow or offline computers.

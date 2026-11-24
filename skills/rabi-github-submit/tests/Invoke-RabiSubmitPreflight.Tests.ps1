@@ -396,6 +396,11 @@ jobs:
     Invoke-Test "plugin-only changes advance their authority while the Host remains unchanged" {
         $repo = New-FixtureRepository "plugin-only"
         Set-PluginSubmission $repo
+        foreach ($language in @('版本更新日志.md', '版本更新日志_en.md')) {
+            $log = Join-Path $repo $language
+            $text = [IO.File]::ReadAllText($log).Replace('## 0.2.0 - 2026-11-05', '## Unreleased')
+            Write-Utf8File $log $text
+        }
         Invoke-Git $repo @("add", ".") | Out-Null
         $result = Invoke-Preflight $repo -Scope Staged
         Assert-True ($result.exitCode -eq 0) "Plugin-only staged change should pass: $($result.text)"
@@ -417,6 +422,47 @@ jobs:
             Assert-True ($result.report.versionGate.applications[0].headVersion -eq '0.3.2' -and $result.report.versionGate.applications[0].candidateVersion -eq '0.3.3') "Retain the exact application transition."
             Assert-True ($result.report.versionGate.headVersion -eq $result.report.versionGate.candidateVersion) "Host version stays unchanged."
         }
+    }
+
+    Invoke-Test "Android APK changes advance Gradle versionCode without a Host bump" {
+        $repo = New-FixtureRepository 'android-owner'
+        $gradle = Join-Path $repo 'apps/rabi-mobile-android/app/build.gradle'
+        Write-Utf8File (Join-Path $repo 'apps/rabi-mobile-android/settings.gradle') "include ':app'"
+        Write-Utf8File $gradle "defaultConfig {`n    versionCode mobileSlim ? 75 : 6`n}"
+        Invoke-Git $repo @('add', '.') | Out-Null
+        Invoke-Git $repo @('commit', '-m', 'Add Android fixture') | Out-Null
+        Write-Utf8File (Join-Path $repo 'apps/rabi-mobile-android/app/src/main/Voice.kt') 'class Voice'
+        Write-Utf8File $gradle "defaultConfig {`n    versionCode mobileSlim ? 76 : 6`n}"
+        foreach ($language in @('版本更新日志.md', '版本更新日志_en.md')) {
+            Write-Utf8File (Join-Path $repo $language) "# History`n`n## 0.2.0 - 2026-11-24`n`n- Android voice update.`n"
+        }
+        Invoke-Git $repo @('add', '.') | Out-Null
+        Write-Utf8File $gradle "defaultConfig {`n    versionCode mobileSlim ? 76 : 5`n}"
+        $staged = Invoke-Preflight $repo -Scope Staged
+        Assert-True ($staged.exitCode -eq 0 -and -not $staged.report.versionGate.hostVersionRequired) "Android APK should keep the Host version: $($staged.text)"
+        Assert-True ($staged.report.versionGate.applications[0].candidateVersionCodes.mobileSlim -eq 76) 'Use the selected Gradle version in the Git index.'
+        $working = Invoke-Preflight $repo
+        Assert-True (@($working.report.versionGate.findings | Where-Object rule -eq 'android-version-code-regression').Count -eq 1) 'Do not allow another APK variant to regress.'
+        Write-Utf8File $gradle "defaultConfig {`n    versionCode mobileSlim ? 75 : 6`n}"
+        $unchanged = Invoke-Preflight $repo
+        Assert-True (@($unchanged.report.versionGate.findings | Where-Object rule -eq 'android-version-code-increase-required').Count -eq 1) 'Reject an APK change with unchanged version codes.'
+    }
+
+    Invoke-Test "Web resource changes keep the Host version" {
+        $repo = New-FixtureRepository 'web-owner'
+        Write-Utf8File (Join-Path $repo 'ribiwebgui/src/Shell.vue') '<template><main>Updated</main></template>'
+        Write-Utf8File (Join-Path $repo 'scripts/build-web-patch.mjs') 'export const changed = true;'
+        foreach ($language in @('版本更新日志.md', '版本更新日志_en.md')) {
+            Write-Utf8File (Join-Path $repo $language) "# History`n`n## 0.2.0 - 2026-11-24`n`n- Update the Web shell.`n"
+        }
+        $result = Invoke-Preflight $repo
+        Assert-True ($result.exitCode -eq 0 -and $result.report.versionGate.webChanged -and -not $result.report.versionGate.hostVersionRequired) "Web-only change should pass with its own release: $($result.text)"
+        Set-SubmissionVersion $repo
+        $bumped = Invoke-Preflight $repo
+        Assert-True (@($bumped.report.versionGate.findings | Where-Object rule -eq 'commit-host-version-unrelated').Count -eq 1) 'A Web-only change must preserve the Host version.'
+        Write-Utf8File (Join-Path $repo 'src/index.js') 'export const ready = false;'
+        $mixed = Invoke-Preflight $repo
+        Assert-True ($mixed.exitCode -eq 0 -and $mixed.report.versionGate.hostVersionRequired) "An accompanying Host change still uses the Host version: $($mixed.text)"
     }
 
     Invoke-Test "application production changes without an own version increase are rejected" {
