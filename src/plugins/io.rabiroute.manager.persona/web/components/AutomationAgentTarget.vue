@@ -11,7 +11,7 @@ const personaService = usePersonaService();
 import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "@shared/routeAgentTargets";
 import { agentAdapterSupportsManagedTaskFeature, isAgentThreadCapableAdapter } from "@shared/agentAdapterCapabilities";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
-import { availableAutomationDsh, automationDsBotDirectory, dsBotDirectoryTargets, chooseDsBot, readDsBotCatalog, type DsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "./automationAgentTargetModel";
+import { availableAutomationDsh, automationAgentDirectory, automationDeviceKey, automationDirectoryTargets, chooseDsBot, readDsBotCatalog, type AutomationDeviceAgent, type DsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "./automationAgentTargetModel";
 
 const props = defineProps<{ gateway: GatewayDefinition; modelValue?: AgentDeliveryTarget; primaryRoutes: readonly RoleConfigurationRoute[] }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentDeliveryTarget] }>();
@@ -39,42 +39,51 @@ const choices = computed(() => [...recipients.value.map(item => {
 }), { title: t("自定义"), value: "$session", description: t("选择 Agent 和已有会话"), props: { disabled: false } }]);
 const agentName = (provider: string) => provider === "codex" ? "Codex" : provider === "dsh" ? "DSH" : provider === "grokBot" ? "Grok Bot" : provider;
 const localDshAvailable = ref(false);
-const directoryAgents = ref<RouteAgentTarget[]>([]);
+const directoryAgents = ref<AutomationDeviceAgent[]>([]);
 const connections = ref<DshConnection[]>([]);
 const selectedDshOrigin = ref("");
 const providerError = ref("");
 let disposed = false;
+const directoryAbort = new AbortController();
 async function loadProviders() {
   providerError.value = "";
   const results = await Promise.allSettled([
     availableAutomationDsh(personaService.fetch),
-    automationDsBotDirectory(personaService.fetch),
+    automationAgentDirectory(personaService.fetch, directoryAbort.signal),
     createDshConnectionClient(personaService.fetch).list()
   ]);
   if (disposed) return;
   const [published, directory, saved] = results;
   if (published.status === "fulfilled") localDshAvailable.value = published.value;
   else providerError.value = String(published.reason);
-  if (directory.status === "fulfilled") directoryAgents.value = dsBotDirectoryTargets(directory.value.instances);
+  if (directory.status === "fulfilled") directoryAgents.value = automationDirectoryTargets(directory.value.instances);
   else providerError.value ||= String(directory.reason);
   if (saved.status === "fulfilled") connections.value = saved.value;
 }
 void loadProviders();
-const savedDsBotAgent = computed<RouteAgentTarget[]>(() => {
-  if (target.value.kind !== "ds_bot") return [];
+const savedAgent = computed<RouteAgentTarget[]>(() => {
+  if (target.value.kind === "recipient") return [];
   try {
     const saved = normalizeAgentDeliveryTarget(target.value);
-    return saved.kind === "ds_bot" ? [{ id: saved.agentTargetId, provider: "dsh", ...(saved.instanceBinding ? { binding: saved.instanceBinding } : {}) }] : [];
+    return saved.kind !== "recipient" && saved.instanceBinding ? [{ id: saved.agentTargetId, provider: saved.agentAdapter, binding: saved.instanceBinding }] : [];
   } catch { return []; }
 });
 const agents = computed<Array<RouteAgentTarget & { title: string }>>(() => [...new Map([
-  ...savedDsBotAgent.value.map(agent => ({ ...agent, title: `${agentName(agent.provider)} · ${agent.id}` })),
-  ...[...new Set([...(props.gateway.agentAdapters ?? []), ...(localDshAvailable.value ? ["dsh" as const] : [])])].filter(isAgentThreadCapableAdapter).map(provider => ({ id: `local:${provider}`, provider, title: `${agentName(provider)} · ${t("本机")}` })),
-  ...directoryAgents.value.map(item => ({ ...item, title: `${agentName(item.provider)} · ${item.binding?.ownerDeviceId ? item.binding.ownerDeviceId + ' / ' : ''}${item.binding?.instanceId} · ${item.binding?.agentId}` })),
-  ...(props.gateway.remoteAgentTargets ?? []).filter(item => isAgentThreadCapableAdapter(item.provider)).map(item => ({ ...item, binding: { instanceId: item.instanceId, agentId: item.agentId, ...(item.ownerDeviceId ? { ownerDeviceId: item.ownerDeviceId } : {}) }, title: `${agentName(item.provider)} · ${item.ownerDeviceId ? item.ownerDeviceId + ' / ' : ''}${item.instanceId} · ${item.agentId}` }))
+  ...savedAgent.value.map(agent => ({ ...agent, title: agentName(agent.provider) })),
+  ...[...new Set([...(props.gateway.agentAdapters ?? []), ...(localDshAvailable.value ? ["dsh" as const] : [])])].filter(isAgentThreadCapableAdapter).map(provider => ({ id: `local:${provider}`, provider, title: agentName(provider) })),
+  ...(props.gateway.remoteAgentTargets ?? []).filter(item => isAgentThreadCapableAdapter(item.provider)).map(item => ({ ...item, binding: { instanceId: item.instanceId, agentId: item.agentId, ...(item.ownerDeviceId ? { ownerDeviceId: item.ownerDeviceId } : {}) }, title: `${agentName(item.provider)} · ${item.agentId}` })),
+  ...directoryAgents.value.map(item => ({ ...item, title: item.agentName || agentName(item.provider) }))
 ].map(item => [item.id, item])).values()]);
+const device = ref("local");
+const deviceItems = computed(() => [...new Map([
+  ["local", { title: t("本机"), value: "local" }] as const,
+  ...agents.value.filter(agent => agent.binding).map(agent => {
+    const value = automationDeviceKey(agent.binding);
+    return [value, { title: directoryAgents.value.find(row => row.device === value)?.deviceName || agent.binding!.ownerDeviceId || agent.binding!.instanceId, value }] as const;
+  })
+]).values()]);
 const agentItems = computed(() => {
-  const items = agents.value.map(agent => ({ ...agent, props: { disabled: false } }));
+  const items = agents.value.filter(agent => automationDeviceKey(agent.binding) === device.value).map(agent => ({ ...agent, props: { disabled: false } }));
   const saved = target.value;
   if ((saved.kind === "session" || saved.kind === "ds_bot") && saved.agentTargetId && !items.some(item => item.id === saved.agentTargetId)) items.unshift({ id: saved.agentTargetId, provider: saved.agentAdapter, title: `${saved.agentTargetId} · ${t("已保存的目标，待核对")}`, props: { disabled: true } });
   return items;
@@ -120,7 +129,7 @@ const roomSnapshot = ref<Session>();
 let identityGeneration = 0;
 const offset = ref<number | undefined>();
 let generation = 0;
-onBeforeUnmount(() => { disposed = true; generation++; identityGeneration++; clearTimeout(searchTimer); });
+onBeforeUnmount(() => { disposed = true; directoryAbort.abort(); generation++; identityGeneration++; clearTimeout(searchTimer); });
 watch(() => props.modelValue, value => {
   if (value?.kind === "session" || value?.kind === "ds_bot") {
     if (selectedAgentId.value !== value.agentTargetId || destinationMode.value !== value.kind) {
@@ -131,16 +140,27 @@ watch(() => props.modelValue, value => {
     destinationMode.value = value.kind;
     if (value.kind === "ds_bot") selectedDshOrigin.value = value.dshBaseUrl ?? "";
     selectedAgentId.value = value.agentTargetId;
+    const binding = value.instanceBinding ?? agents.value.find(agent => agent.id === value.agentTargetId)?.binding;
+    if (binding || value.agentTargetId.startsWith("local:")) device.value = automationDeviceKey(binding);
     if (value.kind === "session" && value.agentAdapter !== "grokBot" && value.sessionId && !sessions.value.some(item => item.id === value.sessionId)) sessions.value.unshift({ id: value.sessionId, name: value.sessionName, projectPath: value.workspace });
   }
 }, { immediate: true });
 function selectRecipient(value: string) {
+  device.value = "local";
+  clearAgentSelection(value);
+}
+function clearAgentSelection(value: string) {
   destinationMode.value = "session"; botCatalog.value = undefined;
   resetIdentities();
   clearTimeout(searchTimer); query.value = ""; selectedAgentId.value = ""; searched.value = false;
   generation++; loading.value = false; error.value = ""; sessions.value = []; offset.value = undefined;
   if (value !== "$session") emit("update:modelValue", { kind: "recipient", recipientId: value });
   else emit("update:modelValue", { kind: "session", agentTargetId: "", agentAdapter: "codex", sessionId: "", sessionName: "", workspace: "" });
+}
+function selectDevice(value: string) {
+  if (value === device.value || !deviceItems.value.some(item => item.value === value)) return;
+  device.value = value;
+  clearAgentSelection("$session");
 }
 function selectAgent(value: string) {
   selectedDshOrigin.value = "";
@@ -149,14 +169,15 @@ function selectAgent(value: string) {
   clearTimeout(searchTimer); query.value = ""; searched.value = false;
   generation++; loading.value = false; sessions.value = []; offset.value = undefined; error.value = "";
   selectedAgentId.value = value;
-  const agent = agents.value.find(item => item.id === value);
+  const agent = agents.value.find(item => item.id === value && automationDeviceKey(item.binding) === device.value);
   if (agent) {
     if (agent.provider === "dsh" && destinationMode.value === "ds_bot") {
       emit("update:modelValue", { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: agent.id, botScopeId: "", botId: "", botName: "" });
       void scan(); return;
     }
     destinationMode.value = "session";
-    const next: SessionTarget = { kind: "session", agentTargetId: agent.id, agentAdapter: agent.provider, sessionId: "", sessionName: "", workspace: "", ...(agent.provider === "grokBot" ? { deliveryType: "private" as const, sendMode: "direct" as const } : {}) };
+    const next: SessionTarget = { kind: "session", agentTargetId: agent.id, agentAdapter: agent.provider, sessionId: "", sessionName: "", workspace: "",
+      ...(agent.binding ? { instanceBinding: agent.binding } : {}), ...(agent.provider === "grokBot" ? { deliveryType: "private" as const, sendMode: "direct" as const } : {}) };
     emit("update:modelValue", next);
     void scan();
   }
@@ -167,7 +188,11 @@ function selectDestinationMode(value: "session" | "ds_bot") {
   clearTimeout(searchTimer); query.value = ""; generation++; loading.value = false; searched.value = false;
   sessions.value = []; botCatalog.value = undefined; offset.value = undefined; error.value = ""; resetIdentities();
   if (value === "ds_bot") emit("update:modelValue", { kind: "ds_bot", agentAdapter: "dsh", agentTargetId: selectedAgentId.value, botScopeId: "", botId: "", botName: "" });
-  else emit("update:modelValue", { kind: "session", agentAdapter: "dsh", agentTargetId: selectedAgentId.value, sessionId: "", sessionName: "", workspace: "" });
+  else {
+    const binding = agents.value.find(agent => agent.id === selectedAgentId.value)?.binding;
+    emit("update:modelValue", { kind: "session", agentAdapter: "dsh", agentTargetId: selectedAgentId.value, sessionId: "", sessionName: "", workspace: "",
+      ...(binding ? { instanceBinding: binding } : {}) });
+  }
   void scan();
 }
 function selectBot(value: string) {
@@ -313,8 +338,10 @@ function openSessions(open: boolean) {
     </ul>
     <p v-else-if="target.kind === 'recipient'" class="delivery-hint">{{ selectedRecipient?.executor === 'primary' ? primaryDescription : recipientHint }}</p>
     <div v-else class="delivery-custom">
-      <p class="delivery-hint">{{ t('选择 Agent，再选择接收对象') }}</p>
+      <p class="delivery-hint">{{ t('选择设备、Agent 和接收对象') }}</p>
       <div class="delivery-fields">
+        <v-select :model-value="device" :items="deviceItems" :label="t('接收设备')" density="compact"
+          variant="outlined" hide-details @update:model-value="selectDevice" />
         <v-select :model-value="selectedAgentId" :items="agentItems" item-title="title" item-value="id"
           :label="t('Agent 端')" :placeholder="t('选择 Agent')" density="compact" variant="outlined" hide-details
           :no-data-text="t('暂无可用 Agent，请先在 Agent 设置中配置。')" @update:model-value="selectAgent" >

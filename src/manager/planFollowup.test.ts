@@ -37,6 +37,18 @@ test("normalization preserves explicit empty selection and bounds invalid number
   assert.deepEqual(normalizePlanFollowup(config), config);
 });
 
+test("follow-up matches the selected computer and keeps existing unscoped rules", () => {
+  const pc = { instanceId: "pc-one" };
+  const run = (sourceDevice: unknown, sourceInstance?: typeof pc) => decidePlanFollowup({ ...input, sourceInstance,
+    config: { ...config, rules: [{ ...config.rules[0], sourceDevice }] } });
+  assert.ok(run(undefined, pc));
+  assert.ok(run("local"));
+  assert.equal(run("local", pc), null);
+  assert.ok(run(pc, pc));
+  assert.equal(run(pc, { instanceId: "pc-two" }), null);
+  assert.equal(run(pc), null);
+});
+
 test("显式暂停即使命中追问规则也不唤醒，旧正文不改变判定", () => {
   const pausedWorkflow = { ...workflow, roles: { ...workflow.roles, paused: plan.status } };
   assert.equal(decidePlanFollowup({ ...input, workflow: pausedWorkflow }), null);

@@ -39,6 +39,24 @@ test("remote calls omit local target identity and wrong-session receipts fail", 
   await assert.rejects(sendAutomationSession(target, envelope, "delivery-one", async () => ({ delivery: { ...receipt("delivery-one").delivery, targetThreadId: "other" } })), /no confirmed receipt/);
 });
 
+test("unified Manager receipts recover using the actual ID after a restart", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scoped-session-delivery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = path.join(root, "intent.json"), actualId = "agent-" + "b".repeat(64), calls: unknown[] = [];
+  const remote = { ...target, agentTargetId: "remote:node:agent", instanceBinding: { instanceId: "node", agentId: "agent" } };
+  await assert.rejects(deliverSessionOnce(state, remote, envelope, "caller", async payload => {
+    calls.push(payload.action);
+    if (payload.action !== "send") { assert.equal(payload.deliveryId, actualId); throw new Error("waiting"); }
+    return { threadId: remote.sessionId, delivery: { status: "unconfirmed", deliveryId: actualId, targetThreadId: remote.sessionId }, communication: { deliveryId: actualId } };
+  }, { remote: true }), /no confirmed receipt/);
+  await deliverSessionOnce(state, remote, envelope, "caller", async payload => {
+    calls.push(payload.action);
+    assert.equal(payload.deliveryId, actualId);
+    return { ...receipt(actualId), delivery: { ...receipt(actualId).delivery, status: "accepted" } };
+  }, { remote: true });
+  assert.deepEqual(calls, ["send", "reconcile_delivery", "reconcile_delivery"]);
+});
+
 test("DSH direct, steer and queue send into the same selected session", async () => {
   const dsh: AgentSessionDestination = { ...target, agentAdapter: "dsh", agentTargetId: "local:dsh" };
   const modes = [undefined, "steer", "queue"] as const;

@@ -224,7 +224,7 @@ Session conditions support searchable multi-selection and explicit paginated loa
 
 For NapCat, choose a Route, QQ account, group or private QQ, and the corresponding ID. Speech uses the selected Route's synthesis and playback settings without QQ fields. Existing group rules migrate while preserving their project, plan requirement, destination, and enabled state; saving removes the legacy fields. New rules start disabled; complete the settings, enable the rule, and save the persona.
 
-With a project filter, Codex projects in different repository directories remain separate; worktrees retain the relative project directory. Non-Git projects match the exact directory. Notifications show the task name, linked plan names, and final reply, without project paths or session IDs. The current Codex title takes priority over the saved plan binding title; if neither exists, the task is labelled unnamed. Require a linked plan only accepts task bindings in this role's plans.
+With a project filter, the turn's working directory must match. Local Codex also verifies the chat's saved project. Git worktrees retain the relative project directory. Non-Git projects match the exact directory. Notifications show the task name, linked plan names, and final reply, without project paths or session IDs. The current Codex title takes priority over the saved plan binding title; if neither exists, the task is labelled unnamed. Require a linked plan only accepts task bindings in this role's plans.
 
 Repeated events reuse the receipt for the same task, turn, and target. Uncertain sending outcomes are not automatically retried; check the Route's sending log. Events without a turn ID or final reply are ignored. Rules start disabled and do not send historical messages when added.
 

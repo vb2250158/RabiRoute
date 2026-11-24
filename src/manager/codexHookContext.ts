@@ -14,7 +14,7 @@ import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
 import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
 import { agentHookSettingsFor } from "../shared/gatewayConfigModel.js";
-import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
+import { planBindingDeliveryIdentity, planBindingMatchesSource, planBindingSourceKey, type PlanBindingSource, type PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
 import type { AgentThreadRemoteSource } from "../agentThreads.js";
 
 const STORE_VERSION = 9;
@@ -186,6 +186,7 @@ export type CodexHookContextServiceOptions = {
   observeCodexProgress?: (request: CodexHookContextRequest) => void;
   readContext?: (input: CodexHookContextReadRequest) => Promise<CodexHookContextReadReply>;
   deliverAgentCompletion?: (request: CodexHookContextRequest, roleIds?: readonly string[]) => Promise<import("./agentCompletionDelivery.js").CompletionDeliveryResult[]>;
+  resolveFollowupSource?: (request: CodexHookContextRequest) => PlanBindingSource | undefined;
   rolesRoot: () => string;
   storePath: string;
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
@@ -501,6 +502,7 @@ export class CodexHookContextService {
   private readonly onChatHistoryChanged?: CodexHookContextServiceOptions["onChatHistoryChanged"];
 
   private readonly deliverAgentCompletion?: CodexHookContextServiceOptions["deliverAgentCompletion"];
+  private readonly resolveFollowupSource?: CodexHookContextServiceOptions["resolveFollowupSource"];
 
   constructor(options: CodexHookContextServiceOptions) {
     this.recordOriginalChatTurn = options.recordOriginalChatTurn;
@@ -508,6 +510,7 @@ export class CodexHookContextService {
     this.onHookStage = options.onHookStage;
     this.readContext = options.readContext;
     this.deliverAgentCompletion = options.deliverAgentCompletion;
+    this.resolveFollowupSource = options.resolveFollowupSource;
     this.rolesRoot = options.rolesRoot;
     this.storePath = path.resolve(options.storePath);
     this.deliverPlanTaskCompletion = options.deliverPlanTaskCompletion;
@@ -1153,9 +1156,11 @@ export class CodexHookContextService {
 
   private planFollowup(request: CodexHookContextRequest, planRoleIds?: readonly string[]): CodexHookContextResult["followup"] {
     if (request.stopHookActive || !request.turnId) return undefined;
+    const source = this.resolveFollowupSource ? this.resolveFollowupSource(request) : request;
+    if (!source) return undefined;
     const matches = (planRoleIds ?? this.listRoles()).flatMap(roleId => {
       const role = this.requireRole(roleId);
-      return this.listPlansOrCold(role.roleDir).filter(plan => planBindingMatchesSource(plan.taskBinding, request)
+      return this.listPlansOrCold(role.roleDir).filter(plan => planBindingMatchesSource(plan.taskBinding, source, true)
         && plan.archiveStatus !== "已归档")
         .map(plan => ({ ...role, plan }));
     });
@@ -1169,6 +1174,7 @@ export class CodexHookContextService {
     const key = typeof sourceIdentity === "string" ? fingerprint([roleId, plan.id, sourceIdentity])
       : crypto.createHash("sha256").update(JSON.stringify([roleId, plan.id, sourceIdentity])).digest("hex");
     const result = decidePlanFollowup({ config, workflow, plan, sessionId: request.sessionId,
+      sourceInstance: source.sourceInstance,
       turnId: request.turnId, stopHookActive: request.stopHookActive,
       previous: store.planFollowups?.[key], now: Date.now() });
     if (!result) return undefined;

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.84 - 2026-11-25
+
+- Persona 0.1.47 adds source and receiving device selection to Agent rules and session delivery, preserving legacy device scopes and existing local settings and correcting project conditions, remote plan identity and original receipt reconciliation.
+
 ## 0.15.83 - 2026-11-25
 
 - Forward the end of mobile streaming recognition so the assistant can return to standby after the final transcript and the existing idle timeout.

@@ -15,6 +15,7 @@ export type AgentSessionDestination = {
   sessionId: string;
   sessionName: string;
   workspace: string;
+  instanceBinding?: AgentInstanceBinding;
   sendTiming?: AgentSessionSendTiming;
   dshDeliveryMode?: "queue" | "steer";
   deliveryType?: "private" | "group";
@@ -82,6 +83,10 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
   }
   if (raw.kind === "recipient" && text("recipientId")) return { kind: "recipient", recipientId: text("recipientId") };
   if (raw.kind === "session" && isAgentAdapterType(raw.agentAdapter)) {
+    const instanceBinding = normalizeAgentInstanceBinding(raw.instanceBinding);
+    if (raw.instanceBinding !== undefined && (!instanceBinding || text("agentTargetId") !== remoteAgentTargetKey(instanceBinding))) {
+      throw new Error("Remote session destination requires its exact device and Agent binding.");
+    }
     const delivery: Partial<AgentSessionDestination> = {};
     if (raw.sendTiming !== undefined) {
       if (!agentSessionSupportsSendTiming(raw.agentAdapter) || (raw.sendTiming !== "direct" && raw.sendTiming !== "queue")) {
@@ -106,7 +111,8 @@ export function normalizeAgentDeliveryTarget(value: unknown): AgentDeliveryTarge
       } else if (text("senderAgentId") || text("senderAgentName")) throw new Error("Direct delivery cannot retain a sender identity.");
     }
     return { kind: "session", agentTargetId: text("agentTargetId"), agentAdapter: raw.agentAdapter,
-      sessionId: text("sessionId"), sessionName: text("sessionName"), workspace: text("workspace"), ...delivery };
+      sessionId: text("sessionId"), sessionName: text("sessionName"), workspace: text("workspace"),
+      ...(instanceBinding ? { instanceBinding } : {}), ...delivery };
   }
   throw new Error("Select an Agent recipient or a complete Agent/session binding.");
 }

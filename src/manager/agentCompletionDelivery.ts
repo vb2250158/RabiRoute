@@ -13,7 +13,7 @@ import { handleAgentSend, inspectAgentSendDelivery, type AgentSendRequest } from
 import { completionConversationFields } from "../shared/agentHookAutomation.js";
 import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
-import { agentHookEventsFor, agentHookRuleErrors, agentHookRuleEvents } from "../shared/agentHookAutomation.js";
+import { agentHookDeviceMatches, agentHookEventsFor, agentHookRuleErrors, agentHookRuleEvents } from "../shared/agentHookAutomation.js";
 import { agentAdapterManifest, isAgentAdapterType, agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 import { mermaidDiagramSource, renderMarkdownFileToPngPages } from "../markdownImage.js";
@@ -26,10 +26,12 @@ import { originalChatChannel } from "../shared/agentHookAutomation.js";
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed" | "skipped"; reason?: string };
 export type CompletionRuleOwner = { roleId: string; rule: AgentCompletionDeliveryRule };
 export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string, source?: PlanBindingSource): CompletionRuleOwner[] {
-  return plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source)
+  return plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source, true)
     : plan.taskBinding?.sessionId === sessionId && !plan.taskBinding.instanceBinding)
     .flatMap(plan => (plan.messageChannels ?? []).map((destination, index) => ({ roleId, rule: {
-      id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
+      id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination,
+      ...(source?.sourceInstance ? { sourceDevice: { instanceId: source.sourceInstance.instanceId,
+        ...(source.sourceInstance.ownerDeviceId ? { ownerDeviceId: source.sourceInstance.ownerDeviceId } : {}) } } : {})
     } })));
 }
 export type CompletionTaskContext = { taskName?: string; plans: Array<{ id: string; title: string }>; images?: string[]; imageReadError?: boolean; originalChat?: OriginalChat };
@@ -60,7 +62,7 @@ export function splitCompletionMessage(text: string, maxChars = 3000): string[] 
 
 export function completionTaskContextFromPlans(sessionId: string,
   plans: readonly Pick<PlanItem, "id" | "title" | "taskBinding">[], currentTitle?: string, source?: PlanBindingSource): CompletionTaskContext {
-  const bound = plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source)
+  const bound = plans.filter(plan => source ? planBindingMatchesSource(plan.taskBinding, source, true)
     : plan.taskBinding?.sessionId === sessionId && !plan.taskBinding.instanceBinding);
   return {
     taskName: currentTitle?.trim() || undefined,
@@ -147,7 +149,8 @@ export function completionMessagePayloads(text: string, renderDiagrams: boolean,
 }
 
 export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryRule, hook: CodexHookContextRequest,
-  deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] }): Promise<void> {
+  deliveryId: string, routeId: string, options: AgentReplyOptions, context: CompletionTaskContext = { plans: [] },
+  assertRuleCurrent?: () => void): Promise<void> {
   const taskName = context.taskName?.trim() || "未命名任务";
   const agent = isAgentAdapterType(hook.agentType) ? agentAdapterManifest(hook.agentType).label : "Codex";
   const { params } = rule.destination;
@@ -171,7 +174,8 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     payload: { type: "text", text },
     styleValidation: 0
   };
-  let images = context.images ?? [];
+  const localSource = !hook.sourceInstance && !hook.peerEndpoint;
+  let images = localSource ? context.images ?? [] : [];
   if (channel === "napcat" && images.length) {
     const linked = completionMessagePayloads(text, false, hook.cwd).flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
       .filter((segment): segment is { type: "image"; path: string } => segment.type === "image" && typeof segment.path === "string");
@@ -182,7 +186,9 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     }
     images = images.filter(image => !embedded.has(image));
   }
-  const payloads = channel === "napcat" && !original ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false") : [{ type: "text", text }];
+  const payloads: Array<Record<string, unknown>> = channel === "napcat" && !original && localSource
+    ? completionMessagePayloads(text, params.renderDiagrams !== "false", hook.cwd, images, params.renderTables !== "false")
+    : channel === "napcat" && !original ? splitCompletionMessage(text).map(text => ({ type: "text", text })) : [{ type: "text", text }];
   const displayedImageFiles = new Set(payloads.flatMap(payload => Array.isArray(payload.segments) ? payload.segments : [])
     .filter((segment): segment is { type: "image"; path: string } => segment.type === "image" && typeof segment.path === "string")
     .map(segment => canonicalPath(segment.path)));
@@ -193,12 +199,14 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
     };
     const inspection = await inspectAgentSendDelivery(part, options);
     if (inspection.state === "uncertain") throw new Error(inspection.reason);
+    if (inspection.state !== "completed") assertRuleCurrent?.();
     const result = inspection.state === "completed" ? inspection.result : await handleAgentSend(part, options);
     if (result.status !== "sent" || (channel === "napcat" && !result.sentMessageId)) throw new Error(result.reason || "完成消息未取得发送回执。");
   }
-  if (channel === "napcat" && !original && params.includeFiles !== "false") {
+  if (channel === "napcat" && !original && localSource && params.includeFiles !== "false") {
     const failures: string[] = [];
     for (const file of completionLocalFiles(hook.lastAssistantMessage!)) {
+      assertRuleCurrent?.();
       const part: AgentSendRequest = { ...request,
         deliveryId: `${deliveryId}-file-${createHash("sha256").update(process.platform === "win32" ? file.toLowerCase() : file).digest("hex")}`,
         payload: { type: "file", path: file, fileName: path.basename(file) }
@@ -251,7 +259,7 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
           await fs.promises.rename(tempPath, preparedPath);
           recordDataMutationAudit({ group: "agent.completion", event: "completion_attachment_prepared", owner: "agentCompletionDelivery", action: "write", target: { type: "completion-attachment", id: String(part.deliveryId) }, dataSource: { kind: "file", id: preparedPath }, outcome: "committed" });
         }
-        result ??= await handleAgentSend(part, options);
+        if (!result) { assertRuleCurrent?.(); result = await handleAgentSend(part, options); }
         if (result.status !== "sent" || !(result.sentFileId || result.sentMessageId)) {
           failures.push(`${path.basename(file)}: ${result.reason || "文件未取得发送回执。"}`);
         }
@@ -265,6 +273,16 @@ export async function deliverCompletionToEndpoint(rule: AgentCompletionDeliveryR
 function canonicalPath(value: string): string {
   const result = path.resolve(value);
   return process.platform === "win32" ? result.toLowerCase() : result;
+}
+
+/** A path from another device must never be opened on the Manager. */
+function remoteProjectPath(value: string): string {
+  const directory = value.trim();
+  if (/^(?:[a-z]:[\\/]|[\\/]{2})/i.test(directory)) {
+    const windows = directory.replaceAll("\\", "/").replace(/^\/\/\?\/UNC\//i, "//").replace(/^\/\/\?\//, "");
+    return path.win32.normalize(windows).replace(/\\+$/, "").toLowerCase();
+  }
+  return directory.startsWith("/") ? path.posix.normalize(directory).replace(/\/$/, "") || "/" : "";
 }
 
 /** Git's common directory identifies all worktrees of one project without prefix matching unrelated projects. */
@@ -295,14 +313,20 @@ export class AgentCompletionDeliveryService {
   constructor(private readonly options: {
     rules(request: CodexHookContextRequest, roleIds?: readonly string[]): CompletionRuleOwner[];
     projectIdentity?: typeof completionProjectIdentity;
+    readLocalCodexTask?(sessionId: string): Promise<{ cwd: string } | null | undefined>;
+    readRemoteTask?(request: CodexHookContextRequest): Promise<{ cwd: string } | null | undefined>;
+    resolveRemoteSource?(request: CodexHookContextRequest): PlanBindingSource["sourceInstance"];
+    hasBoundPlan?(owner: CompletionRuleOwner, request: CodexHookContextRequest): boolean;
     resolveOriginalChat?(owner: CompletionRuleOwner, request: CodexHookContextRequest): OriginalChat | undefined;
     taskContext?(owner: CompletionRuleOwner, request: CodexHookContextRequest): CompletionTaskContext | Promise<CompletionTaskContext>;
-    deliver(owner: CompletionRuleOwner, request: CodexHookContextRequest, deliveryId: string, context: CompletionTaskContext): Promise<void>;
+    deliver(owner: CompletionRuleOwner, request: CodexHookContextRequest, deliveryId: string, context: CompletionTaskContext,
+      assertRuleCurrent: () => void): Promise<void>;
   }) {}
 
   private observesProgress(request: CodexHookContextRequest, roleIds?: readonly string[]): boolean {
     return this.options.rules({ ...request, eventName: "AssistantProgress" }, roleIds)
-      .some(({ rule }) => rule.enabled && agentHookRuleEvents(rule).includes("task_progress"));
+      .some(({ rule }) => rule.enabled && agentHookDeviceMatches(rule.sourceDevice, this.options.resolveRemoteSource?.(request) ?? request.sourceInstance)
+        && agentHookRuleEvents(rule).includes("task_progress"));
   }
 
   beginCodexProgress(request: CodexHookContextRequest): boolean {
@@ -329,12 +353,18 @@ export class AgentCompletionDeliveryService {
     const key = JSON.stringify([source, request.turnId, event.value, request.eventName === "AssistantProgress" ? request.messageId : null, originalOnly]);
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const matches = () => this.options.rules(request, roleIds).filter(({ rule }) => rule.enabled && agentHookRuleEvents(rule).includes(event.value)
-      && (!originalOnly || rule.destination.channel === originalChatChannel));
+    const matches = (currentRequest: CodexHookContextRequest, eventType: string) => {
+      const deviceSource = this.options.resolveRemoteSource?.(currentRequest) ?? currentRequest.sourceInstance;
+      return this.options.rules(currentRequest, roleIds).filter(({ rule }) => rule.enabled && agentHookRuleEvents(rule).includes(eventType)
+        && agentHookDeviceMatches(rule.sourceDevice, deviceSource)
+        && (!originalOnly || rule.destination.channel === originalChatChannel));
+    };
+    const currentRule = (owner: CompletionRuleOwner, currentRequest: CodexHookContextRequest, eventType: string) =>
+      matches(currentRequest, eventType).some(candidate => candidate.roleId === owner.roleId && JSON.stringify(candidate.rule) === JSON.stringify(owner.rule));
     const received = async () => {
       if (request.eventName === "AssistantProgress") {
         if (!notification.text.trim() || !request.messageId?.trim()) return [];
-        const owners = matches();
+        const owners = matches(request, event.value);
         if (!owners.length) return [];
         const turn = this.progressTurn(request, source);
         if (!turn || turn.seen.has(request.messageId)) return [];
@@ -342,7 +372,7 @@ export class AgentCompletionDeliveryService {
         const message = { ...request, lastAssistantMessage: notification.text };
         const guarded = owners.filter(({ rule }) => rule.conditions.some(item => item.type === "exclude_heartbeat"));
         if (guarded.length && !notification.heartbeat) turn.waiting.push({ request: message, owners: guarded });
-        return this.deliverMatches(message, owners.filter(owner => !guarded.includes(owner)), false);
+        return this.deliverMatches(message, owners.filter(owner => !guarded.includes(owner)), false, owner => currentRule(owner, request, event.value));
       }
 
       const results: CompletionDeliveryResult[] = [];
@@ -354,17 +384,17 @@ export class AgentCompletionDeliveryService {
           turn.closed = true;
           if (waiting.length && !notification.heartbeat && notification.text.trim()) {
             // A removed, disabled or changed rule must not send staged text.
-            const current = this.options.rules({ ...request, eventName: "AssistantProgress" }, roleIds);
+            const progressRequest = { ...request, eventName: "AssistantProgress" as const };
             for (const item of waiting) {
-              const active = item.owners.filter(owner => current.some(candidate => candidate.rule.enabled
-                && candidate.roleId === owner.roleId && JSON.stringify(candidate.rule) === JSON.stringify(owner.rule)));
-              results.push(...await this.deliverMatches(item.request, active, false));
+              const isCurrent = (owner: CompletionRuleOwner) => currentRule(owner, progressRequest, "task_progress");
+              results.push(...await this.deliverMatches({ ...item.request, cwd: request.cwd }, item.owners.filter(isCurrent), false, isCurrent));
             }
           }
         }
       }
       if (notification.text.trim()) results.push(...await this.deliverMatches(
-        { ...request, lastAssistantMessage: notification.text }, matches(), notification.heartbeat));
+        { ...request, lastAssistantMessage: notification.text }, matches(request, event.value), notification.heartbeat,
+        owner => currentRule(owner, request, event.value)));
       return results;
     };
     const operation = received().finally(() => this.pending.delete(key));
@@ -385,16 +415,19 @@ export class AgentCompletionDeliveryService {
     return entry;
   }
 
-  private async deliverMatches(request: CodexHookContextRequest, owners: CompletionRuleOwner[], heartbeat: boolean): Promise<CompletionDeliveryResult[]> {
+  private async deliverMatches(request: CodexHookContextRequest, owners: CompletionRuleOwner[], heartbeat: boolean,
+    isCurrent: (owner: CompletionRuleOwner) => boolean): Promise<CompletionDeliveryResult[]> {
     if (!owners.length) return [];
     const identify = this.options.projectIdentity ?? completionProjectIdentity;
     const results: CompletionDeliveryResult[] = [];
     let project: string | undefined;
+    let codexTaskProject: Promise<string> | undefined;
+    let remoteTask: Promise<{ cwd: string } | null | undefined> | undefined;
     const targets = new Set<string>();
     for (const owner of owners) {
       const { rule } = owner;
       try {
-        const errors = agentHookRuleErrors(rule);
+        const errors = agentHookRuleErrors(rule, request.agentType ?? "codex");
         if (errors.length) throw new Error(errors.join(" "));
         if (heartbeat && rule.conditions.some(condition => condition.type === "exclude_heartbeat")) continue;
         if (rule.conditions.some(condition =>
@@ -403,14 +436,33 @@ export class AgentCompletionDeliveryService {
         const projectCondition = rule.conditions.find(condition => condition.type === "project");
         if (projectCondition) {
           if (!request.cwd?.trim()) continue;
-          if (request.sourceInstance && !this.options.projectIdentity) {
-            throw new Error("Remote project identity cannot be read on the Manager computer; use the bound plan or configure a remote-aware project identity reader.");
+          if (request.sourceInstance) {
+            if (rule.sourceDevice === undefined) throw new Error("旧规则的项目条件仅在本机核对。在规则中选择触发设备后，可核对该设备的项目。");
+            const expected = remoteProjectPath(projectCondition.path!);
+            if (!expected || remoteProjectPath(request.cwd) !== expected) continue;
+            remoteTask ??= this.options.readRemoteTask?.(request);
+            const task = await remoteTask;
+            if (!task?.cwd) throw new Error("无法在所选设备核对会话所属项目。");
+            if (remoteProjectPath(task.cwd) !== expected) continue;
+          } else {
+            project ??= await identify(request.cwd);
+            if (await identify(projectCondition.path!) !== project) continue;
           }
-          project ??= await identify(request.cwd);
-          if (await identify(projectCondition.path!) !== project) continue;
+          if (!request.sourceInstance && (request.agentType ?? "codex") === "codex" && this.options.readLocalCodexTask) {
+            // A turn can run outside the project that owns its chat.
+            codexTaskProject ??= this.options.readLocalCodexTask(request.sessionId).then(task => {
+              const cwd = task?.cwd?.trim();
+              if (!cwd) throw new Error("无法核对 Codex 会话所属项目，已跳过限定项目的投递。");
+              return cwd === request.cwd ? project! : identify(cwd);
+            });
+            if (await codexTaskProject !== project) continue;
+          }
         }
         let context = await this.options.taskContext?.(owner, request) ?? { plans: [] };
-        if (rule.conditions.some(condition => condition.type === "bound_plan") && context.plans.length === 0) continue;
+        const requiresPlan = rule.conditions.some(condition => condition.type === "bound_plan");
+        const ruleApplies = () => isCurrent(owner) && (!requiresPlan
+          || (this.options.hasBoundPlan?.(owner, request) ?? context.plans.length > 0));
+        if (!ruleApplies()) continue;
         let { channel, gatewayId, params } = rule.destination;
         if (channel === originalChatChannel) {
           const original = this.options.resolveOriginalChat?.(owner, request);
@@ -433,7 +485,9 @@ export class AgentCompletionDeliveryService {
           : [planBindingDeliveryIdentity(request), request.turnId, target];
         const kind = request.eventName === "AssistantProgress" ? "progress" : "completion";
         const deliveryId = `agent-${kind}-${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
-        await this.options.deliver(owner, request, deliveryId, context);
+        await this.options.deliver(owner, request, deliveryId, context, () => {
+          if (!ruleApplies()) throw new Error("规则或计划绑定已更改，已停止尚未发送的投递。");
+        });
         results.push({ ruleId: rule.id, status: "sent" });
       } catch (error) {
         results.push({ ruleId: rule.id, status: "failed", reason: error instanceof Error ? error.message : String(error) });

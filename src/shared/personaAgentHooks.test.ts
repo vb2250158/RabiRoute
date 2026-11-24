@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { agentHookSettingsFor, normalizeCodexHookSettings, type GatewayDefinition } from "./gatewayConfigModel.js";
 import { agentAdapterTypes, agentAdapterSupportsLifecycleHooks } from "./agentAdapterCapabilities.js";
-import { configuredPersonaHookAgents, editPersonaAgentRule, personaHookAgentOptions } from "./personaAgentHooks.js";
+import { configuredPersonaHookAgents, editPersonaAgentRule, personaAgentHookDraft, personaHookAgentOptions } from "./personaAgentHooks.js";
 
 test("Hook choices come from configured local ends, excluding disabled routes and other owners", () => {
   const routes = [
@@ -61,4 +61,17 @@ test("moving a follow-up keeps unrelated target rules and preserves both Agents'
     enabled: false, cooldownSeconds: 240, rules: [targetRule, { ...rule, id: "moved" }]
   });
   assert.deepEqual(settings.byAgent?.dsh?.planFollowup?.rules, [rule]);
+});
+
+test("editing a legacy event rule preserves the absent device and saves an explicit local selection", () => {
+  const settings = normalizeCodexHookSettings({ completionDeliveries: [{ id: "legacy", enabled: true, event: "task_completed",
+    conditions: [], destination: { channel: "speech", gatewayId: "fixture", params: {} } }] });
+  const original = personaAgentHookDraft(settings, "codex").completionDeliveries![0];
+  const save = (sourceDevice?: "local") => normalizeCodexHookSettings(JSON.parse(JSON.stringify(editPersonaAgentRule(settings, {
+    rule: { kind: "delivery", value: { ...original, name: "Edited title", ...(sourceDevice ? { sourceDevice } : {}) } },
+    targetAgent: "codex", sourceAgent: "codex", createId: () => "unchanged"
+  })))).byAgent?.codex?.completionDeliveries?.[0];
+  assert.equal(save()?.name, "Edited title");
+  assert.equal(Object.hasOwn(save()!, "sourceDevice"), false);
+  assert.equal(save("local")?.sourceDevice, "local");
 });

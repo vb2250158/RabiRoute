@@ -1,3 +1,5 @@
+import { normalizeAgentHookDevice, type AgentHookDeviceSelection } from "./agentHookAutomation.js";
+
 /** Persona-owned Stop rules. Status keys come from the persona's workflow catalog. */
 export type PlanFollowupRule = {
   id: string;
@@ -5,6 +7,7 @@ export type PlanFollowupRule = {
   enabled: boolean;
   statusKeys: string[];
   prompt: string;
+  sourceDevice?: AgentHookDeviceSelection;
 };
 export type PlanFollowupSettings = {
   enabled: boolean;
@@ -15,11 +18,13 @@ export type PlanFollowupSettings = {
 export function normalizePlanFollowup(value: unknown): PlanFollowupSettings {
   const raw = value && typeof value === "object" ? value as Partial<PlanFollowupSettings> : {};
   const ids = new Set<string>();
-  const rules = (Array.isArray(raw.rules) ? raw.rules : []).flatMap(rule => {
+  const rules = (Array.isArray(raw.rules) ? raw.rules : []).flatMap<PlanFollowupRule>(rule => {
     if (!rule || typeof rule.id !== "string" || !rule.id.trim() || ids.has(rule.id.trim())) return [];
     ids.add(rule.id.trim());
     const name = typeof rule.name === "string" ? rule.name.trim() : "";
+    const sourceDevice = normalizeAgentHookDevice(rule.sourceDevice);
     return [{ id: rule.id.trim(), ...(name ? { name } : {}), enabled: rule.enabled === true,
+      ...(sourceDevice ? { sourceDevice } : {}),
       statusKeys: [...new Set((Array.isArray(rule.statusKeys) ? rule.statusKeys : [])
         .filter((key): key is string => typeof key === "string" && Boolean(key.trim())).map(key => key.trim()))],
       prompt: typeof rule.prompt === "string" ? rule.prompt.trim().slice(0, 4000) : "" }];

@@ -12,7 +12,7 @@ import type { RoleConfiguration } from "../../../../shared/roleConfiguration";
 import type { GatewayDefinition, PersonaAutomationRuleDefinition } from "../../../../../ribiwebgui/src/types";
 
 const names = [
-  "openAutomationCreation", "beginAutomationPreview", "previewFromTemplate", "confirmAutomationPreview",
+  "openAutomationCreation", "beginAutomationPreview", "previewFromTemplate", "confirmAutomation",
   "automationTemplateChoice", "templateDeliveryAction", "patchAutomation", "withAutomationTemplateRequest", "selectAutomationAction",
   "saveCustomAutomationTemplate", "removeCustomAutomationTemplate"
 ];
@@ -42,27 +42,34 @@ function editor(options: Record<string, unknown> = {}) {
   const actions = createRoleEditorActions(() => draft.value, () => {});
   const activeId = ref("existing");
   const automationPreview = ref<PersonaAutomationRuleDefinition | null>(null);
+  const automationEdit = ref<PersonaAutomationRuleDefinition | null>(JSON.parse(JSON.stringify(draft.value.automationRules![0])));
   const automationDialog = ref(false);
   const automationCreationDialog = ref(false);
   const creationTemplateId = ref<string | null>(null);
-  watch(automationDialog, open => { if (!open) automationPreview.value = null; }, { flush: "sync" });
-  const activeAutomation = computed(() => automationPreview.value ?? draft.value.automationRules!.find(rule => rule.id === activeId.value));
+  watch(automationDialog, open => { if (!open) { automationPreview.value = null; automationEdit.value = null; } }, { flush: "sync" });
+  const activeAutomation = computed(() => automationPreview.value ?? automationEdit.value);
   const ownAutomationTemplates = computed(() => draft.value.automationDeliveryTemplates ?? []);
   const selectedAutomationTemplateId = ref("");
   const selectedCustomAutomationTemplate = computed(() => ownAutomationTemplates.value
     .find(item => selectedAutomationTemplateId.value === "custom:" + item.id));
   const automationTemplateError = ref("");
   const automationTemplates = ref([...DEFAULT_AUTOMATION_TEMPLATES]);
+  let saves = 0;
   const bindings = {
-    store: { ...actions, ready: true, saving: false, get draft() { return draft.value; } }, ownAutomationTemplates, selectedCustomAutomationTemplate,
-    gateway: draft, automationPreview, automationDialog, automationCreationDialog, creationTemplateId,
+    store: { ...actions, ready: true, saving: false, submitConfig() { saves++; }, get draft() { return draft.value; } }, ownAutomationTemplates, selectedCustomAutomationTemplate,
+    automations: computed(() => draft.value.automationRules ?? []), automationDraftIncomplete: ref(false),
+    gateway: draft, automationPreview, automationEdit, automationDialog, automationCreationDialog, creationTemplateId,
     automationCreationEndpoint: ref("napcat"), choosingCreationTemplate: ref(false), automationPreviewIncomplete: ref(false),
     newAutomationDraft, applyAutomationPatch, automationEndpoint,
     activeAutomation, selectedAutomationTemplateId, automationTemplateError, automationTemplates,
     automationTemplateLoading: ref(false), automationTemplateName: ref("My custom template"),
     automationTemplateRequest: undefined, editingAutomationTemplateName: ref(false), normalizeAgentDeliveryTarget,
     browserUuid: () => "test-id", selectedAutomationEndpoint: ref("napcat"), personaService: {}, userFacingError: String,
-    loadAutomationTemplate, openAutomation(id: string) { activeId.value = id; automationDialog.value = true; },
+    loadAutomationTemplate, openAutomation(id: string) {
+      activeId.value = id;
+      if (!automationPreview.value) automationEdit.value = JSON.parse(JSON.stringify(draft.value.automationRules!.find(rule => rule.id === id)));
+      automationDialog.value = true;
+    },
     setAutomationActionType() {},
     selectedEndpoint: { set value(endpoint: string) {
       if (endpoint === "schedule" && activeAutomation.value?.trigger.type !== "schedule") {
@@ -74,8 +81,8 @@ function editor(options: Record<string, unknown> = {}) {
     ...options
   };
   const run = new Function(...Object.keys(bindings), handlers + ";return {" + names.join(",") + "};")(...Object.values(bindings));
-  return { ...run, activeAutomation, activeId, draft, actions, automationDialog, automationCreationDialog, creationTemplateId,
-    automationTemplateError, selectedAutomationTemplateId };
+  return { ...run, openAutomation: bindings.openAutomation, activeAutomation, activeId, draft, actions, automationDialog, automationCreationDialog, creationTemplateId,
+    automationTemplateError, selectedAutomationTemplateId, saves: () => saves };
 }
 
 test("template client reads small pages and fetches a selected plugin body from the supplied source", async () => {
@@ -110,8 +117,9 @@ test("manual and template previews leave existing rules unchanged until Create i
   assert.equal(ui.activeAutomation.value!.trigger.type, "schedule");
   assert.equal(ui.activeAutomation.value!.action.message, preset.action.message);
   ui.patchAutomation({ name: "Tweaked preset" });
-  ui.confirmAutomationPreview();
-  ui.confirmAutomationPreview();
+  ui.confirmAutomation();
+  ui.confirmAutomation();
+  assert.equal(ui.saves(), 1);
   assert.equal(ui.draft.value.automationRules!.length, 2);
   assert.equal(ui.draft.value.automationRules![1].name, "Tweaked preset");
   assert.equal(ui.draft.value.automationRules![0].action.message, "Original");
@@ -125,11 +133,13 @@ test("custom template save, reuse, update and delete preserve independent rule t
 
   ui.openAutomationCreation();
   ui.beginAutomationPreview();
-  ui.confirmAutomationPreview();
+  const createdId = ui.activeAutomation.value!.id;
+  ui.confirmAutomation();
+  ui.openAutomation(createdId);
   await ui.selectAutomationAction("custom:test-id");
   assert.equal(ui.activeAutomation.value!.action.message, "Original");
   assert.deepEqual(ui.activeAutomation.value!.action.target, { kind: "recipient", recipientId: "primary" });
-  ui.actions.updateAutomation(ui.activeId.value, { action: { ...ui.activeAutomation.value!.action, message: "New text" } });
+  ui.patchAutomation({ action: { ...ui.activeAutomation.value!.action, message: "New text" } });
   ui.saveCustomAutomationTemplate();
   assert.equal(templates()[0].message, "New text");
   assert.equal(ui.draft.value.automationRules![0].action.message, "Original");
@@ -153,7 +163,7 @@ test("a late plugin body cannot overwrite a changed draft or a replacement rule"
       ui.openAutomationCreation();
       ui.beginAutomationPreview();
     }
-    else ui.actions.updateAutomation("existing", { action: { ...ui.activeAutomation.value!.action, message: "Edited" } });
+    else ui.patchAutomation({ action: { ...ui.activeAutomation.value!.action, message: "Edited" } });
     finish();
     await pending;
     assert.equal(ui.activeAutomation.value!.trigger.type, "message");

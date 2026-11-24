@@ -703,9 +703,10 @@ async function deliverPacketToSession(
   envelope: RabiDeliveryEnvelope, messageId: string, imagePaths: string[], model?: string, originalChat?: OriginalChat, replay = false
 ): Promise<ForwardAdapterOutcome[]> {
   const configuredRemote = config.remoteAgentTargets.find(item => item.id === target.agentTargetId);
-  if (target.kind !== "ds_bot" && (configuredRemote ? configuredRemote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
+  if (target.kind === "session" && !target.instanceBinding && (configuredRemote ? configuredRemote.provider !== target.agentAdapter : target.agentTargetId !== `local:${target.agentAdapter}`
     || !config.agentAdapters.includes(target.agentAdapter))) throw new Error("The selected Agent instance is unavailable or mismatched.");
-  const remote = target.kind === "ds_bot" ? target.instanceBinding : configuredRemote;
+  if (target.kind === "session" && configuredRemote && configuredRemote.provider !== target.agentAdapter) throw new Error("The selected Agent instance is unavailable or mismatched.");
+  const remote = target.instanceBinding ?? (target.kind === "session" ? configuredRemote : undefined);
   const deliveryId = `automation-${createHash("sha256").update(JSON.stringify([routeId, ruleId, envelope.deliveryId ?? messageId, target])).digest("hex")}`;
   const statePath = path.join(config.dataDir, "automation-deliveries", `${deliveryId}.json`);
   const instance = remote ? { instanceId: remote.instanceId, agentId: remote.agentId,

@@ -1,3 +1,5 @@
+import type { PlanBindingSourceInstance } from "./planBindingOwner.js";
+
 export const AGENT_HOOK_EVENTS = [
   { value: "task_completed", title: "任务完成", hookEvent: "Stop" },
   { value: "task_progress", title: "任务过程文本", hookEvent: "AssistantProgress" }
@@ -7,7 +9,7 @@ export function agentHookEventsFor(agentType: string) {
   return AGENT_HOOK_EVENTS.filter(event => event.value === "task_completed" || agentType === "codex" || agentType === "dsh");
 }
 export const AGENT_HOOK_CONDITIONS = [
-  { value: "project", title: "限定项目", description: "只有任务的工作目录与所选项目一致时才投递。Git 项目的不同工作树可匹配同一项目，但项目内不同子目录不会自动视为相同。请填写绝对目录，也可以读取当前 Agent 端的项目候选。" },
+  { value: "project", title: "限定项目", description: "本轮工作目录必须与所选项目一致。本机 Codex 会同时核对会话所属项目。Git 项目的不同工作树可匹配同一项目，但项目内不同子目录不会自动视为相同。请填写绝对目录，也可以读取当前 Agent 端的项目候选。" },
   { value: "bound_plan", title: "必须绑定计划", description: "只有当前任务绑定了当前角色的计划时才投递。按任务 ID 核对绑定，不按任务名称猜测；未绑定计划的任务会跳过。此条件无需额外参数。" },
   { value: "include_sessions", title: "限定聊天会话", description: "只投递所选聊天会话的任务结果。可以多选，命中其中任意一个即可满足此条件；实际按会话 ID 匹配，改名不影响匹配。至少选择一个会话。" },
   { value: "exclude_sessions", title: "排除聊天会话", description: "所选聊天会话的任务结果不通过本规则投递，其他会话仍需满足本规则的其余条件。可以多选，实际按会话 ID 匹配；同一会话同时被限定和排除时，以排除为准。至少选择一个会话。" },
@@ -32,6 +34,16 @@ export const completionConversationFields: Readonly<Record<string, { field: stri
 };
 
 export type AgentHookSession = { id: string; name: string };
+export type AgentHookDevice = PlanBindingSourceInstance;
+export type AgentHookDeviceSelection = AgentHookDevice | "local";
+
+export function agentHookDeviceMatches(device: AgentHookDeviceSelection | undefined, source: PlanBindingSourceInstance | undefined): boolean {
+  if (device === undefined) return true;
+  if (device === "local") return !source;
+  if (!source) return false;
+  return device.instanceId === source.instanceId && (device.ownerDeviceId || "") === (source.ownerDeviceId || "")
+    && (!device.agentId || device.agentId === source.agentId);
+}
 export type AgentHookCondition = { type: string; path?: string; sessions?: AgentHookSession[] };
 export type AgentHookDestination = { channel: string; gatewayId: string; params: Record<string, string> };
 
@@ -56,6 +68,7 @@ export type AgentCompletionDeliveryRule = {
   enabled: boolean;
   event: string;
   events?: string[];
+  sourceDevice?: AgentHookDeviceSelection;
   conditions: AgentHookCondition[];
   destination: AgentHookDestination;
 };
@@ -106,11 +119,20 @@ export function normalizeAgentCompletionDeliveries(value: unknown): AgentComplet
     const name = text(raw.name);
     const events = Array.isArray(raw.events) ? [...new Set(raw.events.map(text).filter(Boolean))] : undefined;
     const event = events ? events[0] ?? "" : legacy ? "task_completed" : text(raw.event);
-    return [{ id, ...(name ? { name } : {}), enabled: raw.enabled === true, event, ...(events ? { events } : {}), conditions,
+    const sourceDevice = normalizeAgentHookDevice(raw.sourceDevice);
+    return [{ id, ...(name ? { name } : {}), enabled: raw.enabled === true, event, ...(events ? { events } : {}),
+      ...(sourceDevice ? { sourceDevice } : {}), conditions,
       destination: legacy
         ? { channel: "napcat", gatewayId: text(raw.gatewayId), params: { target: "group", targetId: text(raw.groupId), instanceId: text(raw.instanceId) } }
         : { channel, gatewayId: text(destination.gatewayId), params: normalizedParams } }];
   });
+}
+
+export function normalizeAgentHookDevice(value: unknown): AgentHookDeviceSelection | undefined {
+  if (value === undefined || value === "local") return value;
+  const device = object(value);
+  return { instanceId: text(device.instanceId), ...(device.ownerDeviceId === undefined ? {} : { ownerDeviceId: text(device.ownerDeviceId) }),
+    ...(device.agentId === undefined ? {} : { agentId: text(device.agentId) }) };
 }
 
 export function agentHookConditionErrors(condition: AgentHookCondition): string[] {
@@ -124,10 +146,16 @@ export function agentHookConditionErrors(condition: AgentHookCondition): string[
 
 export function agentHookRuleErrors(rule: AgentCompletionDeliveryRule, agentType?: string): string[] {
   const errors: string[] = [];
+  const device = rule.sourceDevice === "local" ? undefined : rule.sourceDevice;
+  const validDeviceId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/;
+  if (device && (!validDeviceId.test(device.instanceId) || [device.ownerDeviceId, device.agentId].some(id => id !== undefined && !validDeviceId.test(id)))) {
+    errors.push("请选择有效的触发设备。");
+  }
   const events = agentHookRuleEvents(rule);
   if (!events.length || events.some(value => !AGENT_HOOK_EVENTS.some(event => event.value === value))) {
     errors.push("请选择支持的事件。");
-  } else if (agentType && events.some(value => !agentHookEventsFor(agentType).some(event => event.value === value))) {
+  } else if (agentType && events.some(value => !agentHookEventsFor(agentType).some(event => event.value === value)
+    || device && agentType === "codex" && value === "task_progress")) {
     errors.push("所选 Agent 不支持此规则中的触发事件。");
   }
   const seen = new Set<string>();

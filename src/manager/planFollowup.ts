@@ -3,11 +3,14 @@ import { planCanAutoAdvance } from "../planState.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import type { PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { normalizePlanFollowup } from "../shared/planFollowup.js";
+import { agentHookDeviceMatches } from "../shared/agentHookAutomation.js";
+import type { PlanBindingSourceInstance } from "../shared/planBindingOwner.js";
 
 export type PlanFollowupReceipt = { fingerprint: string; turnId: string; at: number };
 export function decidePlanFollowup(input: {
   config: unknown; workflow: PersonaPlanWorkflow; plan: PlanItem;
   sessionId: string; turnId?: string; stopHookActive?: boolean;
+  sourceInstance?: PlanBindingSourceInstance;
   previous?: PlanFollowupReceipt; now: number;
 }): { reason: string; receipt: PlanFollowupReceipt } | null {
   const settings = normalizePlanFollowup(input.config);
@@ -18,7 +21,8 @@ export function decidePlanFollowup(input: {
   const status = input.workflow.statuses.find(item => item.key === plan.status && item.state === "enabled");
   // Terminal plans never become implementation work merely because a rule matches.
   if (!status) return null;
-  const rule = settings.rules.find(item => item.enabled && item.prompt && item.statusKeys.includes(plan.status));
+  const rule = settings.rules.find(item => item.enabled && item.prompt && item.statusKeys.includes(plan.status)
+    && (item.sourceDevice === undefined || agentHookDeviceMatches(item.sourceDevice, input.sourceInstance)));
   if (!rule) return null;
   const fingerprint = createHash("sha256").update(JSON.stringify({
     rule, status: plan.status, currentStepId: plan.currentStepId, steps: plan.steps,

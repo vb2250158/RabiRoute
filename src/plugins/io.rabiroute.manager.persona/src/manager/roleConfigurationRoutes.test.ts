@@ -141,6 +141,7 @@ test("Agent rule names persist through the role configuration API", async () => 
 test("the role API round-trips DSH progress and Stop together with unchanged delivery options", async () => fixture(async f => {
   const before = await f.get();
   const rule = { id: "progress", name: "Share progress", enabled: true, event: "task_progress",
+    sourceDevice: { instanceId: "fixture-computer", agentId: "fixture-dsh" },
     events: ["task_progress", "task_completed"], conditions: [{ type: "bound_plan" }],
     destination: { channel: "speech", gatewayId: "route", params: {
       content: "excerpt", includeAgentType: "false", includeTaskName: "true"

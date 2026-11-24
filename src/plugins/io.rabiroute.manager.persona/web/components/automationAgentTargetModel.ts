@@ -2,6 +2,8 @@ import { readAgentInstanceDirectory } from "../../../../../ribiwebgui/src/connec
 import { normalizeAgentInstanceBinding, type AgentInstance } from "@shared/agentInstance";
 import { remoteAgentTargetKey, type RouteAgentTarget } from "@shared/routeAgentTargets";
 import { normalizeAgentDeliveryTarget, normalizeDsBotConnectionOrigin, type AgentSessionDestination, type AgentDsBotDestination } from "@shared/agentDeliveryTarget";
+import { isAgentThreadCapableAdapter } from "@shared/agentAdapterCapabilities";
+import { agentInstanceDisplayName } from "@shared/agentInstance";
 
 export type SessionTarget = AgentSessionDestination;
 export type DeliverySession = {
@@ -68,18 +70,25 @@ export function chooseDsBot(agent: RouteAgentTarget, catalog: DsBotCatalog, botI
 }
 
 /** Connected owner catalogs provide the binding; target IDs are only generated with the existing owner helper. */
-export function dsBotDirectoryTargets(instances: readonly AgentInstance[]): RouteAgentTarget[] {
-  const targets = new Map<string, RouteAgentTarget>();
+export type AutomationDeviceAgent = RouteAgentTarget & { device: string; deviceName: string; agentName?: string };
+
+export function automationDeviceKey(binding?: Pick<NonNullable<RouteAgentTarget["binding"]>, "ownerDeviceId" | "instanceId">): string {
+  return binding ? JSON.stringify([binding.ownerDeviceId ?? "", binding.instanceId]) : "local";
+}
+
+export function automationDirectoryTargets(instances: readonly AgentInstance[]): AutomationDeviceAgent[] {
+  const targets = new Map<string, AutomationDeviceAgent>();
   for (const instance of instances) {
     if (!instance || !Array.isArray(instance.agents) || !instance.connected || instance.enabled === false || instance.local && !instance.ownerDeviceId) continue;
     for (const agent of instance.agents) {
-      if (!agent || agent.provider !== "dsh" || agent.enabled === false) continue;
+      const provider = agent?.provider === "codex-desktop" ? "codex" : agent?.provider;
+      if (!agent || !isAgentThreadCapableAdapter(provider) || agent.enabled === false) continue;
       let binding;
       try { binding = normalizeAgentInstanceBinding({ instanceId: instance.instanceId, agentId: agent.agentId, ...(instance.ownerDeviceId ? { ownerDeviceId: instance.ownerDeviceId } : {}) }); }
       catch { continue; }
       if (!binding) continue;
       const id = remoteAgentTargetKey(binding);
-      targets.set(id, { id, provider: "dsh", binding });
+      targets.set(id, { id, provider, binding, device: automationDeviceKey(binding), deviceName: agentInstanceDisplayName(instance), agentName: agent.name });
     }
   }
   return [...targets.values()];
@@ -94,10 +103,10 @@ export async function availableAutomationDsh(fetcher: typeof fetch): Promise<boo
 }
 
 /** Reuse the authenticated instance directory entry point, including its independent-host failure isolation. */
-export async function automationDsBotDirectory(fetcher: typeof fetch) {
-  const response = await fetcher("/api/webgui-access");
+export async function automationAgentDirectory(fetcher: typeof fetch, signal?: AbortSignal) {
+  const response = await fetcher("/api/webgui-access", { signal });
   const body = await response.json();
   if (!response.ok) throw new Error("Agent directory access unavailable");
   const headers: Record<string, string> = typeof body.data?.token === "string" ? { "x-rabiroute-webgui-token": body.data.token } : {};
-  return readAgentInstanceDirectory(fetcher, headers);
+  return readAgentInstanceDirectory(fetcher, headers, signal);
 }

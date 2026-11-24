@@ -64,13 +64,16 @@ async function closeServer(server) {
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
 
-test("default control uses distinct actual ports while an existing 8797 listener stays untouched", async t => {
+test("default control uses distinct actual ports while legacy port 8797 is unavailable or occupied", async t => {
   const blocker = http.createServer((_request, response) => response.end('{"marker":"original"}'));
   let ownsBlocker = false;
   try {
     await new Promise((resolve, reject) => { blocker.once("error", reject); blocker.listen(8797, "127.0.0.1", resolve); });
     ownsBlocker = true;
-  } catch (error) { if (error.code !== "EADDRINUSE") throw error; }
+  } catch (error) {
+    if (!["EADDRINUSE", "EACCES"].includes(error.code)) throw error;
+    t.diagnostic(`Legacy fixture port unavailable: ${error.code}; dynamic listeners remain fully exercised.`);
+  }
   if (ownsBlocker) t.after(() => closeServer(blocker));
   const one = await start(t, { REMOTE_AGENT_CONTROL_PORT: undefined });
   const two = await start(t);

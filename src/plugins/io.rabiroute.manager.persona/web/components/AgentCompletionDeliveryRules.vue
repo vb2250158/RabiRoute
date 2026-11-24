@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AutomationParameterHelp from "./AutomationParameterHelp.vue";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { AgentAdapterType } from "@shared/agentAdapterCapabilities";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, agentHookEventsFor, agentHookRuleErrors, agentHookRuleEvents,
@@ -10,10 +10,13 @@ import AgentHookConditionDialog from "./AgentHookConditionDialog.vue";
 import { usePersonaService } from "../persona/personaServiceClient";
 import { completionTargetKey, completionTargetLabel, type completionTargetChoices } from "../persona/agentCompletionTargets";
 import type { AutomationQqDirectory } from "../persona/automationRuleConversation";
+import { postRouteAgentThreadAction } from "../../../../../ribiwebgui/src/routeAgentThreadClient";
+import { automationDeviceKey, type AutomationDeviceAgent, type DeliverySession } from "./automationAgentTargetModel";
 const fetch = usePersonaService().fetch;
 
 const props = defineProps<{ rule: AgentCompletionDeliveryRule; gateways: GatewayDefinition[]; agentType: AgentAdapterType;
-  targets: ReturnType<typeof completionTargetChoices>; qqDirectories: readonly AutomationQqDirectory[] }>();
+  targets: ReturnType<typeof completionTargetChoices>; qqDirectories: readonly AutomationQqDirectory[];
+  deviceAgents: readonly AutomationDeviceAgent[]; deviceError: string }>();
 const emit = defineEmits<{ "update:rule": [value: AgentCompletionDeliveryRule] }>();
 const projects = ref<string[]>([]);
 const loading = ref(false);
@@ -21,6 +24,50 @@ const error = ref("");
 const sessions = ref<AgentHookSession[]>([]);
 const sessionLoading = ref(false);
 const nextSessionOffset = ref<number | null>(null);
+const remoteDevice = computed(() => props.rule.sourceDevice === "local" ? undefined : props.rule.sourceDevice);
+const device = computed(() => props.rule.sourceDevice === undefined ? "legacy" : automationDeviceKey(remoteDevice.value));
+const deviceAgents = computed(() => props.deviceAgents.filter(agent => agent.provider === props.agentType));
+const deviceChoices = computed(() => {
+  const choices = new Map(deviceAgents.value.map(agent => [agent.device, { title: agent.deviceName, value: agent.device }]));
+  const saved = remoteDevice.value;
+  if (saved && !choices.has(device.value)) choices.set(device.value, { title: `${saved.instanceId} · 暂不可用`, value: device.value });
+  return [...(device.value === "legacy" ? [{ title: "沿用原设备范围", value: "legacy" }] : []), { title: "本机", value: "local" }, ...choices.values()];
+});
+const sourceAgents = computed(() => deviceAgents.value.filter(agent => agent.device === device.value));
+const remoteTarget = computed(() => remoteDevice.value?.agentId
+  ? sourceAgents.value.find(agent => agent.binding?.agentId === remoteDevice.value?.agentId)
+  : sourceAgents.value.length === 1 ? sourceAgents.value[0] : undefined);
+let catalogRequest = new AbortController();
+function resetCatalog() {
+  catalogRequest.abort();
+  catalogRequest = new AbortController();
+  loading.value = sessionLoading.value = false;
+  conditionDialog.value = false;
+  projects.value = []; sessions.value = []; nextSessionOffset.value = null; error.value = "";
+}
+onBeforeUnmount(() => catalogRequest.abort());
+function changeSource(value: string) {
+  if (value === device.value) return;
+  const target = deviceAgents.value.find(agent => agent.device === value)?.binding;
+  if (value !== "local" && !target) return;
+  update({ sourceDevice: target ? { instanceId: target.instanceId } : "local", conditions: resetDeviceConditions() });
+}
+function selectSourceAgent(value: string) {
+  if (value === remoteDevice.value?.agentId) return;
+  const binding = sourceAgents.value.find(agent => agent.binding?.agentId === value)?.binding;
+  if (binding) update({ sourceDevice: binding, conditions: resetDeviceConditions() });
+}
+function resetDeviceConditions(): AgentHookCondition[] {
+  return props.rule.conditions.map(condition => condition.type === "project" ? { type: condition.type, path: "" }
+    : condition.type === "include_sessions" || condition.type === "exclude_sessions" ? { type: condition.type, sessions: [] } : condition);
+}
+async function readRemoteThreads(offset: number, signal: AbortSignal) {
+  if (!remoteTarget.value) throw new Error("所选设备的 Agent 暂不可用，请核对连接和来源 Agent。");
+  const result = await postRouteAgentThreadAction({ action: "list", limit: 100, offset }, remoteTarget.value,
+    { fetch, accessToken: () => "", signal });
+  if (!Array.isArray(result.threads)) throw new Error("所选设备未返回会话列表。");
+  return { threads: result.threads as DeliverySession[], nextOffset: typeof result.nextOffset === "number" ? result.nextOffset : null };
+}
 const conditionDialog = ref(false);
 const conditionIndex = ref(-1);
 const editedCondition = computed(() => props.rule.conditions[conditionIndex.value]);
@@ -44,15 +91,24 @@ function conditionSummary(item: AgentHookCondition) {
   if (item.type === "exclude_heartbeat") return "跳过本轮完整心跳结果（含 NOTIFY）。";
   return AGENT_HOOK_CONDITIONS.find(option => option.value === item.type)?.description || item.type;
 }
-watch(() => props.agentType, () => { conditionDialog.value = false; projects.value = []; sessions.value = []; nextSessionOffset.value = null; });
+watch([() => props.agentType, device, () => remoteDevice.value?.agentId], resetCatalog, { flush: "sync" });
 async function scanSessions(more = false) {
   if (sessionLoading.value) return;
   sessionLoading.value = true; error.value = "";
+  const { signal } = catalogRequest;
   try {
+    if (remoteDevice.value) {
+      const result = await readRemoteThreads(more ? nextSessionOffset.value ?? 0 : 0, signal);
+      if (signal.aborted) return;
+      const found = result.threads.filter(row => row.id).map(row => ({ id: row.id, name: row.name || row.title || row.id }));
+      sessions.value = [...new Map([...(more ? sessions.value : []), ...found].map(row => [row.id, row])).values()];
+      nextSessionOffset.value = result.nextOffset;
+      return;
+    }
     const type = props.agentType ?? "codex";
     const query = new URLSearchParams({ [`${type}Offset`]: String(more ? nextSessionOffset.value ?? 0 : 0), [`${type}Limit`]: "100" });
-    const response = await fetch(`/api/scan/agents${type === "dsh" ? "/dsh" : ""}?${query}`); const data = await response.json();
-    if (type !== (props.agentType ?? "codex")) return;
+    const response = await fetch(`/api/scan/agents${type === "dsh" ? "/dsh" : ""}?${query}`, { signal }); const data = await response.json();
+    if (signal.aborted) return;
     if (!response.ok) throw new Error(data.message || "读取聊天会话失败");
     const agent = data.agents?.[type];
     if (!agent) throw new Error("所选 Agent 端未返回会话，请检查 Agent 端连接。");
@@ -60,11 +116,11 @@ async function scanSessions(more = false) {
       .map((session: AgentHookSession) => ({ id: session.id, name: session.name || "未命名任务" }));
     sessions.value = [...new Map([...(more ? sessions.value : []), ...found].map(session => [session.id, session])).values()];
     nextSessionOffset.value = agent.sessionPage?.hasMore ? agent.sessionPage.nextOffset ?? null : null;
-  } catch (cause) { error.value = userFacingError(cause); }
-  finally { sessionLoading.value = false; }
+  } catch (cause) { if (!signal.aborted) error.value = userFacingError(cause); }
+  finally { if (!signal.aborted) sessionLoading.value = false; }
 }
 const events = computed(() => agentHookRuleEvents(props.rule));
-const supportedEvents = computed(() => agentHookEventsFor(props.agentType));
+const supportedEvents = computed(() => agentHookEventsFor(props.agentType).filter(event => !remoteDevice.value || props.agentType !== "codex" || event.value !== "task_progress"));
 const eventChoices = computed(() => AGENT_HOOK_EVENTS.filter(event => supportedEvents.value.includes(event) || events.value.includes(event.value)));
 function toggleEvent(event: string, selected: boolean) {
   const next = selected ? [...events.value, event] : events.value.filter(value => value !== event);
@@ -88,7 +144,7 @@ function chooseTarget(key: string) {
 }
 function update(patch: Partial<AgentCompletionDeliveryRule>) {
   const next = { ...props.rule, ...patch };
-  if (agentHookRuleErrors(next).length) next.enabled = false;
+  if (agentHookRuleErrors(next, props.agentType).length) next.enabled = false;
   emit("update:rule", next);
 }
 function params(patch: Record<string, string>) {
@@ -96,23 +152,37 @@ function params(patch: Record<string, string>) {
 }
 async function scanProjects() {
   loading.value = true; error.value = "";
+  const { signal } = catalogRequest;
   try {
+    if (remoteDevice.value) {
+      const { threads } = await readRemoteThreads(0, signal);
+      if (!signal.aborted) projects.value = [...new Set(threads.map(row => row.projectPath || row.cwd || "").filter(Boolean))];
+      return;
+    }
     const type = props.agentType ?? "codex";
-    const response = await fetch(type === "dsh" ? "/api/scan/agents/dsh" : "/api/scan/agents"); const data = await response.json();
-    if (type !== (props.agentType ?? "codex")) return;
+    const response = await fetch(type === "dsh" ? "/api/scan/agents/dsh" : "/api/scan/agents", { signal }); const data = await response.json();
+    if (signal.aborted) return;
     if (!response.ok) throw new Error(data.message || "读取项目目录失败");
     const agent = data.agents?.[type];
     if (!agent) throw new Error("所选 Agent 端未返回项目，请检查 Agent 端连接。");
     const scanned: string[] = (agent.projects ?? []).map((item: { path?: string }) => String(item.path || "")).filter(Boolean);
     projects.value = [...new Set(scanned)];
-  } catch (cause) { error.value = userFacingError(cause); }
-  finally { loading.value = false; }
+  } catch (cause) { if (!signal.aborted) error.value = userFacingError(cause); }
+  finally { if (!signal.aborted) loading.value = false; }
 }
 </script>
 
 <template>
   <section class="hook-delivery-rules">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
+    <div class="hook-rule-section">
+      <v-select :model-value="device" :items="deviceChoices" label="触发设备" density="compact" variant="outlined" hide-details
+        @update:model-value="changeSource" />
+      <v-select v-if="sourceAgents.length > 1" :model-value="remoteDevice?.agentId || null"
+        :items="sourceAgents.map(agent => ({ title: agent.agentName || agent.binding!.agentId, value: agent.binding!.agentId }))"
+        label="来源 Agent" density="compact" variant="outlined" hide-details @update:model-value="selectSourceAgent" />
+      <p v-if="deviceError" class="section-note">{{ deviceError }}</p>
+    </div>
     <div class="hook-rule-section">
       <div class="hook-rule-label">触发事件</div>
       <v-checkbox v-for="event in eventChoices" :key="event.value" :label="event.title"

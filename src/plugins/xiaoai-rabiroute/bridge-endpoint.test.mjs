@@ -42,7 +42,11 @@ test("bridge chooses a free port and smoke discovers its verified live endpoint"
   fs.writeFileSync(path.join(endpointDirectory, "foreign.json"), "do-not-overwrite");
   const occupied = net.createServer();
   const ownsOldPort = await new Promise((resolve, reject) => {
-    occupied.once("error", error => error.code === "EADDRINUSE" ? resolve(false) : reject(error));
+    occupied.once("error", error => {
+      if (!["EADDRINUSE", "EACCES"].includes(error.code)) return reject(error);
+      t.diagnostic(`Legacy fixture port unavailable: ${error.code}; dynamic bridge and smoke readback remain exercised.`);
+      resolve(false);
+    });
     occupied.listen(8798, "127.0.0.1", () => resolve(true));
   });
   let redirect = false, redirected = 0;

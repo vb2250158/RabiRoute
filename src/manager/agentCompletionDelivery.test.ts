@@ -22,8 +22,10 @@ test("DSH progress follows native turn order across clock skew and never reuses 
       { type: "include_sessions", sessions: [{ id: "agent-1", name: "Task" }] }] } };
   const sent: Array<{ id: string; request: CodexHookContextRequest }> = [];
   const service = new AgentCompletionDeliveryService({
-    rules: () => [progressRule, progressRule],
+    rules: request => request.sourceInstance?.instanceId === "isolated-node"
+      ? [{ ...progressRule, rule: { ...progressRule.rule, sourceDevice: { instanceId: "isolated-node" } } }] : [progressRule, progressRule],
     projectIdentity: async value => value,
+    readRemoteTask: async () => ({ cwd: "/project" }),
     taskContext: (_, request) => ({ plans: request.sourceInstance?.instanceId === "unbound" ? [] : [{ id: "p", title: "Plan" }] }),
     deliver: async (_, request, id) => {
       sent.push({ id, request });
@@ -96,17 +98,20 @@ test("plan completion discovery and pending sends separate same-ID local and rem
   const plans = [{ id: "local", title: "Local", taskBinding: base, messageChannels: [owner.rule.destination] },
     ...["pc-one", "pc-two"].map(instanceId => ({ id: instanceId, title: instanceId,
       taskBinding: { ...base, instanceBinding: { instanceId, agentId: "configured-agent" } }, messageChannels: [owner.rule.destination] }))];
-  const remote = { ...event, sourceInstance: { instanceId: "pc-one" } };
+  const remote = { ...event, sourceInstance: { instanceId: "pc-one", agentId: "configured-agent" } };
   assert.deepEqual(planCompletionDeliveryRules("test", plans, event.sessionId).map(row => row.rule.id), ["plan-local-0"]);
   assert.deepEqual(planCompletionDeliveryRules("test", plans, event.sessionId, remote).map(row => row.rule.id), ["plan-pc-one-0"]);
   assert.deepEqual(completionTaskContextFromPlans(event.sessionId, plans, undefined, remote).plans, [{ id: "pc-one", title: "pc-one" }]);
+  const unknownOwner = { ...remote, sourceInstance: { instanceId: "pc-one" } };
+  assert.deepEqual(completionTaskContextFromPlans(event.sessionId, plans, undefined, unknownOwner).plans, []);
+  assert.deepEqual(planCompletionDeliveryRules("test", plans, event.sessionId, unknownOwner), []);
   const ids: string[] = []; const releases: Array<() => void> = [];
   let allStarted!: () => void;
   const started = new Promise<void>(resolve => { allStarted = resolve; });
   const service = new AgentCompletionDeliveryService({ rules: request => planCompletionDeliveryRules("test", plans, request.sessionId, request),
     taskContext: (_owner, request) => completionTaskContextFromPlans(request.sessionId, plans, undefined, request),
     deliver: async (_owner, _request, id) => { ids.push(id); await new Promise<void>(resolve => { releases.push(resolve); if (releases.length === 3) allStarted(); }); } });
-  const pending = [service.handle(event), service.handle(remote), service.handle({ ...remote, sourceInstance: { instanceId: "pc-two" } })];
+  const pending = [service.handle(event), service.handle(remote), service.handle({ ...remote, sourceInstance: { ...remote.sourceInstance, instanceId: "pc-two" } })];
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try { await Promise.race([started, new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("Owner-scoped deliveries did not start independently")), 5000); })]); }
   finally { if (timeout) clearTimeout(timeout); releases.forEach(release => release()); }
@@ -137,10 +142,74 @@ test("completion notices retain independent receipts per destination and source 
 });
 
 test("remote project conditions do not inspect a same-named Manager filesystem path", async () => {
-  const service = new AgentCompletionDeliveryService({ rules: () => [owner], deliver: async () => { assert.fail("unverified remote project must not send"); } });
+  const remoteOwner = { ...owner, rule: { ...owner.rule, sourceDevice: { instanceId: "remote-node" } } };
+  const service = new AgentCompletionDeliveryService({ rules: () => [remoteOwner], deliver: async () => { assert.fail("unverified remote project must not send"); } });
   const result = await service.handle({ ...event, sourceInstance: { instanceId: "remote-node" } });
   assert.equal(result[0].status, "failed");
-  assert.match(result[0].reason!, /Remote project identity cannot be read on the Manager computer/);
+  assert.match(result[0].reason!, /无法在所选设备核对会话所属项目/);
+});
+
+test("legacy fixed targets keep their device range, while an explicit device restricts it", async () => {
+  const selected = { instanceId: "pc-one", agentId: "desktop" };
+  const remote = { ...event, sourceInstance: selected };
+  const another = { ...remote, sourceInstance: { ...selected, instanceId: "pc-two" } };
+  let rule: CompletionRuleOwner["rule"] = { ...owner.rule, conditions: [] };
+  const sends: string[] = [];
+  const service = new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule }],
+    readRemoteTask: async () => assert.fail("the legacy project's remote path remains unverified"),
+    deliver: async (_, request) => { sends.push(request.sourceInstance?.instanceId ?? "local"); }
+  });
+  await service.handle(event);
+  await service.handle(remote);
+  assert.deepEqual(await service.handle(remote, undefined, true), [], "Peer original-only ingress cannot reach fixed targets");
+  rule = { ...rule, sourceDevice: "local" };
+  await service.handle(event);
+  assert.deepEqual(await service.handle(remote), []);
+  rule = { ...rule, sourceDevice: selected };
+  await service.handle(remote);
+  assert.deepEqual(await service.handle(event), []);
+  assert.deepEqual(await service.handle(another), []);
+  rule = { ...owner.rule };
+  assert.equal((await service.handle(remote))[0]?.status, "failed");
+  assert.deepEqual(sends, ["local", "pc-one", "local", "pc-one"]);
+});
+
+test("remote rules compare their own device, Agent, exact session and saved project", async () => {
+  const sourceDevice = { instanceId: "pc-one", agentId: "selected-agent" };
+  const include = { type: "include_sessions", sessions: [{ id: event.sessionId, name: "Selected task" }] };
+  const project = { type: "project", path: "E:/Project" };
+  let conditions = [include, project];
+  const remote = { ...event, cwd: "e:\\Project", sourceInstance: sourceDevice };
+  const service = new AgentCompletionDeliveryService({
+    rules: () => [{ ...owner, rule: { ...owner.rule, sourceDevice, conditions } }],
+    projectIdentity: async () => assert.fail("remote paths must not touch the Manager filesystem"),
+    readRemoteTask: async request => ({ cwd: request.turnId === "moved" ? "E:/Other" : "\\\\?\\E:\\Project" }),
+    deliver: async () => {}
+  });
+  for (const request of [event, { ...remote, sessionId: "other" }, { ...remote, turnId: "moved" },
+    { ...remote, sourceInstance: { ...sourceDevice, instanceId: "pc-two" } },
+    { ...remote, sourceInstance: { ...sourceDevice, agentId: "different-agent" } },
+    { ...remote, sourceInstance: { instanceId: "pc-one" } }]) assert.deepEqual(await service.handle(request), []);
+  assert.equal((await service.handle(remote))[0]?.status, "sent");
+  conditions = [include, { ...include, type: "exclude_sessions" }, project];
+  assert.deepEqual(await service.handle(remote), []);
+});
+
+test("new conditions stop a delivery that is still preparing its context", async () => {
+  let rules = [{ ...owner, rule: { ...owner.rule, conditions: [] as typeof owner.rule.conditions } }];
+  let entered!: () => void;
+  let resume!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const waiting = new Promise<void>(resolve => { resume = resolve; });
+  const service = new AgentCompletionDeliveryService({ rules: () => rules,
+    taskContext: async () => { entered(); await waiting; return { plans: [] }; },
+    deliver: async () => assert.fail("changed exclusions must stop the pending send")
+  });
+  const delivery = service.handle(event);
+  await started;
+  rules = [{ ...owner, rule: { ...owner.rule, conditions: [{ type: "exclude_sessions", sessions: [{ id: event.sessionId, name: "Task" }] }] } }];
+  resume();
+  assert.deepEqual(await delivery, []);
 });
 
 test("heartbeat completion honors silence and sends only notification text without mutating hook evidence", async () => {
@@ -209,6 +278,24 @@ test("optional plan channels merge with persona rules and deduplicate the same d
   assert.equal(sent, 1);
   await service.handle({ ...event, sessionId: "other" });
   assert.equal(sent, 2, "unbound sessions still use persona event rules");
+});
+
+test("local Codex project rules require the saved chat project as well as the turn directory", async () => {
+  const owners = [owner, { ...owner, rule: { ...owner.rule, id: "unrestricted", conditions: [],
+    destination: { ...owner.rule.destination, params: { ...owner.rule.destination.params, targetId: "67890" } } } }];
+  const service = new AgentCompletionDeliveryService({
+    rules: () => owners,
+    projectIdentity: async cwd => cwd === "/project-worktree" ? "/project" : cwd,
+    readLocalCodexTask: async id => id === "unknown" ? undefined : { cwd: id === "maintenance" ? "/maintenance" : "/project-worktree" },
+    deliver: async () => {}
+  });
+  const outcomes = async (sessionId: string, cwd: string, agentType = "codex") =>
+    (await service.handle({ ...event, sessionId, cwd, agentType })).map(({ ruleId, status }) => [ruleId, status]);
+  assert.deepEqual(await outcomes("maintenance", "/project"), [["unrestricted", "sent"]]);
+  assert.deepEqual(await outcomes("business", "/maintenance"), [["unrestricted", "sent"]]);
+  assert.deepEqual(await outcomes("business", "/project"), [["rule", "sent"], ["unrestricted", "sent"]]);
+  assert.deepEqual(await outcomes("unknown", "/project"), [["rule", "failed"], ["unrestricted", "sent"]]);
+  assert.deepEqual(await outcomes("maintenance", "/project", "dsh"), [["rule", "sent"], ["unrestricted", "sent"]]);
 });
 
 test("session allow and deny lists match exact IDs, combine with project and plan, and deny wins", async () => {
@@ -629,6 +716,10 @@ test("QQ completion preserves original local and native images with text and reu
     for(const call of calls){const segments=call.message as Array<any>;assert.deepEqual(segments.map(s=>s.type),["text","image","text","image"]);assert.match(segments[0].data.text,/Before/);assert.match(segments[2].data.text,/After/);assert.equal(segments[3].data.file,context.images[0]);}
     await assert.rejects(deliverCompletionToEndpoint(owner.rule,{...event,lastAssistantMessage:"Text remains available"},"image-read-failed","route",withTestEndpointEgress(options),{plans:[],imageReadError:true}),/正文已发送/);
     assert.equal(calls.length,3);
+    await deliverCompletionToEndpoint(owner.rule, { ...hook, sourceInstance: { instanceId: "other-pc" },
+      lastAssistantMessage: hook.lastAssistantMessage + `\n[原文件](<${file}>)` }, "photos-remote", "route", withTestEndpointEgress(options), context);
+    assert.equal(calls.length, 4, "a remote message must not attach files from the Manager's same-named path");
+    assert.match(String(calls[3].message), /原文件/);
     assert.match(String(calls[2].message),/Text remains available/);
   }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));fs.rmSync(rootDir,{recursive:true,force:true});}
 });
@@ -645,14 +736,16 @@ test("receipt identity keeps every legacy local completion ID and separates JSON
   const source = { ...event, sessionId: "business-session", sourceInstance: { instanceId: "remote-node" } };
   const oldRemoteKey = JSON.stringify(["remote", "", "remote-node", "codex", source.sessionId]);
   const target = JSON.stringify(["route", "qq", "12345"]), ids: string[] = [];
-  const service = new AgentCompletionDeliveryService({ rules: () => [owner], projectIdentity: async value => value,
+  const service = new AgentCompletionDeliveryService({ rules: request => [{ ...owner, rule: { ...owner.rule, sourceDevice: request.sourceInstance, conditions: [] } }],
     deliver: async (_owner, _request, id) => { ids.push(id); } });
   for (const sessionId of ["ordinary-original", oldRemoteKey]) {
     await service.handle({ ...event, sessionId });
     const original = "agent-completion-" + createHash("sha256").update(JSON.stringify([sessionId, event.turnId, target])).digest("hex");
     assert.equal(ids.at(-1), original, "old local uncertain/accepted delivery lookup must keep its original ID");
   }
-  await service.handle(source); assert.notEqual(ids[1], ids[2], "remote tuple is an array element, not an equal local string");
+  await service.handle(source);
+  assert.equal(ids.length, 3);
+  assert.notEqual(ids[1], ids[2], "remote tuple is an array element, not an equal local string");
 });
 
 

@@ -21,7 +21,7 @@ type BindingOwner = {
 };
 
 /** Local bindings remain local; an identical remote session ID is a different owner. */
-export function planBindingMatchesSource(binding: BindingOwner | undefined, source: PlanBindingSource): boolean {
+export function planBindingMatchesSource(binding: BindingOwner | undefined, source: PlanBindingSource, requireAgentId = false): boolean {
   if (!binding || binding.sessionId !== source.sessionId
     || binding.agentType !== (source.agentType || "codex")) return false;
   const expected = binding.instanceBinding;
@@ -29,7 +29,7 @@ export function planBindingMatchesSource(binding: BindingOwner | undefined, sour
   if (!expected || !actual) return !expected && !actual;
   return expected.instanceId === actual.instanceId
     && (expected.ownerDeviceId || "") === (actual.ownerDeviceId || "")
-    && (!actual.agentId || expected.agentId === actual.agentId);
+    && (actual.agentId ? expected.agentId === actual.agentId : !requireAgentId);
 }
 
 /** Stable receipt/hash identity: existing local IDs remain strings, remote owners are typed tuples. */

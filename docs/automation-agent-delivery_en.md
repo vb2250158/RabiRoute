@@ -2,6 +2,10 @@ English | [简体中文](automation-agent-delivery.md)
 
 # Agent delivery targets in automation
 
+For Agent events, choose the triggering device before selecting project and chat filters. Enrolled remote computers send Hook events to this Manager. New rules default to this computer. Existing event rules without `sourceDevice` display their original device scope and keep matching eligible local and remote events. Verified replies to an original Peer chat use the original delivery receipt. Automatic follow-up also supports a triggering device, with existing follow-up rules retaining their previous scope.
+
+Event rules save `sourceDevice: "local"` for this computer, or an object with `instanceId` and optional `agentId` for a remote computer. Session filters compare the full ID within the rule's device scope. Choosing a remote computer enables project checks on that computer's saved session and turn directories. Existing project rules without a device setting continue to check local projects. File links in remote replies remain text. Remote Codex supports task completion, while live Codex progress uses the local Desktop subscription.
+
 Agent settings define recipients and execution parameters. Persona automation rules select the recipient for each message. Configuring a primary Agent, secretary, or message pool does not redirect other rules.
 
 ## Delivery modes and preview
@@ -22,7 +26,7 @@ Open **Persona → Automation**, edit a rule, and choose **Delivery target** und
 - **Plan secretary:** use the secretary bound to the message's associated plan. Missing plans or bindings fail explicitly.
 - **Message processing Agent:** reuse the existing pool, tasks, and model settings.
 - **Memory consolidation Agent:** create or reuse the existing consolidation session.
-- **Custom:** select an Agent instance and an existing session. Search by name or ID within the session selector. Results show names with full IDs and workspaces below them, and support loading more. Changing the Agent clears the previous session. Done is disabled until both fields are selected; session details can be expanded.
+- **Custom:** select the receiving device, Agent, and existing session. The picker includes this computer, connected enrolled computers, and available RabiLink PCs. Search by name or ID, or load more results. Changing the device or Agent clears the session selection.
 
 Save and refresh to verify the selection. Changing the primary binding affects subsequent rules referencing it; custom sessions remain unchanged.
 
@@ -47,7 +51,7 @@ The count is stored in `automationRules[].action.recentMessageLimit`; `0` disabl
 }
 ```
 
-Custom targets store `kind: "session"`, `agentTargetId`, `agentAdapter`, `sessionId`, `sessionName`, and `workspace`. Instance and full session IDs distinguish identical names. Delivery to a selected session does not create a replacement by name.
+Custom targets store `kind: "session"`, `agentTargetId`, `agentAdapter`, `sessionId`, `sessionName`, and `workspace`. New remote targets also store `instanceBinding`. Existing Route target references continue to work. A disconnected target retains its saved device, session, and receipt.
 
 Rules shared by several routes can use `sourceRouteIds` to restrict their scope. Without it, the rule applies to all routes using the persona. Defaults are generated during initialization or migration, not restored on every read.
 

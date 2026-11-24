@@ -110,7 +110,7 @@ import {
   type AgentDeliveryTestResult
 } from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
-import { installAgentAdapterManifestReader, normalizePlanBindingAgentType, type AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
+import { installAgentAdapterManifestReader, isAgentAdapterType, normalizePlanBindingAgentType, type AgentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, readAgentEndpointSummary, type AgentThreadRequest, type AgentThreadRemoteSource, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { createAgentEndpointDelivery, type AgentServiceSourcePrincipal } from "./agentEndpointDelivery.js";
 import { createOwnedServiceAgentSender } from "./ownedServiceAgentSender.js";
@@ -1827,8 +1827,49 @@ function currentOriginalChatAccount(chat: OriginalChat, definition: GatewayDefin
   return isRecord(instance) ? String(instance.botUserId ?? "") : "";
 }
 
+function completionHookNodeAgent(request: CodexHookContextRequest) {
+  const instance = request.sourceInstance;
+  if (!instance || instance.ownerDeviceId) return undefined;
+  const node = instanceThreadTransport?.instances().find(node => !node.local && node.instanceId === instance.instanceId);
+  if (!node?.connected || node.enabled === false) return undefined;
+  const provider = request.agentType ?? "codex";
+  const candidates = (node.agents ?? []).filter(agent => agent.enabled
+    && (agent.provider === "codex-desktop" ? "codex" : agent.provider) === provider);
+  if (instance.agentId) return candidates.find(agent => agent.agentId === instance.agentId);
+  const owners = candidates.filter(agent => agent.sessionId === request.sessionId || agent.managedSessionIds?.includes(request.sessionId));
+  return owners.length === 1 ? owners[0] : candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function completionHookPlanSource(request: CodexHookContextRequest): PlanBindingSource {
+  if (!request.sourceInstance || request.sourceInstance.agentId) return request;
+  const agent = completionHookNodeAgent(request);
+  return agent ? { ...request, sourceInstance: { ...request.sourceInstance, agentId: agent.agentId } } : request;
+}
+
+function isAttributedHookSource(request: CodexHookContextRequest): boolean {
+  if (!request.sourceInstance) return true;
+  const source = request.trustedRemoteSource;
+  return source?.sessionId === request.sessionId && source.provider === request.agentType && source.nodeId === request.sourceInstance.instanceId;
+}
+
 const agentCompletionDelivery = new AgentCompletionDeliveryService({
   resolveOriginalChat: ({ roleId }, request) => readOriginalChat(originalChatRoot, request, roleId),
+  resolveRemoteSource: request => completionHookPlanSource(request).sourceInstance,
+  hasBoundPlan: ({ roleId }, request) => {
+    const source = completionHookPlanSource(request);
+    return listPlans(roleDirForApi(roleId)).some(plan => planBindingMatchesSource(plan.taskBinding, source, true));
+  },
+  readLocalCodexTask: sessionId => invokePublishedAgentOperation<{ cwd: string } | null | undefined>(
+    "codex", "readCodexDesktopThread", { sessionId }),
+  readRemoteTask: async request => {
+    const agent = completionHookNodeAgent(request);
+    const agentType = request.agentType ?? "codex";
+    if (!agent || !request.sourceInstance || !instanceThreadTransport || !isAgentAdapterType(agentType)) return undefined;
+    const result = await routeInstanceThread({ action: "read", agentAdapter: agentType, threadId: request.sessionId,
+      instanceBinding: { instanceId: request.sourceInstance.instanceId, agentId: agent.agentId } }, instanceThreadTransport);
+    const thread = result?.data.thread as { id?: string; cwd?: string } | undefined;
+    return result?.statusCode === 200 && thread?.id === request.sessionId && thread.cwd ? { cwd: thread.cwd } : undefined;
+  },
   rules: (request, roleIds) => {
     const roles = new Set<string>();
     const progress = request.eventName === "AssistantProgress";
@@ -1843,7 +1884,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
       roles.add(roleId);
       return [
         ...(agentHookSettingsFor(runtime.definition.codexHooks, request.agentType).completionDeliveries ?? []).map(rule => ({ roleId, rule })),
-        ...(request.eventName === "Stop" ? planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId, request) : [])
+        ...(request.eventName === "Stop" ? planCompletionDeliveryRules(roleId, listPlans(roleDirForApi(roleId)), request.sessionId, completionHookPlanSource(request)) : [])
       ];
     });
   },
@@ -1856,7 +1897,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
         action: request.sessionId, error: managerOperationalError(error, rootDir)
       });
     }
-    const context = completionTaskContextFromPlans(request.sessionId, plans, taskName, request);
+    const context = completionTaskContextFromPlans(request.sessionId, plans, taskName, completionHookPlanSource(request));
     if (request.eventName === "Stop" && !request.sourceInstance && rule.destination.channel === "napcat" && request.agentType === "codex" && request.turnId) {
       const imageError = (error: unknown) => {
         context.imageReadError = true;
@@ -1871,7 +1912,7 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
     }
     return context;
   },
-  deliver: async ({ rule }, hook, deliveryId, context) => {
+  deliver: async ({ rule }, hook, deliveryId, context, assertRuleCurrent) => {
     const original = context.originalChat;
     const runtime = runtimes.get(original?.gatewayId ?? rule.destination.gatewayId);
     if (!runtime || runtime.definition.enabled === false) throw new Error("目标消息路线未启用。");
@@ -1914,10 +1955,11 @@ const agentCompletionDelivery = new AgentCompletionDeliveryService({
       runtimes: [{ ...runtime.definition, napcatInstances: instances.map(item => ({ ...item, accessToken: item.accessToken ?? "" })) }]
     };
     await deliverCompletionToEndpoint(rule, hook, deliveryId,
-      original?.routeId ?? (runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id), options, context);
+      original?.routeId ?? (runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id), options, context, assertRuleCurrent);
   }
 });
 async function deliverAgentRuleEvent(request: CodexHookContextRequest, roleIds?: readonly string[]) {
+  if (!isAttributedHookSource(request)) return [];
   const results = await agentCompletionDelivery.handle(request, roleIds);
   if (request.eventName === "Stop" && !managerReadOnly) {
     try {
@@ -1993,6 +2035,7 @@ const codexHookContextService = new CodexHookContextService({
     return reply;
   },
   deliverAgentCompletion: deliverAgentRuleEvent,
+  resolveFollowupSource: request => isAttributedHookSource(request) ? completionHookPlanSource(request) : undefined,
   rolesRoot: () => managerRolesRoot(),
   storePath: path.join(rootDir, "data", "codex-hook", "sessions.json"),
   deliverPlanTaskCompletion,

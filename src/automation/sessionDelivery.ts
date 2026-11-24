@@ -23,7 +23,7 @@ export function deliverSessionOnce(
       throw new Error("Original delivery target does not match; refusing to redirect the message.");
     }
     if (existing?.status === "delivered") return;
-    const save = (status: string) => {
+    const save = (status: string, receiptId?: string) => {
       const id = createHash("sha256").update(path.resolve(statePath)).digest("hex");
       const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
         group: "agent-delivery", event: "session_delivery_state", owner: "session-delivery", action: "save", outcome,
@@ -32,7 +32,7 @@ export function deliverSessionOnce(
       audit("started");
       const temporary = `${statePath}.${randomUUID()}.tmp`;
       try {
-        fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status, ...(messageHash ? { messageHash } : {}) }), { flag: "wx" });
+        fs.writeFileSync(temporary, JSON.stringify({ deliveryId, target, status, ...(receiptId ? { receiptId } : {}), ...(messageHash ? { messageHash } : {}) }), { flag: "wx" });
         fs.renameSync(temporary, statePath);
         audit("committed");
       } catch (error) {
@@ -46,13 +46,13 @@ export function deliverSessionOnce(
         if (acceptedDsBot(readback, target, deliveryId)) { save("delivered"); return; }
         throw new Error("Original DSBot delivery remains unconfirmed; no duplicate message was sent.");
       }
-      const readback = await request({ action: target.deliveryType ? "reconcile_delivery" : "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,
+      const receiptId = typeof existing.receiptId === "string" ? existing.receiptId : deliveryId;
+      const readback = await request({ action: target.deliveryType || existing.receiptId ? "reconcile_delivery" : "read", agentAdapter: target.agentAdapter, threadId: target.sessionId,
         ...(target.deliveryType ? { grokBotDelivery: { deliveryType: target.deliveryType, sendMode: target.sendMode,
           ...(target.sendMode === "identity" ? { senderAgentId: target.senderAgentId } : {}) } } : {}),
-        ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId });
-      if (readback.threadId === target.sessionId && readback.delivery?.deliveryId === deliveryId
-        && (readback.delivery.state === "accepted" || readback.delivery.status === "delivered")) {
-        save("delivered"); return;
+        ...(options.remote ? {} : { agentTargetId: target.agentTargetId }), deliveryId: receiptId });
+      if (acceptedSession(readback, target, receiptId)) {
+        save("delivered", existing.receiptId); return;
       }
       throw new Error("Original delivery remains unconfirmed; no duplicate message was sent.");
     }
@@ -69,8 +69,9 @@ export function deliverSessionOnce(
       if (latest?.status === "delivered") return;
       if (latest?.status === "pending") throw new Error("Original delivery remains unconfirmed; no duplicate message was sent.");
       save("pending");
-      await sendAutomationSession(target, envelope, deliveryId, request, options);
-      save("delivered");
+      let receiptId: string | undefined;
+      await sendAutomationSession(target, envelope, deliveryId, request, { ...options, rememberReceipt: id => { receiptId = id; save("pending", id); } });
+      save("delivered", receiptId);
     } catch (error) {
       if ((error as { response?: { error?: { commitState?: string } } }).response?.error?.commitState === "not_started") save("retryable");
       throw error;
@@ -90,7 +91,7 @@ export async function sendAutomationSession(
   envelope: RabiDeliveryEnvelope,
   deliveryId: string,
   request: (payload: Record<string, unknown>) => Promise<Record<string, any>>,
-  options: { remote?: boolean; imagePaths?: string[]; model?: string } = {}
+  options: { remote?: boolean; imagePaths?: string[]; model?: string; rememberReceipt?: (id: string) => void } = {}
 ): Promise<void> {
   if (target.kind === "ds_bot") {
     validateAgentDeliveryTarget(target);
@@ -113,8 +114,7 @@ export async function sendAutomationSession(
       deliveryType: target.deliveryType, sendMode: target.sendMode,
       ...(target.sendMode === "identity" ? { senderAgentId: target.senderAgentId } : {})
     } } : {}) };
-  const confirmed = (result: Record<string, any>) => result.delivery?.status === "delivered"
-    && result.delivery.targetThreadId === target.sessionId && result.delivery.deliveryId === deliveryId;
+  let receiptId = deliveryId;
   try {
     const result = await request({ ...identity, action: "send", ...(target.agentAdapter === "grokBot" ? {} : { cwd: target.workspace }), createIfMissing: false,
       ...(target.agentAdapter === "dsh" && target.sendTiming
@@ -125,17 +125,29 @@ export async function sendAutomationSession(
       prompt: envelope.messageContent, messageSource: envelope.messageSource,
       contextBlocks: envelope.contextBlocks, controlBlocks: envelope.controlBlocks,
       imagePaths: options.imagePaths ?? [], ...(target.agentAdapter === "grokBot" ? {} : { model: options.model }), responsePolicy: "none" });
-    if (!confirmed(result)) throw new Error("Agent delivery has no confirmed receipt for the selected session.");
+    // The unified Manager scopes the caller key and returns its actual receipt on the original response.
+    if (result.threadId === target.sessionId && result.delivery?.targetThreadId === target.sessionId
+      && result.communication?.deliveryId === result.delivery.deliveryId && /^agent-[a-f0-9]{64}$/.test(result.delivery.deliveryId)) {
+      receiptId = result.delivery.deliveryId;
+      options.rememberReceipt?.(receiptId);
+    }
+    if (!acceptedSession(result, target, receiptId)) throw new Error("Agent delivery has no confirmed receipt for the selected session.");
   } catch (error) {
     // A timeout may follow successful acceptance. Reconcile the same identity; never resend here.
     try {
-      const result = await request({ ...identity, action: "reconcile_delivery" });
-      if (confirmed(result) || (result.threadId === target.sessionId && result.ok === true
+      const result = await request({ ...identity, action: "reconcile_delivery", deliveryId: receiptId });
+      if (acceptedSession(result, target, receiptId) || (result.threadId === target.sessionId && result.ok === true
         && ["receipt_recovered", "already_recorded"].includes(result.status)
         && result.communication?.deliveryId === deliveryId)) return;
     } catch { /* Preserve the original error, including owner/transport failures. */ }
     throw error;
   }
+}
+
+function acceptedSession(result: Record<string, any>, target: AgentSessionDestination, deliveryId: string): boolean {
+  const delivery = result.delivery;
+  return delivery?.deliveryId === deliveryId && (delivery.targetThreadId ?? result.threadId) === target.sessionId
+    && (delivery.status === "accepted" || delivery.status === "delivered" || delivery.state === "accepted");
 }
 
 function dsBotRequest(target: AgentDsBotDestination, envelope: RabiDeliveryEnvelope, deliveryId: string,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { compileScript, compileTemplate, parse } from "@vue/compiler-sfc";
-import { availableAutomationDsh, automationDsBotDirectory, dsBotDirectoryTargets, chooseDsBot, readDsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "../../src/plugins/io.rabiroute.manager.persona/web/components/automationAgentTargetModel";
+import { availableAutomationDsh, automationAgentDirectory, automationDirectoryTargets, chooseDsBot, readDsBotCatalog, changeDeliveryType, changeSendMode, chooseDeliverySession, chooseSenderIdentity, deliverySessions, isGroupSession, senderIdentities, type DeliverySession, type SessionTarget } from "../../src/plugins/io.rabiroute.manager.persona/web/components/automationAgentTargetModel";
 
 const room = { id: "grokBot:full-room-session-id", name: "Example group", kind: "GROK_BOT_AGENT_KIND_ROOM", memberAgentIds: ["member-a"] };
 const member: DeliverySession = { id: "member-session", name: "Member", kind: "AGENT", nativeAgentId: "member-a" };
@@ -138,8 +138,11 @@ test("DSBot component retains saved destinations and fences asynchronous host or
 });
 
 test("connected remote catalogs expose real peer bindings without any Route", () => {
-  const targets = dsBotDirectoryTargets([{ instanceId: "machine", ownerDeviceId: "peer", local: false, connected: true, agents: [{ agentId: "dsh-instance", name: "DSH", provider: "dsh", enabled: true }] }, { instanceId: "offline", local: false, connected: false, agents: [{ agentId: "dsh", name: "DSH", provider: "dsh", enabled: true }] }]);
-  assert.deepEqual(targets, [{ id: "peer:peer:machine:dsh-instance", provider: "dsh", binding: { ownerDeviceId: "peer", instanceId: "machine", agentId: "dsh-instance" } }]);
+  const targets = automationDirectoryTargets([{ instanceId: "machine", ownerDeviceId: "peer", local: false, connected: true, agents: [{ agentId: "dsh-instance", name: "DSH", provider: "dsh", enabled: true },
+    { agentId: "desktop", name: "Codex", provider: "codex-desktop", enabled: true }] }, { instanceId: "offline", local: false, connected: false, agents: [{ agentId: "dsh", name: "DSH", provider: "dsh", enabled: true }] }]);
+  assert.deepEqual(targets.map(agent => [agent.id, agent.provider, agent.device]), [
+    ["peer:peer:machine:dsh-instance", "dsh", '["peer","machine"]'], ["peer:peer:machine:desktop", "codex", '["peer","machine"]']
+  ]);
   const catalog = readDsBotCatalog({ schemaVersion: 1, botScopeId: "scope", runtimeId: "live", dshBaseUrl: "http://127.0.0.1:4567", bots: [{ botId: "bot", botName: "Bot" }] });
   const remote = chooseDsBot(targets[0], catalog, "bot")!;
   assert.deepEqual(remote.instanceBinding, targets[0].binding); assert.equal(remote.dshBaseUrl, undefined);
@@ -149,7 +152,7 @@ test("connected remote catalogs expose real peer bindings without any Route", ()
 
 test("DSBot directory follows the existing access-token handshake and isolates an unavailable source", async () => {
   const calls: string[] = [];
-  const directory = await automationDsBotDirectory(async (input, init) => {
+  const directory = await automationAgentDirectory(async (input, init) => {
     const url = String(input); calls.push(url);
     if (url === "/api/webgui-access") return Response.json({ code: 0, data: { token: "fixture-directory-access" } });
     assert.equal(new Headers(init?.headers).get("x-rabiroute-webgui-token"), "fixture-directory-access");
@@ -159,13 +162,13 @@ test("DSBot directory follows the existing access-token handshake and isolates a
     return Response.json({ code: -1, message: "other source unavailable" }, { status: 503 });
   });
   assert.equal(calls[0], "/api/webgui-access");
-  assert.equal(dsBotDirectoryTargets(directory.instances)[0].binding?.instanceId, "remote");
+  assert.equal(automationDirectoryTargets(directory.instances)[0].binding?.instanceId, "remote");
   assert.ok(directory.diagnostics.length > 0);
 });
 
 test("one malformed remote directory entry does not hide healthy DSH owners", () => {
-  const targets = dsBotDirectoryTargets([null, { connected: true }, { instanceId: "bad identity!", connected: true, agents: [{ provider: "dsh", agentId: "dsh" }] }, { instanceId: "healthy", connected: true, local: false, agents: [null, { provider: "dsh", agentId: "dsh", enabled: true }] }] as unknown as import("../../src/shared/agentInstance").AgentInstance[]);
-  assert.deepEqual(targets, [{ id: "remote:healthy:dsh", provider: "dsh", binding: { instanceId: "healthy", agentId: "dsh" } }]);
+  const targets = automationDirectoryTargets([null, { connected: true }, { instanceId: "bad identity!", connected: true, agents: [{ provider: "dsh", agentId: "dsh" }] }, { instanceId: "healthy", connected: true, local: false, agents: [null, { provider: "dsh", agentId: "dsh", enabled: true }] }] as unknown as import("../../src/shared/agentInstance").AgentInstance[]);
+  assert.deepEqual(targets.map(({ id, provider, binding }) => ({ id, provider, binding })), [{ id: "remote:healthy:dsh", provider: "dsh", binding: { instanceId: "healthy", agentId: "dsh" } }]);
 });
 
 test("the actual Persona parent accepts an incomplete DSBot edit without poisoning draft projections", async () => {

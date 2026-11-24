@@ -74,7 +74,7 @@ Under **Role → Automation → Agent Hook → Event delivery**, expand a rule a
 
 | Condition | Meaning and parameters |
 | --- | --- |
-| Restrict project | Enter an absolute project directory or load candidates from the selected Agent. Worktrees of the same Git project can match; different subdirectories are not automatically identical. |
+| Restrict project | Enter an absolute project directory or load candidates from the selected Agent. The turn's working directory must match the selected project. Local Codex also checks the chat's saved project, so a turn that runs across projects cannot trigger this rule. Git worktrees can match when they refer to the same project directory within the repository. |
 | Require a bound plan | The current task must be bound to a plan belonging to this role, matched by task ID. No extra parameters. |
 | Include chat sessions | Select allowed sessions. Any selected ID matches; renaming a session does not change the match. |
 | Exclude chat sessions | Select sessions whose results must not be delivered. Exclusion wins if an ID also appears in the include list. |

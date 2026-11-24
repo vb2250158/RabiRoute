@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { agentHookSettingsFor, type CodexHookSettings, type GatewayDefinition, type PersonaAutomationRuleDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, agentHookRuleErrors, agentHookRuleEvents, type AgentHookSession } from "@shared/agentHookAutomation";
 import { normalizePlanFollowup, type PlanFollowupSettings as FollowupSettings } from "@shared/planFollowup";
@@ -14,6 +14,8 @@ import type { AutomationQqDirectory } from "../persona/automationRuleConversatio
 import AutomationEndpointNav from "./AutomationEndpointNav.vue";
 import PlanFollowupSettings from "./PlanFollowupSettings.vue";
 import AgentCompletionDeliveryRules from "./AgentCompletionDeliveryRules.vue";
+import { automationAgentDirectory, automationDeviceKey, automationDirectoryTargets, type AutomationDeviceAgent } from "./automationAgentTargetModel";
+import { usePersonaService } from "../persona/personaServiceClient";
 
 const props = defineProps<{ modelValue?: CodexHookSettings; gateways: GatewayDefinition[]; gateway: GatewayDefinition;
   messageRules: readonly PersonaAutomationRuleDefinition[]; qqDirectories: readonly AutomationQqDirectory[] }>();
@@ -22,6 +24,16 @@ const adaptersPath = computed(() => routeScopedAdaptersPath(defaultRoute.value.c
 const targets = computed(() => completionTargetChoices(props.gateway, props.gateways, props.messageRules, props.qqDirectories, props.modelValue));
 const emit = defineEmits<{ "update:modelValue": [value: CodexHookSettings] }>();
 const { t } = useI18n();
+const personaFetch = usePersonaService().fetch;
+const hookDeviceAgents = ref<AutomationDeviceAgent[]>([]);
+const hookDevicesError = ref("");
+const hookDevicesAbort = new AbortController();
+onBeforeUnmount(() => hookDevicesAbort.abort());
+void automationAgentDirectory(personaFetch, hookDevicesAbort.signal).then(directory => {
+  if (hookDevicesAbort.signal.aborted) return;
+  hookDeviceAgents.value = automationDirectoryTargets(directory.instances).filter(agent => !agent.binding?.ownerDeviceId);
+  hookDevicesError.value = directory.diagnostics.find(item => item.source === "local-instances")?.message || "";
+}).catch(error => { if (!hookDevicesAbort.signal.aborted) hookDevicesError.value = String(error); });
 const selected = ref("");
 const contextDialog = ref(false);
 const contextPatch = ref<Partial<Omit<CodexHookSettings, "byAgent">>>({});
@@ -36,10 +48,31 @@ const moving = computed(() => Boolean(sourceAgent.value && sourceAgent.value !==
 const sessionSelections = new Map<AgentAdapterType, Map<string, AgentHookSession[] | undefined>>();
 const previewDrafts = new Map<AgentAdapterType, { rule: Rule; enableFollowup: boolean }>();
 const supportedOptions = computed(() => personaHookAgentOptions(props.gateways, props.gateway.agentRoleId || "")
-  .map(option => ({ ...option, icon: "mdi-robot-outline" })));
+  .map(option => ({ ...option, configured: option.configured || hookDeviceAgents.value.some(item => item.provider === option.value), icon: "mdi-robot-outline" })));
 const options = computed(() => supportedOptions.value.filter(item => item.configured));
 const selectedAgent = computed(() => options.value.find(item => item.value === selected.value));
 const editorAgent = computed(() => supportedOptions.value.find(item => item.value === previewAgent.value));
+const followupDevice = computed(() => {
+  const value = draft.value?.kind === "followup" ? draft.value.value.sourceDevice : undefined;
+  return value === undefined ? "legacy" : value === "local" ? "local" : automationDeviceKey(value);
+});
+const followupDevices = computed(() => {
+  const devices = new Map(hookDeviceAgents.value.filter(agent => agent.provider === editorAgent.value?.value)
+    .map(agent => [agent.device, { title: agent.deviceName, value: agent.device }]));
+  const saved = draft.value?.kind === "followup" ? draft.value.value.sourceDevice : undefined;
+  if (saved && saved !== "local" && !devices.has(followupDevice.value)) {
+    devices.set(followupDevice.value, { title: `${saved.instanceId} · 暂不可用`, value: followupDevice.value });
+  }
+  return [...(followupDevice.value === "legacy" ? [{ title: "沿用原设备范围", value: "legacy" }] : []),
+    { title: "本机", value: "local" }, ...devices.values()];
+});
+function changeFollowupDevice(value: string) {
+  if (draft.value?.kind !== "followup" || value === followupDevice.value) return;
+  const binding = hookDeviceAgents.value.find(agent => agent.device === value && agent.provider === editorAgent.value?.value)?.binding;
+  if (value === "local" || binding) {
+    draft.value = { kind: "followup", value: { ...draft.value.value, sourceDevice: binding ? { instanceId: binding.instanceId } : "local" } };
+  }
+}
 const previewStatuses = computed(() => Object.fromEntries(supportedOptions.value.map(option =>
   [option.value, t(option.configured ? "已配置" : "未配置")])));
 watch([() => props.gateway.agentRoleId, options], ([role, available], previous) => {
@@ -130,10 +163,10 @@ const draftType = computed<RuleType>(() => draft.value?.kind === "followup" ? "f
 
 function newRule(type: RuleType, name?: string): Rule {
   if (type === "followup") {
-    return { kind: "followup", value: { id: browserUuid(), name, enabled: false, statusKeys: [], prompt: "" } };
+    return { kind: "followup", value: { id: browserUuid(), name, enabled: false, statusKeys: [], prompt: "", sourceDevice: "local" } };
   }
   const value = type === "speech" ? createTtsCompletionRule("") : createAgentCompletionRule();
-  return { kind: "delivery", value: { ...value, name } };
+  return { kind: "delivery", value: { ...value, name, sourceDevice: "local" } };
 }
 function openEditor(rule?: Rule) {
   previewDrafts.clear();
@@ -159,7 +192,10 @@ function switchPreview(agent: AgentAdapterType) {
       const sessionConditions = conditions.filter(item => item.type === "include_sessions" || item.type === "exclude_sessions");
       sessionSelections.set(previewAgent.value, new Map(sessionConditions.map(item => [item.type, item.sessions])));
       const targetSelections = sessionSelections.get(agent);
-      current.value = { ...current.value, conditions: conditions.map(item => sessionConditions.includes(item)
+      const sourceDevice = current.value.sourceDevice;
+      current.value = { ...current.value, ...(sourceDevice && sourceDevice !== "local" && sourceDevice.agentId
+        ? { sourceDevice: { ...sourceDevice, agentId: undefined } } : {}),
+        conditions: conditions.map(item => sessionConditions.includes(item)
         ? { ...item, sessions: targetSelections?.get(item.type) ?? [] } : item) };
     }
     enableFollowup.value = false;
@@ -285,10 +321,12 @@ function saveRule(remove = false) {
                 <div v-for="error in draftErrors" :key="error">{{ error }}</div>
               </v-alert>
               <AgentCompletionDeliveryRules :key="draft.value.id" :rule="draft.value" :targets="targets" :gateways="gateways"
-                :qq-directories="qqDirectories"
+                :qq-directories="qqDirectories" :device-agents="hookDeviceAgents" :device-error="hookDevicesError"
                 :agent-type="editorAgent.value" @update:rule="value => draft = { kind: 'delivery', value }" />
             </template>
             <template v-else>
+              <v-select :model-value="followupDevice" :items="followupDevices" label="触发设备" density="compact"
+                variant="outlined" hide-details class="mb-4" @update:model-value="changeFollowupDevice" />
               <PlanFollowupSettings :key="draft.value.id" :rule="draft.value" :role-id="gateway.agentRoleId || ''"
                 @update:rule="value => draft = { kind: 'followup', value }" />
               <v-checkbox v-if="editorAgent.configured && !previewFollowupEnabled" v-model="enableFollowup"
