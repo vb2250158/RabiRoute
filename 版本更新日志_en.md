@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.90 - 2026-11-25
+
+- io.rabiroute.agent.codex 0.1.18 and rabi-agent 0.4.10: select the existing Windows Desktop thread queue from verified official CLI capabilities when legacy IPC is unavailable. Persist one transport before enqueue; queue success or timeout stays unconfirmed until the original user input matches the exact delivery ID and body hash. Preserve legacy IPC, permissions and workspace checks without requeueing or starting another runtime.
+
 ## 0.15.89 - 2026-11-25
 
 - Fix a voice timer error when starting or stopping recognition on Rokid glasses so the assistant returns to wake standby after 60 seconds of inactivity.

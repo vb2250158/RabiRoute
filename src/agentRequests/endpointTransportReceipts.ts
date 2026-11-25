@@ -16,6 +16,7 @@ type TransportEvidence = { deliveryId: string; generation: string; promptHash: s
   executionOptions?: EndpointExecutionOptions; target: NativeOwnerDeliveryEvidence["target"]; receipt?: EndpointDeliveryReceipt;
   attemptId?: string; attemptSequence?: number; state?: "attempting" | "not_sent";
   dispatchAttemptId?: string;
+  selectedTransport?: "desktop-ipc" | "desktop-queue";
   noFrameProof?: NoFrameProof; lastNoFrameProof?: NoFrameProof };
 
 /** Transport-only ledger. An attempted operation is never dispatched again after a crash or timeout. */
@@ -81,6 +82,16 @@ export class EndpointTransportReceipts {
   async readReceipt(delivery: NativeOwnerDeliveryEvidence): Promise<EndpointDeliveryReceipt | undefined> {
     return this.read(delivery)?.receipt;
   }
+  readSelectedTransport(delivery: NativeOwnerDeliveryEvidence) {
+    return this.read(delivery)?.selectedTransport;
+  }
+  selectTransport(delivery: NativeOwnerDeliveryEvidence, selectedTransport: "desktop-ipc" | "desktop-queue"): void {
+    const original = this.read(delivery);
+    if (original?.state !== "attempting" || original.receipt || original.dispatchAttemptId !== delivery.dispatchAttemptId
+      || original.selectedTransport) throw new Error("Cannot select transport for this attempt.");
+    this.mutate(delivery, "select_transport", () => atomicWriteFileSync(this.file(delivery),
+      JSON.stringify({ ...original, selectedTransport }), { mode: 0o600 }));
+  }
   async beginAttempt(delivery: NativeOwnerDeliveryEvidence): Promise<boolean> {
     const original = this.read(delivery);
     if (original) {
@@ -92,7 +103,7 @@ export class EndpointTransportReceipts {
       // Only its owner can persist prepared and allocate a new dispatch token.
       if (original.dispatchAttemptId === delivery.dispatchAttemptId) return false;
       return this.mutate(delivery, "consume_no_frame_proof", () => {
-        const { noFrameProof, ...retained } = original;
+        const { noFrameProof, selectedTransport: _selected, ...retained } = original;
         atomicWriteFileSync(this.file(delivery), JSON.stringify({ ...retained, state: "attempting", attemptId: randomUUID(),
           dispatchAttemptId: delivery.dispatchAttemptId,
           attemptSequence: (original.attemptSequence ?? 1) + 1, lastNoFrameProof: noFrameProof } satisfies TransportEvidence), { mode: 0o600 });

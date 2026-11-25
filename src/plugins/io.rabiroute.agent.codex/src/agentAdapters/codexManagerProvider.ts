@@ -45,7 +45,7 @@ export function createManager(options: AgentManagerImplementationOptions, descri
       "endpoint.execute": (_payload, invocation) => {
         const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.executeEndpointOnOwner> | undefined;
         if (!args) throw new Error("Original native endpoint arguments are required.");
-        return endpointOwner.executeEndpointOnOwner(args[0], args[1], args[2], args[3] ?? { sendCodex: runtime.sendCodexThreadMessage });
+        return endpointOwner.executeEndpointOnOwner(args[0], args[1], args[2], { ipcReady: runtime.isCodexDesktopReady, ...args[3], sendCodex: args[3]?.sendCodex ?? runtime.sendCodexThreadMessage });
       },
       "endpoint.recover": (_payload, invocation) => {
         const args = invocation?.nativeArgs as Parameters<typeof endpointOwner.recoverEndpointOwnerReceipt> | undefined;

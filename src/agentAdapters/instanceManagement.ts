@@ -15,6 +15,7 @@ export type InstanceManagementContext = { rootDir: string; defaultWorkspace: str
   getProviders?: () => readonly AgentManagerProvider[];
   invokeAgentOperation?: AgentManagerOperationInvoker;
   observeRecovery?: <T>(operation: () => Promise<T>) => Promise<T>;
+  readSelectedTransport?: (delivery: PreparedEndpointDelivery) => "desktop-ipc" | "desktop-queue" | undefined;
   ownerTransport?: Parameters<typeof executeEndpointOnOwner>[3] };
 
 /** Both transports execute the same provider operations on the owning computer. */
@@ -36,8 +37,8 @@ async function executeInstanceAgentOperation(operation: string, params: Record<s
     try {
       return await executePreparedEndpointDelivery(delivery, { ...context.endpointExecution,
         recoverReceipt: (prepared, assertAuthorized) => context.observeRecovery
-          ? context.observeRecovery(() => recoverEndpointOwnerReceipt(prepared, assertAuthorized))
-          : recoverEndpointOwnerReceipt(prepared, assertAuthorized),
+          ? context.observeRecovery(() => recoverEndpointOwnerReceipt(prepared, assertAuthorized, context.readSelectedTransport?.(prepared)))
+          : recoverEndpointOwnerReceipt(prepared, assertAuthorized, context.readSelectedTransport?.(prepared)),
         send: (prepared, assertAuthorized) => executeEndpointOnOwner(prepared, { allowedWorkspaces: context.allowedWorkspaces, dshBaseUrl }, assertAuthorized, context.ownerTransport)
       }, operation === "reconcile_prepared_delivery");
     } catch (error) {

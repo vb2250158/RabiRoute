@@ -15,8 +15,14 @@ export function assertEndpointOwnerDirectory(cwd: string | undefined): asserts c
   }
 }
 
-export async function recoverEndpointOwnerReceipt(delivery: NativeOwnerDeliveryEvidence, assertAuthorized: () => void | Promise<void>): Promise<EndpointDeliveryReceipt | undefined> {
-  return invokeScopedAgentManagerOperation(delivery.target.provider, "endpoint.recover", { delivery }, { nativeArgs: [delivery, assertAuthorized] });
+export type EndpointOwnerTransport = {
+  sendCodex?: import("../agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"];
+  selectTransport?: (selected: "desktop-ipc" | "desktop-queue") => void;
+};
+
+export async function recoverEndpointOwnerReceipt(delivery: NativeOwnerDeliveryEvidence, assertAuthorized: () => void | Promise<void>,
+  selectedTransport?: "desktop-ipc" | "desktop-queue"): Promise<EndpointDeliveryReceipt | undefined> {
+  return invokeScopedAgentManagerOperation(delivery.target.provider, "endpoint.recover", { delivery }, { nativeArgs: [delivery, assertAuthorized, selectedTransport] });
 }
 
 /** Business authority and frozen delivery remain on the original host; only native I/O is delegated. */
@@ -24,7 +30,7 @@ export async function executeEndpointOnOwner(
   delivery: NativeOwnerDelivery,
   options: Pick<AgentThreadRequestOptions, "dshBaseUrl" | "invokeAgentOperation" | "getProviders"> & { allowedWorkspaces?: string[] },
   assertAuthorized: () => void | Promise<void>,
-  transport?: { sendCodex: import("../agentAdapters/codexContracts.js").CodexNativeOperations["sendCodexThreadMessage"] }
+  transport?: EndpointOwnerTransport
 ): Promise<{ threadId: string; action: string; transport: string }> {
   await assertAuthorized();
   // The exact local Codex Desktop owner resolves its execution directory in its own context.

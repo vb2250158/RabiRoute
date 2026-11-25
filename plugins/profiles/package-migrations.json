@@ -39,9 +39,10 @@
         "0.1.13",
         "0.1.14",
         "0.1.15",
-        "0.1.16"
+        "0.1.16",
+        "0.1.17"
       ],
-      "toVersion": "0.1.17"
+      "toVersion": "0.1.18"
     },
     {
       "packageId": "io.rabiroute.agent.copilot-cli",

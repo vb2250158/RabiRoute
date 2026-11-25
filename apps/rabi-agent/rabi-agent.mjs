@@ -1520,7 +1520,7 @@ class RabiAgentRuntime {
             const dsh = message.params?.dshBaseUrl ? { baseUrl: message.params.dshBaseUrl } : agent?.dsh || this.config.dsh;
             const params = { ...message.params, ...(provider ? { provider, agentAdapter: provider } : {}) };
             if (message.operation === "threads" && params.cwd) params.cwd = resolveTaskWorkspace(params.cwd, this.config);
-            let endpointExecution;
+            let endpointExecution, ownerTransport, readSelectedTransport;
             if (preparedOperation) {
               const delivery = params.delivery;
               const assertAuthorized = () => trace.run("authority", async () => {
@@ -1542,6 +1542,8 @@ class RabiAgentRuntime {
               });
               await assertAuthorized();
               const receipts = new EndpointTransportReceipts(path.join(path.dirname(this.configPath), "endpoint-transport-receipts"));
+              ownerTransport = { selectTransport: selected => receipts.selectTransport(delivery, selected) };
+              readSelectedTransport = prepared => receipts.readSelectedTransport(prepared);
               endpointExecution = { endpoint: delivery.target, assertAuthorized,
                 readReceipt: async prepared => {
                   const receipt = await trace.run("receipt_read", () => receipts.readReceipt(prepared));
@@ -1578,7 +1580,7 @@ class RabiAgentRuntime {
                 latePreparedObservation = this.observeLatePreparedReceipt(params.delivery, recoveryConnection,
                   undefined, CODEX_DESKTOP_LATE_RECEIPT_WINDOW_MS);
               }
-              result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, ...nativeContext, dsh, endpointExecution,
+              result = await trace.run("execute", () => manageInstanceAgent(message.operation, params, { ...this.config, ...nativeContext, dsh, endpointExecution, ownerTransport, readSelectedTransport,
                 observeRecovery: operation => trace.run("receipt_recovery", operation), rootDir: path.dirname(fileURLToPath(import.meta.url)) }));
               if (result?.accepted === true || result?.status === "not_sent") latePreparedObservation?.dispose();
             }

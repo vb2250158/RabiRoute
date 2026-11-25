@@ -320,3 +320,62 @@ test("authenticated remote management recovers its durable no-frame proof after 
   assert.notEqual(completed.dispatchAttemptId, frozen.dispatchAttemptId);
   assert.equal((await executeEndpointAgentDelivery(request, manager.options())).statusCode, 200); assert.equal(preparedCalls, 2);
 });
+
+test("Desktop queue pins the attempt before enqueue and waits for exact original user input", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-queue-"));
+  const original = { home: process.env.CODEX_HOME, sqlite: process.env.CODEX_SQLITE_HOME };
+  process.env.CODEX_HOME = root;
+  process.env.CODEX_SQLITE_HOME = root;
+  t.after(() => {
+    if (original.home === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = original.home;
+    if (original.sqlite === undefined) delete process.env.CODEX_SQLITE_HOME; else process.env.CODEX_SQLITE_HOME = original.sqlite;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const threadId = randomUUID(), rolloutPath = path.join(root, "rollout.jsonl");
+  const db = new DatabaseSync(path.join(root, "state_5.sqlite"));
+  db.exec("CREATE TABLE threads (id TEXT PRIMARY KEY,title TEXT,cwd TEXT,rollout_path TEXT,updated_at INTEGER,updated_at_ms INTEGER,recency_at INTEGER,recency_at_ms INTEGER,archived INTEGER,first_user_message TEXT)");
+  db.prepare("INSERT INTO threads VALUES (?,'Owner',?,?,1,1000,1,1000,0,'existing')").run(threadId, root, rolloutPath);
+  db.close();
+  fs.writeFileSync(rolloutPath, JSON.stringify({ type: "session_meta", payload: { id: threadId } }) + "\n");
+  const writeText = (role: string, text: string) => fs.appendFileSync(rolloutPath,
+    JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type: "input_text", text }] } }) + "\n");
+  const { agentDeliveryPromptHash } = await import("./store.js");
+  const { endpointExecutionOptionsHash } = await import("./executionOptions.js");
+  const { executeNativeOwnerDelivery } = await import("./endpointExecution.js");
+  const deliveryId = randomUUID();
+  const prompt = `## 消息源\n- 投递 ID：${deliveryId}\n\n## 消息内容\nfixture`;
+  const executionOptions = { cwd: root };
+  const target = { kind: "local", managerInstanceId: "manager", agentId: "codex", provider: "codex", sessionId: threadId, authorizationIncarnation: "fixture-epoch" } as const;
+  const delivery = { deliveryId, prompt, generation: "fixture-generation", target, executionOptions,
+    promptHash: agentDeliveryPromptHash(prompt), executionOptionsHash: endpointExecutionOptionsHash(executionOptions) };
+  const directory = path.join(root, "transport");
+  let ledger = new EndpointTransportReceipts(directory), enqueueCount = 0;
+  const context = {
+    endpoint: target, assertAuthorized: () => {}, readReceipt: () => ledger.readReceipt(delivery),
+    beginAttempt: () => ledger.beginAttempt(delivery), writeReceipt: (_: unknown, receipt: Parameters<EndpointTransportReceipts["writeReceipt"]>[1]) => ledger.writeReceipt(delivery, receipt),
+    recoverReceipt: () => codexOwner.recoverEndpointOwnerReceipt(delivery, () => {}, ledger.readSelectedTransport(delivery)),
+    send: () => codexOwner.executeEndpointOnOwner(delivery, {}, () => {}, {
+      ipcReady: async () => false,
+      selectTransport: transport => ledger.selectTransport(delivery, transport),
+      sendCodex: async () => { throw new Error("Unexpected IPC prompt"); }
+    }, {
+      platform: "win32", wait: async () => {},
+      prepare: async () => async () => {
+        assert.equal(ledger.readSelectedTransport(delivery), "desktop-queue");
+        enqueueCount++;
+        writeText("assistant", prompt);
+        writeText("user", prompt.replace(deliveryId, randomUUID()));
+        writeText("user", prompt + " changed");
+        throw new Error("fixture CLI deadline after queue write");
+      }
+    })
+  };
+  await assert.rejects(executeNativeOwnerDelivery(delivery, context), /acceptance remains unconfirmed/);
+  ledger = new EndpointTransportReceipts(directory);
+  assert.equal(await executeNativeOwnerDelivery(delivery, context), undefined);
+  assert.equal(await executeNativeOwnerDelivery(delivery, context, true), undefined);
+  assert.equal(enqueueCount, 1);
+  writeText("user", prompt);
+  assert.equal((await executeNativeOwnerDelivery(delivery, context, true))?.transport, "desktop-queue");
+  assert.equal(enqueueCount, 1);
+});
