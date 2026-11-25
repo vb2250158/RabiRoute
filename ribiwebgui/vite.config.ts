@@ -43,9 +43,9 @@ export default defineConfig(({ command }) => {
       emptyOutDir: true,
       manifest: true,
       rollupOptions: {
-        preserveEntrySignatures: "exports-only",
-        // Business Web entries are built once by the official package producer.
-        input: { app: fileURLToPath(new URL("./index.html", import.meta.url)) }
+        preserveEntrySignatures: "exports-only"
+        // Entry is Vite's default `root/index.html`. Passing an absolute input here
+        // turns into an absolute chunk name on network drives, which Rollup rejects.
       }
     },
     server: {

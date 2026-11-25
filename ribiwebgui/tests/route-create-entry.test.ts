@@ -62,13 +62,16 @@ test("route-control is built and synchronized as an independent Web entry", () =
   const sync = fs.readFileSync(new URL("../../scripts/sync-plugin-web-bundles.mjs", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
   assert.doesNotMatch(vite, /readdirSync/);
-  assert.match(vite, /input: \{ app:/);
+  // The app entry stays Vite's default `root/index.html`; an absolute `input`
+  // becomes an absolute chunk name on network drives and Rollup rejects it.
+  assert.doesNotMatch(vite, /input: \{/);
+  assert.match(vite, /preserveEntrySignatures: "exports-only"/);
   const pkg = JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.route-control/package.json", import.meta.url), "utf8"));
   assert.equal(pkg.rabi.webSource, "web/entry.ts");
   assert.match(sync, /buildPluginWebPackages/);
   assert.match(sync, /allWeb: true/);
   assert.doesNotMatch(sync, /export \{ activate \} from/);
-  assert.match(app, /pageCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore.commands.value, "topbar-primary"\)\.filter/);
-  assert.match(app, /command.handlerId !== "web.add-route" \|\| route.path.startsWith\("\/routes"\)/);
+  assert.match(app, /pageCommands = computed\(\(\) => webCommandsInSlot\(pluginCatalogStore\.commands\.value, "topbar-primary", route\.path\)/);
+  assert.match(app, /command\.handlerId !== "web\.save-page"/);
   assert.match(app, /v-for="command in pageCommands"/);
 });
