@@ -59,11 +59,11 @@ internal class RabiConversationListUi(private val activity: Activity) {
         }
     }
 
-    fun row(title: String, preview: String, time: String, description: String, image: ImageView, unread: Int, open: () -> Unit, actions: () -> Unit, destinationHint: String = "", sourceComputer: String = ""): View = LinearLayout(activity).apply {
+    fun row(title: String, preview: String, time: String, description: String, image: ImageView, unread: Int, open: () -> Unit, actions: () -> Unit, destinationHint: String = "", sourceComputer: String = "", pinned: Boolean = false): View = LinearLayout(activity).apply {
         orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(88); setPadding(dp(18), dp(14), dp(18), dp(14))
-        contentDescription = "$title，$description，$preview，$time，$unread 条未读消息"
-        addView(image, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(16) })
+        minimumHeight = dp(72); setPadding(dp(16), dp(10), dp(16), dp(10))
+        contentDescription = "$title，$description，$preview，$time，$unread 条未读消息" + if (pinned) "，已置顶" else ""
+        addView(image, LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(12) })
         addView(LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             if(sourceComputer.isNotBlank()) addView(personaHeading(title,unread,sourceComputer),LinearLayout.LayoutParams(-1,-2))
@@ -74,15 +74,20 @@ internal class RabiConversationListUi(private val activity: Activity) {
             if (destinationHint.isNotBlank()) addView(text(destinationHint, 11f, RabiMobileUi.muted).apply {
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
-            addView(text(preview, 14f, RabiMobileUi.muted).apply {
+            addView(text(preview, 13f, RabiMobileUi.muted).apply {
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(7) })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        if (time.isNotBlank() || unread > 0) addView(LinearLayout(activity).apply {
+        if (time.isNotBlank() || unread > 0 || pinned) addView(LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.END
-            if (time.isNotBlank()) addView(text(time, 12f, RabiMobileUi.muted).apply { maxLines = 1 }, LinearLayout.LayoutParams(-2, -2))
-            if (unread > 0) addView(RabiMobileUi.unreadBadge(activity, unread), LinearLayout.LayoutParams(-2, dp(20)).apply { topMargin = dp(10) })
-        }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12); gravity = Gravity.TOP })
+            if (time.isNotBlank() || pinned) addView(LinearLayout(activity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                if (pinned) addView(RabiMobileUi.icon(activity, R.drawable.ic_ui_pin, RabiMobileUi.muted),
+                    LinearLayout.LayoutParams(dp(12), dp(12)).apply { if (time.isNotBlank()) marginEnd = dp(4) })
+                if (time.isNotBlank()) addView(text(time, 12f, RabiMobileUi.muted).apply { maxLines = 1 })
+            }, LinearLayout.LayoutParams(-2, -2))
+            if (unread > 0) addView(RabiMobileUi.unreadBadge(activity, unread), LinearLayout.LayoutParams(-2, dp(20)).apply { topMargin = dp(5) })
+        }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12); gravity = Gravity.CENTER_VERTICAL })
         touch(this, open, actions)
     }
 

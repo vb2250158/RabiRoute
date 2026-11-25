@@ -14,18 +14,25 @@ public final class RabiVoiceCallSession {
     public final String captureId = "call_" + id;
     public final String workerId;
     public final String routeId;
+    private final String wireRouteId;
     public volatile boolean muted;
     public volatile boolean ended;
     private final Set<String> admittedEvents = new HashSet<>();
     public RabiVoiceCallSession(String workerId, String routeId) {
-        if (workerId == null || workerId.trim().isEmpty() || routeId == null || routeId.trim().isEmpty())
+        this(workerId, routeId, routeId);
+    }
+    public RabiVoiceCallSession(String workerId, String routeId, String wireRouteId) {
+        if (workerId == null || workerId.trim().isEmpty() || routeId == null || routeId.trim().isEmpty()
+                || wireRouteId == null || wireRouteId.trim().isEmpty())
             throw new IllegalArgumentException("通话需要明确的电脑和消息路线");
-        this.workerId = workerId; this.routeId = routeId;
+        this.workerId = workerId;
+        this.routeId = routeId;
+        this.wireRouteId = wireRouteId;
     }
     public synchronized String admit(String capture, String eventId, long endedAt, long now) {
         if (ended || muted || !captureId.equals(capture) || endedAt > now || now - endedAt >= INPUT_TTL_MS
                 || eventId == null || eventId.isEmpty() || !admittedEvents.add(eventId)) return "";
-        return "rabi-call-v1." + id + "." + (endedAt + INPUT_TTL_MS) + "." + encode(workerId) + "." + encode(routeId) + "." + hash(eventId);
+        return "rabi-call-v1." + id + "." + (endedAt + INPUT_TTL_MS) + "." + encode(workerId) + "." + encode(wireRouteId) + "." + hash(eventId);
     }
     public boolean acceptsInput(String clientId, long now) {
         if (ended || clientId == null) return false;

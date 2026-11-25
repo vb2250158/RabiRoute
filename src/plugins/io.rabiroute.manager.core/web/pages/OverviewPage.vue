@@ -14,12 +14,15 @@ import { routeScopedAdaptersPath } from "../../../../../ribiwebgui/src/routeScop
 import type { GatewayDefinition } from "../../../../../ribiwebgui/src/types";
 import { adapterLabel, gatewayAdapterTypes } from "../../../../../ribiwebgui/src/utils/gatewayHelpers";
 import { personaSourceKey } from "../../../io.rabiroute.manager.persona/web/persona/personaSourcePresentation";
-import { remotePersonaClient, type PersonaSourceDevice } from "../../../io.rabiroute.manager.persona/web/persona/remotePersonaReference";
+import { RemotePersonaReadError, remotePersonaClient, type PersonaSourceDevice } from "../../../io.rabiroute.manager.persona/web/persona/remotePersonaReference";
 import { getTimeoutMs } from "../../../../../ribiwebgui/src/timeoutSettingsClient";
+import { readPreview, writePreview } from "../../../../../ribiwebgui/src/readPreviewCache";
 
 const store = useGatewayStore();
 const roles = useRoleStore();
 const { t } = useI18n();
+const devicePreviewKey = ["role-catalog-computers"];
+const cachedDevices = ref<Pick<PersonaSourceDevice, "deviceId" | "name">[]>(readPreview(devicePreviewKey) ?? []);
 const devices = ref<PersonaSourceDevice[]>([]);
 const devicesLoading = ref(false);
 const devicesError = ref("");
@@ -41,7 +44,10 @@ const computers = computed(() => {
         title: device.name,
         trusted: device.trusted,
         unavailable: !device.online ? "离线" : !device.trusted ? "未连接" : !device.supported ? "在线 · 需要更新" : ""
-      }))
+      })),
+    ...cachedDevices.value
+      .filter(device => personaSourceKey(store.meta, device.deviceId))
+      .map(device => ({ source: device.deviceId, title: device.name, unavailable: "上次读取", trusted: true }))
   ];
 });
 
@@ -96,9 +102,24 @@ async function loadComputers(force = false): Promise<void> {
   try {
     const peers = await remotePersonaClient.catalogDevices(signal);
     signal.throwIfAborted();
+    const trustedPeers = peers.filter(peer => peer.trusted && personaSourceKey(store.meta, peer.deviceId));
+    const trustedIds = new Set(trustedPeers.map(peer => peer.deviceId));
+    for (const device of [...cachedDevices.value, ...devices.value]) {
+      if (!trustedIds.has(device.deviceId)) roles.forgetCatalogPreview(device.deviceId);
+    }
     devices.value = peers;
+    cachedDevices.value = [];
+    writePreview(devicePreviewKey, trustedPeers.map(({ deviceId, name }) => ({ deviceId, name })));
   } catch (error) {
-    if (!signal.aborted) devicesError.value = userFacingError(error);
+    if (!signal.aborted) {
+      if (error instanceof RemotePersonaReadError && error.state === "unauthorized") {
+        for (const device of [...cachedDevices.value, ...devices.value]) roles.forgetCatalogPreview(device.deviceId);
+        cachedDevices.value = [];
+        devices.value = [];
+        writePreview(devicePreviewKey, undefined);
+      }
+      devicesError.value = userFacingError(error);
+    }
     return;
   } finally {
     if (!signal.aborted) devicesLoading.value = false;
@@ -114,11 +135,14 @@ async function loadComputers(force = false): Promise<void> {
   }));
 }
 
+roles.restoreCatalogPreview("");
+for (const device of cachedDevices.value) roles.restoreCatalogPreview(device.deviceId);
 onMounted(() => void loadComputers());
 watch(() => roles.catalogRefreshRevision, () => void loadComputers(true));
 watch(() => store.meta.managerInstanceId, (_id, previous) => {
   if (!previous) return;
   devices.value = [];
+  cachedDevices.value = [];
   void loadComputers();
 });
 onBeforeUnmount(() => discovery?.abort());
@@ -178,9 +202,9 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
     <section v-for="group in groups" :key="group.source ?? 'other-routes'" class="role-computer-group">
         <header class="role-computer-heading">
           <h2 data-no-i18n>{{ group.title }}</h2>
-          <span v-if="group.unavailable">{{ t(group.unavailable) }}</span>
+          <span v-if="group.unavailable || group.catalog?.cached">{{ t(group.unavailable || "上次读取") }}</span>
         </header>
-        <v-progress-linear v-if="group.catalog && !group.unavailable && (group.catalog.loading || (!group.catalog.loaded && !group.catalog.error))" indeterminate color="secondary" :aria-label="t('加载中')" />
+        <v-progress-linear v-if="group.catalog && !group.cards.length && !group.unavailable && (group.catalog.loading || (!group.catalog.loaded && !group.catalog.error))" indeterminate color="secondary" :aria-label="t('加载中')" />
         <v-alert v-if="group.catalog?.error && !group.unavailable" :type="group.catalog.partial ? 'warning' : 'error'" variant="tonal" density="compact">
           {{ group.catalog.error }}
           <v-btn variant="text" size="small" @click="loadComputer(group.source ?? '', true, discovery?.signal)">{{ t("重试") }}</v-btn>

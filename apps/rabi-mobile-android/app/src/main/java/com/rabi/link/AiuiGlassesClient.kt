@@ -60,7 +60,7 @@ class AiuiGlassesClient(private val context: Context, val connection: RabiLinkRe
     fun saveProfile(ownerDeviceId: String,input: JSONObject): JSONObject = request(ownerDeviceId,"/api/rabilink/agent-devices/" + encode(input.getString("bindingId")) + "/profile","PUT",
         JSONObject().put("expectedRevision",input.getInt("expectedRevision")).put("idempotencyKey",input.getString("idempotencyKey")).put("profile",input.getJSONObject("profile")),JSONObject().put("Idempotency-Key",input.getString("idempotencyKey")))
     data class HistoryMessage(val id: String, val role: String, val text: String, val conversationId: String, val name: String, val receivedAt: String)
-    fun history(routeIds: Map<String, String>, routeSourceId: String): List<HistoryMessage> {
+    fun history(routeIds: Map<Pair<String, String>, String>): List<HistoryMessage> {
         val source = devices()
         val roles = linkedMapOf<Pair<String,String>, String>()
         val devices = source.optJSONArray("devices") ?: JSONArray()
@@ -86,7 +86,7 @@ class AiuiGlassesClient(private val context: Context, val connection: RabiLinkRe
                     val row = rows.getJSONObject(i); val kind = row.optString("kind")
                     if (kind == "aiui_user" || kind == "aiui_assistant") result.add(HistoryMessage(
                         "aiui:$sourcePc:$roleId:" + row.getString("id"), if (kind == "aiui_user") "user" else "assistant", row.getString("text"),
-                        (if(sourcePc == routeSourceId) routeIds[roleId] else null) ?: "aiui:$sourcePc:$roleId", name, row.getString("receivedAt")))
+                        routeIds[reference] ?: "aiui:$sourcePc:$roleId", name, row.getString("receivedAt")))
                 }
                 cursor = if (page.isNull("nextCursor")) null else page.optString("nextCursor").takeIf { it.isNotBlank() }
                 if (cursor == null) break

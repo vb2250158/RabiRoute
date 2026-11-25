@@ -89,7 +89,35 @@ function deliverySentAt(value: unknown): string {
     ?? new Date().toLocaleString("zh-CN", { hour12: false });
 }
 
-export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: string): string[] {
+type SystemSourceLocale = "zh-CN" | "en" | "ja";
+type SystemSourcePresentation = SystemSourceLocale | "legacy";
+
+const connectionEventLabels = {
+  "zh-CN": { eventType: "Agent 连接", eventName: "已连接的发送方" },
+  en: { eventType: "Agent connection", eventName: "Connected sender" },
+  ja: { eventType: "エージェント接続", eventName: "接続済みの送信元" }
+} satisfies Record<SystemSourceLocale, { eventType: string; eventName: string }>;
+
+const connectionTransportLabels = new Map<string, Record<SystemSourceLocale, string>>([
+  ["local", { "zh-CN": "本机", en: "Local device", ja: "このデバイス" }],
+  ["lan-agent", { "zh-CN": "局域网 Agent", en: "LAN Agent", ja: "LAN エージェント" }],
+  ["rabilink", { "zh-CN": "RabiLink", en: "RabiLink", ja: "RabiLink" }],
+  ["service", { "zh-CN": "服务", en: "Service", ja: "サービス" }]
+]);
+
+function systemSourceDisplay(source: RabiSystemMessageSource, presentation?: SystemSourcePresentation) {
+  if (source.eventType !== "agent_connection" || presentation === "legacy") return source;
+  const hostLanguage = Intl.DateTimeFormat().resolvedOptions().locale.split("-")[0];
+  const locale = presentation ?? (hostLanguage === "en" || hostLanguage === "ja" ? hostLanguage : "zh-CN");
+  const labels = connectionEventLabels[locale];
+  return {
+    eventType: labels.eventType,
+    eventName: source.eventName === "Connected sender" ? labels.eventName : source.eventName,
+    actorType: source.actorType ? connectionTransportLabels.get(source.actorType)?.[locale] ?? source.actorType : undefined
+  };
+}
+
+export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: string, systemSourcePresentation?: SystemSourcePresentation): string[] {
   const lines: Array<string | undefined> = [RABI_MESSAGE_SOURCE_HEADER];
   if ((source.type === "agent" || source.type === "agent_hook")) {
     lines.push(...agentSourceLines(source, source.type === "agent_hook" ? "AgentHook" : "Agent"));
@@ -115,12 +143,13 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
       optionalLine("消息路线 ID", source.routeId)
     );
   } else {
+    const display = systemSourceDisplay(source, systemSourcePresentation);
     lines.push(
       "消息源类型：系统",
-      `事件类型：${source.eventType}`,
-      `事件名称：${source.eventName}`,
+      `事件类型：${display.eventType}`,
+      `事件名称：${display.eventName}`,
       `事件 ID：${source.eventId}`,
-      optionalLine("触发方类型", source.actorType),
+      optionalLine("触发方类型", display.actorType),
       optionalLine("触发方名称", source.actorName),
       optionalLine("触发方 ID", source.actorId),
       optionalLine("消息路线", source.routeName),
@@ -189,11 +218,11 @@ export function renderPeerRouteSourceContext(sourceDeviceId: string): string {
     + "Manager 地址使用当前主机的动态发现结果。文件、CLI 与任务工作目录仍归当前执行电脑；不要把来源主机的相对接口路径误用到当前电脑。";
 }
 
-export function renderRabiDelivery(envelope: RabiDeliveryEnvelope): string {
+export function renderRabiDelivery(envelope: RabiDeliveryEnvelope, systemSourcePresentation?: SystemSourcePresentation): string {
   const messageSource = normalizeRabiMessageSource(envelope.messageSource);
   const sentAt = deliverySentAt(envelope.sentAt);
   return [
-    ...rabiMessageSourceLines(messageSource, sentAt),
+    ...rabiMessageSourceLines(messageSource, sentAt, systemSourcePresentation),
     ...(envelope.deliveryId ? [`- 投递 ID：${envelope.deliveryId}`] : []),
     "", RABI_MESSAGE_CONTENT_HEADER,
     renderRabiDeliveryContent(envelope)

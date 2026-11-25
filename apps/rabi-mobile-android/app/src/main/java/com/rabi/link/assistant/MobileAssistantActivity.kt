@@ -14,12 +14,17 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.rabi.link.RabiLinkRelaySettings
+import com.rabi.link.RabiComputerDirectoryCache
 import com.rabi.link.recording.AllDayRecordingSettings
 import com.rabi.link.transport.RabiManagerHttpTransport
 import com.rabi.link.transport.RabiSpeechTunnel
 import com.rabiroute.sdk.RabiRouteSdk
+import com.rabiroute.sdk.RabiHttpException
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Foreground-only mobile input and output. The selected PC remains the model and conversation owner. */
@@ -42,6 +47,7 @@ class MobileAssistantActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (RabiLinkRelaySettings.requireSignIn(this)) return
         // Freeze the selected computer for the life of this screen.
         account
         computerId
@@ -98,6 +104,7 @@ class MobileAssistantActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (!::browser.isInitialized || RabiLinkRelaySettings.requireSignIn(this)) return
         inForeground = true
         browser.evaluateJavascript("window.mobileVisible?.()", null)
     }
@@ -108,7 +115,7 @@ class MobileAssistantActivity : Activity() {
         stopRecognition()
         permission?.deny()
         permission = null
-        browser.evaluateJavascript("window.mobileHidden?.()", null)
+        if (::browser.isInitialized) browser.evaluateJavascript("window.mobileHidden?.()", null)
         super.onStop()
     }
 
@@ -121,8 +128,10 @@ class MobileAssistantActivity : Activity() {
         stopRecognition()
         recognitionExecutor.shutdownNow()
         executor.shutdownNow()
-        browser.removeJavascriptInterface("RabiMobile")
-        browser.destroy()
+        if (::browser.isInitialized) {
+            browser.removeJavascriptInterface("RabiMobile")
+            browser.destroy()
+        }
         super.onDestroy()
     }
 
@@ -221,8 +230,43 @@ class MobileAssistantActivity : Activity() {
     }
 
     private fun request(id: String, operation: String, body: JSONObject) {
-        val target = targetComputer()
+        if (operation == "model-machines-cached") {
+            check(currentComputer()) { "MOBILE_COMPUTER_CHANGED" }
+            val workers = RabiComputerDirectoryCache.read(this, account).orEmpty()
+            resolve(id, true, JSONArray(workers.map {
+                JSONObject().put("id", it.id).put("name", it.name)
+            }).toString())
+            return
+        }
+        if (operation == "model-machines") {
+            check(currentComputer()) { "MOBILE_COMPUTER_CHANGED" }
+            val workers = try {
+                RabiRouteSdk().getMobileState(account.baseUrl, account.token).workers
+            } catch (error: RabiHttpException) {
+                if (error.statusCode !in listOf(401, 403)) throw error
+                RabiComputerDirectoryCache.clear(this, account)
+                throw IllegalStateException("MOBILE_COMPUTER_AUTHORIZATION_CHANGED")
+            }
+            check(currentComputer()) { "MOBILE_COMPUTER_CHANGED" }
+            RabiComputerDirectoryCache.save(this, account, workers)
+            resolve(id, true, JSONArray(workers.map {
+                JSONObject().put("id", it.id).put("name", it.name).put("online", it.online)
+            }).toString())
+            return
+        }
+        val modelKind = when (operation) { "model-asr" -> "asr"; "model-tts" -> "tts"; else -> null }
+        val choice = modelKind?.let { voiceModel(it) }
+        if (modelKind != null && (choice == null || body.remove("machine") != choice.getString("machine") ||
+                body.remove("selectedModel") != choice.getString("model"))) error("MOBILE_MODEL_CHANGED")
+        val machine = if (operation == "models") body.getString("machine") else choice?.getString("machine")
+        val target = if (machine == null) targetComputer() else {
+            require(machine.length in 1..200)
+            check(currentComputer()) { "MOBILE_COMPUTER_CHANGED" }
+            RabiRouteSdk().getMobileState(account.baseUrl, account.token).workers
+                .singleOrNull { it.id == machine } ?: error("MOBILE_COMPUTER_UNAVAILABLE")
+        }
         val (path, bytes, contentType, lane) = when (operation) {
+            "models" -> Request("/api/speech/models?computeDeviceId=")
             "state" -> Request("/api/voice-assistant/state?view=mobile")
             "messages" -> Request("/api/voice-assistant/messages?view=mobile")
             "submit" -> {
@@ -238,9 +282,26 @@ class MobileAssistantActivity : Activity() {
                 Request("/api/voice-assistant/mobile-transcribe?sessionId=" + Uri.encode(sessionId) + "&source=" + source,
                     pcm, "audio/wav", lane = 1)
             }
-            "tts" -> {
+            "model-asr" -> {
+                val model = checkNotNull(choice).getString("model")
+                val pcm = Base64.decode(body.getString("audio"), Base64.NO_WRAP)
+                require(pcm.size in 44..2_100_000)
+                val boundary = "rabi-mobile-" + UUID.randomUUID()
+                val output = ByteArrayOutputStream()
+                output.write(("--$boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n$model\r\n" +
+                    "--$boundary\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\nverbose_json\r\n" +
+                    "--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n" +
+                    "Content-Type: audio/wav\r\n\r\n").toByteArray(Charsets.UTF_8))
+                output.write(pcm)
+                output.write("\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8))
+                Request("/api/speech/asr?computeDeviceId=", output.toByteArray(), "multipart/form-data; boundary=$boundary", lane = 1)
+            }
+            "tts", "model-tts" -> {
                 body.put("play", false).put("responseFormat", "wav")
-                Request("/api/speech/tts", body.toString().toByteArray(Charsets.UTF_8), "application/json", lane = 2)
+                if (operation == "model-tts") body.put("model", checkNotNull(choice).getString("model")).put("voice", "default")
+                val compute = if (operation == "model-tts") "?computeDeviceId=" else
+                    body.remove("computeDeviceId")?.toString()?.let { "?computeDeviceId=" + Uri.encode(it) }.orEmpty()
+                Request("/api/speech/tts" + compute, body.toString().toByteArray(Charsets.UTF_8), "application/json", lane = 2)
             }
             "assistant-tts" -> {
                 val sessionId = body.opt("sessionId") as? String
@@ -256,7 +317,7 @@ class MobileAssistantActivity : Activity() {
         val method = if (bytes.isEmpty()) "GET" else "POST"
         val headers = if (contentType.isEmpty()) emptyMap() else mapOf("content-type" to contentType)
         val response = transports[lane].request(account.baseUrl, account.token, target, method, path, headers, bytes)
-        if ((operation == "tts" || operation == "assistant-tts") && response.statusCode in 200..299) {
+        if ((operation == "tts" || operation == "model-tts" || operation == "assistant-tts") && response.statusCode in 200..299) {
             val responseType = response.headers.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }?.value.orEmpty()
             val validAudio = if (operation == "assistant-tts") {
                 responseType.substringBefore(';').trim().equals("audio/wav", ignoreCase = true) &&
@@ -269,14 +330,22 @@ class MobileAssistantActivity : Activity() {
         }
         val text = String(response.body, Charsets.UTF_8)
         val document = runCatching { JSONObject(text) }.getOrNull()
-        if (response.statusCode !in 200..299 || operation != "asr" && document?.optInt("code", -1) != 0) {
+        val directAsr = operation == "asr" || operation == "model-asr"
+        if (response.statusCode !in 200..299 || !directAsr && document?.optInt("code", -1) != 0) {
             val code = document?.optString("message").orEmpty()
             error(code.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{1,100}")) } ?: "MOBILE_ASSISTANT_HTTP_" + response.statusCode)
         }
-        resolve(id, true, if (operation == "asr") text else document!!.get("data").toString())
+        resolve(id, true, if (directAsr) text else document!!.get("data").toString())
     }
 
     private data class Request(val path: String, val body: ByteArray = ByteArray(0), val contentType: String = "", val lane: Int = 0)
+    private fun modelPreferenceKey(kind: String): String =
+        "model:" + com.rabi.link.transport.AsrDirectory.accountIdentity(account.baseUrl, account.token) + ":" + computerId + ":" + kind
+
+    private fun voiceModel(kind: String): JSONObject? {
+        val raw = localSwitch.getString(modelPreferenceKey(kind), null) ?: return null
+        return runCatching { JSONObject(raw) }.getOrNull()
+    }
 
     private fun resolve(id: String, success: Boolean, payload: String) {
         runOnUiThread {
@@ -289,7 +358,7 @@ class MobileAssistantActivity : Activity() {
     private inner class Backend {
         @JavascriptInterface fun send(id: String, operation: String, payload: String) {
             if (closed || !id.matches(Regex("[a-zA-Z0-9-]{1,80}"))) return
-            val limit = if (operation == "asr") 2_850_000 else 30_000
+            val limit = if (operation == "asr" || operation == "model-asr") 2_850_000 else 30_000
             if (payload.length > limit) {
                 resolve(id, false, "MOBILE_REQUEST_TOO_LARGE")
                 return
@@ -351,6 +420,19 @@ class MobileAssistantActivity : Activity() {
 
         @JavascriptInterface fun setVoiceEnabled(enabled: Boolean) {
             localSwitch.edit().putBoolean("enabled", enabled).apply()
+        }
+
+        @JavascriptInterface fun selectedModel(kind: String): String =
+            if (kind in listOf("asr", "tts")) voiceModel(kind)?.toString().orEmpty() else ""
+
+        @JavascriptInterface fun selectModel(kind: String, machine: String, model: String): Boolean {
+            if (!inForeground || !currentComputer() || kind !in listOf("asr", "tts") ||
+                machine.length > 200 || model.length > 200 || model.contains(Regex("[\\x00-\\x1f\\x7f]")) ||
+                machine.isBlank() != model.isBlank()) return false
+            val key = modelPreferenceKey(kind)
+            return localSwitch.edit().apply {
+                if (machine.isBlank()) remove(key) else putString(key, JSONObject().put("machine", machine).put("model", model).toString())
+            }.commit()
         }
 
         @JavascriptInterface fun close() = runOnUiThread { finish() }

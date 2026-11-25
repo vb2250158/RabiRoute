@@ -127,7 +127,10 @@ export class VideoService {
     if (!deviceId) return this.snapshot();
     try {
       const remote = await this.remote.status(deviceId, access);
-      return {...remote, jobs:this.snapshot().jobs, states:this.catalog.states, models:this.catalog.models};
+      const local = this.snapshot();
+      const remoteModelIds = Array.isArray(remote.models) ? new Set(remote.models.map(model => model.id)) : undefined;
+      const models = remoteModelIds ? local.models.filter(model => remoteModelIds.has(model.id)) : local.models;
+      return { ...remote, jobs: local.jobs, states: local.states, models };
     } catch (error) {
       access?.assert();
       return {...this.snapshot(),online:false,availableModels:[],availableWorkflows:[],computeError:error instanceof VideoError ? error.message : "模型服务电脑连接失败，请检查连接。"};
@@ -190,46 +193,47 @@ export class VideoService {
     const value = await response.json(); access?.assert(); return value;
   }
   async start(modelRoot, beforeStart = () => {}, access) {
-    return this.exclusive(async () => {
-      access?.assert(); await beforeStart(); access?.assert();
-      if (this.closing) throw new VideoError("视频插件正在停止。", 503);
-      if (this.online && this.runtime.alive()) return this.snapshot();
-      this.endpoint = await this.runtime.start(typeof modelRoot === "function" ? modelRoot() : modelRoot, access);
-      access?.assert();
-      try {
-        const deadline = Date.now() + (this.runtime.getTimeoutMs?.("video.runtime.start", 120000) ?? 120000);
-        while (true) {
-          if (!this.runtime.alive()) throw new VideoError("H3 进程已退出，请检查视频服务日志。", 503);
-          try { await this.request("/system_stats", {}, access); break; } catch (error) {
-            access?.assert();
-            if (Date.now() >= deadline || this.closing) throw error;
-            await delay(1000, undefined, { signal: this.controller.signal }); access?.assert();
+    return this.exclusive(() => this.startUnlocked(modelRoot, beforeStart, access), access);
+  }
+  async startUnlocked(modelRoot, beforeStart, access) {
+    access?.assert(); await beforeStart(); access?.assert();
+    if (this.closing) throw new VideoError("视频插件正在停止。", 503);
+    if (this.online && this.runtime.alive()) return this.snapshot();
+    this.endpoint = await this.runtime.start(typeof modelRoot === "function" ? modelRoot() : modelRoot, access);
+    access?.assert();
+    try {
+      const deadline = Date.now() + (this.runtime.getTimeoutMs?.("video.runtime.start", 120000) ?? 120000);
+      while (true) {
+        if (!this.runtime.alive()) throw new VideoError("H3 进程已退出，请检查视频服务日志。", 503);
+        try { await this.request("/system_stats", {}, access); break; } catch (error) {
+          access?.assert();
+          if (Date.now() >= deadline || this.closing) throw error;
+          await delay(1000, undefined, { signal: this.controller.signal }); access?.assert();
+        }
+      }
+      const info = await this.request("/object_info", {}, access);
+      this.frameAdaptationAvailable = Boolean(info.LoadImage && info.ResizeAndPadImage);
+      this.availableModels=[];
+      this.availableWorkflows=[];
+      for (const model of this.catalog.models) {
+        for (const workflowId of model.workflows ? Object.keys(model.workflows) : [undefined]) {
+          for (const generateAudio of model.mode === "image" ? [false] : [false, true]) {
+            const command = { id:"check", prompt:"check", width:512, height:512, frames:22, seed:1, workflowId, generateAudio };
+            const workflow = buildWorkflow(model, command);
+            const resolved = resolveWorkflow(model, command);
+            if (Object.values(workflow).some(node => !info[node.class_type])) continue;
+            const files = [["UNETLoader","unet_name",resolved.files.diffusion],["CLIPLoader","clip_name",resolved.files.textEncoder],["VAELoader","vae_name",resolved.files.vae],["VAELoader","vae_name",resolved.files.audioVae],["LoraLoaderModelOnly","lora_name",resolved.files.lora]].filter(row=>row[2]);
+            if (!files.every(([node,field,file])=>info[node]?.input?.required?.[field]?.[0]?.includes(file))) continue;
+            this.availableWorkflows.push({model:model.id, workflowId:resolved.workflowId, generateAudio});
+            if (!this.availableModels.includes(model.id)) this.availableModels.push(model.id);
           }
         }
-        const info = await this.request("/object_info", {}, access);
-        this.frameAdaptationAvailable = Boolean(info.LoadImage && info.ResizeAndPadImage);
-        this.availableModels=[];
-        this.availableWorkflows=[];
-        for (const model of this.catalog.models) {
-          for (const workflowId of model.workflows ? Object.keys(model.workflows) : [undefined]) {
-            for (const generateAudio of model.mode === "image" ? [false] : [false, true]) {
-              const command = { id:"check", prompt:"check", width:512, height:512, frames:22, seed:1, workflowId, generateAudio };
-              const workflow = buildWorkflow(model, command);
-              const resolved = resolveWorkflow(model, command);
-              if (Object.values(workflow).some(node => !info[node.class_type])) continue;
-              const files = [["UNETLoader","unet_name",resolved.files.diffusion],["CLIPLoader","clip_name",resolved.files.textEncoder],["VAELoader","vae_name",resolved.files.vae],["VAELoader","vae_name",resolved.files.audioVae],["LoraLoaderModelOnly","lora_name",resolved.files.lora]].filter(row=>row[2]);
-              if (!files.every(([node,field,file])=>info[node]?.input?.required?.[field]?.[0]?.includes(file))) continue;
-              this.availableWorkflows.push({model:model.id, workflowId:resolved.workflowId, generateAudio});
-              if (!this.availableModels.includes(model.id)) this.availableModels.push(model.id);
-            }
-          }
-        }
-        if(!this.availableModels.length) throw new VideoError("没有已安装完整的生成模型，请打开模型管理。",409);
-        this.online = true;
-        this.publish("video.changed", { online: true });
-        return this.snapshot();
-      } catch (error) { access?.assert(); await this.runtime.stop(access); this.endpoint = ""; this.online = false; access?.assert(); throw error; }
-    }, access);
+      }
+      if(!this.availableModels.length) throw new VideoError("没有已安装完整的生成模型，请打开模型管理。",409);
+      this.online = true;
+      this.publish("video.changed", { online: true });
+      return this.snapshot();
+    } catch (error) { access?.assert(); await this.runtime.stop(access); this.endpoint = ""; this.online = false; access?.assert(); throw error; }
   }
   async stop(access) {
     return this.exclusive(async () => {
@@ -258,8 +262,18 @@ export class VideoService {
         return this.view(previous);
       }
       if (this.unknownKeyScopes.has(scope)) throw new VideoError("该任务目录存在无法识别幂等键的原记录，请恢复原文件后再提交；已有回执仍可查询。", 409);
-      const capability = deviceId ? await this.remote.status(deviceId, access) : null;
-      if (this.closing || (capability ? !capability.online : !this.online || !this.runtime.alive())) throw new VideoError("请先启动所选电脑的视频生成服务。", 503);
+      if (this.closing) throw new VideoError("视频插件正在停止。", 503);
+      let capability = deviceId ? await this.remote.status(deviceId, access) : null;
+      if (capability?.computeError) throw new VideoError(capability.computeError, 409);
+      if (capability && !capability.online) {
+        await this.remote.start(deviceId, access, { recover: false });
+        capability = await this.remote.status(deviceId, access);
+        if (capability.computeError || !capability.online) throw new VideoError(capability.computeError || "所选电脑的视频生成服务未就绪。", 503);
+      } else if (!capability && (!this.online || !this.runtime.alive())) {
+        const runtime = options.localRuntime;
+        if (!runtime) throw new VideoError("请先启动所选电脑的视频生成服务。", 503);
+        await this.startUnlocked(runtime.modelRoot, runtime.beforeStart, access);
+      }
       if ((command.firstFrame || command.lastFrame) && !(capability ? capability.frameAdaptationAvailable : this.frameAdaptationAvailable)) throw new VideoError("视频运行环境缺少 ResizeAndPadImage 自动适配节点，请更新 ComfyUI 后重启视频服务。", 409);
       const availableModels = capability?.availableModels ?? this.availableModels;
       const availableWorkflows = capability?.availableWorkflows ?? this.availableWorkflows;

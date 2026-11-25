@@ -40,8 +40,64 @@ test('Relay generic transport pins explicit PC and forwards future APIs without 
     fs.writeFileSync(file, JSON.stringify(store));
     const workerHeaders = { 'x-rabilink-token': app.token };
     const deviceHeaders = id => ({ 'x-rabilink-token': 'rbd_' + id });
+    const mobileAccount = '/api/rabilink/mobile/account';
+    assert.equal((await req(mobileAccount)).status, 401);
+    assert.equal((await req(mobileAccount, 'GET', undefined, deviceHeaders('one'))).status, 403);
+    assert.equal((await req(mobileAccount + '?token=' + encodeURIComponent(app.token))).status, 403);
+    const ownerProfile = await req(mobileAccount + '?accountId=unrelated', 'GET', undefined, workerHeaders);
+    assert.equal(ownerProfile.status, 200);
+    assert.deepEqual(ownerProfile.data.data, { account: { id: account.data.account.id, username: 'aiui-fixture-owner', nickname: null, status: 'online' }, avatar: null });
+    const statusPath = mobileAccount + '/status';
+    const setStatus = (status, headers, accountId = 'unrelated') => req(statusPath, 'PATCH', { status, accountId }, headers);
+    assert.equal((await setStatus('away')).status, 401);
+    assert.equal((await setStatus('away', deviceHeaders('one'))).status, 403);
+    assert.equal((await setStatus('unsupported', workerHeaders)).status, 400);
+    const otherOwner = await req('/manage/api/accounts', 'POST', { username: 'another-fixture-owner', password: hash('other' + directory) });
+    const otherApp = (await req('/manage/api/apps', 'POST', { name: 'other fixture' }, { cookie: otherOwner.cookie })).data.app;
+    const anotherOwnerApp = (await req('/manage/api/apps', 'POST', { name: 'same account fixture' }, { cookie: account.cookie })).data.app;
+    const stream = await fetch(base + '/api/rabilink/events?deviceKind=phone', {
+      headers: { 'x-rabilink-token': anotherOwnerApp.token }, signal: AbortSignal.timeout(5000),
+    });
+    const events = stream.body.getReader();
+    try {
+      assert.deepEqual((await setStatus('do-not-disturb', workerHeaders, otherOwner.data.account.id)).data.data,
+        { id: account.data.account.id, status: 'do-not-disturb' });
+      const decoder = new TextDecoder();
+      let eventFrames = '';
+      while (!eventFrames.includes('event: mobile_account_changed')) {
+        const frame = await events.read();
+        assert.equal(frame.done, false);
+        eventFrames += decoder.decode(frame.value, { stream: true });
+      }
+    } finally {
+      await events.cancel();
+    }
+    assert.equal((await req(mobileAccount, 'GET', undefined, { 'x-rabilink-token': anotherOwnerApp.token })).data.data.account.status, 'do-not-disturb');
+    assert.equal((await req(mobileAccount, 'GET', undefined, { 'x-rabilink-token': otherApp.token })).data.data.account.status, 'online');
+    assert.equal(JSON.parse(fs.readFileSync(file)).accounts.find(item => item.id === account.data.account.id).mobileStatus, 'do-not-disturb');
     const workerQuery = (pc, wait = 0) => `/worker/webgui-requests?deviceId=${pc}&deviceGuid=guid-${pc}&deviceName=Fixture&deviceKind=pc&waitMs=${wait}&capabilities=webgui`;
     for (const pc of ['pc-default', 'pc-persona']) assert.equal((await req(workerQuery(pc), 'GET', undefined, workerHeaders)).status, 200);
+    const portable = '/api/rabilink/devices/input';
+    const chatHeaders = (pc, expected = pc) => ({ ...workerHeaders, 'x-rabilink-portable-target': pc, 'x-rabilink-expected-worker-id': expected });
+    const chat = { type: 'rabilink.message', text: 'Fixture', routeProfileId: 'the-same-route' };
+    assert.equal((await req(portable, 'POST', chat, chatHeaders('unknown-pc'))).status, 404);
+    assert.equal((await req(portable, 'POST', chat, chatHeaders('pc-persona', 'pc-default'))).status, 409);
+    assert.equal((await req(portable, 'POST', chat, { ...chatHeaders('pc-persona'), ...deviceHeaders('one') })).status, 403);
+    const choose = '/api/rabilink/mobile/target';
+    assert.equal((await req(choose, 'PATCH', { targetDeviceId: '' }, workerHeaders)).status, 200);
+    assert.equal((await req(portable, 'POST', chat, chatHeaders('pc-persona'))).status, 202);
+    const claimChat = pc => req(`/worker/tasks?deviceId=${pc}&deviceGuid=guid-${pc}&deviceKind=pc&waitMs=0&taskFormat=opaque-v1`, 'GET', undefined, workerHeaders);
+    assert.deepEqual((await claimChat('pc-default')).data.tasks, []);
+    const [task] = (await claimChat('pc-persona')).data.tasks;
+    assert.equal(task.targetDeviceId, 'pc-persona');
+    assert.equal(task.expectedWorkerFencing, true);
+    assert.deepEqual(task.raw, chat);
+    assert.equal((await req('/worker/messages', 'POST', { text: 'Reply from the other PC', routeProfileId: chat.routeProfileId,
+      deviceId: 'pc-persona', deviceGuid: 'guid-pc-persona', targetDeviceKinds: ['phone'] }, workerHeaders)).status, 200);
+    const downlink = await req('/api/rabilink/devices/messages?deviceKind=phone&after=&waitMs=0', 'GET', undefined, workerHeaders);
+    assert.equal(downlink.data.messages[0].sourceWorkerId, 'pc-persona');
+    assert.equal(downlink.data.messages[0].routeProfileId, chat.routeProfileId);
+    assert.equal((await req(choose, 'PATCH', { targetDeviceId: 'pc-default' }, workerHeaders)).status, 200);
     const connection = '/api/rabilink/mobile/connection';
     assert.equal((await req(connection, 'PATCH', { connectionOwnerDeviceId: 'missing' }, workerHeaders)).status, 409);
     assert.equal((await req(connection, 'PATCH', { connectionOwnerDeviceId: 'pc-persona' }, deviceHeaders('one'))).status, 403);

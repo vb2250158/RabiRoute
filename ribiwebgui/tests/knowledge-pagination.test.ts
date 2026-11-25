@@ -179,7 +179,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(client, /detail: "summary"/);
   assert.match(client, /\/plans\?\$\{params\.toString\(\)\}/);
   assert.match(page, /const planRequestView = computed/);
-  assert.match(page, /const result = await loadRolePlanPage\(selectedRoleId, "", 8, currentPlanPageFilter\(\), controller.signal, \(\) => \{/);
+  assert.match(page, /const filter = currentPlanPageFilter\(\);[\s\S]*?loadRolePlanPage\(selectedRoleId, "", 8, filter, controller.signal, \(\) => \{/);
   assert.match(page, /planListAbort === controller && !controller.signal.aborted[\s\S]{0,160}currentRequest === requestVersion && selectedRoleId === roleId.value\) planCatalogInitializing.value = true/);
   assert.doesNotMatch(page, /loadRolePlanPageWithPriorityDetails/);
   assert.match(page, /loadRolePlanPage\(selectedRoleId, cursor, limit, \{[\s\S]{0,180}includeFacets: false/);
@@ -266,7 +266,12 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /v-if="planFullDetailsLoaded\[plan\.id\] && plan\.steps\.length"/);
   assert.doesNotMatch(page, /knowledge-plan-detail-loading[\s\S]{0,600}<v-skeleton-loader/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?content-visibility:\s*auto/);
-  assert.match(page, /点击加载更多读取下一页计划/);
+  assert.match(page, /继续向下滚动加载更多计划/);
+  const scrollHandler = page.slice(page.indexOf("function handleKnowledgeWindowScroll"), page.indexOf("function setPlanDirectoryMarquee"));
+  assert.match(scrollHandler, /scrollingDown && sentinel && !hasMoreRenderedPlans\.value && canLoadMorePlans\(\)[\s\S]*?loadMorePlans\(8\)/);
+  const sentinelObserver = page.slice(page.indexOf("function observeProgressiveSentinels"), page.indexOf("function scheduleProgressiveSentinelRefresh"));
+  assert.doesNotMatch(sentinelObserver, /loadMorePlans\(/);
+  assert.match(page, /@click="hasMoreRenderedPlans \? loadMoreRenderedPlans\(\) : retryPlanPages\(\)"/);
   assert.match(page, /正在加载计划详情/);
   assert.match(page, /ref="planLoadMoreSentinel"/);
   assert.match(page, /ref="planLoadPreviousSentinel"/);
@@ -287,7 +292,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.doesNotMatch(page, /watch\(\[planNextCursor, hasMoreMemory\]/);
   assert.match(page, /const memoryNextCursor = ref\(""\)/);
   assert.match(page, /const kind = currentMemoryKind\(\)/);
-  assert.match(page, /loadRoleMemoryPage\(selectedRoleId, kind, "", 24, normalizedQuery\.value\)/);
+  assert.match(page, /const query = normalizedQuery\.value;[\s\S]*?loadRoleMemoryPage\(selectedRoleId, kind, "", 24, query\)/);
   assert.match(page, /loadRoleMemoryPage\(selectedRoleId, kind, cursor, limit, normalizedQuery\.value\)/);
   assert.doesNotMatch(page, /loadRoleMemory\(selectedRoleId\)/);
   assert.match(page, /knowledgePageShouldWork\(document\.visibilityState, planDirectoryMounted\)/);
@@ -295,7 +300,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /document\.removeEventListener\("visibilitychange", handleKnowledgeVisibilityChange\)/);
   assert.match(page, /v-for="memory in renderedMemoryForView"/);
   assert.match(page, /visibleMemoryForView\.value\.slice\(0, memoryRenderLimit\.value\)/);
-  assert.match(page, /当前内容已加载，可点击加载更多读取下一页/);
+  assert.match(page, /当前内容已加载/);
   assert.doesNotMatch(page, /query\.value\.trim\(\)/);
   assert.match(page, /function applyPlanListDialog\(\): void[\s\S]{0,500}planListDialogOpen\.value = false;[\s\S]{0,500}void refreshKnowledge\(\);/);
   assert.match(page, /watch\(\[activeView, query\], \(\) => \{[\s\S]{0,300}requestVersion \+= 1;/);

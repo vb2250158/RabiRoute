@@ -140,6 +140,31 @@ test("system source renders the event and route identity", () => {
   ].join("\n"));
 });
 
+test("connection source localizes display values without changing the envelope identity", () => {
+  const messageSource = {
+    type: "system" as const, eventType: "agent_connection", eventName: "Connected sender",
+    eventId: "event-1", actorType: "local", actorId: "device-1", actorName: "自定义名称"
+  };
+  const envelope = { messageSource, messageContent: "Keep Connected sender in the message body.", sentAt: "2026/9/7 12:34:56" };
+  const original = structuredClone(envelope);
+
+  for (const [locale, eventType, eventName, actorType] of [
+    ["zh-CN", "Agent 连接", "已连接的发送方", "本机"],
+    ["en", "Agent connection", "Connected sender", "Local device"],
+    ["ja", "エージェント接続", "接続済みの送信元", "このデバイス"],
+    ["legacy", "agent_connection", "Connected sender", "local"]
+  ] as const) {
+    assert.equal(renderRabiDelivery(envelope, locale), [
+      "## 消息源", "- 消息源类型：系统", `- 事件类型：${eventType}`, `- 事件名称：${eventName}`,
+      "- 事件 ID：event-1", `- 触发方类型：${actorType}`, "- 触发方名称：自定义名称", "- 触发方 ID：device-1",
+      "- 消息包发送时间：2026/9/7 12:34:56", "", "## 消息内容", envelope.messageContent
+    ].join("\n"));
+  }
+  assert.deepEqual(envelope, original);
+  assert.match(renderRabiDelivery({ ...envelope, messageSource: { ...messageSource, eventName: "Custom event", actorType: "plugin" } }, "ja"),
+    /事件名称：Custom event\n- 事件 ID：event-1\n- 触发方类型：plugin\n/);
+});
+
 test("message source normalization rejects omitted or incomplete source identity", () => {
   assert.throws(() => normalizeRabiMessageSource(undefined), /Missing messageSource/);
   assert.throws(() => normalizeRabiMessageSource({ type: "agent", agentAdapter: "codex", sessionId: "task-1" }), /sessionName/);

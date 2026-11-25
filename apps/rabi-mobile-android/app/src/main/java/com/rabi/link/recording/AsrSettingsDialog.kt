@@ -7,11 +7,15 @@ import android.view.DragEvent
 import android.view.View
 import android.widget.*
 import com.rabi.link.RabiLinkRelaySettings
+import com.rabi.link.RabiComputerDirectoryCache
 import com.rabi.link.RabiMobileUi
+import com.rabiroute.sdk.RabiHttpException
 import com.rabiroute.sdk.RabiRouteSdk
 
 /** Server-owned ordering; edits are committed only by Save. */
 object AsrSettingsDialog {
+    private const val DIRECTORY = "asr-computer-directory"
+
     fun show(activity: Activity) {
         val relay = RabiLinkRelaySettings.load(activity)
         fun toast(text: String) = Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
@@ -19,15 +23,49 @@ object AsrSettingsDialog {
         fun request(priority: List<String>? = null) = com.rabi.link.transport.RabiManagerHttpTransport(activity).use { transport ->
             RabiRouteSdk(managerTransport = transport).mobileAsrSettings(relay.baseUrl, relay.token, priority)
         }
+        fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
+        val rows = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16),dp(8),dp(16),dp(8)) }
+        val scroll = ScrollView(activity).apply { addView(rows) }
+        val status = TextView(activity).apply {
+            text = "正在读取 ASR 电脑列表…"
+            setTextColor(RabiMobileUi.muted)
+        }
+        val cached = RabiComputerDirectoryCache.read(activity, relay, DIRECTORY).orEmpty()
+        rows.addView(status)
+        if (cached.isNotEmpty()) {
+            status.text = "正在更新 ASR 电脑列表，已显示上次读取的顺序。"
+            cached.forEachIndexed { index, worker ->
+                rows.addView(TextView(activity).apply {
+                    text = "${index + 1}. ${worker.name}"
+                    setTextColor(RabiMobileUi.muted)
+                    setPadding(0, dp(12), 0, dp(12))
+                })
+            }
+        }
+        val dialog = AlertDialog.Builder(activity).setTitle("ASR 设置").setView(scroll)
+            .setNegativeButton("取消", null).setPositiveButton("保存", null).create()
+        dialog.show()
+        val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+        button.isEnabled = false
         Thread {
             val loaded = runCatching { request() }
             activity.runOnUiThread {
-                if(activity.isFinishing || activity.isDestroyed) return@runOnUiThread
-                val settings = loaded.getOrElse { toast("ASR 列表读取失败，请确认服务器已更新并联网"); return@runOnUiThread }
+                if(!dialog.isShowing || activity.isFinishing || activity.isDestroyed) return@runOnUiThread
+                if (relay != RabiLinkRelaySettings.load(activity)) {
+                    dialog.dismiss()
+                    return@runOnUiThread
+                }
+                val settings = loaded.getOrElse { error ->
+                    if (error is RabiHttpException && error.statusCode in listOf(401, 403)) {
+                        RabiComputerDirectoryCache.clear(activity, relay, DIRECTORY)
+                        rows.removeAllViews()
+                        rows.addView(status)
+                    }
+                    status.text = if (rows.childCount > 1) "更新失败，已显示上次读取的顺序。" else "ASR 列表读取失败，请确认服务器已更新并联网。"
+                    return@runOnUiThread
+                }
+                RabiComputerDirectoryCache.save(activity, relay, settings.workers, DIRECTORY)
                 val workers = settings.workers.toMutableList()
-                fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
-                val rows = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16),dp(8),dp(16),dp(8)) }
-                val scroll = ScrollView(activity).apply { addView(rows) }
                 fun render() {
                     rows.removeAllViews()
                     rows.addView(TextView(activity).apply { text = "拖动右侧手柄调整顺序，优先使用靠上的在线电脑。保存后自动转录新录音，并补转已有的本地录音。"; textSize = 13f; setTextColor(RabiMobileUi.muted); setPadding(0,0,0,dp(12)) })
@@ -61,20 +99,26 @@ object AsrSettingsDialog {
                     }
                 }
                 render()
-                val dialog = AlertDialog.Builder(activity).setTitle("ASR 设置").setView(scroll)
-                    .setNegativeButton("取消",null).setPositiveButton("保存",null).create()
-                dialog.setOnShowListener {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                        val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE); button.isEnabled = false
+                button.isEnabled = true
+                button.setOnClickListener {
+                        button.isEnabled = false
                         val priority = workers.map { it.id }
                         Thread {
                             val saved = runCatching {
                                 val current = RabiLinkRelaySettings.load(activity)
                                 check(current.baseUrl == relay.baseUrl && current.token == relay.token) { "RabiLink 已切换" }
-                                request(priority).also { com.rabi.link.transport.AsrDirectory.update(relay,it) }
+                                request(priority).also {
+                                    com.rabi.link.transport.AsrDirectory.update(relay, it)
+                                    if (RabiLinkRelaySettings.load(activity) == relay)
+                                        RabiComputerDirectoryCache.save(activity, relay, it.workers, DIRECTORY)
+                                }
                             }
-                            activity.runOnUiThread {
-                                if(activity.isFinishing || activity.isDestroyed) return@runOnUiThread
+                            activity.runOnUiThread finishSave@{
+                                if(activity.isFinishing || activity.isDestroyed || !dialog.isShowing) return@finishSave
+                                if (relay != RabiLinkRelaySettings.load(activity)) {
+                                    dialog.dismiss()
+                                    return@finishSave
+                                }
                                 button.isEnabled = true
                                 if(saved.isSuccess) {
                                     val activated = runCatching { if(workers.isNotEmpty()) AllDayRecordingSettings.enableAsr(activity) }
@@ -84,9 +128,7 @@ object AsrSettingsDialog {
                                 else toast("未确认保存结果，请重新打开检查")
                             }
                         }.start()
-                    }
                 }
-                dialog.show()
             }
         }.start()
     }

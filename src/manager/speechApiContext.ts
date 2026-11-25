@@ -11,6 +11,7 @@ import type { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
 export type SpeechApiAdmission = Readonly<{
   guard: SpeechAuthorityGuard;
   run<T>(operation: () => T): T;
+  catalogScope?(): readonly ("tts" | "asr")[];
   selectedPeer?: Readonly<{ runtime: Pick<PeerTunnelRuntime, "session">; deviceId: string }>;
   targetLocal: boolean;
 }>;

@@ -1,6 +1,8 @@
 package com.rabi.link
 
 import com.rabiroute.sdk.RabiRouteInfo
+import com.rabiroute.sdk.RabiLinkPc
+import org.json.JSONObject
 
 data class RabiAdapterPresentation(
     val type: String,
@@ -12,6 +14,34 @@ data class RabiAdapterPresentation(
 /** Pure conversation rules shared by the UI and local unit tests. */
 object RabiConversationRules {
     const val LEGACY_CONVERSATION_ID = "__legacy_rabi__"
+
+    fun wireRouteId(route: RabiRouteInfo): String = route.rawJson.optString("wireRouteId").ifBlank { route.id }
+    fun scopedRouteId(workerId: String, wireRouteId: String): String = "pc-route:${workerId.length}:$workerId:$wireRouteId"
+
+    fun mergeComputerCatalogs(
+        previous: List<RabiRouteInfo>,
+        workers: List<RabiLinkPc>,
+        catalogs: Map<String, List<RabiRouteInfo>>,
+    ): List<RabiRouteInfo> {
+        val previousByOwner = previous.groupBy { it.rawJson.optString("ownerWorkerId") }
+        val occupied = previous.associate { it.id to it.rawJson.optString("ownerWorkerId") }.toMutableMap()
+        return workers.flatMap { worker ->
+            val cached = previousByOwner[worker.id].orEmpty()
+            val fresh = catalogs[worker.id] ?: return@flatMap cached.map { it.copy(running = false) }
+            val previousIds = cached.associate { wireRouteId(it) to it.id }
+            fresh.filter { it.id.isNotBlank() }.distinctBy { it.id }.map { route ->
+                val wireId = route.id
+                val historicalOwner = occupied[wireId]
+                val id = previousIds[wireId] ?: if (historicalOwner.isNullOrBlank() || historicalOwner == worker.id) wireId
+                    else scopedRouteId(worker.id, wireId)
+                occupied[id] = worker.id
+                route.copy(id = id, rawJson = JSONObject(route.rawJson.toString())
+                    .put("wireRouteId", wireId)
+                    .put("ownerWorkerId", worker.id)
+                    .put("ownerComputerName", worker.name.ifBlank { route.rawJson.optString("ownerComputerName") }))
+            }
+        }
+    }
 
     fun isChatCapable(
         enabled: Boolean,

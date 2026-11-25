@@ -28,6 +28,8 @@ const jsonMode = ref(false);
 const rawParameters = ref('');
 const advanced = ref(false);
 const tab = ref('results');
+const resultScroll = ref<HTMLElement>();
+const paginationFooter = ref<HTMLElement>();
 const busy = ref(false);
 const loadingMore = ref(false);
 const error = ref('');
@@ -71,7 +73,7 @@ const ranges = computed(() => [
   { title: t('全部角色'), value: '' },
   ...(range.value && range.value !== props.roleId ? [{ title: range.value, value: range.value }] : []),
 ]);
-const sourceLabels: Record<string, string> = { all: '全部来源', knowledge: '计划与记忆', messages: '聊天记录', skills: '技能', operations: '接口', entities: '设备' };
+const sourceLabels: Record<string, string> = { all: '全部来源', knowledge: '计划与记忆', messages: '消息记录', identities: '身份关系', scenarios: '会话情景', events: '画面采集', skills: '技能', operations: '接口', entities: '设备', devices: 'RabiLink 设备' };
 const kindLabels: Record<string, string> = { plan: '计划', recent: '近期记忆', consolidated: '整理记忆', message: '消息', group: '群聊', private: '私聊', operation: '接口', entity: '设备' };
 const statusLabels: Record<string, string> = { ok: '已完成', partial: '部分完成', unavailable: '不可用', skipped: '已跳过' };
 const sources = computed(() => {
@@ -88,6 +90,7 @@ const groups = computed(() => searchTestResultGroups(resultItems.value));
 const stale = computed(() => submitted.value && (parameters.value !== pretty(submitted.value.parameters)
   || callerType.value !== submitted.value.identity.agentType || callerId.value !== submitted.value.identity.sessionId));
 const nextCursor = computed(() => receipt.value?.body.data?.nextCursor);
+const canLoadMore = computed(() => Boolean(submitted.value && nextCursor.value && !stale.value && !busy.value));
 const coverage = computed(() => receipt.value?.body.data?.coverage);
 const hasGaps = computed(() => coverage.value?.state === 'partial');
 const requestLog = computed(() => failedAttempt.value ? [...pages.value, failedAttempt.value] : pages.value);
@@ -137,6 +140,7 @@ function clearDetail() {
   detailBusy.value = false;
 }
 async function search(more = false) {
+  if (more && !canLoadMore.value) return;
   let input: Record<string, unknown>;
   try { input = more ? { ...submitted.value!.parameters, cursor: nextCursor.value } : parseSearchTestParameters(parameters.value); }
   catch (cause) { error.value = userFacingError(cause); return; }
@@ -169,6 +173,7 @@ async function search(more = false) {
       expandedGroups.value = new Set();
       clearDetail();
       tab.value = 'results';
+      if (resultScroll.value) resultScroll.value.scrollTop = 0;
     }
   } catch (cause) {
     if (!controller.signal.aborted) error.value = userFacingError(cause);
@@ -250,6 +255,17 @@ watch(() => props.modelValue, open => {
   if (open) void loadIdentities();
   else { stopRequests(); clearDetail(); }
 });
+watch([() => props.modelValue, resultScroll, paginationFooter, nextCursor], ([open, root, footer, cursor], _, onCleanup) => {
+  if (!open || !root || !footer || !cursor || typeof IntersectionObserver === 'undefined') return;
+  const observer = new IntersectionObserver(entries => {
+    if (props.modelValue && footer === paginationFooter.value && cursor === nextCursor.value
+      && tab.value === 'results' && !error.value && entries.some(entry => entry.isIntersecting)) {
+      void search(true);
+    }
+  }, { root, rootMargin: '0px 0px 120px 0px' });
+  observer.observe(footer);
+  onCleanup(() => observer.disconnect());
+}, { flush: 'post' });
 onBeforeUnmount(stopRequests);
 </script>
 
@@ -310,7 +326,7 @@ onBeforeUnmount(stopRequests);
       <v-tabs v-model="tab" density="compact" class="search-test-tabs">
         <v-tab value="results">{{ t('搜索结果') }}</v-tab><v-tab value="coverage">{{ t('来源状态') }}</v-tab><v-tab value="requests">{{ t('请求与返回') }}</v-tab>
       </v-tabs>
-      <main class="search-test-content" :aria-busy="busy">
+      <main ref="resultScroll" class="search-test-content" :aria-busy="busy">
         <section v-if="tab === 'results'" class="search-test-results">
           <p v-if="!receipt" class="search-test-empty">{{ t('搜索后查看结果，可直接读取详情和复制调用入口。') }}</p>
           <p v-else-if="!resultItems.length" class="search-test-empty">{{ t('没有匹配结果。') }} <span v-if="hasGaps">{{ t('部分来源未完成') }}</span></p>
@@ -332,7 +348,7 @@ onBeforeUnmount(stopRequests);
               </section>
             </article>
           </template>
-          <div v-if="receipt" class="search-test-pagination"><v-btn v-if="nextCursor" :disabled="!!stale || busy" :loading="loadingMore" variant="tonal" @click="search(true)">{{ t('加载更多结果') }}</v-btn><span>{{ nextCursor ? t('还有更多结果') : t('本次查询已加载完毕') }}</span></div>
+          <div v-if="receipt" ref="paginationFooter" class="search-test-pagination"><v-btn v-if="nextCursor" :disabled="!canLoadMore" :loading="loadingMore" variant="tonal" @click="search(true)">{{ t('加载更多结果') }}</v-btn><span>{{ nextCursor ? t('还有更多结果') : t('本次查询已加载完毕') }}</span></div>
         </section>
         <section v-else-if="tab === 'coverage'" class="search-test-coverage">
           <p v-if="!coverage" class="search-test-empty">{{ t('搜索后查看各来源状态。') }}</p>

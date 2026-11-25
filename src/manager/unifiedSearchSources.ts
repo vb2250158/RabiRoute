@@ -57,7 +57,7 @@ export function createSearchLanes(context: UnifiedSearchSourceContext, snapshot:
                     const detailUrl = '/api/roles/' + encodeURIComponent(roleId) + '/message-endpoint-timeline?' + params;
                     items.push({ source: 'messages', kind: record.kind ?? 'message', agent: roleId, label: record.text.slice(0, 120), excerpt: record.text, sourcePosition: position + recordIndex,
                         origin: { agent: roleId, adapter: record.adapter, conversationKey: record.conversationKey, recordId, messageTime: observation.toISOString() },
-                        detailUrl, handle: { detailUrl }, searchText: record.text, evidence: { state: 'unknown', observedAt: observation.toISOString() } });
+                        detailUrl, handle: { detailUrl }, searchText: [record.text, record.sender, record.target].filter(Boolean).join(' '), evidence: { state: 'unknown', observedAt: observation.toISOString() } });
                 }
                 return { items, gaps, version: result.page.sourceSnapshot ? apiDigest(result.page.sourceSnapshot) : apiDigest({ index: result.coverage.indexVersion, source: result.coverage.sourceVersion }),
                     ...(result.page.sourceSnapshot ? { snapshot: result.page.sourceSnapshot } : {}),

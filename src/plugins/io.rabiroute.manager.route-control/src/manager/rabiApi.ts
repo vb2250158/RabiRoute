@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { timeoutCatalog } from "@rabiroute/host-api/shared/timeoutCatalog";
 import { getTimeoutMs, validateTimeoutOverrides, readRegisteredTimeoutCatalog } from "@rabiroute/host-api/shared/timeoutSettings";
 import { localAgentTargetKey, normalizeRouteAgentTargets, type RemoteAgentTarget } from "@rabiroute/host-api/shared/routeAgentTargets";
-import type { ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
+import { apiDigest, type ApiOperationResult } from "@rabiroute/host-api/manager/apiOperationContract";
 import type { ManagerConfig } from "@rabiroute/host-api/manager/configRepository";
 import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "@rabiroute/host-api/shared/agentInstance";
 import http from "node:http";
 import { readRabiLinkHome, RabiLinkHomeError } from "@rabiroute/host-api/manager/rabiLinkHome";
+import { RabiLinkDeviceLabels, type DeviceLabels } from "./rabiLinkDeviceLabels.js";
 import { instanceIdentityResetAvailable } from "@rabiroute/host-api/manager/identityResetRoutes";
 import fs from "node:fs";
 import os from "node:os";
@@ -914,6 +915,45 @@ async function localMessageProcessingCleanup(
 
 /** Owns native Rabi discovery and Route mutations; routing and JSON decoding belong to the registry. */
 export function createRabiApiOwner(ctx: RabiApiContext) {
+  const deviceLabels = new RabiLinkDeviceLabels(path.join(ctx.rootDir || ctx.globalConfig.rootDir || ".", "data", "rabilink-device-labels"));
+  const homeConfig = () => {
+    const config = ctx.globalConfig.read();
+    return { relay: { ...(ctx.hostAccountRelay?.() ?? config.rabiLinkRelay) }, deviceGuid: config.rabiGuid };
+  };
+  const homeDirectory = async (signal?: AbortSignal, optional = false) => {
+    const { relay, deviceGuid } = homeConfig();
+    if (optional && !relay.enabled) return { scope: "", legacyScope: "", checkedAt: "", devices: [] };
+    const { devices, checkedAt, applicationId } = await readRabiLinkHome(relay, { deviceGuid, rabiPcVersion: ctx.version() }, signal);
+    const current = homeConfig();
+    if (current.relay.enabled !== relay.enabled || current.relay.url !== relay.url || current.relay.token !== relay.token
+      || current.relay.deviceId !== relay.deviceId || current.deviceGuid !== deviceGuid) {
+      throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
+    }
+    const relayUrl = relay.url.trim().replace(/\/+$/, "");
+    const legacyScope = apiDigest([relayUrl, ["legacy", relay.token]]).slice("sha256:".length);
+    const scope = applicationId ? apiDigest([relayUrl, ["app", applicationId]]).slice("sha256:".length) : legacyScope;
+    return { devices, checkedAt, scope, legacyScope };
+  };
+  const homeDevices = async (signal?: AbortSignal, optional = false) => {
+    const { scope, legacyScope, devices, checkedAt } = await homeDirectory(signal, optional);
+    return { devices: scope ? deviceLabels.list(scope, legacyScope, devices) : [], checkedAt, scope };
+  };
+  const findHomeDevice = <T extends { id: string }>(devices: T[], id: string): T => {
+    const matches = devices.filter(device => device.id === id);
+    if (matches.length !== 1) {
+      throw new RabiLinkHomeError(matches.length ? 409 : 404, "RABILINK_DEVICE_ID_UNAVAILABLE", "设备标识不存在或不唯一，请刷新设备列表。");
+    }
+    return matches[0]!;
+  };
+  const homeResponse = async (read: () => Promise<unknown>): Promise<ApiOperationResult> => {
+    const headers = { "cache-control": "no-store" };
+    try {
+      return { status: 200, body: { code: 0, data: await read() }, headers };
+    } catch (error) {
+      const safe = error instanceof RabiLinkHomeError ? error : new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取或保存 RabiLink 设备信息，请稍后重试。");
+      return { status: safe.statusCode, body: { code: -1, errorCode: safe.errorCode, message: safe.message }, headers };
+    }
+  };
   const success = (body: unknown): ApiOperationResult => ({ status: 200, body });
   const failed = (error: unknown, fallback = 500): ApiOperationResult => ({ status: apiErrorStatus(error, fallback), body: { code: -1, message: error instanceof Error ? error.message : String(error) } });
   const mutationFailed = (error: unknown): ApiOperationResult => {
@@ -973,19 +1013,51 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
         return success({ code: 0, data: { ...config, rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay) } });
       } catch (error) { return failed(error, 400); }
     },
-    async home(): Promise<ApiOperationResult> {
+    homeDevices,
+    home(signal?: AbortSignal): Promise<ApiOperationResult> {
+      return homeResponse(async () => {
+        const { devices, checkedAt } = await homeDevices(signal);
+        return { devices, checkedAt };
+      });
+    },
+    homeDevice(deviceId: string, signal?: AbortSignal): Promise<ApiOperationResult> {
+      return homeResponse(async () => findHomeDevice((await homeDevices(signal)).devices, deviceId));
+    },
+    async phoneFiles(deviceId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<ApiOperationResult> {
+      const { relay } = homeConfig();
       const headers = { "cache-control": "no-store" };
-      try {
-        const savedConfig = ctx.globalConfig.read(), saved = { ...(ctx.hostAccountRelay?.() ?? savedConfig.rabiLinkRelay) };
-        const local = { deviceGuid: savedConfig.rabiGuid, rabiPcVersion: ctx.version() };
-        const data = await readRabiLinkHome(saved, local);
-        const currentConfig = ctx.globalConfig.read(), current = ctx.hostAccountRelay?.() ?? currentConfig.rabiLinkRelay;
-        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId || currentConfig.rabiGuid !== local.deviceGuid) throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
-        return { ...success({ code: 0, data }), headers };
-      } catch (error) {
-        const safe = error instanceof RabiLinkHomeError ? error : new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取 RabiLink 设备，请稍后重试。");
-        return { status: safe.statusCode, body: { code: -1, errorCode: safe.errorCode, message: safe.message }, headers };
+      if (!relay.enabled || !relay.url.trim() || !relay.token.trim()) {
+        return { status: 503, body: { code: -1, errorCode: "RABILINK_HOME_NOT_CONFIGURED" }, headers };
       }
+      try {
+        const base = new URL(relay.url);
+        if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error("Invalid Relay URL");
+        const deadline = AbortSignal.timeout(35_000);
+        const response = await fetch(base.href.replace(/\/+$/, "") + "/api/rabilink/mobile/files", {
+          method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+          headers: { "x-rabilink-token": relay.token, "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ ...input, targetId: deviceId })
+        });
+        const current = homeConfig().relay;
+        if (!current.enabled || current.url !== relay.url || current.token !== relay.token) {
+          await response.body?.cancel();
+          return { status: 409, body: { code: -1, errorCode: "PHONE_FILES_CREDENTIAL_CHANGED" }, headers };
+        }
+        const body: unknown = await response.json();
+        return { status: response.status, body, headers };
+      } catch {
+        signal?.throwIfAborted();
+        return { status: 502, body: { code: -1, errorCode: "PHONE_FILES_TRANSPORT_UNCONFIRMED" }, headers };
+      }
+    },
+    updateDeviceLabels(deviceId: string, body: DeviceLabels & { guid: string; expectedRevision: string }, assertCurrent: () => void, signal?: AbortSignal): Promise<ApiOperationResult> {
+      return homeResponse(async () => {
+        const { scope, legacyScope, devices } = await homeDirectory(signal);
+        const device = findHomeDevice(devices, deviceId);
+        if (device.guid !== body.guid) throw new RabiLinkHomeError(409, "RABILINK_DEVICE_CHANGED", "设备身份已变更，请刷新设备列表。");
+        assertCurrent();
+        return deviceLabels.save(scope, legacyScope, device, body, body.expectedRevision);
+      });
     },
     async instances(request: http.IncomingMessage, url: URL): Promise<ApiOperationResult> {
       try { return success({ code: 0, data: { instances: await discoverInstances(ctx, request, url) } }); } catch (error) { return failed(error); }

@@ -66,10 +66,10 @@ export function createPeerControlOperations(owner: Pick<PeerTunnelRuntime, "asse
       { id: "peer.events.bounds", description: "At most ten device IDs; original 15-second live-channel RTT heartbeat and 64 KiB queued-event budget. Slow consumers close instead of buffering without bound." }]
   }, discovery: {
     title: peerPurposes[item.id][0], summary: item.id === "servers.read"
-      ? "查询 Rabi 主机目录及连接状态，使用 deviceId 定位主机。一台主机可有多个当前 Manager 执行实例；执行实例和登记 SDK 节点目录分别查询，不合并计作电脑数。"
+      ? "查询 Rabi 主机目录及连接状态，使用 deviceId 定位主机。连接异常时探测同一设备，再查询其执行实例和可用的电脑控制入口。执行实例和登记 SDK 节点目录分别查询，不合并计作电脑数。"
       : item.description,
     category: { id: "devices", title: "电脑与设备" }, keywords: peerPurposes[item.id][1],
-    ...(item.id === "servers.read" ? { relatedOperations: ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list"] }
+    ...(item.id === "servers.read" ? { relatedOperations: ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.rabilink.peer.probe", "manager.lan-agent.computers.list"] }
       : item.id === "selection.update" ? { inputSources: [{ field: "body.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }], relatedOperations: ["manager.rabilink.peer.selection.read"] } : {})
   }, handler: async input => {
     const assertCurrent = () => { input.signal?.throwIfAborted(); hasAuthenticatedConnectionRequest(input.request); owner.assertControl(input.request, input.url, item.mutation === true); };

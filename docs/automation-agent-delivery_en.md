@@ -14,6 +14,8 @@ Select a message endpoint under Automation in the role configuration. Hover over
 
 An existing Codex, DSH, or WorkBuddy session supports direct or queued delivery. Direct delivery can add to an active turn and starts a turn when idle. Queued delivery waits until the current turn ends. Both modes use the original session.
 
+For a DS Bot destination, messages forwarded from QQ and other messaging endpoints enter the Bot's regular chat. When a Rabi schedule fires, it sends the occurrence time and DS Bot displays a scheduled run.
+
 Consecutive messages can be handled separately, grouped only for the message-processing Agent, or grouped before applying all delivery rules. QQ Bot can opt into grouping. Existing configurations keep their prior defaults.
 
 Agent completion rules can send to WeChat, QQ Bot, WeCom, Feishu, NapCat, or speech. The newly available chat channels send text through their existing delivery interfaces. QQ Bot uses an original message ID and follows the platform's reply capabilities.

@@ -54,6 +54,7 @@ import { planFeedbackMutationLedger } from "../../../../../ribiwebgui/src/planFe
 import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusDescriptionForDisplay, planStatusLabelForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../../../../../ribiwebgui/src/planPresentationStyles";
 import type { PlanKnowledgeView, PlanListSortMode } from "../../../../../ribiwebgui/src/planPresentationStyles";
 import { useGatewayStore } from "../../../../../ribiwebgui/src/stores/gatewayStore";
+import { previewAccessDenied, readPreview, writePreview } from "../../../../../ribiwebgui/src/readPreviewCache";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
 import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanHistoryRecord, RolePlanStep } from "../../../../../ribiwebgui/src/types";
 
@@ -95,6 +96,9 @@ const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
 const consolidatedMemory = ref<RoleMemory[]>([]);
 const archivedMemory = ref<RoleMemory[]>([]);
+type KnowledgePreviewRow = { id: string; title: string; updatedAt: string };
+const planPreviewRows = ref<KnowledgePreviewRow[]>([]);
+const memoryPreviewRows = ref<KnowledgePreviewRow[]>([]);
 const loading = ref(false);
 const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
@@ -305,6 +309,7 @@ let planDirectoryMounted = false;
 let usesPlanScrollFallback = false;
 let knowledgeScrollDirection: "up" | "down" | "" = "";
 let lastKnowledgeScrollY = 0;
+const PLAN_SCROLL_PREFETCH_PX = 700;
 let directoryJumpTargetId = "";
 let directoryJumpSettleTimer = 0;
 let planMarkdownPreviewAbort: AbortController | null = null;
@@ -484,7 +489,7 @@ const knowledgeListStatus = computed(() => {
     return isEnglish.value ? "Plan list has not loaded yet." : "计划列表尚未加载。";
   }
   if (showsPlanList.value && planEventReset.value && !loading.value) {
-    return isEnglish.value ? "Plans updated; showing the first page. Use Load more to continue." : "计划已更新，当前显示首屏；可点击加载更多继续查看。";
+    return isEnglish.value ? "Plans updated; scroll down to see more." : "计划已更新，向下滚动查看更多。";
   }
   if (showsPlanList.value && !focusedPlanId.value && planCollectionPartial.value) {
     return isEnglish.value
@@ -502,7 +507,7 @@ const knowledgeListStatus = computed(() => {
     ? (isEnglish.value ? "Loading the first visible items" : "正在加载首屏内容")
     : loadingMorePlans.value
       ? (isEnglish.value ? "The visible list is ready; loading more titles in background" : "当前列表已可用，正在后台补齐更多标题")
-      : (isEnglish.value ? "Visible items loaded; use Load more for another page" : "当前内容已加载，可点击加载更多读取下一页");
+      : (isEnglish.value ? "Visible items loaded" : "当前内容已加载");
   const detailHint = showsPlanList.value
     ? (isEnglish.value
       ? "Plan bodies and attachments load near the reading position."
@@ -659,9 +664,16 @@ function handleKnowledgeWindowScroll(): void {
     knowledgeScrollDirection = "";
     return;
   }
+  const scrollingDown = nextScrollY > lastKnowledgeScrollY + 1;
   if (nextScrollY < lastKnowledgeScrollY - 1) knowledgeScrollDirection = "up";
-  else if (nextScrollY > lastKnowledgeScrollY + 1) knowledgeScrollDirection = "down";
+  else if (scrollingDown) knowledgeScrollDirection = "down";
   lastKnowledgeScrollY = nextScrollY;
+  const sentinel = planLoadMoreSentinel.value;
+  if (scrollingDown && sentinel && !hasMoreRenderedPlans.value && canLoadMorePlans()
+    && sentinel.getBoundingClientRect().top <= window.innerHeight + PLAN_SCROLL_PREFETCH_PX) {
+    // Start a network page only on a new downward scroll, even if the sentinel stays visible.
+    void loadMorePlans(8);
+  }
 }
 
 function setPlanDirectoryMarquee(event: Event, active: boolean): void {
@@ -1086,8 +1098,7 @@ function observeProgressiveSentinels(): void {
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
-      // Network pagination is explicitly requested with Load more, never drained by visibility.
-    }, { rootMargin: "700px 0px" });
+    }, { rootMargin: `${PLAN_SCROLL_PREFETCH_PX}px 0px` });
     if (observesPreviousPlans && planLoadPreviousSentinel.value) {
       planPageObserver.observe(planLoadPreviousSentinel.value);
     }
@@ -1156,6 +1167,7 @@ function loadPreviousRenderedPlans(): void {
     if (anchor && anchorTop !== undefined) {
       const nextAnchorTop = anchor.getBoundingClientRect().top;
       window.scrollBy({ top: nextAnchorTop - anchorTop, behavior: "auto" });
+      lastKnowledgeScrollY = Math.max(0, window.scrollY);
     }
     schedulePlanCardObserverRefresh();
     schedulePlanDetailObserverRefresh();
@@ -1174,18 +1186,17 @@ function loadMoreRenderedPlans(): void {
   schedulePlanDetailObserverRefresh();
 }
 
+function canLoadMorePlans(): boolean {
+  return Boolean(roleId.value && hasMorePlans.value && planListReady.value
+    && !loading.value && !loadingMorePlans.value && !planEventRefresh.running
+    && !planError.value && !planPageError.value && knowledgePageWorkAllowed());
+}
+
 async function loadMorePlans(limit = 50): Promise<void> {
+  if (!canLoadMorePlans()) return;
   const selectedRoleId = roleId.value;
   const cursor = planNextCursor.value;
   const currentRequest = requestVersion;
-  if (
-    !selectedRoleId
-    || !cursor
-    || loadingMorePlans.value
-    || planPageError.value
-    || loading.value || planEventRefresh.running || !planListReady.value || Boolean(planError.value)
-    || !knowledgePageWorkAllowed()
-  ) return;
   loadingMorePlans.value = true;
   const controller = new AbortController();
   planListAbort = controller;
@@ -1265,15 +1276,20 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     return;
   }
   loading.value = true;
+  const filter = currentPlanPageFilter();
+  const previewKey = ["plan-list", String(route.query.source || ""), selectedRoleId, JSON.stringify(filter)];
+  planPreviewRows.value = readPreview<KnowledgePreviewRow[]>(previewKey) ?? [];
   const controller = new AbortController();
   planListAbort = controller;
   try {
-    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter(), controller.signal, () => {
+    const result = await loadRolePlanPage(selectedRoleId, "", 8, filter, controller.signal, () => {
       if (planListAbort === controller && !controller.signal.aborted
         && currentRequest === requestVersion && selectedRoleId === roleId.value) planCatalogInitializing.value = true;
     });
     if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
+    planPreviewRows.value = [];
+    if (!result.partial) writePreview(previewKey, result.items.map(({ id, title, updatedAt }) => ({ id, title, updatedAt })));
     applyPlanCollectionDiagnostics(result);
     planListReady.value = true;
     planPageCounts.value = result.counts;
@@ -1283,6 +1299,10 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     planNextCursor.value = result.nextCursor;
   } catch (loadError) {
     if (!controller.signal.aborted && currentRequest === requestVersion) {
+      if (loadError instanceof ManagerRequestError && previewAccessDenied(loadError.status)) {
+        planPreviewRows.value = [];
+        writePreview(previewKey, undefined);
+      }
       planError.value = userFacingError(loadError);
       planListReady.value = false;
     }
@@ -1309,9 +1329,12 @@ async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: nu
     return;
   }
   memoryLoading.value = true;
+  const kind = currentMemoryKind();
+  const query = normalizedQuery.value;
+  const previewKey = ["memory-list", String(route.query.source || ""), selectedRoleId, kind, query];
+  memoryPreviewRows.value = readPreview<KnowledgePreviewRow[]>(previewKey) ?? [];
   try {
-    const kind = currentMemoryKind();
-    const memory = await loadRoleMemoryPage(selectedRoleId, kind, "", 24, normalizedQuery.value);
+    const memory = await loadRoleMemoryPage(selectedRoleId, kind, "", 24, query);
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value || kind !== currentMemoryKind()) return;
     if (kind === "recent") {
       recentMemory.value = memory.items;
@@ -1328,8 +1351,16 @@ async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: nu
     }
     memoryNextCursor.value = memory.nextCursor;
     memoryPageCounts.value = memory.counts;
+    memoryPreviewRows.value = [];
+    writePreview(previewKey, memory.items.map(({ id, title, updatedAt }) => ({ id, title, updatedAt })));
   } catch (loadError) {
-    if (currentRequest === requestVersion) memoryError.value = userFacingError(loadError);
+    if (currentRequest === requestVersion) {
+      if (loadError instanceof ManagerRequestError && previewAccessDenied(loadError.status)) {
+        memoryPreviewRows.value = [];
+        writePreview(previewKey, undefined);
+      }
+      memoryError.value = userFacingError(loadError);
+    }
   } finally {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -1420,6 +1451,8 @@ async function refreshKnowledge(): Promise<void> {
   cancelPlanListWork();
   planEventReset.value = false;
   const currentRequest = ++requestVersion;
+  planPreviewRows.value = [];
+  memoryPreviewRows.value = [];
   planPageError.value = "";
   planListReady.value = false;
   knowledgeCountsReady.value = false;
@@ -3225,7 +3258,11 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-icon size="20">mdi-archive-outline</v-icon>
           <b>{{ isEnglish ? "Archived plans" : "已归档计划" }}</b>
         </div>
-        <div v-if="loading && !plans.length && planCatalogInitializing" class="knowledge-loading-state" role="status">
+        <v-list v-if="!plans.length && planPreviewRows.length" density="compact" :aria-label="t('上次读取')">
+          <v-list-subheader>{{ t('上次读取') }}</v-list-subheader>
+          <v-list-item v-for="row in planPreviewRows" :key="row.id" :title="row.title" :subtitle="formatDate(row.updatedAt)" data-no-i18n />
+        </v-list>
+        <div v-else-if="loading && !plans.length && planCatalogInitializing" class="knowledge-loading-state" role="status">
           <v-progress-circular indeterminate size="28" width="3" color="primary" />
           <div><b>{{ isEnglish ? 'Preparing the plan list' : '正在准备计划列表' }}</b><p>{{ isEnglish ? 'You can switch pages. The list will appear when ready.' : '可以切换页面，准备好后会自动显示列表。' }}</p></div>
         </div>
@@ -4016,7 +4053,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           aria-live="polite"
         >
           <v-progress-circular v-if="loadingMorePlans" indeterminate size="20" width="2" color="primary" />
-          <span>{{ t(hasMoreRenderedPlans ? "继续向下滚动加载更多计划卡片" : "点击加载更多读取下一页计划") }}</span>
+          <span>{{ t(loadingMorePlans ? "正在加载更多…" : "继续向下滚动加载更多计划") }}</span>
           <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : retryPlanPages()">{{ t("加载更多") }}</v-btn>
         </div>
 
@@ -4030,6 +4067,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       </div>
 
       <div v-if="roleId && showsMemoryList" class="knowledge-memory-grid">
+        <v-list v-if="!visibleMemoryForView.length && memoryPreviewRows.length" density="compact" :aria-label="t('上次读取')">
+          <v-list-subheader>{{ t('上次读取') }}</v-list-subheader>
+          <v-list-item v-for="row in memoryPreviewRows" :key="row.id" :title="row.title" :subtitle="formatDate(row.updatedAt)" data-no-i18n />
+        </v-list>
         <div v-if="activeView === 'archived'" class="knowledge-subsection-heading knowledge-memory-heading">
           <v-icon size="20">mdi-archive-outline</v-icon>
           <b>{{ t("已归档记忆") }}</b>
@@ -4112,7 +4153,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         </div>
 
         <div
-          v-if="!memoryLoading && !visibleMemoryForView.length"
+          v-if="!memoryLoading && !visibleMemoryForView.length && !memoryPreviewRows.length && !memoryError"
           class="knowledge-empty"
         >
           <v-icon size="32">mdi-book-open-blank-variant-outline</v-icon>

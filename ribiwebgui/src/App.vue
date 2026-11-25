@@ -40,6 +40,7 @@ import { managerEventSource } from "./managerApi";
 import { API_REFERENCE_CHANGED } from "./docs/apiReferenceClient";
 import { disposeWebPluginModules } from "./pluginModules";
 import { refreshWebPluginCatalog, webPluginPageLoading } from "./pluginModuleBootstrap";
+import { webBrandIconUrl } from "./webRelease";
 import {
   webCommandForHandler,
   webCommandsInSlot,
@@ -192,7 +193,7 @@ const pageContext = computed(() => {
 });
 // Utility pages at or after this order are host maintenance pages and share the "系统" group.
 // Served by the Manager at runtime; a bound URL keeps the bundler from importing it.
-const brandIconUrl = "/assets/rabiroute-icon.png";
+const brandIconUrl = webBrandIconUrl();
 const SYSTEM_NAVIGATION_ORDER = 70;
 const firstSystemNavKey = computed(() => utilityNavItems.value.find(item => item.order >= SYSTEM_NAVIGATION_ORDER)?.key ?? "");
 const routeOptions = computed(() => store.gateways.map(gateway => {

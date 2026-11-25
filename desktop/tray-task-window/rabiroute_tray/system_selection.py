@@ -1344,10 +1344,11 @@ class SystemSelectionController(QObject):
             return
 
         def operation() -> SpeechActionResult:
-            model = resolve_selection_speech_model(settings, self._manager.speech_models())
+            target = settings.compute_device_id if settings.advanced else None
+            model = resolve_selection_speech_model(settings, self._manager.speech_models(target))
             if not model:
                 return SpeechActionResult(ok=False, message="没有可用的 TTS 模型。")
-            return self._manager.synthesize_speech(selected.text, model)
+            return self._manager.synthesize_speech(selected.text, model, target)
 
         def completed(task: QtAsyncTask, result: SpeechActionResult) -> None:
             if self._action_task is task:

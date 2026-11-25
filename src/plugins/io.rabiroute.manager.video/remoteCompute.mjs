@@ -38,9 +38,13 @@ export class RemoteVideoCompute {
     if (value.computeProtocol !== 1 || !Array.isArray(value.availableWorkflows)) throw new VideoError("该电脑需要更新媒体算力接口。", 426);
     return { ...value, online: value.online && !this.blocked.has(deviceId), ...(this.blocked.has(deviceId) ? {computeError:"该电脑有结果未确认的推理，请核对原回执后再启动。"} : {}) };
   }
-  async start(deviceId, access) {
+  async start(deviceId, access, { recover = true } = {}) {
+    if (!recover && this.blocked.has(deviceId)) {
+      throw new VideoError("该电脑有结果未确认的推理，请核对原回执后再启动。", 409);
+    }
     const value = await this.json(deviceId, "/compute/runtime/start", { method: "POST" }, access);
-    this.blocked.delete(deviceId); return value;
+    if (recover) this.blocked.delete(deviceId);
+    return value;
   }
   async upload(deviceId, kind, file, access) {
     const type = assetTypes[kind];

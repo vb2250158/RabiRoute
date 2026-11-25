@@ -1,6 +1,8 @@
 package com.rabi.link
 
 import android.content.Context
+import android.app.Activity
+import android.content.Intent
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -62,6 +64,29 @@ object RabiLinkRelaySettings {
     private const val KEY_BASE_URL = "relayBaseUrl"
     private const val KEY_TOKEN = "token"
     private const val KEY_STATUS_SYNC_ENABLED = "deviceStatusSyncEnabled"
+    private const val KEY_ACCOUNT_ID = "verifiedAccountId"
+
+    @JvmStatic
+    fun accountId(context: Context): String =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_ACCOUNT_ID, "").orEmpty()
+
+    @JvmStatic
+    fun requireSignIn(activity: Activity): Boolean {
+        if (accountId(activity).isNotBlank()) return false
+        activity.startActivity(Intent(activity, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        activity.finish()
+        return true
+    }
+
+    fun clearSignIn(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(KEY_ACCOUNT_ID).apply()
+    }
+
+    fun confirmExisting(context: Context, connection: RabiLinkRelayConfig, accountId: String) {
+        check(load(context) == connection && accountId.isNotBlank()) { "旧连接已变化，请重新登录" }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putString(KEY_ACCOUNT_ID, accountId).apply()
+    }
 
     @JvmStatic
     fun load(context: Context): RabiLinkRelayConfig {
@@ -74,12 +99,20 @@ object RabiLinkRelaySettings {
     }
 
     @JvmStatic
-    fun save(context: Context, baseUrl: String, token: String) {
+    fun save(context: Context, baseUrl: String, token: String) = saveConnection(context, baseUrl, token, "")
+
+    fun saveAuthenticated(context: Context, baseUrl: String, token: String, accountId: String) {
+        require(accountId.isNotBlank())
+        saveConnection(context, baseUrl, token, accountId)
+    }
+
+    private fun saveConnection(context: Context, baseUrl: String, token: String, accountId: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_BASE_URL, baseUrl.trim().trimEnd('/'))
             .putString(KEY_TOKEN, token.trim())
             .putBoolean(KEY_STATUS_SYNC_ENABLED, true)
+            .putString(KEY_ACCOUNT_ID, accountId)
             .apply()
     }
 }

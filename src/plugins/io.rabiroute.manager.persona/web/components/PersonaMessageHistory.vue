@@ -8,6 +8,7 @@ import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogS
 import { usePersonaService } from '../persona/personaServiceClient';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
+import { previewAccessDenied, readPreview, writePreview } from '../../../../../ribiwebgui/src/readPreviewCache';
 import EndpointConversationHistory from './EndpointConversationHistory.vue';
 import PersonaTaskHistory from './PersonaTaskHistory.vue';
 import NapcatConversationHistory from './NapcatConversationHistory.vue';
@@ -16,7 +17,7 @@ import PersonaSearchTestDialog from './PersonaSearchTestDialog.vue';
 import PersonaRoleTimeline from './PersonaRoleTimeline.vue';
 
 const props = defineProps<{ roleId: string; version: number; messageVersion: number; catalogVersion: number; captureVersion: number }>();
-const { fetch } = usePersonaService(), { t } = useI18n();
+const { fetch, deviceId } = usePersonaService(), { t } = useI18n();
 const route = useRoute(), router = useRouter();
 const recordingOpen = computed(() => route.query.tab === 'all-day-recording');
 const recordingLocation = computed(() => ({ query: { ...route.query, tab: 'all-day-recording' } }));
@@ -40,20 +41,38 @@ const timelineFilters = computed(() => [
 const timelineFilter = computed(() => timelineFilters.value.find(option => option.value === timelineSource.value) ?? timelineFilters.value[0]!);
 const searchTestOpen = ref(false);
 const error = ref(''), warnings = ref<string[]>([]), catalogLoading=ref(true);
+const catalogPreview = ref(false);
+const previewKey = () => ['message-channels', deviceId, props.roleId];
 let request: AbortController | undefined;
 async function refreshCatalog() {
   request?.abort(); const controller = new AbortController(); request = controller;catalogLoading.value=true;
+  const key = previewKey();
   try {
     const response = await fetch(`/api/roles/${encodeURIComponent(props.roleId)}/message-history-channels`, { signal: controller.signal });
-    const result = await response.json();
-    if (!response.ok || result.code !== 0) throw new Error(result.message || t('消息记录读取失败'));
     if (controller.signal.aborted) return;
+    if (previewAccessDenied(response.status)) {
+      catalog.value = { adapters: [], chatCategories: [] };
+      catalogPreview.value = false;
+      writePreview(key, undefined);
+    }
+    const result = await response.json();
+    if (controller.signal.aborted) return;
+    if (!response.ok || result.code !== 0) throw new Error(result.message || t('消息记录读取失败'));
     catalog.value = result.data; warnings.value = result.data.warnings ?? []; error.value = '';
+    catalogPreview.value = false;
+    writePreview(key, { adapters: catalog.value.adapters, chatCategories: catalog.value.chatCategories });
   } catch (cause) { if (!controller.signal.aborted) error.value = userFacingError(cause); }
   finally {if(request===controller)catalogLoading.value=false;}
 }
 watch(() => props.catalogVersion, refreshCatalog);
-watch(() => props.roleId, () => { catalog.value = { adapters: [], chatCategories: [] }; visited.value = new Set<string>(); selected.value = ''; void refreshCatalog(); }, { immediate: true });
+watch(() => props.roleId, () => {
+  const cached = readPreview<MessageHistoryChannelCatalog>(previewKey());
+  catalog.value = cached ?? { adapters: [], chatCategories: [] };
+  catalogPreview.value = Boolean(cached);
+  visited.value = new Set<string>();
+  selected.value = '';
+  void refreshCatalog();
+}, { immediate: true });
 watch(channels,list=>{
   const available=new Set(list.map(channel=>channel.id));
   visited.value=new Set([...visited.value].filter(id=>available.has(id)));
@@ -81,6 +100,7 @@ onBeforeUnmount(() => { request?.abort(); });
           density="compact" hide-details class="history-timeline-filter" />
       </div>
     </div>
+    <p v-if="catalogPreview" class="text-caption text-medium-emphasis">{{ t('上次读取') }}</p>
     <PersonaSearchTestDialog v-model="searchTestOpen" :role-id="roleId" />
     <div v-if="recordingOpen" class="history-recording-panel">
       <PersonaRoleTimeline :key="timelineFilter.value" :role-id="roleId" :version="version" :message-version="messageVersion" :capture-version="captureVersion" :source-filter="timelineFilter.source" :channels="channels" />

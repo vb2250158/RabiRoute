@@ -16,7 +16,7 @@ export function parseWakeAliases(value) {
 }
 
 /** Desktop assistants borrow the same sample timeline and use the resident voice loop. */
-export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent, canStart, shouldUseFallback, sleepAfterMs }) {
+export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent, canStart, shouldUseFallback, hasResidentCapture, sleepAfterMs }) {
   let active, wakeError, handoffWrites = Promise.resolve();
   const idle = createVoiceIdleTimer({
     timeoutMs: sleepAfterMs,
@@ -95,7 +95,7 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
       idle.renew();
       const lease = active;
       // Raw audio energy and empty recognition must not stop local transcription.
-      if (hasText && lease && !lease.usingFallback && !lease.handoffRequested) {
+      if (hasText && lease?.captureId && !lease.usingFallback && !lease.handoffRequested) {
         lease.handoffRequested = true;
         setPassiveHandoff(lease, true);
       }
@@ -104,12 +104,19 @@ export function createResidentWake({ speechRuntime, acquireTarget, assertCurrent
     drainHandoff: () => handoffWrites,
     async startManual() {
       const captureId = wake.currentCapture();
-      if (!captureId) return false;
+      if (!captureId && !hasResidentCapture?.()) return false;
       assertCurrent();
       const target = await acquireTarget();
       assertCurrent();
-      if (wake.currentCapture() !== captureId) return false;
-      const createRecording = (checkpoint) => createResidentRecording((signal, cursor) => speechRuntime.openAssistantCapture(signal, cursor), checkpoint);
+      if (captureId && wake.currentCapture() !== captureId) return false;
+      const createRecording = (checkpoint) => createResidentRecording(async (signal, cursor) => {
+        const response = await speechRuntime.openAssistantCapture(signal, cursor);
+        const borrowedId = response.headers['x-rabispeech-capture-id'];
+        if (active?.target === target && typeof borrowedId === 'string' && /^[a-f0-9]{32}$/.test(borrowedId)) {
+          active.captureId = borrowedId;
+        }
+        return response;
+      }, checkpoint);
       await startBorrowed(target, { createRecording: () => createRecording(), createFallbackRecording: createRecording, captureId });
       return true;
     },

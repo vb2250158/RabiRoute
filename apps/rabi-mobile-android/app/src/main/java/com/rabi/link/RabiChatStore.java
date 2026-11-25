@@ -1,6 +1,7 @@
 package com.rabi.link;
 
 import android.content.Context;
+import android.content.Intent;
 import android.util.AtomicFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -18,6 +19,9 @@ import java.util.UUID;
 
 /** Private durable message ledger plus per-conversation read and draft state. */
 public final class RabiChatStore {
+    public static final String ACTION_CHANGED = "com.rabi.link.conversation.STORE_CHANGED";
+    public static final String EXTRA_CONVERSATION_ID = "conversation_id";
+    public static final String EXTRA_LIST_STATE_ONLY = "list_state_only";
     private static final Object LOCK = new Object();
 
     public static final class Message {
@@ -38,6 +42,7 @@ public final class RabiChatStore {
 
     private final AtomicFile chatFile;
     private final AtomicFile stateFile;
+    private final Context application;
 
     /** Rebuilt from the ledger and local conversation state for one list render. */
     public static final class Summary {
@@ -84,22 +89,37 @@ public final class RabiChatStore {
         synchronized (LOCK) {
             try {
                 JSONObject state = readState();
-                if (enabled) state.getJSONObject(field).put(id, true);
-                else state.getJSONObject(field).remove(id);
+                JSONObject flags = state.getJSONObject(field);
+                if (flags.optBoolean(id) == enabled) return;
+                if (enabled) flags.put(id, true);
+                else flags.remove(id);
                 write(stateFile, state.toString());
             } catch (Exception error) { throw new IllegalStateException("Cannot save conversation state", error); }
         }
+        notifyChanged(id, true);
     }
 
     public RabiChatStore(Context context) {
-        this(context.getFilesDir());
+        this(context.getFilesDir(), context.getApplicationContext());
     }
 
     RabiChatStore(File filesDirectory) {
+        this(filesDirectory, null);
+    }
+
+    private RabiChatStore(File filesDirectory, Context application) {
+        this.application = application;
         File directory = new File(filesDirectory, "rabi-conversation");
         directory.mkdirs();
         chatFile = new AtomicFile(new File(directory, "chat.json"));
         stateFile = new AtomicFile(new File(directory, "conversation-state.json"));
+    }
+
+    private void notifyChanged(String conversationId, boolean listStateOnly) {
+        if (application == null) return;
+        application.sendBroadcast(new Intent(ACTION_CHANGED).setPackage(application.getPackageName())
+                .putExtra(EXTRA_CONVERSATION_ID, conversationId)
+                .putExtra(EXTRA_LIST_STATE_ONLY, listStateOnly));
     }
 
     public void append(String id, String role, String kind, String text, String fileName, String contentType) {
@@ -125,6 +145,7 @@ public final class RabiChatStore {
     public void appendRecorded(String id, String role, String kind, String text, String fileName, String contentType,
                                String routeProfileId, String localPath, String clientMessageId,
                                String deliveryState, String failure, long createdAt) {
+        String changedConversation = normalizedId(routeProfileId);
         synchronized (LOCK) {
             try {
                 JSONArray values = readArray(chatFile);
@@ -141,49 +162,58 @@ public final class RabiChatStore {
                         .put("playbackState", "").put("playbackFailure", "")
                         .put("createdAt", createdAt);
                 values.put(value);
+                if (values.length() > 1000) changedConversation = null;
                 while (values.length() > 1000) values.remove(0);
                 write(chatFile, values.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
+        notifyChanged(changedConversation, false);
     }
 
     public void updateDelivery(String clientMessageId, String deliveryState, String failure) {
         String target = clean(clientMessageId);
         if (target.isEmpty()) return;
+        Set<String> affected = new LinkedHashSet<>();
         synchronized (LOCK) {
             try {
                 JSONArray values = readArray(chatFile);
-                boolean changed = false;
                 for (int i = 0; i < values.length(); i++) {
                     JSONObject value = values.getJSONObject(i);
-                    if (target.equals(value.optString("clientMessageId", value.optString("id")))) {
+                    if (target.equals(value.optString("clientMessageId", value.optString("id")))
+                            && (!safe(deliveryState).equals(value.optString("deliveryState"))
+                            || !safe(failure).equals(value.optString("failure")))) {
                         value.put("deliveryState", safe(deliveryState)).put("failure", safe(failure));
-                        changed = true;
+                        affected.add(normalizedId(value.optString("routeProfileId")));
                     }
                 }
-                if (changed) write(chatFile, values.toString());
+                if (!affected.isEmpty()) write(chatFile, values.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
+        if (!affected.isEmpty()) notifyChanged(affected.size() == 1 ? affected.iterator().next() : null, false);
     }
 
     /** Keeps local-only TTS replay feedback with the message that owns the cached audio. */
     public void updatePlayback(String messageId, String playbackState, String playbackFailure) {
         String target = clean(messageId);
         if (target.isEmpty()) return;
+        String changedConversation = null;
         synchronized (LOCK) {
             try {
                 JSONArray values = readArray(chatFile);
-                boolean changed = false;
                 for (int i = 0; i < values.length(); i++) {
                     JSONObject value = values.getJSONObject(i);
                     if (target.equals(value.optString("id"))) {
+                        if (safe(playbackState).equals(value.optString("playbackState"))
+                                && safe(playbackFailure).equals(value.optString("playbackFailure"))) return;
                         value.put("playbackState", safe(playbackState)).put("playbackFailure", safe(playbackFailure));
-                        changed = true;
+                        changedConversation = normalizedId(value.optString("routeProfileId"));
+                        break;
                     }
                 }
-                if (changed) write(chatFile, values.toString());
+                if (changedConversation != null) write(chatFile, values.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
+        if (changedConversation != null) notifyChanged(changedConversation, false);
     }
 
     public List<Message> list() {
@@ -238,11 +268,14 @@ public final class RabiChatStore {
         synchronized (LOCK) {
             try {
                 JSONObject state = readState();
+                if (latestIncomingAt == state.getJSONObject("readAt").optLong(target)
+                        && !state.getJSONObject("markedUnread").has(target)) return;
                 state.optJSONObject("readAt").put(target, latestIncomingAt);
                 state.getJSONObject("markedUnread").remove(target);
                 write(stateFile, state.toString());
             } catch (Exception error) { throw new IllegalStateException(error); }
         }
+        notifyChanged(target, true);
     }
 
     public long readAt(String conversationId) {
@@ -265,6 +298,7 @@ public final class RabiChatStore {
                 JSONObject state = readState();
                 String value = safe(draft);
                 if (value.length() > 4000) value = value.substring(0, 4000);
+                if (value.equals(state.getJSONObject("drafts").optString(clean(conversationId)))) return;
                 if (value.isEmpty()) state.optJSONObject("drafts").remove(clean(conversationId));
                 else state.optJSONObject("drafts").put(clean(conversationId), value);
                 write(stateFile, state.toString());

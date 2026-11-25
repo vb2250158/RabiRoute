@@ -35,6 +35,7 @@ export function peerProxyRequestHeaders(headers: http.IncomingHttpHeaders): Reco
 
 export type TunnelService = {
   baseUrl: string; pathPrefix?: string; headers?: Record<string, string>;
+  prepare?(request: Pick<TunnelRequest, "method" | "path" | "upgrade">, assertCurrent: () => void): Promise<string>;
   internalHeaders?(method: string, target: string): Record<string, string>;
   requestAllowed?(request: Pick<TunnelRequest, "method" | "path" | "upgrade"> & { redirect?: boolean }): boolean;
 };
@@ -81,11 +82,11 @@ function assertPeerForwardingPath(pathname: string, receiverDeviceId: string): v
   }
 }
 export function serveTunnel(session: TunnelSession, services: () => Record<string, TunnelService>, authorize: (service: string) => boolean = service => session.grant.services.includes(service)) {
-  session.on("request", (stream: TunnelStream, request: TunnelRequest) => {
+  session.on("request", (stream: TunnelStream, request: TunnelRequest) => session.trackProducer((async () => {
     let upstream: http.ClientRequest | undefined;
     const guards: Transform[] = [];
     const assertAuthorized = () => {
-      if (!authorize(request.service)) throw new Error("Tunnel service authorization expired.");
+      if (stream.closed || !authorize(request.service)) throw new Error("Tunnel service authorization expired.");
     };
     const fail = () => stream.destroy(new Error("Target service connection interrupted; request result may be unknown."));
     const guard = () => {
@@ -109,9 +110,19 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
       const service = services()[request.service];
       if (!service) throw new Error("Service unavailable.");
       if (service.requestAllowed && !service.requestAllowed(request)) throw new Error("Service request denied.");
-      const endpoint = serviceEndpoint(service, request.path);
+      let endpoint = serviceEndpoint(service, request.path);
       assertPeerForwardingPath(endpoint.pathname, session.remote.target);
-      if (service.requestAllowed && !service.requestAllowed({ ...request, path: endpoint.pathname + endpoint.search })) throw new Error("Service endpoint denied.");
+      const normalized = { ...request, path: endpoint.pathname + endpoint.search };
+      const assertCurrent = () => {
+        assertAuthorized();
+        if (service.requestAllowed && !service.requestAllowed(normalized)) throw new Error("Service endpoint denied.");
+      };
+      assertCurrent();
+      if (service.prepare) {
+        const baseUrl = await service.prepare(normalized, assertCurrent);
+        assertCurrent();
+        endpoint = serviceEndpoint({ ...service, baseUrl }, request.path);
+      }
       // Remote headers cannot create a local identity; application-owned headers are added last.
       const headers: Record<string, string | string[]> = { ...tunnelHeaders(request.headers || {}), ...service.headers, "x-rabiroute-peer-proxy": "1",
         ...(typeof service.internalHeaders === "function" ? service.internalHeaders(request.method, endpoint.pathname + endpoint.search) : {}) };
@@ -155,7 +166,7 @@ export function serveTunnel(session: TunnelSession, services: () => Record<strin
       void stream.reply({ status: 403, headers: { "content-type": "text/plain" } }).then(() => stream.end("Target service unavailable or access denied.")).catch(fail);
       stream.resume();
     }
-  });
+  })()));
 }
 export async function proxyTunnel(session: TunnelSession, service: string, pathname: string, request: http.IncomingMessage, response: http.ServerResponse, authorize?: () => void,
   binding?: Pick<ApiHttpProxyInput, "prepareResponse" | "signal" | "assertCurrent"> & { requestHeaders: Record<string, string | string[]> }) {

@@ -4,7 +4,7 @@
 
 # 主机与远端电脑客户端
 
-完整 Rabi 主机通过 RabiLink 连接后直接提供自身电脑能力，无需再安装一个自连接的客户端。当前源码在 **RabiLink → 电脑控制** 独立标签页平级列出本机、完整主机与轻量节点，设置和执行保持在各自原 Manager；轻量客户端只用于未运行完整主机的电脑。使用方法见[电脑控制](user-guide/computer-control.md)，安装版与真实双机仍按实际版本和证据验收，见[架构与验收范围](connected-host-agent-architecture.md)。
+完整 Rabi 主机通过 RabiLink 连接后直接提供自身电脑能力，无需再安装一个自连接的客户端。当前源码在 **RabiLink → 设备控制 → 电脑控制** 页面平级列出本机、完整主机与轻量节点，设置和执行保持在各自原 Manager；轻量客户端只用于未运行完整主机的电脑。使用方法见[电脑控制](user-guide/computer-control.md)，安装版与真实双机仍按实际版本和证据验收，见[架构与验收范围](connected-host-agent-architecture.md)。
 
 已配置且鉴权的电脑连接默认可调用 Manager 的全部公开接口，无需逐 Agent／会话登记或另加逐接口资格。电脑控制使用一个总开关及终端命令、文件操作、窗口与截图、智能体任务、鼠标与键盘、屏幕标注六项开关；缺省开启，保留已有显式关闭值。这些用户可见设置控制对应电脑的新工作，电脑操作的原结果查询与停止、取消、清理入口保留，配置与其他无依赖服务继续可用。来源任务存在时记录真实来源；没有任务上下文的连接不必虚构 Agent 或会话。
 
@@ -33,9 +33,22 @@ flowchart LR
 
 Mac 使用当前用户 LaunchAgent，支持文件互传与连接器 0.2.4 的 Zsh/Bash/sh 终端。终端依赖 node-pty；Mac 原生编译可能需要 Xcode Command Line Tools。窗口查询和截图仍仅支持 Windows。Mac 原生终端与 Desktop IPC 仍待在线真机验收。
 
-当前源码的主机 WebGUI 在 **RabiLink → 电脑控制 → 展开电脑** 提供终端、文件、窗口与画面入口；终端沿用原面板查询和操作目标实际支持的 Shell。“远端智能体”保留接入电脑、连接器维护和原智能体任务配置，不保留第二套电脑控制。鼠标键盘、静态标注和动态跟踪需目标执行端实际声明支持；旧节点继续使用原有真实能力，在线不代表已经升级。沿用已鉴权连接和用户可见设置，不增加功能白名单或管理密码；执行使用目标系统用户权限。上述新页面与功能的正式安装、真实桌面和双机行为仍需匹配运行版本验收。
+当前源码的主机 WebGUI 在 **RabiLink → 设备控制 → 电脑控制 → 展开电脑** 提供终端、文件、窗口与画面入口；终端沿用原面板查询和操作目标实际支持的 Shell。“远端智能体”保留接入电脑、连接器维护和原智能体任务配置，不保留第二套电脑控制。鼠标键盘、静态标注和动态跟踪需目标执行端实际声明支持；旧节点继续使用原有真实能力，在线不代表已经升级。沿用已鉴权连接和用户可见设置，不增加功能白名单或管理密码；执行使用目标系统用户权限。上述新页面与功能的正式安装、真实桌面和双机行为仍需匹配运行版本验收。
 
 首次连接或 Manager 变化时，从当前 Host 状态取得完整 `managerBaseUrl` 并核对 `/meta`。通过 `GET /api/computers` 读取平级电脑列表，通过目标 Manager 的 `/api/lan-agent/instances` 取得执行实例与能力；已有稳定目标和原连接时直接复用。CLI、MCP 与其他客户端查询同一运行目录：搜索“电脑控制”或读取 `manager.lan-agent.computer.execute` 的当前合同，新增动作通过其 `body.action` 调用，不把动作名当作 operation ID。见[统一接口](unified-agent-api.md)与[电脑控制](user-guide/computer-control.md)。
+
+### 直接操作电脑与恢复任务
+
+日常查文件、查进程、看窗口或操作界面时，按目标能力直接使用电脑控制。用 `manager.lan-agent.terminals.list` 读取原实例的会话和 Shell，再使用终端。需要操作界面时，用 `manager.lan-agent.computer.execute` 查看窗口和截图，再按该合同开启鼠标键盘控制。
+
+Rabi CLI 可以通过活动目录调用这些入口，即使 Codex CLI 连不上 Desktop 会话。共享打包机可以有多个独立节点，各自使用独立配置和节点身份。同一 Windows 用户接入不同主机时，按[多实例接入](lan-rabi-agent-bootstrap.md)保留各自配置。
+
+按原绑定的 `ownerDeviceId`（如适用）、`instanceId`、`agentId` 和完整会话 ID 定位，再核对连接器所在 Windows 用户和持有会话的 Desktop。更新以原 `nodeId` 为目标，电脑名和 IP 只用于辅助辨认。
+
+1. **查原投递。** 保留原 `deliveryId`、电脑绑定、完整会话 ID 和正文。遇到超时、202 或接收状态不明，用 `agent.deliveries.caller.read`、`reconcile_delivery` 和目标会话历史核对是否接收。
+2. **检查同一台电脑。** 用电脑目录确认目标。对完整 Rabi 主机，用 `manager.rabilink.peer.probe` 检查原 `deviceId`，再通过其 Peer Manager 调用原实例。按可用能力从终端确认宿主进程，或从远程桌面检查并恢复同一原会话。Rabi 路径故障时，可用目标已有且获授权的其他远程入口恢复连接或宿主。
+3. **有版本缺口时更新。** 在线轻量节点通过 `manager.lan-agent.nodes.update` 请求已有签名版本，再从 `manager.lan-agent.nodes.list` 核对同一 `nodeId` 的重连、运行版本和所需能力，例如 `taskTargeting: "explicit-session-v1"`。完整主机通过其 Host 发布入口维护。正在接收的任务和仍待确认的回执继续按原记录核对。
+4. **回到原任务。** 确认未开始投递后，沿原 Rabi 入口向同一完整会话续投，核对实际接收。已接收时继续跟踪执行，结果仍不明时继续查原回执。原任务授权内互不依赖的电脑操作可继续进行。
 
 | 接口 | 用途 |
 | --- | --- |

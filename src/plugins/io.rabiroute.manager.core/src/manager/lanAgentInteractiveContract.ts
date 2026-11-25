@@ -55,12 +55,20 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
   return { contract: interactiveApiContract(route),
     ...(route.key === "terminals.list" ? { discovery: {
       title: "查询执行实例的终端与可用 Shell",
-      summary: "使用执行实例目录的 instanceId 查询终端；sessions 为空表示当前没有终端会话，不表示缺少控制能力，shells 列出可用 Shell。",
-      category: { id: "devices", title: "电脑与设备" }, keywords: ["终端", "terminal", "shell", "终端会话"],
+      summary: "使用目标执行实例的 instanceId 查询 sessions 和可用 shells；有可用 Shell 时可进入该电脑执行任务排查或日常命令。完整远端主机经原 ownerDeviceId 的 Peer manager 服务查询。",
+      category: { id: "devices", title: "电脑与设备" }, keywords: ["终端", "terminal", "shell", "终端会话", "远程终端", "remote terminal"],
       inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }],
-      relatedOperations: ["manager.lan-agent.instances.list", "manager.lan-agent.terminals.execute"]
+      relatedOperations: ["manager.lan-agent.instances.list", "manager.lan-agent.terminals.execute", "manager.rabilink.peer.http.get", "manager.lan-agent.computer.execute"]
     } } : {}),
-    ...(route.key === "computer.execute" ? {discovery:{title:"电脑操作与屏幕标注",summary:"文件、窗口、截图、鼠标键盘控制会话与静态/动态屏幕标注。非空ownerDeviceId的完整远端主机经原Peer manager服务转接原路径/原body；先描述对应get/post/patch合同，沿deviceId/service/path及x-rabiroute-proxy-contract，不把远端instanceId投本机。",relatedOperations:["manager.rabilink.peer.http.get","manager.rabilink.peer.http.post","manager.rabilink.peer.http.patch"],category:{id:"devices",title:"设备与电脑"},keywords:["电脑控制","屏幕标注","动态跟踪","鼠标","键盘","computer control","annotation","tracking"],inputSources:[{field:"path.instanceId",operationId:"manager.lan-agent.instances.list",resultPath:"/instances",valuePath:"/instanceId"}]}} : {}), handler: async input => {
+    ...(route.key === "computer.execute" ? { discovery: {
+      title: "电脑操作与屏幕标注",
+      summary: "直接操作目标电脑的文件、窗口、截图、鼠标键盘与屏幕标注，无需先投递 Agent 任务。input.perform 可在一次请求中按顺序按住、移动、等待和释放。恢复会话时可先看原桌面和任务窗口，再按已授权范围恢复宿主。完整远端主机经 ownerDeviceId 的 Peer manager 服务转接原路径与正文，按对应代理合同传 x-rabiroute-proxy-contract。",
+      relatedOperations: ["manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.rabilink.peer.http.get", "manager.rabilink.peer.http.post", "manager.rabilink.peer.http.patch"],
+      category: { id: "devices", title: "设备与电脑" },
+      keywords: ["电脑控制", "远程控制", "远程桌面", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],
+      inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }]
+    } } : {}),
+    handler: async input => {
     const headers = { "cache-control": "no-store" };
     const action = (input.body as Record<string, unknown> | undefined)?.action;
     const readOnly = route.method === "GET" || route.key === "terminals.execute" && terminalActionDefinition(String(action))?.readOnly === true || route.key === "computer.execute" && isComputerReadOnlyAction(String(action));

@@ -191,7 +191,10 @@ test('mobile speech uses the original role conversation and leaves desktop audio
       publicReply:petEvents.at(-1).publicReply},{personaId:'B',clear:true,publicReply:false});
     await assert.rejects(owner.command({action:'start-for-persona',personaId:'A'}),/ASSISTANT_VOICE_DISABLED/);
     await owner.command({action:'host-settings',patch:{personaId:'A'}});
-    await assert.rejects(owner.command({...phone,requestId:randomUUID()}),/ASSISTANT_VOICE_DISABLED/);
+    const mobileWhilePcDisabled=await owner.state('mobile');
+    assert.equal((await owner.state()).settings.voiceEnabled,false);
+    assert.equal(mobileWhilePcDisabled.settings.voiceEnabled,true);
+    assert.equal((await transcribe({query:{sessionId:mobileWhilePcDisabled.sessionId,source:'local'},body:wav})).status,200);
     localModel=false;
     await owner.command({action:'host-settings',patch:{personaId:'B'}});
     const latest=await Promise.all([owner.state(),owner.state()]);

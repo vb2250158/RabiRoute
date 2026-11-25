@@ -17,6 +17,23 @@ import java.security.MessageDigest
  * is in flight.
  */
 object RabiRouteMetadataCache {
+    data class Destination(val workerId: String, val wireRouteId: String)
+
+    fun destination(context: Context, relay: RabiLinkRelayConfig, conversationId: String): Destination {
+        val route = load(context, relay).firstOrNull { it.id == conversationId }
+        return if (route == null) Destination("", conversationId)
+        else Destination(route.rawJson.optString("ownerWorkerId"), RabiConversationRules.wireRouteId(route))
+    }
+
+    fun conversationId(context: Context, relay: RabiLinkRelayConfig, workerId: String, wireRouteId: String): String {
+        val routes = load(context, relay)
+        routes.firstOrNull {
+            it.rawJson.optString("ownerWorkerId") == workerId && RabiConversationRules.wireRouteId(it) == wireRouteId
+        }?.let { return it.id }
+        val rawIdExists = routes.any { it.id == wireRouteId && it.rawJson.optString("ownerWorkerId").isNotBlank() }
+        return if (rawIdExists) RabiConversationRules.scopedRouteId(workerId, wireRouteId) else wireRouteId
+    }
+
     fun load(context: Context, relay: RabiLinkRelayConfig): List<RabiRouteInfo> {
         if (!relay.configured) return emptyList()
         val file = AtomicFile(cacheFile(context, relay))
@@ -32,6 +49,7 @@ object RabiRouteMetadataCache {
     internal fun encode(routes: List<RabiRouteInfo>): String = JSONArray().apply {
         routes.forEach { route -> put(JSONObject().apply {
             put("id", route.id); put("name", route.name); put("configName", route.configName); put("routeName", route.routeName)
+            put("wireRouteId", RabiConversationRules.wireRouteId(route))
             put("isPersonaOnly", route.rawJson.optBoolean("isPersonaOnly"))
             put("enabled", route.enabled); put("running", route.running); put("agentRoleId", route.agentRoleId)
             put("personaDisplayName", route.personaDisplayName); put("messageAdapters", JSONArray(route.messageAdapters))

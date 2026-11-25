@@ -11,6 +11,7 @@ import { createAllDayRecording } from '../../../../manager/allDayRecordingRoutes
 import { readAllDayStorage } from '../../../../manager/allDayRecordingReadStorage.js';
 import { createPersonaRecordingOwner,type PersonaRecordingContext } from './personaRecordingOwner.js';
 import { createPersonaRecordingOperations } from './personaRecordingOperations.js';
+import { createUnifiedSearchOperation } from '../../../../manager/unifiedSearchOperations.js';
 import { ManagerPluginRouteRegistry } from '../../../../manager/managerPluginRouteRegistry.js';
 import { LanAgentAuthority } from '../../../../manager/lanAgentAuthority.js';
 import { assertTrustedLanAgentPrincipal,evaluateLanAgentRequest } from '../../../../manager/lanAgentRequestAccess.js';
@@ -40,8 +41,31 @@ async function fixture(t:test.TestContext,nativeWorker=false){
   t.after(async()=>{server.closeAllConnections();await registration.dispose();await runtime.dispose();await pool?.stop();await new Promise<void>(resolve=>server.close(()=>resolve()));cleanup();});
   const call=(suffix='',method='GET',body?:unknown,prefix='/api/roles',headers:Record<string,string>={})=>new Promise<{status:number;body:any;bytes:Buffer;contentType:string}>((resolve,reject)=>{const request=http.request(base+prefix+'/Example/all-day-recording'+suffix,{method,headers:{authorization:'Bearer '+credential.token,'content-type':'application/json',...headers}},response=>{const chunks:Buffer[]=[];response.on('data',chunk=>chunks.push(Buffer.from(chunk)));response.on('error',reject);response.on('end',()=>{const bytes=Buffer.concat(chunks),contentType=String(response.headers['content-type']);resolve({status:response.statusCode!,body:contentType.startsWith('application/json')?JSON.parse(bytes.toString()):undefined,bytes,contentType});});});request.on('error',reject);request.end(body===undefined?undefined:JSON.stringify(body));});
   const time=Date.now()-1000,day=new Date(time).toISOString().slice(0,10),image:AllDayEvent={id:'original-image',startedAt:time,endedAt:time,source:'screen',deviceId:'original-host',kind:'image',text:'Original frame',state:'saved'};
-  return {directory,context,runtime,root,identity,connection,definitions,call,behavior,repairs,mobile,time,day,image,pool};
+  return {directory,context,runtime,root,identity,connection,definitions,call,behavior,repairs,mobile,time,day,image,pool,registry,base,credential};
 }
+test('timeline capture search reads real frames for ordinary keywords and reports missing history', async t => {
+  const f = await fixture(t);
+  const hash = createHash('sha256').update(f.image.id).digest('hex');
+  await f.runtime.store.append('Example', f.image, jpeg);
+  f.runtime.reads.page = async () => ({
+    events: [{ ...f.image, media: 'media/' + f.day + '/' + hash + '.jpg' }],
+    hasMore: true, loading: false, pendingDays: [], readError: undefined, cursor: { time: f.time, id: f.image.id }
+  });
+  const registration = f.registry.registerOperations('search-fixture', [createUnifiedSearchOperation(f.registry, {
+    roles: () => [{ roleId: 'Example' }], roleDirectory: f.context.roleDirectory,
+    queryHistory: async () => [], entities: async () => { throw new Error('Entities are outside this test'); }
+  })]);
+  try {
+    const query = new URLSearchParams({ scope: 'events', agent: 'Example', q: 'Original frame' });
+    const response = await fetch(f.base + '/api/search?' + query, { headers: { authorization: 'Bearer ' + f.credential.token } });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.data.items[0].origin.recordId, f.image.id);
+    assert.equal(body.data.coverage.state, 'partial');
+    assert.equal(body.data.coverage.sources[0].coverage[0].gaps[0].code, 'CAPTURE_HISTORY_BOUNDED');
+    assert.deepEqual((await f.call('/media/' + f.day + '/' + hash + '.jpg')).bytes, jpeg);
+  } finally { await registration.dispose(); }
+});
 test('all twenty-four recording operations succeed through original native owners for an authenticated empty node',async t=>{
   const f=await fixture(t);assert.equal(f.definitions.length,24);await f.runtime.store.append('Example',f.image,jpeg);
   await f.runtime.store.append('Example',{...f.image,id:'original-audio',kind:'audio',source:'microphone',text:'Original transcript',speechRecordId:'original-speech-record'});

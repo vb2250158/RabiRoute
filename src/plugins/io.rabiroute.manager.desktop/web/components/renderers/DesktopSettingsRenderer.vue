@@ -2,6 +2,8 @@
 import { translateText } from "../../../../../../ribiwebgui/src/i18n/index";
 import { browserUuid } from "../../../../../../ribiwebgui/src/browserUuid";
 import { userFacingError } from "../../../../../../ribiwebgui/src/userFacingError";
+import ComputerModelPicker from "../../../../../../ribiwebgui/src/components/ComputerModelPicker.vue";
+import PeerServerSelect from "../../../../../../ribiwebgui/src/components/PeerServerSelect.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import {
@@ -49,7 +51,10 @@ const selectionSpeechEnabled = ref(false);
 const selectionReadAloudEnabled = ref(true);
 const selectionSpeechAdvanced = ref(false);
 const selectionSpeechModel = ref("");
-const selectionSpeechModels = ref<SpeechModel[]>([]);
+const selectionSpeechDevice = ref<string>();
+const speechDefaultDevice = ref("");
+const selectionSpeechLabel = ref("");
+const previewSpeechModels = new Map<string, SpeechModel[]>();
 const selectionSpeechLoaded = ref(false);
 const selectionSpeechError = ref("");
 const loaded = ref(false);
@@ -123,23 +128,40 @@ async function loadDesktopSettings(): Promise<void> {
 
 async function loadSelectionSpeechSettings(): Promise<void> {
   try {
-    const [settings, modelPayload] = await Promise.all([
-      speechControlClient.selectionReaderSettings(),
-      speechControlClient.models()
-    ]);
+    const settings = await speechControlClient.selectionReaderSettings();
     selectionSpeechEnabled.value = settings.enabled;
     selectionReadAloudEnabled.value = settings.readAloudEnabled;
     selectionSpeechAdvanced.value = settings.advanced;
     selectionSpeechModel.value = settings.model;
-    selectionSpeechModels.value = modelPayload.models || [];
-    if (selectionSpeechAdvanced.value) {
-      selectionSpeechModel.value = resolveSelectionSpeechModel(settings, selectionSpeechModels.value);
+    selectionSpeechDevice.value = settings.computeDeviceId;
+    selectionSpeechLabel.value = "";
+    try {
+      const { models } = await speechControlClient.models({ computeDeviceId: settings.computeDeviceId });
+      if (selectionSpeechAdvanced.value && (settings.computeDeviceId === undefined || !settings.model)) {
+        selectionSpeechModel.value = resolveSelectionSpeechModel(settings, models);
+      }
+      selectionSpeechLabel.value = models.find(model => model.id === selectionSpeechModel.value)?.name || "";
+      selectionSpeechError.value = "";
+    } finally {
+      selectionSpeechLoaded.value = true;
     }
-    selectionSpeechLoaded.value = true;
-    selectionSpeechError.value = "";
   } catch (cause) {
     selectionSpeechError.value = userFacingError(cause);
   }
+}
+
+async function loadSelectionSpeechModels(deviceId: string, signal: AbortSignal) {
+  const { models } = await speechControlClient.models({ computeDeviceId: deviceId, signal });
+  const voices = models.filter(model => model.capability === "tts" && model.available);
+  if (!signal.aborted) previewSpeechModels.set(deviceId, voices);
+  return voices.map(model => ({ value: model.id, title: model.name, subtitle: model.id }));
+}
+
+function chooseSelectionSpeechModel(deviceId: string, model: string) {
+  selectionSpeechDevice.value = deviceId;
+  selectionSpeechModel.value = model;
+  selectionSpeechLabel.value = previewSpeechModels.get(deviceId)?.find(item => item.id === model)?.name || "";
+  selectionSpeechError.value = "";
 }
 
 async function load(): Promise<void> {
@@ -159,7 +181,7 @@ const desktopChanges = computed(() => JSON.stringify([
   desktopScreenshotAutoCopy.value, desktopAutostart.value, desktopTheme.value
 ]));
 const selectionChanges = computed(() => JSON.stringify([
-  selectionSpeechEnabled.value, selectionReadAloudEnabled.value, selectionSpeechAdvanced.value, selectionSpeechModel.value
+  selectionSpeechEnabled.value, selectionReadAloudEnabled.value, selectionSpeechAdvanced.value, selectionSpeechModel.value, selectionSpeechDevice.value
 ]));
 const settingsChanges = computed(() => desktopChanges.value + selectionChanges.value);
 
@@ -320,7 +342,8 @@ async function saveSelectionSpeechSettings(): Promise<void> {
     enabled: selectionSpeechEnabled.value,
     readAloudEnabled: selectionReadAloudEnabled.value,
     advanced: selectionSpeechAdvanced.value,
-    model: selectionSpeechModel.value
+    model: selectionSpeechModel.value,
+    computeDeviceId: selectionSpeechDevice.value
   };
   try {
     const saved = await speechControlClient.updateSelectionReaderSettings(settings);
@@ -331,6 +354,7 @@ async function saveSelectionSpeechSettings(): Promise<void> {
         selectionReadAloudEnabled.value = saved.readAloudEnabled;
         selectionSpeechAdvanced.value = saved.advanced;
         selectionSpeechModel.value = saved.model;
+        selectionSpeechDevice.value = saved.computeDeviceId;
         await nextTick();
         selectionSpeechDirty.value = false;
       } finally { hydrating.value = false; }
@@ -590,18 +614,13 @@ onBeforeUnmount(() => {
         <v-switch v-model="selectionReadAloudEnabled" label="滑词朗读" color="success" density="compact" inset hide-details :disabled="!selectionSpeechLoaded" />
       </div>
       <v-switch v-model="selectionSpeechAdvanced" label="高级选项" color="primary" density="compact" hide-details :disabled="!selectionSpeechLoaded || !selectionReadAloudEnabled" />
-      <v-select
-        v-if="selectionReadAloudEnabled && selectionSpeechAdvanced"
-        v-model="selectionSpeechModel"
-        class="mt-3"
-        label="滑词朗读模型"
-        :items="selectionSpeechModels.filter(item => item.capability === 'tts' && item.available)"
-        item-title="name"
-        item-value="id"
-        :disabled="!selectionSpeechLoaded"
-      >
-        <template #item="{ props, item }"><v-list-item v-bind="props" :subtitle="item.raw.id" /></template>
-      </v-select>
+      <PeerServerSelect v-if="selectionReadAloudEnabled && selectionSpeechAdvanced" persist-selection
+        v-slot="computers" @changed="speechDefaultDevice = $event">
+        <ComputerModelPicker class="mt-3" label="滑词朗读模型"
+          :model-id="selectionSpeechModel" :model-label="selectionSpeechLabel || selectionSpeechModel"
+          :device-id="selectionSpeechDevice ?? speechDefaultDevice" :computers="computers"
+          :disabled="!selectionSpeechLoaded || saving" :load-models="loadSelectionSpeechModels" :choose="chooseSelectionSpeechModel" />
+      </PeerServerSelect>
     </template>
     <v-divider class="my-4" />
     <div class="section-title-row compact-row">

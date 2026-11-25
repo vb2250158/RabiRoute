@@ -23,6 +23,11 @@ test("selection speech settings are host-scoped and fail closed by default", () 
     advanced: true,
     model: "local/gpt-sovits"
   });
+  for (const computeDeviceId of ["peer-a", ""]) {
+    const settings = store.write({ enabled: true, advanced: true, model: "tts/model", computeDeviceId });
+    assert.equal(settings.computeDeviceId, computeDeviceId);
+    assert.deepEqual(store.read(), settings);
+  }
 });
 
 test("selection speech settings ignore malformed persisted data", () => {

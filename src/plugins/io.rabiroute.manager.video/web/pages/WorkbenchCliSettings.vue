@@ -3,7 +3,7 @@ import { onMounted } from "vue";
 import { cliProviders, cliError, cliLoading, loadWorkbenchCli } from "./workbenchCliCatalog";
 
 const emit = defineEmits<{ close: [] }>();
-onMounted(() => { void loadWorkbenchCli(true); });
+onMounted(() => { void loadWorkbenchCli(); });
 </script>
 
 <template>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   readRabiLinkHome,
+  saveRabiLinkDeviceLabels,
   rabiLinkCapabilities,
   rabiLinkDeviceKind,
   rabiLinkDeviceIcon,
@@ -33,6 +34,19 @@ test("strict DTO parser rejects malformed success and upstream errors instead of
 test("DTO projection discards unexpected credential and address fields", async () => {
   const result = await readRabiLinkHome(new AbortController().signal, response({ code: 0, data: { ...data, token: "fake-token", devices: [{ ...device, token: "fake-token", address: "private" }] } }));
   assert.deepEqual(result, data);
+});
+test("device labels read back and edits retain the displayed device identity and revision", async () => {
+  const labels = { alias: "蓝鲸机", tags: ["开发", "QA"] };
+  const input = { ...device, id: "example pc", labels, labelRevision: "a".repeat(64) };
+  const loaded = await readRabiLinkHome(new AbortController().signal, response({ code: 0, data: { ...data, devices: [input] } }));
+  assert.deepEqual(loaded.devices, [input]);
+  await saveRabiLinkDeviceLabels(loaded.devices[0]!, labels, async (url, init) => {
+    assert.equal(url, "/api/rabi/link-home/devices/example%20pc/labels");
+    assert.equal(init?.method, "PATCH");
+    assert.deepEqual(JSON.parse(String(init?.body)), { ...labels, guid: device.guid, expectedRevision: input.labelRevision });
+    return new Response(JSON.stringify({ code: 0 }));
+  });
+  await assert.rejects(saveRabiLinkDeviceLabels(input, labels, response({ code: -1 }, 409)), /刷新/);
 });
 test("remote access capabilities remain available without advertising persona sync", () => {
   assert.deepEqual(rabiLinkCapabilities(["webgui", "peer-rpc", "peer-tunnel", "persona-sync"]), {

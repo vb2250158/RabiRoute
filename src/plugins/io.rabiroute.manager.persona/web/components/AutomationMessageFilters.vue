@@ -137,6 +137,15 @@ function updateQqTarget(key: "targetUserId" | "targetGroupId", value: unknown): 
             hide-details
             clearable density="compact" variant="outlined" @update:model-value="value => updateQqTarget('targetUserId', value)" >
             <template #append-inner><AutomationParameterHelp text="只处理该平台 ID 对应的私聊消息。" /></template>
+            <template #item="{ props: itemProps, item: contact }">
+              <v-list-item v-bind="itemProps">
+                <template #prepend><QqAvatar :id="String(contact.value || '')" :name="contact.title" :size="32" class="mr-3" /></template>
+              </v-list-item>
+            </template>
+            <template #selection="{ item: contact }">
+              <QqAvatar :id="String(contact.value || '')" :name="contact.title" :size="24" class="mr-2" />
+              <span class="text-truncate" data-no-i18n>{{ contact.title }}</span>
+            </template>
           </v-autocomplete>
           <v-combobox v-else-if="item.key === 'targetGroupId' && endpoint === 'napcat'" :model-value="trigger.targetGroupId || null"
             :items="qqGroups" :return-object="false" :loading="qqLoading" :label="t(item.title)"

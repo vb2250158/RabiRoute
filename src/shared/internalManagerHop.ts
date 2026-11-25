@@ -23,7 +23,8 @@ function validInput(value: HopInput): boolean {
     && typeof value.method === "string" && /^[A-Z]{1,20}$/.test(value.method)
     && typeof value.target === "string" && value.target.length <= 8192 && value.target.startsWith("/")
     && !value.target.startsWith("//") && !/[\\#\u0000-\u0020\u007f]/.test(value.target)
-    && (value.authenticatedAt === undefined || Number.isSafeInteger(value.authenticatedAt) && value.authenticatedAt >= 0 && value.authenticatedAt <= Date.now());
+    // Relay owns authenticatedAt; only the locally issued proof uses this host's clock.
+    && (value.authenticatedAt === undefined || Number.isSafeInteger(value.authenticatedAt) && value.authenticatedAt >= 0);
 }
 function mac(encoded: string): Buffer { return createHmac("sha256", key).update(domain + encoded).digest(); }
 function cleanup(now: number): void {

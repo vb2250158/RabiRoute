@@ -75,7 +75,38 @@ data class RabiLinkMobileState(
     val selectedWorker: RabiLinkPc?,
     val workers: List<RabiLinkPc>,
     val rawJson: JSONObject
+) {
+    val ownerAccountId: String
+        get() = rawJson.optJSONObject("app")?.opt("ownerAccountId") as? String ?: ""
+}
+
+class RabiLinkAccountApplication internal constructor(val id: String, val name: String, val token: String)
+
+class RabiLinkAccountApplications internal constructor(
+    val accountId: String,
+    val username: String,
+    val applications: List<RabiLinkAccountApplication>
 )
+
+data class RabiLinkMobileAccount @JvmOverloads constructor(
+    val id: String,
+    val username: String,
+    val nickname: String,
+    val avatarPng: String?,
+    val status: RabiLinkMobileAccountStatus? = null,
+) {
+    val displayName: String get() = nickname.ifBlank { username }
+}
+
+enum class RabiLinkMobileAccountStatus(val wireValue: String) {
+    ONLINE("online"), AWAY("away"), BUSY("busy"), DO_NOT_DISTURB("do-not-disturb");
+
+    companion object {
+        fun fromWireValue(value: String): RabiLinkMobileAccountStatus? = entries.firstOrNull { it.wireValue == value }
+    }
+}
+
+class RabiHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
 data class RabiLinkAsrSettings(val workers: List<RabiLinkPc>, val selectedWorkerId: String)
 
@@ -209,10 +240,16 @@ class RabiRouteSdk @JvmOverloads constructor(
     fun requestMobileManager(relayBaseUrl: String, token: String, targetDeviceId: String, path: String,
                              method: String = "GET", body: String? = null, headers: Map<String,String> = emptyMap(),
                              operationId: String? = null): JSONObject {
-        require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
         val directory = getMobileState(relayBaseUrl,token)
         val id = targetDeviceId.ifBlank { directory.selectedTargetDeviceId }
         val target = directory.workers.firstOrNull { it.id == id || it.guid == id } ?: error("Target PC is not in the authenticated connection directory")
+        return requestMobileWorker(relayBaseUrl, token, target, path, method, body, headers, operationId)
+    }
+
+    private fun requestMobileWorker(relayBaseUrl: String, token: String, target: RabiLinkPc, path: String,
+                                    method: String = "GET", body: String? = null, headers: Map<String, String> = emptyMap(),
+                                    operationId: String? = null): JSONObject {
+        require(path.startsWith("/") && !path.startsWith("//") && !path.contains('\\') && !path.contains('\r') && !path.contains('\n'))
         val requestHeaders = headers.toMutableMap()
         requestHeaders.putIfAbsent("content-type","application/json; charset=utf-8")
         val mutation = method !in listOf("GET","HEAD","OPTIONS")
@@ -580,6 +617,59 @@ class RabiRouteSdk @JvmOverloads constructor(
         return mobileStateFromJson(json)
     }
 
+    /** Reads the applications owned by a Relay account using the existing integration API. */
+    fun getMobileAccountApplications(relayBaseUrl: String, username: String, password: String): RabiLinkAccountApplications {
+        val url = java.net.URI(relayBaseUrl)
+        require(url.host != null && url.rawUserInfo == null && url.rawQuery == null && url.rawFragment == null &&
+            (url.scheme == "https" || (url.scheme == "http" && url.host in setOf("localhost", "127.0.0.1", "[::1]")))) {
+            "请填写 HTTPS 的 RabiLink 服务器地址"
+        }
+        val credentials = android.util.Base64.encodeToString(
+            "$username:$password".toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP
+        )
+        val response = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/manage/api/state?integration=1", "GET", null,
+            mapOf("X-RabiLink-Admin-Auth" to credentials), readTimeoutMs = 10000
+        )
+        val account = response.optJSONObject("account")
+        val accountId = account?.optString("id").orEmpty()
+        check(accountId.isNotBlank()) { "服务器未确认账号" }
+        val rows = response.getJSONArray("apps")
+        val applications = (0 until rows.length()).mapNotNull { index ->
+            val row = rows.optJSONObject(index) ?: return@mapNotNull null
+            val id = row.optString("id")
+            val token = row.opt("token") as? String ?: return@mapNotNull null
+            if (row.optString("ownerAccountId") != accountId || !row.optBoolean("enabled") || id.isBlank() || token.isBlank())
+                return@mapNotNull null
+            RabiLinkAccountApplication(id, row.optString("name").ifBlank { id }, token)
+        }
+        return RabiLinkAccountApplications(accountId, account?.optString("username").orEmpty(), applications)
+    }
+
+    /** Reads only the account that owns the authenticated mobile connection. */
+    fun getMobileAccount(relayBaseUrl: String, token: String): RabiLinkMobileAccount {
+        val data = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/account", "GET", null,
+            mapOf("X-RabiLink-Token" to token), readTimeoutMs = 10000, maxResponseBytes = 512 * 1024
+        ).getJSONObject("data")
+        val account = data.getJSONObject("account")
+        return RabiLinkMobileAccount(account.getString("id"), account.getString("username"),
+            account.opt("nickname") as? String ?: "", data.opt("avatar") as? String,
+            RabiLinkMobileAccountStatus.fromWireValue(account.optString("status")))
+    }
+
+    fun setMobileAccountStatus(relayBaseUrl: String, token: String, accountId: String, status: RabiLinkMobileAccountStatus): RabiLinkMobileAccountStatus {
+        val data = requestJson(
+            "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/account/status", "PATCH",
+            JSONObject().put("status", status.wireValue).toString(),
+            mapOf("X-RabiLink-Token" to token), readTimeoutMs = 10000
+        ).getJSONObject("data")
+        check(data.getString("id") == accountId && data.getString("status") == status.wireValue) {
+            "Mobile account status was not confirmed"
+        }
+        return status
+    }
+
     @JvmOverloads
     fun publishPortableObservation(
         relayBaseUrl: String,
@@ -722,7 +812,12 @@ class RabiRouteSdk @JvmOverloads constructor(
         targetDeviceId: String = ""
     ): RabiRouteCatalogResult {
         val worker = mobileRouteTarget(relayBaseUrl,token,targetDeviceId)
-        val json = requestMobileManager(relayBaseUrl,token,worker.id,"/api/rabi/instances/${encodePath(worker.guid.ifBlank { worker.id })}/routes?includeProfiles=true&presentation=mobile")
+        return getMobileRouteCatalog(relayBaseUrl, token, worker)
+    }
+
+    /** Reads a PC obtained from this connection's authenticated mobile directory. */
+    fun getMobileRouteCatalog(relayBaseUrl: String, token: String, worker: RabiLinkPc): RabiRouteCatalogResult {
+        val json = requestMobileWorker(relayBaseUrl,token,worker,"/api/rabi/instances/${encodePath(worker.guid.ifBlank { worker.id })}/routes?includeProfiles=true&presentation=mobile")
         return routeCatalogResult(json)
     }
 
@@ -906,11 +1001,11 @@ class RabiRouteSdk @JvmOverloads constructor(
                 throw IllegalStateException("JSON response exceeds the bounded client size.")
             }
             val text = stream?.use { readBoundedUtf8(it, maxResponseBytes) }.orEmpty()
-            val json = JSONObject(text.ifBlank { "{}" })
             if (responseCode !in 200..299) {
-                throw IllegalStateException(json.optString("message", "HTTP $responseCode"))
+                val message = runCatching { JSONObject(text).optString("message") }.getOrNull().orEmpty()
+                throw RabiHttpException(responseCode, message.ifBlank { "HTTP $responseCode" })
             }
-            return json
+            return JSONObject(text.ifBlank { "{}" })
         } finally {
             connection.disconnect()
         }

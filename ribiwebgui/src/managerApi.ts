@@ -2,6 +2,7 @@ import { translateText, useI18n } from "./i18n/index";
 import { errorResponsePresentation } from "../../src/shared/errorPresentation";
 import { appendWebguiTokenQuery, captureWebguiTokenFromHref } from "./webguiAccessToken";
 import { subscribeToManagerEvents } from "./sharedManagerEvents";
+import { clearReadPreviews } from "./readPreviewCache";
 
 declare global {
   interface Window {
@@ -52,6 +53,7 @@ function captureManagerAccessToken(): void {
   const capture = captureWebguiTokenFromHref(window.location.href);
   if (capture.token) {
     try {
+      if (capture.token !== managerAccessToken()) clearReadPreviews();
       window.sessionStorage.setItem(WEBGUI_TOKEN_SESSION_KEY, capture.token);
     } catch {
       // The current page can still use loopback access when browser storage is unavailable.

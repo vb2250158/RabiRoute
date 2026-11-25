@@ -25,15 +25,15 @@ First and last images may differ from the output dimensions and from each other.
 
 Use **RabiLink → Configuration → Model Services** to offer this computer’s models to authorized devices. Use **Model Scope** on the same page to configure TTS, ASR, and Workbench models individually. New installations enable these settings by default. Availability depends on connectivity and model readiness. Disabling a scope rejects new remote model requests. Submitted Workbench jobs still allow their original results to be retrieved.
 
-Opening a RabiPC's URL shows that computer's workbench, projects and work history. The selector only changes the models and compute used by that workbench. Existing direct URL and API access remains available.
+Opening a RabiPC's URL shows that computer's workbench, projects and work history. The model selector changes where the workbench gets its models and compute. Existing direct URL and API access remains available.
 
-The Model-serving computer selector at the top of the workbench offers this computer and connected RabiPCs. The choice is saved in the current project and restored after refresh, independently of the Speech workspace server selection. When the chosen computer already has usable models, the workspace computer needs no CUDA, ComfyUI or model installation. Selection does not initialize models automatically.
+Open the model dropdown on an image, video, or audio card. Choose this computer or a connected RabiPC, then choose a model from that machine. The canvas saves the machine chosen through the model dropdown. A canvas with only the legacy Workbench machine setting opens on this computer. Existing jobs remain available in job history. If the chosen machine already has a usable model, you can use it for generation immediately.
 
 The current Manager owns projects, assets, jobs and work history. Previews and downloads always use local resources. Only model discovery, model management, runtime control and inference use the selected computer; asset inspection can also use its decoder. Inference inputs are temporary remote copies. Results are downloaded and checked locally before the workspace job succeeds. Remote execution receipts stay outside that computer's work history and share its GPU queue with local generation.
 
 Both computers must support `computeProtocol: 1`. Temporary inputs and receipts live under `data/video/compute`. Successful work cleans up its inputs and outputs while retaining a minimal idempotency receipt without the prompt; replaying its key never executes again. Uncertain operations retain their copies. Later compute requests remove inputs and outputs of terminal jobs, and unreferenced inputs, older than 24 hours while preserving active inputs. Disconnects, timeouts and failures neither fall back to local inference nor replay work. The local failure record remains; resuming that target requires an explicit start. Reusing the original idempotency key reads the original local job. Switching computers does not migrate or delete saved work.
 
-Audio cards likewise use only the chosen computer's models and synthesis. Playback, pause insertion and project storage remain in the current workspace. Open **Model Services → Workbench Models** and select a computer to manage its model directories, installation, and generation service.
+Audio cards synthesize speech on the chosen computer. Playback, pause insertion, and project storage stay in the current workspace. Use the gear in **Model Services** to choose the installation target, configure the model directory, and start or stop the generation service.
 
 ## Request authority and revocation
 
@@ -45,7 +45,7 @@ Startup, stop, cancellation and pre-submission checks remain request-bound. Acce
 
 ## Local installation
 
-Models and inference dependencies are optional and never installed merely by opening the page. Open **Model Services → Workbench Models**, configure a local model directory, install the runtime, then download the model. An NVIDIA CUDA GPU is required. The current catalog defines the download set and model management displays its file sizes. Shared files are reused across routes. New downloads verify official SHA-256 hashes and sizes; existing files are checked for size and safetensors headers and are not downloaded again. Failed downloads retain unique temporary files; retries download missing models anew without overwriting existing files.
+Models and inference dependencies are installed separately. Use the gear in **Model Services** to configure the directory and install the runtime. Then return to **Image generation** or **Video generation** in the library to download a model. An NVIDIA CUDA GPU is required. The library displays the current catalog and file sizes. Models share files where possible. New downloads verify official SHA-256 hashes and file sizes. Existing files are checked for size and safetensors headers. Failed downloads retain unique temporary files, and retries download the missing models again.
 
 Configure one model root. The catalog maps H3 to `video/minimax-h3` and Z-Image to `image/comfyui` beneath it. Existing TTS/ASR configuration remains untouched. An empty setting retains `components/video/ComfyUI/models`. Old settings without a layout retain flat paths; saving the root in the page explicitly migrates to categorized paths without moving files.
 

@@ -15,11 +15,12 @@ import QqReadNotice from './QqReadNotice.vue';
 import { qqTimeBreak, qqMessageTime } from '../../../../../ribiwebgui/src/qqChatLayout';
 import {qqNavigationRead} from '../../../../../ribiwebgui/src/qqPreviewQueue';
 import { historyPageForDisplay,mergeSavedHistoryWindow } from '../../../../../ribiwebgui/src/historyConversationPresentation';
+import { previewAccessDenied, readPreview, writePreview } from '../../../../../ribiwebgui/src/readPreviewCache';
 import { qqHistoryRecord,mergeQqHistoryWindow, type QqHistoryMessage as QqNativeHistoryMessage, type QqHistoryRecord, type QqSelection } from '../../../../../ribiwebgui/src/qqMessagePresentation';
 
 const props = defineProps<{ roleId: string; adapter: string; title: string; version: number; messageVersion?:number; active: boolean; conversationKey?: string; bubble?: boolean; senderNames?: Record<string,string>; senderAvatars?: Record<string,string>; ownQqId?: string; qqSelection?: QqSelection; qqLive?:boolean; memberCount?:number }>();
 const emit=defineEmits<{latest:[QqHistoryRecord]}>();
-const { fetch } = usePersonaService();
+const { fetch, deviceId } = usePersonaService();
 const { t,locale } = useI18n();
 const entries = ref<QqHistoryRecord[]>([]);
 const cursor = ref<string | null>(null);
@@ -32,6 +33,11 @@ const detailsRecord = ref<QqHistoryRecord>();
 const imagePreview=ref<{blob:Blob;name:string}>(),quotedMessage=ref<QqNativeHistoryMessage>(),newerAvailable=ref(false);
 const listElement = ref<HTMLElement>(), virtualList = ref<{ scrollToIndex(index: number): void }>();
 const conversation = ref(props.conversationKey ?? ''), appliedConversation = ref(props.conversationKey ?? '');
+type TextPreview = { key: string; text: string; time: number; outgoing: boolean };
+const previewKey = () => ['message-text', deviceId, props.roleId, props.adapter, appliedConversation.value];
+// Native QQ identity can change independently from the role and Manager session.
+const canPreview = () => props.adapter !== 'napcat' && Boolean(appliedConversation.value);
+const textPreview = ref<TextPreview[]>(canPreview() ? readPreview<TextPreview[]>(previewKey()) ?? [] : []);
 let request: AbortController | undefined;
 let pending = false;
 let pendingUpdate=false;
@@ -48,10 +54,22 @@ async function load(older = false,update=false) {
     if (!live&&appliedConversation.value) query.set('conversationKey', appliedConversation.value);
     if (older && cursor.value) query.set('cursor', cursor.value);
     const response = await (live?qqNavigationRead(controller.signal,()=>fetch(`/api/agent/qq/history?${query}`,{signal:controller.signal})):fetch(`/api/roles/${encodeURIComponent(props.roleId)}/message-endpoint-timeline?${query}`, { signal: controller.signal }));
+    if (!controller.signal.aborted && canPreview() && previewAccessDenied(response.status)) {
+      textPreview.value = [];
+      writePreview(previewKey(), undefined);
+    }
     const result = await response.json();
     if (!response.ok || result.code !== 0) throw new Error(result.message || t('消息记录读取失败'));
     if (controller.signal.aborted) return;
     const page = historyPageForDisplay(live?(result.data.entries as QqNativeHistoryMessage[]).map(row=>qqHistoryRecord(row,live,props.ownQqId)):result.data.entries as MessageContextRecord[],Boolean(props.bubble),Boolean(live));
+    if (!live && canPreview()) {
+      textPreview.value = [];
+      if (!older && result.data.coverage.indexCoverage !== 'partial') {
+        writePreview(previewKey(), page.slice(-20).map(row => ({
+          key: key(row), text: (row.text || '').slice(0, 512), time: row.time, outgoing: row.direction === 'outbound'
+        })));
+      }
+    }
     const known = new Set(entries.value.map(key));
     if(update&&entries.value.length&&nativeWindow!==Boolean(live)){
       newerAvailable.value=true;if(props.bubble&&page.length)emit('latest',page.at(-1)!);return;
@@ -123,12 +141,14 @@ async function load(older = false,update=false) {
 function applyConversation() {
   request?.abort(); request = undefined; pending = false; pendingUpdate=false;
   appliedConversation.value = (conversation.value || '').trim(); entries.value = []; cursor.value = null; skippedCount.value=0;unreadablePage.value=false;expanded.value.clear(); void load();
+  textPreview.value = canPreview() ? readPreview<TextPreview[]>(previewKey()) ?? [] : [];
 }
 watch(() => props.version, () => { if (props.active && !entries.value.length) void load(); });
 watch(()=>props.messageVersion,()=>{if(props.active&&props.bubble)void load(false,true);});
 watch(()=>[props.qqLive,props.conversationKey] as const,([live,conversationKey],[previousLive])=>{
   if(live&&previousLive)return;
   request?.abort();request=undefined;pending=false;pendingUpdate=false;loading.value=false;appliedConversation.value=conversationKey??'';
+  textPreview.value = canPreview() ? readPreview<TextPreview[]>(previewKey()) ?? [] : [];
   skippedCount.value=0;unreadablePage.value=false;
   connectionLost.value=nativeWindow&&!live;
   if(props.active&&(!entries.value.length||(live&&!previousLive)))void load(false,entries.value.length>0);
@@ -162,6 +182,13 @@ onActivated(()=>{if(entries.value.length&&props.active)void load(false,true);});
     </form>
     <QqReadNotice v-if="error&&bubble" summary="消息暂时无法更新，已有记录仍可查看。" :detail="error" @retry="load(false,true)" />
     <v-alert v-else-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
+    <div v-if="!entries.length && textPreview.length" class="endpoint-history-list">
+      <p class="text-caption text-medium-emphasis">{{ t('上次读取') }}</p>
+      <article v-for="item in textPreview" :key="item.key" class="history-record mb-2" :class="{ outgoing: item.outgoing }">
+        <time class="text-caption" data-no-i18n>{{ qqMessageTime(item.time, undefined, locale) }}</time>
+        <div class="history-text" data-no-i18n>{{ item.text }}</div>
+      </article>
+    </div>
     <v-alert v-if="partial" type="warning" variant="tonal" class="mb-3">{{ t('部分历史记录未覆盖，当前结果可能不完整。') }}</v-alert>
     <v-alert v-if="connectionLost" type="warning" variant="tonal" class="mb-3">{{ t('QQ 连接已断开，保留已加载的消息。') }}</v-alert>
     <div v-if="skippedCount" class="d-flex align-center ga-2 my-2 text-caption text-medium-emphasis" role="status"><v-icon icon="mdi-information-outline" size="16" /><span>{{ t(unreadablePage?'本页消息无法读取，历史记录可能不完整。':'部分消息无法读取，其他消息仍可查看。') }}</span></div>

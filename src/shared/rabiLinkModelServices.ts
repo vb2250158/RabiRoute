@@ -14,6 +14,10 @@ export function providesRabiLinkModel(settings: RabiLinkModelSettings, service: 
   return settings.provideModelServices !== false && settings.modelScope?.[service] !== false;
 }
 
+export function rabiLinkSpeechCatalogScope(settings: RabiLinkModelSettings): readonly ("tts" | "asr")[] {
+  return (["tts", "asr"] as const).filter(service => providesRabiLinkModel(settings, service));
+}
+
 export function rabiLinkSpeechModelRequest(path: string): "tts" | "asr" | "catalog" | undefined {
   let pathname = new URL(path, "http://localhost").pathname;
   try { pathname = decodeURIComponent(pathname).replace(/\/+$/, ""); }
@@ -27,6 +31,14 @@ export function allowsRabiLinkSpeechModelRequest(settings: RabiLinkModelSettings
   const service = rabiLinkSpeechModelRequest(path);
   if (service === "catalog") return providesRabiLinkModel(settings, "tts") || providesRabiLinkModel(settings, "asr");
   return !service || providesRabiLinkModel(settings, service);
+}
+
+/** Feature requests may prepare an installed engine. Probes, events and active stream I/O never launch it. */
+export function speechRequestNeedsEngine(method: string, path: string): boolean {
+  const pathname = new URL(path, "http://localhost").pathname;
+  if (method === "GET") return pathname === "/v1/models";
+  return method === "POST"
+    && ["/v1/audio/speech", "/v1/audio/transcriptions", "/v1/archive/transcriptions", "/v1/audio-streams/rabilink/start", "/v1/playback/audio"].includes(pathname);
 }
 
 export function isNewRabiLinkWorkbenchModelRequest(pathname: string, method: string): boolean {

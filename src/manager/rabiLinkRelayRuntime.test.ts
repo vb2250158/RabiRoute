@@ -182,11 +182,11 @@ test("Relay forwards all public model and message APIs to the authoritative Mana
   assert.equal(forwarded, paths.length);
 });
 
-test("generic public API transport forwards future contract headers while protecting credentials and proxy identity", async t => {
+test("generic public API transport protects credentials and forwards a write even when the Relay clock is ahead", async t => {
   const headers: Array<http.IncomingHttpHeaders> = [];
   const principals: Array<ReturnType<typeof validateInternalManagerHop>> = [];
   const admittedRequests: http.IncomingMessage[] = [];
-  const authenticatedAt = Date.now() - 1000;
+  const authenticatedAt = Date.now() + 60_000;
   let scope = '';
   const local = http.createServer((request, response) => {
     if (request.url === '/api/future') {
@@ -203,7 +203,7 @@ test("generic public API transport forwards future contract headers while protec
     if (url.pathname === '/api/rabilink/events') { openRelayEvents(response); return; }
     if (url.pathname === '/worker/webgui-requests') {
       const requests = claimed ? [] : [true, false].map((publicApiTransport, index) => ({ id: 'headers-' + index, publicApiTransport,
-        connectionIdentity: { appId: 'fixture-app', deviceId: 'device-one', authenticatedAt }, method: 'GET', path: '/api/future', headers: { 'x-rabiroute-future-contract': 'v2', authorization: 'forged', cookie: 'forged', 'x-rabiroute-relay-proxy': 'forged', 'x-forwarded-for': 'forged', 'x-rabilink-tunnel-local': 'forged', 'x-rabilink-tunnel-device-id': 'forged' } }));
+        connectionIdentity: { appId: 'fixture-app', deviceId: 'device-one', authenticatedAt }, method: publicApiTransport ? 'POST' : 'GET', path: '/api/future', headers: { 'x-rabiroute-future-contract': 'v2', authorization: 'forged', cookie: 'forged', 'x-rabiroute-relay-proxy': 'forged', 'x-forwarded-for': 'forged', 'x-rabilink-tunnel-local': 'forged', 'x-rabilink-tunnel-device-id': 'forged' } }));
       claimed = true; response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, requests })); return;
     }
     if (request.method === 'POST' && url.pathname.endsWith('/response')) {
@@ -217,6 +217,7 @@ test("generic public API transport forwards future contract headers while protec
   runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: 'synthetic-test-token', deviceId: 'fixture-pc', deviceGuid: 'fixture-guid', deviceName: 'Fixture', claimWaitMs: 60000,
     applicationGenerationId: 'fixture-generation', localWebguiUrl: `http://127.0.0.1:${localPort}`, localSpeechUrl: '' });
   await waitForRelayRuntime(runtime, 'generic header forwarding', () => completed === 2, () => ({ completed }));
+  assert.equal(admittedRequests[0]?.method, 'POST');
   assert.equal(headers[0]?.['x-rabiroute-future-contract'], 'v2'); assert.equal(headers[1]?.['x-rabiroute-future-contract'], undefined);
   assert.equal(headers[0]?.['x-rabilink-tunnel-local'], 'fixture-generation'); assert.equal(headers[0]?.['x-rabilink-tunnel-device-id'], 'device-one');
   assert.equal(headers[1]?.['x-rabilink-tunnel-local'], 'fixture-generation'); assert.equal(headers[1]?.['x-rabilink-tunnel-device-id'], '$application');
@@ -781,7 +782,7 @@ test("global Relay runtime bounds a stuck local GET and retries an uncertain Rel
   );
 });
 
-for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled ? "proxies speech without exposing credentials" : "refuses ASR when excluded from model scope"}`, async (t) => {
+for (const { asrEnabled, cold } of [{ asrEnabled: true, cold: false }, { asrEnabled: false, cold: true }, { asrEnabled: true, cold: true }]) test(`global Relay runtime ${!asrEnabled ? "refuses ASR before preparing a cold model service" : cold ? "prepares the authorized cold speech engine before forwarding bytes" : "proxies speech without exposing credentials"}`, async (t) => {
   let relayConnections = 0;
   const requestPayload = Buffer.from("fake-multipart-audio", "utf8");
   const wavPayload = Buffer.from("RIFF-test-wave", "utf8");
@@ -858,6 +859,8 @@ for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled 
 
   const runtime = new RabiLinkRelayRuntime({ localSpeechRequestTimeoutMs: 1000 });
   t.after(() => runtime.stop());
+  let engineReady = !cold;
+  const preparations: string[] = [];
   const config = {
     enabled: true,
     modelScope: { asr: asrEnabled },
@@ -868,7 +871,13 @@ for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled 
     deviceName: "Test PC",
     claimWaitMs: 60000,
     localWebguiUrl: `http://127.0.0.1:${localSpeechPort}`,
-    localSpeechUrl: `http://127.0.0.1:${localSpeechPort}`
+    localSpeechUrl: () => engineReady ? `http://127.0.0.1:${localSpeechPort}` : "",
+    canStartLocalSpeech: () => cold,
+    prepareLocalSpeech: async (method: string, pathname: string, assertCurrent: () => void) => {
+      assertCurrent();
+      preparations.push(method + " " + pathname);
+      engineReady = true;
+    }
   };
   await runtime.sync(config);
 
@@ -878,7 +887,8 @@ for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled 
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,speech" + (asrEnabled ? ",asr" : ""));
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,rabilink-application-access-v1,persona-reference-v1,speech" + (asrEnabled && !cold ? ",asr" : ""));
+  assert.deepEqual(preparations, asrEnabled ? ["POST /v1/audio/transcriptions?language=zh"] : []);
   if (!asrEnabled) {
     assert.equal(localState.method, undefined);
     assert.equal(relayState.finishedBody?.statusCode, 403);
@@ -896,7 +906,7 @@ for (const asrEnabled of [true, false]) test(`global Relay runtime ${asrEnabled 
   assert.equal(runtime.status().capabilities?.includes("asr"), false);
   assert.equal(relayConnections, 1);
   await runtime.sync(config);
-  assert.equal(runtime.status().capabilities?.includes("asr"), true);
+  assert.equal(runtime.status().capabilities?.includes("asr"), !cold);
   assert.equal(relayConnections, 1);
 });
 

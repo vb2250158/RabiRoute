@@ -122,6 +122,15 @@ export class SpeechModelManager {
     return this.dependenciesPresent(stable) ? stable : path.join(this.pluginRoot, ".deps");
   }
 
+  runtimeInstallation() {
+    return {
+      platformSupported: this.platform === "win32",
+      dependenciesInstalled: this.dependenciesPresent(this.dependenciesRoot()),
+      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe"))
+        || !!packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir) && fs.existsSync(path.join(this.pluginRoot, "scripts", "windows_host.py"))
+    };
+  }
+
   snapshot(guard?: SpeechAuthorityGuard): SpeechModelManagementSnapshot {
     guard = stickySpeechAuthority(guard);
     guard();
@@ -129,10 +138,7 @@ export class SpeechModelManager {
     const manifest = this.readManifest();
     const manifestRows = new Map((manifest.models ?? []).map(item => [String(item.alias || ""), item]));
     return {
-      platformSupported: this.platform === "win32",
-      dependenciesInstalled: this.dependenciesPresent(this.dependenciesRoot()),
-      windowsHostInstalled: fs.existsSync(path.join(this.pluginRoot, "runtime", "RabiSpeech.exe"))
-        || !!packagedSpeechPython(this.options.packageRoot ?? this.options.rootDir) && fs.existsSync(path.join(this.pluginRoot, "scripts", "windows_host.py")),
+      ...this.runtimeInstallation(),
       catalogVersion: this.catalog.schema_version,
       models: this.catalog.models.map(model => {
         const manifestRow = manifestRows.get(model.alias);

@@ -14,12 +14,14 @@ import { routeScopedRuntimePath } from "../routeScopedNavigation";
 import { personaOptionDisplayName } from "../personaPresentation";
 import { publishedAutomaticWebhookUrl, publishedHttpCallbackUrl } from "../webhookRuntimeEndpoint";
 import { isNapcatPortSetting, publishedNapcatWsUrl } from "../napcatRuntimeEndpoint";
+import { webBrandIconUrl } from "../webRelease";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 
 const store = useGatewayStore();
 const router = useRouter();
+const brandIconUrl = webBrandIconUrl();
 const open = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit("update:modelValue", value)
@@ -928,7 +930,7 @@ async function apply() {
     <v-card class="app-card quick-setup-card">
       <v-card-title class="quick-setup-title">
         <v-avatar rounded="lg" size="44">
-          <v-img src="/assets/rabiroute-icon.png" alt="RabiRoute" />
+          <v-img :src="brandIconUrl" alt="RabiRoute" />
         </v-avatar>
         <div class="min-w-0">
           <div class="section-title">快速配置 RabiRoute</div>

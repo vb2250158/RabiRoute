@@ -107,6 +107,46 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test("cold target preparation happens after admission and is fenced again before forwarding audio", { timeout: 3000 }, async t => {
+  const { caller, receiver } = sessions(t);
+  const entered = deferred<void>();
+  const continueStart = deferred<void>();
+  let allowed = false;
+  let preparations = 0;
+  let requests = 0;
+  const readyUrl = await server(t, (request, response) => {
+    requests++;
+    assert.equal(request.url, "/v1/audio/transcriptions?model=local");
+    request.resume();
+    response.end("ready");
+  });
+  serveTunnel(receiver, () => ({ manager: {
+    baseUrl: "http://127.0.0.1:1",
+    requestAllowed: () => allowed,
+    async prepare(_request, assertCurrent) {
+      assertCurrent();
+      preparations++;
+      entered.resolve();
+      await continueStart.promise;
+      assertCurrent();
+      return readyUrl;
+    }
+  } }));
+  const request = () => tunnelFetch(caller, "manager", "/v1/audio/transcriptions?model=local", { method: "POST", body: "audio" });
+  assert.equal((await request()).status, 403);
+  assert.equal(preparations, 0);
+  allowed = true;
+  const revoked = request();
+  await entered.promise;
+  allowed = false;
+  continueStart.resolve();
+  assert.equal((await revoked).status, 403);
+  assert.equal(requests, 0);
+  allowed = true;
+  assert.equal(await (await request()).text(), "ready");
+  assert.equal(requests, 1);
+});
 function guardedFront(t: test.TestContext, caller: TunnelSession, guard: () => void) {
   const settled = deferred<unknown>();
   const url = server(t, (request, response) => {

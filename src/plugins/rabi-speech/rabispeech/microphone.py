@@ -146,6 +146,7 @@ class SpeechInputSource:
     channels: int = 1
     sample_rate: int = 16_000
     assistant_owned: bool = False
+    assistant_background: bool = False
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,7 @@ class MicrophoneService:
         transcriber: Transcriber,
         submitter: Submitter,
         assistant_transcriber: Transcriber | None = None,
+        background_transcriber: Callable[[Path, MicrophoneConfig, str], Awaitable[TranscriptionResult]] | None = None,
         playback_active: Callable[[], bool],
         stop_playback: PlaybackStopper | None = None,
         record_transcription: RecordTranscription | None = None,
@@ -205,6 +207,9 @@ class MicrophoneService:
         self.temp_dir = temp_dir.expanduser().resolve()
         self._transcriber = transcriber
         self._assistant_transcriber = assistant_transcriber
+        self._background_transcriber = background_transcriber
+        self._assistant_background: tuple[str, str, str] | None = None
+        self._assistant_settings_lock = asyncio.Lock()
         self._submitter = submitter
         self._playback_active = playback_active
         self._stop_playback = stop_playback
@@ -294,9 +299,9 @@ class MicrophoneService:
             self._state = "starting"
             self._error = ""
             try:
-                if self._remote_audio is not None:
+                if self._remote_audio is not None and self._assistant_background is None:
                     self._remote_audio.assert_selection_available()
-                if self._remote_audio is not None and self._remote_audio.selected_client_id:
+                if self._remote_audio is not None and self._remote_audio.selected_client_id and self._assistant_background is None:
                     await self._remote_audio.start_capture(self.config.sample_rate, self.config.chunk_ms)
                 else:
                     if self._stream_factory is _sounddevice_stream:
@@ -333,6 +338,34 @@ class MicrophoneService:
                 broadcast=True,
             )
             return self.snapshot()
+
+    async def configure_assistant(self, enabled: bool, model: str, compute_device_id: str, owner: str, *, release: bool = False) -> dict[str, object]:
+        async with self._assistant_settings_lock:
+            if not enabled:
+                if release and (self._assistant_background is None or self._assistant_background[2] != owner):
+                    return self.snapshot()
+                if self._assistant_background is not None or self.config.streaming_enabled:
+                    await self.stop(persist=False)
+                    self._assistant_background = None
+                    self.config = replace(self._read_config(), enabled=False, streaming_enabled=False)
+                    self._write_config()
+                return self.snapshot()
+            requested = (model, compute_device_id, owner)
+            if self._running and self._assistant_background is not None and self._assistant_background[:2] == requested[:2]:
+                self._assistant_background = requested
+                return self.snapshot()
+            if self._running:
+                await self.stop(persist=False)
+            self.config = self._read_config()
+            if self.config.streaming_enabled:
+                self.config = replace(self.config, enabled=False, streaming_enabled=False)
+                self._write_config()
+            self._assistant_background = requested
+            try:
+                return await self.start({"sample_rate": 16000}, persist=False)
+            except BaseException:
+                self._assistant_background = None
+                raise
 
     async def update_settings(self, updates: object = None) -> dict[str, object]:
         was_running = self._running
@@ -410,12 +443,13 @@ class MicrophoneService:
             return self.snapshot()
 
     def snapshot(self) -> dict[str, object]:
+        remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None and self._assistant_background is None else None
         return {
             "ok": True,
             "mode": "host_resident",
             "audio_stream": {
-                "source": "remote" if self._remote_audio is not None and self._remote_audio.selected_client_id else "local",
-                "client_id": self._remote_audio.selected_client_id if self._remote_audio is not None else None,
+                "source": "remote" if remote_id else "local",
+                "client_id": remote_id,
             },
             "running": self._running,
             "stream_active": bool(self._stream is not None and getattr(self._stream, "active", self._running)),
@@ -444,6 +478,9 @@ class MicrophoneService:
             "history": list(self._history),
             "events": list(self._events),
         }
+
+    def assistant_background_active(self) -> bool:
+        return self._assistant_background is not None
 
     def _emit_event(self, stage: str, kind: str, message: str, *, level: str = "info", **details: object) -> None:
         self._event_sequence += 1
@@ -530,7 +567,7 @@ class MicrophoneService:
         self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
 
     def feed_remote(self, client_id: str, samples: np.ndarray) -> None:
-        if self._remote_audio is None or client_id != self._remote_audio.selected_client_id:
+        if self._assistant_background is not None or self._remote_audio is None or client_id != self._remote_audio.selected_client_id:
             return
         source = self._input_source()
         if self._utterance_source is not None and self._utterance_source != source:
@@ -770,7 +807,7 @@ class MicrophoneService:
         self._barge_in_voiced_samples = 0
 
     def _input_source(self) -> SpeechInputSource:
-        remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None else None
+        remote_id = self._remote_audio.selected_client_id if self._remote_audio is not None and self._assistant_background is None else None
         if remote_id:
             adapter_type = self._remote_audio.selected_message_adapter_type or "speech"
             return SpeechInputSource(
@@ -792,15 +829,16 @@ class MicrophoneService:
             )
         device = str(self.config.device).strip() if self.config.device is not None else "system-default"
         capture = self._assistant_capture
-        assistant_owned = bool(capture and capture.readers)
+        assistant_owned = self._assistant_background is not None or bool(capture and capture.readers)
         return SpeechInputSource(
             source="pc_microphone",
             transport="rabispeech_local_audio",
             channel_type="speech.pc_microphone",
             message_adapter_type="speech",
             assistant_owned=assistant_owned,
+            assistant_background=self._assistant_background is not None,
             processing_policy="record_only" if assistant_owned else "agent",
-            capture_id=capture.capture_id if assistant_owned else "",
+            capture_id=capture.capture_id if capture is not None and capture.readers else "",
             device_id=device,
             device_name=device,
             device_kind="pc_microphone",
@@ -829,11 +867,17 @@ class MicrophoneService:
                     self._record_audio_state(self.config, started_at, target, input_source, "processing")
                     pending_record = True
                 transcribe = self._transcriber
-                if input_source.assistant_owned:
+                if input_source.assistant_background:
+                    if self._background_transcriber is None or self._assistant_background is None:
+                        raise RuntimeError("ASSISTANT_BACKGROUND_TRANSCRIPTION_UNAVAILABLE")
+                    model, device_id, _ = self._assistant_background
+                    result = await self._background_transcriber(target, replace(self.config, asr_model=model), device_id)
+                elif input_source.assistant_owned:
                     if self._assistant_transcriber is None:
                         raise RuntimeError("ASSISTANT_LOCAL_TRANSCRIPTION_UNAVAILABLE")
-                    transcribe = self._assistant_transcriber
-                result = await transcribe(target, self.config)
+                    result = await self._assistant_transcriber(target, self.config)
+                else:
+                    result = await transcribe(target, self.config)
                 text = result.text.strip()
                 if not text:
                     if self._record_audio_state is not None:

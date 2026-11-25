@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SpeechControlRequestError, speechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
+import { createSpeechControlClient, SpeechControlRequestError, speechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
+
+test("candidate model catalogs target the requested machine without writing the speech selection", async () => {
+  const calls: { path: string; init?: RequestInit }[] = [];
+  const client = createSpeechControlClient(async (path, init) => {
+    calls.push({ path: String(path), init });
+    return Response.json({ code: 0, data: { models: [] } });
+  });
+  const { signal } = new AbortController();
+  await client.models({ computeDeviceId: "compute A", signal });
+  await client.models({ computeDeviceId: "" });
+  await client.models();
+  assert.deepEqual(calls.map(call => call.path), [
+    "/api/speech/models?computeDeviceId=compute%20A",
+    "/api/speech/models?computeDeviceId=",
+    "/api/speech/models"
+  ]);
+  assert.equal(calls[0].init?.signal, signal);
+  assert.ok(calls.every(call => !call.init?.method || call.init.method === "GET"));
+});
 
 test("manual ASR requests words and returns separate provider observations", async () => {
   const originalFetch = globalThis.fetch;

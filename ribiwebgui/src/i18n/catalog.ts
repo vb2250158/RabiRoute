@@ -1,6 +1,7 @@
 import { pluginTranslation } from "./translationRegistry";
 
 export const englishCatalog: Record<string, string> = {
+  "上次读取": "Last loaded",
   "手机：录像接收器启动": "Phone: recording receiver startup",
   "0 表示自动分配；启动后从运行状态读取实际地址": "0 allocates an available port; read the actual address from runtime status after startup.",
   "启动后自动分配": "Assigned automatically after startup",

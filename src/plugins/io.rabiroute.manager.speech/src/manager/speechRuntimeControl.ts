@@ -236,6 +236,35 @@ export class SpeechRuntimeControl {
     return this.launchServiceUrl;
   }
 
+  async ensureReady(guard?: SpeechAuthorityGuard): Promise<void> {
+    guard?.();
+    if (!this.options.managedEndpoint?.()) return;
+    try { this.serviceUrl(); }
+    catch (error) {
+      if (!(error instanceof SpeechRuntimeControlError)) throw error;
+      await this.start(guard, false);
+    }
+    guard?.();
+  }
+
+  async setAssistantResident(
+    settings: Readonly<{ enabled: boolean; model?: string; computeDeviceId?: string; ownerId: string; release?: boolean }>,
+    signal: AbortSignal,
+    guard?: SpeechAuthorityGuard
+  ): Promise<void> {
+    signal.throwIfAborted();
+    guard?.();
+    if (settings.enabled) await this.ensureReady(guard);
+    if (!settings.enabled && !this.managedPublished) return;
+    const response = await this.requestAssistantAudio("/v1/internal/assistant-resident", signal, "", JSON.stringify(settings));
+    const statusCode = response.statusCode;
+    const result = await readAssistantAudioJson(response, statusCode === 200 ? 200 : 409, 4096) as {running?: boolean; detail?: string} | undefined;
+    if (statusCode !== 200 || !result || (!settings.release && result.running !== settings.enabled)) {
+      throw new SpeechRuntimeControlError(result?.detail || "未确认语音助手麦克风状态。", statusCode && statusCode >= 400 ? statusCode : 502);
+    }
+    guard?.();
+  }
+
   /** Only the owning Manager can borrow the running local microphone. */
   openAssistantCapture(signal: AbortSignal, cursor?: Readonly<{ captureId: string; sample: number }>): Promise<IncomingMessage> {
     const query = cursor ? "?" + new URLSearchParams({ capture_id: cursor.captureId, from_sample: String(cursor.sample) }) : "";

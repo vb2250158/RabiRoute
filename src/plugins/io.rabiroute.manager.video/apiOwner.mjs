@@ -19,6 +19,13 @@ export function presentVideoError(cause, access, method = "GET") {
 /** Original services own all state, queues, files, processes and durable receipts. */
 export function createVideoOperationsOwner(context) {
   const { runtime, service, models, assets, computeAssets, projects, catalog, events } = context;
+  const localRuntime = {
+    modelRoot: () => models.runtimeRoots(),
+    async beforeStart(access) {
+      if (models.flight) throw new VideoError("请等待安装结束。", 409);
+      await models.assertStartable(access);
+    }
+  };
   return Object.freeze({
     runtime, service, models, assets, computeAssets, projects, catalog, events,
     error: presentVideoError,
@@ -38,7 +45,13 @@ export function createVideoOperationsOwner(context) {
     computeStatus() { const { jobs, ...status } = service.snapshot(); return { ...status, computeProtocol: 1, frameAdaptationAvailable: service.frameAdaptationAvailable }; },
     async startLocal(access) {
       if (models.flight) throw new VideoError("请等待安装结束。", 409);
-      return service.start(() => models.runtimeRoots(), async () => { if (models.flight) throw new VideoError("请等待安装结束。", 409); await models.assertStartable(access); }, access);
+      return service.start(localRuntime.modelRoot, () => localRuntime.beforeStart(access), access);
+    },
+    submit(input, key, access, options) {
+      return service.submit(input, key, access, {
+        ...options,
+        localRuntime: { modelRoot: localRuntime.modelRoot, beforeStart: () => localRuntime.beforeStart(access) }
+      });
     },
     async installRuntime(access) {
       return service.exclusive(async () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import type {
   SpeechManagedModel,
   SpeechManagedModelCapability,
@@ -10,16 +11,40 @@ import type {
 } from "@shared/speechModelManagement";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n/index";
+import ModelLibraryTable from "../components/ModelLibraryTable.vue";
+import { speechLibraryAbilities } from "../components/modelLibraryPresentation";
 import { speechModelManagementClient, SpeechModelManagementRequestError } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechModelManagementClient";
 
-type CapabilityFilter = SpeechManagedModelCapability;
+const WorkbenchModels = defineAsyncComponent(() => import("../../../src/plugins/io.rabiroute.manager.video/web/pages/WorkbenchModelService.vue"));
+const SpeechDiagnostics = defineAsyncComponent(() => import("../../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue"));
 
 const { isEnglish } = useI18n();
+const route = useRoute();
+const router = useRouter();
+const settings = computed(() => route.query.settings === "1");
+const speechDiagnosticsOpen = computed(() => route.query.section === "speech-diagnostics");
+function setSpeechDiagnostics(open: boolean) {
+  void router.replace({ query: { ...route.query, section: open ? "speech-diagnostics" : undefined } });
+}
+type CapabilityFilter = SpeechManagedModelCapability | "image" | "video";
+const capability = computed<CapabilityFilter>(() => {
+  const tab = route.query.tab;
+  if (tab === "workbench") return "video";
+  return tab === "asr" || tab === "speaker" || tab === "image" || tab === "video" ? tab : "tts";
+});
+const mediaKind = computed(() => capability.value === "image" || capability.value === "video" ? capability.value : undefined);
+function selectCapability(tab: CapabilityFilter) {
+  void router.replace({ query: { ...route.query, tab } });
+}
+function openSettings(open: boolean) {
+  const location = { query: { ...route.query, settings: open ? "1" : undefined, section: undefined } };
+  if (open) void router.push(location);
+  else void router.replace(location);
+}
 const snapshot = ref<SpeechModelManagementSnapshot>();
 const loading = ref(false);
 const actionError = ref("");
 const search = ref("");
-const capability = ref<CapabilityFilter>("tts");
 const directorySettings = ref<SpeechModelDirectorySettings>();
 const directoryDraft = ref("");
 const directoryLoading = ref(false);
@@ -43,14 +68,12 @@ const copy = computed(() => isEnglish.value ? {
   reinstallRuntime: "Reinstall speech environment",
   installingRuntime: "Installing environment",
   modelLibrary: "Model library",
-  modelCount: "models",
   model: "Model",
-  capability: "Capability",
-  purpose: "Purpose",
+  capability: "Model capabilities",
   size: "Size",
   runtime: "Runtime",
-  status: "Status",
   action: "Action",
+  close: "Close",
   search: "Search name, family, or alias",
   tts: "Text to speech",
   asr: "Speech recognition",
@@ -58,12 +81,8 @@ const copy = computed(() => isEnglish.value ? {
   sizeUnknown: "Size not measured",
   coreRuntime: "Uses the core environment",
   isolatedRuntime: "Requires an isolated environment",
-  notDownloaded: "Not downloaded",
-  downloaded: "Model downloaded",
-  failed: "Last download failed",
   downloading: "Downloading",
   download: "Download model",
-  redownload: "Download again",
   prepareFirst: "Install the speech environment first",
   empty: "No models match the current filters.",
   source: "Official source",
@@ -87,14 +106,12 @@ const copy = computed(() => isEnglish.value ? {
   reinstallRuntime: "重新安装语音运行环境",
   installingRuntime: "正在安装运行环境",
   modelLibrary: "模型库",
-  modelCount: "个模型",
   model: "模型",
-  capability: "类型",
-  purpose: "用途",
+  capability: "模型能力",
   size: "大小",
   runtime: "运行环境",
-  status: "状态",
   action: "操作",
+  close: "关闭",
   search: "搜索名称、系列或别名",
   tts: "语音合成",
   asr: "语音识别",
@@ -102,12 +119,8 @@ const copy = computed(() => isEnglish.value ? {
   sizeUnknown: "尚未测量大小",
   coreRuntime: "使用核心环境",
   isolatedRuntime: "需独立环境",
-  notDownloaded: "未下载",
-  downloaded: "模型已下载",
-  failed: "上次下载失败",
   downloading: "正在下载",
   download: "下载模型",
-  redownload: "重新下载",
   prepareFirst: "请先安装语音运行环境",
   empty: "没有符合当前筛选条件的模型。",
   source: "官方来源",
@@ -120,22 +133,26 @@ const copy = computed(() => isEnglish.value ? {
   jobFailed: "失败"
 });
 
-const capabilityItems = computed(() => [
+const capabilityItems = computed<{ value: CapabilityFilter; label: string; icon: string }[]>(() => [
   { value: "tts", label: copy.value.tts, icon: "mdi-account-voice" },
   { value: "asr", label: copy.value.asr, icon: "mdi-waveform" },
-  { value: "speaker", label: copy.value.speaker, icon: "mdi-account-search-outline" }
+  { value: "speaker", label: copy.value.speaker, icon: "mdi-account-search-outline" },
+  { value: "image", label: isEnglish.value ? "Image generation" : "图片生成模型", icon: "mdi-image-outline" },
+  { value: "video", label: isEnglish.value ? "Video generation" : "视频生成模型", icon: "mdi-video-outline" }
 ]);
+const settingsLabel = computed(() => isEnglish.value ? "Model service settings" : "模型服务设置");
 
 const models = computed(() => (snapshot.value?.models ?? []).filter(model => model.capability === capability.value));
-const filteredModels = computed(() => {
+const speechRows = computed(() => {
   const query = (search.value ?? "").trim().toLocaleLowerCase();
-  return models.value.filter(model => {
-    if (!query) return true;
-    return [model.name, model.family, model.alias, model.purposeZh, model.purposeEn]
-      .some(value => value.toLocaleLowerCase().includes(query));
+  return models.value.flatMap(model => {
+    const abilities = speechLibraryAbilities(model, capabilityLabel(model.capability), capabilityIcon(model.capability), isEnglish.value);
+    if (query && ![model.name, model.family, model.alias, model.purposeZh, model.purposeEn, ...abilities.map(item => item.label)]
+      .some(value => value.toLocaleLowerCase().includes(query))) return [];
+    return [{ model, id: model.alias, name: model.name, family: model.family, size: sizeLabel(model), runtime: runtimeLabel(model),
+      runtimeIcon: model.runtime === "core" ? "mdi-layers-outline" : "mdi-call-split", sourceUrl: model.sourceUrl, abilities, error: model.lastError }];
   });
 });
-const downloadedCount = computed(() => models.value.filter(model => model.downloaded).length);
 const activeJob = computed(() => snapshot.value?.activeJob);
 const displayedJob = computed(() => activeJob.value ?? snapshot.value?.lastJob);
 const runtimeBusy = computed(() => activeJob.value?.kind === "runtime");
@@ -207,17 +224,6 @@ function capabilityIcon(value: SpeechManagedModelCapability): string {
   return value === "tts" ? "mdi-account-voice" : value === "asr" ? "mdi-waveform" : "mdi-account-search-outline";
 }
 
-function capabilityColor(value: SpeechManagedModelCapability): string {
-  return value === "tts" ? "primary" : value === "asr" ? "secondary" : "info";
-}
-
-function modelStatus(model: SpeechManagedModel): { label: string; color: string; icon: string } {
-  if (model.status === "downloading") return { label: copy.value.downloading, color: "primary", icon: "mdi-progress-download" };
-  if (model.status === "downloaded") return { label: copy.value.downloaded, color: "success", icon: "mdi-check-circle-outline" };
-  if (model.status === "failed") return { label: copy.value.failed, color: "error", icon: "mdi-alert-circle-outline" };
-  return { label: copy.value.notDownloaded, color: "grey", icon: "mdi-cloud-download-outline" };
-}
-
 function jobPresentation(job: SpeechModelManagementJob): { label: string; color: string; icon: string } {
   if (job.state === "running") return { label: copy.value.jobRunning, color: "primary", icon: "mdi-progress-clock" };
   if (job.state === "completed") return { label: copy.value.jobCompleted, color: "success", icon: "mdi-check-circle-outline" };
@@ -242,15 +248,6 @@ function sizeLabel(model: SpeechManagedModel): string {
 
 function runtimeLabel(model: SpeechManagedModel): string {
   return model.runtime === "core" ? copy.value.coreRuntime : copy.value.isolatedRuntime;
-}
-
-function purpose(model: SpeechManagedModel): string {
-  return isEnglish.value ? model.purposeEn : model.purposeZh;
-}
-
-function modelActionLabel(model: SpeechManagedModel): string {
-  if (model.status === "downloading") return copy.value.downloading;
-  return model.downloaded ? copy.value.redownload : copy.value.download;
 }
 
 function modelActionDisabled(model: SpeechManagedModel): boolean {
@@ -313,6 +310,11 @@ onBeforeUnmount(() => managerEvents?.close());
       {{ actionError }}
     </v-alert>
 
+    <div v-if="settings" class="settings-header">
+      <v-btn variant="text" prepend-icon="mdi-arrow-left" @click="openSettings(false)">{{ copy.modelLibrary }}</v-btn>
+      <h2>{{ settingsLabel }}</h2>
+    </div>
+    <template v-if="settings">
     <section class="environment-bar" :aria-label="copy.runtimeTitle" :aria-busy="loading">
       <strong>{{ copy.runtimeTitle }}</strong>
       <div class="runtime-statuses">
@@ -350,7 +352,8 @@ onBeforeUnmount(() => managerEvents?.close());
       </div>
     </section>
 
-    <section v-if="displayedJob" class="job-row" role="status" aria-live="polite" aria-atomic="true">
+    </template>
+    <section v-if="displayedJob && (settings || (!mediaKind && activeJob?.kind === 'model'))" class="job-row" role="status" aria-live="polite" aria-atomic="true">
       <span>{{ activeJob ? copy.currentTask : copy.lastTask }}</span>
       <v-chip size="small" :color="jobPresentation(displayedJob).color" variant="tonal" :prepend-icon="jobPresentation(displayedJob).icon">
         {{ jobPresentation(displayedJob).label }}
@@ -362,6 +365,7 @@ onBeforeUnmount(() => managerEvents?.close());
       </v-alert>
     </section>
 
+    <template v-if="settings">
     <details class="model-help directory-settings">
       <summary>{{ directoryCopy.title }}</summary>
       <p v-if="directoryLocalOnly">{{ directoryCopy.localOnly }}</p>
@@ -386,25 +390,13 @@ onBeforeUnmount(() => managerEvents?.close());
       <p>{{ copy.runtimeCopy }}</p>
       <p>{{ copy.boundaryCopy }}</p>
     </details>
+    </template>
 
-    <section class="library-section">
+    <section v-if="!settings" class="library-section">
       <div class="library-header">
         <div>
           <h2>{{ copy.modelLibrary }}</h2>
-          <p>{{ downloadedCount }} / {{ models.length }} {{ copy.modelCount }}</p>
         </div>
-        <v-text-field
-          v-model="search"
-          class="model-search"
-          density="compact"
-          variant="solo-filled"
-          flat
-          hide-details
-          clearable
-          prepend-inner-icon="mdi-magnify"
-          :label="copy.search"
-          :aria-label="copy.search"
-        />
       </div>
 
       <div class="capability-filter" role="group" :aria-label="copy.modelLibrary">
@@ -415,88 +407,55 @@ onBeforeUnmount(() => managerEvents?.close());
           :color="capability === item.value ? 'primary' : undefined"
           :prepend-icon="item.icon"
           :aria-pressed="capability === item.value"
-          @click="capability = item.value as CapabilityFilter"
+          @click="selectCapability(item.value)"
         >
           {{ item.label }}
         </v-btn>
+        <v-btn class="library-settings" icon="mdi-cog-outline" size="small" variant="text"
+          :title="settingsLabel" :aria-label="settingsLabel" @click="openSettings(true)" />
       </div>
 
-      <div v-if="filteredModels.length" class="model-table-shell" tabindex="0" role="region" :aria-label="copy.modelLibrary">
-        <table class="model-table">
-          <thead>
-            <tr>
-              <th class="model-column">{{ copy.model }}</th>
-              <th class="capability-column">{{ copy.capability }}</th>
-              <th class="purpose-column">{{ copy.purpose }}</th>
-              <th class="size-column">{{ copy.size }}</th>
-              <th class="runtime-column">{{ copy.runtime }}</th>
-              <th class="status-column">{{ copy.status }}</th>
-              <th class="source-column">{{ copy.source }}</th>
-              <th class="action-column">{{ copy.action }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-for="model in filteredModels" :key="model.alias">
-              <tr class="model-row">
-                <td>
-                  <div class="model-table-name">
-                    <span>{{ model.family }}</span>
-                    <strong>{{ model.name }}</strong>
-                    <code>{{ model.alias }}</code>
-                  </div>
-                </td>
-                <td>
-                  <v-chip :color="capabilityColor(model.capability)" size="small" variant="tonal" :prepend-icon="capabilityIcon(model.capability)">
-                    {{ capabilityLabel(model.capability) }}
-                  </v-chip>
-                </td>
-                <td class="model-table-purpose">{{ purpose(model) }}</td>
-                <td class="model-table-size">{{ sizeLabel(model) }}</td>
-                <td class="model-table-runtime">
-                  <v-icon size="16">{{ model.runtime === "core" ? "mdi-layers-outline" : "mdi-call-split" }}</v-icon>
-                  <span>{{ runtimeLabel(model) }}</span>
-                </td>
-                <td>
-                  <v-chip :color="modelStatus(model).color" size="small" variant="text" :prepend-icon="modelStatus(model).icon">
-                    {{ modelStatus(model).label }}
-                  </v-chip>
-                </td>
-                <td>
-                  <v-btn variant="text" size="small" append-icon="mdi-open-in-new" :href="model.sourceUrl" target="_blank" rel="noreferrer">
-                    {{ copy.source }}
-                  </v-btn>
-                </td>
-                <td>
-                  <v-tooltip :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
-                    <template #activator="{ props }">
-                      <span v-bind="props">
-                        <v-btn
-                          color="primary"
-                          variant="tonal"
-                          size="small"
-                          prepend-icon="mdi-download"
-                          :loading="model.status === 'downloading'"
-                          :disabled="modelActionDisabled(model)"
-                          @click="installModel(model)"
-                        >
-                          {{ modelActionLabel(model) }}
-                        </v-btn>
-                      </span>
-                    </template>
-                  </v-tooltip>
-                </td>
-              </tr>
-              <tr v-if="model.lastError" class="model-error-row">
-                <td colspan="8">
-                  <v-alert type="error" density="compact" variant="tonal">{{ model.lastError }}</v-alert>
-                </td>
-              </tr>
+      <v-text-field
+        v-model="search"
+        class="model-search"
+        density="compact"
+        variant="plain"
+        single-line
+        hide-details
+        clearable
+        prepend-inner-icon="mdi-magnify"
+        :placeholder="copy.search"
+        :aria-label="copy.search"
+      />
+
+      <WorkbenchModels v-if="mediaKind" :kind="mediaKind" :labels="copy" :english="isEnglish" :search="search ?? ''" />
+      <ModelLibraryTable v-else :rows="speechRows" :labels="copy" :loading="loading">
+        <template #action="{ row: { model } }">
+          <v-tooltip v-if="!model.downloaded" :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
+            <template #activator="{ props }">
+              <span v-bind="props">
+                <v-btn color="primary" variant="tonal" size="small" prepend-icon="mdi-download"
+                  :loading="model.status === 'downloading'" :disabled="modelActionDisabled(model)" @click="installModel(model)">
+                  {{ model.status === 'downloading' ? copy.downloading : copy.download }}
+                </v-btn>
+              </span>
             </template>
-          </tbody>
-        </table>
-      </div>
-      <v-empty-state v-else icon="mdi-cube-off-outline" :title="copy.empty" />
+          </v-tooltip>
+        </template>
+      </ModelLibraryTable>
     </section>
+    <v-expansion-panels v-if="settings" :model-value="speechDiagnosticsOpen ? 'diagnostics' : undefined"
+      @update:model-value="setSpeechDiagnostics($event === 'diagnostics')">
+      <v-expansion-panel value="diagnostics">
+        <v-expansion-panel-title>
+          {{ isEnglish ? "Speech service diagnostics" : "语音服务诊断" }}
+        </v-expansion-panel-title>
+        <v-expansion-panel-text>
+          <SpeechDiagnostics v-if="speechDiagnosticsOpen" />
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
+    <WorkbenchModels v-if="settings" settings :labels="copy" :english="isEnglish" />
   </div>
 </template>
 
@@ -520,53 +479,21 @@ onBeforeUnmount(() => managerEvents?.close());
 .model-help { color: var(--rr-muted-soft); font-size: 13px; }
 .model-help summary { cursor: pointer; padding: 8px 0; }
 .model-help p { margin: 4px 0 8px; line-height: 1.6; }
-.model-help summary:focus-visible, .model-table-shell:focus-visible { outline: 2px solid var(--rr-accent); outline-offset: 2px; }
+.model-help summary:focus-visible { outline: 2px solid var(--rr-accent); outline-offset: 2px; }
 .directory-editor, .directory-path { min-width: 0; overflow-wrap: anywhere; }
 .directory-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .directory-form :deep(.v-input) { flex: 1 1 280px; min-width: 0; }
 .library-section { display: grid; min-width: 0; gap: 12px; }
-.library-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.settings-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.library-settings { margin-inline-start: auto; }
 .library-header h2 { margin: 0; color: var(--model-ink); font-size: 20px; }
-.library-header p { margin: 0; color: var(--rr-muted-soft); font-size: 13px; }
-.model-search { width: min(390px, 100%); flex: 0 1 390px; }
+.model-search { width: min(390px, 100%); padding-inline: 6px; }
+.model-search :deep(.v-field) { --v-field-padding-top: 0px; --v-field-padding-bottom: 0px; }
 .capability-filter { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-input); }
-.model-table-shell { overflow-x: auto; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }
-.model-table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
-.model-table th { position: sticky; top: 0; z-index: 1; padding: 11px 14px; color: var(--rr-muted-soft); background: var(--rr-input); font-size: 11px; font-weight: 800; letter-spacing: .04em; text-align: left; white-space: nowrap; }
-.model-table td { padding: 14px; border-top: 1px solid var(--rr-border); color: var(--rr-muted-soft); font-size: 13px; vertical-align: middle; }
-.model-row { transition: background-color .15s ease; }
-.model-row:hover { background: var(--rr-subtle); }
-.model-column { width: 20%; }
-.capability-column { width: 10%; }
-.purpose-column { width: 19%; }
-.size-column { width: 8%; }
-.runtime-column { width: 14%; }
-.status-column { width: 9%; }
-.source-column { width: 8%; }
-.action-column { width: 12%; }
-.model-table-name { display: grid; min-width: 0; gap: 3px; }
-.model-table-name > span { color: var(--rr-muted-faint); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
-.model-table-name strong { overflow: hidden; color: var(--model-ink); font-size: 15px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.model-table-name code { overflow: hidden; color: var(--rr-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.model-table-purpose { line-height: 1.45; }
-.model-table-size { white-space: nowrap; }
-.model-table-runtime { display: table-cell; }
-.model-table-runtime .v-icon { margin-right: 6px; vertical-align: -3px; }
-.model-table td:last-child, .model-table th:last-child { text-align: right; }
-.model-table td:nth-last-child(2), .model-table th:nth-last-child(2) { text-align: center; }
-.model-error-row td { padding: 0 14px 14px; background: var(--rr-surface); }
-.model-error-row :deep(.v-alert) { overflow-wrap: anywhere; }
-
-@media (max-width: 820px) {
-  .library-header { align-items: stretch; flex-direction: column; }
-  .model-search { width: 100%; flex-basis: auto; }
-}
-
 @media (max-width: 640px) {
   .model-management-page { padding: 16px; }
   .environment-actions { margin-left: 0; }
   .capability-filter { flex-wrap: wrap; }
-  .model-table { min-width: 1040px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -32,15 +32,25 @@ export function createOwnedRuntime(ports) {
                     const generation = ports.managerHostIdentity?.applicationGenerationId ?? ports.managerInstanceId;
                     const services = { manager: { baseUrl: ports.managerBaseUrl, headers: { "x-rabilink-tunnel-local": generation } },
                         resources: { baseUrl: ports.managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": ports.resourceCacheKey, "x-rabilink-tunnel-local": generation } } };
-                    try {
-                        const endpoint = ports.speechServiceUrl();
-                        if (endpoint) services.speech = {
-                            baseUrl: endpoint, headers: { "x-rabilink-tunnel-local": generation },
-                            requestAllowed: request => ports.allowsSpeechModelRequest(request.path)
+                    let endpoint;
+                    try { endpoint = ports.speechServiceUrl(); }
+                    catch (error) {
+                        if (![409, 503].includes(error?.status)) throw error;
+                    }
+                    if (endpoint || ports.speechEngineInstalled()) {
+                        services.speech = {
+                            baseUrl: endpoint || ports.managerBaseUrl, headers: { "x-rabilink-tunnel-local": generation },
+                            requestAllowed: request => ports.allowsSpeechModelRequest(request.path),
+                            internalHeaders(method) {
+                                return method === "GET"
+                                    ? { "x-rabilink-speech-catalog-scope": ports.getSpeechCatalogScope().join(",") }
+                                    : {};
+                            },
+                            async prepare(request, assertCurrent) {
+                                await ports.preparePublishedSpeech(request.method, request.path, assertCurrent);
+                                return ports.speechServiceUrl();
+                            }
                         };
-                    } catch (error) {
-                        // An unavailable optional Speech owner cannot disable Manager or resource tunneling.
-                        if (error?.status !== 409) throw error;
                     }
                     return services;
                 },

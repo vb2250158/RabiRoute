@@ -66,18 +66,19 @@ function device(value: unknown, localDeviceId: string, local?: LocalRabiPcIdenti
 }
 
 /** Only the saved Manager configuration is accepted; never pass caller headers or URLs. */
-export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfig>, local?: LocalRabiPcIdentity): Promise<{ devices: RabiLinkHomeDevice[]; checkedAt: string }> {
+export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfig>, local?: LocalRabiPcIdentity, parentSignal?: AbortSignal): Promise<{ devices: RabiLinkHomeDevice[]; checkedAt: string; applicationId: string }> {
   if (!config.enabled) throw new RabiLinkHomeError(503, "RABILINK_HOME_DISABLED", "RabiLink 尚未启用。");
   if (!config.url.trim() || !config.token.trim()) throw new RabiLinkHomeError(503, "RABILINK_HOME_NOT_CONFIGURED", "请先保存 RabiLink 服务器地址和应用令牌。");
   let endpoint: URL;
   try {
     const base = new URL(config.url);
     if (!["https:", "http:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error();
-    endpoint = new URL(`${base.href.replace(/\/+$/, "")}/api/rabilink/peers`);
+    endpoint = new URL(`${base.href.replace(/\/+$/, "")}/api/rabilink/peers?includePortable=phone`);
   } catch {
     throw new RabiLinkHomeError(503, "RABILINK_HOME_NOT_CONFIGURED", "RabiLink 服务器地址配置无效。");
   }
-  const signal = AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkHome.DEADLINE_MS", DEADLINE_MS));
+  const timeout = AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkHome.DEADLINE_MS", DEADLINE_MS));
+  const signal = parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
   try {
     const response = await fetch(endpoint, {
       method: "GET", headers: { "x-rabilink-token": config.token, accept: "application/json" },
@@ -107,9 +108,11 @@ export async function readRabiLinkHome(config: Readonly<RabiLinkRelayGlobalConfi
     }
     const body = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     if (body.code !== 0 || body.ok !== true || !Array.isArray(body.peers) || body.peers.length > 1000) throw invalidResponse();
-    return { devices: body.peers.map(value => device(value, config.deviceId, local)), checkedAt: new Date().toISOString() };
+    return { devices: body.peers.map(value => device(value, config.deviceId, local)), checkedAt: new Date().toISOString(),
+      applicationId: typeof body.appId === "string" ? body.appId : "" };
   } catch (error) {
-    if (signal.aborted) throw new RabiLinkHomeError(504, "RABILINK_HOME_TIMEOUT", "读取 RabiLink 设备超时，请稍后重试。");
+    parentSignal?.throwIfAborted();
+    if (timeout.aborted) throw new RabiLinkHomeError(504, "RABILINK_HOME_TIMEOUT", "读取 RabiLink 设备超时，请稍后重试。");
     if (error instanceof RabiLinkHomeError) throw error;
     if (error instanceof SyntaxError) throw invalidResponse();
     throw new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取 RabiLink 设备，请检查已保存的配置或稍后重试。");

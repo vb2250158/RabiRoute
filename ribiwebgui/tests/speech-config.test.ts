@@ -8,6 +8,7 @@ import { transformSync } from "esbuild";
 import * as speechContract from "../../src/shared/speechControlContract";
 import { ManagerSpeechControl } from "../../src/plugins/io.rabiroute.manager.speech/src/manager/speechControl";
 import * as playbackPresentation from "../../src/plugins/io.rabiroute.manager.speech/web/speech/playbackPresentation";
+import { createSpeechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
   MAX_RECENT_MESSAGE_LIMIT,
@@ -69,24 +70,18 @@ test("keeps the legacy Route auto-submit field enabled so keyword mode can recor
   assert.equal(SPEECH_ROUTE_AUTO_SUBMIT, true);
 });
 
-test("speech workbench exposes exact VAD inputs and one host playback volume control", () => {
+test("speech diagnostics retains one host playback control and leaves capture to the assistant", () => {
   const source = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue", import.meta.url), "utf8");
   const controlPlane = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
   const speechPlugin = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/lifecycle.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /投递 Route|会话 ID|送入所选 Route|selectedGatewayId|v-model="autoSubmit"/);
-  assert.equal(source.match(/<SpeechParameterSlider\b/g)?.length, 8);
+  assert.equal(source.match(/<SpeechParameterSlider\b/g)?.length, 1);
   assert.equal(source.match(/label="主机播放音量"/g)?.length, 1);
   assert.match(source, /:min="0"[\s\S]*:max="100"[\s\S]*@update:model-value="schedulePlaybackVolume"/);
   assert.match(source, /speech\.setPlaybackVolume\(nextVolume\)/);
-  assert.match(source, /speech\.updateMicrophoneSettings\(microphoneSettingsCommand\(\)\)/);
   assert.match(source, /具体原因：/);
   assert.match(source, /处理方法：/);
-  assert.match(source, /label="开启 ASR 串流"/);
-  assert.match(source, /@update:model-value="changeAsrStreamingEnabled"/);
-  assert.match(source, /streamingEnabled: asrStreamingEnabled\.value/);
-  assert.match(source, /麦克风不会持续录音/);
-  assert.match(source, /没有 Route 订阅时只保存主机记录/);
-  assert.match(source, /同一段 ASR 会广播给全部/);
+  assert.doesNotMatch(source, /开启 ASR 串流|changeAsrStreamingEnabled|updateMicrophoneSettings|启停 RabiSpeech/);
   assert.match(source, /<SpeechHostMonitor[^>]+:subscriber-count="speechSubscriberRoutes\.length"/);
   assert.match(controlPlane, /resolvePublishedPluginService\("manager\.speech@1"\)/);
   assert.match(controlPlane, /createPluginServicePort\(\(\) => currentSpeechService\(\)\.speechRuntimeControl\)/);
@@ -134,14 +129,24 @@ test("speech workbench renders one mode switch and keeps device logs collapsed b
   assert.match(source, /v-if="audioLogExpanded"[\s\S]*id="speech-device-log-panel"[\s\S]*role="region"/);
 });
 
-test("Model Services owns the lazy speech model page and legacy address", () => {
+test("Model Services owns the unified model library and legacy address", () => {
   const page = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/SpeechServicePage.vue", import.meta.url), "utf8");
   const models = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.core/web/pages/ModelServicesPage.vue", import.meta.url), "utf8");
+  const library = fs.readFileSync(new URL("../src/pages/ModelManagementPage.vue", import.meta.url), "utf8");
   const router = fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8");
+  const speechNavigation = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/contributions.ts", import.meta.url), "utf8");
+  const legacy = fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.speech/web/pages/LegacySpeechPage.vue", import.meta.url), "utf8");
 
   assert.doesNotMatch(page, /modelManagementDialog|ModelManagementPage/);
-  assert.match(models, /defineAsyncComponent\(\(\) => import\("[^"]+\/ModelManagementPage\.vue"\)\)/);
-  assert.match(models, /<SpeechModels v-if="tab === 'speech'"/);
+  assert.match(models, /<ModelManagementPage\s*\/>/);
+  assert.doesNotMatch(models, /<v-tab/);
+  assert.match(library, /value: "image".*value: "video"/s);
+  assert.match(library, /<template v-if="settings">\s*<section class="environment-bar"/);
+  assert.match(library, /icon="mdi-cog-outline"[^>]*@click="openSettings\(true\)"/);
+  assert.match(library, /<SpeechDiagnostics v-if="speechDiagnosticsOpen"/);
+  assert.match(speechNavigation, /import\("\.\/pages\/LegacySpeechPage\.vue"\)/);
+  assert.doesNotMatch(speechNavigation, /navigation:/);
+  assert.match(legacy, /path: "\/model-services", query: \{ \.\.\.route.query, settings: "1", section: "speech-diagnostics" \}/);
   assert.match(router, /path: "\/models", redirect: \{ path: "\/model-services", query: \{ tab: "speech" \}/);
   assert.doesNotMatch(router, /const ModelManagementPage/);
 });
@@ -290,7 +295,7 @@ function selectionRecoveryWorkbench(t: import("node:test").TestContext, failFirs
     selection_storage_error: "音频设备选择存档损坏或版本不受支持。重新选择设备会保留原始恢复副本，并使用本版本的设备选择格式。",
     selection_recovery: null, clients: [], events: [] };
   const backup = { id: `${"f".repeat(32)}-${"a".repeat(64)}.raw`, sha256: "a".repeat(64) };
-  const writes: unknown[] = [], independent = { tts: 0, asr: 0 };
+  const writes: unknown[] = [];
   const online: speechContract.SpeechRuntimeStatus = { state: "online", checkedAt: "", configuredUrl: "http://127.0.0.1:1", defaults: { tts: "", asr: "" }, providers: { tts: [], asr: [] } };
   const control = new ManagerSpeechControl({ serviceUrl: () => "http://127.0.0.1:1", personas: () => [], route: () => undefined, routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }), appendRouteLog: () => {}, localSpeech: {
@@ -309,9 +314,7 @@ function selectionRecoveryWorkbench(t: import("node:test").TestContext, failFirs
   const speech = { status: vue.ref(online), models: vue.ref([{ id: "fixture-tts", capability: "tts", available: true }]),
     microphone: vue.ref(null), playback: vue.ref({ jobs: [], queued: 0, volume: 100 }), audioStream: vue.ref(null), recordsVersion: vue.ref(0), loading: vue.ref(false),
     async refreshAudioStreams() { speech.audioStream.value = await control.audioStreams(); },
-    async selectAudioStream(command: speechContract.SpeechAudioStreamSelectionCommand) { speech.audioStream.value = await control.selectAudioStream(command); },
-    async synthesize() { independent.tts++; return { audio: new Blob(["fixture"]) }; },
-    async transcribe() { independent.asr++; return { text: "fixture transcription" }; }
+    async selectAudioStream(command: speechContract.SpeechAudioStreamSelectionCommand) { speech.audioStream.value = await control.selectAudioStream(command); }
   };
   const source = fs.readFileSync(component, "utf8");
   const code = transformSync(compileScript(parse(source).descriptor, { id: "speech-selection-recovery" }).content, { loader: "ts", format: "cjs" }).code;
@@ -344,7 +347,7 @@ function selectionRecoveryWorkbench(t: import("node:test").TestContext, failFirs
   const scope = vue.effectScope();
   const model = scope.run(() => module.exports.default.setup({}, { expose() {} }));
   t.after(() => { for (const fn of unmount) fn(); scope.stop(); });
-  return { model, speech, writes, backup, independent };
+  return { model, speech, writes, backup };
 }
 
 test("actual Manager DTO reaches the compiled speech chooser and local recovery sends the existing PUT", async t => {
@@ -353,11 +356,6 @@ test("actual Manager DTO reaches the compiled speech chooser and local recovery 
   assert.equal(f.speech.audioStream.value.source, "unavailable");
   assert.equal(f.model.selectedAudioStream.value, null, "a damaged selection must not appear as local");
   assert.equal(f.model.selectedAudioStreamLabel.value, "请重新选择音频设备");
-  f.model.queuePlayback.value = false; f.model.ttsModel.value = "fixture-tts";
-  await f.model.synthesize();
-  f.model.asrModel.value = "fixture-asr";
-  await f.model.transcribeBlob(new Blob(["fixture"]));
-  assert.deepEqual(f.independent, { tts: 1, asr: 1 }, "independent synthesis/browser playback and uploaded ASR remain available");
   assert.ok(f.speech.audioStream.value.selectionStorageError);
   await f.model.chooseAudioStream("local");
   assert.deepEqual(f.writes, [{ source: "local", client_id: null }]);
@@ -387,18 +385,54 @@ test("the speech page distinguishes an unread status from a stopped service", t 
   const online = speech.status.value;
   speech.status.value = null;
   assert.equal(model.runtimeStatusLabel.value, "检查中");
-  assert.equal(model.runtimeStatusKnown.value, false);
+  assert.equal(model.serviceEnabled.value, false);
 
   model.requestError.value = "status request failed";
   assert.equal(model.runtimeStatusLabel.value, "状态未知");
 
   speech.status.value = online;
   speech.loading.value = true;
-  assert.equal(model.runtimeStatusLabel.value, "已开启");
-  assert.equal(model.runtimeStatusKnown.value, true);
+  assert.equal(model.runtimeStatusLabel.value, "在线");
+  assert.equal(model.serviceEnabled.value, true);
 
   speech.status.value = { ...online, state: "offline", configuredUrl: "" };
-  assert.equal(model.runtimeStatusLabel.value, "已关闭");
+  assert.equal(model.runtimeStatusLabel.value, "待启动");
   speech.status.value = { ...online, state: "offline", error: "probe timed out" };
   assert.equal(model.runtimeStatusLabel.value, "未连接");
+});
+
+test("voice assistant submits uploaded audio to the chosen machine, retaining explicit local selection", async t => {
+  const component = new URL("../../src/plugins/io.rabiroute.manager.voice-assistant/web/VoiceAssistantPage.vue", import.meta.url);
+  const require = createRequire(component), vue = require("vue");
+  const code = transformSync(compileScript(parse(fs.readFileSync(component, "utf8")).descriptor, { id: "assistant-upload" }).content,
+    { loader: "ts", format: "cjs" }).code;
+  const module = { exports: {} as any };
+  const uploaded: Array<{ path: string; model: FormDataEntryValue | null }> = [];
+  vm.runInNewContext(code, {
+    module, exports: module.exports, URLSearchParams, AbortController,
+    fetch: async (path: string, init: RequestInit) => {
+      assert.ok(init.body instanceof FormData);
+      uploaded.push({ path, model: init.body.get("model") });
+      return new Response(JSON.stringify({ text: "fixture transcription" }));
+    },
+    require: (name: string) => {
+      if (name === "vue") return { ...vue, onMounted() {}, onBeforeUnmount() {} };
+      if (name.endsWith("/speechControlClient")) return { createSpeechControlClient, speechControlClient: {} };
+      if (name.endsWith("/userFacingError")) return { userFacingError: (cause: Error) => cause.message };
+      return {};
+    }
+  });
+  const scope = vue.effectScope();
+  t.after(() => scope.stop());
+  const form = scope.run(() => module.exports.default.setup({}, { expose() {} }));
+  form.selectAudioFile({ target: { files: [new File(["wav"], "voice.wav", { type: "audio/wav" })] } });
+  form.selectRecognitionModel("peer A&1", "remote-asr");
+  await form.transcribeAudio();
+  assert.equal(form.result.value.text, "fixture transcription");
+  form.selectRecognitionModel("", "local-asr");
+  await form.transcribeAudio();
+  assert.deepEqual(uploaded, [
+    { path: "/api/speech/asr?computeDeviceId=peer+A%261", model: "remote-asr" },
+    { path: "/api/speech/asr?computeDeviceId=", model: "local-asr" }
+  ]);
 });

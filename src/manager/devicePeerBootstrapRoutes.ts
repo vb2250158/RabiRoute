@@ -39,6 +39,7 @@ export function createDevicePeerBootstrapOperation(options: DevicePeerBootstrapO
         const current = options.current();
         if (stopped || current.scope !== initial.scope || current.generation !== initial.generation || current.deviceId !== initial.deviceId
           || !hasAuthenticatedConnectionRequest(request)) throw new Error("Original connection changed.");
+        if (authenticatedAt > Date.now()) throw new Error("Original authentication is ahead of the device lease clock.");
         const fresh = validateInternalManagerHop(request, initial);
         if (!fresh || fresh.kind !== "relay" || fresh.deviceId !== claims.deviceId || fresh.nonce !== claims.nonce) {
           throw new Error("Original Relay device identity changed.");

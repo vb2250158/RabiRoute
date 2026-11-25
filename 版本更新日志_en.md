@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.91 - 2026-11-25
+
+- Integrate expanded search, scroll pagination, QQ avatars, device controls and labels, page toolbars, model services and caches while retaining the adopted workbench performance and branding.
+- Preserve cross-computer clock compatibility and legacy device labels; localize Agent connection messages in Chinese, English and Japanese.
+- Android 0.3.73-dev (76) combines sign-in, legacy account recovery, chat and status, phone file operations and directory caching. Connector 0.4.11 receives the branding assets without automatically changing existing remote nodes.
+
 ## 0.15.90 - 2026-11-25
 
 - io.rabiroute.agent.codex 0.1.18 and rabi-agent 0.4.10: select the existing Windows Desktop thread queue from verified official CLI capabilities when legacy IPC is unavailable. Persist one transport before enqueue; queue success or timeout stays unconfirmed until the original user input matches the exact delivery ID and body hash. Preserve legacy IPC, permissions and workspace checks without requeueing or starting another runtime.

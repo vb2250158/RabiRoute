@@ -7,6 +7,21 @@ test('real React first frame and host settings render without requiring loaded s
   const base={hostSettings:{personaId:'B',personas:[{id:'B',label:'无本机声线人格'}],asrSource:'host',ttsSource:'custom',models:[],voiceReady:false},context:{busy:false}};
   assert.match(ui.renderHost({state:base,settingsTab:'conversation'}),/无本机声线人格/);
   assert.match(ui.renderHost({state:base,settingsTab:'speech',speechKind:'asr'}),/请选择可用模型/);
-  assert.match(ui.renderHost({state:base,settingsTab:'speech',speechKind:'tts'}),/自定义提供商/);
+  assert.match(ui.renderHost({state:base,settingsTab:'speech',speechKind:'tts',query:async()=>[]}),/自定义提供商/);
+  const props={state:{...base,hostSettings:{...base.hostSettings,asrDeviceId:'remote',asrModel:'fixture-asr',
+    modelComputers:[{deviceId:'remote',name:'共享模型电脑',online:true,supported:true,trusted:false}]}},
+    settingsTab:'speech',query:async()=>[]};
+  const recognition=ui.renderHost({...props,speechKind:'asr'});
+  assert.match(recognition,/实时识别模型/);
+  assert.match(recognition,/后台转写模型/);
+  assert.match(recognition,/共享模型电脑 · fixture-asr/);
+  assert.match(recognition,/选择机器/);
+  assert.match(recognition,/自定义提供商/);
+  assert.doesNotMatch(recognition,/<select\b/);
+  const playback=ui.renderHost({...props,speechKind:'tts'});
+  assert.match(playback,/播报模型/);
+  assert.match(playback,/<strong>自定义提供商<\/strong>/);
+  assert.match(playback,/共享模型电脑/);
+  assert.doesNotMatch(playback,/后台转写模型|<select\b/);
  }finally{await rm(directory,{recursive:true,force:true})}
 });

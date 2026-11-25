@@ -242,7 +242,9 @@ Regex decides whether the rule matches, not whether the Agent must reply. The ro
 
 ## Conversation avatars and history
 
-QQ rules offer a group picker with avatars and search by name or number. You can also enter a group number directly; clearing it accepts any group. A rule restricted to one group shows that group's avatar and name. A private-message rule can select a contact, match their QQ number, and show their avatar. An empty selection accepts any private contact. Rules covering both groups and private chats keep the channel icon. Unavailable contact details also keep the icon without changing the rule. Contacts come only from QQ connections configured for the current role.
+The QQ group and private contact pickers show avatars in the list and beside the current selection. Search groups by name or number, or enter a group number directly. Private-message rules match the selected contact's QQ number. Clear the selection to remove the restriction.
+
+Rule cards show the avatar and name of a single group or private contact. Loaded avatars stay visible during background refresh. Cards without conversation details show the channel icon. Contacts come from QQ connections configured for the current role.
 
 History channels share a two-line conversation list. Drag either separator to resize the conversation list or the task/group-member rail; each remembers its width. Focus a separator to use arrow keys, or double-click to reset it. Narrow windows preserve wider preferences. Conversations with recent activity appear first; messages retain conversation order, with the latest at the bottom. Long messages collapse according to their displayed height and can be expanded. Source, delivery status, and identifiers remain available in message details.
 

@@ -60,13 +60,15 @@ async function refresh(probe = false) {
   } catch (cause) { if (!disposed && sequence === requestSequence) error.value = cause instanceof Error ? cause.message : String(cause); }
   finally { if (sequence === requestSequence) loading.value = false; }
 }
-async function select(value: string) {
-  if (props.disabled || saving.value || value === selected.value) return;
+async function select(value: string): Promise<boolean> {
+  if (props.disabled || saving.value) return false;
+  if (value === selected.value) return true;
   saving.value = true;
   try {
     if (props.persistSelection) await api("selection", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceId: value }) });
     selected.value = value; emit("changed", value); await refresh(true);
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+    return true;
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); return false; }
   finally { saving.value = false; }
 }
 function menuChanged(open: boolean) { menuOpen.value = open; if (open) void refresh(true); else subscribe(); }
@@ -79,6 +81,7 @@ onBeforeUnmount(() => { disposed = true; requestSequence++; events?.close(); cle
 </script>
 
 <template>
+  <slot :options="options" :loading="loading" :error="error" :select="select" :menuChanged="menuChanged">
     <v-select class="peer-server-picker" :model-value="selected" :items="options" :label="label" :aria-label="`选择${label}`"
       density="compact" variant="outlined" :loading="loading || saving" :disabled="disabled || saving" :error="!!error"
       :title="error || options.find(item => item.value === selected)?.detail"
@@ -96,4 +99,5 @@ onBeforeUnmount(() => { disposed = true; requestSequence++; events?.close(); cle
         <v-alert v-if="error" type="warning" variant="tonal" class="ma-2" role="alert">{{ error }}</v-alert>
       </template>
     </v-select>
+  </slot>
 </template>

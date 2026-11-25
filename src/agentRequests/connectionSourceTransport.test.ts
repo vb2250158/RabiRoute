@@ -64,9 +64,13 @@ test("connection source survives real Device prepared HTTP, native claim and exa
             const queued = await call("manager", "POST", "/prepared-deliveries", { ledgerOwnerDeviceId: "pc-a", delivery: frozen });
             assert.equal(queued.data.receipt, null, "HTTP queued is not acceptance");
             const claim = await call("device", "POST", "/deliveries/claim", session);
-            const claimed = claim.data.delivery as { deliveryId: string; prompt: string; envelope: { messageSource: { type: string; actorId: string } } };
+            const claimed = claim.data.delivery as { deliveryId: string; prompt: string; envelope: { messageSource: { type: string; eventType: string; actorType: string; actorId: string } } };
             assert.equal(claimed.deliveryId, frozen.deliveryId); assert.equal(claimed.prompt, frozen.prompt);
             assert.equal(claimed.envelope.messageSource.type, "system"); assert.equal(claimed.envelope.messageSource.actorId, "real-node");
+            assert.equal(claimed.envelope.messageSource.eventType, "agent_connection");
+            assert.equal(claimed.envelope.messageSource.actorType, "lan-agent");
+            assert.match(claimed.prompt, /- 事件类型：(?:Agent 连接|Agent connection|エージェント接続)\n/);
+            assert.match(claimed.prompt, /- 触发方类型：(?:局域网 Agent|LAN Agent|LAN エージェント)\n/);
             const reconciled = await call("manager", "POST", "/prepared-deliveries/reconcile", { ledgerOwnerDeviceId: "pc-a", delivery: frozen });
             const nativeReceipt = reconciled.data.receipt as EndpointDeliveryReceipt;
             assert.equal(nativeReceipt.deliveryId, frozen.deliveryId); assert.deepEqual(nativeReceipt.endpoint, target);

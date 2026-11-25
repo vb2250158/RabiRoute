@@ -91,6 +91,6 @@ test("original authentication time is MAC-bound and is never refreshed by hop is
   const value = JSON.parse(Buffer.from(encoded, "base64url").toString()); value.authenticatedAt = now;
   const tampered = { ...header, "x-rabilink-internal-hop": Buffer.from(JSON.stringify(value)).toString("base64url") + "." + signature };
   assert.equal(validateInternalManagerHop(request(tampered), input), null);
-  assert.throws(() => issueInternalManagerHopHeaders({ ...input, authenticatedAt: now + 1 }));
+  assert.throws(() => issueInternalManagerHopHeaders({ ...input, authenticatedAt: -1 }));
   assert.throws(() => issueInternalManagerHopHeaders({ ...input, authenticatedAt: 1.5 }));
 });

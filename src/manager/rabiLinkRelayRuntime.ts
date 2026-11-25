@@ -5,7 +5,7 @@ import { issueInternalManagerHopHeaders } from '../shared/internalManagerHop.js'
 import { APPLICATION_ACCESS_CAPABILITY } from '../peerTunnel/runtime.js';
 import { PERSONA_REFERENCE_CAPABILITY } from "../shared/personaPeerService.js";
 import { normalizeRabiPcVersion, rabiPcVersionAdvertisement } from "../shared/rabiPcVersionContract.js";
-import { allowsRabiLinkSpeechModelRequest, providesRabiLinkModel, rabiLinkModelScope, type RabiLinkModelSettings } from "../shared/rabiLinkModelServices.js";
+import { allowsRabiLinkSpeechModelRequest, providesRabiLinkModel, rabiLinkModelScope, rabiLinkSpeechCatalogScope, type RabiLinkModelSettings } from "../shared/rabiLinkModelServices.js";
 type RelayProxyRequest = {
   remainingBudgetMs?: number;
   singleAttempt?: boolean;
@@ -37,6 +37,8 @@ export type RabiLinkRelayRuntimeConfig = RabiLinkModelSettings & {
   peerUrls?: string[];
   accountTunnel?: boolean;
   localSpeechUrl: string | (() => string);
+  canStartLocalSpeech?: () => boolean;
+  prepareLocalSpeech?: (method: string, path: string, assertCurrent: () => void) => Promise<void>;
 };
 
 export type RabiLinkRelayRuntimeStatus = {
@@ -414,7 +416,7 @@ function appendWorkerDiscovery(params: URLSearchParams, config: RabiLinkRelayRun
   if (config.peerUrls?.length) params.set("peerUrls", JSON.stringify(config.peerUrls));
 }
 
-type SpeechAdvertisement = { available: boolean; speechAvailable: boolean };
+type SpeechAdvertisement = { available: boolean; speechAvailable: boolean; canStart?: boolean };
 const asrAdvertisements = new WeakMap<RabiLinkRelayRuntimeConfig, SpeechAdvertisement>();
 
 async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, signal: AbortSignal): Promise<SpeechAdvertisement> {
@@ -423,23 +425,24 @@ async function probeSpeechAdvertisement(config: RabiLinkRelayRuntimeConfig, sign
   let speechAvailable = false;
   try {
     const endpoint = resolveSpeechUrl(config);
-    if (!endpoint) return { available: false, speechAvailable: false };
-    const response = await fetch(`${endpoint}/v1/capabilities`, {
+    if (endpoint) {
+      const response = await fetch(`${endpoint}/v1/capabilities`, {
       signal: AbortSignal.any([signal, AbortSignal.timeout(getTimeoutMs("backend.manager.rabiLinkRelayRuntime.probeSpeechAdvertisement.AbortSignal.timeout.request", 3000))]), redirect: "error"
-    });
-    if (response.ok) {
-      const body = await response.json() as { providers?: { asr?: Record<string, { enabled?: boolean }> } };
-      speechAvailable = !!body.providers && typeof body.providers === "object";
-      available = speechAvailable && Object.values(body.providers?.asr || {}).some(provider => provider.enabled !== false);
+      });
+      if (response.ok) {
+        const body = await response.json() as { providers?: { asr?: Record<string, { enabled?: boolean }> } };
+        speechAvailable = !!body.providers && typeof body.providers === "object";
+        available = speechAvailable && Object.values(body.providers?.asr || {}).some(provider => provider.enabled !== false);
+      }
     }
   } catch { /* An unavailable local service must not be advertised as usable ASR. */ }
-  return { available, speechAvailable };
+  return { available, speechAvailable, canStart: config.canStartLocalSpeech?.() };
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
   const speech = asrAdvertisements.get(config);
   const offersAsr = providesRabiLinkModel(config, "asr");
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), speech?.speechAvailable && (offersAsr || providesRabiLinkModel(config, "tts")) ? "speech" : "", speech?.available && offersAsr ? "asr" : "", config.accountTunnel ? "host-account-tunnel-v1" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", APPLICATION_ACCESS_CAPABILITY, PERSONA_REFERENCE_CAPABILITY, rabiPcVersionAdvertisement(config.rabiPcVersion), (speech?.speechAvailable || speech?.canStart) && (offersAsr || providesRabiLinkModel(config, "tts")) ? "speech" : "", speech?.available && offersAsr ? "asr" : "", config.accountTunnel ? "host-account-tunnel-v1" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -723,9 +726,18 @@ async function proxySpeechRequest(
       if ((input.captureId || input.processingPolicy === 'transcribe') && request.expectedWorkerFencing !== true) throw new Error('CAPTURE_EXPECTED_WORKER_REQUIRED');
     }
     const managerVideoOffer = method === "POST" && localPath === "/api/rabilink/video/offer";
-    if (!managerVideoOffer && !Boolean(resolveSpeechUrl(config))) throw new Error("Local speech service is not configured.");
     const managerSpeechIngress = localPath === "/api/speech/messages" || managerVideoOffer;
-    if (!managerSpeechIngress) headers["x-rabilink-tunnel-local"] = "relay-speech";
+    if (!managerSpeechIngress) {
+      await config.prepareLocalSpeech?.(method, localPath, () => {
+        signal.throwIfAborted();
+        if (!allowsRabiLinkSpeechModelRequest(config, localPath)) throw new Error("RabiLink model permission changed.");
+      });
+      if (!resolveSpeechUrl(config)) throw new Error("Local speech service is not configured.");
+      headers["x-rabilink-tunnel-local"] = "relay-speech";
+      if (method === "GET") {
+        headers["x-rabilink-speech-catalog-scope"] = rabiLinkSpeechCatalogScope(config).join(",");
+      }
+    }
     const response = await localFetchWithTimeout(
       managerSpeechIngress ? safeLocalUrl(config, localPath) : safeSpeechUrl(config, localPath), {
       method,
@@ -988,7 +1000,7 @@ export class RabiLinkRelayRuntime {
           }, () => {
             if (!this.active(generation, signal) || streamPath !== '/api/speech/events') return;
             speechAvailabilityEpoch++;
-            asrAdvertisements.set(config, { available: false, speechAvailable: false });
+            asrAdvertisements.set(config, { available: false, speechAvailable: false, canStart: asrAdvertisements.get(config)?.canStart });
             publishCapabilities();
           })
           .finally(() => webguiEvents.delete(streamPath));

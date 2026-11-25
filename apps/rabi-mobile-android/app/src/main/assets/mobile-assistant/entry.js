@@ -38,6 +38,7 @@ const label = { MOBILE_COMPUTER_REQUIRED: '请返回消息页，选择一台已�
   MOBILE_STREAM_BACKLOG: '实时识别连接处理较慢，请重新开启。',
   MOBILE_STREAM_UNAVAILABLE: '当前电脑的实时识别连接不可用。',
   MOBILE_STREAM_SAMPLE_RATE_UNAVAILABLE: '此设备无法以 16 kHz 采集。',
+  MOBILE_MODEL_CHANGED: '模型选择已更改，请重新开始实时语音。',
   MOBILE_AUDIO_RESPONSE_INVALID: '电脑返回的播报音频无法播放。',
   MOBILE_WAKE_UNAVAILABLE: '手机暂时无法检测唤醒词。请刷新连接或开启电脑转写。',
   MOBILE_WAKE_ENGINE_FAILED: '手机唤醒模型启动失败。请重新开启关键词监听。',
@@ -61,7 +62,7 @@ function request(operation, body = {}, signal) {
       signal?.removeEventListener('abort', stop);
       try {
         if (!ok) throw new Error(text);
-        resolve(operation === 'tts' || operation === 'assistant-tts' ? text : JSON.parse(text));
+        resolve(['tts', 'model-tts', 'assistant-tts'].includes(operation) ? text : JSON.parse(text));
       } catch (error) { reject(error); }
     });
     native.send(id, operation, JSON.stringify(body));
@@ -126,9 +127,17 @@ const recognition = createStreamingRecognition(native);
 window.mobileRecognitionEvent = recognition.receive;
 const localWake = createLocalWakeRecognition(native);
 window.mobileWakeEvent = localWake.receive;
+function selectedModel(kind) {
+  const raw = native.selectedModel?.(kind);
+  return raw ? JSON.parse(raw) : null;
+}
 const asr = createPhoneCapture({
-  transcribe: (bytes, signal, policy) => request('asr', { sessionId:connection,
-    source:policy.kind === 'wake' || policy.local ? 'local' : 'active', audio:encode(bytes) }, signal),
+  transcribe: (bytes, signal, policy) => {
+    const local = policy.kind === 'wake' || policy.local;
+    const choice = local ? null : profile?.asrOverride;
+    return request(choice ? 'model-asr' : 'asr', { sessionId:connection, source:local ? 'local' : 'active', audio:encode(bytes),
+      ...(choice ? {machine:choice.machine, selectedModel:choice.model} : {}) }, signal);
+  },
   waveform, phase, mayRecord: () => native.microphoneAvailable(),
   getPolicy: () => running ? activePolicy() : wakePolicy(),
   openStream: events => recognition.open(connection, events),
@@ -160,6 +169,8 @@ const tts = {
     const body = operation === 'assistant-tts'
       ? { sessionId: connection, responseId, input: text }
       : { model: profile.ttsModel, voice: profile.personaId, input: text, sessionId: 'mobile.' + crypto.randomUUID(),
+        ...(profile.ttsDeviceId == null ? {} : {computeDeviceId:profile.ttsDeviceId}),
+        ...(profile.ttsOverride ? {machine:profile.ttsOverride.machine, selectedModel:profile.ttsOverride.model} : {}),
         ...(typeof expression.instructions === 'string' ? { instructions: expression.instructions } : {}),
         ...(typeof expression.speed === 'number' ? { speed: expression.speed } : {}) };
     const audioBytes = await request(operation, body, signal);
@@ -235,11 +246,16 @@ const voice = createVoiceInteraction({
   },
 });
 
-const streaming = host => host?.mobileAudio?.recognition === 'streaming' && host.mobileAudio.sampleRate === 16000;
+const streaming = host => !host?.asrOverride && host?.mobileAudio?.recognition === 'streaming' && host.mobileAudio.sampleRate === 16000;
 function mobileVoiceProfile(state) {
-  const host = state?.hostSettings;
-  if (!host || !state.sessionId || state.settings?.voiceEnabled === false || state.capabilities?.mobileVoiceSubmit !== true
-      || host.asrIssue || host.ttsIssue || !(streaming(host) || host.asrModel || state.settings?.asrModel)) return null;
+  if (!state?.hostSettings || !state.sessionId || (state.settings?.voiceEnabled === false && !state.capabilities?.mobileIndependentVoice) ||
+      state.capabilities?.mobileVoiceSubmit !== true) return null;
+  const asr = selectedModel('asr'), tts = selectedModel('tts');
+  const host = { ...state.hostSettings, asrOverride:asr,
+    ...(asr ? { asrIssue:null, asrModel:asr.model } : {}) };
+  if (host.asrIssue || !(streaming(host) || host.asrModel || state.settings?.asrModel)) return null;
+  if (tts) return { ...host, ttsOverride:tts, ttsModel:tts.model, ttsOperation:'model-tts' };
+  if (host.ttsIssue) return null;
   if (host.ttsSource === 'custom' && state.capabilities.mobileCustomTts === true) return { ...host, ttsOperation: 'assistant-tts' };
   if (host.ttsSource === 'host' && host.ttsModel && host.voiceReady) return { ...host, ttsOperation: 'tts' };
   return null;
@@ -392,7 +408,7 @@ async function refresh() {
     syncLocalAsrRefresh();
     ui.source.textContent = profile ? [profile.personaLabel, streaming(profile) ? '流式识别' : '整句识别', '手机播放'].filter(Boolean).join(' · ') : 'RabiLink';
     if (!profile) {
-      ui.issue.textContent = state.settings?.voiceEnabled === false ? label.ASSISTANT_VOICE_DISABLED
+      ui.issue.textContent = state.settings?.voiceEnabled === false && !state.capabilities?.mobileIndependentVoice ? label.ASSISTANT_VOICE_DISABLED
         : state.capabilities?.mobileVoiceSubmit !== true ? '请更新所选电脑的语音助手插件。'
         : state.hostSettings?.ttsSource === 'custom' && state.capabilities.mobileCustomTts !== true
           ? '自定义播报暂不可用，请检查所选电脑的播报设置和语音助手版本。'
@@ -563,6 +579,84 @@ function canCapture() {
   report(new Error('MOBILE_MICROPHONE_IN_USE'));
   return false;
 }
+
+ui.liveModels.hidden = typeof native.selectModel !== 'function';
+
+const setModelOptions = (select, items) => {
+  select.replaceChildren(...items.map(({id, name, disabled}) => {
+    const option = document.createElement('option');
+    option.value = id; option.textContent = name; option.disabled = Boolean(disabled);
+    return option;
+  }));
+};
+
+let modelLists = 0;
+async function listMachineModels() {
+  const id = ++modelLists, selected = selectedModel(ui.modelKind.value);
+  const machine = ui.modelMachine.value;
+  ui.applyModel.disabled = true;
+  ui.modelChoice.disabled = true;
+  ui.modelStatus.textContent = '正在读取模型';
+  try {
+    const result = machine ? await request('models', {machine}) : {models:[]};
+    if (id !== modelLists) return;
+    const models = result.models.filter(row => row.capability === ui.modelKind.value && row.enabled !== false);
+    setModelOptions(ui.modelChoice, [{id:'', name:machine ? '请选择模型' : '跟随配对电脑设置'},
+      ...models.map(row => ({id:row.id, name:row.name || row.id, disabled:!row.available}))]);
+    if (selected?.machine === machine && models.some(row => row.id === selected.model)) ui.modelChoice.value = selected.model;
+    ui.modelStatus.textContent = machine && models.length === 0 ? '这台机器还没有提供此类模型' : '';
+    ui.modelChoice.disabled = false;
+    ui.applyModel.disabled = Boolean(machine && !ui.modelChoice.value);
+  } catch(error) {
+    if (id === modelLists) ui.modelStatus.textContent = label[error.message] || '无法读取该机器的模型';
+  }
+}
+async function listModelMachines() {
+  const id = ++modelLists;
+  ui.applyModel.disabled = true;
+  ui.modelMachine.disabled = true;
+  ui.modelChoice.disabled = true;
+  ui.modelStatus.textContent = '正在读取已授权机器';
+  let settled = false;
+  const showMachines = (workers, cached) => {
+    setModelOptions(ui.modelMachine, [{id:'',name:'跟随配对电脑设置'},
+      ...workers.map(worker => ({id:worker.id,name:worker.name || worker.id,disabled:cached || !worker.online}))]);
+    const machine = selectedModel(ui.modelKind.value)?.machine;
+    if (workers.some(worker => worker.id === machine)) ui.modelMachine.value = machine;
+  };
+  void request('model-machines-cached').then(workers => {
+    if (settled || id !== modelLists || !workers.length) return;
+    showMachines(workers, true);
+    ui.modelStatus.textContent = '正在更新，已显示上次读取的机器';
+  }).catch(() => {});
+  try {
+    const workers = await request('model-machines');
+    if (id !== modelLists) return;
+    settled = true;
+    showMachines(workers, false);
+    ui.modelMachine.disabled = false;
+    await listMachineModels();
+  } catch(error) {
+    settled = true;
+    if (id === modelLists) {
+      if (['MOBILE_COMPUTER_CHANGED', 'MOBILE_COMPUTER_AUTHORIZATION_CHANGED'].includes(error.message)) showMachines([], true);
+      ui.modelStatus.textContent = label[error.message] || '无法读取机器';
+    }
+  }
+}
+ui.liveModels.addEventListener('toggle', () => { if (ui.liveModels.open) void listModelMachines(); });
+ui.modelKind.addEventListener('change', listModelMachines);
+ui.modelMachine.addEventListener('change', listMachineModels);
+ui.modelChoice.addEventListener('change', () => { ui.applyModel.disabled = !ui.modelChoice.value; });
+ui.applyModel.addEventListener('click', () => {
+  if (!native.selectModel(ui.modelKind.value,ui.modelMachine.value,ui.modelChoice.value)) {
+    ui.modelStatus.textContent = '无法保存模型选择';
+    return;
+  }
+  if (capturing) stopVoice();
+  ui.modelStatus.textContent = '模型选择已保存';
+  void refresh();
+});
 
 function startCapture() {
   capturing = true;

@@ -6,6 +6,28 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RabiConversationRulesTest {
+    @Test fun duplicateRoutesFromTwoComputersKeepTheirOwnersAndExistingIds() {
+        fun pc(id: String, online: Boolean = true) = com.rabiroute.sdk.RabiLinkPc(id, "guid-$id", id, "app", "", online, "", org.json.JSONObject())
+        fun route(owner: String) = com.rabiroute.sdk.RabiRouteInfo(
+            id = "shared", name = owner, configName = "", routeName = "shared", enabled = true, running = true,
+            agentRoleId = "persona", personaDisplayName = "Persona", messageAdapters = listOf("rabilink"),
+            agentAdapters = emptyList(), codexCwd = "", codexThreadName = "", avatarConfigured = false, avatarVersion = "",
+            rawJson = org.json.JSONObject().put("ownerWorkerId", owner),
+        )
+        val workers = listOf(pc("pc-other"), pc("pc-original"))
+        val original = route("pc-original")
+        val fresh = mapOf("pc-original" to listOf(original), "pc-other" to listOf(route("pc-other")))
+        val merged = RabiConversationRules.mergeComputerCatalogs(listOf(original), workers, fresh)
+        assertEquals(listOf("pc-other", "pc-original"), merged.map { it.rawJson.getString("ownerWorkerId") })
+        assertEquals(listOf(RabiConversationRules.scopedRouteId("pc-other", "shared"), "shared"), merged.map { it.id })
+        assertEquals(listOf("shared", "shared"), merged.map(RabiConversationRules::wireRouteId))
+        val refreshed = RabiConversationRules.mergeComputerCatalogs(
+            merged, listOf(pc("pc-original", online = false), pc("pc-other")), mapOf("pc-other" to fresh.getValue("pc-other")),
+        )
+        assertEquals(merged.map { it.id }.reversed(), refreshed.map { it.id })
+        assertFalse(refreshed.first().running)
+    }
+
     @Test fun pcCatalogIncludesUnconfiguredAndDisabledPersonasWithoutDuplicatePlaceholders() {
         fun route(id: String, role: String, owner: String = "pc-a", profile: Boolean = false, enabled: Boolean = false) = com.rabiroute.sdk.RabiRouteInfo(
             id=id,name=role,configName="",routeName=id,enabled=enabled,running=false,agentRoleId=role,personaDisplayName=role,

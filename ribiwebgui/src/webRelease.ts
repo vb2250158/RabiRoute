@@ -3,3 +3,7 @@ export function webReleaseQuery(): string {
     ?? (typeof location === "undefined" ? null : location.pathname.match(/^\/_rabiroute\/web\/([a-f0-9]{64})\/.+$/)?.[1]);
   return revision && /^[a-f0-9]{64}$/.test(revision) ? `?webRelease=${revision}` : "";
 }
+
+export function webBrandIconUrl(): string {
+  return document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href ?? "/assets/rabiroute-icon.png";
+}

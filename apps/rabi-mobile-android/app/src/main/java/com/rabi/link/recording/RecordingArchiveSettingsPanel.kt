@@ -5,10 +5,13 @@ import android.app.AlertDialog
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.rabi.link.RabiLinkRelayConfig
 import com.rabi.link.RabiLinkRelaySettings
+import com.rabi.link.RabiComputerDirectoryCache
 import com.rabi.link.RabiMobileDeviceIdentity
 import com.rabi.link.RabiMobileUi
 import com.rabiroute.sdk.RabiLinkPc
+import com.rabiroute.sdk.RabiHttpException
 import com.rabiroute.sdk.RabiRouteSdk
 import java.util.concurrent.Executors
 
@@ -34,6 +37,11 @@ object RecordingArchiveSettingsPanel {
         val status = label("尚未读取电脑列表")
         val rows = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         panel.addView(rows)
+        val relayAtOpen = RabiLinkRelaySettings.load(activity)
+        val cached = RabiComputerDirectoryCache.read(activity, relayAtOpen)
+        cached.orEmpty().forEach { computer ->
+            rows.addView(RabiMobileUi.secondary(activity, computer.name) {}.apply { isEnabled = false })
+        }
         val dialog = AlertDialog.Builder(activity).setTitle("电脑长期保存")
             .setView(ScrollView(activity).apply { addView(panel) })
             .setNegativeButton("关闭", null).create()
@@ -50,15 +58,15 @@ object RecordingArchiveSettingsPanel {
             }
             else -> "无法验证电脑身份或归档配置；请检查连接及电脑设置后重试。"
         }
-        fun probe(worker: RabiLinkPc) {
+        fun probe(relay: RabiLinkRelayConfig, worker: RabiLinkPc) {
             status.text = "正在验证所选电脑…"
             executor.execute {
-                val relay = RabiLinkRelaySettings.load(activity)
                 val result = runCatching {
-                    check(relay.configured)
+                    check(relay == RabiLinkRelaySettings.load(activity))
                     RecordingArchiveTransport(activity, relay, worker).probeCapabilities()
                 }
                 post {
+                    if (relay != RabiLinkRelaySettings.load(activity)) return@post
                     result.onSuccess { cap ->
                         val namespace = cap.getString("storageNamespaceId")
                         val revision = cap.getLong("bindingRevision")
@@ -74,10 +82,11 @@ object RecordingArchiveSettingsPanel {
                             .setMessage("电脑：${worker.name.ifBlank { worker.id }}\n新录音保存在此电脑，转录和回读校验完成后清理手机原件。已有录音可另行加入处理。")
                             .setNegativeButton("取消", null)
                             .setPositiveButton("启用") { _, _ ->
-                                if (dismissed) return@setPositiveButton
+                                if (dismissed || relay != RabiLinkRelaySettings.load(activity)) return@setPositiveButton
                                 status.text = "正在核验并保存…"
                                 executor.execute {
                                     val saved = runCatching {
+                                        check(relay == RabiLinkRelaySettings.load(activity))
                                         RecordingArchiveSession.configure(activity, worker, namespace, revision, true).also {
                                             runCatching { com.rabi.link.RabiConversationService.kickArchive() }
                                         }
@@ -90,32 +99,51 @@ object RecordingArchiveSettingsPanel {
                 }
             }
         }
-        val refresh = RabiMobileUi.secondary(activity, "刷新电脑列表") {
+        var refreshing = false
+        fun refreshComputers() {
+            if (refreshing) return
             val relay = RabiLinkRelaySettings.load(activity)
             if (!relay.configured) {
                 status.text = "请先配置 RabiLink 连接。"
             } else {
-                status.text = "正在发现电脑…"
+                refreshing = true
+                for (index in 0 until rows.childCount) rows.getChildAt(index).isEnabled = false
+                status.text = if (rows.childCount == 0) "正在发现电脑…" else "正在更新电脑列表，已显示上次读取的电脑。"
                 executor.execute {
                     val result = runCatching { RabiRouteSdk().getMobileState(relay.baseUrl, relay.token).workers }
                     post {
-                        rows.removeAllViews()
+                        refreshing = false
+                        if (relay != RabiLinkRelaySettings.load(activity)) {
+                            rows.removeAllViews()
+                            status.text = "连接已切换，请刷新电脑列表。"
+                            return@post
+                        }
                         result.onSuccess { workers ->
+                            RabiComputerDirectoryCache.save(activity, relay, workers)
+                            rows.removeAllViews()
                             status.text = if (workers.isEmpty()) "暂无发现的电脑，请确认电脑在线。" else "选择电脑后会先验证归档授权，不会修改当前聊天目标。"
                             workers.forEach { worker ->
-                                rows.addView(RabiMobileUi.secondary(activity, worker.name.ifBlank { worker.id } + (if (worker.online) "" else "（离线）")) { probe(worker) }.apply { isEnabled = worker.online })
+                                rows.addView(RabiMobileUi.secondary(activity, worker.name.ifBlank { worker.id } + (if (worker.online) "" else "（离线）")) { probe(relay, worker) }.apply { isEnabled = worker.online })
                             }
-                        }.onFailure { status.text = "电脑列表读取失败，请检查 RabiLink 连接。" }
+                        }.onFailure { error ->
+                            if (error is RabiHttpException && error.statusCode in listOf(401, 403)) {
+                                RabiComputerDirectoryCache.clear(activity, relay)
+                                rows.removeAllViews()
+                            }
+                            for (index in 0 until rows.childCount) rows.getChildAt(index).isEnabled = false
+                            status.text = if (rows.childCount > 0) "电脑列表更新失败，已显示上次读取的电脑。" else "电脑列表读取失败，请检查 RabiLink 连接。"
+                        }
                     }
                 }
             }
         }
-        panel.addView(refresh)
+        panel.addView(RabiMobileUi.secondary(activity, "刷新电脑列表", ::refreshComputers))
         panel.addView(RabiMobileUi.secondary(activity,"转录并归档已有录音") {
             runCatching { RecordingArchiveSession.authorizeExisting(activity) }
                 .onSuccess { status.text = "已有完整录音已加入处理；不完整或归属冲突的原件会保留。" }
                 .onFailure { status.text = "请先启用当前电脑长期保存。" }
         })
         dialog.show()
+        refreshComputers()
     }
 }

@@ -36,9 +36,9 @@ export function createMediaServiceClient(target: () => string, fetchImpl: typeof
       const response = await fetchImpl(`/api/video${route}${suffix}`, init);
       let body: T & { message?: string; error?: string };
       try { body = await response.json(); }
-      catch { throw new Error(`服务电脑未提供此媒体接口（HTTP ${response.status}）。`); }
+      catch { throw Object.assign(new Error(`服务电脑未提供此媒体接口（HTTP ${response.status}）。`), { status: response.status }); }
       if (compute && (deviceId !== target() || expectedRevision !== revision)) throw new MediaServiceChangedError();
-      if (!response.ok) throw new Error(body.message || body.error || `媒体服务请求失败（HTTP ${response.status}）。`);
+      if (!response.ok) throw Object.assign(new Error(body.message || body.error || `媒体服务请求失败（HTTP ${response.status}）。`), { status: response.status });
       return body;
     }
   };

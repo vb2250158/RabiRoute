@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { previewAccessDenied, readPreview, writePreview } from "../../../../../ribiwebgui/src/readPreviewCache";
+import { loadWorkbenchDefinition } from "./workbenchDefinition";
 import WorkbenchCliPicker from "./WorkbenchCliPicker.vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
@@ -10,6 +12,7 @@ const props = defineProps<{
   projectId: string;
   projectTitle?: string;
   listHidden?: boolean;
+  listRevision?: number;
   lastOpenedCanvasId?: string;
   resolveCover?: (preview?: CanvasPreview) => CanvasCover | undefined;
   canvasId?: string;
@@ -25,7 +28,9 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{back:[];media:[canvasId:string,runId?:string];runSelected:[runId:string];cliSettings:[]}>();
 const project=ref<{title:string;revision:number;defaultCanvasId:string}>(),definition=ref<WorkbenchDefinition>();
-const rows=ref<CanvasSummary[]>([]),cursor=ref<string|null>(null),search=ref(""),trimmed=ref(0),listLoading=ref(false);
+const listPreviewKey = (projectId: string) => ["workbench", "canvases", projectId];
+const listPreview = props.mode === "list" ? readPreview<CanvasSummary[]>(listPreviewKey(props.projectId)) : undefined;
+const rows=ref<CanvasSummary[]>(listPreview ?? []),cursor=ref<string|null>(null),search=ref(""),trimmed=ref(0),listLoading=ref(false);
 const value=ref<WorkbenchCanvas>(),error=ref(""),busy=ref(false),dirty=ref(false),selected=ref(""),selectedEdge=ref("");
 const editor=ref(""),variables=ref("[]"),edgeFrom=ref(""),edgeTo=ref(""),edgeCondition=ref("success"),pastedFolder=ref(""),stageName=ref("");
 const conflict=ref(false),recovery=ref<string>(),showAdvanced=ref(false);
@@ -51,7 +56,9 @@ let openController:AbortController|undefined,listController:AbortController|unde
 let listFlight:{key:string;promise:Promise<void>}|undefined,saveFlight:Promise<void>|undefined;
 const draftKey=(projectId:string,id:string)=>`workbench-draft:${projectId}:${id}`;
 const listError = ref("");
-const listLoaded = ref(false);
+const listLoaded = ref(!!listPreview);
+let lastListReadAt = 0;
+let loadedTerm = "";
 
 class RequestError extends Error{constructor(message:string,readonly status:number){super(message);}}
 async function api<T>(suffix:string,method="GET",body?:unknown,options:{root?:string;signal?:AbortSignal}={}):Promise<T>{
@@ -86,11 +93,20 @@ async function list(append = false) {
       } else {
         rows.value = page.canvases;
         trimmed.value = 0;
+        loadedTerm = term;
+        lastListReadAt = Date.now();
+        if (!term) writePreview(listPreviewKey(props.projectId), page.canvases);
       }
       cursor.value = page.nextCursor;
       listLoaded.value = true;
     } catch (failure) {
       if (disposed || token !== listId || controller.signal.aborted) return;
+      if (failure instanceof RequestError && previewAccessDenied(failure.status)) {
+        rows.value = [];
+        cursor.value = null;
+        listLoaded.value = false;
+        writePreview(listPreviewKey(props.projectId), undefined);
+      }
       const detail = failure instanceof Error ? failure.message : String(failure);
       listError.value = signal.aborted ? "画布列表加载超时。" : detail;
     } finally {
@@ -109,7 +125,7 @@ function restoreDraft(){if(!recovery.value)return;const [record,text,vars,positi
 async function open(id:string){
   if(dirty.value)throw new Error("当前画布尚未保存。请保存或导出草稿后再切换。");
   const root=base.value,token=++openId;openController?.abort();const controller=new AbortController();openController=controller;
-  const record=await api<WorkbenchCanvas>(`/canvases/${encodeURIComponent(id)}`,"GET",undefined,{root,signal:controller.signal});
+  const record=await api<WorkbenchCanvas>(`/canvases/${encodeURIComponent(id)}`,"GET",undefined,{root,signal:AbortSignal.any([controller.signal, AbortSignal.timeout(10000)])});
   if(disposed||token!==openId||root!==base.value)return;
   if(dirty.value)throw new Error("打开期间产生了新编辑，已保留当前画布。");
   value.value=record;selected.value="";selectedEdge.value="";editor.value="";variables.value=JSON.stringify(record.variables,null,2);conflict.value=false;
@@ -119,7 +135,10 @@ async function open(id:string){
 }
 async function chooseCanvas(id: string, runId?: string) {
   if (dirty.value) await save();
-  if (!dirty.value) emit("media", id, runId);
+  if (!dirty.value) {
+    if (!rows.value.some(row => row.id === id)) lastListReadAt = 0;
+    emit("media", id, runId);
+  }
 }
 async function create(){const root=base.value,record=await api<WorkbenchCanvas>("/canvases","POST",{id:browserUuid()},{root});if(root===base.value&&!disposed)await chooseCanvas(record.id);}
 async function importFile(event:Event){const input=event.target as HTMLInputElement,file=input.files?.[0];input.value="";if(!file)return;if(file.size>64*1024*1024-4096)throw new Error("导入定义或材料包最大 64 MB。");const root=base.value,parsed=JSON.parse(await file.text()),packet=parsed&&typeof parsed==="object"&&Object.hasOwn(parsed,"source")&&!parsed.graph&&!parsed.nodes,body={id:browserUuid(),source:packet?parsed.source:parsed,...(packet&&parsed.materials!==undefined?{materials:parsed.materials}:{})};if(root!==base.value)return;const record=await api<WorkbenchCanvas>("/canvases/import","POST",body,{root});if(root===base.value&&!disposed)await chooseCanvas(record.id);}
@@ -173,14 +192,28 @@ function ports(node:FlowNode,direction:"in"|"out"){return definition.value?.capa
 function protect(event:BeforeUnloadEvent){if(dirty.value){rememberDraft();event.preventDefault();event.returnValue="";}}
 async function initialize(){
   if (props.mode === "list") { await list(); return; }
-  const token=++initId,root=base.value;const [entry,record]=await Promise.all([fetch("/api/video/v2/definition").then(async response=>{if(!response.ok)throw new Error("无法读取节点定义。");return response.json();}),api<typeof project.value>("","GET",undefined,{root})]);if(disposed||token!==initId||root!==base.value)return;definition.value=entry;project.value=record;const params = new URL(location.href).searchParams;
-  if (!record) return;
-  await open(props.canvasId || params.get("canvas") || record.defaultCanvasId);
+  const token = ++initId, root = base.value;
+  const params = new URL(location.href).searchParams;
+  const canvasId = props.canvasId || params.get("canvas");
+  const opening = canvasId ? open(canvasId) : undefined;
+  const identity = api<typeof project.value>("", "GET", undefined, { root, signal: AbortSignal.timeout(10000) });
+  const definitions = loadWorkbenchDefinition(fetch);
+  const [record, entry] = await Promise.all([identity, definitions, opening]);
+  if (disposed || token !== initId || root !== base.value) return;
+  definition.value = entry;
+  project.value = record;
+  if (!canvasId && record) await open(record.defaultCanvasId);
+  if (disposed || token !== initId || root !== base.value) return;
   const node = props.nodeId && nodeIndex.value.get(props.nodeId);
   if (node && !node.config.legacyCardId) select(node);
   selectedEdge.value = props.edgeId || "";
 }
 watch(()=>props.projectId,(_next,previous)=>{rememberDraft(previous);++actionId;++openId;++listId;++initId;openController?.abort();listController?.abort();busy.value=false;saveFlight=undefined;listFlight=undefined;value.value=undefined;project.value=undefined;dirty.value=false;selected.value="";editor.value="";rows.value=[];cursor.value=null;listLoading.value=false;listLoaded.value=false;listError.value="";recovery.value=undefined;void action(initialize);});
+watch(() => props.listRevision, () => { lastListReadAt = 0; });
+watch(() => props.listHidden, hidden => {
+  if (props.mode === "list" && !hidden && loadedTerm === search.value &&
+      rows.value.length <= 50 && !trimmed.value && Date.now() - lastListReadAt > 15_000) void list();
+});
 onMounted(()=>{void (props.mode === "list" ? initialize() : action(initialize));window.addEventListener("beforeunload",protect);});
 onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++actionId;openController?.abort();listController?.abort();window.removeEventListener("beforeunload",protect);});
 </script>
@@ -209,6 +242,7 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
         <h2>画布</h2><v-spacer/>
         <input v-model="search" type="search" aria-label="搜索画布" placeholder="搜索画布" @keyup.enter="list()"/>
         <v-btn :disabled="listLoading" @click="list()">搜索</v-btn>
+        <v-btn v-if="listLoaded" variant="text" prepend-icon="mdi-refresh" :disabled="listLoading" @click="list()">刷新</v-btn>
       </div>
       <p v-if="listLoading && !rows.length" class="list-message" role="status">正在加载画布…</p>
       <v-alert v-if="listError" type="error" variant="tonal" class="list-message">

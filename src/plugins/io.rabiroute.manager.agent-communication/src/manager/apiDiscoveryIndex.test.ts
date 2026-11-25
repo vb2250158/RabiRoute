@@ -9,6 +9,7 @@ import { createPeerControlOperations } from "../../../../peerTunnel/apiControlOp
 import { createPeerProxyHttpOperations } from "../../../../peerTunnel/apiProxyHttpOperations.js";
 import { createLanAgentManagementOperations } from "../../../io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
 import { LAN_AGENT_INTERACTIVE_ROUTES, interactiveOperation } from "../../../io.rabiroute.manager.core/src/manager/lanAgentInteractiveContract.js";
+import { createAgentThreadControlOperations } from "../../../io.rabiroute.manager.agent-thread-control/src/manager/agentThreadControlOperations.js";
 import { apiDiscoveryIndex, prepareApiDiscoveryIndex, apiOperationDescription, apiOperationPage } from "./apiDiscoveryIndex.js";
 
 function operation(id: string, pathTemplate: string, discovery?: ApiOperationDiscovery): ApiPublishedOperation {
@@ -233,9 +234,15 @@ function nativeComputerOperations(): ApiPublishedOperation[] {
     ...createPeerControlOperations({} as Parameters<typeof createPeerControlOperations>[0]),
     ...createPeerProxyHttpOperations({} as Parameters<typeof createPeerProxyHttpOperations>[0]),
     ...createLanAgentManagementOperations({ registry: {} } as Parameters<typeof createLanAgentManagementOperations>[0]),
-    ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => interactiveOperation(route, {} as Parameters<typeof interactiveOperation>[1], () => ({ status: 200 })))
+    ...LAN_AGENT_INTERACTIVE_ROUTES.map(route => interactiveOperation(route, {} as Parameters<typeof interactiveOperation>[1], () => ({ status: 200 }))),
+    ...createAgentThreadControlOperations({} as Parameters<typeof createAgentThreadControlOperations>[0])
   ];
-  const ids = new Set(["manager.rabilink.peer.servers.read", "manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"]);
+  const ids = new Set([
+    "manager.rabilink.peer.servers.read", "manager.rabilink.peer.probe", "manager.rabilink.peer.http.get",
+    "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.lan-agent.nodes.update",
+    "manager.lan-agent.computers.list", "manager.lan-agent.computer.execute", "manager.lan-agent.terminals.list",
+    "manager.agent.threads.action", "agent.deliveries.caller.read"
+  ]);
   return definitions.filter(definition => ids.has(definition.contract.operationId)).map(definition => {
     const compiled = compileApiContract(definition);
     return { contract: compiled.contract, contractDigest: compiled.digest, discovery: compiled.discovery,
@@ -244,9 +251,13 @@ function nativeComputerOperations(): ApiPublishedOperation[] {
 }
 
 test("native computer factories publish their own precise navigation with the same executable contracts", () => {
-  const native = nativeComputerOperations();
+  const directoryIds = new Set([
+    "manager.rabilink.peer.servers.read", "manager.rabilink.peer.http.get", "manager.lan-agent.instances.list",
+    "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"
+  ]);
+  const native = nativeComputerOperations().filter(({ contract }) => directoryIds.has(contract.operationId));
   const value = snapshot([...native, operation("manager.desktop-pet.binding.read", "/api/desktop-pet/roles/:roleId/binding", { title: "桌宠绑定" })]);
-  assert.equal(native.length, 5);
+  assert.equal(native.length, directoryIds.size);
   for (const query of ["电脑列表", "电脑连接", "远程电脑", "电脑", "computer list", "remote computers"]) {
     const page = apiOperationPage(value, { query, category: "devices" });
     assert.equal(page.items[0]?.operationId, "manager.rabilink.peer.servers.read", query);
@@ -254,7 +265,7 @@ test("native computer factories publish their own precise navigation with the sa
   }
   assert.deepEqual(apiOperationPage(value, { query: "terminal" }).items.map(item => item.operationId), ["manager.lan-agent.terminals.list"]);
   const peers = apiOperationDescription(value, "manager.rabilink.peer.servers.read");
-  assert.deepEqual(peers.discovery.relatedOperations, ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list"]);
+  assert.deepEqual(peers.discovery.relatedOperations, ["manager.rabilink.peer.http.get", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.list", "manager.rabilink.peer.probe", "manager.lan-agent.computers.list"]);
   const proxy = apiOperationDescription(value, "manager.rabilink.peer.http.get");
   assert.deepEqual(proxy.discovery.inputSources, [{ field: "path.deviceId", operationId: "manager.rabilink.peer.servers.read", resultPath: "/peers", valuePath: "/deviceId" }]);
   const terminal = apiOperationDescription(value, "manager.lan-agent.terminals.list");
@@ -270,6 +281,22 @@ test("native computer factories publish their own precise navigation with the sa
   }
   assert.equal(apiOperationPage(snapshot([]), {}).total, 0);
   assert.throws(() => apiOperationDescription(snapshot([]), "manager.rabilink.peer.servers.read"), /API_OPERATION_NOT_FOUND/);
+});
+
+test("remote task recovery exposes the original receipt and same-computer controls in the catalog", () => {
+  const value = snapshot(nativeComputerOperations());
+  const threads = apiOperationDescription(value, "manager.agent.threads.action");
+  assert.ok("contract" in threads);
+  for (const operationId of [
+    "agent.deliveries.caller.read", "manager.rabilink.peer.probe", "manager.lan-agent.computer.execute",
+    "manager.lan-agent.terminals.list", "manager.lan-agent.nodes.update"
+  ]) {
+    assert.ok(threads.discovery.relatedOperations?.includes(operationId), operationId);
+    assert.ok("contract" in apiOperationDescription(value, operationId));
+  }
+  assert.match(threads.contract.recovery.description, /original receipt.*same target session.*before any resend/);
+  assert.equal(apiOperationPage(value, { query: "远程桌面", category: "devices" }).items[0]?.operationId, "manager.lan-agent.computer.execute");
+  assert.equal(apiOperationPage(value, { query: "连接器升级", category: "devices" }).items[0]?.operationId, "manager.lan-agent.nodes.update");
 });
 
 test("explicit owner discovery defines navigation without host-specific operation rules", () => {

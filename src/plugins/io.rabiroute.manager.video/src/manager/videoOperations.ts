@@ -32,6 +32,7 @@ export type VideoOperationsOwner = {
   readModelBody(request: IncomingMessage, access: VideoRequestAccess): Promise<unknown>;
   computeStatus(): unknown;
   startLocal(access: VideoRequestAccess): Promise<unknown>;
+  submit(input: unknown, key: string | string[] | undefined, access: VideoRequestAccess, options: { deviceId?: string; computeOnly?: boolean }): Promise<unknown>;
   installRuntime(access: VideoRequestAccess): Promise<unknown>;
   remoteModel(saved: Admission, path: string, method: string, body: unknown, signal?: AbortSignal): Promise<unknown>;
   unmatchedModel(): never;
@@ -243,7 +244,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
   add("compute.runtime-start", "POST", "/compute/runtime/start", async (_, saved) => { await owner.startLocal(saved.access); return owner.computeStatus(); }, { compute: true });
   add("compute.runtime-stop", "POST", "/compute/runtime/stop", async (_, saved) => { await service.stop(saved.access); return owner.computeStatus(); }, { compute: true });
   add("compute.asset-remove", "DELETE", "/compute/assets/:mediaId", (input, saved) => owner.removeComputeAsset(input.path.mediaId, saved.access), { compute: true });
-  add("compute.job-submit", "POST", "/compute/jobs", (input, saved) => service.submit(input.body, input.request.headers["idempotency-key"], saved.access, { computeOnly: true }), { body: json(25 * 1024 ** 2, contracts.requests.command), status: 202, compute: true });
+  add("compute.job-submit", "POST", "/compute/jobs", (input, saved) => owner.submit(input.body, input.request.headers["idempotency-key"], saved.access, { computeOnly: true }), { body: json(25 * 1024 ** 2, contracts.requests.command), status: 202, compute: true });
   add("compute.job-read", "GET", "/compute/jobs/:mediaId", (input) => service.view(owner.job(input.path.mediaId, true)), { compute: true });
   add("compute.job-remove", "DELETE", "/compute/jobs/:mediaId", (input, saved) => { owner.job(input.path.mediaId, true); return service.removeCompute(input.path.mediaId, saved.access); }, { compute: true });
   const model = (name: string, method: ApiMethod, suffix: string, local: (input: ApiOperationInput, saved: Admission) => unknown, body?: Options["body"]) => add(name, method, suffix, (input, saved) => saved.deviceId ? owner.remoteModel(saved, input.url.pathname.slice(root.length), method, ["POST", "PATCH"].includes(method) ? input.body : undefined, input.signal) : local(input, saved), { model: true, ...(body ? { body } : {}) });
@@ -255,7 +256,7 @@ export function createVideoOperations(context: VideoOperationsContext) {
   add("status", "GET", "/status", (_, saved) => service.snapshotFor(saved.deviceId, saved.access));
   add("runtime.start", "POST", "/runtime/start", (_, saved) => saved.deviceId ? service.startRemote(saved.deviceId, saved.access) : owner.startLocal(saved.access));
   add("runtime.stop", "POST", "/runtime/stop", async (_, saved) => { if (!saved.deviceId) return service.stop(saved.access); await service.remote.json(saved.deviceId, "/compute/runtime/stop", { method: "POST" }, saved.access); return service.snapshotFor(saved.deviceId, saved.access); });
-  add("jobs.submit", "POST", "/jobs", (input, saved) => service.submit(input.body, input.request.headers["idempotency-key"], saved.access, { deviceId: saved.deviceId }), { status: 202, body: json(25 * 1024 ** 2, contracts.requests.command) });
+  add("jobs.submit", "POST", "/jobs", (input, saved) => owner.submit(input.body, input.request.headers["idempotency-key"], saved.access, { deviceId: saved.deviceId }), { status: 202, body: json(25 * 1024 ** 2, contracts.requests.command) });
   add("jobs.list", "GET", "/jobs", () => ({ jobs: service.snapshot().jobs }));
   add("job.read", "GET", "/jobs/:mediaId", input => service.view(owner.job(input.path.mediaId)));
   add("job.cancel", "POST", "/jobs/:mediaId/cancel", (input, saved) => { owner.job(input.path.mediaId); return service.cancel(input.path.mediaId, saved.access); });

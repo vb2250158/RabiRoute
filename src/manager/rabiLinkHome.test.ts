@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import type { RabiApiContext } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
@@ -9,6 +11,7 @@ import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import { createUnifiedSearchOperation } from "./unifiedSearchOperations.js";
 
 
 test("route-control installs link home from the same executable operation definitions", () => {
@@ -36,10 +39,18 @@ function send(response: http.ServerResponse, body: unknown): void {
   response.setHeader("content-type", "application/json");
   response.end(JSON.stringify(body));
 }
-async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid"): Promise<string> {
-  const context = { applicationGenerationId: "test-generation", managerInstanceId: "test-manager", version: () => "0.3.19", globalConfig: { read: () => ({ rabiLinkRelay: read(), rabiGuid: readGuid() }) } } as unknown as RabiApiContext;
+async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid", fixtureRoot?: string): Promise<string> {
+  const rootDir = fixtureRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-home-"));
+  if (!fixtureRoot) t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const context = { rootDir, applicationGenerationId: "test-generation", managerInstanceId: "test-manager", version: () => "0.3.19", globalConfig: { read: () => ({ rabiLinkRelay: read(), rabiGuid: readGuid() }) } } as unknown as RabiApiContext;
   const registry = new ManagerPluginRouteRegistry();
-  const registration = registry.registerOperations("route-control-home-test", createRabiControlOperations(context));
+  const registration = registry.registerOperations("route-control-home-test", [
+    ...createRabiControlOperations(context),
+    createUnifiedSearchOperation(registry, {
+      roles: () => [{ roleId: "fixture-role" }], roleDirectory: () => rootDir,
+      queryHistory: async () => [], entities: async () => { throw new Error("entity source not requested"); }
+    })
+  ]);
   t.after(() => registration.dispose());
   return server(t, (request, response) => {
     markAuthenticatedConnectionRequest(request);
@@ -51,7 +62,7 @@ test("link home uses only saved app header and returns a positive allowlist", as
   let calls = 0;
   const upstream = await server(t, (request, response) => {
     calls++;
-    assert.equal(request.url, "/api/rabilink/peers");
+    assert.equal(request.url, "/api/rabilink/peers?includePortable=phone");
     assert.equal(request.headers["x-rabilink-token"], "test-only-app-token");
     assert.equal(request.headers.cookie, undefined);
     assert.equal(request.headers.authorization, undefined);
@@ -62,13 +73,83 @@ test("link home uses only saved app header and returns a positive allowlist", as
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.code, 0);
-  assert.deepEqual(body.data.devices, [{ ...peer, deviceKind: "unknown", rabiPcVersion: null, isLocal: false }]);
+  assert.match(body.data.devices[0].labelRevision, /^[a-f0-9]{64}$/);
+  const { labelRevision: _revision, ...publicDevice } = body.data.devices[0];
+  assert.deepEqual(publicDevice, { ...peer, deviceKind: "unknown", rabiPcVersion: null, isLocal: false });
   assert.ok(Number.isFinite(Date.parse(body.data.checkedAt)));
   assert.doesNotMatch(JSON.stringify(body), /private|token|cookie|peerUrls|appId/);
   assert.equal(calls, 1);
   const invalid = await fetch(`${base}/api/rabi/link-home?url=http://example.invalid&token=caller`);
   assert.equal(invalid.status, 400);
   assert.equal(calls, 1);
+});
+
+test("authorized phone labels survive restart, stay scoped to their app, and are searchable from a role", async t => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-label-fixture-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  let appId: string | undefined;
+  let token = "test-only-app-token";
+  let revoked = false;
+  const upstream = await server(t, (request, response) => {
+    if (revoked) { response.writeHead(401); response.end(); return; }
+    assert.equal(request.headers["x-rabilink-token"], token);
+    send(response, { code: 0, ok: true, appId, peers: [
+    { ...peer, guid: "", deviceKind: "phone", name: "Workshop Android Phone" },
+    { ...peer, id: "device-b", guid: "guid-b", deviceKind: "pc", name: "Another PC" }
+    ] });
+  });
+  const start = () => manager(t, () => ({ ...config(upstream), token }), () => "local-guid", rootDir);
+  const getDevice = async (base: string) => (await (await fetch(base + "/api/rabi/link-home/devices/device-a")).json()).data;
+  const change = (base: string, expectedRevision: string, alias: string, tags: string[], guid = "") =>
+    fetch(base + "/api/rabi/link-home/devices/device-a/labels", { method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ alias, tags, guid, expectedRevision }) });
+  const search = async (base: string, q: string) => (await (await fetch(base + "/api/search?" + new URLSearchParams({ q, agent: "fixture-role", scope: "devices", match: "all" }))).json()).data;
+  const base = await start(), previous = await getDevice(base);
+  assert.equal((await change(base, previous.labelRevision, "蓝鲸机", [], "wrong-guid")).status, 409);
+  const saved = await change(base, previous.labelRevision, " 蓝鲸机 ", ["开发", "QA", "qa", ""]);
+  assert.equal(saved.status, 200, await saved.clone().text());
+  assert.equal((await change(base, previous.labelRevision, "stale", [])).status, 409);
+  const labelDirectory = path.join(rootDir, "data", "rabilink-device-labels");
+  const savedFiles = fs.readdirSync(labelDirectory);
+  assert.equal(savedFiles.length, 1);
+  appId = "fixture-app-a";
+  const reopened = await start();
+  const labeled = await getDevice(reopened);
+  assert.deepEqual(labeled.labels, { alias: "蓝鲸机", tags: ["开发", "QA"] });
+  assert.notEqual(labeled.labelRevision, (await saved.json()).data.labelRevision);
+  assert.deepEqual(fs.readdirSync(labelDirectory), savedFiles);
+  const concurrent = await Promise.all([change(reopened, labeled.labelRevision, "first", []), change(reopened, labeled.labelRevision, "second", [])]);
+  assert.deepEqual(concurrent.map(response => response.status).sort(), [200, 409]);
+  const winner = await getDevice(reopened);
+  assert.equal((await change(reopened, winner.labelRevision, "蓝鲸机", ["开发", "QA"])).status, 200);
+  assert.deepEqual(fs.readdirSync(labelDirectory), savedFiles);
+  for (const query of ["蓝鲸", "Workshop Android Phone", "开发", "蓝鲸机 QA"]) {
+    const data = await search(reopened, query);
+    assert.equal(data.items.length, 1, query);
+    assert.equal(data.items[0].label, "蓝鲸机");
+    assert.equal(data.items[0].kind, "device");
+    assert.equal(data.items[0].handle.deviceId, "device-a");
+    assert.equal(data.items[0].detailUrl, "/api/rabi/link-home/devices/device-a");
+    assert.equal(data.coverage.state, "complete");
+  }
+  assert.deepEqual((await search(reopened, "无关名字")).items, []);
+  revoked = true;
+  assert.equal((await change(reopened, labeled.labelRevision, "revoked", [])).status, 502);
+  revoked = false;
+  token = "second-test-only-app-token";
+  assert.equal((await getDevice(reopened)).labels, undefined);
+  assert.equal((await change(reopened, labeled.labelRevision, "wrong token", [])).status, 409);
+  appId = "fixture-app-b";
+  assert.equal((await getDevice(reopened)).labels, undefined);
+  assert.equal((await change(reopened, labeled.labelRevision, "wrong app", [])).status, 409);
+  token = "test-only-app-token";
+  appId = "fixture-app-a";
+  assert.equal((await change(reopened, labeled.labelRevision, "", [])).status, 200);
+  assert.deepEqual((await search(reopened, "蓝鲸")).items, []);
+  assert.deepEqual(fs.readdirSync(labelDirectory), savedFiles);
+  appId = undefined;
+  assert.equal((await getDevice(reopened)).labels, undefined);
+  assert.equal((await search(reopened, "Workshop Android Phone")).items[0].label, "Workshop Android Phone");
 });
 
 test("home versions come from each PC advertisement and local identity requires both saved identifiers", async t => {
@@ -90,6 +171,32 @@ test("home versions come from each PC advertisement and local identity requires 
   ]);
   assert.deepEqual(data.devices[1].capabilities, ["webgui"]);
   assert.equal(data.devices[5].deviceKind, "phone");
+});
+
+test("phone files use only the saved Relay credential and forward the original target and transfer identity", async t => {
+  let calls = 0;
+  const upstream = await server(t, async (request, response) => {
+    calls++;
+    assert.equal(request.url, "/api/rabilink/mobile/files");
+    assert.equal(request.headers["x-rabilink-token"], "test-only-app-token");
+    assert.equal(request.headers.authorization, undefined);
+    let body = "";
+    for await (const chunk of request) body += chunk.toString();
+    assert.deepEqual(JSON.parse(body), { action: "upload.status", targetGuid: "", targetId: "rabi-phone-fixture",
+      uploadId: "1cbfd2c8-a532-4ee3-8b25-49321de09675" });
+    send(response, { code: 0, data: { state: "receiving", offset: 65536 } });
+  });
+  const base = await manager(t, () => config(upstream));
+  const endpoint = base + "/api/rabi/link-home/devices/rabi-phone-fixture/files";
+  const post = (body: unknown) => fetch(endpoint, { method: "POST", headers: {
+    "content-type": "application/json", authorization: "Bearer caller", "x-rabilink-token": "caller"
+  }, body: JSON.stringify(body) });
+  assert.equal((await post({ action: "shell.exec", targetGuid: "" })).status, 400);
+  const response = await post({ action: "upload.status", targetGuid: "", uploadId: "1cbfd2c8-a532-4ee3-8b25-49321de09675" });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { code: 0, data: { state: "receiving", offset: 65536 } });
+  assert.equal(calls, 1);
 });
 
 test("unsafe and conflicting version metadata does not fail the device directory", async t => {

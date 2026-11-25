@@ -85,6 +85,7 @@ test("real HTTP denies peer, application, missing original authentication and ba
       {}, { "x-rabilink-tunnel-local": generation, "x-rabilink-tunnel-device-id": source, "x-rabiroute-relay-proxy": "1" },
       headers({ kind: "peer" }), headers({ deviceId: "$application" }), headers({ scope: "b".repeat(64) }),
       headers({ generation: "old-generation" }), headers({ deviceId: "phone-fixture" }), headers({ authenticatedAt: undefined }),
+      headers({ authenticatedAt: Date.now() + 60_000 }),
       { ...headers(), "x-rabilink-tunnel-device-id": "glasses-fedcba9876543210" }
     ];
     for (const value of wrongHeaders) assert.equal((await f.send(body(), value)).status, 403);

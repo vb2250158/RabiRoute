@@ -495,7 +495,7 @@ import { createGatewayRouteActivationOwner } from "./gatewayRouteActivationOwner
 import { mergeEndpointRouteDeclarations, readEndpointRouteDeclarations, readInstalledEndpointRouteDeclarations, type EndpointRouteConfigDeclaration } from "../plugin-runtime-host/messageEndpointRouteConfig.js";
 import type { RouteCatalogApplicationContext } from "./routeCatalogStartupLifecycle.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
-import { allowsRabiLinkSpeechModelRequest, isNewRabiLinkWorkbenchModelRequest, providesRabiLinkModel } from "../shared/rabiLinkModelServices.js";
+import { allowsRabiLinkSpeechModelRequest, isNewRabiLinkWorkbenchModelRequest, providesRabiLinkModel, rabiLinkSpeechCatalogScope, speechRequestNeedsEngine } from "../shared/rabiLinkModelServices.js";
 import { RuntimeRegistry, type GatewayRuntime } from "./runtimeRegistry.js";
 import {
   gatewayRuntimeStartDecision,
@@ -2760,7 +2760,9 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
     applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
     peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
-    localSpeechUrl: speechServiceUrl
+    localSpeechUrl: speechServiceUrl,
+    canStartLocalSpeech: speechEngineInstalled,
+    prepareLocalSpeech: preparePublishedSpeech
   };
   const legacyEnabled = !accountRelay || rabiLinkHostAccount.session()?.legacyCompatible === true;
   await Promise.all([
@@ -7076,6 +7078,27 @@ function speechServiceUrl(): string {
   return currentSpeechService().speechRuntimeControl.serviceUrl();
 }
 
+function speechEngineInstalled(): boolean {
+  if (managerReadOnly || rabiGlobalConfig.read().rabiLinkRelay.speechServiceMode !== "managed") return false;
+  const service = resolvePublishedPluginService("manager.speech@1") as PublishedSpeechService | undefined;
+  if (!service) return false;
+  const runtime = service.resources.speechModelManager.runtimeInstallation();
+  return runtime.platformSupported && runtime.dependenciesInstalled && runtime.windowsHostInstalled;
+}
+
+async function preparePublishedSpeech(method: string, pathname: string, assertRequest: () => void): Promise<void> {
+  if (!speechRequestNeedsEngine(method, pathname) || managerReadOnly) return;
+  const speech = currentSpeechService();
+  const assertCurrent = () => {
+    assertRequest();
+    speech.assertCurrent();
+    if (!allowsRabiLinkSpeechModelRequest(rabiGlobalConfig.read().rabiLinkRelay, pathname)) {
+      throw new SpeechControlError("此电脑未提供该模型服务。", 403);
+    }
+  };
+  await speech.runAcceptedWork(() => speech.speechRuntimeControl.ensureReady(assertCurrent));
+}
+
 async function inspectPlanFeedbackDelivery(
   request: PlanFeedbackRecoveryTaskRequest
 ): Promise<"accepted" | "in_progress" | "missing"> {
@@ -8176,6 +8199,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           rootDir, packageRoot, control: managerSpeechControlPorts,
           managedEndpoint: () => rabiGlobalConfig.read().rabiLinkRelay.speechServiceMode === "managed",
           peerRuntime: () => activePeerTunnel, computeTarget: () => speechComputeTarget.getStore(),
+          runCompute: (deviceId, operation) => speechComputeTarget.run(deviceId, operation),
+          computeServers: () => activePeerTunnel?.directory() ?? Promise.resolve({ selectedDeviceId: "", peers: [] }),
+          requestNeedsEngine: speechRequestNeedsEngine,
           currentService: resolvePublishedPluginService,
           modelChanged: snapshot => publishManagerEvent("speech_model_management_changed", { activeJob: snapshot.activeJob, lastJob: snapshot.lastJob }),
           reportError: (reason, error) => console.warn(`Speech reconciliation failed after ${reason}:`, error instanceof Error ? error.message : String(error)),
@@ -8201,7 +8227,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           if (computeDeviceId !== undefined && computeDeviceId.length > 200) throw new SpeechControlError("模型服务电脑编号无效。", 400);
           const targetLocal = Boolean(rabiLinkRequestScope(request, generation));
           return { guard, targetLocal, ...(peer && selected ? { selectedPeer: { runtime: peer, deviceId: selected } } : {}),
-            run: operation => speechComputeTarget.run(computeDeviceId ?? selected, operation) };
+            ...(targetLocal ? { catalogScope: () => rabiLinkSpeechCatalogScope(rabiGlobalConfig.read().rabiLinkRelay) } : {}),
+            run: operation => speechComputeTarget.run(computeDeviceId ?? (targetLocal ? "" : selected), operation) };
         }
 
           })
@@ -8510,6 +8537,9 @@ get webguiLanRequestAllowed() { return webguiLanRequestAllowed; },
 get managerBaseUrl() { return managerBaseUrl; },
 set managerBaseUrl(value) { managerBaseUrl = value; },
 get speechServiceUrl() { return speechServiceUrl; },
+get speechEngineInstalled() { return speechEngineInstalled; },
+get preparePublishedSpeech() { return preparePublishedSpeech; },
+get getSpeechCatalogScope() { return () => rabiLinkSpeechCatalogScope(rabiGlobalConfig.read().rabiLinkRelay); },
 get allowsSpeechModelRequest() { return (pathname: string) => allowsRabiLinkSpeechModelRequest(rabiGlobalConfig.read().rabiLinkRelay, pathname); },
 get resourceCacheKey() { return resourceCacheKey; },
 get createManagerApiOperationsService() { return createManagerApiOperationsService; },
@@ -9207,6 +9237,10 @@ createManagerEventOperationDefinition
     const archiveAsr = new RecordingArchiveAsrRuntime({
       archive: recordingArchiveRuntime,
       localSpeechUrl: () => speechServiceUrl(),
+      ensureSpeech: async () => {
+        const speech = currentSpeechService();
+        await speech.runAcceptedWork(() => speech.speechRuntimeControl.ensureReady(speech.assertCurrent));
+      },
       workerId: () => rabiLinkRelayConfigForMeta().deviceId,
       instanceId: managerInstanceId,
       changed: () => publishManagerEvent("all_day_recording", { mobile: true })

@@ -33,12 +33,13 @@ const today=new Date(),editionDate=ref(`${today.getFullYear()}-${String(today.ge
 const editionRequest=ref<EditionRequest>(),acceptedEdition=ref<EditionResult>();
 let after=0,events:EventSource|undefined,disposed=false,epoch=0,historyEpoch=0,actionEpoch=0;
 let refreshFlight:Promise<void>|undefined,refreshKey="",controller:AbortController|undefined;
+let refreshAgain = false;
 let historyFlight:{key:string;promise:Promise<void>}|undefined;
 const belongs=(result:Run)=>{if(result.projectId!==props.projectId||result.canvasId!==props.canvasId)throw new Error("运行不属于当前画布。");return result;};
 class ApiError extends Error { constructor(message:string,readonly status:number){super(message);} }
-async function api<T>(url:string,method="GET",body?:unknown,signal?:AbortSignal):Promise<T>{const response=await fetch(url,{method,headers:{"content-type":"application/json"},signal,...(body===undefined?{}:{body:JSON.stringify(body)})});const result=await response.json();if(!response.ok)throw new ApiError(result.message||"运行请求失败。",response.status);return result;}
+async function api<T>(url:string,method="GET",body?:unknown,signal?:AbortSignal):Promise<T>{const response=await fetch(url,{method,headers:{"content-type":"application/json"},signal:signal ?? (method==="GET" ? AbortSignal.timeout(10000) : undefined),...(body===undefined?{}:{body:JSON.stringify(body)})});const result=await response.json();if(!response.ok)throw new ApiError(result.message||"运行请求失败。",response.status);return result;}
 async function action(fn:()=>Promise<unknown>){if(busy.value||disposed)return;const token=++actionEpoch;busy.value=true;error.value="";try{await fn();}catch(cause){if(!disposed&&token===actionEpoch&&!(cause instanceof Error&&cause.name==="AbortError"))error.value=cause instanceof Error?cause.message:String(cause);}finally{if(!disposed&&token===actionEpoch)busy.value=false;}}
-function invalidate(){epoch++;controller?.abort();refreshFlight=undefined;refreshKey="";logsLoading.value=false;}
+function invalidate(){epoch++;controller?.abort();refreshAgain=false;refreshFlight=undefined;refreshKey="";logsLoading.value=false;}
 function clearLogs(){entries.value=[];after=0;logsAtEnd.value=false;}
 function locate(id:string){if(props.nodeId){try{sessionStorage.setItem(lastRunKey,id);}catch{}return;}const url=new URL(location.href);url.searchParams.set('run',id);window.history.replaceState(null,'',url);}
 function keepRequest(value:Request|undefined){request.value=value;try{if(value)sessionStorage.setItem(pendingKey,JSON.stringify(value));else sessionStorage.removeItem(pendingKey);}catch{}}
@@ -59,11 +60,30 @@ async function readLatest(token:number,id:string,signal:AbortSignal){
   entries.value=[...new Map([...entries.value,...page.entries].map(row=>[row.sequence,row])).values()].slice(-500);
   after=page.nextCursor;logsAtEnd.value=page.entries.length<100;
 }
-function refresh(){
+function refresh(changed = false){
   if(disposed)return Promise.resolve();const id=request.value?.id||run.value?.id;if(!id)return Promise.resolve();
-  const token=epoch,key=`${token}:${id}`;if(refreshFlight&&refreshKey===key)return refreshFlight;
+  const token=epoch,key=`${token}:${id}`;
+  if (refreshFlight && refreshKey === key) {
+    refreshAgain ||= changed;
+    return refreshFlight;
+  }
   const next=new AbortController();controller=next;logsLoading.value=true;refreshKey=key;
-  const flight=readLatest(token,id,next.signal).finally(()=>{if(refreshFlight===flight){refreshFlight=undefined;logsLoading.value=false;}});refreshFlight=flight;return flight;
+  const signal = AbortSignal.any([next.signal, AbortSignal.timeout(10000)]);
+  const flight = readLatest(token,id,signal).finally(() => {
+    if (refreshFlight !== flight) return;
+    refreshFlight = undefined;
+    logsLoading.value = false;
+    if (refreshAgain) {
+      refreshAgain = false;
+      refreshInBackground();
+    }
+  });
+  refreshFlight=flight;return flight;
+}
+function refreshInBackground(changed = false) {
+  void refresh(changed).catch(cause => {
+    if (!disposed && !(cause instanceof Error && cause.name === "AbortError")) error.value = String(cause);
+  });
 }
 async function restartLogs(){invalidate();clearLogs();await refresh();}
 async function loadHistory(next=false){
@@ -94,8 +114,8 @@ async function start(resume=false){
   await refresh();
 }
 async function cancel(){if(!run.value)return;const id=run.value.id;invalidate();const token=epoch,result=await api<Run>(`/api/video/v2/runs/${id}/cancel`,"POST");if(!disposed&&token===epoch)run.value=belongs(result);}
-async function reconcile(){if(!run.value)return;const id=run.value.id;invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/refresh`,"POST");if(!disposed&&token===epoch)await refresh();}
-async function complete(attempt:Attempt){if(!run.value)return;const id=run.value.id,submitted=JSON.parse(evidence.value);invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/complete`,"POST",{nodeId:attempt.nodeId,attemptId:attempt.id,identity:identity.value,evidence:submitted});if(!disposed&&token===epoch)await refresh();}
+async function reconcile(){if(!run.value)return;const id=run.value.id;invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/refresh`,"POST");if(!disposed&&token===epoch)await refresh(true);}
+async function complete(attempt:Attempt){if(!run.value)return;const id=run.value.id,submitted=JSON.parse(evidence.value);invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/complete`,"POST",{nodeId:attempt.nodeId,attemptId:attempt.id,identity:identity.value,evidence:submitted});if(!disposed&&token===epoch)await refresh(true);}
 function instructions(id:string){return run.value?.snapshot?.graph.nodes.find(node=>node.id===id)?.config.instructions;}
 async function refreshPrevious(id:string){
   const token=epoch,result=await api<Run>(`/api/video/v2/runs/${id}`);
@@ -106,8 +126,8 @@ async function refreshPrevious(id:string){
 }
 onMounted(()=>{
   try{const pending=sessionStorage.getItem(pendingKey);if(pending){const parsed=JSON.parse(pending);if(typeof parsed.id==="string"&&Number.isSafeInteger(parsed.revision))request.value=parsed;}const pendingEdition=sessionStorage.getItem(editionKey);if(pendingEdition){const parsed=JSON.parse(pendingEdition);if(typeof parsed.id==="string"&&typeof parsed.date==="string")editionRequest.value=parsed;}}catch{}
+  if (!props.nodeId) void loadHistory().catch(cause => { if (!disposed) error.value = String(cause); });
   void action(async()=>{
-    if(!props.nodeId)await loadHistory();
     if(disposed)return;
     const id=request.value?.id||(props.nodeId?sessionStorage.getItem(lastRunKey):new URL(location.href).searchParams.get('run'));
     if(!id)return;
@@ -117,7 +137,16 @@ onMounted(()=>{
       if(!(props.nodeId&&cause instanceof ApiError&&cause.status===404))throw cause;
     }
   });
-  events=managerEventSource("/api/events");events.addEventListener("plugin_event",event=>{if(disposed||busy.value)return;try{const payload=JSON.parse((event as MessageEvent).data),value=payload.data?.instanceId?payload.data:payload;if(value.name==="workbench.changed"&&value.data?.runId===(request.value?.id||run.value?.id))void refresh().catch(cause=>{if(!disposed&&!(cause instanceof Error&&cause.name==="AbortError"))error.value=String(cause);});}catch{error.value="运行事件读取失败，请查询原运行。";}});
+  events = managerEventSource("/api/events");
+  events.addEventListener("plugin_event", event => {
+    if (disposed) return;
+    try {
+      const payload = JSON.parse((event as MessageEvent).data);
+      const value = payload.data?.instanceId ? payload.data : payload;
+      if (value.name === "workbench.changed" && value.data?.runId === (run.value?.id || (!busy.value ? request.value?.id : undefined))) refreshInBackground(true);
+    } catch { error.value = "运行事件读取失败，请查询原运行。"; }
+  });
+  events.onopen = () => { if (run.value && !terminal.has(run.value.state)) refreshInBackground(); };
 });
 onBeforeUnmount(()=>{disposed=true;epoch++;historyEpoch++;actionEpoch++;controller?.abort();events?.close();});
 </script>

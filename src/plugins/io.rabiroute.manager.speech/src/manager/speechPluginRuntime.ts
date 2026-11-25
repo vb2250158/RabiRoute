@@ -10,6 +10,7 @@ import type { SpeechModelManagementSnapshot } from "@rabiroute/host-api/shared/s
 import { createPluginServicePort } from "@rabiroute/host-api/runtime/pluginServicePort";
 import { createPeerSpeechAdapter } from "../peerTunnel/speechAdapter.js";
 import type { PeerTunnelRuntime } from "@rabiroute/host-api/peerTunnel/runtime";
+import type { SpeechServerDirectory } from "@rabiroute/host-api/shared/peerTunnelContract";
 
 export type SpeechPluginPorts = Readonly<{
   rootDir: string;
@@ -22,6 +23,9 @@ export type SpeechPluginPorts = Readonly<{
   reportError(reason: string, error: unknown): void;
   peerRuntime(): Pick<PeerTunnelRuntime, "selected" | "fetch"> | undefined;
   computeTarget(): string | undefined;
+  runCompute?<T>(deviceId: string, operation: () => Promise<T>): Promise<T>;
+  computeServers?(): Promise<SpeechServerDirectory>;
+  requestNeedsEngine?(method: string, pathname: string): boolean;
 }>;
 
 /** The service package owns every speech business instance; the host supplies only ports. */
@@ -36,7 +40,14 @@ function createSpeechResources(ports: SpeechPluginPorts) {
     rabiLinkEnabled: route.rabiLinkEnabled === true && Boolean(ports.currentService("endpoint.rabilink@1"))
   });
   const speechControl = new ManagerSpeechControl({ ...ports.control, speechIngressStore, localServiceUrl: () => speechRuntimeControl.serviceUrl(),
-    localSpeech: createPeerSpeechAdapter(ports.peerRuntime, ports.computeTarget, () => speechRuntimeControl.serviceUrl()),
+    localSpeech: createPeerSpeechAdapter(ports.peerRuntime, ports.computeTarget, () => speechRuntimeControl.serviceUrl(),
+      (method, pathname, guard) => {
+        if (ports.api.readOnly() || !ports.requestNeedsEngine?.(method, pathname)) return;
+        const owner = ports.currentService("manager.speech@1") as { assertCurrent(): void } | undefined;
+        if (!owner) throw new SpeechControlError("语音服务暂不可用。", 503);
+        const assertCurrent = () => { owner.assertCurrent(); guard?.(); };
+        return speechRuntimeControl.ensureReady(assertCurrent);
+      }),
     route: id => subscribed(ports.control.route(id)), routes: () => ports.control.routes().map(route => subscribed(route)!) });
   return { speechControl, speechRuntimeControl, speechModelManager, speechIngressStore, selectionSpeechSettings,
     reconfiguration: undefined as Promise<void> | undefined,
@@ -47,6 +58,8 @@ export type SpeechPluginResources = ReturnType<typeof createSpeechResources>;
 export function createSpeechPluginRuntime(ports: SpeechPluginPorts, previous?: { resources: SpeechPluginResources }, instanceId = "") {
   const resources = previous?.resources ?? createSpeechResources(ports);
   let ready = false;
+  let publishReady!: () => void;
+  const readiness = new Promise<void>(resolve => { publishReady = resolve; });
   const available = <T extends object>(owner: T) => createPluginServicePort(() => {
     if (!ready || !service.isCurrent()) throw new SpeechControlError("Speech service is unavailable or waiting for its previous activation to retire.", 409);
     return owner;
@@ -58,12 +71,25 @@ export function createSpeechPluginRuntime(ports: SpeechPluginPorts, previous?: {
     speechControl, speechRuntimeControl, speechModelManager, speechIngressStore, selectionSpeechSettings });
   const service = Object.freeze({ instanceId, resources, speechControl, speechRuntimeControl, speechModelManager, speechIngressStore, selectionSpeechSettings,
     SpeechApiOwner, createSpeechApiOperations, speechApiContext,
+    invokeOnComputeTarget<T>(deviceId: string, operation: () => Promise<T>): Promise<T> {
+      if (typeof deviceId !== "string" || deviceId.length > 200) throw new SpeechControlError("模型服务电脑编号无效。", 400);
+      if (deviceId && !ports.runCompute) throw new SpeechControlError("远端模型服务不可用。", 503);
+      return service.runAcceptedWork(async () => {
+        const result = ports.runCompute ? await ports.runCompute(deviceId, operation) : await operation();
+        service.assertCurrent();
+        return result;
+      });
+    },
+    computeServers(): Promise<SpeechServerDirectory> {
+      return service.runAcceptedWork(() => ports.computeServers?.() ?? Promise.resolve({ selectedDeviceId: "", peers: [] }));
+    },
     isCurrent: () => ports.currentService("manager.speech@1") === service,
     replacementOwnsResources: () => {
       const current = ports.currentService("manager.speech@1") as { resources?: unknown } | undefined;
       return current !== service && current?.resources === resources;
     },
-    markReady: () => { ready = true; },
+    markReady: () => { ready = true; publishReady(); },
+    whenReady: () => readiness,
     runAcceptedWork<T>(operation: () => Promise<T>): Promise<T> {
       service.assertCurrent();
       const configuration = resources.reconfiguration;

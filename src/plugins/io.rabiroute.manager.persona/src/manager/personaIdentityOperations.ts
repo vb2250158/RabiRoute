@@ -1,6 +1,7 @@
 import { createPersonaIdentityOwner,type PersonaIdentityContext } from './personaIdentityOwner.js';
 import { errorResponsePresentation } from '@rabiroute/host-api/shared/errorPresentation';
-import type { ApiOperationContract,ApiOperationDefinition,ApiOperationInput,ApiOperationResult,ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
+import { apiDigest, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiResponseContract, type SearchLane } from '@rabiroute/host-api/manager/apiOperationContract';
+import type { IncomingMessage } from 'node:http';
 const str={type:'string'},bool={type:'boolean'},array=(items:unknown)=>({type:'array',items}),statuses={enum:['candidate','confirmed','corrected','retired']};
 const evidence={type:'object',properties:{gatewayId:str,routeId:str,endpoint:str,conversationKey:str,messageId:str,note:str}};
 const evidenceRefs=array(evidence),scope={type:'object',required:['conversationKeys','projectIds'],properties:{conversationKeys:array(str),projectIds:array(str)}};
@@ -40,6 +41,67 @@ const identityPurposes: Record<string, string> = {
   "voice.patch": "修改声音身份关联"
 };
 
+const identityKinds = ['endpoint_account', 'participant', 'relation_card', 'voice_identity'];
+
+function identitySearchLanes(owner: ReturnType<typeof createPersonaIdentityOwner>, request: IncomingMessage, roleId: string): SearchLane[] {
+  const baseUrl = '/api/roles/' + encodeURIComponent(roleId);
+  const detailUrl = baseUrl + '/identity-relations';
+  const item = (kind: string, id: string, label: string, excerpt: string, fields: unknown[], updatedAt: string,
+    status?: string, conflicted?: boolean, url = detailUrl, operationId = 'manager.personas.identities.relations.read') => ({
+    source: 'identities', kind, agent: roleId, label, excerpt, updatedAt, ...(status ? { status } : {}),
+    origin: { agent: roleId, recordId: id, kind, ...(conflicted ? { conflicted } : {}) }, detailUrl: url,
+    handle: { detailUrl: url, operationId, recordId: id },
+    searchText: [id, label, excerpt, ...fields].join(' '),
+    evidence: {
+      state: !conflicted && (status === 'confirmed' || status === 'corrected') ? 'confirmed' as const
+        : !conflicted && status === 'candidate' ? 'candidate' as const : 'unknown' as const,
+      evidenceRefs: [url]
+    }
+  });
+  return [{
+    key: roleId, source: 'identities', agent: roleId,
+    async read({ query, signal }) {
+      if (query.kinds.length && query.kinds.every(kind => kind === 'voice_identity')) {
+        return { items: [], complete: true, version: 'filtered' };
+      }
+      const records = owner.prepare(request, roleId, signal).relations(new URLSearchParams());
+      if (!('endpointAccounts' in records)) throw new Error('IDENTITY_RELATIONS_UNAVAILABLE');
+      const names = new Map(records.participants.map(person => [person.id, [person.displayName, ...person.aliases].filter(Boolean).join(' ')]));
+      const items = [
+        ...records.endpointAccounts.map(account => {
+          const params = new URLSearchParams({ platform: account.platform, endpointIdentityNamespace: account.endpointIdentityNamespace, senderStableId: account.senderStableId });
+          return item('endpoint_account', account.id, account.displayName || account.senderStableId, account.platform,
+            [account.senderStableId, account.endpointIdentityNamespace, ...account.participantLinks.flatMap(link => [link.participantId, names.get(link.participantId)])],
+            account.updatedAt, undefined, account.conflicted, detailUrl + '?' + params);
+        }),
+        ...records.participants.map(person => item('participant', person.id, person.displayName || person.aliases[0] || person.id,
+          person.aliases.join(' · '), [person.kind, ...(person.speakingHabits?.map(habit => habit.description) ?? [])], person.updatedAt, person.status, person.conflicted)),
+        ...records.relationCards.map(card => item('relation_card', card.id, card.relationship,
+          [names.get(card.subjectParticipantId) || card.subjectParticipantId, names.get(card.targetId) || card.targetId].join(' → '),
+          [card.subjectParticipantId, card.targetId, card.targetKind, ...card.scope.projectIds, ...card.scope.conversationKeys],
+          card.updatedAt, card.status, card.conflicted))
+      ];
+      return { items, complete: true, version: apiDigest(items) };
+    }
+  }, {
+    key: roleId + ':voice', source: 'identities', agent: roleId,
+    async read({ query, signal }) {
+      if (query.kinds.length && !query.kinds.includes('voice_identity')) {
+        return { items: [], complete: true, version: 'filtered' };
+      }
+      const records = owner.prepare(request, roleId, signal).voices(new URLSearchParams());
+      if (!('identities' in records)) throw new Error('VOICE_IDENTITIES_UNAVAILABLE');
+      const items = records.identities.map(voice => {
+        const params = new URLSearchParams({ sourceHostId: voice.sourceHostId, voiceprintId: voice.voiceprintId });
+        return item('voice_identity', voice.identityKey, voice.displayName || voice.aliases[0] || voice.voiceprintId,
+          voice.relationship || voice.aliases.join(' · '), [...voice.aliases, voice.sourceHostName, voice.sourceHostId, voice.voiceprintId, voice.participantId],
+          voice.updatedAt, undefined, voice.conflicted, baseUrl + '/voice-identities?' + params, 'manager.personas.identities.voice.read');
+      });
+      return { items, complete: true, version: apiDigest(items) };
+    }
+  }];
+}
+
 export function createPersonaIdentityOperations(context:PersonaIdentityContext):readonly ApiOperationDefinition[] {
   const owner=createPersonaIdentityOwner(context),operations:ApiOperationDefinition[]=[];
   for(const prefix of ['/api/roles','/roles'])for(const [id,method,suffix,response,inputBody] of [
@@ -51,6 +113,7 @@ export function createPersonaIdentityOperations(context:PersonaIdentityContext):
   ] as const) {
     const path=prefix+'/:roleId/'+suffix;
     const contract:ApiOperationContract={operationId:'manager.personas.identities.'+id+(prefix==='/roles'?'.alias':''),aliases:[(prefix==='/roles'?'knowledge-alias':'knowledge')+':'+method+':'+path],contractVersion:'1.0.0',method,pathTemplate:path,exposure:'public',transport:'http',description:'Read or update the original selected role’s relation, candidate-observation and voice-identity records. Identity facts do not grant business authority.',
+      ...(id === 'relations.read' && prefix === '/api/roles' ? { searchable: { scope: 'identities', legend: '身份关系与声纹身份 / identity relations and voice identities', kinds: identityKinds } } : {}),
       request:{path:{type:'object',required:['roleId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1}}},query:{type:'object'},headers:{type:'object'},body:inputBody},responses:{'200':json(response),...(method==='GET'?{}:{'201':json(response)}),...errors},
       effects:{mode:method==='GET'?'read':'native-identity-ledger-mutation',description:method==='GET'?'Read original role-scoped identities, endpoint context or voice associations.':'Use native file locks, event heads, conflict resolution and replay rules, then publish original change events. Voice participant association keeps the native relation/voice ledger sequence.'},
       recovery:{strategy:'original-identity-readback',description:'Retain explicit participant/relation IDs and compound endpoint or sourceHostId/voiceprintId identity. Unchanged native patches replay without another row; an omitted participant/relation ID can create a fresh ID and must not be blindly retried. Re-read both ledgers after an uncertain composite voice write; no rollback erases committed history.'},
@@ -62,7 +125,8 @@ export function createPersonaIdentityOperations(context:PersonaIdentityContext):
         return {status:method==='GET'?200:(data as {appended:boolean}).appended?201:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':'no-store'},body:{code:0,data}} as ApiOperationResult;
       }catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}
     };}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
-    operations.push({contract,discovery:{title:identityPurposes[id],summary:identityPurposes[id]+"。",category:{id:"knowledge.identity",title:"人物身份与关系",parentId:"knowledge"},keywords:[identityPurposes[id],id.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}});
+    operations.push({contract,discovery:{title:identityPurposes[id],summary:identityPurposes[id]+"。",category:{id:"knowledge.identity",title:"人物身份与关系",parentId:"knowledge"},keywords:[identityPurposes[id],id.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;},
+      ...(contract.searchable ? { searchLanes: ({ request, roles }) => roles.flatMap(({ roleId }) => identitySearchLanes(owner, request, roleId)) } : {})});
   }
   return operations;
 }

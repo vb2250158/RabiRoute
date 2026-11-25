@@ -72,13 +72,15 @@ export type ManagerSpeechLocalAdapter = {
     serviceUrl: string,
     pathname: string,
     init?: RequestInit,
-    timeoutMs?: number
+    timeoutMs?: number,
+    guard?: SpeechAuthorityGuard
   ): Promise<JsonRequestResult>;
   requestBinary(
     serviceUrl: string,
     pathname: string,
     init?: RequestInit,
-    timeoutMs?: number
+    timeoutMs?: number,
+    guard?: SpeechAuthorityGuard
   ): Promise<LocalSpeechResponse>;
 };
 
@@ -729,7 +731,7 @@ export class ManagerSpeechControl {
   async models(guard?: SpeechAuthorityGuard): Promise<SpeechModel[]> {
     guard = stickySpeechAuthority(guard);
     guard();
-    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/models", {}, 10_000)));
+    const raw = assertSuccess(await awaitSpeechAuthority(guard, () => this.localSpeech.requestJson(this.dependencies.serviceUrl(), "/v1/models", {}, 10_000, guard)));
     return rows(raw.data).map(normalizeModel).filter(model => Boolean(model.id));
   }
 
@@ -1215,7 +1217,9 @@ export class ManagerSpeechControl {
           sessionId: command.sessionId?.slice(0, 200) ?? null,
           routeId: command.routeId?.slice(0, 200) ?? null
         }))
-      }
+      },
+      undefined,
+      guard
     ));
   }
 
@@ -1230,7 +1234,7 @@ export class ManagerSpeechControl {
       headers: { "content-type": contentType },
       signal,
       body: new Uint8Array(body)
-    }));
+    }, undefined, guard));
   }
 
   async acceptMessage(command: SpeechMessageCommand, guard?: SpeechAuthorityGuard): Promise<SpeechMessageResult> {

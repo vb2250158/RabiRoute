@@ -16,6 +16,7 @@ public class TestCenterActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (RabiLinkRelaySettings.requireSignIn(this)) return;
         buildUi();
     }
 

@@ -63,6 +63,7 @@ class SelectionSpeechSettings:
     advanced: bool = False
     model: str = ""
     read_aloud_enabled: bool = True
+    compute_device_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -379,11 +380,13 @@ class ManagerClient:
         payload = self._get_json("/api/speech/selection-reader/settings")
         data = payload.get("data")
         row = data if isinstance(data, dict) else {}
+        device_id = row.get("computeDeviceId")
         return SelectionSpeechSettings(
             enabled=row.get("enabled") is True,
             advanced=row.get("advanced") is True,
             model=str(row.get("model") or "").strip()[:200],
             read_aloud_enabled=row.get("readAloudEnabled", True) is True,
+            compute_device_id=device_id.strip()[:200] if isinstance(device_id, str) else None,
         )
 
     def desktop_plugin_catalog(self) -> DesktopPluginCatalog:
@@ -466,16 +469,18 @@ class ManagerClient:
             custom_theme=custom_theme,
         )
 
-    def speech_models(self) -> list[dict[str, Any]]:
-        payload = self._get_json("/api/speech/models")
+    def speech_models(self, compute_device_id: str | None = None) -> list[dict[str, Any]]:
+        query = "" if compute_device_id is None else f"?computeDeviceId={quote(compute_device_id, safe='')}"
+        payload = self._get_json("/api/speech/models" + query)
         data = payload.get("data")
         rows = data.get("models") if isinstance(data, dict) else []
         return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
-    def synthesize_speech(self, text: str, model: str) -> SpeechActionResult:
+    def synthesize_speech(self, text: str, model: str, compute_device_id: str | None = None) -> SpeechActionResult:
         try:
+            query = "" if compute_device_id is None else f"?computeDeviceId={quote(compute_device_id, safe='')}"
             self._post_binary(
-                "/api/speech/tts",
+                "/api/speech/tts" + query,
                 {
                     "model": model,
                     "input": text,

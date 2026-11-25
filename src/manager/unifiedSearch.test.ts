@@ -19,6 +19,13 @@ import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js
 import { runUnifiedSearch, parseSearchQuery, type SearchLane } from './unifiedSearch.js';
 import { createSearchLanes } from './unifiedSearchSources.js';
 import { createPersonaSkillOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.js';
+import { createPersonaHistoryOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.js';
+import { createPersonaIdentityOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaIdentityOperations.js';
+import { appendPersonaChatReply } from '../personaChatHistory.js';
+import { updateIdentityRelation } from '../identityRelations.js';
+import { updatePersonaVoiceIdentity } from '../personaVoiceIdentities.js';
+import { recordConversationSituation } from '../conversationSituationStore.js';
+import { conversationSituationForIdentity } from '../routing/conversationSituation.js';
 import { listRoleSkills, getRoleSkill } from '../roleKnowledge.js';
 const observed = '2026-11-12T10:00:00.000Z', updated = '2026-11-13T10:00:00.000Z';
 test('role Skills share one native searchable source on every host and retain real detail handles', async t => {
@@ -100,7 +107,53 @@ test('unknown plugin data sources register without host edits and retire with th
     await source.dispose();
     assert.equal((await f.read('scope=new-atlas')).status, 400);
 });
-async function fixture(t: test.TestContext, messageCount = 3) {
+test('message and identity search use original role records, types and exact detail handles', async t => {
+    const f = await fixture(t, 0, true);
+    const role = f.roleDirectory('first');
+    const delivery = await appendPersonaChatReply(role, {
+        sessionId: 'sender-task', sessionTitle: '控制面协调', text: '最近投递正文标识',
+        kind: 'agent_delivery', deliveryId: 'original-delivery', targetSessionId: 'target-task', targetSessionTitle: '目标任务标题'
+    });
+    assert.ok(delivery);
+    const file = path.join(role, 'conversation', 'current.jsonl');
+    fs.appendFileSync(file, JSON.stringify({ schemaVersion: 1, id: 'endpoint-reply', sequence: 1, time: 1794477600,
+        direction: 'outbound', adapter: 'napcat', conversationKey: 'group:test', kind: 'reply_sent',
+        sender: '测试回复者', target: '测试目标群', text: '无关的正文' }) + '\n');
+    refreshMessageHistoryIndex(role, path.join(role, 'fixture.sqlite'));
+    updateIdentityRelation(role, { kind: 'participant', participantId: 'person', participantKind: 'person',
+        displayName: '测试人物', aliases: ['唯一人物别名'], status: 'candidate' });
+    updatePersonaVoiceIdentity(role, { sourceHostId: 'voice-host', voiceprintId: 'test-voice', displayName: '测试声纹' });
+    const situation = recordConversationSituation(role, '特定路由标识', 'group_message',
+        conversationSituationForIdentity(undefined, { conversationId: 'original-conversation', messageIds: ['situation-message'] }))!;
+
+    const search = (scope: string, q: string, filters = {}) => f.read(new URLSearchParams({ scope, q, agent: 'first', ...filters }).toString());
+    const chat = await search('messages', '目标任务标题', { kind: 'agent_delivery' });
+    assert.equal(chat.status, 200, JSON.stringify(chat));
+    assert.equal(chat.data.items.length, 1);
+    assert.equal(chat.data.items[0].origin.recordId, delivery.id);
+    await appendPersonaChatReply(role, { sessionId: 'later', turnId: 'later-turn', text: 'Later append does not shift the original detail offset' });
+    const detail = await (await nativeHttpTestFetch(f.base + chat.data.items[0].handle.detailUrl)).json();
+    assert.deepEqual(detail.data.entries.map((entry: any) => entry.id), [delivery.id]);
+    assert.equal((await search('messages', '测试回复者', { kind: 'reply_sent' })).data.items[0].origin.recordId, 'endpoint-reply');
+    const narrowed = await search('all', '最近投递正文标识', { adapter: 'napcat' });
+    assert.ok(narrowed.data.items.every((item: any) => item.origin.ledger !== 'persona-chat-history'));
+    assert.ok(narrowed.data.coverage.excluded.some((entry: any) => entry.source === 'identities'));
+
+    const identity = await search('identities', '唯一人物别名');
+    assert.equal(identity.data.items[0].kind, 'participant');
+    assert.equal(identity.data.items[0].state, 'candidate');
+    assert.equal((await f.read('scope=identities&agent=second')).data.items.length, 0);
+    const voice = await search('identities', '测试声纹', { kind: 'voice_identity' });
+    assert.equal(voice.data.items[0].handle.operationId, 'manager.personas.identities.voice.read');
+    const voiceDetail = await (await nativeHttpTestFetch(f.base + voice.data.items[0].handle.detailUrl)).json();
+    assert.equal(voiceDetail.data.identity.voiceprintId, 'test-voice');
+    const scenarios = await search('scenarios', '特定路由标识');
+    assert.equal(scenarios.data.items[0].origin.recordId, situation.id);
+    const scenarioDetail = await (await nativeHttpTestFetch(f.base + scenarios.data.items[0].handle.detailUrl)).json();
+    assert.equal(scenarioDetail.data.id, situation.id);
+});
+
+async function fixture(t: test.TestContext, messageCount = 3, nativeRoleHistory = false) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rabi-unified-search-'));
     const roles = [{ roleId: 'first' }, { roleId: 'second' }];
     const roleDirectory = (roleId: string) => path.join(directory, roleId);
@@ -133,7 +186,10 @@ async function fixture(t: test.TestContext, messageCount = 3) {
     const registrations = [registry.registerOperations('discovery', createApiDiscoveryOperations(registry)), registry.registerOperations('knowledge', createPersonaKnowledgeOperations({ service, roleDirectory, roleExists: id => roles.some(role => role.roleId === id), requestCatalogRefresh: () => { } }))];
     const define = (id: string, url: string, searchable?: any) => ({ contract: fixtureApiContract({ operationId: id, method: 'GET', pathTemplate: url, description: '卧室 空调 原始合同', ...(searchable ? { searchable } : {}),
             request: { path: { type: 'object' }, query: { type: 'object' }, headers: { type: 'object' }, body: { kind: 'none' } }, effects: { mode: 'read', description: 'Fixture source read' }, responses: { '200': { mediaType: 'application/json', schema: { type: 'object' } } } }), handler: () => ({ status: 200, body: { code: 0, data: { resources } } }) });
-    registrations.push(registry.registerOperations('message-owner', [define('fixture.messages', '/fixture/messages', { scope: 'messages', legend: '原始聊天记录', kinds: ['group'] })]));
+    registrations.push(registry.registerOperations('message-owner', nativeRoleHistory
+        ? createPersonaHistoryOperations({ roleDir: roleDirectory, readTasks: () => [], query: async () => { throw new Error('Voice transcripts are outside this fixture.'); }, queryHistory: context.queryHistory })
+        : [define('fixture.messages', '/fixture/messages', { scope: 'messages', legend: '原始聊天记录', kinds: ['group'] })]));
+    if (nativeRoleHistory) registrations.push(registry.registerOperations('identity-owner', createPersonaIdentityOperations({ roleDirectory })));
     registrations.push(registry.registerOperations('entity-owner', [define('fixture.entities', '/api/agent/xiaomi-home/resources', { scope: 'entities', legend: '设备实体', kinds: ['*'] }), define('fixture.entity.read', '/api/agent/xiaomi-home/resources/:resourceId'), define('fixture.entity.actions', '/api/agent/xiaomi-home/entity-actions')]));
     registrations.push(registry.registerOperations('unified', [createUnifiedSearchOperation(registry, context)]));
     const server = http.createServer((request, response) => {
@@ -177,12 +233,12 @@ test('scenario 1 — 1000 messages retain all four matching sources on the defau
     assertCounts(response.data);
 });
 test('scenario 2 — limit=1 rotates sources and traverses every stable candidate exactly once', { timeout: 180000 }, async (t) => {
-    const f = await fixture(t, 1000), query = 'q=' + encodeURIComponent('卧室 空调') + '&limit=1';
+    const f = await fixture(t, 1000), query = 'q=' + encodeURIComponent('卧室 空调') + '&limit=1&budgetMs=10000';
     let cursor: string | null = null;
     const seen = new Set<string>(), sources: string[] = [];
     do {
         const response = await f.read(query + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-        assert.equal(response.status, 200);
+        assert.equal(response.status, 200, JSON.stringify({ seen: seen.size, errorCode: response.errorCode, source: response.source, message: response.message }));
         assertCounts(response.data);
         for (const item of response.data.items) {
             const key = JSON.stringify([item.source, item.origin]);
@@ -328,6 +384,7 @@ test('optional caller metadata, all-role defaults, unknown roles, reserved scope
     assert.equal((await f.read('scope=invalid')).errorCode, 'UNKNOWN_SCOPE');
     const reserved = await f.read('scope=events,tasks');
     assert.equal(reserved.status, 200);
+    assert.equal(reserved.data.coverage.state, 'partial');
     assert.equal(reserved.data.coverage.notQueried.length, 2);
     const future = await f.read('scope=knowledge&from=1999999999');
     assert.deepEqual(future.data.items, []);

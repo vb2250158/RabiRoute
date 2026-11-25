@@ -50,9 +50,6 @@ export function createPersonaRecordingOperations(context:PersonaRecordingContext
       ...(contract.searchable ? { searchLanes: ({request,roles}) => roles.map(({roleId}) => ({
         key: roleId, source: 'events', agent: roleId,
         async read({query,signal,snapshot}) {
-          if (query.adapter || (query.q ? !/画面|采集|截图|屏幕|摄像|screen|capture|camera/i.test(query.q) : query.scopes.length > 1 && !query.kinds.includes('capture'))) {
-            return {items:[],complete:true,version:'unused'};
-          }
           const to = snapshot && /^\d+$/.test(snapshot) ? Number(snapshot) : Math.round((query.to ?? Date.now()/1000)*1000)+1;
           const bound=owner.prepare(request,roleId,'page',signal);
           const parameters=new URLSearchParams({direction:'older',type:'image',time:String(to)});
@@ -67,11 +64,12 @@ export function createPersonaRecordingOperations(context:PersonaRecordingContext
             const label=event.source==='camera'?'画面采集 · 摄像头':'画面采集 · 屏幕';
             return [{source:'events',kind:'capture',agent:roleId,label,excerpt:event.text || label,
               origin:{agent:roleId,recordId:event.id,kind:event.source},detailUrl,handle:{detailUrl},
-              searchText:[label,event.text,'截图 屏幕采集 screen capture camera'].join(' '),
+              searchText:[label,event.text,event.deviceId,event.source,event.source==='camera'?'摄像 照片 camera':'桌面 截图 屏幕采集 screen desktop capture'].join(' '),
               evidence:{state:'confirmed' as const,observedAt,evidenceRefs:[detailUrl]}}];
           });
-          return {items,version:apiDigest(items),snapshot:String(to),complete:!result.loading&&!result.hasMore,
-            gaps:result.loading||result.hasMore?[{code:result.loading?'CAPTURE_HISTORY_LOADING':'CAPTURE_HISTORY_BOUNDED',message:result.readError || 'Some capture history is outside the current returned window.'}]:[]};
+          const gap = result.loading ? 'CAPTURE_HISTORY_LOADING' : result.readError ? 'CAPTURE_HISTORY_READ_FAILED' : result.hasMore ? 'CAPTURE_HISTORY_BOUNDED' : undefined;
+          return {items,version:apiDigest(items),snapshot:String(to),complete:!gap,
+            gaps:gap?[{code:gap,message:result.readError || 'Some capture history is outside the current returned window.'}]:[]};
         }
       })) } : {})});
   }

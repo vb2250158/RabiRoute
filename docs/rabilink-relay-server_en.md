@@ -16,7 +16,7 @@ An AIUI host limited to `wx.request` uses the existing buffered HTTP Relay fallb
 
 Relay stores accounts, credentials, connection assignments, same-application directories, opaque request/response queues, leases, cursors, blobs and operation status. Server diagnostics remain supported. Persona templates, business authorization, history assembly, ASR priorities, health interpretation and record-first decisions belong to PCs or clients. Relay neither rewrites opaque business bodies nor dispatches them through per-API business allowlists.
 
-The generic HTTP connection identity includes its original `authenticatedAt` timestamp. The original queue item and identical operation retries retain it; late arrival or another claim cannot extend connection authority. The PC verifies it through an internal MAC. Short leases for a phone to connect under a separate glasses identity belong to the PC; see [Device connection grants](device-peer-connection_en.md). Relay adds neither a business API dispatch table nor a public-key grant registry.
+The generic HTTP connection identity includes its original `authenticatedAt` timestamp. The queue item and identical retries retain it so later claims cannot extend connection authority. The PC includes this timestamp in its internal signature. Ordinary HTTP forwarding checks the short-lived proof against the PC's own clock, so the computers can have different clocks and time zones. Endpoints that rely on revocation or lease times validate those times at their own boundaries. The PC manages short leases for a phone to connect under a separate glasses identity. See [Device connection grants](device-peer-connection_en.md). Relay adds neither a business API dispatch table nor a public-key grant registry.
 
 ## Start and enroll
 
@@ -42,6 +42,8 @@ The bundle includes `rollback-rabilink-relay.ps1 -Root <service-directory> -Back
 
 ## Connection metadata
 
+Android Messages reads the signed-in profile from `GET /api/rabilink/mobile/account`. The request uses the application credential in `X-RabiLink-Token`. Relay resolves its owner and returns the account ID, username, nickname, status, and optional 160 × 160 PNG avatar (Base64). `PATCH /api/rabilink/mobile/account/status` uses the same credential to save the account's status. Send `online`, `away`, `busy`, or `do-not-disturb` in the `status` field. Relay returns the account ID and the saved status. The default is Online.
+
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/rabilink/mobile/state` | Connection directory, targets and service advertisements; no battery, persona or ASR priority |
@@ -52,6 +54,27 @@ The bundle includes `rollback-rabilink-relay.ps1 -Root <service-directory> -Back
 | `GET /api/rabilink/peers` | Same-application connection and capability discovery |
 
 The application owner must be a same-application PC advertising Manager service. Changing the default destination does not change this fixed owner. Resetting the same device binding's credential preserves its owner; a different owner requires a new binding. Missing explicit assignments fail closed instead of guessing from an old tasks-only destination. Assignments describe connection and data ownership, never persona-derived public API permissions.
+
+## Phone file operations
+
+Android uses a stable per-install device ID. Manager requests `GET /api/rabilink/peers?includePortable=phone` for connected phones and uses the existing device alias editor. Phone control clients advertise `phone-file-control-v1`. File operations are on by default. The user grants Android's all-files access in system settings. This gives direct access to primary shared storage, including `Download`, `Documents`, and `DCIM`. Android protects app-private storage and directories such as `Android/data` and `Android/obb`.
+
+Call Manager at `POST /api/rabi/link-home/devices/{deviceId}/files`. Send the discovered `targetGuid` (which may be an empty string) and the fields below. Manager uses its saved Relay connection. Direct Relay clients can call `POST /api/rabilink/mobile/files` with `targetId` and the application credential or a PC credential for the same account in `X-RabiLink-Token`. The phone claims requests over its current connection. Use an absolute path within primary shared storage or a path relative to its root. Reads and uploads use the PC chunk and receipt fields.
+
+| `action` | Input and result |
+| --- | --- |
+| `file.settings.read`, `file.settings.update` | Read or update `enabled`. Returns the switch state and Android's `permissionGranted`. |
+| `file.list` | Send an empty string for the primary shared storage root. Up to 100 entries per page. Continue with the returned `next` and `version` as `after` and `version`. |
+| `file.stat` | `path`. Returns name, type, size, modification time and `version`. |
+| `file.read` | `path`, `version`, and `offset`. Returns base64 data, chunk SHA-256, `nextOffset` and `eof`, up to 64 KiB per chunk. |
+| `file.mkdir` | `path`. Creates one directory. |
+| `file.rename` | `path`, `version`, and `to`. Moves or renames inside primary shared storage. The target path must be available. |
+| `file.delete` | `path` and `version`. Deletes a file or an empty directory. |
+| `upload.begin` | `uploadId` (client-generated UUID), `path`, `size`, and `sha256`. Send the original `version` to replace an existing file. The limit is 512 MiB per file. |
+| `upload.write` | `uploadId`, `offset`, `data` (base64) and chunk `sha256`. Send sequential chunks of up to 64 KiB. |
+| `upload.status`, `upload.commit`, `upload.abort` | `uploadId`. Check progress, verify and commit, or cancel. Commit creates or replaces the file atomically after verifying its complete SHA-256. |
+
+Responses are `{code: 0, data: {...}}` or an HTTP error with an `errorCode`. Check an interrupted transfer with the original `uploadId`. The phone process retains receipts for up to one hour. After the process restarts, confirm a committed file with `file.stat`. For an uncertain move or delete, read back the original path first.
 
 ## Generic HTTP
 

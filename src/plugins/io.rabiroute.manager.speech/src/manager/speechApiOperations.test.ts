@@ -77,11 +77,23 @@ test("an enrolled empty node reaches all 33 native operations and 7 exact local 
 
 test("native audio bytes and headers stay exact; ASR consumes original multipart bytes once", async t => {
   const f = await fixture(t), raw = Buffer.from("--fixture\r\n\u0000original\r\n--fixture--");
-  const response = await f.send("/api/speech/asr", "POST", raw, { "content-type": "multipart/form-data; boundary=fixture" });
+  const response = await f.send("/api/speech/asr?computeDeviceId=selected-asr", "POST", raw, { "content-type": "multipart/form-data; boundary=fixture" });
   assert.equal(response.status, 200); assert.equal(response.headers["content-type"], "audio/x-fixture"); assert.equal(response.headers["x-rabispeech-model"], "fixture-model"); assert.deepEqual(response.bytes, Buffer.from([0, 1, 255, 128]));
   assert.deepEqual(f.calls.find(call => call.method === "transcribe")!.args[1], raw);
   await f.send("/api/speech/models?computeDeviceId=compute-fixture&computeDeviceId=ignored"); await f.send("/api/speech/tts?computeDeviceId=", "POST", {});
-  assert.deepEqual(f.targets.slice(-2), ["compute-fixture", ""]);
+  assert.deepEqual(f.targets, ["selected-asr", "compute-fixture", ""]);
+});
+
+test("model catalog uses the receiving host's current model scope after original fetch", async t => {
+  let allowed: readonly ("asr" | "tts")[] = ["tts"];
+  const f = await fixture(t, {
+    capture: () => ({ targetLocal: true, catalogScope: () => allowed, guard: () => {}, run: action => action() }),
+    control: { models: async () => [{ id: "reader", capability: "tts" }, { id: "listener", capability: "asr" }] as any }
+  });
+  const getCatalog = async () => (await f.send("/api/speech/models")).json().data.models.map((model: { id: string }) => model.id);
+  assert.deepEqual(await getCatalog(), ["reader"]);
+  allowed = ["asr"];
+  assert.deepEqual(await getCatalog(), ["listener"]);
 });
 
 test("local speech parameter failures identify fields and read-only discovery before any provider call", { timeout: 15000 }, async t => {

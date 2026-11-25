@@ -2,6 +2,8 @@ package com.rabi.link.modules.rokid;
 
 import com.rabi.link.RabiConversationSettings;
 import com.rabi.link.RabiConversationTarget;
+import com.rabi.link.RabiLinkRelayConfig;
+import com.rabi.link.RabiRouteMetadataCache;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -62,6 +64,8 @@ public final class RabiGlassPcBackend {
         void onDeliveryState(String clientMessageId, String routeProfileId, String state, String failure);
         ReplyDeliveryResult onReply(String messageId, String routeProfileId, String text, byte[] pcm, JSONArray attachments);
         void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl);
+        default void onAccountProfileChanged() {}
+        default void onComputerDirectoryChanged() {}
         void onError(String message);
         /** Local capture cannot be durably accepted. Owner must stop hardware; never emitted for network failures. */
         default void onCaptureBlocked(String reason) { }
@@ -154,6 +158,7 @@ public final class RabiGlassPcBackend {
     private final RabiNetworkWakeGate networkWakeGate = new RabiNetworkWakeGate();
     private final android.content.SharedPreferences preferences;
     private final android.content.Context context;
+    private final com.rabi.link.RabiPhoneFileConnection phoneFiles;
     private final com.rabi.link.recording.AudioEventSplitter eventSplitter;
     // Writer-owned attribution for buffered speech; never use the current UI selection when sealing.
     private RabiBoundedAudioWriteQueue.Entry bufferedAudioOwner;
@@ -346,6 +351,7 @@ public final class RabiGlassPcBackend {
         });
         eventAsr.setTranscriptListener(listener::onFinalRecordingTranscript);
         this.context = context.getApplicationContext();
+        this.phoneFiles = new com.rabi.link.RabiPhoneFileConnection(this.context);
         this.eventSplitter = new com.rabi.link.recording.AudioEventSplitter(() -> com.rabi.link.recording.EventSplitSettings.load(this.context));
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
         this.listener = listener;
@@ -453,6 +459,7 @@ public final class RabiGlassPcBackend {
 
     public void stop() {
         running = false;
+        phoneFiles.close();
         audioWriteQueue.closeAdmission();
         networkWakeGate.close();
         cancelAudioStreamKeepalive();
@@ -1300,6 +1307,12 @@ public final class RabiGlassPcBackend {
         try {
             long now = System.currentTimeMillis();
             String stableClientMessageId = clean(clientMessageId).isEmpty() ? "phone-text-" + now + "-" + UUID.randomUUID() : clean(clientMessageId);
+            RabiLinkRelayConfig relay = relayConnection();
+            RabiRouteMetadataCache.Destination destination = RabiRouteMetadataCache.INSTANCE.destination(context, relay, clean(routeProfileId));
+            String worker = destination.getWorkerId();
+            if (stableClientMessageId.startsWith("rabi-call-v1.")) {
+                if (worker.isEmpty() || !worker.equals(targetWorkerId)) throw new IllegalStateException("通话缺少固定电脑，未投递");
+            }
             JSONObject body = new JSONObject().put("text", value).put("type", configurationRequest ? "rabilink.configuration_request" : "rabilink.message")
                     .put("deliveryMode", "direct").put("source", "rabilink-phone-chat")
                     .put("configurationRequested", configurationRequest)
@@ -1309,11 +1322,7 @@ public final class RabiGlassPcBackend {
                     .put("proactivityPreference", settings.proactivityPreference.wireValue)
                     .put("transport", "phone-chat-backend").put("clientMessageId", stableClientMessageId)
                     .put("sessionId", deviceId).put("routeProfileId", clean(routeProfileId)).put("capturedAt", now);
-            if (stableClientMessageId.startsWith("rabi-call-v1.")) {
-                String frozenWorker = clean(targetWorkerId);
-                if (frozenWorker.isEmpty()) throw new IllegalStateException("通话缺少固定电脑，未投递");
-                body.put("targetDeviceId", frozenWorker);
-            }
+            storeChatDestination(body, relay, destination);
             ensureQueueCapacity(controlQueueDirectory, ".json", MAX_CONTROL_QUEUE_ITEMS, "文字与控制");
             File target = new File(controlQueueDirectory, String.format(java.util.Locale.US, "%013d-%s.json", now, UUID.randomUUID()));
             RabiReliableQueueFiles.writeAtomically(target, body.toString().getBytes(StandardCharsets.UTF_8));
@@ -1329,22 +1338,30 @@ public final class RabiGlassPcBackend {
         if (!configured()) return;
         File[] pending = RabiReliableQueueFiles.list(controlQueueDirectory, ".json");
         if (pending.length == 0) return;
+        java.util.Set<String> unavailableWorkers = new java.util.HashSet<>();
         for (File item : pending) {
             JSONObject queued = readQueueJson(controlQueueDirectory, "文字与控制", item);
             if (queued == null) continue;
             if (!matchesRetryTarget(queued, onlyMessageId, onlyRouteId)) continue;
             String liveId = queued.optString("clientMessageId");
+            String worker = queued.optString("workerId", queued.optString("targetDeviceId"));
+            if (unavailableWorkers.contains(worker)) continue;
             if (liveId.startsWith("rabi-call-v1.") && !listener.acceptsLiveInput(liveId)) {
                 if (!item.delete()) { listener.onError("过期通话输入清理失败，未投递"); return; }
                 listener.onDeliveryState(liveId, queued.optString("routeProfileId"), "expired", "通话已结束或输入超过90秒；录音保留");
                 continue;
             }
+            String routeProfileId = queued.optString("routeProfileId", "");
             try {
-                byte[] body = RabiReliableQueueFiles.read(item);
                 String clientMessageId = queued.optString("clientMessageId", "");
-                String routeProfileId = queued.optString("routeProfileId", "");
                 listener.onDeliveryState(clientMessageId, routeProfileId, "sending", "");
-                JSONObject receipt = jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body, 20000);
+                String scope = queued.optString("connectionScope");
+                queued.put("routeProfileId", queued.optString("wireRouteId", routeProfileId));
+                queued.remove("wireRouteId");
+                queued.remove("workerId");
+                queued.remove("connectionScope");
+                JSONObject receipt = new JSONObject(new String(request("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8",
+                        queued.toString().getBytes(StandardCharsets.UTF_8), 20000, worker, scope), StandardCharsets.UTF_8));
                 if (liveId.startsWith("rabi-call-v1.")) listener.onLiveInputAccepted(liveId, receipt.optString("eventId"));
                 if (!item.delete()) throw new IllegalStateException("无法确认审阅提示队列项");
                 String type = queued.optString("type", "");
@@ -1355,9 +1372,10 @@ public final class RabiGlassPcBackend {
                                  : "消息已送达 Rabi PC");
                 listener.onDeliveryState(clientMessageId, routeProfileId, "sent", "");
             } catch (Throwable error) {
-                listener.onDeliveryState(queued.optString("clientMessageId", ""), queued.optString("routeProfileId", ""), "failed", shortError(error));
+                listener.onDeliveryState(liveId, routeProfileId, "failed", shortError(error));
                 listener.onError(shortError(error));
-                return;
+                if (worker.isEmpty()) return;
+                unavailableWorkers.add(worker);
             }
         }
     }
@@ -1405,6 +1423,8 @@ public final class RabiGlassPcBackend {
                 .put("sourceDeviceKind", sourceDeviceKind)
                 .put("proactivityPreference", settings.proactivityPreference.wireValue)
                 .put("capturedAt", System.currentTimeMillis());
+        RabiLinkRelayConfig relay = relayConnection();
+        storeChatDestination(value, relay, RabiRouteMetadataCache.INSTANCE.destination(context, relay, clean(routeProfileId)));
         RabiReliableQueueFiles.writeAtomically(metadata, value.toString().getBytes(StandardCharsets.UTF_8));
     }
 
@@ -1419,6 +1439,7 @@ public final class RabiGlassPcBackend {
     private void drainMediaQueue(String onlyMessageId, String onlyRouteId) {
         if (!configured()) return;
         File[] pending = RabiReliableQueueFiles.list(mediaQueueDirectory, ".json");
+        java.util.Set<String> unavailableWorkers = new java.util.HashSet<>();
         if (pending.length == 0) return;
         for (File metadata : pending) {
             File binary = new File(mediaQueueDirectory, metadata.getName().replace(".json", ".bin"));
@@ -1429,25 +1450,29 @@ public final class RabiGlassPcBackend {
             JSONObject value = readQueueJson(mediaQueueDirectory, "媒体", metadata, binary);
             if (value == null) continue;
             if (!matchesRetryTarget(value, onlyMessageId, onlyRouteId)) continue;
+            String worker = value.optString("workerId");
+            String scope = value.optString("connectionScope");
+            if (unavailableWorkers.contains(worker)) continue;
             try {
                 listener.onDeliveryState(value.optString("clientMessageId", ""), value.optString("routeProfileId", ""), "sending", "");
                 byte[] data = RabiReliableQueueFiles.read(binary);
                 listener.onStatus("手机正在慢传媒体 · 剩余 " + pending.length);
                 String path = "/api/rabilink/devices/media?fileName=" + encode(value.optString("fileName", "media.bin"));
                 JSONObject receipt = new JSONObject(new String(request("POST", path,
-                        value.optString("contentType", "application/octet-stream"), data, 10 * 60 * 1000), StandardCharsets.UTF_8));
+                        value.optString("contentType", "application/octet-stream"), data, 10 * 60 * 1000, "", scope), StandardCharsets.UTF_8));
                 publishMediaObservation(value.optString("caption", ""), receipt.getJSONObject("attachment"),
                         value.optString("clientMessageId"), value.optLong("capturedAt", metadata.lastModified()),
-                        value.optString("routeProfileId", ""),
+                        value.optString("wireRouteId", value.optString("routeProfileId")),
                         normalizedSourceKind(value.optString("sourceDeviceKind", SOURCE_PHONE)),
-                        value.optString("proactivityPreference", "agent_decides"));
+                        value.optString("proactivityPreference", "agent_decides"), worker, scope);
                 if (!binary.delete() || !metadata.delete()) throw new IllegalStateException("无法确认媒体队列项");
                 listener.onDeliveryState(value.optString("clientMessageId", ""), value.optString("routeProfileId", ""), "sent", "");
                 listener.onStatus("媒体已进入 Rabi PC 消息端");
             } catch (Throwable error) {
                 listener.onDeliveryState(value.optString("clientMessageId", ""), value.optString("routeProfileId", ""), "failed", shortError(error));
                 listener.onError(shortError(error));
-                return;
+                if (worker.isEmpty()) return;
+                unavailableWorkers.add(worker);
             }
         }
     }
@@ -1460,15 +1485,32 @@ public final class RabiGlassPcBackend {
                     listener.onStatus("等待配置 RabiLink 事件流");
                     return;
                 }
-                String cursor = preferences.getString("cursor:" + deviceId, "");
-                String deviceKind = deviceId.contains("glass") ? "glasses" : "phone";
-                URL url = new URL(baseUrl + "/api/rabilink/events?deviceId=" + encode(deviceId)
-                        + "&deviceKind=" + encode(deviceKind) + "&after=" + encode(cursor));
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                eventConnection = connection;
+                final String eventBase, eventToken, eventDeviceId, fileSession;
+                final HttpURLConnection connection;
+                synchronized (this) {
+                    if (!configured()) return;
+                    eventBase = baseUrl;
+                    eventToken = token;
+                    eventDeviceId = deviceId;
+                    String cursor = preferences.getString("cursor:" + eventDeviceId, "");
+                    String deviceKind = eventDeviceId.contains("glass") ? "glasses" : "phone";
+                    String model = clean(android.os.Build.MODEL);
+                    boolean phone = "phone".equals(deviceKind);
+                    String name = phone && !model.isEmpty() ? model : eventDeviceId;
+                    URL url = new URL(eventBase + "/api/rabilink/events?deviceId=" + encode(eventDeviceId)
+                            + "&deviceKind=" + encode(deviceKind) + "&deviceName=" + encode(name)
+                            + (phone ? "&capabilities=phone-file-control-v1" : "")
+                            + "&after=" + encode(cursor));
+                    connection = (HttpURLConnection) url.openConnection();
+                    fileSession = phone ? com.rabi.link.RabiPhoneFileConnection.newSession() : "";
+                    eventReconnectRequested.set(false);
+                    eventConnection = connection;
+                }
+                connection.setInstanceFollowRedirects(false);
                 connection.setRequestMethod("GET");
                 connection.setRequestProperty("Accept", "text/event-stream");
-                connection.setRequestProperty("X-RabiLink-Token", token);
+                connection.setRequestProperty("X-RabiLink-Token", eventToken);
+                if (!fileSession.isEmpty()) connection.setRequestProperty("X-RabiLink-Phone-Session", fileSession);
                 connection.setConnectTimeout((int)timeoutSetting("android.relay.connect",15000));
                 // Transport-level stall deadline: Relay emits a keepalive every 15 seconds.
                 // A silent half-open socket must reconnect and run the ready -> cursor catch-up path.
@@ -1491,6 +1533,13 @@ public final class RabiGlassPcBackend {
                             eventData.append(line.substring(5).trim());
                         } else if (line.isEmpty()) {
                             if ("ready".equals(event) || "outbox_available".equals(event)) fetchAvailableReplies();
+                            if (!fileSession.isEmpty() && ("ready".equals(event) || "phone_files_available".equals(event))) {
+                                phoneFiles.available(eventBase, eventToken, eventDeviceId, fileSession,
+                                        () -> running && connection == eventConnection && !eventReconnectRequested.get()
+                                                && eventBase.equals(baseUrl) && eventToken.equals(token));
+                            }
+                            if ("mobile_account_changed".equals(event)) listener.onAccountProfileChanged();
+                            if ("peer_changed".equals(event)) listener.onComputerDirectoryChanged();
                             if ("persona_avatar_changed".equals(event)) {
                                 try {
                                     JSONObject data = new JSONObject(eventData.toString());
@@ -1588,7 +1637,12 @@ public final class RabiGlassPcBackend {
     private synchronized void deliverReply(JSONObject item) throws Exception {
         String text = item.optString("text", "").trim();
         String messageId = item.optString("deliveryId", item.optString("id", "message"));
+        String sourceWorker = item.optString("sourceWorkerId");
         String routeProfileId = item.optString("routeProfileId", "");
+        if (!sourceWorker.isEmpty() && !routeProfileId.isEmpty()) {
+            routeProfileId = RabiRouteMetadataCache.INSTANCE.conversationId(context, relayConnection(), sourceWorker, routeProfileId);
+            item = new JSONObject(item.toString()).put("routeProfileId", routeProfileId);
+        }
         JSONArray sourceAttachments = item.optJSONArray("attachments");
         if (text.isEmpty() && (sourceAttachments == null || sourceAttachments.length() == 0)) return;
         if (wasDelivered(messageId)) {
@@ -1599,7 +1653,8 @@ public final class RabiGlassPcBackend {
         boolean wantsTts = !text.isEmpty() && (presentation == null || presentation.length() == 0);
         for (int index = 0; !text.isEmpty() && presentation != null && index < presentation.length(); index++) if ("tts".equals(presentation.optString(index))) wantsTts = true;
         if (RabiGlassTextOutput.enabled(context)) wantsTts = false;
-        if (listener.phoneCallReply(item)) wantsTts = !text.isEmpty();
+        boolean callReply = listener.phoneCallReply(item);
+        if (callReply) wantsTts = !text.isEmpty();
         if (!listener.synthesizeReply(item)) wantsTts = false;
         if (wantsTts) listener.onStatus("Rabi PC 正在合成移动端回复");
         byte[] pcm = wantsTts ? cachedReply(messageId) : new byte[0];
@@ -1607,7 +1662,7 @@ public final class RabiGlassPcBackend {
             byte[] wav = request("POST", "/api/rabilink/speech/v1/audio/speech", "application/json; charset=utf-8",
                     new JSONObject().put("model", settings.ttsModel).put("input", text).put("voice", settings.ttsVoice)
                             .put("response_format", "wav").put("sample_rate", 16000).put("play", false).put("session_id", deviceId)
-                            .toString().getBytes(StandardCharsets.UTF_8), 240000);
+                            .toString().getBytes(StandardCharsets.UTF_8), 240000, callReply ? sourceWorker : "", "");
             pcm = wavPcm(wav); persistReply(messageId, pcm);
         }
         JSONArray attachments = materializeIncomingAttachments(sourceAttachments, messageId);
@@ -1806,7 +1861,7 @@ public final class RabiGlassPcBackend {
 
     private void publishMediaObservation(String caption, JSONObject attachment, String clientMessageId, long capturedAt,
                                          String routeProfileId, String sourceDeviceKind,
-                                         String proactivityPreference) throws Exception {
+                                         String proactivityPreference, String worker, String scope) throws Exception {
         long now = System.currentTimeMillis();
         boolean glasses = SOURCE_GLASSES.equals(normalizedSourceKind(sourceDeviceKind));
         String kind = attachment.optString("kind", "file");
@@ -1825,7 +1880,18 @@ public final class RabiGlassPcBackend {
                 .put("sessionId", deviceId)
                 .put("capturedAt", capturedAt > 0 ? capturedAt : now)
                 .put("attachments", new JSONArray().put(attachment));
-        jsonRequest("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 20000);
+        request("POST", "/api/rabilink/devices/input", "application/json; charset=utf-8",
+                body.toString().getBytes(StandardCharsets.UTF_8), 20000, worker, scope);
+    }
+
+    private synchronized RabiLinkRelayConfig relayConnection() {
+        return new RabiLinkRelayConfig(baseUrl, token, configured());
+    }
+
+    private static void storeChatDestination(JSONObject item, RabiLinkRelayConfig relay, RabiRouteMetadataCache.Destination destination) throws Exception {
+        if (destination.getWorkerId().isEmpty()) return;
+        item.put("workerId", destination.getWorkerId()).put("wireRouteId", destination.getWireRouteId())
+                .put("connectionScope", com.rabi.link.AiuiGlassesClient.Companion.accountScope(relay));
     }
 
     public String reliableQueueSummary() {
@@ -1877,10 +1943,16 @@ public final class RabiGlassPcBackend {
     }
 
     private byte[] request(String method, String path, String contentType, byte[] body, int timeout) throws Exception {
+        return request(method, path, contentType, body, timeout, "", "");
+    }
+
+    private byte[] request(String method, String path, String contentType, byte[] body, int timeout, String worker, String scope) throws Exception {
         HttpURLConnection connection;
         long requestGeneration;
         synchronized (this) {
             requestGeneration = endpointGeneration;
+            if (!scope.isEmpty() && !scope.equals(com.rabi.link.AiuiGlassesClient.Companion.accountScope(relayConnection())))
+                throw new IllegalStateException("消息所属连接已切换");
             boolean fenced = path.startsWith("/api/rabilink/speech/") && !activeExpectedEndpointIdentity.isEmpty();
             if (fenced && !activeExpectedEndpointIdentity.equals(endpointIdentity()))
                 throw new IllegalStateException("recorded target changed; audio processing deferred");
@@ -1889,6 +1961,10 @@ public final class RabiGlassPcBackend {
             connection.setRequestProperty("X-Rabi-Timeout-Ms",Integer.toString(connection.getReadTimeout()));
             connection.setRequestProperty("X-RabiLink-Token", token); connection.setRequestProperty("Accept", "application/json, audio/wav");
             if (fenced) connection.setRequestProperty("X-RabiLink-Expected-Worker-Id", activeExpectedWorkerId);
+            if (!worker.isEmpty()) {
+                connection.setRequestProperty("X-RabiLink-Portable-Target", worker);
+                connection.setRequestProperty("X-RabiLink-Expected-Worker-Id", worker);
+            }
         }
         if (body != null) { connection.setDoOutput(true); connection.setRequestProperty("Content-Type", contentType); connection.setFixedLengthStreamingMode(body.length); try (OutputStream out = connection.getOutputStream()) { out.write(body); } }
         int status = connection.getResponseCode();

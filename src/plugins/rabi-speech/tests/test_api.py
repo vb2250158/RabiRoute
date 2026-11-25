@@ -1005,6 +1005,11 @@ def test_models_are_generated_from_provider_registry(tmp_path: Path) -> None:
     assert detail.status_code == 200
     assert detail.json()["request"]["endpoint"] == "/v1/audio/speech"
 
+    scoped = {"x-rabilink-speech-catalog-scope": "asr"}
+    untrusted_rows = client.get("/v1/models", headers={**auth(), **scoped}).json()["data"]
+    assert {row["capability"] for row in untrusted_rows} == {"asr", "tts"}
+    trusted_rows = client.get("/v1/models", headers={**auth(), **scoped, "x-rabilink-tunnel-local": "test-owner"}).json()["data"]
+    assert {row["capability"] for row in trusted_rows} == {"asr"}
 
 def test_public_discovery_redacts_private_paths_and_urls(tmp_path: Path) -> None:
     client, _tts, _asr = fixture(tmp_path)

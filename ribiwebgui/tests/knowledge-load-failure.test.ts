@@ -14,12 +14,17 @@ test("failed first page cannot show successful empty state or start background r
   assert.match(page, /knowledgeListWarning \? 'warning' : 'success'/);
   assert.doesNotMatch(page, /class="knowledge-metrics"/);
   assert.match(page, /<v-tab value="plans"[^>]*>[\s\S]*?knowledgeCountsReady \|\| planListReady \? planPageCounts.plans : '—'/);
-  assert.match(page, /planEventRefresh.running \|\| !planListReady.value \|\| Boolean\(planError.value\)/);
+  const pageGuard = page.slice(page.indexOf("function canLoadMorePlans"), page.indexOf("async function loadMorePlans"));
+  assert.match(pageGuard, /planListReady\.value[\s\S]*?!planEventRefresh\.running[\s\S]*?!planError\.value && !planPageError\.value/);
+  assert.match(page, /async function loadMorePlans[^\n]*\{\s*if \(!canLoadMorePlans\(\)\) return;/);
   assert.match(page, /if \(planError.value \|\| !planListReady.value\) \{ void refreshKnowledge\(\); return; \}/);
   const context = {
     showsPlanList: { value: true }, loading: { value: false }, planListAbort: null,
     AbortController, requestVersion: 1, roleId: { value: "sample" }, planListReady: { value: false },
     planError: { value: "" }, planCatalogInitializing: { value: false },
+    route: { query: {} }, planPreviewRows: { value: [] },
+    readPreview: () => [{ id: "prior", title: "Previously loaded", updatedAt: "" }],
+    ManagerRequestError: class extends Error {},
     currentPlanPageFilter: () => ({}), loadRolePlanPage: async () => { throw new Error("read failed"); },
     userFacingError: (error: Error) => error.message, planEventRefresh: { idle() {} },
     scheduleProgressiveSentinelRefresh() {},
@@ -32,6 +37,7 @@ test("failed first page cannot show successful empty state or start background r
   assert.equal(context.planError.value, "read failed");
   assert.equal(context.loading.value, false);
   assert.equal(context.planListAbort, null);
+  assert.equal(context.planPreviewRows.value.length, 1);
 });
 
 test("refresh invalidates old replies even when the new role is empty; counts and plans settle independently", () => {

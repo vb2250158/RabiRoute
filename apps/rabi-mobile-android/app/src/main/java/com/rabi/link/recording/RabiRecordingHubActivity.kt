@@ -47,22 +47,27 @@ class RabiRecordingHubActivity : Activity() {
     private fun runtime() = getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE)
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
+        if (RabiLinkRelaySettings.requireSignIn(this)) return
         page = resolvePage(saved?.getString("page") ?: intent.getStringExtra("page"))
         // Historical launch extras navigate only. They never grant consent to start capture.
         render()
     }
     override fun onNewIntent(value: Intent?) {
         super.onNewIntent(value); setIntent(value)
+        if (RabiLinkRelaySettings.requireSignIn(this)) return
         page = resolvePage(value?.getStringExtra("page")); render()
     }
     override fun onSaveInstanceState(out: Bundle) { out.putString("page", page); super.onSaveInstanceState(out) }
     override fun onStart() {
-        super.onStart(); active = true; main.postDelayed(statusTick,1000)
+        super.onStart()
+        if (isFinishing || RabiLinkRelaySettings.requireSignIn(this)) return
+        active = true; main.postDelayed(statusTick,1000)
         ContextCompat.registerReceiver(this, receiver, IntentFilter("com.rabi.link.conversation.RUNTIME_UPDATED"), ContextCompat.RECEIVER_NOT_EXPORTED)
         if(page == "devices" || (page == "records" && reviewPanel == null)) render() else refreshRuntime()
     }
     override fun onStop() {
-        active = false; main.removeCallbacks(statusTick); unregisterReceiver(receiver)
+        if (active) unregisterReceiver(receiver)
+        active = false; main.removeCallbacks(statusTick)
         live?.unlisten(videoChanged); live = null; reviewPanel?.close(); reviewPanel = null; super.onStop()
     }
     override fun onDestroy() { main.removeCallbacksAndMessages(null); super.onDestroy() }

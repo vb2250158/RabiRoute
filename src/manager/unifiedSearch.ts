@@ -79,7 +79,7 @@ export function parseSearchQuery(params: URLSearchParams, snapshot: ApiCatalogSn
     const requested = values(params.get('scope'));
     const unknown = requested.filter(scope => scope !== 'all' && !scopes.includes(scope) && !reservedScopes.includes(scope));
     if (unknown.length)
-        throw new SearchError(400, 'UNKNOWN_SCOPE', 'Select registered search scopes.', { legalValues: scopes, reservedScopes, unknown });
+        throw new SearchError(400, 'UNKNOWN_SCOPE', 'Select registered search scopes.', { legalValues: scopes, reservedScopes: reservedScopes.filter(scope => !scopes.includes(scope)), unknown });
     const integer = (key: string, fallback: number, maximum: number) => {
         const raw = params.get(key);
         if (raw === null)
@@ -202,6 +202,9 @@ export async function runUnifiedSearch(options: {
     const lanes = options.lanes.filter(lane => selectedScopes.has(lane.source));
     const unsupported = query.scopes.filter(scope => !snapshot.searchSources.some(source => source.scope === scope));
     const notQueried: Record<string, unknown>[] = unsupported.map(source => ({ source, reason: 'unsupported' }));
+    const excluded = [...new Set(definitions.map(source => source.scope))]
+        .filter(source => !selectedScopes.has(source))
+        .map(source => ({ source, reason: query.adapter && source !== 'messages' ? 'adapter-filter' : 'kind-filter' }));
     const degraded: Record<string, unknown>[] = [], conflicts: SearchConflict[] = [], terms = searchTerms(query.q);
     for (const source of selectedScopes) {
         if (lanes.some(lane => lane.source === source))
@@ -332,7 +335,7 @@ export async function runUnifiedSearch(options: {
             conflictCheck: results.some(outcome => outcome.batch.conflicts !== undefined) ? 'source_reported' : 'not_checked',
             coverage: results.map(outcome => ({ agent: outcome.lane.agent, complete: outcome.batch.complete, gaps: outcome.gaps })) };
     });
-    const incomplete = degraded.length > 0 || coverageSources.some(source => source.status !== 'ok');
+    const incomplete = notQueried.length > 0 || coverageSources.some(source => source.status !== 'ok');
     const by = (key: 'source' | 'kind' | 'agent') => Object.fromEntries([...new Set(page.map(item => String(item[key])))].sort().map(value => [value, page.filter(item => String(item[key]) === value).length]));
     degraded.sort((a, b) => String(a.source).localeCompare(String(b.source)) || String(a.agent ?? '').localeCompare(String(b.agent ?? '')));
     const status = (lanes.length > 0 || degraded.length > 0) && !successful.length ? 503 : 200;
@@ -341,10 +344,10 @@ export async function runUnifiedSearch(options: {
                 capabilities: { scopes: [...new Set(snapshot.searchSources.map(source => source.scope))].sort(), sources: snapshot.searchSources,
                     filters: ['scope', 'kind', 'agent', 'adapter', 'from', 'to', 'includeArchives'], parameters: ['q', 'scope', 'kind', 'agent', 'adapter', 'from', 'to', 'match', 'mode', 'strict', 'limit', 'cursor', 'budgetMs', 'sort', 'includeArchives', 'expand'],
                     defaults: { scope: 'all', match: 'any', mode: 'keywords', strict: 0, limit: 20, budgetMs: 3000, sort: 'relevance', includeArchives: 0 },
-                    reservedScopes, operationsUrl: '/api/agent/operations', contractUrl: '/api/agent/help?operationId=manager.search' },
+                    reservedScopes: reservedScopes.filter(scope => !snapshot.searchSources.some(source => source.scope === scope)), operationsUrl: '/api/agent/operations', contractUrl: '/api/agent/help?operationId=manager.search' },
                 legend: Object.fromEntries(snapshot.searchSources.map(source => [source.scope, { description: source.legend, kinds: source.kinds }])),
                 facets: { countScope: 'page', bySource: by('source'), byKind: by('kind'), byAgent: by('agent') },
-                coverage: { state: incomplete ? 'partial' : 'complete', completenessUnknown: incomplete || selectedScopes.has('messages'), sources: coverageSources, notQueried, excluded: [] },
+                coverage: { state: incomplete ? 'partial' : 'complete', completenessUnknown: incomplete || selectedScopes.has('messages'), sources: coverageSources, notQueried, excluded },
                 degraded, warnings: options.identity?.agentType?.trim() && options.identity?.id?.trim() ? [] : [{ code: 'AGENT_IDENTITY_MISSING', message: '尽量填写调用方 agentType 和完整 id。当前连接可正常检索全部已选择来源。' }],
                 conflicts: [...new Map(conflicts.map(conflict => [apiDigest(conflict), conflict])).values()],
                 items: page.map(({ key: _key, sortTime: _time, sortKey: _sortKey, sourcePosition: _position, ...item }) => item), nextCursor: hasMore || successful.some(outcome => outcome.batch.hasMore) ? Buffer.from(JSON.stringify(next)).toString('base64url') : null, queryTime

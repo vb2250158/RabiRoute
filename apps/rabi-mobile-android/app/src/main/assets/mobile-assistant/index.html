@@ -26,6 +26,14 @@
   </div>
   <p id="status" role="status">正在连接电脑</p>
   <p id="issue" role="alert" hidden></p>
+  <details id="liveModels">
+    <summary>实时语音模型</summary>
+    <label class="voice-mode">功能<select id="modelKind"><option value="asr">实时识别</option><option value="tts">实时播报</option></select></label>
+    <label class="voice-mode">机器<select id="modelMachine"></select></label>
+    <label class="voice-mode">模型<select id="modelChoice"></select></label>
+    <button id="applyModel" disabled>使用所选模型</button>
+    <p id="modelStatus" role="status"></p>
+  </details>
 </section>
 <main id="messages" aria-label="对话">
   <p id="empty">点击「开始实时语音」，说完会自动发送。</p>

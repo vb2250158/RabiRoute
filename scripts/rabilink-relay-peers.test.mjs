@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -154,6 +155,49 @@ test("peer discovery and RPC stay isolated while retired synchronization is unav
     assert.ok(peerB);
     assert.deepEqual(peerB.peerUrls, ["http://192.168.1.11:8790"]);
     assert.deepEqual(peerB.capabilities, ["rabi-pc-version-0.3.19", "webgui"]);
+
+    const phoneId = "rabi-phone-fixture";
+    const phoneSecret = "a".repeat(64);
+    const filePath = "/api/rabilink/mobile/files";
+    const stream = await fetch(`${baseUrl}/api/rabilink/events?deviceId=${phoneId}&deviceKind=phone&deviceName=Fixture%20phone`, {
+      headers: { "x-rabilink-token": tokenA, "x-rabilink-phone-session": phoneSecret }
+    });
+    assert.equal(stream.status, 200);
+    const login = await fetch(`${baseUrl}/api/rabilink/host-account/login`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: "peer-test", password: "strong-test-password",
+        deviceId: "account-fixture", deviceGuid: randomUUID(), deviceName: "Account fixture" })
+    });
+    assert.equal(login.status, 200);
+    const accountToken = (await login.json()).data.token;
+    const accountDirectory = async query => (await (await fetch(`${baseUrl}/api/rabilink/peers${query}`, {
+      headers: { "x-rabilink-token": accountToken }
+    })).json()).peers;
+    assert.equal((await accountDirectory("")).some(peer => peer.deviceKind === "phone"), false);
+    const phone = (await accountDirectory("?includePortable=phone")).find(peer => peer.deviceKind === "phone");
+    assert.equal(phone?.name, "Fixture phone");
+    assert.equal(phone.online, true);
+    assert.deepEqual(phone.capabilities, ["phone-files-v1"]);
+    assert.deepEqual(phone.peerUrls, []);
+    const post = (token, suffix, body, session) => fetch(baseUrl + filePath + suffix, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": token,
+        ...(session ? { "x-rabilink-phone-session": session } : {}) }, body: JSON.stringify(body)
+    });
+    const readInput = { targetId: phone.id, targetGuid: phone.guid, action: "file.list", path: "" };
+    assert.equal((await post(tokenB, "", { ...readInput, targetId: phoneId })).status, 404);
+    assert.equal((await post(accountToken, "", { ...readInput, targetGuid: "wrong-guid" })).status, 404);
+    const call = post(accountToken, "", readInput);
+    const phoneReader = await waitForSseEvent(stream, "phone_files_available");
+    assert.equal((await post(tokenA, "/claim", { phoneId }, "b".repeat(64))).status, 403);
+    const claim = (await (await post(tokenA, "/claim", { phoneId }, phoneSecret)).json()).data;
+    assert.equal(claim.action, "file.list");
+    assert.deepEqual(claim.input, { path: "" });
+    const receipt = { code: 0, data: { entries: [] } };
+    assert.equal((await post(tokenA, "/result", { phoneId, requestId: claim.id, status: 200, result: receipt }, phoneSecret)).status, 200);
+    const returned = await call;
+    assert.equal(returned.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await returned.json(), receipt);
+    await phoneReader.cancel();
 
     await liveEvents.body.cancel();
     const stillConnectedResponse = await fetch(`${baseUrl}/api/rabilink/peers?deviceId=pc-a&deviceGuid=guid-a`, {

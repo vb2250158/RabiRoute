@@ -47,7 +47,7 @@ function mobileProviderObservation(values){
 }
 export async function createVoiceAssistantOwner({identity,stateRoot,speech,publish,publishDesktopPresentation,signal,hostOptions={},clientFactory,deviceFactory,runtimeEntry,recognitionSampleUrl,createModel,modelCatalog=listProviderModels,customProviderFactory=createSpeechProviders,managerEndpoint,sendAgent,readOnly=()=>false}){
   const directory=join(stateRoot,'data','voice-assistant');await mkdir(directory,{recursive:true});
-  let profile={personaId:'',asrSource:'host',ttsSource:'host',wakeEnabled:false},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
+  let profile={personaId:'',asrSource:'host',ttsSource:'host',wakeEnabled:false,mobileLocalFallback:true},closed=false,runtime,opening,client,clientOpening,profileRevision=0,lastHostError=null;
   let lastPresentationStartedAt=0;
   const profilePath=join(directory,'host-profile.json');
   try{profile={...profile,...JSON.parse(await readFile(profilePath,'utf8'))}}catch(error){if(error.code!=='ENOENT')throw Error('ASSISTANT_HOST_PROFILE_INVALID')}
@@ -60,6 +60,49 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
   }
   const assertCurrent=()=>{if(closed)throw Error('ASSISTANT_CLOSED');signal.throwIfAborted()};
   const assertWritable=()=>{assertCurrent();if(readOnly())throw Error('ASSISTANT_READ_ONLY')};
+  const supportsResidentCapture=()=>typeof speech.speechRuntimeControl?.setAssistantResident==='function';
+  const residentOwner=identity.activationId||identity.managerInstanceId;
+  const compute=(deviceId,operation)=>speech.invokeOnComputeTarget?.(deviceId||'',operation) ?? operation();
+  let residentFlight=Promise.resolve(), residentState={phase:'disabled'};
+  let residentMigration;
+
+  function applyResidentCapture(enabled, bound=profile) {
+    if (!supportsResidentCapture() || readOnly()) return Promise.resolve();
+    const settings={enabled,ownerId:residentOwner,model:bound.backgroundAsrModel||'fireredasr2-aed',computeDeviceId:bound.backgroundAsrDeviceId||''};
+    const result=residentFlight.then(async()=>{
+      assertWritable();
+      residentState={phase:enabled?'starting':'stopping'};
+      try {
+        await speech.speechRuntimeControl.setAssistantResident(settings,signal,assertWritable);
+        residentState={phase:enabled?'recording':'disabled'};
+      } catch(error) {
+        residentState={phase:'error',message:error.message||'ASSISTANT_BACKGROUND_CAPTURE_FAILED'};
+        throw error;
+      }
+    });
+    residentFlight=result.catch(()=>{});
+    return result;
+  }
+
+  async function migrateResidentPreference(settings) {
+    if(!supportsResidentCapture()||readOnly()||settings.read().hostResidentVoiceConfigured)return;
+    let enabled=false;
+    if(settings.read().voiceEnabled){
+      try{
+        await speech.speechRuntimeControl.ensureReady?.(assertWritable);
+        enabled=(await speech.speechControl.microphoneStatus(assertWritable)).config.streamingEnabled===true;
+      }catch(error){if(signal.aborted)throw error;}
+    }
+    assertWritable();
+    await settings.save({voiceEnabled:enabled,hostResidentVoiceConfigured:true});
+  }
+  function prepareResidentPreference() {
+    if(!supportsResidentCapture()||readOnly())return Promise.resolve();
+    return residentMigration??=openSettingsStore(connectionDirectory).then(migrateResidentPreference).catch(error=>{
+      residentMigration=undefined;
+      throw error;
+    });
+  }
   async function manager(){
     assertCurrent();if(client)return client;if(clientOpening)return clientOpening;
     clientOpening=(async()=>{
@@ -104,6 +147,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     assertCurrent:assertWritable,
     canStart:target=>!target.hostSources.asrIssue&&!target.hostSources.ttsIssue,
     shouldUseFallback:target=>target.hostSources.asrSource==='custom',
+    hasResidentCapture:()=>residentState.phase==='recording',
   });
   function armWake() {
     if (!profile.wakeEnabled || readOnly() || armedRevision === profileRevision || arming) return;
@@ -111,6 +155,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     armedRevision = epoch; wakeError = null;
     arming = (async () => {
       const current = await open();
+      await residentFlight;
       if (!current.host.voiceEnabled() || epoch !== profileRevision) return;
       if (!personaId) throw Error('ASSISTANT_WAKE_PERSONA_REQUIRED');
       const role = await call('manager.roles.detail', {pathParams:{roleId:personaId}});
@@ -138,14 +183,22 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const bound=structuredClone(profile),epoch=profileRevision;
       const role=bound.personaId?await call('manager.personas.resources.reference.read',{pathParams:{roleId:bound.personaId}}):undefined;
       const personaLabel=(await personas()).find(item=>item.id===bound.personaId)?.label||bound.personaId;
-      let models=[],modelsError,serviceStatus;
-      try{models=await speech.speechControl.models()}catch(error){modelsError='HOST_SPEECH_UNAVAILABLE'}
-      try{serviceStatus=await speech.speechControl.status?.()}catch{ /* The catalog can still expose a selectable available service. */ }
+      const service=async deviceId=>{
+        let models=[],modelsError,status;
+        try{models=await compute(deviceId,()=>speech.speechControl.models())}catch{modelsError='HOST_SPEECH_UNAVAILABLE'}
+        try{status=await compute(deviceId,()=>speech.speechControl.status?.())}catch{ /* Catalog may still be usable. */ }
+        return {models,modelsError,status};
+      };
+      const asrService=service(bound.asrDeviceId);
+      const ttsService=(bound.asrDeviceId||'')===(bound.ttsDeviceId||'')?asrService:service(bound.ttsDeviceId);
+      const [{models,modelsError,status:serviceStatus},{models:ttsModels,modelsError:ttsModelsError,status:ttsStatus}]
+        =await Promise.all([asrService,ttsService]);
       const asrModel=bound.asrModel||hostSpeechDefaultModel('asr',models,serviceStatus);
-      const readyModel=id=>models.some(item=>item.id===id&&item.enabled&&item.available);
+      const readyModel=(catalog,id)=>catalog.some(item=>item.id===id&&item.enabled&&item.available);
       const aliases=normalizeWakeAliases(role?.personaConfig?.speechTriggerKeywords);
       const wakeAliases=aliases.length<=64?aliases:[];
       async function mobileLocalState(){
+        if(!bound.mobileLocalFallback)return {};
         const deadline=AbortSignal.timeout(200);
         try{
           const passiveModel=await speech.speechRuntimeControl?.assistantLocalAsrModel?.(AbortSignal.any([signal,deadline]));
@@ -169,11 +222,11 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         return {wakeAliases:local.passiveModel||keywordProfile?wakeAliases:[],...local,
           ...(keywordProfile?{kws:keywordProfile}:{})};
       }
-      const asrIssue=bound.asrSource!=='host'?null:modelsError?'无法连接本机识别服务':!asrModel?'未找到可用的本机识别模型':!readyModel(asrModel)?'所选本机识别模型不可用，请重新选择':null;
+      const asrIssue=bound.asrSource!=='host'?null:modelsError?'无法连接所选识别服务':!asrModel?'未找到可用的识别模型':!readyModel(models,asrModel)?'所选识别模型不可用，请重新选择':null;
       const hostVoice=()=>{
         // The route catalogue may publish the selected persona after the assistant opens.
         const persona=speech.speechControl.personas().find(item=>item.id===bound.personaId);
-        const model=bound.ttsModel||hostSpeechDefaultModel('tts',models,serviceStatus,persona?.defaultModel);
+        const model=bound.ttsModel||hostSpeechDefaultModel('tts',ttsModels,ttsStatus,persona?.defaultModel);
         return {persona,model};
       };
       const hostVoiceSettings=()=>{
@@ -181,6 +234,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         return {ttsProvider:'compatible',ttsModel:model||'',ttsVoice:persona?.voiceReady?bound.personaId:'',ttsSpeed:persona?.speed||1};
       };
       const ownDirectory=join(directory,'sessions',hash(bound.personaId||'default'));
+      await prepareResidentPreference();
       const settings=await openSettingsStore(connectionDirectory);
       if(!settings.read().llmModel){
         const available=await modelCatalog({kind:'llm',provider:'workbuddy-cli',endpoint:'codebuddy://cn',workbuddyCli:hostOptions.workbuddyCli}).catch(()=>[]);
@@ -197,7 +251,8 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         const form=new FormData();form.set('file',new Blob([audio],{type:'audio/wav'}),'speech.wav');form.set('model',model);
         if (prompt) form.set('prompt',prompt);
         const request=new Request('http://localhost/',{method:'POST',body:form});
-        const result=await speech.speechControl.transcribe(request.headers.get('content-type'),Buffer.from(await request.arrayBuffer()),()=>{assertCurrent();abort.throwIfAborted()},abort);
+        const bytes=Buffer.from(await request.arrayBuffer());
+        const result=await compute(bound.asrDeviceId,()=>speech.speechControl.transcribe(request.headers.get('content-type'),bytes,()=>{assertCurrent();abort.throwIfAborted()},abort));
         if(result.status<200||result.status>=300)throw Error('HOST_ASR_FAILED');
         return JSON.parse(Buffer.from(result.body).toString('utf8'));
       }
@@ -214,9 +269,9 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
             if(!persona?.voiceReady)throw Error('HOST_PERSONA_VOICE_REQUIRED');
             if(!model)throw Error('HOST_TTS_MODEL_REQUIRED');
             abort.throwIfAborted();assertCurrent();
-            const command=hostSpeechCommand({model:models.find(item=>item.id===model)||{id:model},persona,text,expression,sessionId:runtime?.conversation.getSessionId()});
+            const command=hostSpeechCommand({model:ttsModels.find(item=>item.id===model)||{id:model},persona,text,expression,sessionId:runtime?.conversation.getSessionId()});
             const requestId=randomUUID(),notify=(stage,error)=>trace.onRequest?.({requestId,protocol:'rabi-host-speech',stage,parameters:command,...(error?{error}:{})});notify('sent');
-            try{const result=await speech.speechControl.synthesize(command,()=>{assertCurrent();abort.throwIfAborted()},abort);
+            try{const result=await compute(bound.ttsDeviceId,()=>speech.speechControl.synthesize(command,()=>{assertCurrent();abort.throwIfAborted()},abort));
               if(result.status<200||result.status>=300)throw Error('HOST_TTS_FAILED');notify('accepted');return new Uint8Array(result.body);
             }catch(error){notify('failed','HOST_TTS_FAILED');throw error}
           };
@@ -249,7 +304,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         async dispose(){clearPet();await Promise.allSettled([...petPending]);seen.clear()}};
       const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
         dictionaryPolicy:config=>bound.asrSource==='host'?hostAsrDictionaryPolicy(models.find(item=>item.id===asrModel)):asrDictionaryPolicy(config),
-        ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(models.find(item=>item.id===config.ttsModel),config)}:{}),
+        ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(ttsModels.find(item=>item.id===config.ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
         onCaptureActivity:wake.captureActivity,
         onCaptureStopped(){companionPresentation=false;wake.captureStopped();},
@@ -257,19 +312,21 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true,mobileVoiceSubmit:true},
         discoverTools:async()=>{const connection=await manager();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');return createRabiOperationTools({sdk:connection.operations,sendAgent:sendAgent?request=>sendAgent(request,runtime.conversation.getSessionId()):undefined,assertCurrent:()=>{assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED')}})} });
       if(closed||epoch!==profileRevision){await next.dispose();throw Error('ASSISTANT_CONTEXT_CHANGED')}
-      const mobileTts=createMobileTts({conversation:next.conversation,settings:next.speechSettings,signal,
+      const mobileTts=createMobileTts({conversation:next.conversation,settings:()=>({...next.speechSettings(),voiceEnabled:true}),signal,
         assertCurrent(){assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');},
-        ready:async config=>mobileCustomTtsReady(bound.ttsSource,config,await next.speechCredentialDescription(config)),
+        ready:async config=>mobileCustomTtsReady(bound.ttsSource,{...config,voiceEnabled:true},await next.speechCredentialDescription(config)),
         createProviders:next.speechProviders,
       });
-      const hostModelSummary=models.map(hostSpeechModelSummary);
+      const hostModelSummary=[...models.filter(row=>row.capability==='asr'),...ttsModels.filter(row=>row.capability==='tts')].map(hostSpeechModelSummary);
       runtime={...next,mobileWakeSettings,mobileTts,
         async dispose(){await mobileTts.dispose();await next.dispose();},
         setCompanionPresentation(enabled){companionPresentation=enabled;},
         recognizeMobileLocal:async(audio,abort)=>{
           try{
+            if(!bound.mobileLocalFallback)throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
             const local=speech.speechRuntimeControl;
             if(typeof local?.transcribeMobileAssistantAudio!=='function')throw Error('MOBILE_LOCAL_ASR_UNAVAILABLE');
+            await local.ensureReady?.(()=>{assertCurrent();abort.throwIfAborted()});
             return await local.transcribeMobileAssistantAudio(audio,abort);
           }catch(error){
             abort.throwIfAborted();
@@ -280,7 +337,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         get hostSources(){
         const {persona,model}=hostVoice();
         const voiceReady=Boolean(persona?.voiceReady);
-        const ttsIssue=bound.ttsSource!=='host'?null:modelsError?'无法连接本机播报服务':!voiceReady?'请选择具备本机声线的人格，或使用自定义播报':!model?'未找到可用的本机播报模型':!readyModel(model)?'所选本机播报模型不可用，请重新选择':null;
+        const ttsIssue=bound.ttsSource!=='host'?null:ttsModelsError?'无法连接所选播报服务':!voiceReady?'请选择具备声线的人格，或使用自定义播报':!model?'未找到可用的播报模型':!readyModel(ttsModels,model)?'所选播报模型不可用，请重新选择':null;
         return {...bound,personaLabel,asrModel:asrModel||'',ttsModel:model||'',asrIssue,ttsIssue,voiceReady,models:hostModelSummary,modelsError,identitySource:role?'Rabi 人格正文全文；声线由宿主管理':'自定义人设'};
       }};
       return runtime;
@@ -293,7 +350,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
   }
   async function saveHostProfile(current,patch,{forVoice=false}={}){
     if(current.conversation.activity().pending)throw Error('ASSISTANT_CONTEXT_BUSY');
-    for(const key of Object.keys(patch))if(key==='wakeEnabled'?typeof patch[key]!=='boolean':!['personaId','asrSource','ttsSource','asrModel','ttsModel'].includes(key)||typeof patch[key]!=='string')throw Error('ASSISTANT_HOST_PROFILE_INVALID');
+    for(const [key,value] of Object.entries(patch))if(['wakeEnabled','mobileLocalFallback'].includes(key)?typeof value!=='boolean':!['personaId','asrSource','ttsSource','asrModel','ttsModel','asrDeviceId','ttsDeviceId','backgroundAsrModel','backgroundAsrDeviceId'].includes(key)||typeof value!=='string'||value.length>200)throw Error('ASSISTANT_HOST_PROFILE_INVALID');
     const next={...profile,...patch};
     if(!validSource(next.asrSource)||!validSource(next.ttsSource))throw Error('ASSISTANT_HOST_PROFILE_INVALID');
     if(next.personaId&&!(await personas()).some(item=>item.id===next.personaId))throw Error('ASSISTANT_PERSONA_UNAVAILABLE');
@@ -319,6 +376,10 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       throw error;
     }
     lastHostError=null;
+    if (Object.hasOwn(patch,'backgroundAsrModel') || Object.hasOwn(patch,'backgroundAsrDeviceId')) {
+      const active=await open();
+      await applyResidentCapture(active.host.voiceEnabled(),next);
+    }
     if(!forVoice)armWake();
     return {saved:true,settingsScopeChanged:true};
   }
@@ -363,7 +424,17 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     }
   }
   return {
-    startWake:armWake,
+    startWake(){
+      void Promise.resolve(speech.whenReady?.()).then(async()=>{
+        assertCurrent();
+        if(supportsResidentCapture()&&!readOnly()){
+          await prepareResidentPreference();
+          const settings=await openSettingsStore(connectionDirectory);
+          await applyResidentCapture(settings.read().voiceEnabled);
+        }
+        armWake();
+      }).catch(error=>{if(!closed)residentState={phase:'error',message:error.message}});
+    },
     async state(view){
       const current=await open(),state=await current.state();
       armWake();
@@ -372,12 +443,17 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       if(runtime!==current)throw Error('ASSISTANT_CONTEXT_CHANGED');
       if (view === 'mobile') {
         const {asrDictionary, ...settings} = state.settings;
-        state.settings = settings;
+        state.settings = {...settings,voiceEnabled:true};
       }
+      let modelComputers=[];
+      try { modelComputers=(await speech.computeServers?.())?.peers??[]; }
+      catch { /* Local models remain selectable while the remote directory is unavailable. */ }
+      assertCurrent();
       return {...state,hostSettings:{...current.hostSources,wake:wakeSnapshot(),lastError:lastHostError,personas:people,
+        ...(supportsResidentCapture()&&view!=='mobile'?{residentTranscription:residentState}:{}),modelComputers,
         mobileAudio:{recognition:current.streamingAsr()?'streaming':'utterance',sampleRate:mobileAsrSampleRate,...mobileWake}},
-        capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true,
-          mobileCustomTts:mobileCustomTtsReady(current.hostSources.ttsSource,state.settings,state.credentials?.tts)}};
+        capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true,mobileIndependentVoice:true,
+          mobileCustomTts:mobileCustomTtsReady(current.hostSources.ttsSource,{...state.settings,voiceEnabled:true},state.credentials?.tts)}};
     },
     async synthesizeMobile(request,requestSignal){
       assertWritable();const current=await open();assertWritable();
@@ -391,7 +467,6 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       const assertSession=()=>{
         assertWritable();abort.throwIfAborted();
         if(epoch!==profileRevision||sessionId!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');
-        if(!current.host.voiceEnabled())throw Error('ASSISTANT_VOICE_DISABLED');
       };
       assertSession();
       if (!['active','local'].includes(source)) throw Error('MOBILE_ASR_SOURCE_INVALID');
@@ -414,7 +489,6 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       assertWritable();
       const current=await open(),epoch=profileRevision;
       assertWritable();requestSignal?.throwIfAborted();
-      if(!current.host.voiceEnabled())throw Error('ASSISTANT_VOICE_DISABLED');
       if(sessionId!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');
       if(mobileAsr)throw Error('MOBILE_STREAM_ASR_BUSY');
       const createAsr=current.streamingAsr();
@@ -443,10 +517,14 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     },
     async command(request){
       assertWritable();
+      if(request.action==='speech-models'){
+        if(typeof request.deviceId!=='string'||request.deviceId.length>200)throw Error('ASSISTANT_HOST_PROFILE_INVALID');
+        const models=await compute(request.deviceId,()=>speech.speechControl.models(assertCurrent));
+        return models.map(hostSpeechModelSummary);
+      }
       if(request.action==='start'||request.action==='start-for-persona'||request.action==='host-settings')return startOrConfigure(request);
       const current=await open();assertWritable();
       if(request.action==='mobile-voice-submit'){
-        if(!current.host.voiceEnabled())throw Error('ASSISTANT_VOICE_DISABLED');
         if(request.sessionId!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');
         if(typeof request.requestId!=='string'||!mobileRequestId.test(request.requestId))throw Error('ASSISTANT_INPUT_INVALID');
         const details=mobileAsrDetails(request.observation);
@@ -458,12 +536,15 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       if(request.action==='stop'){const result=await current.command(request);await wake.drainHandoff();return result}
       if(request.action==='clear-context'&&request.confirm===true&&request.sessionId===current.conversation.getSessionId()&&!current.conversation.activity().pending)await stopMobileAsr();
       if(request.action==='settings'){
-        await stopMobileAsr();
-        current.mobileTts.invalidate();
+        if(Object.keys(request.patch||{}).some(key=>key!=='voiceEnabled')){
+          await stopMobileAsr();
+          current.mobileTts.invalidate();
+        }
         const previouslyEnabled=current.host.voiceEnabled();
         const result=await current.command(request);
-        if(previouslyEnabled!==current.host.voiceEnabled()){
+        if(Object.hasOwn(request.patch||{},'voiceEnabled') && (previouslyEnabled!==current.host.voiceEnabled() || residentState.phase==='error')){
           await retireWake();
+          await applyResidentCapture(current.host.voiceEnabled());
           if(current.host.voiceEnabled())armWake();
         }
         return result;
@@ -474,6 +555,17 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},
     async submit(text,requestId,expectedSession){assertWritable();const current=await open();assertWritable();if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
     async recover(requestId,text){assertWritable();const current=await open();assertWritable();return current.conversation.acceptedRequest(requestId,text)},
-    async dispose(){if(closed)return;closed=true;profileRevision++;await opening?.catch(()=>{});const retirement=retireWake();await stopMobileAsr();await runtime?.dispose();await retirement;await clientOpening?.catch(()=>{});await client?.close();runtime=undefined}
+    async dispose(){
+      if(closed)return;
+      closed=true;profileRevision++;
+      await opening?.catch(()=>{});
+      const retirement=retireWake();
+      await stopMobileAsr();await runtime?.dispose();await retirement;await residentFlight;
+      if(residentState.phase==='recording'||residentState.phase==='error'){
+        await Promise.resolve().then(()=>speech.speechRuntimeControl.setAssistantResident(
+          {enabled:false,ownerId:residentOwner,release:true},AbortSignal.timeout(5000))).catch(()=>{});
+      }
+      await clientOpening?.catch(()=>{});await client?.close();runtime=undefined;
+    }
   };
 }

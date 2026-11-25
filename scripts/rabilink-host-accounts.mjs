@@ -5,6 +5,8 @@ import { findPcCredential, pairingHash } from './rabilink-pc-pairing.mjs';
 
 export const isHostAccountScope = app => app?.kind === 'host-account-v1';
 const requestIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const mobileAccountStatuses = new Set(['online', 'away', 'busy', 'do-not-disturb']);
+const mobileAccountStatus = account => mobileAccountStatuses.has(account.mobileStatus) ? account.mobileStatus : 'online';
 
 function fail(statusCode, message) { throw Object.assign(new Error(message), { statusCode }); }
 
@@ -75,7 +77,35 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
     if (!account) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
     return { store, account };
   }
+  const accountProfile = account => ({ id: account.id, username: account.username, nickname: account.nickname ?? null });
+  function applicationOwner(store, accountId) {
+    const account = store.accounts.find(item => item.id === accountId);
+    if (!account) fail(404, 'MOBILE_ACCOUNT_NOT_FOUND');
+    return account;
+  }
+  const avatarFile = accountId => path.join(avatarDirectory, createHash('sha256').update(accountId).digest('hex') + '.png');
+  function readAvatar(file) {
+    try { return readFileSync(file).toString('base64'); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
   return {
+    readApplicationOwnerProfile(accountId) {
+      const account = applicationOwner(readStore(), accountId);
+      return { account: { ...accountProfile(account), status: mobileAccountStatus(account) },
+        avatar: readAvatar(avatarFile(account.id)) };
+    },
+    setApplicationOwnerStatus(accountId, status) {
+      if (!mobileAccountStatuses.has(status)) fail(400, 'MOBILE_ACCOUNT_STATUS_INVALID');
+      const store = readStore();
+      const account = applicationOwner(store, accountId);
+      const changed = account.mobileStatus !== status;
+      if (changed) {
+        account.mobileStatus = status;
+        writeStore(store);
+      }
+      return { data: { id: account.id, status },
+        appIds: changed ? store.apps.filter(app => app.enabled !== false && app.ownerAccountId === account.id).map(app => app.id) : [] };
+    },
     profile(token, nickname) {
       const { store, account } = ownerAccount(readStore(), token);
       if (nickname !== undefined && typeof nickname !== 'string') fail(400, 'HOST_ACCOUNT_NICKNAME_INVALID');
@@ -85,7 +115,7 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
         account.updatedAt = new Date().toISOString();
         writeStore(store);
       }
-      return { id: account.id, username: account.username, nickname: account.nickname ?? null };
+      return accountProfile(account);
     },
     avatar(token, image) {
       const store = readStore();
@@ -93,11 +123,8 @@ export function createHostAccountService({ readStore, writeStore, createAccount,
       if (!match || !isHostAccountScope(match.app)) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
       const account = store.accounts.find(item => item.id === match.app.ownerAccountId);
       if (!account) fail(401, 'HOST_ACCOUNT_AUTH_REQUIRED');
-      const file = path.join(avatarDirectory, createHash('sha256').update(account.id).digest('hex') + '.png');
-      if (image === undefined) {
-        try { return readFileSync(file).toString('base64'); }
-        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-      }
+      const file = avatarFile(account.id);
+      if (image === undefined) return readAvatar(file);
       if (typeof image !== 'string' || image.length > 175000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(image)) {
         fail(400, 'HOST_ACCOUNT_AVATAR_INVALID');
       }

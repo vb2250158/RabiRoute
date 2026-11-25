@@ -9,7 +9,7 @@ const markup = await readFile(new URL('index.html', assets), 'utf8');
 // Execute the actual WebView entry point with the Android bridge and browser audio replaced.
 const app = new vm.Script(entry.replace(/^import\s.*;\r?\n/gm, '') + '\nglobalThis.testVoice = { tts, appendSpeechText };');
 
-async function open(state) {
+async function open(state, selectedModels = {}) {
   const requests = [];
   const playerEvents = [];
   const nodes = Object.fromEntries(Array.from(markup.matchAll(/\bid="([^"]+)"/g), ([, id]) => [id, {
@@ -42,6 +42,7 @@ async function open(state) {
     matchWakeWord() {},
     RabiMobile: {
       voiceEnabled: () => true,
+      selectedModel: kind => selectedModels[kind] ? JSON.stringify(selectedModels[kind]) : '',
       send(id, operation, body) {
         requests.push({ operation, body: JSON.parse(body) });
         const payload = operation === 'state' ? JSON.stringify(state)
@@ -89,6 +90,17 @@ test('legacy host stays ready and uses its existing model, voice and expression 
     operation: 'tts', body: { model: 'legacy-model', voice: 'fixture-persona', input: '仍然可播。',
       sessionId: 'mobile.test-3', instructions: '平静', speed: 1.25 },
   });
+});
+
+test('the phone can select a hosted TTS model without changing the paired PC settings', async () => {
+  const fixture = await open({ ...base, settings:{ voiceEnabled:false },
+    capabilities:{ ...base.capabilities, mobileIndependentVoice:true } }, { tts: {machine:'other-pc', model:'tts/other'} });
+  assert.equal(fixture.nodes.start.disabled, false);
+  const response = await fixture.tts.synthesize('在手机播报。');
+  assert.equal(fixture.requests.at(-1).operation, 'model-tts');
+  assert.equal(fixture.requests.at(-1).body.model, 'tts/other');
+  await response.player.play();
+  assert.deepEqual(fixture.playerEvents, ['prepare', 'play']);
 });
 
 test('only a ready advertised custom provider enables the mobile realtime control', async () => {

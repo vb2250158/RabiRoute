@@ -7,18 +7,13 @@ const pageSource = fs.readFileSync(
   "utf8"
 );
 
-test("speech page performs one initial runtime hydration and reuses its result", () => {
+test("speech diagnostics reuses initial hydration, checking local audio only when absent", () => {
   const mountedBlock = pageSource.match(/onMounted\(async \(\) => \{([\s\S]*?)\n\}\);/)?.[1] || "";
   assert.match(mountedBlock, /await speech\.acquire\(unsubscribe => \{ releaseSpeech = unsubscribe; \}\)/);
-  assert.doesNotMatch(mountedBlock, /hydrateRuntimeUi/);
-  assert.match(mountedBlock, /await syncRuntimeUiFromStore\(\)/);
-
-  const toggleBlock = pageSource.match(/async function toggleRuntime[\s\S]*?\n\}/)?.[0] || "";
-  assert.doesNotMatch(toggleBlock, /await hydrateRuntimeUi\(\)/);
-  assert.match(toggleBlock, /await syncRuntimeUiFromStore\(\)/);
-
-  const syncBlock = pageSource.match(/async function syncRuntimeUiFromStore[\s\S]*?\n\}/)?.[0] || "";
-  assert.doesNotMatch(syncBlock, /speech\.refresh/);
+  assert.match(mountedBlock, /if \(!audioStream\.value\) await refreshHostDiagnostics\(\)/);
+  const refresh = pageSource.match(/async function refreshHostDiagnostics[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(refresh, /speech\.refreshAudioStreams\(\), speech\.refreshPlayback\(\), speech\.refreshMicrophone\(\)/);
+  assert.doesNotMatch(pageSource, /speech\.(startRuntime|stopRuntime|startMicrophone)\(/);
 });
 
 test("collapsed device history is not fetched or mounted until the user expands it", () => {

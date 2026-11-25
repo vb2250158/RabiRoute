@@ -794,7 +794,7 @@ export class LanAgentRegistry {
     if (this.options.nodeEnabled?.(nodeId) === false) throw new Error("Remote instance is disabled.");
     const connection = this.requireConnection(nodeId);
     if (this.requireNode(nodeId).taskTargeting !== "explicit-session-v1") {
-      throw new Error("Upgrade the remote connector: explicit-session-v1 task targeting is required; the configured session will not be used as a fallback.");
+      throw new Error("Upgrade the remote connector: explicit-session-v1 task targeting is required. Use manager.lan-agent.nodes.update for this node and verify its reconnect and taskTargeting in manager.lan-agent.nodes.list before resuming the original delivery.");
     }
 
     if (!this.requireNode(nodeId).agentTypes?.includes(targetAgent)) throw new Error("The selected remote node does not support the requested Agent.");

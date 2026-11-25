@@ -174,3 +174,61 @@ test("the group picker renders avatars in options and selection while accepting 
   assert.equal((template.match(/<QqAvatar/g) || []).length, 2);
   assert.match(template, /kind="group"/);
 });
+
+test("the private picker renders avatars in its options and selection", () => {
+  const start = filtersPage.indexOf(`<v-autocomplete v-if="item.key === 'targetUserId'"`);
+  const end = filtersPage.indexOf("</v-autocomplete>", start);
+  assert.ok(start > 0 && end > start);
+  const template = filtersPage.slice(start, end);
+  assert.match(template, /#item=/);
+  assert.match(template, /#selection=/);
+  assert.equal((template.match(/<QqAvatar/g) || []).length, 2);
+});
+
+test("QQ directory refresh keeps the displayed contact until the response and clears it when changing roles", async () => {
+  const declaration = pickerAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "refreshAutomationQqDirectories");
+  assert.ok(declaration);
+  const store = { selectedRoleId: "Role A", sourceDeviceId: "", detail: { routes: [{ id: route.routeId }] } };
+  const routes = ref<typeof route[]>([]);
+  const directories = ref<ReturnType<typeof directory>[]>([]);
+  const loading = ref(false);
+  const contactRule = rule(["private"], { targetUserId: "30001" });
+  const conversation = () => automationRuleConversation(contactRule, routes.value, directories.value);
+  const contactResponse = (name: string) => ({
+    ok: true,
+    json: async () => ({ code: 0, data: { instanceId: route.instanceId, account: { userId: "10001" },
+      entries: [{ kind: "private", target: "30001", name }] } })
+  });
+  let contacts: Promise<ReturnType<typeof contactResponse>> = Promise.resolve(contactResponse("Friend A"));
+  let catalogUnavailable = false;
+  const personaService = { deviceId: "", fetch: (url: string) => {
+    if (url.startsWith("/api/agent/qq/")) return contacts;
+    return Promise.resolve({ ok: !catalogUnavailable, json: async () => ({ code: 0, data: { qqRoutes: [route] } }) });
+  } };
+  const refresh = new Function("store", "personaService", "activePersonaPageTab", "automationQqRoutes", "automationQqDirectories",
+    "automationQqLoading", "qqNavigationRead", "automationQqDirectory",
+    "let automationQqRequest, automationQqRoleId;" + emit(declaration.getText(pickerAst)) + "return refreshAutomationQqDirectories;")
+    (store, personaService, ref("automation"), routes, directories, loading,
+      (_signal: AbortSignal, read: () => Promise<unknown>) => read(), automationQqDirectory);
+
+  await refresh();
+  assert.equal(conversation()?.name, "Friend A");
+  catalogUnavailable = true;
+  await refresh();
+  assert.equal(conversation()?.name, "Friend A");
+  catalogUnavailable = false;
+
+  const next = Promise.withResolvers<ReturnType<typeof contactResponse>>();
+  contacts = next.promise;
+  const pendingRefresh = refresh();
+  assert.equal(loading.value, true);
+  assert.equal(conversation()?.name, "Friend A");
+  next.resolve(contactResponse("Updated Friend"));
+  await pendingRefresh;
+  assert.equal(conversation()?.name, "Updated Friend");
+
+  store.selectedRoleId = "Role B";
+  const roleRefresh = refresh();
+  assert.equal(conversation(), undefined);
+  await roleRefresh;
+});

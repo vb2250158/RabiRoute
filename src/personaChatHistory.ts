@@ -114,7 +114,7 @@ export async function appendPersonaAiuiExchange(roleDir: string, input: { sessio
 }
 
 /** Reads backwards by byte offset, so paging never reloads the complete history. */
-export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; direction?: "older" | "newer"; id?: string; category?: ChatHistoryCategory; taskKey?: string } = {}): Promise<PersonaChatHistoryPage> {
+export async function readPersonaChatHistory(roleDir: string, cursor?: number, limit = 50, options: { summary?: boolean; includeOffsets?: boolean; direction?: "older" | "newer"; id?: string; category?: ChatHistoryCategory; taskKey?: string } = {}): Promise<PersonaChatHistoryPage> {
   if (options.category && !CHAT_HISTORY_CATEGORIES.includes(options.category)) throw new Error('Invalid chat history category.');
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer from 1 to 100.");
   if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) throw new Error("Invalid chat history cursor.");
@@ -189,7 +189,11 @@ export async function readPersonaChatHistory(roleDir: string, cursor?: number, l
           try {
             if (line.length > 1024 * 1024) throw new Error("Oversized record");
             const record = parseReply(line.toString("utf8"));
-            if (!options.category || chatHistoryCategory(record) === options.category) entries.push(options.summary ? summarizeReply(record, start + lineStart, start + end + 1) : record);
+            if (!options.category || chatHistoryCategory(record) === options.category) {
+              const offset = start + lineStart;
+              if (options.summary) entries.push(summarizeReply(record, offset, start + end + 1));
+              else entries.push(options.includeOffsets ? { ...record, historyCursor: offset } : record);
+            }
           } catch { invalidRecords++; }
           responseBytes += line.length;
         }

@@ -591,6 +591,9 @@
     "./shared/pathPolicy": {
       "types": "./types/src/shared/pathPolicy.d.ts"
     },
+    "./shared/peerTunnelContract": {
+      "types": "./types/src/shared/peerTunnelContract.d.ts"
+    },
     "./shared/performanceContract": {
       "types": "./types/src/shared/performanceContract.d.ts"
     },

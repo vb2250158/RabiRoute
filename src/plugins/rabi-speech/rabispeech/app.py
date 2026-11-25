@@ -128,6 +128,14 @@ class AssistantRealtimeBody(BaseModel):
     enabled: bool
 
 
+class AssistantResidentBody(BaseModel):
+    enabled: bool
+    model: str = Field(default="", max_length=200)
+    computeDeviceId: str = Field(default="", max_length=200)
+    ownerId: str = Field(min_length=1, max_length=200)
+    release: bool = False
+
+
 class PlaybackSettingsBody(BaseModel):
     volume: int = Field(strict=True, ge=0, le=100)
 
@@ -272,12 +280,14 @@ def create_app(
 
     pending_audio_ids: dict[str, str] = {}
 
-    async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig, *, assistant_local=False) -> TranscriptionResult:
+    async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig, *, assistant_local=False,
+                                     compute_device_id: str | None = None) -> TranscriptionResult:
         record_id = pending_audio_ids.get(str(audio_path)) or f"speech-{uuid4().hex}"
         remote = None
         manager_configured = os.environ.get("RABIROUTE_MANAGER_URL", "").strip() or os.environ.get("GATEWAY_MANAGER_URL", "").strip()
-        if not assistant_local and manager_configured:
-            remote = await selected_remote_transcription(_manager_loopback_url(), audio_path, model=config.asr_model, language=config.language, prompt=config.prompt)
+        if not assistant_local and (manager_configured or compute_device_id):
+            remote = await selected_remote_transcription(_manager_loopback_url(), audio_path, model=config.asr_model,
+                                                         language=config.language, prompt=config.prompt, device_id=compute_device_id)
         result = remote or await _transcribe(
             providers,
             audio_path,
@@ -445,6 +455,7 @@ def create_app(
         transcriber=(lambda audio, config: microphone_transcriber(audio, config, assistant_local=True)) if capture_only else microphone_transcriber,
         submitter=record_privately if capture_only else microphone_submitter,
         assistant_transcriber=lambda audio, config: microphone_transcriber(audio, config, assistant_local=True),
+        background_transcriber=lambda audio, config, device: microphone_transcriber(audio, config, compute_device_id=device),
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
         stop_playback=lambda: playback_queue.stop(clear_pending=True),
         record_transcription=None if capture_only else record_completed_audio,
@@ -656,8 +667,12 @@ def create_app(
         }
 
     @api.get("/v1/models")
-    async def models() -> dict[str, object]:
+    async def models(request: Request) -> dict[str, object]:
         rows = await asyncio.to_thread(lambda: model_rows(providers.capabilities()))
+        scope = request.headers.get("x-rabilink-speech-catalog-scope")
+        if scope is not None and request.headers.get("x-rabilink-tunnel-local"):
+            allowed = frozenset(scope.split(","))
+            rows = [row for row in rows if row.get("capability") in allowed]
         return {"object": "list", "data": rows, "api": api_index()}
 
     @api.get("/v1/models/{model_id:path}")
@@ -709,7 +724,7 @@ def create_app(
     @api.put("/v1/audio-streams/selection")
     async def audio_stream_selection(request: Request, body: AudioStreamSelectionBody) -> dict[str, object]:
         _require_loopback(request)
-        was_running = bool(microphone.snapshot().get("running"))
+        was_running = bool(microphone.snapshot().get("running")) and not microphone.assistant_background_active()
         if was_running:
             await microphone.stop(persist=False)
         try:
@@ -1100,6 +1115,16 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return {"enabled": body.enabled}
+
+    @api.post("/v1/internal/assistant-resident", include_in_schema=False)
+    async def assistant_resident(request: Request, body: AssistantResidentBody) -> dict[str, object]:
+        require_assistant_capture(request)
+        try:
+            snapshot = await microphone.configure_assistant(body.enabled, body.model, body.computeDeviceId,
+                                                           body.ownerId, release=body.release)
+            return {"running": snapshot["running"]}
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @api.post("/v1/internal/assistant-transcribe", include_in_schema=False)
     async def assistant_transcribe(request: Request) -> dict[str, object]:

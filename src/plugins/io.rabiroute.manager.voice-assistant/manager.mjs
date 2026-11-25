@@ -22,5 +22,13 @@ export const activate=definePlugin({async activate(context){
   context.services.provide('manager.voice-assistant@1',Object.freeze({instanceId:context.identity.instanceId,state:owner.state,command:owner.command}));
   context.contributions.register({kind:'page',id:'voice-assistant-page',value:{surface:'web.pages',label:{fallback:'语音助手'},routeId:'global.voice-assistant',rendererId:'builtin.web-page.voice-assistant.v1',slot:'route',hosts:['web'],order:51}});
   context.contributions.register({kind:'navigation',id:'voice-assistant',value:{surface:'web.navigation',label:{fallback:'语音助手'},routeId:'global.voice-assistant',icon:'mdi-microphone-message',slot:'utility',hosts:['web'],order:51}});
-  context.effects.add(async()=>{const registration=await api.registerOperationsAsync(implementation.createVoiceAssistantOperations(owner,operation=>provider.runAcceptedWork(operation)),context.lifecycle.signal);owner.startWake();return()=>registration.dispose()},'register voice assistant operations');
+  context.effects.add(async()=>{const registration=await api.registerOperationsAsync(implementation.createVoiceAssistantOperations(owner,operation=>provider.runAcceptedWork(operation)),context.lifecycle.signal);return()=>registration.dispose()},'register voice assistant operations');
+  context.publication.add({
+    publish(){}, rollback(){},
+    async afterPublish({previousRetirement,signal}){
+      await previousRetirement;
+      signal.throwIfAborted();
+      owner.startWake();
+    }
+  },'restore voice assistant capture after publication');
 }}).activate;

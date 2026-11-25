@@ -18,28 +18,11 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "语音服务"
+                        "fallback": "语音服务诊断"
                     },
                     "routeId": "route.speech",
                     "rendererId": "builtin.web-page.speech.v1",
                     "slot": "route",
-                    "hosts": [
-                        "web"
-                    ],
-                    "order": 50
-                }
-            },
-            {
-                "kind": "navigation",
-                "id": "speech",
-                "value": {
-                    "surface": "web.navigation",
-                    "label": {
-                        "fallback": "语音服务"
-                    },
-                    "routeId": "route.speech",
-                    "icon": "mdi-waveform",
-                    "slot": "utility",
                     "hosts": [
                         "web"
                     ],

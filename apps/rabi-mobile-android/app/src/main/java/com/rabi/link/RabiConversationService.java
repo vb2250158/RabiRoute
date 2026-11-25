@@ -46,6 +46,8 @@ import com.rabi.link.modules.wearable.WearableHealthController;
 
 /** Foreground phone client. Glasses are optional; this service works with the phone alone. */
 public final class RabiConversationService extends Service {
+    static final String ACTION_ACCOUNT_PROFILE_CHANGED = "com.rabi.link.account.PROFILE_CHANGED";
+    static final String ACTION_COMPUTER_DIRECTORY_CHANGED = "com.rabi.link.computers.DIRECTORY_CHANGED";
     private static volatile RabiConversationService currentInstance;
     private com.rabi.link.modules.rokid.RabiDeviceAgentWakeConsumer deviceAgentWake;
     private com.rabi.link.transport.RabiManagerHttpTransport managerHttpTransport;
@@ -116,7 +118,7 @@ public final class RabiConversationService extends Service {
                 || target.getRawJson().optInt("voiceCallProtocol") != 1 || !worker.equals(target.getRawJson().optString("ownerWorkerId"))) {
             callStatus("error", "电脑未确认通话合同或路线不可用，请刷新会话并检查详情"); return;
         }
-        voiceCall = new RabiVoiceCallSession(worker, route);
+        voiceCall = new RabiVoiceCallSession(worker, route, RabiConversationRules.INSTANCE.wireRouteId(target));
         voiceCallRelay = relay;
         callStarting = true;
         getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit().putString("callId", voiceCall.id)
@@ -635,6 +637,12 @@ public final class RabiConversationService extends Service {
                 }
                 return new RabiGlassPcBackend.ReplyDeliveryResult(true, playbackRequested, played,
                         outputDeviceKind, playbackFailure);
+            }
+            @Override public void onAccountProfileChanged() {
+                sendBroadcast(new Intent(ACTION_ACCOUNT_PROFILE_CHANGED).setPackage(getPackageName()));
+            }
+            @Override public void onComputerDirectoryChanged() {
+                sendBroadcast(new Intent(ACTION_COMPUTER_DIRECTORY_CHANGED).setPackage(getPackageName()));
             }
             @Override public void onPersonaAvatarChanged(String roleId, String avatarVersion, String avatarUrl) {
                 String role = roleId == null ? "" : roleId.trim();

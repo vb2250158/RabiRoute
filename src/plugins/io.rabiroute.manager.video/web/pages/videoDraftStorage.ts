@@ -1,4 +1,11 @@
 export type DraftRecord<T> = { revision: number; value: T | null; title: string };
+
+export function restoreMediaComputeSelection(value: { modelComputeDeviceId?: string; serviceDeviceId?: string }) {
+  const modelDeviceId = typeof value.modelComputeDeviceId === "string" ? value.modelComputeDeviceId : undefined;
+  const legacyDeviceId = typeof value.serviceDeviceId === "string" ? value.serviceDeviceId : "";
+  return { deviceId: modelDeviceId ?? "", pendingImageDeviceId: modelDeviceId ?? legacyDeviceId };
+}
+
 async function api(url: string, init?: RequestInit) {
   const response = await fetch(url, init);
   const value = await response.json();
@@ -26,8 +33,8 @@ function decode(value: unknown): unknown {
   return value;
 }
 function draftPath(key:string,canvasId?:string) { return canvasId ? `/api/video/v2/projects/${encodeURIComponent(key)}/canvases/${encodeURIComponent(canvasId)}/editor` : `/api/video/projects/${encodeURIComponent(key)}`; }
-export async function readDraft<T>(key: string,canvasId?:string): Promise<DraftRecord<T>> {
-  const record=await api(draftPath(key,canvasId));
+export async function readDraft<T>(key: string,canvasId?:string, signal = AbortSignal.timeout(15000)): Promise<DraftRecord<T>> {
+  const record=await api(draftPath(key,canvasId), { signal });
   return {...record,value:decode(record.value)};
 }
 export async function writeDraft<T>(key: string,value:T,revision:number,title:string,canvasId?:string):Promise<number> {

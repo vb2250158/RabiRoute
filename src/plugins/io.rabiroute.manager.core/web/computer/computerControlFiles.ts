@@ -15,10 +15,10 @@ function unbase64(value: string): Uint8Array { return Uint8Array.from(atob(value
 /** Browser adapter for the existing upload/read wire protocol. The target owns durable transfer state. */
 export class ComputerControlFiles {
   constructor(private readonly call: ComputerFileCall) {}
-  async upload(file: Blob, path: string, uploadId: string, signal: AbortSignal, progress: (value: ComputerFileProgress) => void) {
+  async upload(file: Blob, path: string, uploadId: string, signal: AbortSignal, progress: (value: ComputerFileProgress) => void, version?: string) {
     const hash = await fileHash(file, signal);
     const check = () => { if (signal.aborted) throw new DOMException("上传等待已停止；请查询原传输或明确取消。", "AbortError"); }; check();
-    let current = await this.call({ action:"upload.begin", uploadId, path, size:file.size, sha256:hash });
+    let current = await this.call({ action:"upload.begin", uploadId, path, size:file.size, sha256:hash, ...(version ? { version } : {}) });
     progress(current as ComputerFileProgress);
     while (Number(current.offset) < file.size) {
       check(); const offset = Number(current.offset); const part = new Uint8Array(await file.slice(offset, Math.min(offset + Number(COMPUTER_LIMITS.chunkBytes), file.size)).arrayBuffer());

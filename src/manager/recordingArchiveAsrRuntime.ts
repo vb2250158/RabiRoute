@@ -10,6 +10,7 @@ import { resolveEffectiveAsrSelection, type EffectiveAsrSelection } from "./reco
 export interface RecordingArchiveAsrRuntimeOptions {
   archive: Pick<RecordingArchiveRuntime, "bindings" | "store" | "catalog">;
   localSpeechUrl(): string;
+  ensureSpeech?(): Promise<void>;
   workerId(): string;
   instanceId: string;
   clock?: () => number;
@@ -49,10 +50,14 @@ export class RecordingArchiveAsrRuntime {
     if (!entry) {
       const store = new RecordingAsrJobStore({ owner, resolveOwner: o => this.options.archive.bindings.resolveOwner(o), workerId: this.options.workerId, instanceId: this.options.instanceId, clock: this.clock, leaseMs: 600_000 });
       const jobs = new RecordingAsrJobs({ store, clock: this.clock, changed: key => this.options.changed?.(owner, key),
-        resolveSelection: () => resolveEffectiveAsrSelection({ readJson: async path => {
+        resolveSelection: async () => {
+          try { await this.options.ensureSpeech?.(); }
+          catch { return { ok: false, code: "blocked_model_configuration", reason: "read_failed" }; }
+          return resolveEffectiveAsrSelection({ readJson: async path => {
           const response = await requestLocalSpeechJson(this.options.localSpeechUrl(), path, {}, { timeoutMs: getTimeoutMs("backend.manager.recordingArchiveAsrRuntime.readJson.requestLocalSpeechJson.timeoutMs", 15_000), fetchImpl: this.options.fetchImpl });
           if (response.status !== 200) throw new Error("local_model_status_failed"); return response.data;
-        } }), transcribeLocal: (ref, selected, key, signal) => this.compute(ref, selected, key, signal) });
+          } });
+        }, transcribeLocal: (ref, selected, key, signal) => this.compute(ref, selected, key, signal) });
       entry = { store, jobs }; this.owners.set(owner, entry);
     }
     return entry;
@@ -112,6 +117,9 @@ export class RecordingArchiveAsrRuntime {
     const started = Date.now();
     let url: string, wav: Buffer;
     try {
+      signal.throwIfAborted();
+      await this.options.ensureSpeech?.();
+      signal.throwIfAborted();
       url = normalizeLocalSpeechServiceUrl(this.options.localSpeechUrl());
       const m = ref.manifest;
       if (m.totalBytes > RECORDING_ARCHIVE_MAX_BYTES || signal.aborted) throw new Error("pre_dispatch_rejected");

@@ -11,6 +11,8 @@ export interface RabiLinkHomeDevice {
   platform?: string;
   rabiPcVersion?: string | null;
   isLocal?: boolean;
+  labels?: { alias: string; tags: string[] };
+  labelRevision?: string;
 }
 export interface RabiLinkHomeData {
   devices: RabiLinkHomeDevice[];
@@ -22,7 +24,7 @@ function record(value: unknown): value is Record<string, unknown> {
 /** Only the local Manager reads the stored application credential. */
 export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetch = fetch): Promise<RabiLinkHomeData> {
   const response = await request("/api/rabi/link-home", { method: "GET", cache: "no-store", signal });
-  if (!response.ok) throw new Error("暂时无法读取已授权设备，请检查服务器连接后重试。");
+  if (!response.ok) throw new Error("暂时无法读取已连接设备，请检查服务器连接后重试。");
   const payload: unknown = await response.json();
   if (!record(payload) || payload.code !== 0 || !record(payload.data)) throw new Error("服务器返回的数据不完整，请刷新重试。");
   const { devices, checkedAt } = payload.data;
@@ -39,6 +41,9 @@ export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetc
     const deviceModel = typeof device.deviceModel === "string" ? device.deviceModel : (typeof device.model === "string" ? device.model : undefined);
     const clientKind = typeof device.clientKind === "string" ? device.clientKind : undefined;
     const platform = typeof device.platform === "string" ? device.platform : undefined;
+    const labels = record(device.labels) && typeof device.labels.alias === "string" && Array.isArray(device.labels.tags)
+      && device.labels.tags.every(tag => typeof tag === "string")
+      ? { labels: { alias: device.labels.alias, tags: [...device.labels.tags] } } : {};
     return {
       id: device.id,
       guid: device.guid,
@@ -51,14 +56,44 @@ export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetc
       ...(clientKind ? { clientKind } : {}),
       ...(platform ? { platform } : {}),
       ...(device.rabiPcVersion !== undefined ? { rabiPcVersion: device.rabiPcVersion as string | null } : {}),
-      ...(device.isLocal !== undefined ? { isLocal: device.isLocal as boolean } : {})
+      ...(device.isLocal !== undefined ? { isLocal: device.isLocal as boolean } : {}),
+      ...(typeof device.labelRevision === "string" ? { labelRevision: device.labelRevision } : {}),
+      ...labels
     };
   });
   return { devices: result, checkedAt };
 }
 
+export async function saveRabiLinkDeviceLabels(device: RabiLinkHomeDevice, labels: NonNullable<RabiLinkHomeDevice["labels"]>, request: typeof fetch = fetch): Promise<void> {
+  if (!device.labelRevision) throw new Error("请刷新设备列表后重试。");
+  const response = await request(`/api/rabi/link-home/devices/${encodeURIComponent(device.id)}/labels`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      ...labels, guid: device.guid, expectedRevision: device.labelRevision
+    })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.code !== 0) {
+    throw new Error(response.status === 409 ? "设备信息已更新，请刷新后重试。" : "无法保存别名和标签，请稍后重试。");
+  }
+}
+
+export async function requestPhoneFileOperation(device: Pick<RabiLinkHomeDevice, "id" | "guid">,
+  input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const response = await fetch(`/api/rabi/link-home/devices/${encodeURIComponent(device.id)}/files`, {
+    method: "POST", signal, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...input, targetGuid: device.guid })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.code !== 0 || !record(payload?.data)) {
+    throw new Error(typeof payload?.errorCode === "string" ? payload.errorCode : "PHONE_FILES_TRANSPORT_UNCONFIRMED");
+  }
+  return payload.data;
+}
+
 export function rabiLinkDeviceKind(device: RabiLinkHomeDevice): "phone" | "glasses" | "desktop" {
-  if ((device.deviceKind || device.kind) === "pc") return "desktop";
+  const kind = device.deviceKind || device.kind;
+  if (kind === "phone" || kind === "glasses") return kind;
+  if (kind === "pc") return "desktop";
   const text = `${device.kind || ""} ${device.deviceKind || ""} ${device.clientKind || ""} ${device.platform || ""} ${device.deviceModel || ""} ${device.name || ""} ${device.id || ""}`.toLowerCase();
   if (text.includes("glass") || text.includes("rokid") || text.includes("ar")) return "glasses";
   if (text.includes("phone") || text.includes("mobile") || text.includes("android") || text.includes("ios") || text.includes("iphone") || text.includes("xiaomi") || text.includes("huawei") || text.includes("23116pn5bc")) return "phone";
@@ -92,6 +127,7 @@ export function rabiLinkDeviceDisplayName(device: RabiLinkHomeDevice): string {
 const capabilityLabels: Record<string, string> = {
   agent: "智能体",
   "mobile-agent": "移动智能体",
+  "phone-files-v1": "文件操作",
   "glasses-agent": "眼镜智能体",
   tasks: "任务处理", webgui: "网页管理",
   speech: "语音服务", tts: "语音合成", asr: "语音识别",
@@ -106,6 +142,7 @@ export function rabiLinkCapabilities(capabilities: string[], deviceKind?: "phone
   const known: string[] = [];
   const advanced: string[] = [];
   for (const value of effective) {
+    if (value === "phone-file-control-v1") continue;
     const label = Object.hasOwn(capabilityLabels, value) ? capabilityLabels[value] : undefined;
     if (label) known.push(label); else advanced.push(value);
   }

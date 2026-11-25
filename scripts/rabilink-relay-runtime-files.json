@@ -7,6 +7,7 @@
   "scripts/rabilink-device-log-store.mjs",
   "scripts/rabilink-event-hub.mjs",
   "scripts/rabilink-host-accounts.mjs",
+  "scripts/rabilink-phone-files.mjs",
   "scripts/rabilink-pair-pc.mjs",
   "scripts/rabilink-pc-pairing-ui.mjs",
   "scripts/rabilink-pc-pairing.mjs",

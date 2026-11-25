@@ -63,11 +63,34 @@ async function fixture(t: test.TestContext) {
   return { root, globalConfig, definitions, registry, registration, request, holdSync, authority, credential, context, routeHash };
 }
 
-test("all 16 control operations use one executable catalog and an enrolled empty node reads native identity/configuration", async t => {
+test("all 19 control operations use one executable catalog and an enrolled empty node reads native identity/configuration", async t => {
   const f = await fixture(t);
-  assert.equal(f.definitions.length, 16);
+  assert.equal(f.definitions.length, 19);
   assert.ok(f.definitions.every(value => value.contract.exposure === "public"));
-  assert.equal(f.registry.catalogSnapshot().operations.length, 16);
+  for (const [id, method, path] of [
+    ["manager.route-control.link-home.device.read", "GET", "/api/rabi/link-home/devices/:deviceId"],
+    ["manager.route-control.link-home.device.labels.update", "PATCH", "/api/rabi/link-home/devices/:deviceId/labels"],
+    ["manager.route-control.link-home.device.phone-files.execute", "POST", "/api/rabi/link-home/devices/:deviceId/files"]
+  ]) {
+    const matches = f.definitions.filter(value => value.contract.operationId === id);
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].contract.method, method);
+    assert.equal(matches[0].contract.pathTemplate, path);
+    assert.equal(matches[0].contract.exposure, "public");
+    assert.ok(matches[0].contract.responses);
+  }
+  const labels = f.definitions.find(value => value.contract.operationId === "manager.route-control.link-home.device.labels.update")!.contract.request.body as any;
+  const files = f.definitions.find(value => value.contract.operationId === "manager.route-control.link-home.device.phone-files.execute")!.contract.request.body as any;
+  assert.deepEqual(labels.schema.required, ["alias", "tags", "guid", "expectedRevision"]);
+  assert.deepEqual(files.schema.required, ["targetGuid", "action"]);
+  assert.equal(labels.schema.additionalProperties, false);
+  assert.equal(files.schema.additionalProperties, false);
+  assert.ok(files.schema.properties.action.enum.includes("file.list"));
+  assert.ok(files.schema.properties.action.enum.includes("upload.commit"));
+  for (const [url, method] of [["/api/rabi/link-home/devices/phone", "GET"], ["/api/rabi/link-home/devices/phone/labels", "PATCH"], ["/api/rabi/link-home/devices/phone/files", "POST"]]) {
+    assert.equal((await f.request(url, method, undefined, { authorization: "Bearer invalid" })).status, 401);
+  }
+  assert.equal(f.registry.catalogSnapshot().operations.length, 19);
   const response = await f.request("/api/rabi/identity?ignored=yes"); assert.equal(response.status, 200);
   assert.equal((await response.json()).data.guid, f.globalConfig.read().rabiGuid);
   const configuration = await f.request("/manager-config"); assert.equal(configuration.status, 200); assert.equal((await configuration.json()).routeDir, "routes");

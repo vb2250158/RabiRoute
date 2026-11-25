@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMediaServiceClient, MediaServiceChangedError } from "../../src/plugins/io.rabiroute.manager.video/web/pages/mediaServiceClient";
+import { restoreMediaComputeSelection } from "../../src/plugins/io.rabiroute.manager.video/web/pages/videoDraftStorage";
 import { createSpeechControlClient } from "../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
 
 test("workspace requests, resources and events remain local while only compute carries the selected PC", async () => {
@@ -46,6 +47,28 @@ test("remote failure never falls back to local initialization or replays a write
   });
   await assert.rejects(client.request("/jobs", { method: "POST", headers: { "Idempotency-Key": "original-operation" }, body: "parameters" }), /service unavailable/);
   assert.deepEqual(calls, ["/api/video/jobs?computeDeviceId=offline-compute"]);
+});
+
+test("legacy canvas opens locally while pending image submission keeps its original computer", async () => {
+  const selection = restoreMediaComputeSelection({ serviceDeviceId: "old-offline-pc" });
+  const calls: string[] = [];
+  const client = createMediaServiceClient(() => selection.deviceId, async url => {
+    calls.push(String(url));
+    return Response.json({ online: false, jobs: [{ id: "existing-job" }] });
+  });
+  const status = await client.request<{ jobs: { id: string }[] }>("/status");
+  assert.deepEqual(calls, ["/api/video/status"]);
+  assert.deepEqual(status.jobs, [{ id: "existing-job" }]);
+  assert.equal(selection.pendingImageDeviceId, "old-offline-pc");
+});
+
+test("a machine explicitly selected using the model picker survives refresh", () => {
+  assert.deepEqual(restoreMediaComputeSelection({ modelComputeDeviceId: "model-pc" }), {
+    deviceId: "model-pc", pendingImageDeviceId: "model-pc"
+  });
+  assert.deepEqual(restoreMediaComputeSelection({ modelComputeDeviceId: "", serviceDeviceId: "old-pc" }), {
+    deviceId: "", pendingImageDeviceId: ""
+  });
 });
 
 test("audio model listing and synthesis share the media target without changing the speech selection", async () => {

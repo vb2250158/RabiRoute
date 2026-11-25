@@ -3,6 +3,36 @@ import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';impor
 import {PassThrough} from 'node:stream';
 import {createVoiceAssistantOwner} from './src/runtime.mjs';import {createChatModel} from '@rabilink/desktop-voice-service/chat-model';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+test('the PC assistant switch owns background capture, with an independent compute selection and safe retirement', async t => {
+  const stateRoot=await mkdtemp(join(tmpdir(),'rabi-assistant-background-'));
+  const calls=[];
+  const owner=await createVoiceAssistantOwner({
+    identity:{applicationGenerationId:'app',managerInstanceId:'manager',activationId:'assistant'},
+    stateRoot,signal:new AbortController().signal,publish(){},
+    clientFactory:async()=>({operations:{async call(){return {ok:true,data:{roles:[]}}}},close:async()=>{}}),
+    speech:{
+      computeServers:async()=>{throw Error('RabiLink Relay is not configured.')},
+      speechControl:{models:async()=>[],personas:()=>[],microphoneStatus:async()=>({config:{streamingEnabled:false}})},
+      speechRuntimeControl:{async setAssistantResident(settings){calls.push(settings)}},
+    },
+    modelCatalog:async()=>[],
+  });
+  t.after(async()=>{await owner.dispose();await rm(stateRoot,{recursive:true,force:true})});
+  const initial=await owner.state();
+  assert.equal(initial.settings.voiceEnabled,false);
+  assert.deepEqual(initial.hostSettings.modelComputers,[]);
+  await owner.command({action:'host-settings',patch:{backgroundAsrDeviceId:'trusted-peer',backgroundAsrModel:'small-asr'}});
+  await owner.command({action:'settings',patch:{voiceEnabled:true}});
+  assert.equal((await owner.state()).hostSettings.residentTranscription.phase,'recording');
+  assert.deepEqual(calls.at(-1),{enabled:true,ownerId:'assistant',model:'small-asr',computeDeviceId:'trusted-peer'});
+  await owner.command({action:'settings',patch:{voiceEnabled:false}});
+  assert.equal((await owner.state()).hostSettings.residentTranscription.phase,'disabled');
+  assert.equal((await owner.state('mobile')).settings.voiceEnabled,true);
+  await owner.command({action:'settings',patch:{voiceEnabled:true}});
+  await owner.dispose();
+  assert.deepEqual(calls.at(-1),{enabled:false,ownerId:'assistant',release:true});
+});
+
 for(const asrSource of ['host','custom'])for(const ttsSource of ['host','custom'])test(`actual ASR→automatic model submit→one player: ${asrSource} ASR + ${ttsSource} TTS`,async()=>{
  const stateRoot=await mkdtemp(join(tmpdir(),'rabi-voice-sources-')),abort=new AbortController();let owner;
  const calls={hostAsr:0,hostTts:0,customAsr:0,customTts:0,players:0,opened:0,closed:0,recordings:0,released:0},transcripts=[];

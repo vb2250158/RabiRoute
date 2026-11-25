@@ -8,7 +8,7 @@ import AudioPromptEditor from "../components/AudioPromptEditor.vue";
 import { synthesizeWithPauses } from "../../../io.rabiroute.manager.speech/web/speech/audioPause";
 import { createSpeechControlClient } from "../../../io.rabiroute.manager.speech/web/speech/speechControlClient";
 import type { SpeechModel } from "@shared/speechControlContract";
-import { readDraft, writeDraft } from "./videoDraftStorage";
+import { readDraft, restoreMediaComputeSelection, writeDraft, type DraftRecord } from "./videoDraftStorage";
 import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
 import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
@@ -19,7 +19,10 @@ import MediaVideoPlayer from "../components/MediaVideoPlayer.vue";
 import type { VideoProgressJob } from "./videoJobProgress";
 
 import PeerServerSelect from "../../../../../ribiwebgui/src/components/PeerServerSelect.vue";
+import ComputerModelPicker from "../../../../../ribiwebgui/src/components/ComputerModelPicker.vue";
 import { createMediaServiceClient, MediaServiceChangedError } from "./mediaServiceClient";
+import { previewAccessDenied, readPreview, writePreview } from "../../../../../ribiwebgui/src/readPreviewCache";
+import { loadWorkbenchDefinition } from "./workbenchDefinition";
 import { peerManagerPath } from "../../../../../ribiwebgui/src/peerManagerTarget";
 const serviceDeviceId = ref("");
 const mediaService = createMediaServiceClient(() => serviceDeviceId.value);
@@ -51,11 +54,14 @@ const referenceKinds: { id: AssetKind; label: string; icon: string; accept: stri
   { id: "video", label: "视频", icon: "mdi-video-outline", accept: "video/mp4", limit: 3, bytes: 64 * 1024 ** 2 },
   { id: "audio", label: "音频", icon: "mdi-music-note-outline", accept: ".wav", limit: 3, bytes: 16 * 1024 ** 2 },
 ];
-const availableModels = computed(() => (snapshot.value?.models || []).filter(item => item.mode !== "image").filter(item => (item.mode === "reference") === (mode.value === "reference")));
+function videoModels(models: Model[]) {
+  return models.filter(item => item.mode !== "image" && (item.mode === "reference") === (mode.value === "reference"));
+}
+const availableModels = computed(() => videoModels(snapshot.value?.models || []));
 const selectedWorkflow = computed(() => snapshot.value?.models.find(item => item.id === model.value)?.workflows?.[quickGeneration.value ? "fast" : "standard"]);
 const workflowProblem = computed(() => {
   if (!snapshot.value?.models.find(item => item.id === model.value)?.workflows) return "请更新视频服务以使用标准／快速工作流。";
-  if (snapshot.value.online && !snapshot.value.availableWorkflows?.some(item => item.model === model.value && (snapshot.value?.models.find(row => row.id === model.value)?.workflows?.[item.workflowId]?.kind || item.workflowId) === (quickGeneration.value ? "fast" : "standard") && item.generateAudio === generateAudio.value)) return "当前工作流或声音依赖未就绪，请前往「模型服务 → 工作台模型」检查。";
+  if (snapshot.value.online && !snapshot.value.availableWorkflows?.some(item => item.model === model.value && (snapshot.value?.models.find(row => row.id === model.value)?.workflows?.[item.workflowId]?.kind || item.workflowId) === (quickGeneration.value ? "fast" : "standard") && item.generateAudio === generateAudio.value)) return "当前工作流或声音依赖未就绪，请前往「模型服务 → 视频生成模型」检查。";
   return "";
 });
 function setMode(value: string) {
@@ -192,7 +198,7 @@ function endMinimap(event: PointerEvent) {
 }
 const { viewport, scale, handMode, canPan, dragging, canUndo, canRedo, transform: canvasTransform, grid: canvasGrid } = canvas;
 type CanvasKind = "video" | "image" | "audio" | "text";
-type CanvasItem = { id: string; kind: CanvasKind; title: string; jobId?: string; asset?: Asset; text: string; imageModel?: string; imageSize?: string; imageTier?: string; imageKey?: string; imageBody?: string; audioMode?: "generate" | "reference"; audioModel?: string; audioParameters?: TtsParameters; audioSettingsOpen?: boolean; audioVoiceMode?: "default" | "custom"; audioVoice?: string; audioSpeed?: number; audioUrl?: string; audioError?: string; audioBusy?: boolean };
+type CanvasItem = { id: string; kind: CanvasKind; title: string; jobId?: string; asset?: Asset; text: string; imageModel?: string; imageSize?: string; imageTier?: string; imageKey?: string; imageBody?: string; imageComputeDeviceId?: string; audioMode?: "generate" | "reference"; audioModel?: string; audioParameters?: TtsParameters; audioSettingsOpen?: boolean; audioVoiceMode?: "default" | "custom"; audioVoice?: string; audioSpeed?: number; audioUrl?: string; audioError?: string; audioBusy?: boolean };
 const canvasItems = ref<CanvasItem[]>([{ id: "draft-1", kind: "video", title: "视频 1", text: "" }]);
 const activeVideoId = ref("draft-1");
 const selectedCanvasId = ref("draft-1");
@@ -365,9 +371,18 @@ function imageSource(item: CanvasItem) { const url=imageJob(item)?.imageUrl; ret
 async function generateImage(item: CanvasItem) {
   const [w,h]=(item.imageSize || "1024x1024").split("x").map(Number);
   const body=JSON.stringify({model:item.imageModel || imageModels.value[0]?.id,prompt:mediaPrompt(item.id, item.text),width:w,height:h,seed:1});
-  if(item.imageBody!==body) {item.imageKey=browserUuid();item.imageBody=body;}
+  if (item.imageKey && item.imageComputeDeviceId !== serviceDeviceId.value) {
+    throw new Error("上次图片提交结果未确认，请切回原机器核对任务记录。");
+  }
+  if (!item.imageKey || item.imageBody !== body) {
+    item.imageKey = browserUuid();
+    item.imageBody = body;
+    item.imageComputeDeviceId = serviceDeviceId.value;
+  }
   const job=await request<Job>("/jobs",{method:"POST",headers:{"content-type":"application/json","Idempotency-Key":item.imageKey!},body});
-  item.jobId=job.id; item.imageKey=undefined; item.imageBody=undefined; await refresh();
+  item.jobId = job.id;
+  item.imageKey = item.imageBody = item.imageComputeDeviceId = undefined;
+  showSubmittedJob(job);
 }
 async function useGeneratedImage(item: CanvasItem) {
   const url=imageSource(item); if(!url)return;
@@ -390,12 +405,60 @@ function insertAudioText(item: CanvasItem, text: string) {
   openPopover.value="";
 }
 const generatedAudio = new Map<string, Blob>();
-async function loadAudioModels() {
-  try { audioModels.value = (await speechControlClient.models()).models.filter(row => row.capability === "tts"); audioCatalogError.value = ""; }
-  catch (cause) { if (!(cause instanceof MediaServiceChangedError)) audioCatalogError.value = "所选电脑的 TTS 服务未就绪，请启用后刷新。"; }
+let audioCatalogFlight: Promise<void> | undefined;
+let audioCatalogAt = 0;
+function loadAudioModels() {
+  if (audioCatalogFlight) return audioCatalogFlight;
+  if (Date.now() - audioCatalogAt < 30_000) return Promise.resolve();
+  const revision = mediaService.selectionRevision();
+  const flight = speechControlClient.models({ signal: AbortSignal.timeout(10000) }).then(({ models }) => {
+    if (disposed || revision !== mediaService.selectionRevision()) return;
+    audioModels.value = models.filter(row => row.capability === "tts");
+    audioCatalogAt = Date.now();
+    audioCatalogError.value = "";
+  }).catch(cause => {
+    if (!disposed && revision === mediaService.selectionRevision() && !(cause instanceof MediaServiceChangedError)) {
+      audioCatalogError.value = "所选电脑的 TTS 服务未就绪，请启用后刷新。";
+    }
+  }).finally(() => { if (audioCatalogFlight === flight) audioCatalogFlight = undefined; });
+  audioCatalogFlight = flight;
+  return flight;
 }
 function selectedAudioModel(item:CanvasItem){return audioModels.value.find(row=>row.id===item.audioModel) || (!item.audioModel ? audioModels.value.find(row=>row.available) : undefined);}
-function selectAudioModel(item:CanvasItem,model:SpeechModel){item.audioModel=model.id;item.audioParameters=normalizeTtsParameters(model);item.audioVoice=undefined;item.audioSpeed=undefined;item.audioError="";}
+async function loadModelOptions(kind: "image" | "video" | "audio", deviceId: string, signal: AbortSignal) {
+  const preview = createMediaServiceClient(() => deviceId);
+  if (kind === "audio") {
+    const speech = createSpeechControlClient((input, init) => preview.fetchManager(String(input), init));
+    const models = deviceId === serviceDeviceId.value && Date.now() - audioCatalogAt < 30_000
+      ? audioModels.value : (await speech.models({ signal })).models;
+    return models.filter(row => row.capability === "tts").map(row => ({
+      value: row.id, title: row.name, subtitle: `${row.note || row.family} · ${row.available ? "可用" : "未就绪"}`
+    }));
+  }
+  const status = deviceId === serviceDeviceId.value && !refreshFlight &&
+    !statusError.value && Date.now() - snapshotAt < 10_000 ? snapshot.value : undefined;
+  const current = status ?? await preview.request<Snapshot>("/status", { signal });
+  if (current.computeError) throw new Error(current.computeError);
+  const models = kind === "image" ? current.models.filter(row => row.mode === "image") : videoModels(current.models);
+  return models.map(row => ({
+    value: row.id, title: row.label,
+    subtitle: current.availableModels?.includes(row.id) ? "可用" : "未就绪"
+  }));
+}
+async function chooseMediaModel(target: CanvasItem | undefined, deviceId: string, id: string) {
+  if (!(await selectModelService(deviceId))) return false;
+  if (!target) model.value = id;
+  else if (target.kind === "image") target.imageModel = id;
+  else {
+    if (!audioModels.value.length) await loadAudioModels();
+    target.audioModel = id;
+    target.audioParameters = normalizeTtsParameters(audioModels.value.find(row => row.id === id));
+    target.audioVoice = undefined;
+    target.audioSpeed = undefined;
+    target.audioError = "";
+  }
+  return true;
+}
 function audioParameterValues(item:CanvasItem){return normalizeTtsParameters(selectedAudioModel(item),item.audioParameters || {voice:item.audioVoice,speed:item.audioSpeed});}
 function audioSource(item: CanvasItem) { return item.audioUrl || (item.asset ? managerResourceUrl(`/api/video/assets/${item.asset.id}`) : undefined); }
 async function generateAudioCard(item: CanvasItem) {
@@ -465,11 +528,12 @@ function resetCanvasView() {
 }
 
 const inputProblem = computed(() => {
+  if (snapshot.value?.computeError) return snapshot.value.computeError;
   if (videoInputPrompt.value.length > 12000) return "当前提示词和连接的文本合计超过 12000 字。";
   if (!model.value) return "当前模式没有可用的生成方案。";
   if (workflowProblem.value) return workflowProblem.value;
   if (mode.value === "reference" && !references.value.length) return "请添加图片、视频或音频参考。";
-  if (snapshot.value?.online && !snapshot.value.availableModels?.includes(model.value)) return "当前方案尚未就绪，请前往「模型服务 → 工作台模型」检查下载，并启动视频服务。";
+  if (snapshot.value?.online && !snapshot.value.availableModels?.includes(model.value)) return "当前方案尚未就绪，请前往「模型服务 → 视频生成模型」检查下载。";
   if (mode.value === "image" && !firstFrame.value && !lastFrame.value) return "请添加首帧或尾帧。";
   if (![width.value, height.value].every(value => Number.isSafeInteger(value) && value >= 256 && value % 32 === 0) || width.value * height.value > 1032192) return "宽高须为 32 的倍数，总像素不超过 1032192。";
   if (!Number.isSafeInteger(frames.value) || frames.value < 22 || frames.value > 260 || (frames.value - 5) % 17 !== 0) return "帧数须为 17k+5，范围 22–260。";
@@ -502,7 +566,10 @@ async function copyPrompt(job: Job) {
 }
 function cancelSelected() {
   const job = selected.value;
-  if (job?.status === "queued") void action(() => request(`/jobs/${job.id}/cancel`, { method: "POST" }));
+  if (job?.status === "queued") void action(async () => {
+    await request(`/jobs/${job.id}/cancel`, { method: "POST" });
+    void refresh(true);
+  });
 }
 let events: EventSource | undefined;
 let computeEvents: EventSource | undefined;
@@ -513,21 +580,56 @@ const duration = computed(() => (frames.value / (snapshot.value?.models.find(ite
 async function request<T>(route: string, init?: RequestInit): Promise<T> {
   return mediaService.request<T>(route, init);
 }
-function refresh(): Promise<void> {
-  if (refreshFlight) return refreshFlight;
-  const flight = request<Snapshot>("/status").then(value => {
-    if (disposed) return;
+let statusController: AbortController | undefined;
+let statusInvalidated = false;
+let snapshotAt = 0;
+const statusError = ref("");
+function refresh(changed = false): Promise<void> {
+  if (disposed) return Promise.resolve();
+  if (refreshFlight) {
+    statusInvalidated ||= changed;
+    return refreshFlight;
+  }
+  const controller = new AbortController();
+  statusController = controller;
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
+  const flight = request<Snapshot>("/status", { signal }).then(value => {
+    if (disposed || signal.aborted) return;
     snapshot.value = value;
-    if (value.computeError) error.value = value.computeError;
-    if (!model.value) model.value = value.models[0]?.id || "";
-  }).finally(() => { if (refreshFlight === flight) refreshFlight = undefined; });
+    snapshotAt = Date.now();
+    statusError.value = "";
+    if (!model.value) model.value = videoModels(value.models)[0]?.id || "";
+  }).catch(failure => {
+    if (!disposed && !controller.signal.aborted && !(failure instanceof MediaServiceChangedError)) {
+      statusError.value = "服务状态更新失败。";
+      if (previewAccessDenied((failure as { status?: number })?.status)) snapshot.value = undefined;
+    }
+  }).finally(() => {
+    if (refreshFlight !== flight) return;
+    refreshFlight = undefined;
+    statusController = undefined;
+    if (statusInvalidated) {
+      statusInvalidated = false;
+      void refresh();
+    }
+  });
   refreshFlight = flight;
-  return refreshFlight;
+  return flight;
+}
+function showSubmittedJob(job: Job) {
+  if (snapshot.value) {
+    const jobs = snapshot.value.jobs;
+    const index = jobs.findIndex(item => item.id === job.id);
+    if (index === -1) jobs.unshift(job);
+    else jobs[index] = job;
+  }
+  void refresh(true);
 }
 async function action(operation: () => Promise<unknown>) {
+  if (busy.value || disposed) return;
   busy.value = true; error.value = "";
-  try { await operation(); await refresh(); }
-  catch (failure) { if (!(failure instanceof MediaServiceChangedError)) error.value = failure instanceof Error ? failure.message : "请求失败。"; }
+  try { await operation(); }
+  catch (failure) { if (!disposed && !(failure instanceof MediaServiceChangedError)) error.value = failure instanceof Error ? failure.message : "请求失败。"; }
   finally { busy.value = false; }
 }
 async function pngBase64FromBitmap(bitmap: ImageBitmap) {
@@ -580,10 +682,10 @@ async function submit() {
   const result = await request<Job>("/jobs", { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": pendingSubmission.key }, body });
   activeVideo.value!.jobId = result.id; selectedId.value = result.id; filter.value = "all"; search.value = ""; notice.value = "已加入生成队列。";
   pendingSubmission = undefined;
+  showSubmittedJob(result);
 }
-type SavedCanvas = { version: 1; serviceDeviceId?: string; items: CanvasItem[]; active: string; selected: string[]; positions: Record<string, NodeLayout>; drafts: [string, ReturnType<typeof captureDraft>][]; audio: [string, Blob][] };
+type SavedCanvas = { version: 1; modelComputeDeviceId?: string; serviceDeviceId?: string; items: CanvasItem[]; active: string; selected: string[]; positions: Record<string, NodeLayout>; drafts: [string, ReturnType<typeof captureDraft>][]; audio: [string, Blob][] };
 const draftLoaded = ref(true);
-const draftStatus = ref("正在恢复草稿…");
 const draftFailure = ref("");
 let draftRevision = 0;
 let savingDraft = false;
@@ -591,7 +693,9 @@ let draftSaveFlight: Promise<void> | undefined;
 let savingGraph = false;
 let workflowLayoutFlight: Promise<void> | undefined;
 let workflowLayoutRequested = false;
-let pendingDraft: SavedCanvas | undefined;
+let pendingDraft = false;
+let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let recentDraft: { projectId: string; canvasId: string; record: DraftRecord<SavedCanvas> } | undefined;
 const projectId = ref(new URL(location.href).searchParams.get("project") || "");
 const projectTitle = ref("未命名画布");
 const workbenchProjectTitle = ref("");
@@ -712,11 +816,14 @@ type ProjectCard = {
   preview?: CanvasPreview;
 
 };
-const projects = ref<ProjectCard[]>([]);
+const projectPreviewKey = ["workbench", "projects"];
+const projectPreview = readPreview<ProjectCard[]>(projectPreviewKey);
+const projects = ref<ProjectCard[]>(projectPreview ?? []);
 const catalogProjectId = ref("");
 const lastOpenedCanvasId = ref("");
+const catalogRevision = ref(0);
 const projectsLoading = ref(false);
-const projectsLoaded = ref(false);
+const projectsLoaded = ref(!!projectPreview);
 const projectsError = ref("");
 let projectsRequest: AbortController | undefined;
 const jobsById = computed(() => new Map(snapshot.value?.jobs.map(job => [job.id, job])));
@@ -731,8 +838,14 @@ function resolvePreview(preview?: CanvasPreview): CanvasCover | undefined {
 }
 const projectPreviews = computed(() => new Map(projects.value.map(project => [project.id, previewUnavailable.value.has(project.id) ? undefined : resolvePreview(project.preview)])));
 function failProjectPreview(id: string) { previewUnavailable.value.add(id); }
-async function loadProjects() {
-  projectsRequest?.abort();
+let projectsFlight: Promise<void> | undefined;
+function loadProjects() {
+  if (projectsFlight) return projectsFlight;
+  const flight = readProjects().finally(() => { if (projectsFlight === flight) projectsFlight = undefined; });
+  projectsFlight = flight;
+  return flight;
+}
+async function readProjects() {
   const controller = new AbortController();
   projectsRequest = controller;
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
@@ -742,10 +855,16 @@ async function loadProjects() {
     const result = await request<{ projects: ProjectCard[] }>("/projects", { signal });
     if (projectsRequest !== controller || signal.aborted) return;
     projects.value = result.projects;
+    writePreview(projectPreviewKey, result.projects);
     projectsLoaded.value = true;
     previewUnavailable.value.clear();
   } catch (failure) {
     if (projectsRequest !== controller || controller.signal.aborted) return;
+    if (previewAccessDenied((failure as { status?: number })?.status)) {
+      projects.value = [];
+      projectsLoaded.value = false;
+      writePreview(projectPreviewKey, undefined);
+    }
     projectsError.value = signal.aborted ? "项目列表加载超时。" : failure instanceof Error ? failure.message : "项目列表加载失败。";
   } finally {
     if (projectsRequest === controller) {
@@ -770,6 +889,25 @@ async function openProject(id: string, route?: CanvasRoute) {
   }
   type ProjectIdentity = { defaultCanvasId: string; title: string };
   const needsDefault = !route?.canvasId && Boolean(route?.runId || route?.nodeId || route?.settings);
+  const targetCanvas = route?.canvasId;
+  const signal = AbortSignal.timeout(15000);
+  async function readCanvas(canvasId: string): Promise<[WorkbenchCanvas, DraftRecord<SavedCanvas>]> {
+    const graph = request<WorkbenchCanvas>(`/v2/projects/${encodeURIComponent(id)}/canvases/${encodeURIComponent(canvasId)}`, { signal });
+    if (recentDraft?.projectId !== id || recentDraft.canvasId !== canvasId) {
+      return Promise.all([graph, readDraft<SavedCanvas>(id, canvasId, signal)]);
+    }
+    const cached = recentDraft.record;
+    const result = await graph;
+    const record = result.revision === cached.revision ? cached : await readDraft<SavedCanvas>(id, canvasId, signal);
+    return [result, record];
+  }
+  let target = targetCanvas ? readCanvas(targetCanvas) : undefined;
+  void target?.catch(() => {});
+  if ((targetCanvas || needsDefault) && !workspaceDefinition.value) {
+    void loadWorkbenchDefinition().then(value => {
+      if (!disposed) workspaceDefinition.value = value;
+    }).catch(() => { /* Node definitions can be retried from canvas settings. */ });
+  }
   let modern: ProjectIdentity;
   if (id === projectId.value && workbenchProjectTitle.value && !needsDefault) {
     modern = { title: workbenchProjectTitle.value, defaultCanvasId: "" };
@@ -779,15 +917,23 @@ async function openProject(id: string, route?: CanvasRoute) {
     if (!projectResponse.ok && projectResponse.status !== 409) {
       throw new Error((await projectResponse.json()).message || "项目读取失败。");
     }
+    if (projectResponse.status === 409) target = undefined;
     modern = projectResponse.ok ? await projectResponse.json() : await request<ProjectIdentity>(`${base}/migrate`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ automatic: true })
     });
   }
   const canvasId = route?.canvasId || (needsDefault ? modern.defaultCanvasId : "");
-  const savedCanvas = canvasId
-    ? await request<WorkbenchCanvas>(`/v2/projects/${encodeURIComponent(id)}/canvases/${encodeURIComponent(canvasId)}`, { signal: AbortSignal.timeout(15000) })
-    : undefined;
-  if (savedCanvas && !workspaceDefinition.value) workspaceDefinition.value = await request<WorkbenchDefinition>("/v2/definition");
+  let [savedCanvas, draft] = canvasId ? await (target ?? readCanvas(canvasId)) : [];
+  if (savedCanvas && draft && savedCanvas.revision !== draft.revision) {
+    [savedCanvas, draft] = await readCanvas(canvasId);
+    if (savedCanvas.revision !== draft.revision) throw new Error("画布正在其他窗口更新，请重新打开。");
+  }
+  await saveCanvasDraft();
+  if (disposed || draftFailure.value || savingGraph) return;
+  if (savedCanvas && id === projectId.value && canvasId === mediaCanvasId.value && savedCanvas.revision < draftRevision) {
+    throw new Error("已保存当前编辑，请再次打开画布读取最新版本。");
+  }
+  if (draft?.value && !isSavedCanvas(draft.value)) throw new Error("草稿格式无法识别，原草稿已保留。");
   if (projectId.value !== id) lastOpenedCanvasId.value = "";
   if (!canvasId) catalogProjectId.value = id;
   else lastOpenedCanvasId.value = canvasId;
@@ -808,9 +954,10 @@ async function openProject(id: string, route?: CanvasRoute) {
   if (canvasId) url.searchParams.set("canvas", canvasId);
   if (route?.runId) url.searchParams.set("run", route.runId);
   history.replaceState(null, "", url);
-  if (!savedCanvas) return;
+  if (!savedCanvas || !draft) return;
   draftLoaded.value = false;
-  await restoreCanvasDraft();
+  recentDraft = { projectId: id, canvasId, record: draft };
+  await restoreCanvasDraft(draft);
   if (route?.nodeId && flowNodes.value.some(node => node.id === route.nodeId)) {
     selectedIds.value = [route.nodeId];
     canvas.center(route.nodeId);
@@ -834,6 +981,7 @@ async function commitWorkflow(editCanvas: (current: WorkbenchCanvas) => Workbenc
     });
     workspaceGraph.value = saved;
     draftRevision = saved.revision;
+    catalogRevision.value++;
     const ids = new Set(saved.graph.nodes.map(node => node.config.legacyCardId || node.id));
     for (const id of Object.keys(canvas.positions.value)) if (!ids.has(id)) delete canvas.positions.value[id];
     for (const node of saved.graph.nodes) {
@@ -890,7 +1038,7 @@ async function addWorkflowCard(entry: string) {
   const kind = entry === "text-generation" ? "agent" : entry;
   const position = contextMenu.value?.world;
   contextMenu.value = undefined;
-  if (canvasItems.value.length) pendingDraft ??= canvasRecord();
+  if (canvasItems.value.length) pendingDraft = true;
   const current = workspaceGraph.value;
   const label = workflowCardKinds.find(row => row.kind === entry)?.label;
   if (!current || !label) throw new Error("无法读取节点类型。");
@@ -967,7 +1115,7 @@ async function connectPort(target: string, kind: PortKind) {
   if (!wire || wire.kind !== kind || wire.from === target) return;
   cancelPort();
   if (kind === "content") {
-    if (canvasItems.value.length) pendingDraft ??= canvasRecord();
+    if (canvasItems.value.length) pendingDraft = true;
     await commitWorkflow(current => ({ ...current, mediaLinks: [...(current.mediaLinks ?? []), { from: wire.from, to: target }] }));
     return;
   }
@@ -1123,7 +1271,7 @@ async function workbenchHome() {
   const url = new URL(location.href);
   for (const key of ["project", "canvas", "view", "run", "node"]) url.searchParams.delete(key);
   history.replaceState(null, "", url);
-  await loadProjects();
+  void loadProjects();
 }
 async function showProjects() {
   await workflowLayoutFlight;
@@ -1146,23 +1294,25 @@ function canvasRecord(): SavedCanvas {
   }
   const ids = new Set(items.map(item => item.id));
   const positions = Object.fromEntries(Object.entries(canvas.positions.value).filter(([id]) => ids.has(id)));
-  return { version: 1, serviceDeviceId:serviceDeviceId.value, items, active: activeVideoId.value, selected: storedMediaSelection.value.filter(id => ids.has(id)), positions, drafts: JSON.parse(JSON.stringify([...allDrafts])), audio };
+  return { version: 1, modelComputeDeviceId: serviceDeviceId.value, items, active: activeVideoId.value, selected: storedMediaSelection.value.filter(id => ids.has(id)), positions, drafts: JSON.parse(JSON.stringify([...allDrafts])), audio };
 }
 async function saveCanvasDraft() {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = undefined;
   if (draftSaveFlight) return draftSaveFlight;
   if (savingGraph || draftFailure.value || !pendingDraft) return;
   savingDraft = true;
   const flight = (async () => {
     try {
       while (pendingDraft) {
-        const value = pendingDraft;
-        pendingDraft = undefined;
+        const value = canvasRecord();
+        pendingDraft = false;
         draftRevision = await writeDraft(projectId.value, value, draftRevision, projectTitle.value, mediaCanvasId.value || undefined);
+        catalogRevision.value++;
       }
-      draftStatus.value = "已保存";
     } catch (failure) {
+      pendingDraft = true;
       draftFailure.value = failure instanceof Error ? failure.message : "草稿保存失败。";
-      draftStatus.value = "保存失败";
     }
   })();
   draftSaveFlight = flight;
@@ -1171,21 +1321,32 @@ async function saveCanvasDraft() {
 }
 watch(() => [captureDraft(), canvasItems.value, canvasItems.value.map(item => canvas.positions.value[item.id]), activeVideoId.value, storedMediaSelection.value, projectTitle.value, serviceDeviceId.value, canvas.changingLayout.value], () => {
   if (!draftLoaded.value || projectHome.value || !mediaCanvasId.value || !canvasItems.value.length || draftFailure.value || canvas.changingLayout.value) return;
-  pendingDraft = canvasRecord(); draftStatus.value = "保存中…";
-  void saveCanvasDraft();
+  pendingDraft = true;
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(saveCanvasDraft, 350);
 }, { deep: true, flush: "post" });
-async function restoreCanvasDraft() {
+function isSavedCanvas(value: SavedCanvas) {
+  if (value.version !== 1 || !Array.isArray(value.items)) return false;
+  return value.active
+    ? value.items.some(item => item.id === value.active && item.kind === "video")
+    : !value.items.some(item => item.kind === "video");
+}
+async function restoreCanvasDraft(record: DraftRecord<SavedCanvas>) {
   try {
     draftFailure.value = "";
-    const record = await readDraft<SavedCanvas>(projectId.value,mediaCanvasId.value||undefined);
+    for (const url of generatedAudio.keys()) URL.revokeObjectURL(url);
+    generatedAudio.clear();
     draftRevision = record.revision;
     if (!workspaceGraph.value || record.value || !flowNodes.value.length) projectTitle.value = record.title;
     if (record.value) {
-      const value = record.value;
-      serviceDeviceId.value = typeof value.serviceDeviceId === "string" ? value.serviceDeviceId : "";
-      if (value.version !== 1 || !Array.isArray(value.items) || (value.active ? !value.items.some(item => item.id === value.active && item.kind === "video") : !mediaCanvasId.value || value.items.some(item => item.kind === "video"))) throw new Error("草稿格式无法识别，原草稿已保留。");
+      const value = structuredClone(record.value);
+      const compute = restoreMediaComputeSelection(value);
+      serviceDeviceId.value = compute.deviceId;
       draftRevision = record.revision;
       canvasItems.value = value.items;
+      for (const item of canvasItems.value) {
+        if (item.imageKey && item.imageComputeDeviceId === undefined) item.imageComputeDeviceId = compute.pendingImageDeviceId;
+      }
       canvas.positions.value = { ...flowPositions.value, ...value.positions };
       drafts.clear(); for (const [id, draft] of value.drafts) drafts.set(id, draft);
       for (const [id, blob] of value.audio || []) {
@@ -1224,36 +1385,52 @@ async function restoreCanvasDraft() {
     }
   } catch (failure) {
     draftFailure.value = failure instanceof Error ? failure.message : "草稿恢复失败，原内容未覆盖。";
-    draftStatus.value = "恢复失败";
   } finally { await nextTick(); draftLoaded.value = true; }
-  await connectModelService();
+  connectModelService();
 }
 function protectUnsavedDraft(event: BeforeUnloadEvent) {
   if (savingDraft || pendingDraft || draftFailure.value) { event.preventDefault(); event.returnValue = ""; }
 }
 const serviceBusy = computed(() => busy.value || uploading.value || !draftLoaded.value || canvasItems.value.some(item => item.audioBusy));
-async function selectModelService(deviceId: string) {
-  if (serviceBusy.value || deviceId === serviceDeviceId.value) return;
+async function selectModelService(deviceId: string): Promise<boolean> {
+  if (serviceBusy.value) return false;
+  if (deviceId === serviceDeviceId.value) return true;
   serviceDeviceId.value = deviceId;
-  await connectModelService();
+  connectModelService();
+  return serviceDeviceId.value === deviceId;
 }
-async function connectModelService() {
-  mediaService.invalidate(); refreshFlight = undefined;
+let connectedDeviceId: string | undefined;
+function connectModelService() {
+  if (connectedDeviceId === serviceDeviceId.value) {
+    if (statusError.value) void refresh();
+    if (canvasItems.value.some(item => item.kind === "audio" && item.id === selectedCanvasId.value)) void loadAudioModels();
+    return;
+  }
+  connectedDeviceId = serviceDeviceId.value;
+  mediaService.invalidate();
+  statusController?.abort();
+  refreshFlight = undefined;
+  statusInvalidated = false;
+  snapshotAt = 0;
+  statusError.value = "";
   computeEvents?.close(); computeEvents = undefined;
-  if (snapshot.value) snapshot.value = {...snapshot.value, online:false};
+  if (snapshot.value) snapshot.value = {...snapshot.value, computeError:undefined, online:false, models:[], availableModels:[], availableWorkflows:[]};
   const revision = mediaService.selectionRevision();
   if (serviceDeviceId.value) {
     computeEvents = managerEventSource(peerManagerPath(serviceDeviceId.value, "/api/video/compute/events"));
     computeEvents.addEventListener("compute", event => {
       if (disposed || revision !== mediaService.selectionRevision()) return;
       const name = JSON.parse((event as MessageEvent).data).name;
-      if (name === "video.changed") void refresh().catch(() => {error.value="无法更新所选电脑的算力状态。";});
+      if (name === "video.changed" || name === "video.models") void refresh(true);
     });
-    computeEvents.onopen = () => {if (revision === mediaService.selectionRevision()) void refresh().catch(()=>{});};
+    computeEvents.onopen = () => {if (revision === mediaService.selectionRevision()) void refresh();};
     computeEvents.onerror = () => {if (revision === mediaService.selectionRevision() && snapshot.value) snapshot.value={...snapshot.value,online:false};};
   }
+  audioCatalogFlight = undefined;
+  audioCatalogAt = 0;
   audioModels.value = []; audioCatalogError.value = "";
-  void loadAudioModels(); await action(refresh);
+  void refresh();
+  if (canvasItems.value.some(item => item.kind === "audio" && item.id === selectedCanvasId.value)) void loadAudioModels();
 }
 onMounted(() => {
   if (projectId.value) {
@@ -1268,6 +1445,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   finishPointerFrame();
+  void saveCanvasDraft();
   projectsRequest?.abort();
   window.removeEventListener("beforeunload", protectUnsavedDraft);
   window.removeEventListener("keyup", releaseCanvasSpace);
@@ -1296,22 +1474,22 @@ onMounted(() => {
           const { progress, progressStage, progressValue, progressMax, progressUnit, startedAt } = value.data;
           Object.assign(job, { status: 'running', progress, progressStage, progressValue, progressMax, progressUnit, startedAt: startedAt || job.startedAt });
         }
-      } else if (value.name === "video.changed") void refresh().catch(() => { error.value = "任务状态更新失败，请刷新。"; });
-    } catch { error.value = "任务事件读取失败，请刷新。"; }
+      } else if (value.name === "video.changed" || (value.name === "video.models" && !serviceDeviceId.value)) void refresh(true);
+    } catch { statusError.value = "任务事件读取失败。"; }
   });
-  events.onopen = () => { void refresh().catch(() => { error.value = "无法读取视频服务状态。"; }); };
+  events.onopen = () => { if (connectedDeviceId !== undefined) void refresh(); };
 });
-onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.close(); computeEvents?.close(); for (const url of generatedAudio.keys()) URL.revokeObjectURL(url); generatedAudio.clear(); });
+onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusController?.abort(); events?.close(); computeEvents?.close(); for (const url of generatedAudio.keys()) URL.revokeObjectURL(url); generatedAudio.clear(); });
 </script>
 
 <template>
   <v-theme-provider with-background class="video-page">
     <v-dialog v-model="showCliSettings" max-width="520"><WorkbenchCliSettings v-if="showCliSettings" @close="showCliSettings=false"/></v-dialog>
-    <v-overlay :model-value="!draftLoaded" persistent class="align-center justify-center">正在恢复草稿…</v-overlay>
+    <p v-if="!draftLoaded && !mediaCanvasId" class="video-hint ma-4" role="status">正在打开工作台…</p>
     <section v-if="projectHome" class="project-home">
-      <div class="workbench-project-heading"><h1>我的项目</h1><v-btn variant="text" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></div>
+      <div class="workbench-project-heading"><h1>我的项目</h1><v-btn variant="text" prepend-icon="mdi-refresh" aria-label="刷新项目列表" @click="loadProjects">刷新</v-btn><v-btn variant="text" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></div>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
-      <p v-if="projectsLoading" role="status" class="video-hint">正在加载项目…</p>
+      <p v-if="projectsLoading && !projectsLoaded" role="status" class="video-hint">正在加载项目…</p>
       <v-alert v-if="projectsError" type="error" variant="tonal">
         {{ projectsError }} <v-btn variant="text" @click="loadProjects">重试</v-btn>
       </v-alert>
@@ -1332,7 +1510,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
     </section>
     <section v-else-if="catalogProjectId === projectId && workbenchProjectTitle" v-show="!mediaCanvasId" class="project-home">
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
-      <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" :list-hidden="!!mediaCanvasId" :last-opened-canvas-id="lastOpenedCanvasId" mode="list" @back="action(showProjects)"
+      <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" :list-hidden="!!mediaCanvasId" :list-revision="catalogRevision" :last-opened-canvas-id="lastOpenedCanvasId" mode="list" @back="action(showProjects)"
         @media="(id,runId) => action(() => openMediaCanvas(id,runId))" @cli-settings="showCliSettings=true"/>
     </section>
     <section v-else-if="!mediaCanvasId && error" class="project-home">
@@ -1344,20 +1522,21 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         <WorkbenchPanel :key="workflowPanel + mediaCanvasId" :project-id="projectId" :canvas-id="mediaCanvasId" :mode="workflowPanel" :edge-id="selectedEdgeId" :commit="saveInspectorDraft" @back="closeWorkflowPanel" @media="(id,runId)=>action(()=>openMediaCanvas(id,runId))" @run-selected="focusedRunId = $event"/>
       </v-card-text></v-card>
     </v-dialog>
+    <PeerServerSelect :model-value="serviceDeviceId" v-slot="computers">
     <div v-show="!projectHome && !!mediaCanvasId">
     <div class="video-heading workspace-heading">
       <v-btn prepend-icon="mdi-arrow-left" variant="text" @click="action(showProjectCanvases)">画布列表</v-btn>
       <strong v-if="flowNodes.length && !canvasItems.length">{{projectTitle}}</strong>
       <input v-else v-model="projectTitle" class="project-title" aria-label="画布名称" maxlength="100" />
-      <div><h1>工作台</h1><span>{{ snapshot ? (snapshot.online ? '服务已就绪' : '服务未启动') : '正在连接' }}</span></div>
+      <div><h1>工作台</h1><span>{{ statusError || (snapshot ? (snapshot.computeError ? '服务暂不可用' : snapshot.online ? '服务已就绪' : '按需启动') : '正在连接') }}</span></div>
+      <v-btn v-if="statusError" variant="text" @click="refresh()">重试服务连接</v-btn>
       <v-btn v-if="mediaCanvasId" variant="text" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
       <v-btn v-if="flowNodes.length" variant="text" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
 
-      <PeerServerSelect :model-value="serviceDeviceId" :disabled="serviceBusy" label="模型服务电脑" @changed="selectModelService" />
       <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
     </div>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" class="mb-4">{{ error || snapshot?.computeError }}</v-alert>
     <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-content':workflowWire?.kind==='content','linking-step':workflowWire?.kind==='step','linking-input':workflowWire?.kind==='input'}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="cancelPort(); pendingInput=undefined; showLibrary=false; contextMenu=undefined; openPopover=''">
       <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button></nav>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
@@ -1403,14 +1582,19 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
               <textarea v-model="item.text" :aria-label="`${item.title}生成提示词`" placeholder="描述你想生成的画面…" />
               <div class="image-generation-controls">
                 <span class="image-mode-label"><v-icon icon="mdi-image-outline" size="15" />图片生成</span>
-                <v-menu :model-value="openPopover===`image-model-${item.id}`" @update:model-value="updatePopover(`image-model-${item.id}`,$event)" location="bottom start" offset="8"><template #activator="{props}"><button v-bind="props" class="media-picker" aria-label="选择图片模型">{{ imageModels.find(row=>row.id===item.imageModel)?.label || imageModels[0]?.label || '选择模型' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template>
-                  <div class="media-model-menu" role="menu" aria-label="图片模型列表"><button v-for="option in imageModels" :key="option.id" role="menuitemradio" :aria-checked="(item.imageModel || imageModels[0]?.id)===option.id" @click="item.imageModel=option.id"><span><strong>{{ option.label }}</strong><small>文生图 · 快速生成场景与创作草图</small></span><v-icon v-if="(item.imageModel || imageModels[0]?.id)===option.id" icon="mdi-check" size="17" /></button><RouterLink class="model-manage-link" :to="{ path: '/model-services', query: { tab: 'workbench', deviceId: serviceDeviceId || undefined } }">管理模型与下载<v-icon icon="mdi-arrow-top-right" size="15" /></RouterLink></div>
-                </v-menu>
+                <ComputerModelPicker compact label="选择图片模型" :open="openPopover===`image-model-${item.id}`"
+                  @update:open="updatePopover(`image-model-${item.id}`,$event)" :device-id="serviceDeviceId" :computers="computers"
+                  :model-id="item.imageModel || imageModels[0]?.id"
+                  :model-label="imageModels.find(row => row.id === (item.imageModel || imageModels[0]?.id))?.label"
+                  :disabled="serviceBusy" :load-models="(device, signal) => loadModelOptions('image', device, signal)"
+                  :choose="(device, id) => chooseMediaModel(item, device, id)">
+                  <template #footer><RouterLink class="model-manage-link" :to="{ path: '/model-services', query: { tab: 'image', deviceId: serviceDeviceId || undefined } }">管理模型与下载<v-icon icon="mdi-arrow-top-right" size="15" /></RouterLink></template>
+                </ComputerModelPicker>
                 <v-menu :model-value="openPopover===`image-format-${item.id}`" @update:model-value="updatePopover(`image-format-${item.id}`,$event)" location="top" offset="8" :close-on-content-click="false"><template #activator="{props}"><button v-bind="props" class="media-picker" aria-label="图片比例与清晰度"><v-icon icon="mdi-rectangle-outline" size="16" />{{ imageRatio(item).label }} / {{ imageQuality(item) }}<v-icon icon="mdi-chevron-down" size="16" /></button></template>
                   <div class="image-format-menu"><div class="format-label">比例</div><div class="image-ratio-segments"><button v-for="ratio in imageRatios" :key="ratio.label" :class="{active:imageRatio(item).label===ratio.label}" :aria-label="`图片比例 ${ratio.label}`" :aria-pressed="imageRatio(item).label===ratio.label" @click="setImageFormat(item,ratio)"><span :style="{width:(ratio.w>=ratio.h ? 17 : 17*ratio.w/ratio.h)+'px',height:(ratio.h>=ratio.w ? 17 : 17*ratio.h/ratio.w)+'px'}" />{{ ratio.label }}</button></div><div class="format-label">清晰度 <small>{{ (item.imageSize || '1024x1024').replace('x',' × ') }}</small></div><div class="image-quality-segments"><button v-for="quality in ['480P','720P','1K','2K']" :key="quality" :class="{active:imageQuality(item)===quality}" :aria-pressed="imageQuality(item)===quality" @click="setImageFormat(item,imageRatio(item),quality)">{{ quality }}</button></div></div>
                 </v-menu>
                 <span class="image-single-count">×1</span>
-                <v-btn class="image-generate-arrow" icon="mdi-arrow-up" size="x-small" color="white" aria-label="生成图片" :disabled="busy || uploading || !snapshot?.online || !mediaPrompt(item.id, item.text).trim() || !imageModels.length || (imageJob(item) && !snapshot?.states[imageJob(item)!.status]?.terminal)" @click="action(()=>generateImage(item))" />
+                <v-btn class="image-generate-arrow" icon="mdi-arrow-up" size="x-small" color="white" aria-label="生成图片" :disabled="busy || uploading || !!snapshot?.computeError || !mediaPrompt(item.id, item.text).trim() || !imageModels.length || (imageJob(item) && !snapshot?.states[imageJob(item)!.status]?.terminal)" @click="action(()=>generateImage(item))" />
               </div>
               <p v-if="imageJob(item)" role="status">{{ snapshot?.states[imageJob(item)!.status]?.label }} {{ imageJob(item)?.error }}</p>
             </template>
@@ -1420,7 +1604,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
               <AudioPromptEditor v-if="item.audioMode!=='reference'" :ref="el=>{if(el)audioEditors.set(item.id,el as InstanceType<typeof AudioPromptEditor>);else audioEditors.delete(item.id);}" v-model="item.text" :label="`${item.title}合成文字`" :disabled="item.audioBusy" />
 
               <div class="image-generation-controls audio-toolbar"><v-menu :model-value="openPopover===`audio-mode-${item.id}`" @update:model-value="updatePopover(`audio-mode-${item.id}`,$event)" location="top start" offset="8"><template #activator="{props}"><button v-bind="props" class="media-picker" aria-label="音频功能" :disabled="item.audioBusy"><v-icon icon="mdi-music-note-outline" size="15" />{{ item.audioMode==='reference' ? '音频参考' : '音频生成' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template><div class="media-model-menu" role="menu" aria-label="音频功能选项"><button role="menuitemradio" :aria-checked="item.audioMode!=='reference'" @click="item.audioMode='generate'"><span><strong>音频生成</strong><small>将文字合成为语音</small></span></button><button role="menuitemradio" :aria-checked="item.audioMode==='reference'" @click="item.audioMode='reference'"><span><strong>音频参考</strong><small>上传、试听并用于视频生成</small></span></button></div></v-menu>
-                <v-menu v-if="item.audioMode!=='reference'" :model-value="openPopover===`audio-model-${item.id}`" @update:model-value="updatePopover(`audio-model-${item.id}`,$event)" location="bottom start" offset="8"><template #activator="{props}"><button v-bind="props" class="media-picker audio-model-picker" aria-label="选择音频模型" :title="`选择 TTS 模型（${audioModels.length} 个）`">{{ audioModels.find(row=>row.id===(item.audioModel || audioModels.find(row=>row.available)?.id))?.name || '选择 TTS 模型' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template><div class="media-model-menu audio-model-menu" role="menu" aria-label="音频模型列表"><button v-for="option in audioModels" :key="option.id" role="menuitemradio" :aria-checked="(item.audioModel || audioModels.find(row=>row.available)?.id)===option.id" :disabled="item.audioBusy" @click="selectAudioModel(item,option)"><span><strong>{{ option.name }}</strong><small>{{ option.note || option.family }} · {{ option.available ? '可用' : '未就绪' }}</small></span><v-icon v-if="selectedAudioModel(item)?.id===option.id" icon="mdi-check" size="17" /></button><p v-if="!audioModels.length" class="audio-catalog-message">{{ audioCatalogError || '正在读取模型…' }}</p><button @click="loadAudioModels">刷新模型列表</button></div></v-menu>
+                <ComputerModelPicker v-if="item.audioMode !== 'reference'" compact label="选择音频模型"
+                  :open="openPopover===`audio-model-${item.id}`" @update:open="updatePopover(`audio-model-${item.id}`,$event)"
+                  :device-id="serviceDeviceId" :computers="computers" :model-id="selectedAudioModel(item)?.id"
+                  :model-label="selectedAudioModel(item)?.name" :disabled="serviceBusy"
+                  :load-models="(device, signal) => loadModelOptions('audio', device, signal)"
+                  :choose="(device, id) => chooseMediaModel(item, device, id)" />
                 <button v-if="item.audioMode!=='reference'" class="media-picker" :class="{active:item.audioSettingsOpen}" aria-label="音频参数设置" :aria-expanded="!!item.audioSettingsOpen" :aria-controls="`audio-settings-${item.id}`" @click="item.audioSettingsOpen=!item.audioSettingsOpen;openPopover='';if(item.audioSettingsOpen)loadAudioModels()">参数设置<v-icon :icon="item.audioSettingsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="16" /></button>
                 <a v-if="audioSource(item)" class="media-picker" :href="audioSource(item)" :download="`${item.title}.wav`" aria-label="下载音频"><v-icon icon="mdi-download" size="16" /></a>
                 <v-btn v-if="item.audioMode!=='reference'" class="generate-button" color="white" size="x-small" icon="mdi-arrow-up" aria-label="生成音频" :loading="item.audioBusy" :disabled="item.audioBusy || !mediaPrompt(item.id, item.text).trim() || !audioModels.some(row=>row.available && row.id===(item.audioModel || audioModels.find(row=>row.available)?.id))" @click="generateAudioCard(item)" />
@@ -1541,7 +1730,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
         </div>
         <div class="composer-toolbar">
           <span class="image-mode-label"><v-icon icon="mdi-video-outline" size="15" />视频生成</span>
-          <span class="media-picker">MiniMax H3</span>
+          <ComputerModelPicker compact label="选择视频模型" :open="openPopover==='video-model'"
+            @update:open="updatePopover('video-model',$event)" :device-id="serviceDeviceId" :computers="computers"
+            :model-id="model" :model-label="availableModels.find(row => row.id === model)?.label" :disabled="serviceBusy"
+            :load-models="(device, signal) => loadModelOptions('video', device, signal)"
+            :choose="(device, id) => chooseMediaModel(undefined, device, id)" />
           <v-menu :model-value="openPopover==='video-format'" @update:model-value="updatePopover('video-format',$event)" :close-on-content-click="false" location="top" offset="8" max-width="400">
             <template #activator="{ props }"><button v-bind="props" class="media-picker" aria-label="视频参数"><v-icon icon="mdi-rectangle-outline" size="16" />{{ selectedRatio?.label || `${width}×${height}` }} / {{ duration }}s / {{ selectedResolution?.label || '自定义' }}<v-icon icon="mdi-chevron-down" size="16" /></button></template>
             <v-card class="parameter-popover"><v-card-text>
@@ -1561,14 +1754,14 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
           </v-menu>
           <v-btn size="small" variant="text" :prepend-icon="generateAudio ? 'mdi-volume-high' : 'mdi-volume-off'" :aria-pressed="generateAudio" @click="generateAudio=!generateAudio">{{ generateAudio ? '生成声音' : '无声' }}</v-btn>
           <v-btn size="small" variant="text" :aria-pressed="quickGeneration" :disabled="!selectedWorkflow" prepend-icon="mdi-lightning-bolt" @click="quickGeneration=!quickGeneration">{{ quickGeneration ? '快速' : '标准' }}</v-btn>
-          <v-btn class="generate-button" size="small" color="white" icon="mdi-arrow-up" aria-label="生成视频" :disabled="busy || uploading || !snapshot?.online || !videoInputPrompt.trim() || !!inputProblem" :loading="busy" @click="action(submit)" />
+          <v-btn class="generate-button" size="small" color="white" icon="mdi-arrow-up" aria-label="生成视频" :disabled="busy || uploading || !videoInputPrompt.trim() || !!inputProblem" :loading="busy" @click="action(submit)" />
         </div>
-        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!snapshot?.online" class="video-hint">请先启动顶部的视频服务。</p><p v-else-if="!videoInputPrompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
+        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!videoInputPrompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="snapshot && !snapshot.online" class="video-hint">提交时会启动所选电脑的生成服务。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
       </section>
       </div>
       </div>
       <aside v-if="showLibrary" id="video-history-panel" class="output-library" aria-label="我的作品">
-        <div class="library-toolbar"><h2>我的作品 <span>{{ snapshot?.jobs.length || 0 }}</span></h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="关闭作品历史" @click="showLibrary=false" /><v-btn variant="text" size="small" prepend-icon="mdi-refresh" :disabled="busy" @click="action(refresh)">刷新</v-btn></div>
+        <div class="library-toolbar"><h2>我的作品 <span>{{ snapshot?.jobs.length || 0 }}</span></h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="关闭作品历史" @click="showLibrary=false" /><v-btn variant="text" size="small" prepend-icon="mdi-refresh" :disabled="busy" @click="refresh(true)">刷新</v-btn></div>
         <div class="library-filters"><v-select v-model="filter" :items="[{title:'全部',value:'all'},{title:'进行中',value:'pending'},{title:'已完成',value:'succeeded'},{title:'失败',value:'failed'}]" label="状态" hide-details density="compact" variant="outlined" /><v-text-field v-model="search" label="搜索提示词" prepend-inner-icon="mdi-magnify" hide-details density="compact" variant="outlined" clearable /></div>
         <p v-if="!filteredJobs.length" class="library-empty">{{ snapshot?.jobs.length ? '没有匹配的作品' : '生成的视频将保存在这里' }}</p>
         <div class="video-library"><button v-for="job in filteredJobs" :key="job.id" class="work-card" :class="{selected: selected?.id===job.id}" :aria-pressed="selected?.id===job.id" @click="addJobToCanvas(job)"><div class="work-thumbnail"><img v-if="job.imageUrl" :src="managerResourceUrl(job.imageUrl)" alt="生成图片" /><video v-else-if="job.videoUrl" :src="managerResourceUrl(job.videoUrl)" muted preload="metadata" tabindex="-1" /><v-icon v-else icon="mdi-movie-open-outline" size="30" /><span class="work-status">{{ snapshot?.states[job.status]?.label || job.status }}</span></div><p>{{ job.prompt }}</p><time>{{ new Date(job.createdAt).toLocaleString() }}</time></button></div>
@@ -1611,6 +1804,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); events?.clos
     </div>
     <v-snackbar v-model="noticeVisible" timeout="4000">{{ notice }}</v-snackbar>
   </div>
+    </PeerServerSelect>
   </v-theme-provider>
 </template>
 
@@ -1880,10 +2074,6 @@ summary { cursor:pointer; }
 .image-single-count {margin-left:auto;color:var(--rr-muted);font-size:12px;padding:0 8px;}
 .image-generate-arrow {margin-left:4px;}
 .media-model-menu,.image-format-menu {background:var(--rr-surface);color:var(--rr-text);border:1px solid var(--rr-border);border-radius:24px;box-shadow:var(--rr-shadow-menu);padding:9px;width:360px;max-width:calc(100vw - 24px);}
-.audio-model-picker {background:var(--rr-subtle);border:1px solid var(--rr-accent-surface);border-radius:10px;min-height:34px;}
-.audio-model-picker:hover,.audio-model-picker[aria-expanded="true"] {background:var(--rr-border-strong);}
-.audio-model-menu {max-height:min(480px,calc(100dvh - 32px));overflow-y:auto;overscroll-behavior:contain;}
-.audio-model-menu>button[aria-checked="true"] {background:var(--rr-accent-surface);}
 .media-model-menu>button {display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;padding:12px 10px;border-radius:9px;text-align:left;cursor:pointer;}
 .media-model-menu>button:hover {background:var(--rr-subtle);}
 .media-model-menu strong {display:block;font-size:13px;font-weight:500;}

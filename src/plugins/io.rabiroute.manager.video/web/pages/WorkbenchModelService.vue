@@ -1,23 +1,27 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { managerEventSource } from "../../../../../ribiwebgui/src/managerApi";
 import PeerServerSelect from "../../../../../ribiwebgui/src/components/PeerServerSelect.vue";
 import { peerManagerPath } from "../../../../../ribiwebgui/src/peerManagerTarget";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import { createMediaServiceClient, MediaServiceChangedError } from "./mediaServiceClient";
+import ModelLibraryTable from "../../../../../ribiwebgui/src/components/ModelLibraryTable.vue";
+import { mediaLibraryAbilities, mediaLibrarySource, type MediaModelCatalogEntry, type MediaWorkflow, type ModelLibraryLabels } from "../../../../../ribiwebgui/src/components/modelLibraryPresentation";
 
 const serviceDeviceId = ref("");
 const route = useRoute();
+const router = useRouter();
+const props = withDefaults(defineProps<{ kind?: "image" | "video"; settings?: boolean; search?: string; english: boolean; labels: ModelLibraryLabels & { download: string } }>(), { search: "" });
 const client = createMediaServiceClient(() => serviceDeviceId.value);
 const request = client.request;
 const busy = ref(false);
 const error = ref("");
-const snapshot = ref<{ online: boolean; computeError?: string }>();
+const snapshot = ref<{ online: boolean; computeError?: string; models: MediaModelCatalogEntry[] }>();
 let events: EventSource | undefined;
 
 type ModelFile = { name: string; bytes: number; installed: boolean; state: string };
-type ModelManagement = { runtimeInstalled: boolean; models: { id: string; label: string; bytes: number; installed: boolean; files: ModelFile[]; workflows?: { id: string; label: string; installed: boolean; missingFiles: string[] }[] }[]; job: { kind: string; state: string; bytes: number; total: number; message?: string; currentFile?: string } | null };
+type ModelManagement = { runtimeInstalled: boolean; models: { id: string; label: string; bytes: number; installed: boolean; files: ModelFile[]; workflows?: MediaWorkflow[] }[]; job: { kind: string; state: string; bytes: number; total: number; message?: string; currentFile?: string } | null };
 type Directories = { revision: number; modelRoot: string | null; effectiveModelRoot: string; defaultModelRoot: string; layout: string };
 type InitializationPlan = { revision: number; modelRoot: string; downloadBytes: number; additionalBytes: number; availableBytes: number; canDownload: boolean; errors: string[]; files: (ModelFile & { relative: string })[] };
 const initialization = ref<InitializationPlan>();
@@ -27,6 +31,22 @@ const management = ref<ModelManagement>();
 const directories = ref<Directories>();
 const modelDirectory = ref("");
 const installing = computed(() => management.value?.job?.state === "running");
+const libraryRows = computed(() => {
+  const catalog = new Map(snapshot.value?.models.map(model => [model.id, model]));
+  const query = props.search.trim().toLocaleLowerCase();
+  return (management.value?.models ?? []).flatMap(model => {
+    const entry = catalog.get(model.id);
+    if (!entry || (entry.mode === "image" ? "image" : "video") !== props.kind) return [];
+    const abilities = mediaLibraryAbilities(entry, model.workflows ?? [], model.files, props.english);
+    if (query && ![model.label, model.id, ...abilities.map(item => item.label)].some(value => value.toLocaleLowerCase().includes(query))) return [];
+    return [{ model, id: model.id, name: model.label, abilities, size: `≈ ${sizeLabel(model.bytes)}`,
+      runtime: "ComfyUI · CUDA", runtimeIcon: "mdi-chip", sourceUrl: mediaLibrarySource(entry) }];
+  });
+});
+const requestedDevice = computed(() => typeof route.query.deviceId === "string" ? route.query.deviceId : "");
+function selectDevice(deviceId: string) {
+  void router.replace({ query: { ...route.query, deviceId: deviceId || undefined } });
+}
 async function refreshModels() { management.value = await request<ModelManagement>("/models"); }
 async function loadDirectory() {
   directories.value = await request<Directories>("/models/settings");
@@ -34,7 +54,7 @@ async function loadDirectory() {
 }
 async function loadModelService() {
   const requests = [refreshModels(), refreshStatus()];
-  if (!directories.value) requests.push(loadDirectory());
+  if (props.settings && !directories.value) requests.push(loadDirectory());
   const results = await Promise.allSettled(requests);
   const failure = results.find(result => result.status === "rejected");
   if (failure) throw failure.reason;
@@ -60,15 +80,17 @@ async function refreshStatus() {
 }
 async function action(operation: () => Promise<unknown>) {
   if (busy.value) return;
+  const revision = client.selectionRevision();
   busy.value = true;
   error.value = "";
   try { await operation(); }
   catch (cause) {
-    if (!(cause instanceof MediaServiceChangedError)) error.value = userFacingError(cause);
-  } finally { busy.value = false; }
+    if (revision === client.selectionRevision() && !(cause instanceof MediaServiceChangedError)) error.value = userFacingError(cause);
+  } finally { if (revision === client.selectionRevision()) busy.value = false; }
 }
 async function connect(deviceId: string) {
   client.invalidate();
+  busy.value = false;
   serviceDeviceId.value = deviceId;
   management.value = undefined;
   directories.value = undefined;
@@ -105,23 +127,34 @@ async function setRuntime(online: boolean) {
   await request(online ? "/runtime/start" : "/runtime/stop", { method: "POST" });
   await refreshStatus();
 }
-onMounted(() => connect(typeof route.query.deviceId === "string" ? route.query.deviceId : ""));
+watch(requestedDevice, deviceId => { void connect(deviceId); });
+onMounted(() => connect(requestedDevice.value));
 onBeforeUnmount(() => { client.invalidate(); events?.close(); });
 </script>
 
 <template>
-  <v-card class="app-card glass-card pa-4">
-    <div class="model-service-heading mb-3">
+  <v-card :variant="settings ? undefined : 'text'" :class="settings ? 'app-card glass-card pa-4' : 'model-service-library'">
+    <div v-if="settings" class="model-service-heading mb-3">
       <div>
-        <h2 class="section-title">图像与视频模型</h2>
-        <p class="section-note mt-1">安装模型并管理生成服务。</p>
+        <h2 class="section-title">图片与视频生成设置</h2>
       </div>
-      <PeerServerSelect :model-value="serviceDeviceId" :disabled="busy" @changed="connect" />
+      <PeerServerSelect :model-value="serviceDeviceId" :disabled="busy" @changed="selectDevice" />
     </div>
     <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" density="compact" class="mb-3">
       {{ error || snapshot?.computeError }}
     </v-alert>
     <v-progress-linear v-if="busy && !snapshot" indeterminate />
+    <template v-if="!settings">
+      <p v-if="serviceDeviceId" class="section-note mb-2">当前安装目标为远端电脑，可在齿轮设置里查看。</p>
+      <ModelLibraryTable :rows="libraryRows" :labels="labels" :loading="busy || Boolean(error || snapshot?.computeError)">
+        <template #action="{ row: { model } }">
+          <v-btn v-if="!model.installed" color="primary" variant="tonal" size="small" prepend-icon="mdi-download"
+            :disabled="busy || installing || !snapshot || snapshot.online || Boolean(snapshot.computeError)"
+            @click="action(() => install(`/models/${model.id}/download`))">{{ labels.download }}</v-btn>
+        </template>
+      </ModelLibraryTable>
+    </template>
+    <template v-else>
     <div v-if="snapshot && !snapshot.computeError" class="model-service-heading mb-4">
       <div>
         <strong>视频生成服务</strong>
@@ -150,17 +183,18 @@ onBeforeUnmount(() => { client.invalidate(); events?.close(); });
     <v-divider class="my-5" />
     <div class="model-service-heading my-2"><strong>媒体运行环境</strong><v-btn :disabled="busy || installing || snapshot?.online || management?.runtimeInstalled" @click="action(() => install('/models/runtime'))">{{ management?.runtimeInstalled ? '已安装' : '安装运行环境' }}</v-btn></div>
     <p class="section-note">需要 NVIDIA CUDA 显卡。首次安装会下载 Python、ComfyUI 和推理依赖。</p>
-    <div v-for="item in management?.models || []" :key="item.id" class="model-service-heading my-2"><div><strong>{{ item.label }}</strong><p>{{ sizeLabel(item.bytes) }} · {{ item.installed ? '已下载' : '部分依赖缺失' }}</p><p v-for="workflow in item.workflows || []" :key="workflow.id">{{ workflow.label }}：{{ workflow.installed ? '依赖齐全' : `缺少 ${workflow.missingFiles.join('、')}` }}</p><p v-for="file in item.files.filter(file => !file.installed)" :key="file.name" class="text-error">{{ file.state === 'invalid' ? '文件损坏或大小不符' : '缺失' }}：{{ file.name }}</p></div><v-btn :disabled="busy || installing || snapshot?.online || item.installed || directoryChanged" @click="action(() => install(`/models/${item.id}/download`))">{{ item.installed ? '已下载' : '下载模型' }}</v-btn></div>
+    <p v-if="snapshot?.online" class="section-note">停止生成服务后可以修改目录或安装。</p>
+    </div>
+    <v-btn class="mt-3" prepend-icon="mdi-refresh" variant="text" :disabled="busy" @click="action(loadModelService)">刷新状态</v-btn>
+    </template>
     <v-progress-linear v-if="installing" :model-value="management?.job?.total ? management.job.bytes / management.job.total * 100 : 0" :indeterminate="!management?.job?.total" color="primary" />
     <p v-if="management?.job" role="status">{{ management.job.state === 'running' ? '正在安装，请保持程序运行' : management.job.state === 'completed' ? '安装完成' : management.job.message }}</p>
     <p v-if="installing && management?.job?.currentFile" role="status">{{ management.job.currentFile }} · {{ sizeLabel(management.job.bytes) }} / {{ sizeLabel(management.job.total) }}</p>
-    <p v-if="snapshot?.online" class="section-note">停止视频服务后可以修改目录或安装。</p>
-    </div>
-    <v-btn class="mt-3" prepend-icon="mdi-refresh" variant="text" :disabled="busy" @click="action(loadModelService)">刷新状态</v-btn>
   </v-card>
 </template>
 
 <style scoped>
 .model-service-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.model-service-library { overflow: visible; }
 .model-service-settings ul { padding-inline-start: 22px; }
 </style>

@@ -448,6 +448,16 @@ class ManagerSnapshotTest(unittest.TestCase):
         self.assertTrue(client.binary_posts[0][1]["play"])
         self.assertEqual(client.binary_posts[0][2], 120)
 
+    def test_selection_speech_catalog_and_synthesis_use_the_same_explicit_machine(self) -> None:
+        client = _RecordingManagerClient()
+        self.assertIsNone(client.selection_speech_settings().compute_device_id)
+        for device, encoded in [("peer A/2", "peer%20A%2F2"), ("", "")]:
+            client.speech_models(device)
+            result = client.synthesize_speech("test", "tts/test", device)
+            self.assertTrue(result.ok)
+            self.assertEqual(client.paths[-1], f"/api/speech/models?computeDeviceId={encoded}")
+            self.assertEqual(client.binary_posts[-1][0], f"/api/speech/tts?computeDeviceId={encoded}")
+
     def test_screenshot_message_keeps_text_and_image_on_role_panel_endpoint(self) -> None:
         client = _RecordingManagerClient()
 

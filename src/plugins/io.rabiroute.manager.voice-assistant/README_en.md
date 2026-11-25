@@ -8,11 +8,13 @@ The unique Rabi PC plugin adds **语音助手** at `/voice-assistant`. It owns i
 
 Connection settings, encrypted credentials and onboarding are shared between personas. Encrypted conversation history and model context are isolated by persona and survive refresh/restart. Switching back restores the original history. The selected public persona document is applied in full; native voice settings remain with their original speech owner. Automation and Hook configuration are not silently converted into system instructions.
 
-ASR and TTS independently select host services or custom providers. Host services reuse `manager.speech@1`, including the selected persona voice; synthesis requests `play:false` and the shared device owns the single player. Personas without a host voice can still chat and use custom TTS. Stop/disable removes registrations, subscriptions and owned audio resources without exiting Rabi or replaying accepted remote work.
+The Rabi PC **Voice Assistant** switch controls background microphone capture. Detected utterances are saved as transcripts. Turning the switch off ends that PC's capture and voice conversation. The first upgrade adopts the previous host streaming setting. The mobile assistant controls the phone's recorder and recording history independently.
+
+Background transcription, live recognition and playback each have a model menu. Choose a local or remote computer, then choose a model it provides. The live recognition and playback menus also open custom provider settings. The selected computer starts its RabiSpeech engine when needed. Synthesis requests `play:false`, and the assistant plays the audio on its device. Personas without a host voice can still chat and use custom TTS.
 
 A paired Rabi mobile app can use the PC's selected custom TTS provider. The PC synthesizes segments of the assistant reply from the current conversation, and the phone plays the returned audio. The model can keep working during synthesis and playback.
 
-The dictionary in **Settings → Speech Recognition → Transcription Dictionary** is shared by Rabi PC and the Android assistant connected to that PC. During live and utterance recognition, the Manager supplies hotwords, a prompt, or context as supported by the selected model. Android's local fallback and passive transcription require a local-only speech service. Dictionary support depends on the local model. FireRedASR2-AED, on-device keyword spotting, and the native AIUI glasses recognizer have no dictionary input.
+The dictionary in **Settings → Speech Recognition → Transcription Dictionary** is shared by Rabi PC and the Android assistant connected to that PC. Manager supplies hotwords, a prompt, or context as supported by the selected model. Android's recognition fallback uses the paired PC. The phone's background recorder follows its existing archive and transcription policy. FireRedASR2-AED, on-device keyword spotting, and the native AIUI glasses recognizer have no dictionary input.
 
 The shared SDK interrupts speech after the first valid ASR text while model/tool work continues. Streaming recognition shows live text; utterance recognition shows input feedback. Desktop-pet presentation consumes the same real playback state, fenced by owner/persona/response/playback/revision. It does not start a second recorder or player.
 
@@ -20,7 +22,7 @@ Desktop capture filters matching playback transcripts during speech and briefly 
 
 Turning on desktop-pet companionship starts live voice capture. When capture has stopped in the same persona's running session, companionship resumes capture in that session. Turning companionship on again while listening continues the current voice round.
 
-Keyword wake uses the current persona's wake words and the local RabiSpeech wake model. Check the wake listener status in voice assistant settings. The wake listener needs to finish loading its model even when the resident microphone is already running.
+Enable keyword wake independently in PC **Speech Recognition** settings. It borrows the background recorder's microphone and uses the selected persona's wake words to start live conversation. Ending the conversation returns the assistant to background transcription. Use **Upload audio for transcription** at the top of the page to transcribe a file.
 
 The plugin registers an addressable `voice-assistant` Agent through `ownAgentAdapter`. Web and Agent deliveries share the same durable session. `nativeThreadOperations` supports listing and reading only the current provider session. `rabi_agent_deliver` uses a native sender bound to the actual published provider object and current session: JSON cannot supply source identity. Sending/reconciliation use the original Manager delivery permissions and receipts.
 

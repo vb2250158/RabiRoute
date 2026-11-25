@@ -17,7 +17,7 @@ test("HTTP workspace keeps projects, jobs, output and SSE local while invoking t
   const model=catalog.models.find(row=>row.mode==="image");
   const remoteId="33333333-3333-4333-8333-333333333333";
   const projectId="44444444-4444-4444-8444-444444444444";
-  const calls=[];const png=Buffer.from("89504e470d0a1a0a0000000d","hex");let cleanup,server;
+  const calls=[];const png=Buffer.from("89504e470d0a1a0a0000000d","hex");let cleanup,server,online=false;
   const registry=new ManagerPluginRouteRegistry();
   t.after(async()=>{server?.closeAllConnections();await cleanup?.();if(server)await new Promise(resolve=>server.close(resolve));assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.ok(path.basename(root).startsWith("rabi-video-api-"));await fs.rm(root,{recursive:true,force:true});});
   const runtime={stateRoot:path.join(root,"video"),componentRoot:path.join(root,"component"),defaultModelRoot:path.join(root,"models"),readOnly:false,
@@ -26,7 +26,8 @@ test("HTTP workspace keeps projects, jobs, output and SSE local while invoking t
     start:async()=>{throw new Error("No local runtime may be started");},
     peerFetch:async(device,route,init)=>{
       calls.push({device,route});assert.equal(device,"compute-b");
-      if(route==="/api/video/compute/status")return Response.json({computeProtocol:1,online:true,availableModels:[model.id],availableWorkflows:[{model:model.id,workflowId:model.id,generateAudio:false}]});
+      if(route==="/api/video/compute/status")return Response.json({computeProtocol:1,online,models:[model],availableModels:online?[model.id]:[],availableWorkflows:online?[{model:model.id,workflowId:model.id,generateAudio:false}]:[]});
+      if(route==="/api/video/compute/runtime/start") { assert.equal(init.method,"POST"); online=true; return Response.json({}); }
       if(route==="/api/video/compute/jobs") {assert.equal(JSON.parse(init.body).model,model.id);return Response.json({id:remoteId,status:"succeeded"});}
       if(route===`/api/video/compute/jobs/${remoteId}/image`)return new Response(png);
       if(route===`/api/video/compute/jobs/${remoteId}` && init.method==="DELETE")return Response.json({removed:true});
@@ -60,12 +61,15 @@ test("HTTP workspace keeps projects, jobs, output and SSE local while invoking t
   assert.equal((await request("/projects")).projects[0].id,projectId);
   assert.equal((await request("/models?computeDeviceId=compute-b")).runtimeInstalled,true);
   const job=await request("/jobs?computeDeviceId=compute-b",{method:"POST",headers:{"content-type":"application/json","idempotency-key":"http-owner-test-001"},body:JSON.stringify({model:model.id,prompt:"Paper boat",width:512,height:512,seed:1})});
+  assert.deepEqual(calls.filter(call=>call.route.startsWith("/api/video/compute/runtime/")),[{device:"compute-b",route:"/api/video/compute/runtime/start"}]);
   const conflict=await fetch(base+"/api/video/jobs?computeDeviceId=compute-b",{method:"POST",headers:{"content-type":"application/json","idempotency-key":"http-owner-test-001"},body:JSON.stringify({model:model.id,prompt:"Paper boat",width:512,height:512,seed:2})});assert.equal(conflict.status,409);
   let state=job;
   for(let attempt=0;attempt<30 && state.status!=="succeeded";attempt++){await new Promise(resolve=>setTimeout(resolve,30));state=await request(`/jobs/${job.id}`);}
   assert.equal(state.status,"succeeded");assert.notEqual(job.id,remoteId);
   const output=await fetch(base+state.imageUrl,{headers:{range:"bytes=0-7"}});assert.equal(output.status,206);assert.deepEqual(Buffer.from(await output.arrayBuffer()),png.subarray(0,8));
-  assert.equal((await request("/status?computeDeviceId=compute-b")).jobs[0].id,job.id);
+  const remoteStatus=await request("/status?computeDeviceId=compute-b");
+  assert.equal(remoteStatus.jobs[0].id,job.id);
+  assert.deepEqual(remoteStatus.models.map(row=>row.id),[model.id]);
   // Direct URL access still reads the addressed workspace's own history.
   const directStatus=await request("/status");
   assert.equal(directStatus.jobs[0].id,job.id);

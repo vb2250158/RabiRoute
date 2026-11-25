@@ -1,7 +1,9 @@
 import { errorResponsePresentation } from "@rabiroute/host-api/shared/errorPresentation";
 import { hasAuthenticatedConnectionRequest } from "@rabiroute/host-api/manager/connectionRequestAccess";
 import { createManagerConfigurationOwner, createRabiApiOwner, publicRouteMutationFailure, requireRouteMutationContract, type ManagerConfigurationContext, type RabiApiContext, type RouteMutationContract } from "./rabiApi.js";
-import type { ApiOperationDefinition, ApiOperationInput, ApiOperationResult, ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
+import { apiDigest, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
+import { normalizeSearchText } from "@rabiroute/host-api/manager/searchText";
+import { deviceLabelLimits, type DeviceLabels } from "./rabiLinkDeviceLabels.js";
 
 const empty = { type: "object", additionalProperties: false };
 const ignored = { type: "object" };
@@ -34,6 +36,37 @@ const proxiedJson = { description: "Native selected-Manager JSON, forwarded with
 const pathSchema = (route = false) => ({ type: "object", required: route ? ["guid", "routeId"] : ["guid"], additionalProperties: false, properties: { guid: { type: "string", minLength: 1 }, ...(route ? { routeId: { type: "string", minLength: 1 } } : {}) } });
 const nativeBody = (properties: Record<string, ApiSchema>) => ({ kind: "json" as const, maxBytes: 0, allowAnyContentType: true, emptyValue: {}, schema: { description: "The native owner ignores unknown properties, preserves JavaScript coercion and accepts non-null primitive or array JSON as an empty patch. Field constraints are enforced by its existing configuration and Route owners.", anyOf: [{ type: "object", properties, additionalProperties: true }, ...["array", "string", "number", "boolean"].map(type => ({ type }))] } });
 const routeBase = "/api/rabi/instances/:guid/routes/:routeId";
+const linkHomeDevicePath = "/api/rabi/link-home/devices/:deviceId";
+const linkHomeDeviceId = "manager.route-control.link-home.device.read";
+const deviceIdPath = { type: "object", required: ["deviceId"], additionalProperties: false, properties: { deviceId: { type: "string", minLength: 1, maxLength: 256 } } };
+const deviceLabelsSchema = {
+  alias: { type: "string", maxLength: deviceLabelLimits.alias },
+  tags: { type: "array", maxItems: deviceLabelLimits.tags, items: { type: "string", maxLength: deviceLabelLimits.tag } }
+};
+const phoneFileActions = ["file.list", "file.stat", "file.read", "file.mkdir", "file.rename", "file.delete", "file.settings.read", "file.settings.update",
+  "upload.begin", "upload.write", "upload.status", "upload.commit", "upload.abort"];
+const phoneFileInput = {
+  type: "object", required: ["targetGuid", "action"], additionalProperties: false,
+  properties: {
+    targetGuid: { type: "string", maxLength: 256 }, action: { enum: phoneFileActions },
+    enabled: { type: "boolean" },
+    path: { type: "string", maxLength: 2048 }, to: { type: "string", maxLength: 2048 },
+    version: { type: "string", pattern: "^[a-f0-9]{64}$" }, after: { type: "string", maxLength: 255 },
+    offset: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    size: { type: "integer", minimum: 0, maximum: 512 * 1024 * 1024 },
+    uploadId: { type: "string", maxLength: 36 }, sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    data: { type: "string", maxLength: 87_384 }
+  }
+};
+const deviceSchema = {
+  type: "object", required: ["id", "guid", "name", "deviceKind", "online", "capabilities", "rabiPcVersion", "isLocal"], additionalProperties: false,
+  properties: { id: { type: "string" }, guid: { type: "string" }, name: { type: "string" }, deviceKind: { type: "string" },
+    online: { type: "boolean" }, capabilities: { type: "array", items: { type: "string" } }, rabiPcVersion: { type: ["string", "null"] }, isLocal: { type: "boolean" },
+    labelRevision: { type: "string" }, labels: { type: "object", required: ["alias", "tags"], additionalProperties: false, properties: deviceLabelsSchema } }
+};
+const homeEnvelope = (data: ApiSchema): ApiSchema => ({
+  type: "object", required: ["code", "data"], additionalProperties: false, properties: { code: { const: 0 }, data }
+});
 type Guard = () => void;
 type Invoke = (input: ApiOperationInput, mutation: RouteMutationContract | undefined, assertCurrent: Guard) => ApiOperationResult | Promise<ApiOperationResult>;
 
@@ -77,9 +110,30 @@ export function createRabiControlOperations(context: RabiApiContext, managerConf
     define("timeouts.update", "PATCH", "/api/rabi/timeouts", empty, { kind: "json", maxBytes: 0, schema: { type: "object", required: ["overrides"], additionalProperties: false, properties: { overrides: { type: "object", additionalProperties: { type: "integer", minimum: 1, maximum: 2147483647 } } } } }, (input, _, guard) => owner.updateTimeouts(input.body as { overrides: unknown }, guard, String(input.request.headers["if-match"] ?? "")), { effects: "Persist timeout overrides through the global configuration owner and publish the committed snapshot. Read back before retrying an uncertain write; this does not resend any timed-out business operation." }),
     define("identity.read", "GET", "/api/rabi/identity", empty, ignoredBody, input => owner.identity(input.request)),
     define("identity.update", "PATCH", "/api/rabi/identity", empty, nativeBody({ rabiName: {}, rabiLinkRelay: {}, agentUploads: {} }), (input, _, guard) => owner.updateIdentity(input.body as any, guard), { effects: "Patch the native global configuration, synchronize the original Relay, mark affected native RabiLink gateways for restart and synchronize them. The public response excludes the saved Relay token." }),
-    define("link-home.read", "GET", "/api/rabi/link-home", empty, { kind: "none" }, () => owner.home(), { query: empty,
+    { ...define("link-home.read", "GET", "/api/rabi/link-home", empty, { kind: "none" }, input => owner.home(input.signal), { query: empty,
       preflight: input => input.url.search || input.request.headers["transfer-encoding"] || Number(input.request.headers["content-length"] || 0) > 0 ? { status: 400, headers: { "cache-control": "no-store" }, body: { code: -1, errorCode: "RABILINK_HOME_INVALID_REQUEST", message: "此接口不接受查询参数或请求正文。" } } : undefined,
-      response: { type: "object", required: ["code", "data"], additionalProperties: false, properties: { code: { const: 0 }, data: { type: "object", required: ["devices", "checkedAt"], additionalProperties: false, properties: { checkedAt: { type: "string" }, devices: { type: "array", items: { type: "object", required: ["id", "guid", "name", "deviceKind", "online", "capabilities", "rabiPcVersion", "isLocal"], additionalProperties: false, properties: { id: { type: "string" }, guid: { type: "string" }, name: { type: "string" }, deviceKind: { type: "string" }, online: { type: "boolean" }, capabilities: { type: "array", items: { type: "string" } }, rabiPcVersion: { type: ["string", "null"] }, isLocal: { type: "boolean" } } } } } } } } }),
+      response: homeEnvelope({ type: "object", required: ["devices", "checkedAt"], additionalProperties: false,
+        properties: { checkedAt: { type: "string" }, devices: { type: "array", items: deviceSchema } } }) }),
+      discovery: { title: "查找已授权电脑和设备", summary: "按名称、别名或标签查找 RabiLink 设备。遇到跨机任务，先用 Rabi CLI 查询 scope=devices，核对 deviceId，再进入远程终端或电脑控制。",
+        keywords: ["Rabi CLI", "rabicli", "查电脑", "跨机", "远程电脑", "远端 CLI", "device alias", "device tags"],
+        category: { id: "devices", title: "电脑与设备" },
+        relatedOperations: [linkHomeDeviceId, "manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.lan-agent.computer.execute"] } },
+    define("link-home.device.read", "GET", linkHomeDevicePath, deviceIdPath, { kind: "none" },
+      input => owner.homeDevice(input.path.deviceId!, input.signal), { query: empty, response: homeEnvelope(deviceSchema) }),
+    define("link-home.device.labels.update", "PATCH", linkHomeDevicePath + "/labels", deviceIdPath,
+      { kind: "json", maxBytes: 4096, schema: { type: "object", additionalProperties: false, required: ["alias", "tags", "guid", "expectedRevision"],
+        properties: { ...deviceLabelsSchema, guid: { type: "string", maxLength: 256 }, expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" } } } },
+      (input, _, guard) => owner.updateDeviceLabels(input.path.deviceId!, input.body as DeviceLabels & { guid: string; expectedRevision: string }, guard, input.signal),
+      { query: empty, response: homeEnvelope(deviceSchema), effects: "Save presentation labels for the selected authorized RabiLink device on this Manager.",
+        recovery: "Re-read the original device and label revision before repeating an uncertain edit." }),
+    { ...define("link-home.device.phone-files.execute", "POST", linkHomeDevicePath + "/files", deviceIdPath,
+      { kind: "json", maxBytes: 128 * 1024, schema: phoneFileInput },
+      input => owner.phoneFiles(input.path.deviceId!, input.body as Record<string, unknown>, input.signal), {
+        query: empty, effects: "Operate on Android primary shared storage within the device's file-operation setting and Android storage permission. Use the exact device ID and GUID from RabiLink. Reads and uploads use the PC file protocol's 64 KiB SHA-256-checked chunks.",
+        recovery: "Use upload.status with the original uploadId after an uncertain upload. Refresh the directory or stat the original paths before repeating other uncertain changes."
+      }), discovery: { title: "手机文件操作", summary: "查询和设置手机文件操作开关，浏览、创建、读取、移动、删除以及上传下载文件。",
+      keywords: ["Android", "手机文件", "文件传输", "phone files", "upload", "download"],
+      category: { id: "devices", title: "电脑与设备" }, relatedOperations: [linkHomeDeviceId] } },
     define("instances.list", "GET", "/api/rabi/instances", empty, ignoredBody, input => owner.instances(input.request, input.url), { query: instanceQuery }),
     define("routes.list", "GET", "/api/rabi/instances/:guid/routes", pathSchema(), ignoredBody, input => owner.routes(input.request, input.url, input.path.guid), { response: proxiedJson, query: routeQuery }),
     define("agent-options.read", "GET", routeBase + "/agent-options", pathSchema(true), ignoredBody, input => owner.agentOptions(input.request, input.url, input.path.guid, input.path.routeId), { response: proxiedJson }),
@@ -89,6 +143,30 @@ export function createRabiControlOperations(context: RabiApiContext, managerConf
     define("message-processing.update", "PATCH", routeBase + "/message-processing", pathSchema(true), nativeBody({ adapter: {}, maxAgents: {} }), (input, mutation, guard) => owner.messageProcessing(input.request, input.url, input.path.guid, input.path.routeId, input.body as any, mutation, guard), { mutation: true, response: proxiedJson, effects: "Update native per-adapter worker limits through the original Route catalog transaction. The native owner coerces and clamps maxAgents to 1..32, skips unknown adapters, and returns its committed receipt." }),
     define("message-processing.cleanup", "POST", routeBase + "/message-processing-cleanup", pathSchema(true), nativeBody({ adapter: {}, keepSessionIds: {} }), (input, _, guard) => owner.cleanup(input.request, input.url, input.path.guid, input.path.routeId, input.body as any, guard, input.signal), { response: proxiedJson, effects: "Delete only native message-processing workers selected by the original adapter/workspace/title rules, retain keepSessionIds, and persist the original worker and affinity files. DSH deletion can partially succeed; no operation-level replay guarantee exists." })
   ];
+  const homeIndex = definitions.findIndex(definition => definition.contract.operationId === "manager.route-control.link-home.read");
+  const home = definitions[homeIndex]!;
+  definitions[homeIndex] = { ...home,
+    contract: { ...home.contract, searchable: { scope: "devices", legend: "RabiLink 已授权设备的名称、别名和标签 / authorized RabiLink devices", kinds: ["computer", "device"] } },
+    searchLanes: () => [{ key: "rabilink-devices", source: "devices", agent: null, async read({ signal, query }) {
+    const { devices, checkedAt, scope } = await owner.homeDevices(signal, true);
+    const terms = [...new Set(normalizeSearchText(query.q).split(/[\s,，、]+/u).filter(Boolean))];
+    const items = devices.flatMap(device => {
+      const fields = [device.name, device.labels?.alias ?? "", ...(device.labels?.tags ?? []), device.id, device.guid].map(normalizeSearchText);
+      const matched = terms.filter(term => fields.some(field => field.includes(term))).length;
+      if (terms.length && (!matched || query.match === "all" && matched !== terms.length)) return [];
+      const detailUrl = linkHomeDevicePath.replace(":deviceId", encodeURIComponent(device.id));
+      const computer = device.deviceKind === "pc";
+      const exact = terms.length > 0 && fields.includes(normalizeSearchText(query.q));
+      return [{ source: "devices", kind: computer ? "computer" : "device", agent: null, label: device.labels?.alias || device.name || device.id,
+        excerpt: [device.name, device.online ? "在线" : "离线", ...(device.labels?.tags ?? [])].filter(Boolean).join(" · "),
+        origin: { deviceId: device.id, deviceGuid: device.guid }, detailUrl,
+        handle: { detailUrl, operationId: linkHomeDeviceId, deviceId: device.id, deviceGuid: device.guid,
+          ...(computer ? { relatedOperations: ["manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.lan-agent.computer.execute"] } : {}) },
+        searchText: fields.join(" "), searchScore: matched * 1000 + (exact ? 300 : 0),
+        evidence: { observedAt: checkedAt, state: "confirmed" as const, evidenceRefs: [detailUrl] } }];
+    });
+    return { items, complete: true, version: apiDigest([scope, devices]) };
+  } }] };
   if (managerConfig) {
     const configuration = createManagerConfigurationOwner(managerConfig);
     const schema = { type: "object", required: ["code"], additionalProperties: false, properties: { code: { const: 0 }, routeDir: { type: "string" }, rolesDir: { type: "string" }, directoryDiagnostics: { type: "array", items: { type: "object", required: ["field", "code", "message"], additionalProperties: false, properties: { field: {type:"string"}, code: {type:"string"}, message: {type:"string"} } } }, rawDirectoryConfig: { type:"object", additionalProperties:false, properties: {routeDir:{},rolesDir:{}} } } };

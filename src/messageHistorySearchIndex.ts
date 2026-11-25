@@ -517,7 +517,7 @@ export function searchMessageHistoryIndexResult(directory: string, query: Recent
       // SQLite orders the existing owner view. Only one requested window is projected into JS.
       const unifiedTerms=searchTerms(query.query ?? '');
       db.function('rabi_search_normalize',{deterministic:true},value=>normalizeSearchText(String(value ?? '')));
-      const body="rabi_search_normalize(json_extract(d.payload,'$.text'))";
+      const body="rabi_search_normalize(json_extract(d.payload,'$.text') || ' ' || d.sender || ' ' || d.target)";
       const title="rabi_search_normalize(substr(json_extract(d.payload,'$.text'),1,120))";
       const hits=unifiedTerms.map(()=>`(instr(${body},?)>0)`);
       const score=unifiedTerms.length ? '('+hits.join('+')+')*'+Math.max(1000,unifiedTerms.length+1)+'+('+unifiedTerms.map(()=>`(instr(${title},?)>0)`).join('+')+')' : 'CAST(0 AS INTEGER)';

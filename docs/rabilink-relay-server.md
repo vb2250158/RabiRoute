@@ -16,7 +16,7 @@ AIUI 宿主只提供 `wx.request` 时，使用既有 buffered HTTP Relay 通道�
 
 Relay 保存账号与凭据、设备连接登记、同应用目标目录、opaque 请求/响应队列、传输 lease、cursor、blob 和操作状态。server 自身诊断日志可保留。角色模板、权限业务、聊天记录拼装、ASR 排序、健康数据解释和 record-first 判断均由 PC 或客户端实现。队列中的原始业务正文不由 Relay 改写或按业务白名单分发。
 
-通用 HTTP 传输的连接身份包含首次鉴权时间 `authenticatedAt`。原队列与同操作重试沿用该时间，不能因晚到或重新认领延长连接授权；PC 使用内部 MAC 核验它。手机代眼镜建立独立身份的短租约由 PC 管理，见[设备连接授权](device-peer-connection.md)。Relay 不增加对应业务 API 分发表或公钥授权库。
+通用 HTTP 传输的连接身份包含首次鉴权时间 `authenticatedAt`。原队列与同操作重试沿用该时间，不能因晚到或重新认领延长连接授权。PC 将它纳入内部签名，普通 HTTP 转发使用 PC 自己签发的短期凭据校验时效，支持不同的电脑时钟和时区。需要确认授权是否撤销或租约是否有效的接口各自校验相关时间。手机代眼镜建立独立身份的短租约由 PC 管理，见[设备连接授权](device-peer-connection.md)。Relay 不增加对应业务 API 分发表或公钥授权库。
 
 ## 启动与接入
 
@@ -42,6 +42,8 @@ Windows 部署使用 `scripts/deploy-rabilink-relay-windows.ps1`。`scripts/rabi
 
 ## 连接元数据
 
+Android 消息页通过 `GET /api/rabilink/mobile/account` 读取登录账号的资料。请求使用 `X-RabiLink-Token` 中的应用凭据，Relay 根据应用所有者返回账号 ID、用户名、昵称、状态和可空的 160 × 160 PNG 头像（Base64）。`PATCH /api/rabilink/mobile/account/status` 使用相同凭据保存该账号的状态，请求体以 `status` 传入 `online`、`away`、`busy` 或 `do-not-disturb`，保存后返回账号 ID 和状态。账号尚未设置时默认在线。
+
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/rabilink/mobile/state` | 连接目录、目标和服务广告；无设备电量、角色或 ASR 排序 |
@@ -52,6 +54,27 @@ Windows 部署使用 `scripts/deploy-rabilink-relay-windows.ps1`。`scripts/rabi
 | `GET /api/rabilink/peers` | 同应用连接与能力发现 |
 
 应用 owner 必须是同应用、具 Manager 服务广告的 PC，登记后不可通过默认目标改变。设备同一 binding 的固定 owner 在凭据重置后保留，换 owner 需新 binding。没有明确登记时失败关闭，不从旧 tasks-only 默认目标猜业务归属。目录只表示连接和数据归属，不解析角色，更不按绑定限制公共 API 权限。
+
+## 手机文件操作
+
+Android 使用安装时生成的稳定设备 ID。Manager 从 `GET /api/rabilink/peers?includePortable=phone` 读取已连接手机，用原设备别名入口保存名称。支持手机控制的客户端公布 `phone-file-control-v1`。文件操作默认启用，Android 的「所有文件访问权限」由手机用户在系统设置授予。可访问主共享存储里的现有文件，如 `Download`、`Documents` 和 `DCIM`。应用私有目录和受保护的 `Android/data`、`Android/obb` 由 Android 隔离。
+
+调用 Manager 的 `POST /api/rabi/link-home/devices/{deviceId}/files`，正文传入发现结果的 `targetGuid`（可能是空字符串）以及下表参数。Manager 使用已保存的 Relay 连接。直接连接 Relay 的客户端可调用 `POST /api/rabilink/mobile/files`，另传 `targetId`，使用 `X-RabiLink-Token` 中的应用凭据或同账号 PC 凭据。手机只从当前连接领取请求。支持主共享存储下的绝对路径，也可用相对路径浏览。读取和上传动作沿用电脑端的分块与回执字段。
+
+| `action` | 输入与结果 |
+| --- | --- |
+| `file.settings.read`、`file.settings.update` | 查询或更新 `enabled`，返回开关状态和 Android 的 `permissionGranted`。 |
+| `file.list` | 主共享存储根目录传空字符串。每页最多 100 项，续页把返回的 `next` 和 `version` 作为 `after` 和 `version` 传回。 |
+| `file.stat` | `path`，返回名称、类型、大小、修改时间和 `version`。 |
+| `file.read` | `path`、`version`、`offset`。返回 Base64 数据、块 SHA-256、`nextOffset` 及 `eof`，每块最多 64 KiB。 |
+| `file.mkdir` | `path`，创建一级目录。 |
+| `file.rename` | `path`、`version`、`to`。在主共享存储内移动或重命名。目标路径须空闲。 |
+| `file.delete` | `path`、`version`。删除指定文件或空目录。 |
+| `upload.begin` | `uploadId`（客户端生成的 UUID）、`path`、`size`、`sha256`。替换已有文件时传入原 `version`。单文件上限 512 MiB。 |
+| `upload.write` | `uploadId`、`offset`、`data`（Base64）、块 `sha256`。按顺序传输，每块最多 64 KiB。 |
+| `upload.status`、`upload.commit`、`upload.abort` | 传 `uploadId`，查询进度、校验并提交、或取消。完整 SHA-256 校验通过后原子替换或创建目标文件。 |
+
+结果为 `{code: 0, data: {...}}` 或 HTTP 错误和 `errorCode`。上传中断后用原 `uploadId` 回读。上传回执在手机进程内保留最多一小时。手机重启进程后，已提交文件可通过 `file.stat` 核实。移动和删除结果不确定时先回读原路径。
 
 ## 通用 HTTP 合同
 

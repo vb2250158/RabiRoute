@@ -64,9 +64,11 @@ export function createUnifiedSearchOperation(registry: ManagerPluginRouteRegistr
                 const result = await runUnifiedSearch({ query, snapshot, lanes: [...createSearchLanes(scopedContext, snapshot, input.request, query.agent), ...nativeLanes], signal: input.signal,
                     identity: { agentType: requestIdHeader('x-rabiroute-agent-type'), id: requestIdHeader('x-rabiroute-session-id') } });
                 assertCurrent();
-                const roleSources=result.body.data.coverage.sources.some(source=>source.source==='knowledge' || source.source==='messages' || source.source==='skills');
+                const coverage = result.body.data.coverage.sources;
+                const roleSources=coverage.some(source=>source.coverage.some(lane=>lane.agent!==null));
+                const knowledgeChanged=coverage.some(source=>source.source==='knowledge') && knowledge!==context.knowledge;
                 const currentRoles=context.roles().filter(role=>!query.agent || role.roleId===query.agent);
-                if(roleSources && (knowledge!==context.knowledge || roles.length!==currentRoles.length
+                if(roleSources && (knowledgeChanged || roles.length!==currentRoles.length
                     || roles.some(role=>!currentRoles.some(current=>current.roleId===role.roleId)
                     || path.resolve(context.roleDirectory(role.roleId))!==path.resolve(directories.get(role.roleId)!)))) {
                     throw new SearchError(409,'SEARCH_SCOPE_CHANGED','The original role catalog or index owner changed. Restart the query.');

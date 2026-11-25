@@ -25,12 +25,16 @@ export function assistantServiceRows(state) {
   const config=state.settings,checks=state.diagnostics?.checks||{}
   const modelProvider=state.capabilities?.modelProviders?.find(item=>item.id===config.llmProvider)?.label||config.llmProvider
   const modelName=state.capabilities?.modelCatalogs?.llm?.find(item=>item.id===config.llmModel)?.label||config.llmModel
-  const asrProvider=state.hostSettings?.asrSource==='host'?'本机服务':state.capabilities?.speechProviders?.asr?.find(item=>item.id===config.asrMode)?.label||config.asrMode
+  const hostSource=kind=>{
+    const deviceId=state.hostSettings?.[kind+'DeviceId']
+    return deviceId?(state.hostSettings.modelComputers?.find(peer=>peer.deviceId===deviceId)?.name||'所选机器'):'本机服务'
+  }
+  const asrProvider=state.hostSettings?.asrSource==='host'?hostSource('asr'):state.capabilities?.speechProviders?.asr?.find(item=>item.id===config.asrMode)?.label||config.asrMode
   const voice=state.speechCatalogs?.[config.ttsProvider]?.tts?.voices?.find(item=>item.id===config.ttsVoice)?.label||config.ttsVoice
   const definitions=[
     {id:'model',section:'conversation',title:'对话模型',selection:[modelProvider,modelName].filter(Boolean).join(' · '),missing:!config.llmModel?'请选择对话模型':null,action:'测试连接'},
     {id:'asr',section:'asr',title:'语音识别',selection:[asrProvider,config.asrModel].filter(Boolean).join(' · '),missing:state.hostSettings?.asrIssue||(!config.asrModel&&config.asrMode!=='native'?'请选择识别模型':null),action:'识别示例'},
-    {id:'tts',section:'tts',title:'语音播报',selection:[state.hostSettings?.ttsSource==='host'?'本机服务':config.ttsProvider==='volcengine'?'火山豆包':config.ttsProvider,voice].filter(Boolean).join(' · '),missing:state.hostSettings?.ttsIssue||(!config.ttsVoice?'请选择播报音色':null),action:'试听声音'},
+    {id:'tts',section:'tts',title:'语音播报',selection:[state.hostSettings?.ttsSource==='host'?hostSource('tts'):config.ttsProvider==='volcengine'?'火山豆包':config.ttsProvider,voice].filter(Boolean).join(' · '),missing:state.hostSettings?.ttsIssue||(!config.ttsVoice?'请选择播报音色':null),action:'试听声音'},
     {id:'microphone',section:'devices',title:'麦克风',selection:config.inputDeviceId?'已选择麦克风':'系统默认麦克风',action:'录音 3 秒'},
     {id:'voice',title:'语音对话',selection:'识别、回复、播报与启停',action:'运行完整测试'},
   ]
@@ -64,10 +68,20 @@ export function assistantLiveState(state,disconnected=false) {
   if(state?.activity?.status==='finishing'){title='正在整理回复';detail='正在根据已取得的结果回答。'}
   if(playing&&!working){title='正在播报';detail=listening?'麦克风开启，直接说话可打断声音。':'可停止本次播报，文字回复会继续。'}
   if(phase==='failed'){title='语音出现故障';detail='检查错误提示，修复后重新开启语音。'}
-  if(state?.settings?.voiceEnabled===false){title='语音助手已关闭';detail='打开语音助手开关后可开始实时语音。'}
+  const background=state?.hostSettings?.residentTranscription;
+  if(background?.phase==='recording'&&phase==='running'){
+    action='stop';
+    actionLabel='结束实时语音';
+  }
+  if(background&&phase!=='running'&&phase!=='starting'&&!working&&!playing){
+    if(background.phase==='recording'){title='后台转写中';detail=wakeArmed?'说出唤醒词进入实时语音。':'语音会持续转成文字。';actionLabel='实时语音'}
+    else if(background.phase==='starting'){title='正在开启后台转写';detail='正在连接麦克风。'}
+    else if(background.phase==='error'){title='后台转写未启动';detail=background.message||'请检查语音模型和麦克风后重试。'}
+  }
+  if(state?.settings?.voiceEnabled===false){title='语音助手已关闭';detail=background?'打开语音助手开关后开始后台转写。':'打开语音助手开关后可开始实时语音。'}
   if(disconnected){title='与助手的连接已断开';detail='重新连接后可查看当前状态。'}
   return {title,detail,listening,working,playing,action,actionLabel,
-    captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':wakeArmed&&!disconnected?'唤醒待命':'收音关闭',
+    captureLabel:listening?'收音开启':phase==='running'?'收音暂停':phase==='starting'?'准备收音':background?.phase==='recording'?'后台收音':wakeArmed&&!disconnected?'唤醒待命':'收音关闭',
     generationLabel:working?(state.activity.status==='executing-tool'?'工具执行中':state.activity.status==='finishing'?'整理回复':state.activity.status==='searching'?'正在联网搜索':state.activity.status==='thinking'?'正在思考':'正在生成文字'):'当前无任务',
     playbackLabel:state?.voice?.outputEnabled===false?'播报静音':playing?'正在播报':state?.interaction?.responseSuppressed?'本次声音已打断':'当前无播报'};
 }
@@ -226,7 +240,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       try{const result=await adapter.command(request);const next=await refresh();if(mounted.current&&result?.settingsScopeChanged){setDraft(next.settings);setDraftBase(next.settings);setDraftPatches([]);setDraftCredentials(null);setCatalogs({});setKeys({asr:'',tts:'',llm:'',search:''})}if(mounted.current&&feedback)setMessage(typeof feedback==='function'?feedback(result):feedback);return result}
       catch(error){report(error);throw error}finally{if(mounted.current)setBusy(false)}
     }
-    const invoke=(request,feedback)=>{void command(request,feedback).catch(()=>{})}
+    const invoke=(request,feedback)=>command(request,feedback).then(()=>true,()=>false)
     const send=async()=>{
       if(preview||testRunning||conversationMissing||busy||!state||connectionError||!text.trim()&&!pending)return
       const request=pending||{action:'text',text,requestId:crypto.randomUUID(),sessionId:state.sessionId}
@@ -514,7 +528,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const settingsBody=h('div',{className:'va-settings'},
       preview&&h('div',{className:'va-preview va-preview-settings',role:'status'},h('strong',null,'仅预览设置 · 不能实际对话'),h('span',null,'模型是示例数据，不会连接 WorkBuddy 或其他服务。请勿填写真实密钥。')),
       h('nav',{className:'va-nav','aria-label':'设置分类'},[['conversation','对话'],...(state?.capabilities?.webSearch?[["search","联网搜索"]]:[]),['asr','语音识别'],['tts','语音播报'],['devices','设备'],['appearance','外观'],['setup','连接与测试']].map(([id,name])=>h(Button,{key:id,'aria-pressed':settingsTab==='speech'?speechKind===id:settingsTab===id,onClick:()=>navigateSettings(id)},name))),
-      h('fieldset',{className:'va-pages',disabled:busy,ref:pages},HostSettings&&h(HostSettings,{state,settingsTab,speechKind,command:invoke,dirty}),
+      h('fieldset',{className:'va-pages',disabled:busy,ref:pages},HostSettings&&h(HostSettings,{state,settingsTab,speechKind,command:invoke,query:adapter.command,dirty}),
       h('div',{hidden:settingsTab!=='setup'},state?.settings?.onboardingComplete===false&&h('h3',null,'开始使用语音助手'),state?.settings?.onboardingComplete===false&&h('p',null,'选择对话模型，配置识别和音色后，即可开始。'),h('div',{className:'va-setup-links'},[['conversation','对话模型'],['asr','语音识别'],['tts','语音播报'],['devices','音频设备']].map(([id,name])=>h(Button,{key:id,onClick:()=>navigateSettings(id)},name))),serviceTests||h('p',null,'在语音播报和设备设置中可以试听、测试麦克风。')),
       h('div',{hidden:settingsTab!=='conversation',className:'va-conversation-settings',style:{display:settingsTab==='conversation'?'grid':'none',gap:20}},
       h('div',{className:'va-model-settings'},(state?.capabilities?.modelConfiguration||state?.capabilities?.host==='standalone')
@@ -566,7 +580,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
       h('div',{className:'va-live-header'},h('div',null,state?.settings?.assistantName&&state.settings.assistantName!=='语音助手'&&h('strong',null,state.settings.assistantName),h('span',{className:'va-status','data-running':!connectionError&&live.listening,role:'status'},live.title)),h('div',{style:row},voiceSwitch,state?.capabilities?.contextManagement&&h(Button,{disabled:busy||connectionError||state.context?.busy||testRunning,onClick:()=>setClearPrompt(true)},'清除上下文'),h(Button,{disabled:!state||connectionError,onClick:openSettings},'设置'))),
       connectionError&&h(Button,{disabled:busy,onClick:()=>void refresh().catch(report)},'重新连接'),
       state&&h('div',{className:'va-duplex-status','aria-label':'并行语音状态',role:'status'},h('span',{'data-active':live.listening},live.captureLabel),h('span',{'data-active':live.working},live.generationLabel),h('span',{'data-active':live.playing},live.playbackLabel)),
-      h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':!connectionError&&!voiceDisabled&&live.action==='start'&&setupGaps.length?'先在设置中完成语音配置。':live.detail),
+      h('p',{className:'va-live-hint'},testRunning?'连接测试正在运行，可在设置中查看进度。':!state?.hostSettings?.residentTranscription&&!connectionError&&!voiceDisabled&&live.action==='start'&&setupGaps.length?'先在设置中完成语音配置。':live.detail),
       message&&!editing&&h('p',{role:'status'},message),[...new Set([state?.voice?.error,state?.error].filter(Boolean))].map(code=>h('p',{key:code,role:'alert'},errors[code]||code)),
       clearPrompt&&h('section',{className:'va-context-confirm',role:'alertdialog','aria-label':'清除上下文确认'},h('h3',null,'清除这段对话？'),h('p',null,state.context?.storage==='native'?'将开启新的宿主会话并结束语音。原记录由宿主管理，密钥和人设保持不变。':'将清空当前聊天记录和模型上下文，并结束语音。密钥和人设保持不变。'),h('div',{style:row},h(Button,{disabled:busy,onClick:()=>setClearPrompt(false)},'保留对话'),h(Button,{disabled:busy||state.context?.busy,onClick:()=>void clearContext()},'确认清除'))),
       state?.context?.error&&h('section',{className:'va-context-error',role:'alert'},h('strong',null,'对话尚未保存到本机'),h('p',null,state.context.error==='ASSISTANT_CONTEXT_STORAGE_FULL'?'请释放对话所在磁盘的空间，再重试保存。成功前请保持助手运行。':'请重试保存；成功前不要退出助手。'),h(Button,{disabled:busy,onClick:()=>invoke({action:'retry-context-save'},'对话已保存。')},'重试保存')),

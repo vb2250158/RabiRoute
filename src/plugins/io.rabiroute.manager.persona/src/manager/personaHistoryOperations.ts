@@ -1,9 +1,9 @@
-import type { ApiOperationContract, ApiOperationDefinition, ApiOperationInput, ApiOperationResult, ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
+import { apiDigest, type ApiOperationContract, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
 import { createPersonaChatHistoryOwner, type PersonaChatHistoryContext } from './personaChatHistoryRoutes.js';
 import { createPersonaVoiceTranscriptOwner, type PersonaVoiceTranscriptRouteContext } from './personaVoiceTranscriptRoutes.js';
 import { createMessageEndpointHistoryOwner, type MessageEndpointHistoryContext } from './messageEndpointHistoryRoutes.js';
 import { createPersonaConversationSituationOwner } from './personaConversationSituationOwner.js';
-import type { ChatHistoryCategory } from '@rabiroute/host-api/shared/personaHistoryChannels';
+import { chatHistoryCategory, type ChatHistoryCategory } from '@rabiroute/host-api/shared/personaHistoryChannels';
 import { ManagerReadWorkerError } from '@rabiroute/host-api/manager/managerReadWorkerPool';
 import { errorResponsePresentation } from '@rabiroute/host-api/shared/errorPresentation';
 import { recordMessageHistoryResponseTrace } from '@rabiroute/host-api/manager/messageHistorySearchTelemetry';
@@ -55,13 +55,19 @@ function define<T>(contract:ApiOperationContract,prepare:(input:Omit<ApiOperatio
   },prepare:bind,handler:async input=>{const handler=bind(input);return typeof handler==='function'?handler(input):handler;}};
 }
 
+const historyLabels: Record<ChatHistoryCategory, string> = {
+  agent: 'Agent 间投递', panel: '角色面板', replies: '任务回复', aiui: 'AIUI'
+};
+const chatSearchKinds = ['agent_delivery', 'user_delivery', 'final_reply', 'aiui_user', 'aiui_assistant'];
+
 /** Original ledgers/read workers; exact API and static aliases share the same functional owners. */
 export function createPersonaHistoryOperations(context:PersonaHistoryContext):readonly ApiOperationDefinition[] {
   const chats=createPersonaChatHistoryOwner(context),voices=createPersonaVoiceTranscriptOwner(context),situations=createPersonaConversationSituationOwner(context);
   const messages=createMessageEndpointHistoryOwner({roleDirectory:context.roleDir,identity:context.identity,queryHistory:context.queryHistory});
   const base=(id:string,method:ApiOperationContract['method'],prefix:string,suffix:string,body:ApiOperationContract['request']['body'],response:ApiResponseContract,kind:string):ApiOperationContract=>({
     operationId:'manager.personas.history.'+id+(prefix==='/roles' ? '.alias':''),
-    ...(id === 'messages.timeline' && prefix === '/api/roles' ? { searchable: { scope: 'messages', legend: '所有已保存消息端的原始聊天记录 / saved endpoint messages', kinds: ['group','private','wecom','feishu','voice','heartbeat','manual_trigger','role_panel'] } } : {}),
+    ...(id === 'messages.timeline' && prefix === '/api/roles' ? { searchable: { scope: 'messages', legend: '消息端与角色会话消息 / saved endpoint and role history messages', kinds: ['*'] } } : {}),
+    ...(id === 'situations.list' && prefix === '/api/roles' ? { searchable: { scope: 'scenarios', legend: '会话情景 / saved conversation situations', kinds: ['situation'] } } : {}),
     ...(kind==='aiui'?{}:{aliases:[(kind==='history'?'persona':prefix==='/roles'?'knowledge-alias':'knowledge')+':'+method+':'+prefix+'/:roleId/'+suffix]}),
     contractVersion:'1.0.0',method,pathTemplate:prefix+'/:roleId/'+suffix,exposure:'public',transport:'http',description:'Read the original selected persona history, transcripts, bounded message excerpt or conversation situation; explicit AIUI ingestion appends only its native stable-turn ledger.',
     request:{path:{type:'object',required:suffix.includes(':situationId')?['roleId','situationId']:['roleId'],additionalProperties:false,properties:{roleId:{type:'string',minLength:1},...(suffix.includes(':situationId')?{situationId:{type:'string',minLength:1}}:{})}},query:object,headers:object,body},
@@ -75,7 +81,37 @@ export function createPersonaHistoryOperations(context:PersonaHistoryContext):re
     operations.push(define(base('chat.tasks','GET',prefix,'chat-history/tasks',none,json({type:'object',required:['items','nextCursor','invalidRecords'],properties:{items:array(object),nextCursor:{type:['string','null']},invalidRecords:{type:'number'},partial:{type:'boolean'},projectionIssues:array({type:'object',required:['taskKey','message'],properties:{taskKey:str,message:str}})}}),'chat'),input=>chats.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.tasks({category:input.url.searchParams.get('category') as ChatHistoryCategory||undefined,cursor:input.url.searchParams.get('cursor')||undefined,query:input.url.searchParams.get('query')||undefined,peerOf:input.url.searchParams.get('peerOf')||undefined,recordedMetadata:input.url.searchParams.get('metadata')==='recorded',limit:Number(input.url.searchParams.get('limit')??50)}),'chat'));
     operations.push(define(base('chat.aiui.append','POST',prefix,'chat-history/aiui',{kind:'json',schema:true,maxBytes:131072,allowAnyContentType:true,emptyValue:null},aiui,'aiui'),input=>chats.prepare(input.request,input.path.roleId,input.signal),async(owner,input)=>({receipt:await owner.append(input.body)}),'aiui'));
     operations.push(define(base('voice.read','GET',prefix,'voice-transcripts',none,voice,'voice'),input=>voices.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams),'voice'));
-    for(const detail of [false,true])operations.push(define(base(detail?'situations.detail':'situations.list','GET',prefix,'conversation-situations'+(detail?'/:situationId':''),none,json(detail?situation:array(situation)),'situation'),input=>situations.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams.get('limit'),input.path.situationId),'situation'));
+    for (const detail of [false, true]) {
+      const contract = base(detail ? 'situations.detail' : 'situations.list', 'GET', prefix, 'conversation-situations' + (detail ? '/:situationId' : ''), none, json(detail ? situation : array(situation)), 'situation');
+      const operation = define(contract, input => situations.prepare(input.request, input.path.roleId, input.signal),
+        (owner, input) => owner.read(input.url.searchParams.get('limit'), input.path.situationId), 'situation');
+      const searchLanes: NonNullable<ApiOperationDefinition['searchLanes']> = ({ request, roles }) => roles.map(({ roleId }) => ({
+        key: roleId, source: 'scenarios', agent: roleId,
+        async read({ signal }) {
+          const records = situations.prepare(request, roleId, signal).read('1000');
+          if (!Array.isArray(records)) throw new Error('CONVERSATION_SITUATIONS_UNAVAILABLE');
+          const gaps: { code: string; message: string }[] = [];
+          const items = records.flatMap(record => {
+            if (!Number.isFinite(Date.parse(record.createdAt)) || !Array.isArray(record.topic.projectCandidates)
+                || typeof record.decisions.reason !== 'string') {
+              gaps.push({ code: 'SITUATION_HISTORY_INVALID_RECORD', message: 'A saved situation lacks searchable metadata.' });
+              return [];
+            }
+            const projects = record.topic.projectCandidates.map(project => project?.projectId).filter(Boolean);
+            const label = ['会话情景', ...projects].join(' · ');
+            const excerpt = record.decisions.reason;
+            const detailUrl = '/api/roles/' + encodeURIComponent(roleId) + '/conversation-situations/' + encodeURIComponent(record.id) + '?limit=1000';
+            return [{ source: 'scenarios', kind: 'situation', agent: roleId, label, excerpt, detailUrl,
+              origin: { agent: roleId, recordId: record.id }, handle: { detailUrl, operationId: 'manager.personas.history.situations.detail' },
+              searchText: [label, excerpt, record.id, record.conversationId, record.routeId, record.routeKind, ...record.messageIds, JSON.stringify(record.speaker), JSON.stringify(record.topic)].join(' '),
+              evidence: { observedAt: record.createdAt } }];
+          });
+          if (records.length === 1000) gaps.push({ code: 'SITUATION_HISTORY_BOUNDED', message: 'Only the retained situation read window was searched.' });
+          return { items, version: apiDigest(items), complete: gaps.length === 0, gaps };
+        }
+      }));
+      operations.push(contract.searchable ? { ...operation, searchLanes } : operation);
+    }
   }
   operations.push(define(base('messages.search','GET','/api/roles','message-endpoint-history',none,history,'history'),input=>messages.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams),'history'));
   const timeline: ApiResponseContract = { mediaType: 'application/json; charset=utf-8', schema: {
@@ -86,7 +122,39 @@ export function createPersonaHistoryOperations(context:PersonaHistoryContext):re
       }
     }
   }}};
-  operations.push(define(base('messages.timeline','GET','/api/roles','message-endpoint-timeline',none,timeline,'history'),input=>messages.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams,true),'history'));
+  const messageTimeline = define(base('messages.timeline','GET','/api/roles','message-endpoint-timeline',none,timeline,'history'),input=>messages.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>owner.read(input.url.searchParams,true),'history');
+  const searchChat: NonNullable<ApiOperationDefinition['searchLanes']> = ({ request, roles }) => roles.map(({ roleId }) => ({
+    key: roleId, source: 'messages', agent: roleId,
+    async read({ query, signal }) {
+      if (query.adapter || (query.kinds.length && !query.kinds.some(kind => chatSearchKinds.includes(kind)))) {
+        return { items: [], version: 'filtered', complete: true };
+      }
+      const page = await chats.prepare(request, roleId, signal).read(undefined, 100, { recordedMetadata: true, includeOffsets: true });
+      const gaps: { code: string; message: string }[] = [];
+      const items = page.entries.flatMap(entry => {
+        if (!Number.isSafeInteger(entry.historyCursor) || !Number.isFinite(Date.parse(entry.receivedAt))) {
+          gaps.push({ code: 'ROLE_MESSAGE_HISTORY_INVALID_RECORD', message: 'A role message lacks a valid time or original read cursor.' });
+          return [];
+        }
+        const category = chatHistoryCategory(entry);
+        const label = [historyLabels[category], entry.sessionTitle || entry.targetSessionTitle || entry.sourceLabel].filter(Boolean).join(' · ');
+        const parameters = new URLSearchParams({ id: entry.id, metadata: 'recorded', direction: 'newer', cursor: String(entry.historyCursor), limit: '1' });
+        const detailUrl = '/api/roles/' + encodeURIComponent(roleId) + '/chat-history?' + parameters;
+        return [{ source: 'messages', kind: entry.kind ?? 'final_reply', agent: roleId, label, excerpt: entry.text.slice(0, 500),
+          origin: { agent: roleId, ledger: 'persona-chat-history', recordId: entry.id, sessionId: entry.sessionId },
+          detailUrl, handle: { detailUrl, operationId: 'manager.personas.history.chat.read' },
+          searchText: [label, entry.text, entry.id, entry.sourceLabel, entry.sessionId, entry.targetSessionId, entry.sessionTitle,
+            entry.targetSessionTitle, entry.deliveryId, entry.planTitle, entry.planId].join(' '),
+          evidence: { observedAt: entry.receivedAt } }];
+      });
+      if (page.nextCursor !== null || page.entries.some(entry => entry.textTruncated)) {
+        gaps.push({ code: 'ROLE_MESSAGE_HISTORY_BOUNDED', message: 'Only the recent role message window was searched.' });
+      }
+      if (page.invalidRecords) gaps.push({ code: 'ROLE_MESSAGE_HISTORY_INVALID_RECORDS', message: 'Some role messages could not be read.' });
+      return { items, version: apiDigest(items), complete: gaps.length === 0, gaps };
+    }
+  }));
+  operations.push({ ...messageTimeline, searchLanes: searchChat });
   operations.push(define(base('messages.channels','GET','/api/roles','message-history-channels',none,json({type:'object',required:['adapters','chatCategories','warnings'],properties:{adapters:array(str),chatCategories:array(str),warnings:array(str)}}),'catalog'),input=>chats.prepare(input.request,input.path.roleId,input.signal),owner=>owner.catalog(),'catalog'));
   operations.push(define(base('messages.conversations','GET','/api/roles','message-history-conversations',none,timeline,'history'),input=>messages.prepare(input.request,input.path.roleId,input.signal),(owner,input)=>{
     const query = new URLSearchParams({adapter:input.url.searchParams.get('adapter')||'napcat',includeArchives:'1',includeConversations:'1',catalog:'1'});

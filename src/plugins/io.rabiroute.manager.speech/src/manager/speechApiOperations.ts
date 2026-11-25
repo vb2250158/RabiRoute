@@ -27,7 +27,7 @@ const normal: readonly Normal[] = [
   { id: "events", method: "GET", path: "/events", sse: true },
   { id: "status", method: "GET", path: "/status", error: 500 },
   { id: "selection-reader.read", method: "GET", path: "/selection-reader/settings" },
-  { id: "selection-reader.write", method: "PUT", path: "/selection-reader/settings", fields: ["enabled", "readAloudEnabled", "advanced", "model"], error: 500 },
+  { id: "selection-reader.write", method: "PUT", path: "/selection-reader/settings", fields: ["enabled", "readAloudEnabled", "advanced", "model", "computeDeviceId"], error: 500 },
   { id: "models", method: "GET", path: "/models", query: ["computeDeviceId"] },
   { id: "personas", method: "GET", path: "/personas" },
   { id: "speakers.list", method: "GET", path: "/speakers", query: ["sessionId"] },
@@ -54,7 +54,7 @@ const normal: readonly Normal[] = [
   { id: "playback.cancel-session", method: "POST", path: "/playback/cancel-session", fields: ["sessionId"], error: 400 },
   { id: "playback.stop", method: "POST", path: "/playback/stop" },
   { id: "tts", method: "POST", path: "/tts", query: ["computeDeviceId"], fields: ["model", "input", "voice", "responseFormat", "speed", "language", "instructions", "sampleRate", "play", "sessionId", "routeId"], bytes: true },
-  { id: "asr", method: "POST", path: "/asr", raw: true, bytes: true },
+  { id: "asr", method: "POST", path: "/asr", query: ["computeDeviceId"], raw: true, bytes: true },
   { id: "messages.list", method: "GET", path: "/messages", query: ["recordId", "limit", "sourceDeviceId", "messageAdapterType", "before"] },
   { id: "messages.accept", method: "POST", path: "/messages", fields: ["processingPolicy", "routeId", "routeProfileId", "recordId", "text", "sessionId", "source", "transport", "channelType", "messageAdapterType", "sourceDeviceId", "sourceDeviceName", "sourceDeviceKind", "sourceDeviceTrust", "sourceStreamId", "sourceHostId", "sourceHostName", "sampleRate", "recordedAt", "startedAt", "completedAt", "ingestedAt", "audioFormat", "channels", "peak", "rms", "provider", "model", "language", "duration", "segments", "gatewayId"] }
 ];
@@ -424,7 +424,12 @@ export class SpeechApiOwner {
           case "status": data = await control.status(guard); break;
           case "selection-reader.read": data = this.context.selectionSpeechSettings.read(); break;
           case "selection-reader.write": data = this.context.selectionSpeechSettings.write(input.body); break;
-          case "models": data = { models: await control.models(guard) }; break;
+          case "models": {
+            const models = await control.models(guard);
+            const scope = admission.catalogScope?.();
+            data = { models: scope ? models.filter(model => scope.includes(model.capability)) : models };
+            break;
+          }
           case "personas": data = { personas: control.personas(guard) }; break;
           case "speakers.list": data = await control.speakerRegistry(value(input, "sessionId") || undefined, guard); break;
           case "speakers.create": data = await control.createSpeakerProfile(input.body as Command<"createSpeakerProfile">, guard); break;
@@ -516,7 +521,8 @@ export function createSpeechApiOperations(owner: SpeechApiOwner): { operations: 
     const path = { type: "object", required: params, additionalProperties: false, properties: Object.fromEntries(params.map(key => [key, { type: "string" }])) };
     const query = { type: "object", additionalProperties: true, properties: Object.fromEntries((operation.query ?? []).map(key => [key, { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Use the first query value, preserving native empty/default and numeric conversion behavior." }])) };
     const response200 = operation.sse ? { mediaType: "text/event-stream", stream: { framing: "bytes" as const, maxFrameBytes: SpeechEventStreamOwner.maxChunkBytes, completion: "Natural upstream EOF after original reader cleanup.", cancellation: "Abort the original fetch, cancel its body reader and join actual upstream cancellation and generator completion." }, alternatives: [jsonResponse] } : operation.bytes ? binaryResponse : jsonResponse;
-    const handler = (input: ApiOperationInput) => owner.run(operation, input, owner.capture(input, operation.id === "models" || operation.id === "tts"));
+    const compute = operation.query?.includes("computeDeviceId") === true;
+    const handler = (input: ApiOperationInput) => owner.run(operation, input, owner.capture(input, compute));
     return { contract: {
       operationId: "manager.speech." + operation.id, contractVersion: "1.0.0", method: operation.method, pathTemplate: "/api/speech" + operation.path, exposure: "public" as const, transport: operation.sse ? "sse" as const : "http" as const,
       description: "Invoke the original speech owner for " + operation.id + ". Device I/O, model compute, persistence and playback remain owned by the existing services.",
@@ -525,7 +531,7 @@ export function createSpeechApiOperations(owner: SpeechApiOwner): { operations: 
       effects: { mode: operation.method === "GET" ? operation.sse ? "native-speech-events" : "native-speech-read" : "native-speech-action", description: "Original ManagerSpeechControl, selection settings and ingress store own normalization, runtime requests, Route delivery receipts and host provenance. A successful HTTP response or a playback job is not proof of completed playback, transcription delivery or physical I/O." },
       recovery: { strategy: operation.sse ? "reconnect-native-stream" : operation.method === "GET" ? "repeatable-native-read" : "inspect-native-state-no-replay", description: "Capture the original Agent authority, peer selection and compute override before body consumption. Revalidate before dispatch and result disclosure; target changes never fall back to local work. Writes retain original receipt/idempotency behavior and must not be blindly replayed after uncertainty. Raw audio remains byte-identical; SSE retains original framing without JSON reinterpretation." },
       validators: [{ id: "native-speech-owner", description: "Retain original speaker IDs, persona/voice ownership, model availability, microphone limits, host-owned message provenance and explicit user disables. There is no additional per-feature grant. JSON decoding is performed once by the common registry; native owners validate business values." }]
-    }, discovery: speechDiscovery(operation.id), prepare: input => { const admission = owner.capture(input, operation.id === "models" || operation.id === "tts"); return parsed => owner.run(operation, parsed, admission); }, handler } satisfies ApiOperationDefinition;
+    }, discovery: speechDiscovery(operation.id), prepare: input => { const admission = owner.capture(input, compute); return parsed => owner.run(operation, parsed, admission); }, handler } satisfies ApiOperationDefinition;
   });
   const proxyDefinitions = proxies.map(operation => {
     const params = [...operation.path.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]!);

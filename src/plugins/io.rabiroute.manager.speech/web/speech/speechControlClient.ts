@@ -122,7 +122,10 @@ export function createSpeechControlClient(fetchImpl: typeof fetch = (...args) =>
     "/api/speech/runtime/stop",
     { method: "POST" }
   ),
-  models: (): Promise<SpeechModelsPayload> => managerData("/api/speech/models"),
+  models: ({ computeDeviceId, signal }: { computeDeviceId?: string; signal?: AbortSignal } = {}): Promise<SpeechModelsPayload> => {
+    const query = computeDeviceId === undefined ? "" : `?computeDeviceId=${encodeURIComponent(computeDeviceId)}`;
+    return managerData(`/api/speech/models${query}`, { signal });
+  },
   selectionReaderSettings: (): Promise<SelectionSpeechSettings> => managerData(
     "/api/speech/selection-reader/settings"
   ),

@@ -15,6 +15,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
 import { RabiLinkEventHub } from "./rabilink-event-hub.mjs";
 import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
+import { createPhoneFilesRelay, phoneFilesCapability, phoneFilesPath } from "./rabilink-phone-files.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 0);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
@@ -95,6 +96,7 @@ let nextOutboxMessageSeq = 1;
 let outboxCursorGeneration = "";
 let outboxCursorHighWater = 0;
 const relayEventHub = new RabiLinkEventHub();
+const phoneFiles = createPhoneFilesRelay({ events: relayEventHub, sendJson, selectPhone, callerIsCurrent: phoneFilesCallerIsCurrent });
 const webguiEventHub = new RabiLinkEventHub();
 
 function scheduleLeaseAvailability(eventType, appId, targetDeviceId, leaseUntil, data = {}) {
@@ -929,7 +931,7 @@ function publicWorker(worker, app) {
   return {
     id: worker.id,
     guid: worker.guid || "",
-    name: worker.name || worker.id,
+    name: isRegisteredPhone(worker) && (!worker.name || worker.name === worker.id) ? "Android 手机" : worker.name || worker.id,
     appId: worker.appId || "",
     appName: app?.name || "",
     appTokenPreview,
@@ -1780,7 +1782,7 @@ function handleDeviceMediaDownload(req, url, res) {
   fs.createReadStream(target).pipe(res);
 }
 
-function createTask(raw, req, auth = { app: null }) {
+function createTask(raw, req, auth = { app: null }, targetDeviceId = auth.app?.targetDeviceId || "") {
   loadRelayRuntimeState();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Object.assign(new Error('Transport input must be a JSON object.'), { statusCode: 400 });
   const now = Date.now();
@@ -1794,17 +1796,17 @@ function createTask(raw, req, auth = { app: null }) {
     attempts: 0,
     inputFormat: 'opaque-v1',
     ingressPath: new URL(req.url || '/', 'http://transport.invalid').pathname,
-    expectedWorkerFencing: Boolean(req.headers['x-rabilink-expected-worker-id'] && req.headers['x-rabilink-expected-worker-id'] === auth.app?.targetDeviceId),
+    expectedWorkerFencing: Boolean(targetDeviceId && req.headers['x-rabilink-expected-worker-id'] === targetDeviceId),
     appId: auth.app?.id || "",
     appName: auth.app?.name || "",
-    targetDeviceId: auth.app?.targetDeviceId || "",
+    targetDeviceId,
     source: {
       userAgent: String(req.headers["user-agent"] || ""),
       ip: String(req.socket.remoteAddress || ""),
       connectionDeviceId: auth.deviceBinding?.id || '$application',
       appId: auth.app?.id || "",
       appName: auth.app?.name || "",
-      targetDeviceId: auth.app?.targetDeviceId || ""
+      targetDeviceId
     },
     raw,
     messages: [],
@@ -2274,7 +2276,7 @@ async function handleSpeechProxy(req, url, res) {
       sourceCredentialHash: auth.pcCredential.credentialHash, targetRef: reference, targetGuid: target.worker.guid };
     auth = { ...auth, app: target.app };
     worker = target.worker;
-  } else worker = requireRokidAppTarget(auth, "speech");
+  } else worker = portableRequestWorker(auth, req, "speech");
   const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
   if (expectedWorker && expectedWorker !== worker.id) {
     return sendJson(res, 409, { ok: false, message: "Frozen speech target worker changed; request was not queued." });
@@ -2574,6 +2576,7 @@ function outboxMessageForResponse(message) {
     status: message.status,
     proactive: message.proactive === true,
     source: stringValue(message.source),
+    ...(message.sourceWorkerId ? { sourceWorkerId: message.sourceWorkerId } : {}),
     receipts: Array.isArray(message.receipts)
       ? message.receipts.map((receipt) => ({
           deviceId: stringValue(receipt?.deviceId),
@@ -3084,9 +3087,16 @@ function handleRelayEventStream(req, url, res, body = {}) {
   const appId = auth.app?.id || "";
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
-  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || deviceId);
   const deviceKind = stringValue(url.searchParams.get("deviceKind") || body?.deviceKind);
-  const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "");
+  const isPhone = !auth.pcCredential && !auth.deviceBinding && deviceKind === "phone"
+    && /^rabi-phone-[a-z0-9]{1,89}$/.test(deviceId) && !deviceGuid;
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || (isPhone ? "Android 手机" : deviceId));
+  const phoneSecret = req.headers["x-rabilink-phone-session"];
+  const closePhoneFiles = isPhone && typeof phoneSecret === "string" && /^[a-f0-9]{64}$/.test(phoneSecret)
+    ? phoneFiles.connect(appId, deviceId, sha256(auth.app.token), phoneSecret) : undefined;
+  const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "")
+    .filter(capability => capability !== phoneFilesCapability && (capability !== "phone-file-control-v1" || closePhoneFiles));
+  if (closePhoneFiles) capabilities.push(phoneFilesCapability);
   const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
   if (deviceId || deviceGuid) {
     recordWorkerSeen(appId, deviceId || deviceName || deviceGuid, deviceName || deviceId || deviceGuid, deviceGuid, capabilities, peerUrls, deviceKind);
@@ -3096,6 +3106,7 @@ function handleRelayEventStream(req, url, res, body = {}) {
   const close = () => {
     if (closed) return;
     closed = true;
+    closePhoneFiles?.();
     subscription.close();
     recordWorkerDisconnected(appId, deviceId, deviceGuid);
   };
@@ -3122,9 +3133,13 @@ function handleRelayEventStream(req, url, res, body = {}) {
 function handleRokidInput(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  requireRokidAppTarget(auth);
+  const worker = requireRokidAppTarget(auth);
+  return queuePortableInput(req, res, body, auth, worker);
+}
+
+function queuePortableInput(req, res, body, auth, worker) {
   const outboxCursor = currentOutboxCursor();
-  const event = createTask(body, req, auth);
+  const event = createTask(body, req, auth, worker.id);
   sendJson(res, 202, {
     code: 0,
     ok: true,
@@ -3302,20 +3317,38 @@ function claimDeviceToken(body) {
   };
 }
 
+function portableRequestWorker(auth, req, capability = "") {
+  const target = stringValue(req.headers['x-rabilink-portable-target']);
+  if (!target) return requireRokidAppTarget(auth, capability);
+  if (auth.deviceBinding || auth.pcCredential || !req.headers['x-rabilink-token']) {
+    throw Object.assign(new Error('Application connection credential required.'), { statusCode: 403 });
+  }
+  const worker = mobileWorkersForApp(auth.app).find(item => item.id === target);
+  if (!worker) throw Object.assign(new Error('Target Rabi PC is outside the application directory.'), { statusCode: 404 });
+  if (!worker.online || (capability && !worker.capabilities.includes(capability))) {
+    throw Object.assign(new Error('Target Rabi PC is unavailable.'), { statusCode: 503 });
+  }
+  return worker;
+}
+
 function handlePortableInput(req, url, res, body) {
   // Worker fencing is transport metadata; input policy and samples are interpreted on PC.
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  const worker = requireRokidAppTarget(auth);
+  const worker = portableRequestWorker(auth, req);
   const expected = stringValue(req.headers['x-rabilink-expected-worker-id']);
   if (expected && expected !== worker.id) return sendJson(res, 409, { ok: false, message: 'Frozen worker mismatch; not queued.' });
-  return handleRokidInput(req, url, res, body);
+  return queuePortableInput(req, res, body, auth, worker);
 }
 
 function handleWorkerMessageAppend(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-  requireRokidAppTarget(auth);
+  const identity = workerIdentityFromBody(body);
+  const worker = identity.deviceId
+    ? mobileWorkersForApp(auth.app).find(item => item.id === identity.deviceId && (!identity.deviceGuid || item.guid === identity.deviceGuid))
+    : requireRokidAppTarget(auth);
+  if (!worker) return sendRabiLinkError(res, 403, 'Source Rabi PC is outside the application directory.');
   loadRelayRuntimeState();
   const candidates = Array.isArray(body?.messages) ? body.messages : [body];
   const source = stringValue(body?.source || body?.sender || "Rabi");
@@ -3344,6 +3377,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
       const existingPortableEnvelope = portableEnvelopeForResponse(existing);
       const samePayload = existing.text === text
         && existing.taskId === taskId
+        && (!existing.sourceWorkerId || existing.sourceWorkerId === worker.id)
         && existing.proactive === proactive
         && existing.final === final
         && JSON.stringify(existingPortableEnvelope) === JSON.stringify({ ...portableEnvelope, routeProfileId: stringValue(candidate?.routeProfileId || body?.routeProfileId).slice(0, 160), attachments });
@@ -3373,6 +3407,7 @@ function handleWorkerMessageAppend(req, url, res, body) {
       status: proactive ? "proactive" : "reply",
       proactive,
       source: stringValue(candidate?.source || source),
+      sourceWorkerId: worker.id,
       routeProfileId: stringValue(candidate?.routeProfileId || body?.routeProfileId).slice(0, 160),
       attachments,
       ...portableEnvelope
@@ -5052,16 +5087,43 @@ function mobileWorkersForApp(app) {
     .map((worker) => publicWorker(worker, app));
 }
 
+function isRegisteredPhone(worker) {
+  return normalizeWorkerDeviceKind(worker.deviceKind) === "phone" && /^rabi-phone-[a-z0-9]{1,89}$/.test(worker.id);
+}
+
+function selectPhone(auth, id, guid, store = readAppStore()) {
+  if (isHostAccountScope(auth.app)) {
+    return accountHostTargets(store, auth.app, isRegisteredPhone)
+      .find(target => target.id === id && (target.worker.guid || "") === guid);
+  }
+  const worker = store.workers.find(item => item.appId === auth.app.id && item.id === id
+    && (item.guid || "") === guid && isRegisteredPhone(item));
+  return worker ? { app: auth.app, worker } : undefined;
+}
+
+function phoneFilesCallerIsCurrent(caller) {
+  const store = readAppStore();
+  const app = store.apps.find(item => item.id === caller.appId && item.enabled !== false);
+  if (!app) return false;
+  const tokenHash = sha256(app.token);
+  const valid = isHostAccountScope(app) ? app.pcCredentials.some(item => item.enabled !== false
+    && item.appTokenHash === tokenHash && item.credentialHash === caller.credentialHash) : tokenHash === caller.credentialHash;
+  return valid && selectPhone({ app }, caller.targetId, caller.targetGuid, store)?.app.id === caller.targetAppId;
+}
+
 function handlePeerDiscovery(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const deviceId = stringValue(url.searchParams.get("deviceId") || body?.deviceId);
   const deviceGuid = stringValue(url.searchParams.get("deviceGuid") || body?.deviceGuid);
   const store = readAppStore();
+  const includePhones = url.searchParams.get("includePortable") === "phone" && !auth.deviceBinding;
   const peers = (isHostAccountScope(auth.app)
-    ? accountHostTargets(store, auth.app, workerCanProcessMobileRequests).filter(target => target.worker.id !== deviceId && target.worker.guid !== deviceGuid)
+    ? accountHostTargets(store, auth.app, worker => workerCanProcessMobileRequests(worker) || (includePhones && isRegisteredPhone(worker)))
+      .filter(target => !(deviceId && target.worker.id === deviceId) && !(deviceGuid && target.worker.guid === deviceGuid))
       .map(({ id, worker, app }) => {
         const peer = publicWorker(worker);
+        if (isRegisteredPhone(worker)) return { ...peer, id, peerUrls: [] };
         const native = app.id === auth.app.id && peer.capabilities.includes('host-account-tunnel-v1');
         const capabilities = native ? peer.capabilities : peer.capabilities.filter(value => !['peer-rpc-v1', 'peer-tunnel-v1', 'host-account-tunnel-v1'].includes(value));
         return { ...peer, id, peerUrls: native ? peer.peerUrls : [], capabilities: [...capabilities, 'host-account-http-v1'], legacy: app.id !== auth.app.id };
@@ -5241,6 +5303,20 @@ function mobileWorkerTarget(app, url, body = {}) {
 async function handleMobileApi(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+  if ((req.method === 'GET' && url.pathname === '/api/rabilink/mobile/account') ||
+      (req.method === 'PATCH' && url.pathname === '/api/rabilink/mobile/account/status')) {
+    if (auth.deviceBinding || auth.pcCredential || !req.headers['x-rabilink-token']) {
+      return sendJson(res, 403, { code: 'APPLICATION_CONNECTION_CREDENTIAL_REQUIRED' });
+    }
+    if (req.method === 'GET') {
+      return sendJson(res, 200, { code: 0, data: hostAccountService.readApplicationOwnerProfile(auth.app.ownerAccountId) },
+        { 'cache-control': 'private, no-store' });
+    }
+    const { data, appIds } = hostAccountService.setApplicationOwnerStatus(auth.app.ownerAccountId, body?.status);
+    for (const appId of appIds) relayEventHub.publish('mobile_account_changed', { appId, deviceKind: 'phone', data: {} });
+    return sendJson(res, 200, { code: 0, data },
+      { 'cache-control': 'private, no-store' });
+  }
   if (req.method === 'GET' && url.pathname === '/api/rabilink/mobile/state') return sendJson(res, 200, mobileStatePayload(auth.app));
   if (req.method === 'PATCH' && url.pathname === '/api/rabilink/mobile/connection') {
     if (auth.deviceBinding) return sendJson(res, 403, { code: 'APPLICATION_CONNECTION_CREDENTIAL_REQUIRED' });
@@ -5577,6 +5653,12 @@ const server = http.createServer(async (req, res) => {
     const webguiWorkerEvent = url.pathname === "/worker/webgui-events";
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
     const peerRpcProxy = url.pathname === "/api/rabilink/peer/proxy";
+    if (url.pathname === phoneFilesPath || url.pathname.startsWith(phoneFilesPath + "/")) {
+      const auth = authorizeRabiLinkRequest(req, url, {});
+      if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+      const input = req.method === "POST" ? await readBody(req, { maxBytes: 256 * 1024, label: "Phone file" }) : {};
+      return await phoneFiles.handle(req, url, res, auth, input);
+    }
     const body = req.method === "GET"
       ? {}
       : await readBody(req, webguiWorkerResponse

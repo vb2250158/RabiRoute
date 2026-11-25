@@ -68,7 +68,7 @@ const managementPurposes: Record<string, [string, string[]]> = {
   "instances.enabled": ["启用或停用执行节点", ["节点开关", "停用电脑", "enable instance"]],
   "instances.name": ["修改执行节点名称", ["电脑名称", "节点改名", "rename instance"]],
   "nodes.list": ["查询登记 SDK 节点与版本", ["SDK 节点", "登记节点", "节点版本", "registered SDK nodes"]],
-  "nodes.update": ["更新登记节点 SDK", ["节点升级", "更新SDK", "update node SDK"]],
+  "nodes.update": ["更新登记节点 SDK", ["节点升级", "连接器升级", "远程终端升级", "更新SDK", "update node SDK", "remote connector upgrade"]],
   "nodes.tasks": ["查询登记节点的 Agent 任务", ["节点任务", "会话任务", "node agent tasks"]],
   "agents.create": ["在执行节点创建 Agent", ["新建Agent", "创建处理端", "create agent"]],
   "agents.tasks": ["查询执行节点 Agent 的任务", ["Agent任务", "会话列表", "agent tasks"]],
@@ -82,12 +82,17 @@ function managementDiscovery(key: string): ApiOperationDefinition["discovery"] {
   if (!purpose) return undefined;
   return { title: purpose[0], summary: key === "instances.list"
     ? "查询当前 Manager 的本机与已接入执行实例，使用 instanceId 访问该实例能力。此目录不是 Rabi 主机目录，也不是登记 SDK 节点版本目录。"
-    : key === "nodes.list" ? "查询登记 SDK 节点、nodeId 与版本状态。主机目录和当前 Manager 执行实例目录分别查询。" : purpose[0],
-    category: key === "instances.list" || key === "nodes.list" ? { id: "devices", title: "电脑与设备" } : { id: "agents", title: "Agent 与执行节点" }, keywords: purpose[1],
+    : key === "nodes.list" ? "查询登记 SDK 节点的 nodeId、运行版本、更新状态和 taskTargeting。主机目录和当前 Manager 执行实例目录分别查询。"
+    : key === "nodes.update" ? "确认同一已连接轻量节点存在版本缺口后，通过已有签名发布更新连接器。202 后从 nodes.list 核对同一 nodeId 重连、实际版本和所需能力。完整 Rabi 主机交由其 Host 发布入口维护。"
+    : purpose[0],
+    category: key === "instances.list" || key === "nodes.list" || key === "nodes.update" ? { id: "devices", title: "电脑与设备" } : { id: "agents", title: "Agent 与执行节点" }, keywords: purpose[1],
     ...(key === "instances.list" ? { relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.nodes.list", "manager.lan-agent.terminals.list"] }
-      : key === "nodes.list" ? { relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.instances.list"] }
+      : key === "nodes.list" ? { relatedOperations: ["manager.rabilink.peer.servers.read", "manager.lan-agent.instances.list", "manager.lan-agent.nodes.update"] }
       : key.startsWith("agents.") || key.startsWith("instances.") ? { inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }] }
-      : key.startsWith("nodes.") ? { inputSources: [{ field: "path.nodeId", operationId: "manager.lan-agent.nodes.list", resultPath: "/nodes", valuePath: "/nodeId" }] } : {}) };
+      : key.startsWith("nodes.") ? {
+        inputSources: [{ field: "path.nodeId", operationId: "manager.lan-agent.nodes.list", resultPath: "/nodes", valuePath: "/nodeId" }],
+        ...(key === "nodes.update" ? { relatedOperations: ["manager.lan-agent.nodes.list", "manager.lan-agent.instances.list"] } : {})
+      } : {}) };
 }
 
 export function createLanAgentManagementOperations(context: LanAgentRoutesContext): readonly ApiOperationDefinition[] {

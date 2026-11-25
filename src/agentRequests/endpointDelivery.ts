@@ -232,14 +232,14 @@ function resolvedMessageSource(request: AgentThreadRequest, source: AgentRequest
 }
 
 function renderEndpointPrompt(request: AgentThreadRequest, source: AgentRequestParty, preparation: AgentCommunicationPreparation,
-  executionOptions: EndpointExecutionOptions, sentAt?: string, replyParameters = renderAgentReplyParameters(preparation)): string {
+  executionOptions: EndpointExecutionOptions, sentAt?: string, replyParameters = renderAgentReplyParameters(preparation), legacySystemSource?: "legacy"): string {
   const content = preparation.inReplyToRequestId ? renderAgentResponseContent(request.prompt || "", preparation.result || "", preparation.nextAction || "") : request.prompt;
   if (typeof content !== "string" || !content.trim() || content.length > 200_000) throw new Error("Endpoint delivery requires a non-empty bounded prompt.");
   const messageSource = resolvedMessageSource(request, source);
   return preparation.target.endpoint!.kind === "service" && preparation.target.endpoint!.provider === "grokBot" && executionOptions.grokBotDelivery
     ? content
     : renderRabiDelivery({ messageSource, messageContent: content, sentAt,
-      contextBlocks: request.contextBlocks, controlBlocks: [...(request.controlBlocks ?? []), replyParameters] });
+      contextBlocks: request.contextBlocks, controlBlocks: [...(request.controlBlocks ?? []), replyParameters] }, legacySystemSource);
 }
 
 /** Old snapshots can prove the original payload without inventing a missing semantic input hash. */
@@ -261,7 +261,7 @@ function matchesLegacyReply(request: AgentThreadRequest, delivery: PreparedEndpo
   if (!direct && (!sentAt || footerAt < 0)) return false;
   // Preserve the original machine-generated footer and timestamp, including historical template versions.
   let prompt = renderEndpointPrompt(request, preparation.source, { ...preparation, result: request.result, nextAction: request.nextAction },
-    delivery.executionOptions, sentAt, footerAt < 0 ? "" : frozen.slice(footerAt));
+    delivery.executionOptions, sentAt, footerAt < 0 ? "" : frozen.slice(footerAt), "legacy");
   // Old frozen snapshots must still be compared byte-for-byte using their original envelope.
   if (frozen.startsWith("[消息源]\n") && prompt.startsWith("## 消息源\n")) {
     const boundary = prompt.indexOf("\n\n## 消息内容\n");

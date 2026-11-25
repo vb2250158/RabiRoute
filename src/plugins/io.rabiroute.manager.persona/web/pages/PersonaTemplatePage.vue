@@ -304,6 +304,7 @@ const automationQqRoutes = ref<HistoryQqRoute[]>([]);
 const automationQqDirectories = ref<AutomationQqDirectory[]>([]);
 const automationQqLoading = ref(false);
 let automationQqRequest: AbortController | undefined;
+let automationQqRoleId: string | undefined;
 const automationConversations = computed(() => new Map(automations.value.map(rule =>
   [rule.id, automationRuleConversation(rule, automationQqRoutes.value, automationQqDirectories.value)])));
 const automationPrivateChoices = computed(() => {
@@ -320,12 +321,22 @@ const automationGroupChoices = computed(() => {
 
 async function refreshAutomationQqDirectories(): Promise<void> {
   automationQqRequest?.abort();
-  automationQqRoutes.value = [];
-  automationQqDirectories.value = [];
+  automationQqRequest = undefined;
+  const roleId = store.sourceDeviceId === personaService.deviceId && store.detail
+    ? store.selectedRoleId
+    : undefined;
+  if (roleId !== automationQqRoleId) {
+    automationQqRoleId = roleId;
+    automationQqRoutes.value = [];
+    automationQqDirectories.value = [];
+  }
   automationQqLoading.value = false;
-  const roleId = store.selectedRoleId;
-  if (activePersonaPageTab.value !== "automation" || !roleId || !store.detail
-    || store.sourceDeviceId !== personaService.deviceId) return;
+  if (activePersonaPageTab.value !== "automation" || !roleId) return;
+  const roleRoutes = new Set(store.detail?.routes.map(route => route.id));
+  if (automationQqRoutes.value.some(route => !roleRoutes.has(route.routeId))) {
+    automationQqRoutes.value = automationQqRoutes.value.filter(route => roleRoutes.has(route.routeId));
+    automationQqDirectories.value = automationQqDirectories.value.filter(directory => roleRoutes.has(directory.routeId));
+  }
   const controller = new AbortController();
   automationQqRequest = controller;
   automationQqLoading.value = true;
@@ -340,9 +351,7 @@ async function refreshAutomationQqDirectories(): Promise<void> {
   try {
     const catalog = await read(`/api/roles/${encodeURIComponent(roleId)}/message-history-channels`) as { qqRoutes?: HistoryQqRoute[] };
     if (controller.signal.aborted) return;
-    const roleRoutes = new Set(store.detail.routes.map(route => route.id));
     const routes = (catalog.qqRoutes ?? []).filter(route => typeof route.routeId === "string" && roleRoutes.has(route.routeId));
-    automationQqRoutes.value = routes;
     const directories: AutomationQqDirectory[] = [];
     for (let start = 0; start < routes.length; start += 2) {
       const batch = routes.slice(start, start + 2);
@@ -353,16 +362,19 @@ async function refreshAutomationQqDirectories(): Promise<void> {
         const directory = automationQqDirectory(batch[index]!, result.value);
         if (directory) directories.push(directory);
       }
-      automationQqDirectories.value = [...directories];
     }
+    // Keep the visible directory intact until all route reads have settled.
+    automationQqRoutes.value = routes;
+    automationQqDirectories.value = directories;
   } catch {
-    // Unavailable directories leave the channel icon and stored target ID usable.
+    // Keep the previous directory on a catalog read failure.
   } finally {
     if (automationQqRequest === controller) automationQqLoading.value = false;
   }
 }
-watch([activePersonaPageTab, () => store.selectedRoleId, () => store.sourceDeviceId, () => store.detail?.revision, () => routeStore.routeCatalogRevisionHash],
-  () => { void refreshAutomationQqDirectories(); });
+watch([activePersonaPageTab, () => store.selectedRoleId, () => store.sourceDeviceId, () => store.detail?.revision,
+  () => store.detail?.routes, () => routeStore.routeCatalogRevisionHash],
+  () => { void refreshAutomationQqDirectories(); }, { immediate: true });
 
 const automationDeliveryIncomplete = computed(() => {
   const action = activeAutomation.value?.action;

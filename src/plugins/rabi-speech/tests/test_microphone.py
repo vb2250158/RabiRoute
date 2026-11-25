@@ -25,6 +25,52 @@ class FakeStream:
         self.closed = True
 
 
+def test_assistant_background_reuses_capture_records_without_route_delivery_and_checks_owner(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        result = asyncio.Event()
+        streams: list[FakeStream] = []
+        stored: list[tuple[str, str]] = []
+        calls: list[tuple[str, str]] = []
+
+        async def background(_path, config, device_id):
+            calls.append((config.asr_model, device_id))
+            return TranscriptionResult(text="background text", language="en", duration=1, provider="fake", model=config.asr_model)
+
+        async def legacy(*_args):
+            raise AssertionError("Assistant background audio must not use the legacy ASR or route")
+
+        def record(transcript, _config, _started, _path, source):
+            stored.append((transcript.text, source.processing_policy))
+            result.set()
+
+        def stream(*_args):
+            streams.append(FakeStream())
+            return streams[-1]
+
+        settings = tmp_path / "mic.json"
+        service = MicrophoneService(state_path=settings, temp_dir=tmp_path / "temp", transcriber=legacy,
+                                    submitter=legacy, playback_active=lambda: False, stream_factory=stream,
+                                    background_transcriber=background, record_transcription=record)
+        await service.configure_assistant(True, "small-asr", "compute-a", "old")
+        await service.configure_assistant(True, "small-asr", "compute-a", "new")
+        await service.configure_assistant(False, "", "", "old", release=True)
+        assert service.snapshot()["running"] is True
+        assert len(streams) == 1
+        for _ in range(12):
+            service.feed_for_test(np.full(1600, .12, dtype=np.float32))
+        for _ in range(6):
+            service.feed_for_test(np.zeros(1600, dtype=np.float32))
+        await asyncio.wait_for(result.wait(), 2)
+        assert calls == [("small-asr", "compute-a")]
+        assert stored == [("background text", "record_only")]
+        await service.configure_assistant(False, "", "", "new", release=True)
+        assert streams[0].closed
+        await service.restore()
+        assert service.snapshot()["running"] is False
+
+    asyncio.run(scenario())
+
+
 def test_short_phrase_and_quieter_speech_do_not_get_discarded_or_count_as_silence(tmp_path: Path) -> None:
     async def scenario() -> None:
         async def transcribe(_path, _config):
