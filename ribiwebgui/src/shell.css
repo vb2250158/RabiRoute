@@ -302,8 +302,8 @@
 
 .topbar-page-controls:empty { display: none; }
 .topbar-page-controls {
-  flex: 0 1 auto;
-  width: clamp(160px, 22vw, 320px);
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
 }
 
