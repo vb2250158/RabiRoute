@@ -39,6 +39,15 @@ function preparedAgentCanRetry(attempt, receipt) {
   return provenUnsentAgentReceipt(attempt, receipt, "prepared");
 }
 
+/** Only the node's own earlier turns are context; the caller never decides what reaches an Agent. */
+export function multiTurnContext(conversation) {
+  if (!Array.isArray(conversation)) return "";
+  const turns = conversation.filter(row => row && (row.role === "user" || row.role === "assistant") && typeof row.text === "string" && row.text.trim())
+    .slice(-20).map(row => `${row.role === "assistant" ? "Agent" : "我"}：${row.text.trim().slice(0, 4000)}`);
+  if (!turns.length) return "";
+  return ("\n\n此前的对话（按时间顺序，可作为本轮上下文）：\n" + turns.join("\n\n")).slice(0, 12000);
+}
+
 /** One published plugin activation owns graph execution. Process/Agent/media owners retain their receipts. */
 export class WorkbenchRuns {
   constructor(runtime, projects, media, publish) {
@@ -459,6 +468,7 @@ export class WorkbenchRuns {
       brief = expandRootReferences(expandVariables(await fs.readFile(file,"utf8"),run.snapshot.variables),run.binding.roots);
     }
     if (node.config.linkedMediaContext) brief += "\n\n引用的画布文本：\n" + node.config.linkedMediaContext;
+    if (node.config.multiTurn === true) brief += multiTurnContext(node.config.conversation);
     const projection = node.config.contextProjection;
     if (projection) {
       const root = run.binding.roots[projection.ref?.root];

@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { configFields, configValue, changeConfig, type ConfigField } from "./workbenchEditor";
-const props=defineProps<{kind:string;modelValue:Record<string,any>}>();
+const props=defineProps<{kind:string;modelValue:Record<string,any>;fields?:ConfigField[]}>();
 const emit=defineEmits<{"update:modelValue":[value:Record<string,any>]}>();
-const fields = computed(() => (configFields[props.kind] || []).filter(field => !props.modelValue.cli || !/^(agentBindingKey|target\.|source\.)/.test(field.path)));
+const fields = computed(() => (props.fields?.length ? props.fields : (configFields[props.kind] || [])).filter(field => {
+  // The Agent picker owns the target once a CLI or an exact session is bound; a session still needs its source task.
+  if (props.modelValue.cli) return !/^(agentBindingKey|target\.|source\.)/.test(field.path);
+  if (props.modelValue.target?.threadId) return !/^(agentBindingKey|target\.)/.test(field.path);
+  return true;
+}));
 const parameters = computed(() => (Array.isArray(props.modelValue.parameterSchema) ? props.modelValue.parameterSchema : [])
   .filter(param => !props.modelValue.cli || param.name !== "model"));
 function display(field:ConfigField){const value=configValue(props.modelValue,field.path);return field.type==='lines'?(Array.isArray(value)?value.join('\n'):value==null?'':String(value)):value??'';}

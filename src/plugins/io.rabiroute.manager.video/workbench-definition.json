@@ -1,11 +1,59 @@
 {
   "version": 1,
   "capabilities": {
-    "asset": { "label": "资产", "executable": false, "ports": { "in": [], "out": [] } },
-    "command": { "label": "命令", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
-    "agent": { "label": "Agent", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
-    "human": { "label": "人工检查", "executable": true, "ports": { "in": ["control"], "out": ["control"] } },
-    "generate": { "label": "生成", "executable": true, "ports": { "in": ["control"], "out": ["control"] } }
+    "asset": {
+      "label": "资产", "icon": "mdi-file-outline", "group": "pipeline", "executable": false, "ports": { "in": [], "out": [] },
+      "fields": [
+        { "path": "mediaKind", "label": "材料类型", "type": "select", "options": ["text", "image", "video", "audio"] },
+        { "path": "ref.root", "label": "材料位置", "type": "select", "options": ["canvas", "materials", "output", "runtime"] },
+        { "path": "ref.path", "label": "材料相对路径" },
+        { "path": "artifactKey", "label": "产物名称" }
+      ]
+    },
+    "command": {
+      "label": "命令", "icon": "mdi-console", "group": "pipeline", "executable": true, "ports": { "in": ["control"], "out": ["control"] },
+      "fields": [
+        { "path": "toolKey", "label": "命令工具" },
+        { "path": "argv", "label": "命令参数（每行一项）", "type": "lines" },
+        { "path": "timeoutMs", "label": "超时（毫秒）", "type": "number" },
+        { "path": "validationOnly", "label": "仅校验输入", "type": "boolean" }
+      ]
+    },
+    "agent": {
+      "label": "Agent", "icon": "mdi-robot-outline", "group": "creative", "executable": true, "ports": { "in": ["control"], "out": ["control"] },
+      "fields": [
+        { "path": "agentBindingKey", "label": "Agent 绑定" },
+        { "path": "target.agentAdapter", "label": "目标适配器" },
+        { "path": "target.threadId", "label": "目标对话" },
+        { "path": "source.sourceAgentType", "label": "发起适配器" },
+        { "path": "source.sourceThreadId", "label": "发起对话" },
+        { "path": "briefRef.root", "label": "任务书位置", "type": "select", "options": ["canvas", "materials", "output", "runtime"] },
+        { "path": "briefRef.path", "label": "任务书相对路径" },
+        { "path": "independentFromNodeId", "label": "独立核验的原作者节点" },
+        { "path": "contextProjection.ref.root", "label": "结构化上下文位置", "type": "select", "options": ["canvas", "materials", "output", "runtime"] },
+        { "path": "contextProjection.ref.path", "label": "结构化上下文相对路径" },
+        { "path": "contextProjection.list", "label": "上下文列表字段" },
+        { "path": "contextProjection.fields", "label": "传递字段（每行一项）", "type": "lines" }
+      ]
+    },
+    "human": {
+      "label": "人工检查", "icon": "mdi-account-check-outline", "group": "pipeline", "executable": true, "ports": { "in": ["control"], "out": ["control"] },
+      "fields": [
+        { "path": "instructions", "label": "检查内容", "type": "textarea" }
+      ]
+    },
+    "generate": {
+      "label": "生成", "icon": "mdi-creation", "group": "pipeline", "executable": true, "ports": { "in": ["control"], "out": ["control"] },
+      "fields": [
+        { "path": "command.model", "label": "模型" },
+        { "path": "command.prompt", "label": "生成提示词", "type": "textarea" },
+        { "path": "command.width", "label": "宽度", "type": "number" },
+        { "path": "command.height", "label": "高度", "type": "number" },
+        { "path": "command.frames", "label": "帧数", "type": "number" },
+        { "path": "command.seed", "label": "种子", "type": "number" },
+        { "path": "deviceId", "label": "生成设备" }
+      ]
+    }
   },
   "edgeConditions": ["success", "completed"],
   "variableTypes": ["string", "number", "boolean", "date"],
