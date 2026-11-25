@@ -7,10 +7,12 @@ const source = { frameId: "cached-frame", coordinateSpace: "capture", width: 192
 
 for (const [type, coordinates] of [
   ["move", { x: 256, y: 144 }], ["click", { x: 256, y: 144 }],
-  ["drag", { x: 1, y: 2, toX: 3, toY: 4 }], ["scroll", { x: 256, y: 144, deltaY: 1 }],
+  ["drag", { x: 1, y: 2, toX: 3, toY: 4 }], ["scroll", { x: 256, y: 144, deltaY: 1 }], ["press", { x: 256, y: 144 }],
 ]) {
   test(`scaled image coordinates are required by ${type}`, () => {
-    assert.equal(computerRequestUsesImageView("input.execute", { source, actions: [{ type, ...coordinates }] }), true);
+    for (const action of ["input.execute", "input.perform"]) {
+      assert.equal(computerRequestUsesImageView(action, { source, actions: [{ type, ...coordinates }] }), true);
+    }
   });
 }
 
@@ -37,7 +39,7 @@ for (const action of ["input.status", "input.cancel", "control.status", "control
   });
 }
 
-for (const action of ["input.execute", "annotation.show", "annotation.update", "annotation.track.start"]) {
+for (const action of ["input.execute", "input.perform", "annotation.show", "annotation.update", "annotation.track.start"]) {
   test(`current receiver contract explicitly declares imageView for ${action}`, () => {
     assert.equal(computerRequestSchemaSupportsImageView(computerRequestSchema, action), true);
   });

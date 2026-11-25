@@ -147,6 +147,40 @@ test("Core and local real computer owner return accepted same-ID receipts after 
  assert.equal(requests.filter(value=>["control.begin","input.execute","annotation.show","annotation.track.start"].includes(value.action)).length,count);
 });
 
+test("one input.perform owns shared press, move, hold and release and replays only its receipt",async t=>{
+ const calls:Array<{action:string;body:any}>=[];
+ const native=Object.assign(new EventEmitter(),{async request(action:string,body:any,options?:{beforeSend?:()=>void}){
+   options?.beforeSend?.();calls.push({action,body});
+   if(action==="input.execute")return {state:"completed",completedActions:body.actions.length,releaseState:"released",returnState:{cursor:"unchanged"}};
+   return {state:action==="control.end"?"ended":"active"};
+ },async close(){}});
+ const f=await fixture(t,(id,emit,config,root)=>new ManagerLocalComputer({stateDirectory:path.join(root,"local"),instanceId:id,emit,getSettings:()=>config.readComputerSettingsRaw(),computerServiceOptions:{nativeFactory:()=>native}}));
+ const url=`${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
+ const post=async(body:unknown)=>{const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});return {status:response.status,body:await response.json() as any};};
+ const input={action:"input.perform",requestId:"shared-held-batch",source:{instanceId:f.registry.localInstanceId,kind:"desktop",coordinateSpace:"desktop"},actions:[
+   {type:"press",x:100,y:100},{type:"move",x:130,y:100,durationMs:50},{type:"wait",durationMs:90},{type:"release"},
+   {type:"keyDown",keys:["W"]},{type:"keyUp",keys:["W"]}
+ ]};
+ assert.equal((await post({...input,actions:[{type:"press",x:100}]})).status,400);
+ assert.equal(calls.length,0);
+ const response=await post(input);assert.equal(response.status,200,JSON.stringify(response.body));
+ const receipt=response.body.data;
+ assert.equal(receipt.requestId,input.requestId);assert.equal(receipt.state,"completed");
+ assert.equal(receipt.completedActions,input.actions.length);assert.equal(receipt.releaseState,"released");
+ assert.deepEqual(receipt.controlCleanup,{state:"ended",reason:"input-performed"});
+ assert.deepEqual(calls.map(call=>call.action),["control.begin","input.execute","control.end"]);
+ assert.equal(calls[0]!.body.inputMode,"shared");assert.equal(calls[1]!.body.inputMode,"shared");
+ assert.equal(calls[1]!.body.requestId,input.requestId);assert.deepEqual(calls[1]!.body.actions,input.actions);
+ assert.ok(calls.every(call=>call.body.controlSessionId===receipt.controlSessionId));
+ assert.deepEqual((await post(input)).body.data,receipt);
+ const status=await post({action:"input.status",requestId:input.requestId});assert.equal(status.status,200);
+ assert.deepEqual(status.body.data.result,receipt);
+ const cancel=await post({action:"input.cancel",requestId:input.requestId});assert.equal(cancel.status,200);
+ assert.equal(cancel.body.data.state,"completed");
+ assert.equal((await post({...input,inputMode:"exclusive"})).status,409);
+ assert.equal(calls.length,3);
+});
+
 test("malformed Manager settings leave accepted status/end/clear/upload metadata usable without changing raw bytes",async t=>{
  const native=Object.assign(new EventEmitter(),{request:async(action:string)=>({state:action.endsWith("end")?"ended":"visible"}),close:async()=>{}});
  const f=await fixture(t,(id,emit,config,root)=>new ManagerLocalComputer({stateDirectory:path.join(root,"local"),instanceId:id,emit,getSettings:()=>checkedSettings(config.readComputerSettings()),computerServiceOptions:{nativeFactory:()=>native}}));

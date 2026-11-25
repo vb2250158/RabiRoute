@@ -274,6 +274,38 @@ public final class RabiConversationService extends Service {
         s.withEnabled(false, System.currentTimeMillis()).save(context);
         context.startService(new Intent(context, RabiConversationService.class).setAction(ACTION_PAUSE_RECORD));
     }
+
+    private static volatile java.util.function.Consumer<byte[]> assistantPcm;
+
+    public static synchronized void observeAssistantPcm(java.util.function.Consumer<byte[]> listener) {
+        assistantPcm = listener;
+    }
+
+    public static synchronized void releaseAssistantPcm(java.util.function.Consumer<byte[]> listener) {
+        if (assistantPcm == listener) assistantPcm = null;
+    }
+
+    public static void setAssistantTranscription(Context context, boolean enabled) {
+        AllDayRecordingSettings saved = AllDayRecordingSettings.load(context);
+        boolean requested = saved.running || saved.autoResume;
+        if (!enabled) {
+            if (requested && saved.isAssistantAudioTranscription()) pauseRecording(context);
+            return;
+        }
+        if (requested && !saved.isAssistantAudioTranscription())
+            throw new IllegalStateException("请先结束当前记录，再开启语音助手");
+        if (context.getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).getBoolean("callActive", false))
+            throw new IllegalStateException("请先结束当前通话，再开启语音助手");
+        if (requested) {
+            resumeRecordingFromForeground(context);
+            return;
+        }
+        if (!saved.isAssistantAudioTranscription()) {
+            new AllDayRecordingSettings(false, "audio", saved.source, "transcribe", saved.routeProfileId,
+                    saved.healthEnabled, true, false, saved.windowStartedAt).save(context);
+        }
+        startRecording(context);
+    }
     public static void syncHealth(Context context) {
         context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_HEALTH));
     }
@@ -1015,6 +1047,8 @@ public final class RabiConversationService extends Service {
 
     private void captureReceived(byte[] pcm) {
         if (pcm == null || pcm.length == 0) return;
+        java.util.function.Consumer<byte[]> listener = assistantPcm;
+        if (listener != null && voiceCall == null && voiceServiceActive) listener.accept(pcm);
         com.rabi.link.recording.AudioLevels.accept(pcm, android.os.SystemClock.elapsedRealtime());
         boolean signal = false;
         for (byte value : pcm) { if (value != 0) { signal = true; break; } }

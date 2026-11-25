@@ -10,8 +10,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import com.rabi.link.MainActivity
+import com.rabi.link.RabiLinkRelaySettings
 import com.rabi.link.assistant.MobileAssistantActivity
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -56,6 +59,7 @@ class MobileAssistantInstrumentation : Instrumentation() {
         var mobile: Activity? = null
         try {
             check(targetContext.packageName.endsWith(".assistantacceptance")) { "Isolated debug package required" }
+            RabiLinkRelaySettings.saveAuthenticated(targetContext, "http://127.0.0.1:1", "assistant-fixture", "assistant-fixture-account")
             host = startActivitySync(Intent(targetContext, MainActivity::class.java)
                 .putExtra("open_messages", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             val monitor = addMonitor(MobileAssistantActivity::class.java.name, null, false)
@@ -73,6 +77,28 @@ class MobileAssistantInstrumentation : Instrumentation() {
             await("unpaired connection hint") { eval(view, "document.getElementById('issue')?.textContent").contains("选择一台") }
             report.putString("entry", "passed")
             report.putString("unpaired", "passed")
+
+            runOnMainSync {
+                val permission = android.Manifest.permission.RECORD_AUDIO
+                if (targetContext.checkSelfPermission(permission) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    mobile!!.requestPermissions(arrayOf(permission), 20)
+                }
+                view.webChromeClient = object : WebChromeClient() {
+                    override fun onPermissionRequest(request: PermissionRequest) {
+                        if (request.resources.contentEquals(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                            && targetContext.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            request.grant(request.resources)
+                        } else request.deny()
+                    }
+                }
+            }
+            await("microphone permission dialog") {
+                if (targetContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) return@await true
+                val root = uiAutomation.rootInActiveWindow ?: return@await false
+                val identities = listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller")
+                identities.flatMap { root.findAccessibilityNodeInfosByViewId(it + ":id/permission_allow_foreground_only_button") }
+                    .firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+            }
 
             val scripted = Fixture(view)
             runOnMainSync {
@@ -114,13 +140,6 @@ class MobileAssistantInstrumentation : Instrumentation() {
               })()
             """.trimIndent()
             check(eval(view, inject) == "true")
-            await("microphone permission dialog") {
-                if (targetContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) return@await true
-                val root = uiAutomation.rootInActiveWindow ?: return@await false
-                val identities = listOf("com.android.permissioncontroller", "com.google.android.permissioncontroller")
-                identities.flatMap { root.findAccessibilityNodeInfosByViewId(it + ":id/permission_allow_foreground_only_button") }
-                    .firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
-            }
             await("microphone listening") {
                 eval(view, "Boolean(window.fixtureTone) && document.querySelector('#status').textContent==='正在聆听'") == "true"
             }

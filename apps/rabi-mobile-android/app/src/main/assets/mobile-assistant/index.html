@@ -15,17 +15,10 @@
 </header>
 <section class="control">
   <label class="switch">启用语音助手<input type="checkbox" id="enabled" role="switch"><span aria-hidden="true"></span></label>
-  <div class="voice-mode">
-    <label for="mode">启动方式</label>
-    <select id="mode"><option value="manual">手动</option><option value="keyword">手动或关键词唤醒</option></select>
-    <button id="wake" hidden>开启关键词监听</button>
-  </div>
+  <label class="switch">关键词唤醒<input type="checkbox" id="wake" role="switch"><span aria-hidden="true"></span></label>
   <p id="aliases" hidden></p>
-  <div id="background-row" hidden>
-    <label class="switch">通过电脑转写待机语音<input type="checkbox" id="background" role="switch"><span aria-hidden="true"></span></label>
-  </div>
-  <p id="status" role="status">正在连接电脑</p>
-  <p id="issue" role="alert" hidden></p>
+  <p id="background" role="status"></p>
+  <div class="actions"><button id="asrSettings">后台转写设置</button><button id="recordings">转写记录</button></div>
   <details id="liveModels">
     <summary>实时语音模型</summary>
     <label class="voice-mode">功能<select id="modelKind"><option value="asr">实时识别</option><option value="tts">实时播报</option></select></label>
@@ -34,6 +27,8 @@
     <button id="applyModel" disabled>使用所选模型</button>
     <p id="modelStatus" role="status"></p>
   </details>
+  <p id="status" role="status">正在连接电脑</p>
+  <p id="issue" role="alert" hidden></p>
 </section>
 <main id="messages" aria-label="对话">
   <p id="empty">点击「开始实时语音」，说完会自动发送。</p>

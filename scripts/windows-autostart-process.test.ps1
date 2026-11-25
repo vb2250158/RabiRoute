@@ -27,6 +27,44 @@ $rollbackBlock=[scriptblock]::Create($rollbackText.Substring(1,$rollbackText.Len
 try { try { throw 'original-update-failed' } catch { & $rollbackBlock } } catch { $observed=$_.Exception }
 if(-not $observed -or $observed.InnerExceptions.Count -ne 2 -or $observed.InnerExceptions[0].Message -notlike '*original-update-failed*' -or $observed.InnerExceptions[1].Message -notlike '*task-rollback-failed*'){throw ('Original and rollback failures were not retained: ' + $observed.ToString())}
 if([IO.File]::ReadAllText($settingsPath) -ne 'original-settings' -or [IO.File]::ReadAllText($startupPath) -ne 'original-startup' -or [IO.File]::ReadAllText($legacyStartupPath) -ne 'original-legacy'){throw 'Failed task rollback skipped owned file restoration'}
+# Exercise production snapshot verification with the real mismatch and an isolated scheduler projection.
+$preserveFunctions=@('Resolve-FullPath','Test-SamePath','Test-Under','Get-Sha256Bytes','Write-BytesDurably','Replace-File','Write-JsonDurably','Assert-SnapshotRoot','Get-PreservedTaskHash','Assert-PreservedAutostart','Save-Snapshot')
+foreach ($name in $preserveFunctions) {
+    $function=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+    . ([scriptblock]::Create($function.Extent.Text))
+}
+$currentSid='S-1-5-21-1'
+$elevatedTaskName='RabiRoute.Host.Elevated.fixture'
+$PreserveAutostart=$true
+$autostartEntries=@(
+    [pscustomobject]@{Name='settings';Path=$settingsPath},
+    [pscustomobject]@{Name='startup';Path=$startupPath},
+    [pscustomobject]@{Name='legacyStartup';Path=$legacyStartupPath}
+)
+[IO.File]::WriteAllText($settingsPath,'{ "autostart": true }')
+$elevatedTask=[pscustomobject]@{
+    Description="RabiRoute elevated Host; $currentSid; $install"
+    Actions=@([pscustomobject]@{Execute=$hostPath;Arguments='--elevated-task';WorkingDirectory=$install})
+    Triggers=@([pscustomobject]@{Enabled=$false})
+}
+function Export-ScheduledTask {
+    param($TaskName,$TaskPath)
+    if ($TaskName -cne $elevatedTaskName -or $TaskPath -cne '\') { throw 'Unexpected fixture task identity' }
+    return "<LogonTrigger><Enabled>$($elevatedTask.Triggers[0].Enabled)</Enabled></LogonTrigger>"
+}
+$snapshot=Join-Path $work '.install-staging\fixture'
+Save-Snapshot $snapshot
+Assert-PreservedAutostart $snapshot
+if ([IO.File]::ReadAllText($settingsPath) -cne '{ "autostart": true }' -or $elevatedTask.Triggers[0].Enabled) { throw 'Preservation reconciled the mismatch' }
+$changed=$false
+$elevatedTask.Triggers[0].Enabled=$true
+try { Assert-PreservedAutostart $snapshot } catch { if ($_.Exception.Message -notlike '*definition changed*') { throw }; $changed=$true }
+if (-not $changed) { throw 'Unexpected trigger change was accepted' }
+$foreign=$false
+$elevatedTask.Description='Foreign owner'
+try { Assert-PreservedAutostart $snapshot } catch { if ($_.Exception.Message -notlike '*not owned*') { throw }; $foreign=$true }
+if (-not $foreign) { throw 'Foreign task was accepted' }
+
 'Windows PowerShell GUI wait, exit propagation and rollback isolation passed'
 
 

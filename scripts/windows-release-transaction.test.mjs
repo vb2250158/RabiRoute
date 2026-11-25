@@ -185,6 +185,7 @@ function makeFixture(scenario = "success", packageVersion = "9.9.9") {
 function run(fixture, fault = "", {
   autostartScript = fixture.helper,
   autostartEnabled = "false",
+  preserveAutostart = false,
   recoverOnly = false,
   extraEnv = {},
 } = {}) {
@@ -194,6 +195,7 @@ function run(fixture, fault = "", {
     "-LegacyTaskMigrationScript", legacyTaskMigration, "-TestLegacyTaskStorePath", fixture.taskStore,
     "-AutostartScript", autostartScript, "-AutostartEnabled", autostartEnabled, "-TestSelfTestScript", fixture.helper];
   if (fault) args.push("-FaultPoint", fault);
+  if (preserveAutostart) args.push("-PreserveAutostart");
   if (recoverOnly) args.push("-RecoverOnly");
   return requireFixtureProcessExit(fixture, spawnSync(powershell, args, {
     encoding: "utf8",
@@ -381,6 +383,31 @@ test("post-autostart install failure restores the prior settings and owned Start
     assert.deepEqual(fs.readFileSync(settingsPath), settingsBefore);
     assert.deepEqual(fs.readFileSync(startupPath), startupBefore);
   } finally { cleanupFixture(fixture); }
+});
+
+test("upgrade preserves exact settings and owned Startup link across commit and rollback", { skip: process.platform !== "win32" }, () => {
+  for (const fault of ["after-autostart", ""]) {
+    const fixture = makeFixture();
+    try {
+      const seeded = configureAutostart(fixture, "true");
+      assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+      const settings = path.join(fixture.install, "data", "desktop", "settings.json");
+      const startup = path.join(fixture.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "RabiRoute.lnk");
+      const settingsBefore = Buffer.from('{ "autostart": true, "fixture": "keep" }\r\n');
+      fs.writeFileSync(settings, settingsBefore);
+      const shortcutBefore = fs.readFileSync(startup);
+      const result = run(fixture, fault, { autostartScript: autostartConfigurator, preserveAutostart: true });
+      if (fault) {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Injected fault after-autostart/);
+        assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
+      } else {
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+      }
+      assert.deepEqual(fs.readFileSync(settings), settingsBefore);
+      assert.deepEqual(fs.readFileSync(startup), shortcutBefore);
+    } finally { cleanupFixture(fixture); }
+  }
 });
 
 test("an autostart rollback failure cannot prevent current pointer and bootstrap restoration", { skip: process.platform !== "win32" }, () => {

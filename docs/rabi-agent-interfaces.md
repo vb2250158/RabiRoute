@@ -1258,7 +1258,9 @@ POST /api/codex-hook/context
 
 
 
-Manager 负责解释严格的 `[rabi:*]` 控制标记、维护 session 绑定，并把事件标准化为 `session_start`、`user_prompt`、`reasoning_pre_tool` 或 `reasoning_post_tool`。这些事件与 RabiRoute 消息投递的 `message_delivery` 都进入同一个 `RabiContextManager`；只有它调用 `roleKnowledgeSnapshot()`、执行计划归档和 `viewedAt` 策略，并在 `data.additionalContext` 中返回可注入内容。未绑定会话返回空字符串。
+Manager 解释 `[rabi:*]` 控制标记并维护会话绑定。`SessionStart` 读取角色资料并返回查询入口。`UserPromptSubmit` 和工具检查点由 `RabiContextManager` 根据实际内容召回资料，并应用计划归档和 `viewedAt` 策略。普通消息投递也通过该管理器处理上下文。
+
+同一角色的并发 Hook 共用正在读取的角色资料、计划和记忆目录。每条请求按自己的内容匹配，同一会话内按顺序处理。Manager 在会话状态写入后确认各笔请求，通过 `data.additionalContext` 返回可注入内容。未绑定会话返回空字符串。
 
 
 

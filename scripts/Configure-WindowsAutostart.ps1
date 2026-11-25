@@ -5,6 +5,7 @@ param(
     [ValidateSet("true", "false")]
     [string]$Enabled,
     [switch]$PreflightOnly,
+    [switch]$PreserveAutostart,
     [string]$SnapshotRoot,
     [switch]$RestoreSnapshot,
     [switch]$RemoveOwnedStartup
@@ -119,7 +120,7 @@ $taskHash = [Security.Cryptography.SHA256]::Create()
 try { $taskSuffix = ([BitConverter]::ToString($taskHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($currentSid + "`n" + $install.TrimEnd('\').ToUpperInvariant())))).Replace('-', '').Substring(0, 16) }
 finally { $taskHash.Dispose() }
 $elevatedTaskName = 'RabiRoute.Host.Elevated.' + $taskSuffix
-$elevatedTask = Get-ScheduledTask -TaskName $elevatedTaskName -ErrorAction SilentlyContinue
+$elevatedTask = Get-ScheduledTask -TaskName $elevatedTaskName -TaskPath '\' -ErrorAction SilentlyContinue
 $allowedTargets = @(
     $hostPath,
     (Join-Path $install "RabiRoute-Desktop.exe"),
@@ -135,16 +136,51 @@ function Assert-SnapshotRoot([string]$Root) {
     return $fullRoot
 }
 
+function Get-PreservedTaskHash {
+    if (-not $elevatedTask) { return "" }
+    $owner = "RabiRoute elevated Host; $currentSid; $install"
+    $actions = @($elevatedTask.Actions)
+    if ($elevatedTask.Description -cne $owner -or $actions.Count -ne 1 -or
+        $actions[0].Arguments -cne "--elevated-task" -or
+        -not $actions[0].Execute -or -not (Test-SamePath $actions[0].Execute $hostPath) -or
+        -not $actions[0].WorkingDirectory -or -not (Test-SamePath $actions[0].WorkingDirectory $install)) {
+        throw "Existing elevated Host task is not owned by this installation."
+    }
+    $definition = Export-ScheduledTask -TaskName $elevatedTaskName -TaskPath '\'
+    return Get-Sha256Bytes ([Text.Encoding]::UTF8.GetBytes($definition))
+}
+
+function Assert-PreservedAutostart([string]$Root) {
+    $metadata = Get-Content -LiteralPath (Join-Path (Assert-SnapshotRoot $Root) "snapshot.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($metadata.schemaVersion -ne 1 -or -not (Test-SamePath ([string]$metadata.installRoot) $install) -or
+        $metadata.elevatedTask.name -cne $elevatedTaskName -or $null -eq $metadata.elevatedTask.definitionSha256) {
+        throw "Autostart snapshot identity does not match this installation."
+    }
+    foreach ($item in $autostartEntries) {
+        $entry = $metadata.entries.PSObject.Properties[$item.Name].Value
+        $exists = Test-Path -LiteralPath $item.Path -PathType Leaf
+        if ($null -eq $entry -or $exists -ne [bool]$entry.existed -or
+            ($exists -and (Get-Sha256Bytes ([IO.File]::ReadAllBytes($item.Path))) -ne [string]$entry.sha256)) {
+            throw "Autostart state changed during the upgrade: $($item.Name)."
+        }
+    }
+    if ((Get-PreservedTaskHash) -ne [string]$metadata.elevatedTask.definitionSha256) {
+        throw "Elevated Host task definition changed during the upgrade."
+    }
+}
+
+$autostartEntries = @(
+    [pscustomobject]@{ Name="settings"; Path=$settingsPath },
+    [pscustomobject]@{ Name="startup"; Path=$startupPath },
+    [pscustomobject]@{ Name="legacyStartup"; Path=$legacyStartupPath }
+)
+
 function Save-Snapshot([string]$Root) {
     $root = Assert-SnapshotRoot $Root
     if (Test-Path -LiteralPath $root) { throw "Autostart snapshot root already exists." }
     [IO.Directory]::CreateDirectory($root) | Out-Null
     $entries = [ordered]@{}
-    foreach ($item in @(
-        [pscustomobject]@{ Name="settings"; Path=$settingsPath },
-        [pscustomobject]@{ Name="startup"; Path=$startupPath },
-        [pscustomobject]@{ Name="legacyStartup"; Path=$legacyStartupPath }
-    )) {
+    foreach ($item in $autostartEntries) {
         $exists = Test-Path -LiteralPath $item.Path -PathType Leaf
         $backupName = "$($item.Name).bin"
         $bytes = if ($exists) { [IO.File]::ReadAllBytes($item.Path) } else { $null }
@@ -159,7 +195,11 @@ function Save-Snapshot([string]$Root) {
         schemaVersion=1
         installRoot=$install
         entries=$entries
-        elevatedTask=@{ name=$elevatedTaskName; existed=[bool]$elevatedTask; triggerEnabled=$(if ($elevatedTask) { [bool]$elevatedTask.Triggers[0].Enabled } else { $false }) }
+        elevatedTask=@{
+            name=$elevatedTaskName; existed=[bool]$elevatedTask
+            triggerEnabled=$(if ($elevatedTask) { [bool]$elevatedTask.Triggers[0].Enabled } else { $false })
+            definitionSha256=$(if ($PreserveAutostart) { Get-PreservedTaskHash })
+        }
     })
 }
 
@@ -236,6 +276,12 @@ if ($RemoveOwnedStartup) {
         throw "Owned RabiRoute Startup shortcut removal could not be verified."
     }
     [pscustomobject]@{ ok = $true; removedOwnedStartup = $true } | ConvertTo-Json -Compress
+    exit 0
+}
+
+if ($PreserveAutostart) {
+    Assert-PreservedAutostart $SnapshotRoot
+    [pscustomobject]@{ ok = $true; autostartPreserved = $true } | ConvertTo-Json -Compress
     exit 0
 }
 

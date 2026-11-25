@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 
+const heldActions = new Set(["press", "release", "wait", "keyDown", "keyUp"]);
+
 /** One pipe owner per target. Native input, drawing and capture have separate executors. */
 export class NativeComputerClient extends EventEmitter {
   constructor({ timeout = (_key, fallback) => fallback, children = new Set(), launch = spawn, executable, args, qtPresentation, getPresentationTheme, presentationIssue } = {}) {
@@ -92,10 +94,15 @@ export class NativeComputerClient extends EventEmitter {
       if (capabilities.imageViewVersion !== 1) throw Object.assign(new Error("The selected native desktop worker does not support resized image coordinates. Select an updated desktop resource."), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "imageViewVersion" });
     }
     const scopedCapture = action === "screen.capture" && (body.captureSpec || [body, body.source].some(value => value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined));
-    if (action === "input.execute" && Array.isArray(body.actions) || action === "displays.list" || scopedCapture) {
+    const batch = action === "input.execute" && Array.isArray(body.actions);
+    const sharedControl = action === "control.begin" && body.inputMode === "shared";
+    if (batch || sharedControl || action === "displays.list" || scopedCapture) {
       const capabilities = await this.readNativeCapabilities();
-      const version = action === "input.execute" ? capabilities.inputBatchVersion : capabilities.captureSpecVersion;
-      if (version !== 1) throw Object.assign(new Error("The selected native desktop worker does not support " + (action === "input.execute" ? "input batches and native return" : "display/region capture") + ". Select an updated desktop resource."), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: action === "input.execute" ? "inputBatchVersion" : "captureSpecVersion" });
+      const input = batch || sharedControl;
+      const extended = body.inputMode === "shared" || batch && body.actions.some(item => heldActions.has(item?.type) || item?.type === "move" && item.durationMs !== undefined);
+      const supported = input ? capabilities.inputBatchVersion === 2 || capabilities.inputBatchVersion === 1 && !extended
+        : capabilities.captureSpecVersion === 1;
+      if (!supported) throw Object.assign(new Error("The selected native desktop worker does not support " + (input ? extended ? "shared or held input batches" : "input batches and native return" : "display/region capture") + ". Select an updated desktop resource."), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: input ? "inputBatchVersion" : "captureSpecVersion" });
     }
     options.beforeSend?.();
     this.start(); const id = randomUUID();

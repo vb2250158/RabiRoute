@@ -101,7 +101,12 @@ test("templates cannot traverse or follow a junction outside the persona directo
 
 test("rejects other personas' summaries and handles missing optional files", async context => {
   const fixtureData = await fixture(context);
-  assert.match(await fixtureData.build(), /precise, playful/);
+  await fs.unlink(path.join(fixtureData.roleDirectory, "prompts/companionship.md"));
+  const prompt = await fixtureData.build();
+  assert.match(prompt, /precise, playful/);
+  assert.doesNotMatch(prompt, /companionship\.md/);
+  await fixtureData.write("prompts/companionship.md", "  \n");
+  assert.equal(await fixtureData.build(), prompt);
   await fixtureData.write("companion/state.json", JSON.stringify({ roleId: "other" }));
   await assert.rejects(fixtureData.build(), /another persona/);
   await fixtureData.write("companion/state.json", "{}");

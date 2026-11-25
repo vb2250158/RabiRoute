@@ -77,6 +77,7 @@ import {
 import {
   assertWritablePlanStatus,
   ensurePersonaPlanWorkflow,
+  loadDefaultPersonaPlanWorkflow,
   planStatusDefinition,
   planStatusKeyForRole,
   readPersonaPlanWorkflow,
@@ -4266,7 +4267,7 @@ function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: nu
   const archived: PlanItem[] = [];
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   for (const plan of plans) {
-    if (planActivationStatus(plan, workflow) !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    if (!hookPlanNeedsArchive(plan, workflow, archiveAfterHours)) continue;
     const next = {
       ...plan,
       activationStatus: "已归档" as const,
@@ -4279,6 +4280,10 @@ function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: nu
     archived.push(next);
   }
   return archived;
+}
+
+function hookPlanNeedsArchive(plan: PlanItem, workflow: PersonaPlanWorkflow, archiveAfterHours = workflow.archiveAfterHours): boolean {
+  return planActivationStatus(plan, workflow) === "已完成" && ageHours(plan.updatedAt) > archiveAfterHours;
 }
 
 export type MemoryConsolidationScheduleInspection = Readonly<{
@@ -4939,22 +4944,52 @@ export function roleKnowledgeSnapshotFromStorage(
 
 /** Reads fresh memory files with bounded parallel I/O inside the owned context worker. */
 export async function roleKnowledgeSnapshotFromStorageAsync(
-  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}, memories?: RoleMemoryCatalogs
+  roleDir: string, messageText: string, options: RoleKnowledgeSnapshotOptions = {}, memories?: RoleMemoryCatalogs,
+  planCatalog?: RoleHookPlanCatalog
 ): Promise<RoleKnowledgeSnapshot> {
   if (memories && memories.roleDir !== path.resolve(roleDir)) throw new Error("Physical memory catalog belongs to another persona.");
-  const [physicalPlans, recentMemories, consolidatedMemories] = await Promise.all([
-    readFreshHookPlans(roleDir),
+  if (planCatalog && planCatalog.roleDir !== path.resolve(roleDir)) throw new Error("Physical plan catalog belongs to another persona.");
+  const dedicated = options.consolidationInputMemoryIds !== undefined;
+  const [plans, recentMemories, consolidatedMemories] = await Promise.all([
+    dedicated ? undefined : planCatalog ?? readRoleHookPlanCatalog(roleDir, false),
     memories ? memories.recent : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory),
-    memories ? memories.consolidated : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
+    dedicated ? [] : memories ? memories.consolidated : readMemoryCatalogAsync(memoryCatalogDirectory(roleDir, "consolidated"), normalizeConsolidatedMemory)
   ]);
-  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
-  const archived = options.archiveCompletedPlans === true
-    ? archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours, physicalPlans) : [];
-  const byId = new Map(archived.map(plan => [plan.id, plan]));
+  const currentPlans = plans && !planCatalog && options.archiveCompletedPlans === true
+    ? archiveRoleHookPlanCatalog(plans) : plans;
   return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
-    plans: physicalPlans.map(plan => byId.get(plan.id) ?? plan), planWorkflow: workflow,
-    recentMemories, consolidatedMemories, skills: listRoleSkills(roleDir), contextInjection: roleContextInjectionPolicy(roleDir)
+    plans: currentPlans?.plans ?? [],
+    planWorkflow: plans?.planWorkflow ?? readPersonaPlanWorkflow(roleDir)?.workflow ?? loadDefaultPersonaPlanWorkflow(),
+    recentMemories, consolidatedMemories, skills: plans?.skills ?? [],
+    contextInjection: plans?.contextInjection ?? roleContextInjectionPolicy(roleDir)
   }, true);
+}
+
+export type RoleHookPlanCatalog = {
+  roleDir: string;
+  plans: PlanItem[];
+  planWorkflow: PersonaPlanWorkflow;
+  skills: RoleSkillItem[];
+  contextInjection: RoleContextInjectionPolicy;
+  archiveDue: boolean;
+};
+
+/** Read an active plan collection once for concurrent Hook projections of the same role. */
+export async function readRoleHookPlanCatalog(roleDir: string, archive: boolean): Promise<RoleHookPlanCatalog> {
+  const plans = await readFreshHookPlans(roleDir);
+  const planWorkflow = readPersonaPlanWorkflow(roleDir)?.workflow ?? loadDefaultPersonaPlanWorkflow();
+  const catalog = { roleDir: path.resolve(roleDir), plans, planWorkflow,
+    skills: listRoleSkills(roleDir), contextInjection: roleContextInjectionPolicy(roleDir),
+    archiveDue: plans.some(plan => hookPlanNeedsArchive(plan, planWorkflow)) };
+  return archive ? archiveRoleHookPlanCatalog(catalog) : catalog;
+}
+
+function archiveRoleHookPlanCatalog(catalog: RoleHookPlanCatalog): RoleHookPlanCatalog {
+  if (!catalog.archiveDue) return catalog;
+  const archived = archiveCompletedPlansFromStorage(catalog.roleDir, catalog.planWorkflow.archiveAfterHours, catalog.plans);
+  if (!archived.length) return catalog;
+  const byId = new Map(archived.map(plan => [plan.id, plan]));
+  return { ...catalog, archiveDue: false, plans: catalog.plans.map(plan => byId.get(plan.id) ?? plan) };
 }
 
 async function readFreshHookPlans(roleDir: string): Promise<PlanItem[]> {

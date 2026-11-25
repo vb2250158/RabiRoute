@@ -477,6 +477,7 @@ Agent 的工具入口围绕三个真实目的组织，底层复用第 7 节的�
 | `control.status` | 查询指定会话或该电脑当前会话；返回真实 owner、状态和剩余时间，不续期、不输入 |
 | `control.end` | 结束指定会话，取消剩余输入、释放本次按键并返回完成/待确认状态；不终止其他业务任务 |
 | `input.execute` | 请求 `requestId`、当前 `controlSessionId`、有序 `actions`、坐标来源、`captureAfter`；返回逐动作进度及已注入/失败/待确认结果 |
+| `input.perform` | 单次请求获取短时控制、执行有序 `actions`、结束控制。保留 `requestId` 通过 `input.status` 查询。回执分别记录输入、按键释放与控制回收结果 |
 | `input.status` | 按原 `requestId` 查询结果和进度，不重放输入 |
 | `input.cancel` | 按原 `requestId` 取消未执行动作并返回已执行范围与释放状态，不撤销已注入事件 |
 | `annotation.show` | 请求 `requestId`、目标来源、`layerId`、图形对象、显示时长；返回实际显示状态 |
@@ -488,6 +489,8 @@ Agent 的工具入口围绕三个真实目的组织，底层复用第 7 节的�
 | `annotation.track.stop` | 停止指定追踪并释放所属采集/计算；最后一帧按第 6.7 节处理，不结束其他图层/输入任务 |
 
 `captureAfter` 默认 false，仅 true 且截图功能有效时采集；截图不可用时返回单独的画面状态，不将已经执行的输入改记为失败。`backend` 首版仅 `kcf`、`template`，默认 `kcf`；`rateHz` 是请求上限，实际值独立返回；`expiresAt` 为 UTC 时间或 null，null 表示依所属业务任务生命周期结束。标注动作无需 controlSessionId，只有随控制退出清理的图层才关联该 ID。
+
+`input.perform` 默认 `inputMode: "shared"`。真人和 Agent 可以同时使用不同的输入设备组，输入冲突由真人接管。一次持续手势可组合 `press`、`move`、`wait`、`release`，键盘按住和释放用 `keyDown`、`keyUp`。同批次中的 `wait.durationMs` 指定等待时长。正常结束、取消及接管都会释放该批次持有的输入，回执记录实际结果。
 
 首版输入 `actions` 只包含移动、单击/双击/右键、滚动、完整拖拽、Unicode 文字和组合键；原生执行器分段注入并在段间检查停止，不暴露跨请求永久保持按下的键。图形类型固定为矩形、椭圆、箭头、路径、纯文本和高亮。来源必须包含目标与坐标空间；追踪必须引用原始来源帧，`screen.capture` 新增来源帧标识时同步其响应 schema，不假定当前响应已经有该字段。
 

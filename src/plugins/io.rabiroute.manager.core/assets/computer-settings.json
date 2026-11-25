@@ -483,6 +483,16 @@
       "feature": "input",
       "capability": "input"
     },
+    "input.perform": {
+      "settingsPaths": [
+        "input",
+        "control.returnCursor",
+        "control.returnForeground"
+      ],
+      "receipt": true,
+      "feature": "input",
+      "capability": "input"
+    },
     "input.status": {
       "feature": "input",
       "capability": "input",

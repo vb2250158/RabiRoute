@@ -120,6 +120,65 @@ test("unsupported native selectors and batches fail before executing instead of 
   assert.deepEqual(sent.map(item=>item.action),["capabilities"]);await client.close();
 });
 
+test("held and shared input needs the native version that owns both features", async () => {
+  for (const version of [1, 2]) {
+    const sent = [];
+    const child = childFixture((line, current) => {
+      const request = JSON.parse(line); sent.push(request);
+      const result = request.action === "capabilities" ? { inputBatchVersion: version } : { state: "completed" };
+      setImmediate(() => current.stdout.write(JSON.stringify({ id: request.id, result }) + "\n"));
+    });
+    const client = new NativeComputerClient({ launch: () => child });
+    try {
+      await client.request("input.execute", { actions: [{ type: "move", x: 1, y: 2 }] });
+      const shared = { inputMode: "shared" };
+      const held = { actions: [{ type: "press", x: 1, y: 2 }, { type: "wait", durationMs: 10 }, { type: "release" }] };
+      if (version === 1) {
+        await assert.rejects(client.request("control.begin", shared), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "inputBatchVersion" });
+        await assert.rejects(client.request("input.execute", held), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "inputBatchVersion" });
+        assert.deepEqual(sent.map(value => value.action), ["capabilities", "input.execute"]);
+      } else {
+        await client.request("control.begin", shared);
+        await client.request("input.execute", { ...held, ...shared });
+        assert.deepEqual(sent.map(value => value.action), ["capabilities", "input.execute", "control.begin", "input.execute"]);
+      }
+    } finally { await client.close(); }
+  }
+});
+
+test("aborting a scoped input batch cancels the original native intent and closes only its control", async () => {
+  const pending = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const calls = [];
+  const native = Object.assign(new EventEmitter(), { async request(action, body, options) {
+    options?.beforeSend?.();
+    calls.push({ action, body });
+    if (action === "input.execute") {
+      started.resolve();
+      return pending.promise;
+    }
+    if (action === "input.cancel") pending.resolve({ state: "cancelled", completedActions: 1, releaseState: "released" });
+    return { state: action === "control.begin" ? "active" : "ended" };
+  } });
+  const owner = new ComputerControlService({ native });
+  const controller = new AbortController();
+  const requestId = "scope-cancel";
+  const output = owner.execute({ action: "input.perform", requestId, actions: [
+    { type: "press", x: 1, y: 2 }, { type: "wait", durationMs: 900 }, { type: "release" }
+  ] }, { signal: controller.signal });
+  await started.promise;
+  controller.abort();
+  const receipt = await output;
+  assert.equal(receipt.state, "cancelled");
+  assert.equal(receipt.completedActions, 1);
+  assert.equal(receipt.releaseState, "released");
+  assert.equal(receipt.controlCleanup.state, "ended");
+  assert.deepEqual(calls.map(call => call.action), ["control.begin", "input.execute", "input.cancel", "control.end"]);
+  assert.ok(calls.every(call => call.body.controlSessionId === receipt.controlSessionId));
+  assert.equal(calls[2].body.requestId, requestId);
+  assert.equal((await owner.execute({ action: "input.status", requestId })).state, "cancelled");
+});
+
 test('image view schema separates stable frame dimensions from presented coordinates', () => {
   const view = computerSourceSchema.properties.imageView;
   assert.deepEqual(view.required, ['width', 'height']);

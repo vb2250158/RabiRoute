@@ -2,14 +2,15 @@ import crypto, { randomUUID } from "node:crypto";
 import { planCanAutoAdvance } from "../planState.js";
 import fs from "node:fs";
 import path from "node:path";
-import { type RabiContextTriggerKind } from "../context/rabiContextManager.js";
+import type { RabiContextResolution, RabiContextTriggerKind } from "../context/rabiContextManager.js";
 import { readCodexHookContextInput, type CodexHookContextReadRequest, type CodexHookContextReadReply, type CodexHookRoleSource } from "./codexHookContextRead.js";
 import { ensurePlanStorageLayout, listPlans, RoleKnowledgeCacheUnavailableError, type PlanItem } from "../roleKnowledge.js";
 import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanWorkflow.js";
-import { buildRoleKnowledgeContextView, turnMemoryReview } from "../routing/roleKnowledgeContext.js";
+import { buildRoleKnowledgeContextView, planMemoryApiHint, turnMemoryReview } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
-import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { createOperationContext, currentOperationContext, recordDataMutationAudit, runWithOperationContext,
+  type DataMutationAuditRecord, type OperationContext } from "../observability/dataMutationAudit.js";
 import { appendPersonaChatReply } from "../personaChatHistory.js";
 import { readPersonaConfigFragment } from "./configMigration.js";
 import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js";
@@ -228,14 +229,18 @@ function readText(filePath: string): string {
   }
 }
 
-function writeJsonAtomic(filePath: string, value: unknown): void {
+function writeJsonAtomic(filePath: string, value: unknown, contexts?: readonly OperationContext[]): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   const content = `${JSON.stringify(value, null, 2)}\n`;
+  const audit = (record: DataMutationAuditRecord): void => {
+    if (!contexts) recordDataMutationAudit(record);
+    else for (const context of contexts) runWithOperationContext(context, () => recordDataMutationAudit(record));
+  };
   try {
     fs.writeFileSync(temporaryPath, content, "utf8");
     fs.renameSync(temporaryPath, filePath);
-    recordDataMutationAudit({
+    audit({
       group: "agent-session",
       event: "codex_hook_context_written",
       owner: "codex-hook-context",
@@ -246,7 +251,7 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
       after: { digest: crypto.createHash("sha256").update(content).digest("hex") }
     });
   } catch (error) {
-    recordDataMutationAudit({
+    audit({
       level: "error",
       group: "agent-session",
       event: "codex_hook_context_write_failed",
@@ -491,6 +496,13 @@ export class CodexHookContextService {
   private readonly readContext?: CodexHookContextServiceOptions["readContext"];
   private readonly contextQueues = new Map<string, { tail: Promise<void>; pending: number }>();
   private pendingContexts = 0;
+  private pendingBindingCommits: {
+    binding: CodexHookSessionBinding;
+    expected: string | undefined;
+    context: OperationContext;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }[] = [];
   private storeSnapshot?: { revision: string; value: CodexHookSessionStoreFile; legacyRaw?: Buffer };
   private readonly rolesRoot: () => string;
   private readonly storePath: string;
@@ -701,7 +713,8 @@ export class CodexHookContextService {
   }
 
   private async handleContextAsync(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
-    const steps = this.contextSteps(request);
+    let committed: Promise<void> | undefined;
+    const steps = this.contextSteps(request, binding => { committed = this.queueBindingCommit(binding); });
     let step = steps.next();
     while (!step.done) {
       const bindingBefore = JSON.stringify(this.getBinding(request.sessionId, request.sourceInstance, request.agentType));
@@ -711,6 +724,7 @@ export class CodexHookContextService {
       }
       step = steps.next(reply);
     }
+    await committed;
     return step.value;
   }
 
@@ -720,7 +734,8 @@ export class CodexHookContextService {
     return reply.source;
   }
 
-  private *contextSteps(request: CodexHookContextRequest): Generator<CodexHookContextReadRequest, CodexHookContextResult, CodexHookContextReadReply> {
+  private *contextSteps(request: CodexHookContextRequest, commit?: (binding: CodexHookSessionBinding) => void):
+    Generator<CodexHookContextReadRequest, CodexHookContextResult, CodexHookContextReadReply> {
     const sessionId = this.requireSessionId(request.sessionId);
     if (!["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"].includes(request.eventName)) {
       throw new Error(`Unsupported Codex hook event: ${request.eventName}`);
@@ -806,39 +821,43 @@ export class CodexHookContextService {
     const includeBase = !dedicated && (forceBase || binding.baseFingerprint !== baseFingerprint);
     const sameTurn = Boolean(turnId && binding.lastTurnId === turnId && (!dedicated || binding.activeRunId === scopedRunId));
     const seenContextKeys = new Set(sameTurn ? binding.turnContextKeys ?? [] : []);
-    const contextReply = yield { kind: "knowledge", trigger: {
-      kind: triggerKind(request.eventName),
-      source: "codex_hook",
-      roleId: role.roleId,
-      roleDir: role.roleDir,
-      signalText: triggerSignal(request),
-      sessionId,
-      turnId: request.turnId,
-      eventId: request.toolUseId,
-      toolName: request.toolName,
-      seenContextKeys: [...seenContextKeys],
-      consolidationInputMemoryIds
-    } };
-    if (contextReply.kind !== "knowledge") throw new Error("Invalid Codex hook knowledge reply.");
-    const contextResolution = contextReply.resolution;
-    const isReasoningCheckpoint = contextResolution.policy.presentation === "recall_delta";
-    const unseenEntries = contextResolution.entries.filter((entry) => !seenContextKeys.has(entry.key));
+    let contextResolution: RabiContextResolution | undefined;
+    if (request.eventName !== "SessionStart") {
+      const contextReply = yield { kind: "knowledge", trigger: {
+        kind: triggerKind(request.eventName),
+        source: "codex_hook",
+        roleId: role.roleId,
+        roleDir: role.roleDir,
+        signalText: triggerSignal(request),
+        sessionId,
+        turnId: request.turnId,
+        eventId: request.toolUseId,
+        toolName: request.toolName,
+        seenContextKeys: [...seenContextKeys],
+        consolidationInputMemoryIds
+      } };
+      if (contextReply.kind !== "knowledge") throw new Error("Invalid Codex hook knowledge reply.");
+      contextResolution = contextReply.resolution;
+    }
+    const isReasoningCheckpoint = contextResolution?.policy.presentation === "recall_delta";
+    const unseenEntries = contextResolution?.entries.filter((entry) => !seenContextKeys.has(entry.key)) ?? [];
     const shouldRender = includeBase
-      || (contextResolution.shouldInject && (!isReasoningCheckpoint || unseenEntries.length > 0));
+      || (contextResolution?.shouldInject && (!isReasoningCheckpoint || unseenEntries.length > 0));
     const visibleRequiredItems = isReasoningCheckpoint
       ? unseenEntries.flatMap((entry) => entry.item ? [entry.item] : [])
-      : contextResolution.knowledge.requiredReadItems;
+      : contextResolution?.knowledge.requiredReadItems ?? [];
     const visibleItemIds = new Set(visibleRequiredItems.map((item) => `${item.type}:${item.id}`));
-    const visibleKnowledge = isReasoningCheckpoint
+    const visibleKnowledge = contextResolution && (isReasoningCheckpoint
       ? {
           ...contextResolution.knowledge,
           requiredReadItems: visibleRequiredItems,
           matchedItems: contextResolution.knowledge.matchedItems.filter((item) => visibleItemIds.has(`${item.type}:${item.id}`)),
           matchedSkills: contextResolution.knowledge.matchedSkills.filter((item) => visibleItemIds.has(`role_skill:${item.id}`))
         }
-      : contextResolution.knowledge;
-    const view = buildRoleKnowledgeContextView(role.roleId, visibleKnowledge);
-    const focusedContext = view.mode === "focused";
+      : contextResolution.knowledge);
+    const view = visibleKnowledge && buildRoleKnowledgeContextView(role.roleId, visibleKnowledge);
+    const contextInjection = visibleKnowledge?.contextInjection ?? role.contextInjection;
+    const focusedContext = contextInjection.mode === "focused";
     const blocks: string[] = [];
 
     if (dedicated) {
@@ -862,7 +881,7 @@ export class CodexHookContextService {
           : "",
         excerpt(
           persona,
-          visibleKnowledge.contextInjection.personaMaxChars,
+          contextInjection.personaMaxChars,
           focusedContext ? 500 : 700
         )
       ]));
@@ -880,9 +899,9 @@ export class CodexHookContextService {
       blocks.push(section("记忆与计划", [
         `Rabi Manager API 基址：${managerBaseUrl}`,
         turnMemoryReview(role.roleId),
-        ...view.apiHintLines,
+        ...(view?.apiHintLines ?? planMemoryApiHint(role.roleId)),
         "",
-        ...(focusedContext ? [] : [
+        ...(!view || focusedContext ? [] : [
           "可用技能：",
           view.activeSkillIndex,
           "",
@@ -899,11 +918,11 @@ export class CodexHookContextService {
           view.matchedIndex
         ])
       ]));
-      blocks.push(section("处理前上下文确认", [
+      if (view) blocks.push(section("处理前上下文确认", [
         "下列 GET 路径均相对于上方 Rabi Manager API 基址。",
         ...view.requiredReadLines
       ]));
-    } else if (!dedicated && shouldRender) {
+    } else if (!dedicated && shouldRender && view) {
       blocks.push(section("Rabi 推理期上下文刷新", [
         `触发点：${request.eventName}`,
         request.toolName ? `工具：${request.toolName}` : "",
@@ -924,7 +943,7 @@ export class CodexHookContextService {
     }
 
     const deliveredKeys = shouldRender
-      ? [...seenContextKeys, ...contextResolution.entries.map((entry) => entry.key)].slice(-80)
+      ? [...seenContextKeys, ...(contextResolution?.entries.map((entry) => entry.key) ?? [])].slice(-80)
       : [...seenContextKeys].slice(-80);
     const timestamp = nowIso();
     const nextBinding: CodexHookSessionBinding = {
@@ -940,7 +959,8 @@ export class CodexHookContextService {
       lastTurnId: request.eventName === "SessionStart" ? undefined : turnId ?? binding.lastTurnId,
       turnContextKeys: request.eventName === "SessionStart" ? [] : deliveredKeys
     };
-    this.replaceBinding(nextBinding);
+    if (commit) commit(nextBinding);
+    else this.replaceBinding(nextBinding);
     return {
       action,
       binding: structuredClone(nextBinding),
@@ -1430,7 +1450,7 @@ export class CodexHookContextService {
     return { ...value };
   }
 
-  private writeStore(store: CodexHookSessionStoreFile): void {
+  private writeStore(store: CodexHookSessionStoreFile, contexts?: readonly OperationContext[]): void {
     if (fs.existsSync(this.storePath)) {
       const revision = hookStoreRevision(fs.statSync(this.storePath));
       // A draft never becomes the cache before the existing atomic publication succeeds.
@@ -1462,7 +1482,7 @@ export class CodexHookContextService {
       projectFileChangeReminders: store.projectFileChangeReminders
     };
     try {
-      writeJsonAtomic(this.storePath, published);
+      writeJsonAtomic(this.storePath, published, contexts);
       freezeHookStore(published);
       this.storeSnapshot = { revision: hookStoreRevision(fs.statSync(this.storePath)), value: published };
     } catch (error) {
@@ -1475,5 +1495,38 @@ export class CodexHookContextService {
     const store = this.readStore();
     store.sessions = { ...store.sessions, [planBindingSourceKey(binding)]: binding };
     this.writeStore(store);
+  }
+
+  private queueBindingCommit(binding: CodexHookSessionBinding): Promise<void> {
+    const expected = JSON.stringify(this.readStore().sessions[planBindingSourceKey(binding)]);
+    const context = currentOperationContext() ?? createOperationContext({ source: "background", actor: { kind: "system" } });
+    return new Promise((resolve, reject) => {
+      if (!this.pendingBindingCommits.length) setImmediate(() => this.flushBindingCommits());
+      this.pendingBindingCommits.push({ binding, expected, context, resolve, reject });
+    });
+  }
+
+  private flushBindingCommits(): void {
+    const pending = this.pendingBindingCommits;
+    this.pendingBindingCommits = [];
+    try {
+      const store = this.readStore();
+      const sessions = { ...store.sessions };
+      const ready = pending.filter(item => {
+        const key = planBindingSourceKey(item.binding);
+        if (JSON.stringify(sessions[key]) !== item.expected) {
+          item.reject(new Error("Codex hook binding changed before context was committed; retry."));
+          return false;
+        }
+        sessions[key] = item.binding;
+        return true;
+      });
+      if (!ready.length) return;
+      store.sessions = sessions;
+      this.writeStore(store, ready.map(item => item.context));
+      for (const item of ready) item.resolve();
+    } catch (error) {
+      for (const item of pending) item.reject(error);
+    }
   }
 }

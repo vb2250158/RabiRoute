@@ -38,6 +38,8 @@ Call `control.begin` to obtain a `controlSessionId`. Place one logical operation
 
 Before its first input, the native executor records the user's cursor and foreground. It executes actions in order, releases its own keys／buttons and returns the cursor and foreground when the batch ends. `captureAfter: true` can return the resulting image. Captures attached to other control operations also retain display, region, window, layout revision and `maxWidth` parameters.
 
+With native input batch version 2, `input.perform` acquires short-lived control, executes `actions`, and ends that control in one request. Shared mode lets the user and the agent use different input groups concurrently. Conflicting input yields to the user. A shared batch leaves focus where it is at completion. The target application still controls how clicks affect focus. When a batch uses a window capture `source`, the executor checks which window the cursor hits before pressing a button or scrolling. Use `wait.durationMs` between `move` and `press` when the target needs time to handle hover. Window-scoped keyboard input and scrolling also require the target to be foreground.
+
 `completedActions`, `results`, `releaseState` and `returnState` describe the executed prefix, individual action results, resource release and return outcome. `returnState.keys`, `cursor` and `foreground` report independently. Cancellation, failure, deadline and physical takeover finish through the original input owner.
 
 | Setting | Behavior |

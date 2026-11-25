@@ -69,9 +69,9 @@
 
 ## 角色陪伴配置
 
-每次讨论从当前角色目录重新读取 `persona.md`（或路线指定的角色文件）、`prompts/companionship.md`、可选 `growth.md` 和 `skills/companionship-response.md`。缺少响应 Skill 不影响已有陪伴提示词加载；角色文件或陪伴提示词缺失、为空或无效时显示投递失败，不改用通用安慰文案。全局模式预设只约束观察节奏、行为边界和回传，不决定角色口吻。
+每次讨论从当前角色目录重新读取 `persona.md`（或路线指定的角色文件）、可选的 `growth.md` 和 `skills/companionship-response.md`，并使用近期记忆摘要。角色卡提供人格和口吻，模式预设提供观察节奏、行为边界和回传方式。默认的 `prompts/companionship.md` 可作为补充，文件缺失或为空时仍继续讨论。
 
-可在该角色的 `personaConfig.json` 中指定自己的提示词和模式附加模板；不配置时仍读取既有 `prompts/companionship.md`，无需迁移该文件：
+角色可以在 `personaConfig.json` 中指定自定义提示词和模式附加模板。显式指定的文件需可读且有内容：
 
 ```json
 {

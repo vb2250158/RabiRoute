@@ -20,6 +20,18 @@ public class AllDayRecordingSettingsTest {
         assertEquals(300, settings(false, 100).withRunning(true, 300).windowStartedAt);
         assertEquals(100, settings(true, 100).withRunning(true, 300).windowStartedAt);
     }
+    @Test public void assistantControlsOnlyAudioTranscription() {
+        assertTrue(new AllDayRecordingSettings(true, "audio", "auto", "transcribe",
+                "fixed-route", false, true, true, 100).isAssistantAudioTranscription());
+        assertFalse(new AllDayRecordingSettings(true, "audio", "auto", "transcribe",
+                "fixed-route", false, false, true, 100).isAssistantAudioTranscription());
+        assertFalse(new AllDayRecordingSettings(true, "audio", "auto", "local_only",
+                "fixed-route", false, false, true, 100).isAssistantAudioTranscription());
+        assertFalse(new AllDayRecordingSettings(true, "audio", "auto", "agent",
+                "fixed-route", false, true, true, 100).isAssistantAudioTranscription());
+        assertFalse(settings(true, 100).isAssistantAudioTranscription());
+    }
+
     @Test public void unknownProcessingNeverEnablesAgent() {
         AllDayRecordingSettings value = new AllDayRecordingSettings(false, "bad", "bad", "bad", null, false, true, false, -4);
         assertEquals("transcribe", value.processingPolicy);

@@ -69,9 +69,9 @@ Automated checks cover bounded delivery, reply expiration, window-switch invalid
 
 ## Persona companionship configuration
 
-Each discussion reloads `persona.md` (or the Route's configured persona file), `prompts/companionship.md`, optional `growth.md` and `skills/companionship-response.md` from the current persona directory. A missing response Skill does not prevent loading an existing companionship prompt. Missing, empty or invalid required persona/prompt files fail delivery instead of using generic comfort text. Global mode presets govern observation timing, behavior and replies, not persona voice.
+Each discussion reloads `persona.md` (or the Route's configured persona file), optional `growth.md` and `skills/companionship-response.md`, and uses recent memory summaries. The persona card guides voice and character. The mode preset governs observation timing, behavior and replies. The default `prompts/companionship.md` can provide extra guidance. A missing or empty default prompt lets the discussion proceed.
 
-Use the persona's `personaConfig.json` to select its own prompt and additional mode templates. Without configuration, the existing `prompts/companionship.md` is loaded without migration:
+Use the persona's `personaConfig.json` to select a custom prompt or additional mode templates. Explicitly configured files must be readable and contain text:
 
 ```json
 {

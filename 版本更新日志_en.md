@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.92 - 2026-11-25
+
+- Preserve existing desktop settings, startup shortcuts and owned scheduled-task state on upgrades. Explicit changes retain their permission checks and transactional rollback.
+- Integrate on-demand Hook context, shared role directories and batch persistence while preserving optional companion prompts and task identities.
+- Include shared computer input, input settings and human takeover release in independently delivered connector 0.4.12; existing remote nodes are not changed automatically.
+- Android 0.3.74-dev (77) combines real-time model selection, caches and shared PCM. Assistant background transcription preserves other recording tasks; keyword listening remains foreground-only.
+
 ## 0.15.91 - 2026-11-25
 
 - Integrate expanded search, scroll pagination, QQ avatars, device controls and labels, page toolbars, model services and caches while retaining the adopted workbench performance and branding.

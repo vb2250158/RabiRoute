@@ -2,20 +2,22 @@ package com.rabi.link.assistant
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.webkit.JavascriptInterface
-import android.webkit.PermissionRequest
-import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.rabi.link.RabiLinkRelaySettings
 import com.rabi.link.RabiComputerDirectoryCache
+import com.rabi.link.RabiConversationService
 import com.rabi.link.recording.AllDayRecordingSettings
+import com.rabi.link.recording.AsrSettingsDialog
+import com.rabi.link.recording.RabiRecordingHubActivity
 import com.rabi.link.transport.RabiManagerHttpTransport
 import com.rabi.link.transport.RabiSpeechTunnel
 import com.rabiroute.sdk.RabiRouteSdk
@@ -26,8 +28,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
+import java.util.function.Consumer
 
-/** Foreground-only mobile input and output. The selected PC remains the model and conversation owner. */
+/** The foreground conversation borrows PCM from the mobile background transcription service. */
 class MobileAssistantActivity : Activity() {
     private lateinit var browser: WebView
     private val executor = Executors.newFixedThreadPool(3)
@@ -40,10 +44,61 @@ class MobileAssistantActivity : Activity() {
     private val recognitionLock = Any()
     @Volatile private var recognition: MobileRecognitionStream? = null
     @Volatile private var localWake: MobileWakeSession? = null
-    private var permission: PermissionRequest? = null
     @Volatile private var inForeground = false
     @Volatile private var closed = false
     private val localSwitch by lazy { getSharedPreferences("mobile_assistant", MODE_PRIVATE) }
+    private val runtime by lazy { getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE) }
+    private val recording by lazy { getSharedPreferences(AllDayRecordingSettings.PREFS, MODE_PRIVATE) }
+    @Volatile private var pcmId: String? = null
+    private val pcmSlots = Semaphore(16)
+    private val pcm: Consumer<ByteArray> = Consumer { frame ->
+        val id = pcmId ?: return@Consumer
+        if (!pcmSlots.tryAcquire()) {
+            stopPcm(id)
+            runOnUiThread { if (!closed && inForeground) browser.evaluateJavascript("window.mobilePcmEnded?.(" + JSONObject.quote(id) + ")", null) }
+            return@Consumer
+        }
+        val payload = Base64.encodeToString(frame, Base64.NO_WRAP)
+        runOnUiThread {
+            if (closed || !inForeground || pcmId != id) pcmSlots.release()
+            else browser.evaluateJavascript("window.mobilePcmEvent?.(" + JSONObject.quote(id) + "," + JSONObject.quote(payload) + ")") { pcmSlots.release() }
+        }
+    }
+    private val transcriptionChanged = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key in listOf("running", "autoResume", "mode", "allDayStatus", "actualAudioSource", "callActive")) notifyTranscription()
+    }
+
+    private fun transcriptionEnabled(): Boolean {
+        val settings = AllDayRecordingSettings.load(this)
+        return settings.isAssistantAudioTranscription() && (settings.running || settings.autoResume)
+    }
+
+    private fun notifyTranscription(error: String = "") {
+        runOnUiThread {
+            if (closed || !inForeground || !::browser.isInitialized) return@runOnUiThread
+            browser.evaluateJavascript("window.mobileTranscriptionChanged?.(" + transcriptionEnabled() +
+                "," + JSONObject.quote(runtime.getString("allDayStatus", "").orEmpty()) + "," + JSONObject.quote(error) +
+                "," + !runtime.getBoolean("callActive", false) + ")", null)
+        }
+    }
+
+    private fun setTranscription(enabled: Boolean) {
+        if (!inForeground || closed) return
+        if (enabled && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC_PERMISSION)
+            return
+        }
+        if (!enabled) stopPcm()
+        val error = runCatching { RabiConversationService.setAssistantTranscription(this, enabled) }
+            .exceptionOrNull()?.message.orEmpty()
+        notifyTranscription(error)
+    }
+
+    private fun stopPcm(id: String? = null) {
+        if (id != null && id != pcmId) return
+        pcmId = null
+        RabiConversationService.releaseAssistantPcm(pcm)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,25 +132,6 @@ class MobileAssistantActivity : Activity() {
                     }.getOrElse { missing() }
                 }
             }
-            webChromeClient = object : WebChromeClient() {
-                override fun onPermissionRequest(request: PermissionRequest) {
-                    if (!inForeground || !trustedOrigin(request.origin) ||
-                        !request.resources.contentEquals(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))) {
-                        request.deny()
-                        return
-                    }
-                    if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        request.grant(request.resources)
-                    } else if (permission == null) {
-                        permission = request
-                        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC_PERMISSION)
-                    } else request.deny()
-                }
-
-                override fun onPermissionRequestCanceled(request: PermissionRequest) {
-                    if (permission === request) permission = null
-                }
-            }
             addJavascriptInterface(Backend(), "RabiMobile")
         }
         setContentView(browser)
@@ -106,23 +142,27 @@ class MobileAssistantActivity : Activity() {
         super.onResume()
         if (!::browser.isInitialized || RabiLinkRelaySettings.requireSignIn(this)) return
         inForeground = true
+        runtime.registerOnSharedPreferenceChangeListener(transcriptionChanged)
+        recording.registerOnSharedPreferenceChangeListener(transcriptionChanged)
+        if (transcriptionEnabled()) RabiConversationService.resumeRecordingFromForeground(this)
+        notifyTranscription()
         browser.evaluateJavascript("window.mobileVisible?.()", null)
     }
 
     override fun onStop() {
         inForeground = false
+        runtime.unregisterOnSharedPreferenceChangeListener(transcriptionChanged)
+        recording.unregisterOnSharedPreferenceChangeListener(transcriptionChanged)
+        stopPcm()
         stopLocalWake()
         stopRecognition()
-        permission?.deny()
-        permission = null
         if (::browser.isInitialized) browser.evaluateJavascript("window.mobileHidden?.()", null)
         super.onStop()
     }
 
     override fun onDestroy() {
         closed = true
-        permission?.deny()
-        permission = null
+        stopPcm()
         transports.forEach { it.close() }
         stopLocalWake()
         stopRecognition()
@@ -138,10 +178,8 @@ class MobileAssistantActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, results: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, results)
         if (requestCode != MIC_PERMISSION) return
-        val request = permission ?: return
-        permission = null
-        if (inForeground && results.singleOrNull() == PackageManager.PERMISSION_GRANTED) request.grant(request.resources)
-        else request.deny()
+        if (inForeground && results.singleOrNull() == PackageManager.PERMISSION_GRANTED) setTranscription(true)
+        else notifyTranscription("请授予麦克风权限后再开启语音助手")
     }
 
     private fun trustedOrigin(uri: Uri): Boolean =
@@ -398,29 +436,35 @@ class MobileAssistantActivity : Activity() {
 
         @JavascriptInterface fun wakeCancel(id: String) = stopLocalWake(id)
 
-        @JavascriptInterface fun startMode(): String = localSwitch.getString("startMode", "manual") ?: "manual"
+        @JavascriptInterface fun keywordWake(): Boolean =
+            localSwitch.getBoolean("keywordWake", localSwitch.getString("startMode", "manual") == "keyword")
 
-        @JavascriptInterface fun setStartMode(mode: String) {
-            if (mode in listOf("manual", "keyword")) localSwitch.edit().putString("startMode", mode).apply()
-        }
-
-        @JavascriptInterface fun backgroundTranscription(): Boolean = localSwitch.getBoolean("backgroundTranscription", false)
-
-        @JavascriptInterface fun setBackgroundTranscription(enabled: Boolean) {
-            localSwitch.edit().putBoolean("backgroundTranscription", enabled).apply()
-        }
+        @JavascriptInterface fun setKeywordWake(enabled: Boolean) =
+            localSwitch.edit().putBoolean("keywordWake", enabled).apply()
 
         @JavascriptInterface fun microphoneAvailable(): Boolean {
-            val recording = AllDayRecordingSettings.load(this@MobileAssistantActivity)
-            val callActive = getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).getBoolean("callActive", false)
-            return !(recording.running && recording.mode == "audio") && !callActive
+            return transcriptionEnabled() && !runtime.getBoolean("callActive", false)
         }
 
-        @JavascriptInterface fun voiceEnabled(): Boolean = localSwitch.getBoolean("enabled", true)
+        @JavascriptInterface fun voiceEnabled(): Boolean = transcriptionEnabled()
 
         @JavascriptInterface fun setVoiceEnabled(enabled: Boolean) {
-            localSwitch.edit().putBoolean("enabled", enabled).apply()
+            runOnUiThread { setTranscription(enabled) }
         }
+
+        @JavascriptInterface fun observePcm(id: String): Boolean {
+            if (!inForeground || closed || !microphoneAvailable() || !id.matches(Regex("[a-zA-Z0-9-]{1,80}"))) return false
+            pcmId = id
+            RabiConversationService.observeAssistantPcm(pcm)
+            return true
+        }
+
+        @JavascriptInterface fun releasePcm(id: String) = stopPcm(id)
+        @JavascriptInterface fun transcriptionStatus(): String = runtime.getString("allDayStatus", "").orEmpty()
+        @JavascriptInterface fun openRecordingHistory() = runOnUiThread {
+            startActivity(Intent(this@MobileAssistantActivity, RabiRecordingHubActivity::class.java))
+        }
+        @JavascriptInterface fun openAsrSettings() = runOnUiThread { AsrSettingsDialog.show(this@MobileAssistantActivity) }
 
         @JavascriptInterface fun selectedModel(kind: String): String =
             if (kind in listOf("asr", "tts")) voiceModel(kind)?.toString().orEmpty() else ""

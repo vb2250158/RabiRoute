@@ -1048,7 +1048,9 @@ The body uses Codex Hook fields and must contain `hook_event_name` plus the real
 
 
 
-Manager interprets strict `[rabi:*]` controls, owns the session binding, and normalizes these events as `session_start`, `user_prompt`, `reasoning_pre_tool`, or `reasoning_post_tool`. They and normal RabiRoute `message_delivery` enter the same `RabiContextManager`; it is the sole caller of `roleKnowledgeSnapshot()` and owns plan archival and `viewedAt` policy. Manager returns model-visible text in `data.additionalContext`; an unbound session returns an empty string.
+Manager interprets `[rabi:*]` controls and owns session bindings. `SessionStart` reads the persona and returns its discovery entry points. On `UserPromptSubmit` and tool checkpoints, `RabiContextManager` retrieves relevant material from the actual input and applies the plan archival and `viewedAt` policies. The same manager resolves context for regular message delivery.
+
+Concurrent Hooks for the same persona share in-progress reads of its profile, plans, and memory catalogs. Each Hook matches its own input, and Hooks for the same session run in order. Manager acknowledges each request after persisting its session state and returns model-visible text in `data.additionalContext`. An unbound session returns an empty string.
 
 
 

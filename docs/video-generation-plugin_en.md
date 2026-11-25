@@ -25,6 +25,8 @@ First and last images may differ from the output dimensions and from each other.
 
 Use **RabiLink → Configuration → Model Services** to offer this computer’s models to authorized devices. Use **Model Scope** on the same page to configure TTS, ASR, and Workbench models individually. New installations enable these settings by default. Availability depends on connectivity and model readiness. Disabling a scope rejects new remote model requests. Submitted Workbench jobs still allow their original results to be retrieved.
 
+When you return to the workbench, the project and canvas lists show the last loaded entries while they refresh in the background. The lists also offer a manual refresh. Service events update canvas run and media job status. Consecutive edits are saved together, and switching canvases saves the latest changes first.
+
 Opening a RabiPC's URL shows that computer's workbench, projects and work history. The model selector changes where the workbench gets its models and compute. Existing direct URL and API access remains available.
 
 Open the model dropdown on an image, video, or audio card. Choose this computer or a connected RabiPC, then choose a model from that machine. The canvas saves the machine chosen through the model dropdown. A canvas with only the legacy Workbench machine setting opens on this computer. Existing jobs remain available in job history. If the chosen machine already has a usable model, you can use it for generation immediately.

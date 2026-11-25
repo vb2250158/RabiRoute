@@ -6,9 +6,9 @@ export function computerRequestUsesImageView(action, body = {}) {
   const view = source?.imageView;
   if (!view || source.coordinateSpace === "desktop" && !source.frameId) return false;
   if (view.width === source.width && view.height === source.height) return false;
-  if (action === "input.execute") {
+  if (action === "input.execute" || action === "input.perform") {
     const actions = Array.isArray(body.actions) ? body.actions : body.input ? [body.input] : [];
-    return actions.some(item => item?.type === "move" || item?.type === "click" || item?.type === "drag"
+    return actions.some(item => item?.type === "move" || item?.type === "click" || item?.type === "drag" || item?.type === "press"
       || item?.type === "scroll" && item.x !== undefined && item.y !== undefined);
   }
   return action === "annotation.show" || action === "annotation.update" || action === "annotation.track.start";

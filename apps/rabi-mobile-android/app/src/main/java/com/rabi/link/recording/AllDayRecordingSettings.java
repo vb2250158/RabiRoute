@@ -30,6 +30,11 @@ public final class AllDayRecordingSettings {
         this.windowStartedAt = Math.max(0, windowStartedAt);
     }
 
+    /** Audio transcriptions controlled by the voice assistant. Other recording policies retain their own controls. */
+    public boolean isAssistantAudioTranscription() {
+        return "audio".equals(mode) && "transcribe".equals(processingPolicy) && uploadEnabled;
+    }
+
     public static AllDayRecordingSettings load(Context context) {
         SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         // No legacy auto-start flag is imported: an upgrade must not grant capture consent.

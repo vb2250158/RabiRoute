@@ -50,10 +50,14 @@ public static class RabiComputer {
     [DllImport("kernel32.dll")] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool result);
 
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window,uint flags);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point point,uint flags);
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor,int kind,out uint x,out uint y);
 
-    static long physicalInputEpoch,physicalMouseEpoch,activePhysicalEpoch,activeDeadlineUtcMs,batchGeneration;
+    static long physicalInputEpoch,physicalMouseEpoch,physicalKeyboardEpoch,activePhysicalEpoch,activeMouseEpoch,activeKeyboardEpoch,activeDeadlineUtcMs,batchGeneration;
+    static volatile bool sharedControl,activeSharedInput,activePointerInput,activeKeyboardInput,activeRequiresForeground;
+    static readonly int[] physicalHeld=new int[256];
     static string presentationPhase="ready",presentationRequestId;static bool nativeBarMode=true;
     static object presentationReturnState,presentationDisplay,presentationRegion,presentationStopAction;
     static readonly object outputLock=new object(), stateLock=new object(), inputGate=new object(), frameLock=new object();
@@ -167,17 +171,50 @@ public static class RabiComputer {
     static uint Inject(Input value,bool cleanup=false){lock(stateLock){if(!cleanup)CheckInput(activeInputSession,activeInputRequest);uint count=SendInput(1,new[]{value},Marshal.SizeOf(typeof(Input)));if(count!=1)throw new InvalidOperationException("SendInput inserted "+count+" of 1 events. The target desktop or OS integrity level may block injection.");return count;}}
     static uint Key(ushort key,ushort scan,uint flags,bool cleanup=false){return Inject(new Input{type=1,value=new InputUnion{key=new KeyInput{key=key,scan=scan,flags=flags,extra=injectionMarker}}},cleanup);}
     static uint Mouse(int x,int y,uint flags,uint data=0,bool cleanup=false){return Inject(new Input{type=0,value=new InputUnion{mouse=new MouseInput{x=x,y=y,flags=flags,data=data,extra=injectionMarker}}},cleanup);}
-    static void ReleaseOwned(){lock(stateLock){foreach(ushort scan in new List<ushort>(ownedUnicode)){Key(0,scan,6,true);ownedUnicode.Remove(scan);}foreach(int key in new List<int>(ownedKeys)){Key((ushort)key,0,2,true);ownedKeys.Remove(key);}foreach(int button in new List<int>(ownedButtons)){Mouse(0,0,(uint)button,0,true);ownedButtons.Remove(button);}}}
+    static int MouseVirtualKey(uint up){return up==16?2:up==64?4:1;}
+    static void RememberPhysical(int key,bool held){if(key>0&&key<physicalHeld.Length)Volatile.Write(ref physicalHeld[key],held?1:0);}
+    static bool PhysicalHeld(int key){return key>0&&key<physicalHeld.Length&&Volatile.Read(ref physicalHeld[key])!=0;}
+    static int PhysicalKeyCode(KeyHookData value){
+        switch(value.key){
+            case 0x10:return value.scan==0x36?0xa1:0xa0;
+            case 0x11:return (value.flags&1)==0?0xa2:0xa3;
+            case 0x12:return (value.flags&1)==0?0xa4:0xa5;
+            default:return (int)value.key;
+        }
+    }
+    static int InputKeyCode(string name){
+        int key=(int)KeyCode(name);
+        return key==0x10?0xa0:key==0x11?0xa2:key==0x12?0xa4:key;
+    }
+    static bool ExitsOnPhysical(bool mouse){
+        if(!exitOnLocal)return false;
+        if(activeSharedInput)return mouse?activePointerInput:activeKeyboardInput;
+        return !sharedControl||activeInputRequest!=null;
+    }
+    static void ReleaseOwned(){
+        lock(stateLock){
+            foreach(ushort scan in new List<ushort>(ownedUnicode)){Key(0,scan,6,true);ownedUnicode.Remove(scan);}
+            foreach(int key in new List<int>(ownedKeys)){if(!PhysicalHeld(key))Key((ushort)key,0,2,true);ownedKeys.Remove(key);}
+            foreach(int button in new List<int>(ownedButtons)){if(!PhysicalHeld(MouseVirtualKey((uint)button)))Mouse(0,0,(uint)button,0,true);ownedButtons.Remove(button);}
+        }
+    }
     static void EndControl(string id,string reason,bool announce=true){
-        lock(stateLock){if(session==null||session!=id)return;ReleaseOwned();session=null;pointerVisible=false;lastActivity.Reset();UnregisterHotKey(bar.Handle,1);hotkeyRegistered=false;}
+        lock(stateLock){if(session==null||session!=id)return;ReleaseOwned();session=null;sharedControl=false;pointerVisible=false;lastActivity.Reset();UnregisterHotKey(bar.Handle,1);hotkeyRegistered=false;}
         if(ui!=null)ui.Post(_=>{presentationPhase="stopped";presentationStopAction=null;bar.RefreshStatus();overlay.Invalidate();PublishPresentation();},null);if(announce)Event("control-ended",new{controlSessionId=id,reason=reason});
     }
     static void CheckInput(string id,string request){lock(stateLock){
         if(activeInputRequest!=null&&activeInputRequest==request){
             if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new OperationCanceledException("native-input-settings-disabled");
-            if(Interlocked.Read(ref physicalInputEpoch)!=activePhysicalEpoch)throw new OperationCanceledException("physical-input-takeover");
+            var conflict=activeSharedInput
+                ? (activePointerInput&&Interlocked.Read(ref physicalMouseEpoch)!=activeMouseEpoch)||(activeKeyboardInput&&Interlocked.Read(ref physicalKeyboardEpoch)!=activeKeyboardEpoch)
+                : Interlocked.Read(ref physicalInputEpoch)!=activePhysicalEpoch;
+            if(conflict)throw new OperationCanceledException("physical-input-takeover");
             if(activeDeadlineUtcMs>0&&UtcMilliseconds()>=activeDeadlineUtcMs)throw new OperationCanceledException("native-input-deadline");
-        }if(stopping||session==null||session!=id||cancelledRequests.Contains(request))throw new OperationCanceledException("The native input intent ended.");if(inputWindow!=IntPtr.Zero&&(!IsWindow(inputWindow)||Pid(inputWindow)!=inputPid||GetForegroundWindow()!=inputWindow))throw new InvalidOperationException("The original window or foreground target changed.");}}
+        }if(stopping||session==null||session!=id||cancelledRequests.Contains(request))throw new OperationCanceledException("The native input intent ended.");if(inputWindow!=IntPtr.Zero){
+            if(!IsWindow(inputWindow)||Pid(inputWindow)!=inputPid)throw new InvalidOperationException("The original window changed.");
+            if(activeRequiresForeground&&GetForegroundWindow()!=inputWindow)
+                throw new InvalidOperationException("The original foreground target changed.");
+        }}}
     static Dictionary<string,object> ValidateSource(Dictionary<string,object> request,Dictionary<string,object> source){
         string target=Str(request,"instanceId");
         if(target!=""&&Str(source,"instanceId")!=""&&Str(source,"instanceId")!=target)throw new InvalidOperationException("The source belongs to a different computer instance.");
@@ -238,37 +275,141 @@ public static class RabiComputer {
         return new Point((int)Math.Round(x),(int)Math.Round(y));
     }
     static uint Move(Point point){lock(stateLock){var screen=SystemInformation.VirtualScreen;uint inserted=Mouse((int)Math.Round((point.X-screen.Left)*65535.0/Math.Max(1,screen.Width-1)),(int)Math.Round((point.Y-screen.Top)*65535.0/Math.Max(1,screen.Height-1)),0x0001|0x8000|0x4000);pointer=point;pointerVisible=showPointer;Redraw();return inserted;}}
+    static uint MouseUpFlag(Dictionary<string,object> action){
+        switch(Str(action,"button","left")){
+            case "left":return 4;
+            case "right":return 16;
+            case "middle":return 64;
+            default:throw new ArgumentException("Unsupported mouse button.");
+        }
+    }
+    static void VerifyPointerTarget(){
+        CheckInput(activeInputSession,activeInputRequest);
+        if(!activeSharedInput||inputWindow==IntPtr.Zero)return;
+        IntPtr hit=WindowFromPoint(Cursor.Position);
+        if(hit!=inputWindow&&GetAncestor(hit,2)!=inputWindow)
+            throw new InvalidOperationException("The point no longer hits the original window.");
+    }
+    static uint PressMouse(uint up){
+        lock(stateLock){
+            VerifyPointerTarget();
+            if(GetAsyncKeyState(MouseVirtualKey(up))<0)throw new InvalidOperationException("The mouse button is already held.");
+            uint inserted=Mouse(0,0,up/2);
+            ownedButtons.Add((int)up);
+            return inserted;
+        }
+    }
+    static uint ReleaseMouse(uint up){
+        lock(stateLock){
+            if(!ownedButtons.Contains((int)up))throw new InvalidOperationException("This batch does not hold that mouse button.");
+            uint inserted=Mouse(0,0,up);
+            ownedButtons.Remove((int)up);
+            return inserted;
+        }
+    }
+    static int ActionDuration(Dictionary<string,object> action,int fallback){
+        double value=Num(action,"durationMs",fallback);
+        if(value<0||value>Int32.MaxValue||value!=Math.Truncate(value))throw new ArgumentException("Input action duration must be a non-negative integer.");
+        return (int)value;
+    }
+    static void TimedInput(int duration,int segment,string id,string requestId,Action<double> frame){
+        var elapsed=Stopwatch.StartNew();
+        for(;;){
+            CheckInput(id,requestId);
+            long remaining=duration-elapsed.ElapsedMilliseconds;
+            if(remaining<=0)break;
+            Thread.Sleep((int)Math.Min(segment,remaining));
+            CheckInput(id,requestId);
+            if(frame!=null&&elapsed.ElapsedMilliseconds<duration)frame(elapsed.ElapsedMilliseconds/(double)duration);
+        }
+    }
+    static void MoveOverTime(Point target,int duration,int segment,string id,string requestId,Action<Point> emit){
+        Point from=Cursor.Position;
+        TimedInput(duration,segment,id,requestId,progress=>
+            emit(new Point(from.X+(int)Math.Round((target.X-from.X)*progress),from.Y+(int)Math.Round((target.Y-from.Y)*progress))));
+        emit(target);
+    }
+    static uint PressKey(int key,bool skipHeld){
+        lock(stateLock){
+            int alias=key==0xa0?0x10:key==0xa2?0x11:key==0xa4?0x12:key;
+            if(GetAsyncKeyState(key)<0||alias!=key&&GetAsyncKeyState(alias)<0){if(skipHeld)return 0;throw new InvalidOperationException("The key is already held.");}
+            uint inserted=Key((ushort)key,0,0);
+            ownedKeys.Add(key);
+            return inserted;
+        }
+    }
+    static uint ReleaseKey(int key){
+        lock(stateLock){
+            if(!ownedKeys.Contains(key))throw new InvalidOperationException("This batch does not hold that key.");
+            uint inserted=Key((ushort)key,0,2);
+            ownedKeys.Remove(key);
+            return inserted;
+        }
+    }
     static Dictionary<string,object> ExecuteInputAction(Dictionary<string,object> action,Dictionary<string,object> source,string id,string requestId,int segment){
         uint inserted=0;
         try{
             string type=Str(action,"type");
-            if(type=="move"||type=="click"||type=="drag"||type=="scroll"&&action.ContainsKey("x")&&action.ContainsKey("y"))inserted+=Move(Position(action,source,"x","y"));
-            if(type=="click"||type=="drag"){
-                string button=Str(action,"button","left");uint down=button=="right"?8u:button=="middle"?32u:2u;uint up=down*2;int count=type=="drag"?1:(int)Num(action,"count",1);
-                if(count<1||count>2)throw new ArgumentException("Click count must be one or two.");
-                for(int c=0;c<count;c++){
-                    CheckInput(id,requestId);lock(stateLock){if(GetAsyncKeyState(button=="right"?2:button=="middle"?4:1)<0)throw new InvalidOperationException("The physical mouse button is already held.");CheckInput(id,requestId);inserted+=Mouse(0,0,down);ownedButtons.Add((int)up);}
-                    if(type=="drag"){
-                        Point from=Position(action,source,"x","y"),to=Position(action,source,"toX","toY");int duration=Math.Max(segment,(int)Num(action,"durationMs",250));
-                        for(int elapsed=segment;elapsed<duration;elapsed+=segment){Thread.Sleep(segment);CheckInput(id,requestId);inserted+=Move(new Point(from.X+(to.X-from.X)*elapsed/duration,from.Y+(to.Y-from.Y)*elapsed/duration));}CheckInput(id,requestId);inserted+=Move(to);
+            switch(type){
+                case "move":
+                    MoveOverTime(Position(action,source,"x","y"),ActionDuration(action,0),segment,id,requestId,point=>inserted+=Move(point));
+                    break;
+                case "press":
+                    uint pressed=MouseUpFlag(action);
+                    inserted+=Move(Position(action,source,"x","y"));
+                    inserted+=PressMouse(pressed);
+                    break;
+                case "release":
+                    inserted+=ReleaseMouse(MouseUpFlag(action));
+                    break;
+                case "wait":
+                    TimedInput(ActionDuration(action,0),segment,id,requestId,null);
+                    break;
+                case "click":
+                case "drag":
+                    uint button=MouseUpFlag(action);
+                    int count=type=="drag"?1:(int)Num(action,"count",1);
+                    if(count<1||count>2)throw new ArgumentException("Click count must be one or two.");
+                    int duration=type=="drag"?Math.Max(segment,ActionDuration(action,250)):0;
+                    inserted+=Move(Position(action,source,"x","y"));
+                    for(int c=0;c<count;c++){
+                        inserted+=PressMouse(button);
+                        if(type=="drag")MoveOverTime(Position(action,source,"toX","toY"),duration,segment,id,requestId,point=>inserted+=Move(point));
+                        inserted+=ReleaseMouse(button);
+                        if(c+1<count)Thread.Sleep(Math.Min(segment,16));
                     }
-                    lock(stateLock){inserted+=Mouse(0,0,up);ownedButtons.Remove((int)up);}if(c+1<count)Thread.Sleep(Math.Min(segment,16));
-                }
-            }else if(type=="scroll"){
-                double dy=Num(action,"deltaY"),dx=Num(action,"deltaX");if(dy!=0)inserted+=Mouse(0,0,0x0800,unchecked((uint)(int)(dy*120)));if(dx!=0)inserted+=Mouse(0,0,0x1000,unchecked((uint)(int)(dx*120)));
-            }else if(type=="text"){
-                string text=Str(action,"text");int n=0;foreach(char ch in text){CheckInput(id,requestId);lock(stateLock){CheckInput(id,requestId);if(ch=='\n'){if(GetAsyncKeyState(0x0d)<0)throw new InvalidOperationException("The physical Enter key is already held.");inserted+=Key(0x0d,0,0);ownedKeys.Add(0x0d);inserted+=Key(0x0d,0,2);ownedKeys.Remove(0x0d);}else{inserted+=Key(0,(ushort)ch,4);ownedUnicode.Add((ushort)ch);inserted+=Key(0,(ushort)ch,6);ownedUnicode.Remove((ushort)ch);}}if(++n%32==0)Thread.Sleep(1);}
-            }else if(type=="key"){
-                var keys=Items(Get(action,"keys"));foreach(var name in keys){CheckInput(id,requestId);int key=(int)KeyCode(Convert.ToString(name));lock(stateLock){if(GetAsyncKeyState(key)<0)continue;CheckInput(id,requestId);inserted+=Key((ushort)key,0,0);ownedKeys.Add(key);}}
-                ReleaseOwned();
-            }else if(type!="move"&&type!="click"&&type!="drag")throw new ArgumentException("Unsupported input action type.");
+                    break;
+                case "scroll":
+                    if(action.ContainsKey("x")&&action.ContainsKey("y"))inserted+=Move(Position(action,source,"x","y"));
+                    VerifyPointerTarget();
+                    double dy=Num(action,"deltaY"),dx=Num(action,"deltaX");if(dy!=0)inserted+=Mouse(0,0,0x0800,unchecked((uint)(int)(dy*120)));if(dx!=0)inserted+=Mouse(0,0,0x1000,unchecked((uint)(int)(dx*120)));
+                    break;
+                case "text":
+                    string text=Str(action,"text");int n=0;foreach(char ch in text){CheckInput(id,requestId);lock(stateLock){CheckInput(id,requestId);if(ch=='\n'){if(GetAsyncKeyState(0x0d)<0)throw new InvalidOperationException("The physical Enter key is already held.");inserted+=Key(0x0d,0,0);ownedKeys.Add(0x0d);inserted+=Key(0x0d,0,2);ownedKeys.Remove(0x0d);}else{inserted+=Key(0,(ushort)ch,4);ownedUnicode.Add((ushort)ch);inserted+=Key(0,(ushort)ch,6);ownedUnicode.Remove((ushort)ch);}}if(++n%32==0)Thread.Sleep(1);}
+                    break;
+                case "key":
+                case "keyDown":
+                case "keyUp":
+                    var transient=new List<int>();
+                    foreach(var name in Items(Get(action,"keys"))){
+                        CheckInput(id,requestId);
+                        int key=InputKeyCode(Convert.ToString(name));
+                        if(type=="keyUp"){inserted+=ReleaseKey(key);continue;}
+                        uint countDown=PressKey(key,type=="key");
+                        inserted+=countDown;
+                        if(type=="key"&&countDown!=0)transient.Add(key);
+                    }
+                    for(int index=transient.Count-1;index>=0;index--)inserted+=ReleaseKey(transient[index]);
+                    break;
+                default:throw new ArgumentException("Unsupported input action type.");
+            }
             return new Dictionary<string,object>{{"state","injected"},{"injectedEvents",inserted}};
         }catch(OperationCanceledException error){return new Dictionary<string,object>{{"state","cancelled"},{"injectedEvents",inserted},{"reason",error.Message}};}
         catch(Exception error){return new Dictionary<string,object>{{"state","failed"},{"injectedEvents",inserted},{"reason",error.Message}};}
     }
     class InputAnchor {
         public long generation,physicalEpoch,mouseEpoch;public Point cursor;public IntPtr foreground;public uint pid;
-        public string batchId,sessionId,layoutRevision;public bool returnCursor,returnForeground;public double returnForegroundTimeoutMs;
+        public string batchId,sessionId,layoutRevision;public bool shared,returnCursor,returnForeground;public double returnForegroundTimeoutMs;
     }
     static long UtcMilliseconds(){return (long)(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalMilliseconds;}
     static bool ReturnAnchorCurrent(InputAnchor anchor){
@@ -278,13 +419,14 @@ public static class RabiComputer {
         return anchor.generation==Interlocked.Read(ref batchGeneration)&&anchor.mouseEpoch==Interlocked.Read(ref physicalMouseEpoch);
     }
     static void YieldInputReturn(InputAnchor anchor,Dictionary<string,object> result){
-        if(!ReturnCursorAnchorCurrent(anchor))result["cursor"]="yielded";
-        if(!ReturnAnchorCurrent(anchor))result["foreground"]="yielded";
-        result["reason"]="physical-input-takeover";
+        if((!anchor.shared||anchor.returnCursor)&&!ReturnCursorAnchorCurrent(anchor))result["cursor"]="yielded";
+        if(!anchor.shared&&!ReturnAnchorCurrent(anchor))result["foreground"]="yielded";
+        if(!anchor.shared||Str(result,"cursor")=="yielded")result["reason"]="physical-input-takeover";
     }
     static void RestoreInputAnchor(InputAnchor anchor,Dictionary<string,object> result,bool layoutCurrent,Rectangle area){
         // Runs on the hook owner. Mouse activity owns cursor takeover; all physical input owns foreground takeover.
-        if(!ReturnCursorAnchorCurrent(anchor))YieldInputReturn(anchor,result);
+        if(anchor.shared&&!anchor.returnCursor)result["cursor"]="disabled";
+        else if(!ReturnCursorAnchorCurrent(anchor))YieldInputReturn(anchor,result);
         else if(!anchor.returnCursor)result["cursor"]="disabled";
         else if(!layoutCurrent)result["cursor"]="unavailable";
         else try{
@@ -296,6 +438,7 @@ public static class RabiComputer {
                 else YieldInputReturn(anchor,result);
             }else YieldInputReturn(anchor,result);
         }catch(Exception error){result["cursor"]="partial";result["cursorReason"]=error.Message;}
+        if(anchor.shared)return;
         if(!ReturnAnchorCurrent(anchor)){YieldInputReturn(anchor,result);return;}
         if(!anchor.returnForeground)result["foreground"]="disabled";
         else try{
@@ -368,16 +511,33 @@ public static class RabiComputer {
         // Installed pre-batch clients keep focus across their individual action calls.
         bool legacyInput=actions.Count==0&&Get(request,"input")!=null;
         if(legacyInput)actions.Add(Get(request,"input"));
+        bool shared=Str(request,"inputMode")=="shared";
+        bool usesMouse=false,usesKeyboard=false,usesWheel=false;
+        foreach(var action in actions){
+            switch(Str(Obj(action),"type")){
+                case "move":case "press":case "release":case "click":case "drag":usesMouse=true;break;
+                case "scroll":usesMouse=true;usesWheel=true;break;
+                case "text":case "key":case "keyDown":case "keyUp":usesKeyboard=true;break;
+            }
+        }
         var result=new Dictionary<string,object>{{"batchId",requestId},{"state","injected"},{"results",results},{"completedActions",0},{"injectedEvents",0u}};
         Frame captured=null;InputAnchor anchor=null;bool released=false;uint total=0;int completed=0;
         int segment=Math.Max(1,(int)Num(Obj(Get(RequestSettings(request),"input")),"nativeSegmentMs",16));
         lock(inputGate){
             try{
-                lock(stateLock){inputWindow=IntPtr.Zero;CheckInput(id,requestId);activeInputRequest=requestId;activeInputSession=id;activePhysicalEpoch=Interlocked.Read(ref physicalInputEpoch);activeDeadlineUtcMs=(long)Num(request,"deadlineUtcMs");}
+                lock(stateLock){
+                    inputWindow=IntPtr.Zero;CheckInput(id,requestId);
+                    activePointerInput=usesMouse;activeKeyboardInput=usesKeyboard;activeSharedInput=shared;
+                    activeRequiresForeground=!shared||usesKeyboard||usesWheel;
+                    activePhysicalEpoch=Interlocked.Read(ref physicalInputEpoch);activeMouseEpoch=Interlocked.Read(ref physicalMouseEpoch);activeKeyboardEpoch=Interlocked.Read(ref physicalKeyboardEpoch);
+                    activeDeadlineUtcMs=(long)Num(request,"deadlineUtcMs");activeInputRequest=requestId;activeInputSession=id;
+                }
+                if(shared&&usesMouse&&(GetAsyncKeyState(1)<0||GetAsyncKeyState(2)<0||GetAsyncKeyState(4)<0))
+                    throw new OperationCanceledException("physical-input-takeover");
                 source=ValidateSource(request,source);
                 if(Get(source,"windowId")!=null){lock(stateLock){inputWindow=new IntPtr(Convert.ToInt64(Str(source,"windowId"),16));inputPid=Convert.ToUInt32(Get(source,"pid"));}}
                 var control=Obj(Get(RequestSettings(request),"control"));
-                anchor=new InputAnchor{batchId=requestId,sessionId=id,generation=Interlocked.Increment(ref batchGeneration),physicalEpoch=activePhysicalEpoch,mouseEpoch=Interlocked.Read(ref physicalMouseEpoch),cursor=Cursor.Position,foreground=GetForegroundWindow(),layoutRevision=LayoutRevision(),returnCursor=!legacyInput&&Bool(control,"returnCursor",true),returnForeground=!legacyInput&&Bool(control,"returnForeground",true),returnForegroundTimeoutMs=Num(control,"returnForegroundTimeoutMs",120)};
+                anchor=new InputAnchor{batchId=requestId,sessionId=id,generation=Interlocked.Increment(ref batchGeneration),physicalEpoch=activePhysicalEpoch,mouseEpoch=Interlocked.Read(ref physicalMouseEpoch),cursor=Cursor.Position,foreground=GetForegroundWindow(),layoutRevision=LayoutRevision(),shared=shared,returnCursor=!legacyInput&&(!shared||usesMouse)&&Bool(control,"returnCursor",true),returnForeground=!legacyInput&&!shared&&Bool(control,"returnForeground",true),returnForegroundTimeoutMs=Num(control,"returnForegroundTimeoutMs",120)};
                 anchor.pid=Pid(anchor.foreground);Phase("operating",request,source);
                 if(actions.Count==0)throw new ArgumentException("Input actions must not be empty.");
                 for(int index=0;index<actions.Count;index++){
@@ -400,10 +560,10 @@ public static class RabiComputer {
                 Phase("returning",request,source);
                 try{if(!released){ReleaseOwned();released=true;}}catch(Exception error){result["releaseReason"]=error.Message;}
                 var returned=ReturnInput(anchor,Str(result,"reason",Str(result,"state")),released);result["returnState"]=returned;
-                if(Str(returned,"state")=="yielded"){result["state"]="yielded";result["reason"]="physical-input-takeover";}
+                if(Str(returned,"state")=="yielded"||Str(result,"reason")=="physical-input-takeover"){result["state"]="yielded";result["reason"]="physical-input-takeover";}
                 result["releaseState"]=released?"released":"uncertain";result["completedActions"]=completed;result["injectedEvents"]=total;
                 if(Str(result,"state")!="injected"&&captured!=null){captured.Dispose();captured=null;}
-                lock(stateLock){activeInputRequest=null;activeInputSession=null;inputWindow=IntPtr.Zero;activeDeadlineUtcMs=0;}
+                lock(stateLock){activeInputRequest=null;activeInputSession=null;inputWindow=IntPtr.Zero;activeDeadlineUtcMs=0;activeSharedInput=false;activePointerInput=false;activeKeyboardInput=false;activeRequiresForeground=false;}
                 Phase("returned",request,source,returned);
             }
         }
@@ -680,7 +840,7 @@ public static class RabiComputer {
         if(action=="control.begin"){
             object result=null;UI(()=>{lock(stateLock){if(endingControlSessions.Contains(Str(request,"controlSessionId"))){result=new{state="ended",visible=false,reason="ended-before-native-enter"};return;}}
                 ApplyControlRequestSettings(request);
-                if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");session=Str(request,"controlSessionId");presentationPhase="ready";presentationRequestId=Str(request,"requestId",session);nativeBarMode=Str(request,"controlRenderer","native")!="qt";initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
+                if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");sharedControl=Str(request,"inputMode")=="shared";session=Str(request,"controlSessionId");presentationPhase="ready";presentationRequestId=Str(request,"requestId",session);nativeBarMode=Str(request,"controlRenderer","native")!="qt";initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
         }
         if(action=="settings.patch"){UI(()=>ApplySettingsPatch(Obj(Get(request,"patch"))));return new{state="applied"};}
         if(action=="settings.update"){UI(()=>ApplySettings(Obj(Get(request,"settings"))));return new{state="applied"};}
@@ -689,7 +849,7 @@ public static class RabiComputer {
         if(action=="annotation.track.stop"){Tracking item;lock(tracking)tracking.TryGetValue(Str(request,"trackingId"),out item);return item==null?(object)new{state="absent"}:StopTracking(item,Bool(request,"clear"),"requested");}
         if(action.StartsWith("annotation.")){object result=null;UI(()=>result=Annotation(request));return result;}
         if(Str(request,"renderer")=="qt")externalQt=true;
-        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=1,imageViewVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
+        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
         throw new ArgumentException("Unsupported desktop operation.");
     }
     static void Handle(Dictionary<string,object> request){try{Emit(new{id=Get(request,"id"),result=Dispatch(request)});}catch(Exception error){var cause=error.GetBaseException();bool uncertain=false;lock(stateLock)uncertain=Str(request,"action")=="input.execute"&&(ownedKeys.Count>0||ownedButtons.Count>0||ownedUnicode.Count>0);Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=cause.Message,uncertain=uncertain}});}finally{if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;if(pendingInputCounts.TryGetValue(id,out count)){if(count<=1){pendingInputCounts.Remove(id);pendingInputSessions.Remove(id);cancelledRequests.Remove(id);}else pendingInputCounts[id]=count-1;}}if(Str(request,"action")=="control.begin")lock(stateLock){string id=Str(request,"controlSessionId");int count;if(pendingControlBegins.TryGetValue(id,out count)){if(count<=1){pendingControlBegins.Remove(id);endingControlSessions.Remove(id);}else pendingControlBegins[id]=count-1;}}}}
@@ -702,8 +862,8 @@ public static class RabiComputer {
     public static void Run(){
         SetProcessDpiAwarenessContext((IntPtr)(-4));var ready=new ManualResetEvent(false);
         var gui=new Thread(()=>{Application.EnableVisualStyles();overlay=new Overlay();bar=new ControlBar();var ignored=overlay.Handle;ignored=bar.Handle;ui=new WindowsFormsSynchronizationContext();overlay.Show();ShowWindow(overlay.Handle,4);
-            keyboardHook=(code,message,data)=>{if(code>=0){var value=(KeyHookData)Marshal.PtrToStructure(data,typeof(KeyHookData));if((value.flags&0x10)==0&&value.extra!=injectionMarker){Interlocked.Increment(ref physicalInputEpoch);if(session==null)return CallNextHookEx(keyboardHandle,code,message,data);if((value.flags&0x80)!=0){initialPhysicalKeys.Remove(value.key);physicalExitPending=false;}else if(initialPhysicalKeys.Contains(value.key))return CallNextHookEx(keyboardHandle,code,message,data);if(value.key==exitKey&&(message.ToInt32()==0x100||message.ToInt32()==0x104))physicalExitPending=true;if(exitOnLocal)EndControl(session,"local-input");}}return CallNextHookEx(keyboardHandle,code,message,data);};
-            mouseHook=(code,message,data)=>{if(code>=0){var value=(MouseHookData)Marshal.PtrToStructure(data,typeof(MouseHookData));if((value.flags&1)==0&&value.extra!=injectionMarker){bool moved=lastPhysicalX==int.MinValue||value.x!=lastPhysicalX||value.y!=lastPhysicalY;lastPhysicalX=value.x;lastPhysicalY=value.y;if(moved||message.ToInt32()!=0x200){Interlocked.Increment(ref physicalInputEpoch);Interlocked.Increment(ref physicalMouseEpoch);if(session!=null&&exitOnLocal)EndControl(session,"local-input");}}}return CallNextHookEx(mouseHandle,code,message,data);};
+            keyboardHook=(code,message,data)=>{if(code>=0){var value=(KeyHookData)Marshal.PtrToStructure(data,typeof(KeyHookData));if((value.flags&0x10)==0&&value.extra!=injectionMarker){RememberPhysical(PhysicalKeyCode(value),(value.flags&0x80)==0);Interlocked.Increment(ref physicalInputEpoch);Interlocked.Increment(ref physicalKeyboardEpoch);if(session==null)return CallNextHookEx(keyboardHandle,code,message,data);if((value.flags&0x80)!=0){initialPhysicalKeys.Remove(value.key);physicalExitPending=false;}else if(initialPhysicalKeys.Contains(value.key))return CallNextHookEx(keyboardHandle,code,message,data);if(value.key==exitKey&&(message.ToInt32()==0x100||message.ToInt32()==0x104))physicalExitPending=true;if(ExitsOnPhysical(false))EndControl(session,"local-input");}}return CallNextHookEx(keyboardHandle,code,message,data);};
+            mouseHook=(code,message,data)=>{if(code>=0){var value=(MouseHookData)Marshal.PtrToStructure(data,typeof(MouseHookData));if((value.flags&1)==0&&value.extra!=injectionMarker){switch(message.ToInt32()){case 0x201:RememberPhysical(1,true);break;case 0x202:RememberPhysical(1,false);break;case 0x204:RememberPhysical(2,true);break;case 0x205:RememberPhysical(2,false);break;case 0x207:RememberPhysical(4,true);break;case 0x208:RememberPhysical(4,false);break;}bool moved=lastPhysicalX==int.MinValue||value.x!=lastPhysicalX||value.y!=lastPhysicalY;lastPhysicalX=value.x;lastPhysicalY=value.y;if(moved||message.ToInt32()!=0x200){Interlocked.Increment(ref physicalInputEpoch);Interlocked.Increment(ref physicalMouseEpoch);if(session!=null&&ExitsOnPhysical(true))EndControl(session,"local-input");}}}return CallNextHookEx(mouseHandle,code,message,data);};
             keyboardHandle=SetWindowsHookExW(13,keyboardHook,GetModuleHandleW(null),0);mouseHandle=SetWindowsHookExW(14,mouseHook,GetModuleHandleW(null),0);
             var timer=new System.Windows.Forms.Timer();timer.Interval=100;timer.Tick+=(sender,args)=>{
                 UpdateWindowLayers();

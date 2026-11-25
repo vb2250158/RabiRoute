@@ -21,6 +21,7 @@ import {
 } from "./codexHookContext.js";
 import { readPersonaChatHistory } from "../personaChatHistory.js";
 import { AgentRequestStore, type AgentRequestPersistence } from "../agentRequests/store.js";
+import { createOperationContext, installDataMutationAuditSink, runWithOperationContext } from "../observability/dataMutationAudit.js";
 
 function publishFixtureRoleKnowledge(roleDir: string): void {
   publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
@@ -101,15 +102,61 @@ test("async hook reads keep HTTP health responsive through both physical read ph
 });
 
 test("96 independent sessions can enter the same role together", async t => {
-  const { root, service } = fixture({ readContext: readCodexHookContextInputAsync });
+  const { root, service } = fixture({ readContext: input => {
+    assert.equal(input.kind, "role_source", "startup must not queue a knowledge scan");
+    return readCodexHookContextInputAsync(input);
+  } });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const sessions = Array.from({ length: 96 }, (_, index) => `concurrent-${index}`);
   for (const sessionId of sessions) service.bindSession(sessionId, "YeYu");
-  const results = await Promise.all(sessions.map(sessionId => service.handleHook({
+  const receipts = new Map<string, string | undefined>();
+  const dispose = installDataMutationAuditSink(record => {
+    if (record.event === "codex_hook_context_written" && record.requestId) receipts.set(record.requestId, record.after?.digest);
+  });
+  t.after(dispose);
+  const results = await Promise.all(sessions.map(sessionId => runWithOperationContext(
+    createOperationContext({ requestId: sessionId, source: "http", actor: { kind: "system" } }), () => service.handleHook({
     sessionId, eventName: "SessionStart", managerBaseUrl: "http://127.0.0.1:8790"
-  })));
+  }))));
   assert.deepEqual(results.map(result => result.binding?.sessionId), sessions);
   assert.ok(results.every(result => result.binding?.roleId === "YeYu" && result.additionalContext.length > 0));
+  assert.equal(receipts.size, sessions.length);
+  assert.ok([...receipts.values()].every(Boolean));
+});
+
+test("DSH starts without knowledge and recalls against the first prompt while other sessions can start", async t => {
+  let releaseKnowledge!: () => void;
+  let knowledgeStarted!: () => void;
+  const blockedKnowledge = new Promise<void>(resolve => { releaseKnowledge = resolve; });
+  const arrived = new Promise<void>(resolve => { knowledgeStarted = resolve; });
+  const { root, roleDir, service } = fixture({ readContext: async input => {
+    if (input.kind === "knowledge") {
+      knowledgeStarted();
+      await blockedKnowledge;
+    }
+    return readCodexHookContextInputAsync(input);
+  } });
+  t.after(() => { releaseKnowledge(); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify({ contextInjection: { mode: "legacy" } }));
+  const common = { agentType: "dsh", managerBaseUrl: "http://127.0.0.1:8790" } as const;
+  for (const sessionId of ["first-dsh", "second-dsh"]) service.bindSession(sessionId, "YeYu", undefined, "dsh");
+  const start = await service.handleHook({ ...common, sessionId: "first-dsh", eventName: "SessionStart" });
+  assert.match(start.additionalContext, /角色工作集/);
+  assert.match(start.additionalContext, /温柔、清楚/);
+  assert.match(start.additionalContext, /GET \/api\/search/);
+  assert.doesNotMatch(start.additionalContext, /plan-hook|memory-hook|处理前上下文确认/);
+  const prompt = service.handleHook({ ...common, sessionId: "first-dsh", eventName: "UserPromptSubmit",
+    turnId: "first", prompt: "触发器和注入器" });
+  await arrived;
+  try {
+    const other = await service.handleHook({ ...common, sessionId: "second-dsh", eventName: "SessionStart" });
+    assert.equal(other.binding?.sessionId, "second-dsh");
+    assert.equal(service.getBinding("first-dsh", undefined, "dsh")?.lastEventName, "SessionStart");
+  } finally { releaseKnowledge(); }
+  const result = await prompt;
+  assert.match(result.additionalContext, /memory-hook/);
+  assert.match(result.additionalContext, /plan-hook/);
+  assert.equal(result.binding?.lastTurnId, "first");
 });
 
 test("unbind during an async read fences the late reply and the queue recovers", async t => {
@@ -592,9 +639,10 @@ test("binding and base context are owned by Rabi Manager", (t) => {
   assert.ok(fs.existsSync(storePath));
   assert.ok(result.additionalContext.length <= 6200);
   const { sessionId, roleId } = result.binding;
-  const next = service.handleContext({ sessionId, eventName: "UserPromptSubmit", turnId: "next", prompt: "你好" });
+  const next = service.handleContext({ sessionId, eventName: "UserPromptSubmit", turnId: "next", prompt: "你好", managerBaseUrl: "http://127.0.0.1:8791" });
   assert.ok(next.additionalContext.includes(`当前绑定的人格是 ${roleId}。每轮结束前`));
   assert.ok(next.additionalContext.includes(`/api/roles/${roleId}/memory/recent`));
+  assert.match(next.additionalContext, /127\.0\.0\.1:8791/);
 });
 
 test("default Codex hook context keeps unrelated plan and memory indexes on demand", (t) => {

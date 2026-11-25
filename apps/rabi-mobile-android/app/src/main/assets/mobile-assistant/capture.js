@@ -7,7 +7,7 @@ const useConversationalAudio = policy => policy.kind !== 'wake' || !policy.kws;
 /** Phone PCM capture. The shared voice SDK owns recognition rounds, interruption and audio output. */
 export function createPhoneCapture({
   transcribe, waveform, phase, mayRecord, getPolicy = () => ({ kind: 'utterance' }),
-  openStream, openWake, matchWake, onWake, onFallback, onWakeFallback,
+  openStream, openWake, openPcm, matchWake, onWake, onFallback, onWakeFallback,
 }) {
   let current;
   const stop = round => {
@@ -16,6 +16,7 @@ export function createPhoneCapture({
     round.control.abort();
     round.streamSession?.close();
     round.wakeSession?.close();
+    round.pcmSession?.close();
     if (round.processor) {
       round.processor.onaudioprocess = null;
       round.processor.disconnect();
@@ -23,7 +24,7 @@ export function createPhoneCapture({
     round.source?.disconnect();
     round.silentOutput?.disconnect();
     round.stream?.getTracks().forEach(track => track.stop());
-    void round.context?.close().catch(() => {});
+    void round.context?.close?.().catch(() => {});
     round.frames.length = 0;
     round.preRoll.length = 0;
     round.replay.length = 0;
@@ -343,6 +344,28 @@ export function createPhoneCapture({
     submit(round, after);
   }
 
+  function receiveFrame(round, frame) {
+    if (round.closed || frame.length === 0) return;
+    round.position += frame.length;
+    if (round.policy.kind === 'streaming') {
+      if (round.backup) captureLocal(round, frame);
+      if (!round.streamSession?.write(frame)) streamFailed(round, new Error('MOBILE_STREAM_BACKLOG'));
+      return;
+    }
+    if (round.policy.kind === 'wake') {
+      round.replay.push({ frame, after: round.position });
+      // A text-only wake check can outlast the fast on-device keyword window.
+      const replaySeconds = !round.wakeSession && round.pending > 0 ? pendingWakeReplaySeconds : keywordReplaySeconds;
+      const firstSample = round.position - replaySeconds * round.context.sampleRate;
+      while (round.replay[0]?.after <= firstSample) round.replay.shift();
+      if (round.wakeSession && !round.wakeSession.write(frame, round.position)) {
+        wakeFailed(round, new Error('MOBILE_WAKE_BACKLOG'));
+      }
+      if (!round.policy.model || round.closed) return;
+    }
+    captureLocal(round, frame);
+  }
+
   return {
     adapterId: 'rabi-mobile-pcm',
     setPolicy(policy) {
@@ -368,6 +391,20 @@ export function createPhoneCapture({
         if (!mayRecord()) throw new Error('MOBILE_MICROPHONE_IN_USE');
         current = round;
         round.audioProcessing = useConversationalAudio(round.policy);
+        if (openPcm) {
+          round.context = { sampleRate: 16000 };
+          round.pcmSession = openPcm({
+            receive: frame => receiveFrame(round, frame),
+            end: () => {
+              if (!round.closed) {
+                stop(round);
+                round.handlers.onError?.(new Error('MOBILE_MICROPHONE_IN_USE'));
+              }
+            },
+          });
+          changePolicy(round, round.policy);
+          return;
+        }
         round.stream = await navigator.mediaDevices.getUserMedia({
           audio: round.audioProcessing ? conversationalAudio : keywordAudio, video: false,
         });
@@ -385,28 +422,8 @@ export function createPhoneCapture({
         round.source.connect(round.processor);
         round.processor.connect(round.silentOutput);
         round.silentOutput.connect(round.context.destination);
-        round.processor.onaudioprocess = event => {
-          if (round.closed) return;
-          const frame = new Float32Array(event.inputBuffer.getChannelData(0));
-          round.position += frame.length;
-          if (round.policy.kind === 'streaming') {
-            if (round.backup) captureLocal(round, frame);
-            if (!round.streamSession?.write(frame)) streamFailed(round, new Error('MOBILE_STREAM_BACKLOG'));
-            return;
-          }
-          if (round.policy.kind === 'wake') {
-            round.replay.push({ frame, after: round.position });
-            // A text-only wake check can outlast the fast on-device keyword window.
-            const replaySeconds = !round.wakeSession && round.pending > 0 ? pendingWakeReplaySeconds : keywordReplaySeconds;
-            const firstSample = round.position - replaySeconds * round.context.sampleRate;
-            while (round.replay[0].after <= firstSample) round.replay.shift();
-            if (round.wakeSession && !round.wakeSession.write(frame, round.position)) {
-              wakeFailed(round, new Error('MOBILE_WAKE_BACKLOG'));
-            }
-            if (!round.policy.model || round.closed) return;
-          }
-          captureLocal(round, frame);
-        };
+        round.processor.onaudioprocess = event =>
+          receiveFrame(round, new Float32Array(event.inputBuffer.getChannelData(0)));
         for (const track of round.stream.getTracks()) track.addEventListener('ended', () => {
           if (round.closed) return;
           stop(round);

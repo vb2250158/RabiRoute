@@ -30,6 +30,7 @@ class RabiRecordingHubActivity : Activity() {
     private lateinit var body: LinearLayout
     private var status: TextView? = null
     private var recordingToggle: CompoundButton? = null
+    private var assistantEntry: View? = null
     private var recordingTitle: TextView? = null
     private var recordingSource: TextView? = null
     private var recordingDuration: TextView? = null
@@ -87,7 +88,7 @@ class RabiRecordingHubActivity : Activity() {
         addView(label(title, 20f).apply { typeface = Typeface.DEFAULT_BOLD })
     }.also { body.addView(it) }
     private fun render() {
-        reviewPanel?.close(); reviewPanel = null; status = null; recoveryAction = null; recordingToggle = null; recordingTitle = null; recordingSource = null; recordingDuration = null
+        reviewPanel?.close(); reviewPanel = null; status = null; recoveryAction = null; recordingToggle = null; assistantEntry = null; recordingTitle = null; recordingSource = null; recordingDuration = null
         val frame = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
         val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(20),dp(2),dp(12),dp(2)) }
         if(page == "devices") header.addView(label("记录设备",20f),LinearLayout.LayoutParams(0,-2,1f))
@@ -116,6 +117,8 @@ class RabiRecordingHubActivity : Activity() {
                     }
                 }
             }.also { captureHeader.addView(it,LinearLayout.LayoutParams(dp(48),dp(48))) }
+            assistantEntry = RabiMobileUi.compactAction(this, "语音助手", ::openAssistant)
+                .also { captureHeader.addView(it) }
             header.addView(captureHeader)
             val more = RabiMobileUi.iconAction(this,R.drawable.ic_ui_more,"记录更多操作") {}
             more.setOnClickListener {
@@ -173,7 +176,7 @@ class RabiRecordingHubActivity : Activity() {
                 status = label("",12f).apply { setTextColor(RabiMobileUi.warning); visibility = View.GONE }.also { addView(it) }
                 recoveryAction = RabiMobileUi.compactAction(this@RabiRecordingHubActivity,"检查并恢复记录") {
                     if(RabiConversationService.recordingSaveError().isNotBlank() || runtime().getString("allDayStatus", "").orEmpty().let { it.contains("storage_low") || it.contains("空间不足") }) RecordingStorageDialog.show(this@RabiRecordingHubActivity)
-                    else startRecording()
+                    else if (settings().isAssistantAudioTranscription()) openAssistant() else startRecording()
                 }.apply { visibility = View.GONE }.also { addView(it) }
             }
             frame.addView(feedback)
@@ -199,6 +202,7 @@ class RabiRecordingHubActivity : Activity() {
         } else RabiComputerPicker.show(this) { if(page == "devices") render() }
     }
     private fun transitionPending(): Boolean = runtime().getString("allDayStatus", "").orEmpty().let { it.contains("正在停止") || it.contains("正在保存") }
+    private fun openAssistant() = startActivity(Intent(this, com.rabi.link.assistant.MobileAssistantActivity::class.java))
     private fun startRecording() {
         if(transitionPending()) { toast("正在保存上一段，请完成后再开始"); return }
         RabiConversationService.rememberRecordingRequest(this)
@@ -298,6 +302,9 @@ class RabiRecordingHubActivity : Activity() {
         } + if(value.mode != "location" && com.rabi.link.location.LocationSettings(this).enabled) " · 位置" else ""
         recordingToggle?.stateDescription = recordingTitle?.text
         recordingToggle?.isEnabled = !transitionPending()
+        val useAssistant = value.isAssistantAudioTranscription()
+        recordingToggle?.visibility = if (useAssistant) View.GONE else View.VISIBLE
+        assistantEntry?.visibility = if (useAssistant) View.VISIBLE else View.GONE
         updatingToggle = false
         status?.apply { text = presentation.detail; visibility = if(text.isBlank()) View.GONE else View.VISIBLE }
         recoveryAction?.visibility = if(presentation.recoverable) View.VISIBLE else View.GONE
@@ -369,7 +376,7 @@ class RabiRecordingHubActivity : Activity() {
         }
         val cards = mutableListOf(
             card("phone","手机",if(audioSource == "mobile") "正在收音" else "本机 · 自动参与录音") {
-                AlertDialog.Builder(this).setTitle("手机").setMessage("手机会在眼镜没有供声时自动录音。开始和暂停使用记录页顶部的总开关。")
+                AlertDialog.Builder(this).setTitle("手机").setMessage("手机会在眼镜没有供声时自动录音。音频转写由语音助手开关控制。")
                     .setPositiveButton("位置记录") { _, _ -> startActivity(Intent(this, com.rabi.link.location.LocationSettingsActivity::class.java)) }
                     .setNegativeButton("完成",null).show()
             },

@@ -477,6 +477,7 @@ All actions use the same computer POST. Define complete fields in shared `intera
 | `control.status` | Query a session or the computer's current one; real owner/state/time, no renewal or input |
 | `control.end` | Cancel remaining input, release owned keys and return complete/unconfirmed cleanup; leave unrelated tasks running |
 | `input.execute` | `requestId`, current `controlSessionId`, ordered `actions`, coordinate source, `captureAfter`; per-action progress and injected/failed/uncertain results |
+| `input.perform` | Acquires control, runs ordered `actions` and releases control in one request. Read the original `requestId` through `input.status`. The receipt reports input, held-input release and control cleanup separately. |
 | `input.status` | Original-request progress/result without replay |
 | `input.cancel` | Cancel unexecuted work; report executed extent/release state, never reverse injected events |
 | `annotation.show` | `requestId`, source, `layerId`, shapes, lifetime; actual display state |
@@ -488,6 +489,8 @@ All actions use the same computer POST. Define complete fields in shared `intera
 | `annotation.track.stop` | Release the selected tracker/capture/compute; last-frame behavior follows section 6.7, leaving unrelated layers/input tasks alone |
 
 `captureAfter` defaults false and captures only when true and observation is available. Image unavailability is separate from an already executed input result. First-release `backend` is `kcf` or `template`, default `kcf`; `rateHz` is a ceiling, not the effective rate. `expiresAt` is UTC or null; null follows the business-task lifecycle. Annotation needs no controlSessionId except an optional cleanup association.
+
+`input.perform` defaults to `inputMode: "shared"`. Physical and Agent input can run concurrently in different device groups. Physical input takes over on conflict. Use `press`, `move`, `wait` and `release` for a held pointer gesture, or `keyDown` and `keyUp` for held keys. `wait.durationMs` sets the pause. Completion, cancellation and takeover release the input held by that batch and report the result.
 
 First-release input contains move, click/double/right-click, scroll, complete drag, Unicode text and key combinations. Inject in cancellable segments, without cross-request permanently held keys. Shapes are rectangle, ellipse, arrow, path, plain text and highlight. Sources identify computer/coordinate space; tracking references the original frame. Adding source-frame identity to `screen.capture` also updates its response schema; do not assume current responses contain it.
 

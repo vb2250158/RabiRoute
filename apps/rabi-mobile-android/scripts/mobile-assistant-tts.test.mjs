@@ -103,6 +103,34 @@ test('the phone can select a hosted TTS model without changing the paired PC set
   assert.deepEqual(fixture.playerEvents, ['prepare', 'play']);
 });
 
+test('native service audio follows the same recognizer and releases its lease at the end', async () => {
+  const source = await readFile(new URL('capture.js', assets), 'utf8');
+  const {createPhoneCapture} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+  let pcm, closed = 0, browserMic = 0;
+  const oldGetUserMedia = Object.getOwnPropertyDescriptor(navigator,'mediaDevices');
+  Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{ async getUserMedia() { browserMic++; } }});
+  try {
+    const recognizer = createPhoneCapture({
+      openPcm: callbacks => { pcm = callbacks; return { close() { closed++; } }; },
+      mayRecord: () => true, waveform() {}, phase() {},
+      transcribe: async wav => ({text:'fixture', bytes:wav.length}),
+    });
+    const commands = [];
+    const round = recognizer.createRound({onFinal:value=>commands.push(value)});
+    await recognizer.start(round);
+    pcm.receive(new Float32Array(1024).fill(0.2));
+    for (let index=0; index<12; index++) pcm.receive(new Float32Array(1024));
+    await round.queue;
+    assert.equal(commands[0].text,'fixture');
+    assert.equal(browserMic,0);
+    recognizer.stop(round);
+    assert.equal(closed,1);
+  } finally {
+    if (oldGetUserMedia) Object.defineProperty(navigator,'mediaDevices',oldGetUserMedia);
+    else delete navigator.mediaDevices;
+  }
+});
+
 test('only a ready advertised custom provider enables the mobile realtime control', async () => {
   for (const state of [base, { ...custom, capabilities: { ...custom.capabilities, mobileCustomTts: false } },
     { ...custom, capabilities: { ...custom.capabilities, mobileVoiceSubmit: false } },

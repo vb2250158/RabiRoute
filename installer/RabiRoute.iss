@@ -55,7 +55,7 @@ Name: "agentcli"; Description: "独立 Agent CLI：apps/rabi-agent 命令行客�
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "autostart"; Description: "登录 Windows 后启动 RabiRoute"; GroupDescription: "启动选项"; Flags: unchecked
+Name: "autostart"; Description: "登录 Windows 后启动 RabiRoute"; GroupDescription: "启动选项"; Flags: unchecked; Check: IsNewInstall
 
 [Files]
 ; Core and the desktop runtime are always installed, so they ship inside the
@@ -82,6 +82,18 @@ Filename: "{app}\RabiRouteHost.exe"; Description: "启动 RabiRoute"; WorkingDir
 [Code]
 var
   DownloadPage: TOutputProgressWizardPage;
+  AutostartPage: TInputOptionWizardPage;
+
+function IsNewInstall: Boolean;
+begin
+  Result := not (FileExists(ExpandConstant('{app}\current.json')) and
+    FileExists(ExpandConstant('{app}\RabiRouteHost.exe')));
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = AutostartPage.ID) and IsNewInstall;
+end;
 
 function PsQuote(Value: String): String;
 begin
@@ -212,12 +224,18 @@ end;
 
 function InstallTransaction: Boolean;
 var
-  AutostartValue, Arguments: String;
+  AutostartArguments, Arguments: String;
   ResultCode: Integer;
 begin
   ExtractTransactionFiles;
   ExtractReleaseArchives;
-  if WizardIsTaskSelected('autostart') then AutostartValue := 'true' else AutostartValue := 'false';
+  if not IsNewInstall and (WizardSilent or (AutostartPage.SelectedValueIndex = 0)) then
+    AutostartArguments := ' -PreserveAutostart'
+  else if (IsNewInstall and WizardIsTaskSelected('autostart')) or
+      (not IsNewInstall and (AutostartPage.SelectedValueIndex = 1)) then
+    AutostartArguments := ' -AutostartEnabled true'
+  else
+    AutostartArguments := ' -AutostartEnabled false';
   Arguments := '-InstallRoot ' + PsQuote(ExpandConstant('{app}')) +
     ' -ExpectedReleaseId ' + PsQuote('{#ReleaseId}') +
     ComponentArguments +
@@ -226,7 +244,7 @@ begin
     ' -LegacyMigrationScript ' + PsQuote(ExpandConstant('{tmp}\Stop-LegacyRabiRouteRuntime.ps1')) +
     ' -LegacyTaskMigrationScript ' + PsQuote(ExpandConstant('{tmp}\Migrate-LegacyWearableHealthTask.ps1')) +
     ' -AutostartScript ' + PsQuote(ExpandConstant('{tmp}\Configure-WindowsAutostart.ps1')) +
-    ' -AutostartEnabled ' + AutostartValue;
+    AutostartArguments;
   Result := RunPowerShell('Install-RabiRouteReleaseTransaction.ps1', Arguments, ResultCode);
 end;
 
@@ -271,5 +289,11 @@ end;
 
 procedure InitializeWizard;
 begin
+  AutostartPage := CreateInputOptionPage(wpSelectTasks, 'Windows 登录启动',
+    '选择更新后的自启设置', '默认保留当前 Windows 登录启动状态。', True, False);
+  AutostartPage.Add('保留当前状态');
+  AutostartPage.Add('登录 Windows 后启动 RabiRoute');
+  AutostartPage.Add('登录 Windows 后不启动 RabiRoute');
+  AutostartPage.SelectedValueIndex := 0;
   DownloadPage := CreateOutputProgressPage('获取可选组件', '安装器正在获取你选择的组件，并逐个校验 SHA-256。');
 end;

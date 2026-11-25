@@ -20,10 +20,12 @@ import {
   type RoleKnowledgeCatalogSnapshot,
   type MemoryLifecyclePresentation,
   type RecentMemoryItem,
+  type RoleHookPlanCatalog,
   type RoleMemoryCatalogs
 } from "../roleKnowledge.js";
 import type { PlanFeedbackRecoveryCandidate } from "./planFeedbackRecovery.js";
 import type { RolePanelTimelineMessage } from "../rolePanelTimeline.js";
+import type { CodexHookContextReadRequest, CodexHookContextWorkerReply, CodexHookRoleStorageFailure } from "./codexHookContextRead.js";
 import type {
   PerformanceMonitoringConfig,
   PerformanceStoreStatus
@@ -228,6 +230,8 @@ export class ManagerReadWorkerPool {
   private readonly rolePlanPageInFlight = new Map<string, SharedRead<unknown>>();
   private readonly roleFileCountsInFlight = new Map<string, SharedRead<unknown>>();
   private readonly roleMemoryPageInFlight = new Map<string, SharedRead<unknown>>();
+  private readonly hookRoleSourceInFlight = new Map<string, SharedRead<unknown>>();
+  private readonly hookPlanCatalogInFlight = new Map<string, SharedRead<unknown>>();
   private readonly workers = new Set<WorkerSlot>();
   private readonly terminationPendingWorkers = new Set<WorkerSlot>();
   private readonly terminationBlockedWorkers = new Set<WorkerSlot>();
@@ -290,6 +294,8 @@ export class ManagerReadWorkerPool {
     for (const shared of this.rolePlanPageInFlight.values()) shared.controller.abort();
     for (const shared of this.roleFileCountsInFlight.values()) shared.controller.abort();
     for (const shared of this.roleMemoryPageInFlight.values()) shared.controller.abort();
+    for (const shared of this.hookRoleSourceInFlight.values()) shared.controller.abort();
+    for (const shared of this.hookPlanCatalogInFlight.values()) shared.controller.abort();
     const slots = [...this.workers];
     const closed = await Promise.all(slots.map(slot => this.discardWorker(slot, stoppingError)));
     const unconfirmed = slots.filter((_slot, index) => !closed[index]);
@@ -576,6 +582,21 @@ export class ManagerReadWorkerPool {
     if (this === managerKnowledgePageWorkerPool) return managerMemoryCatalogWorkerPool.queryRoleMemoryCatalogs(roleDir, options);
     return this.querySharedRead<RoleMemoryCatalogs>(this.roleMemoryPageInFlight,
       JSON.stringify(["role_memory_catalogs", roleDir]), { type: "role_memory_catalogs", roleDir }, options);
+  }
+
+  queryHookRoleSource(input: Extract<CodexHookContextReadRequest, { kind: "role_source" }>,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<CodexHookContextWorkerReply> {
+    const key = JSON.stringify([input.rolesRoot, input.roleId]);
+    return this.querySharedRead<CodexHookContextWorkerReply>(this.hookRoleSourceInFlight, key,
+      { type: "codex_hook_context_read", input }, options);
+  }
+
+  queryHookPlanCatalog(roleDir: string, archive: boolean,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<RoleHookPlanCatalog | CodexHookRoleStorageFailure> {
+    const fence = planReadFence(roleDir);
+    const key = JSON.stringify([roleDir, archive, fence.epoch, fence.revision]);
+    return this.querySharedRead<RoleHookPlanCatalog | CodexHookRoleStorageFailure>(this.hookPlanCatalogInFlight,
+      key, { type: "codex_hook_plan_catalog", roleDir, archive }, options);
   }
 
   queryRoleMemoryOverview<T>(
@@ -1062,7 +1083,8 @@ export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({ timeou
   maxQueue: 32,
   timeoutMs: 30_000
 });
-/** Session starts can arrive in bursts without filling the knowledge page's queue. */
+/** Keep short role card reads outside the queue for full contextual recall. */
+export const managerHookRoleWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 2, maxQueue: 128 });
 export const managerHookContextWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 4, maxQueue: 128 });
 /** One resident reader keeps validated memory bodies across page and context requests. */
 export const managerMemoryCatalogWorkerPool = new ManagerReadWorkerPool({ timeoutKey: "worker.memoryCatalog",
@@ -1094,6 +1116,7 @@ const builtinManagerReadWorkerPools = [
   managerMessageSearchWorkerPool,
   managerMessageIndexWorkerPool,
   managerKnowledgePageWorkerPool,
+  managerHookRoleWorkerPool,
   managerHookContextWorkerPool,
   managerMemoryCatalogWorkerPool,
   managerKnowledgeIndexWorkerPool,

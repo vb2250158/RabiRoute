@@ -10,6 +10,7 @@ param(
     [Parameter(Mandatory = $true)][string]$LegacyTaskMigrationScript,
     [Parameter(Mandatory = $true)][string]$AutostartScript,
     [ValidateSet("true", "false")][string]$AutostartEnabled = "false",
+    [switch]$PreserveAutostart,
     [switch]$RecoverOnly,
     [ValidateSet("", "after-recovery", "after-stage", "after-legacy-task-remove", "after-legacy-task-remove-before-journal", "after-version-move-before-journal", "before-pointer", "after-bootstrap", "after-pointer", "after-autostart-before-journal", "after-autostart")][string]$FaultPoint = "",
     [string]$TestSelfTestScript,
@@ -157,6 +158,7 @@ function Invoke-Autostart([switch]$Preflight, [switch]$Restore, [string]$Snapsho
     $arguments = @("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",$AutostartScript,"-InstallRoot",$install,"-Enabled",$AutostartEnabled)
     if ($Preflight) { $arguments += "-PreflightOnly" }
     if ($Restore) { $arguments += "-RestoreSnapshot" }
+    elseif ($PreserveAutostart) { $arguments += "-PreserveAutostart" }
     if ($SnapshotRoot) { $arguments += @("-SnapshotRoot",$SnapshotRoot) }
     & powershell.exe @arguments | Out-Null
     $label = if ($Restore) { "Autostart rollback" } elseif ($Preflight) { "Autostart preflight" } else { "Autostart commit" }
@@ -675,6 +677,9 @@ try {
     $release = Read-Candidate $candidate $ExpectedReleaseId
     if ($FaultPoint -eq "after-stage") { throw "Injected fault after-stage" }
     Invoke-BootstrapSelfTest $release.bootstrap "Candidate bootstrap self-test"
+    if ($PreserveAutostart -and (-not $hadPointer -or -not $hadBootstrap)) {
+        throw "Preserving autostart requires an existing managed installation."
+    }
     Invoke-Autostart -Preflight -SnapshotRoot $autostartSnapshotRoot
     $autostartState = "captured"
     Save-Journal "autostart-snapshot-captured" "not-started" $false
@@ -719,11 +724,13 @@ try {
     Save-Journal "switched" "committed" $true
     if ($FaultPoint -eq "after-pointer") { throw "Injected fault after-pointer" }
     Invoke-BootstrapSelfTest $bootstrapPath "Installed bootstrap self-test"
-    $autostartState = "applying"
-    Save-Journal "autostart-applying" "committed" $true
+    if (-not $PreserveAutostart) {
+        $autostartState = "applying"
+        Save-Journal "autostart-applying" "committed" $true
+    }
     Invoke-Autostart -SnapshotRoot $autostartSnapshotRoot
     if ($FaultPoint -eq "after-autostart-before-journal") { exit 98 }
-    $autostartState = "applied"
+    $autostartState = if ($PreserveAutostart) { "preserved" } else { "applied" }
     Save-Journal "autostart-applied" "committed" $true
     if ($FaultPoint -eq "after-autostart") { throw "Injected fault after-autostart" }
     Remove-Item -LiteralPath $journal -Force

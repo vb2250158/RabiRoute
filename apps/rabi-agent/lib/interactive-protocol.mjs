@@ -75,11 +75,15 @@ export const computerSourceSchema = { type: 'object', description: 'Reuse the so
 }, additionalProperties: true };
 const action = (type, required, properties) => ({ type: 'object', required: ['type', ...required], properties: { type: { const: type }, ...properties }, additionalProperties: false });
 const xy = { x: {type:'number'}, y: {type:'number'} };
+const button = {enum:['left','right','middle']};
+const keys = {type:'array',minItems:1,items:text};
 export const computerInputActionSchema = { anyOf: [
-  action('move', ['x','y'], xy), action('click', ['x','y'], { ...xy, button: {enum:['left','right','middle']}, count: {type:'integer',minimum:1,maximum:2} }),
+  action('move', ['x','y'], { ...xy, durationMs: integer }), action('click', ['x','y'], { ...xy, button, count: {type:'integer',minimum:1,maximum:2} }),
   action('scroll', [], { deltaX: {type:'number',description:'Wheel ticks; the Windows executor converts one tick to 120 units.'}, deltaY: {type:'number'}, ...xy }),
-  action('drag', ['x','y','toX','toY'], { ...xy, toX:{type:'number'},toY:{type:'number'},button:{enum:['left','right','middle']},durationMs:integer }),
-  action('text', ['text'], {text}), action('key', ['keys'], {keys:{type:'array',minItems:1,items:text}})
+  action('drag', ['x','y','toX','toY'], { ...xy, toX:{type:'number'},toY:{type:'number'},button,durationMs:integer }),
+  action('press', ['x','y'], { ...xy, button }), action('release', [], { button }),
+  action('wait', ['durationMs'], { durationMs: integer }),
+  action('text', ['text'], {text}), ...['key', 'keyDown', 'keyUp'].map(type => action(type, ['keys'], {keys}))
 ] };
 export const computerAnnotationShapeSchema = { type: 'object', required: ['id','type'], properties: { id:text,
   type:{enum:['rect','ellipse','arrow','path','text','highlight']}, bounds: computerSourceSchema.properties.bounds,
@@ -88,9 +92,12 @@ export const computerAnnotationShapeSchema = { type: 'object', required: ['id','
 export const computerTrackingTargetSchema = { type: 'object', required: ['id','bounds'], properties: { id: text, bounds: computerSourceSchema.properties.bounds, description: text, label: text }, additionalProperties: true };
 const requestId = text, controlSessionId = text, layerId = text, trackingId = text;
 const observation = { source: computerSourceSchema, captureAfter: bool, maxWidth: {type:'integer',minimum:1,maximum:3840}, ...computerCaptureFields, captureSpec: { type: "object", properties: computerCaptureFields, additionalProperties: false } };
+const actions = {type:'array',minItems:1,items:computerInputActionSchema};
+const inputMode = { enum: ['shared', 'exclusive'], description: 'Shared input allows disjoint physical and Agent input. Physical input takes over when it conflicts with the Agent batch.' };
 export const computerControlRequestBranches = [
   branch('control.begin',['requestId'],{requestId,...observation}), branch('control.status',[],{controlSessionId}), branch('control.end',['controlSessionId'],{controlSessionId,requestId}),
-  branch('input.execute',['requestId','controlSessionId','actions'],{requestId,controlSessionId,actions:{type:'array',minItems:1,items:computerInputActionSchema},...observation}),
+  branch('input.execute',['requestId','controlSessionId','actions'],{requestId,controlSessionId,actions,inputMode,...observation}),
+  branch('input.perform',['requestId','actions'],{requestId,actions,inputMode,...observation}),
   branch('input.status',['requestId'],{requestId}), branch('input.cancel',['requestId'],{requestId}),
   branch('annotation.show',['requestId','source','layerId','objects'],{requestId,layerId,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]},controlSessionId}),
   branch('annotation.update',['layerId','expectedVersion'],{requestId,layerId,expectedVersion:integer,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]}}),
@@ -98,7 +105,7 @@ export const computerControlRequestBranches = [
   branch('annotation.track.start',['requestId','source','layerId','targets','taskId'],{requestId,layerId,source:computerSourceSchema,targets:{type:'array',minItems:1,items:computerTrackingTargetSchema},backend:{enum:['kcf','template']},rateHz:{type:'number',exclusiveMinimum:0},taskId:text,expiresAt:{anyOf:[{type:'string',format:'date-time'},{type:'null'}]}}),
   branch('annotation.track.status',['trackingId'],{trackingId}), branch('annotation.track.stop',['trackingId'],{trackingId})
 ];
-export const computerRequestSchema = { description: 'For visual computer operations, read displays.list once for the current target and layout. Reuse displayId and layoutRevision until the layout changes. Capture the target using screen.capture with scope display or region. Use the pixels of the image preview you inspected directly for annotation, tracking and input. Return its complete source including imageView unchanged so Rabi maps preview coordinates automatically. Enter control with control.begin before input.execute. Submit a logical mouse/keyboard sequence in one input.execute actions batch. Rabi automatically releases owned keys and returns the cursor and foreground after the batch. Read returnState for the actual outcome. captureAfter returns the resulting view captured before automatic return.', anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
+export const computerRequestSchema = { description: 'Reuse displayId and layoutRevision until the display layout changes. For visual input, capture a display or region and use the pixels of the image preview you inspected. Return its complete source including imageView unchanged so Rabi maps preview coordinates. Use input.perform to acquire control, run one ordered actions batch and release control in one request. input.perform defaults to shared input. Use input.execute with an already active control session. To hold a button across motion, submit press, move, optional wait, and release in one batch. Rabi releases held buttons and keys after the batch or on physical takeover. Read returnState for automatic cursor/foreground return and input.status with the original requestId for the batch result. captureAfter requests a view before automatic return.', anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
   branch("file.read", ["path", "version", "offset"], { ...fileFields, version: text, offset: integer }),
   branch("upload.begin", ["uploadId", "path", "size", "sha256"], { ...fileFields, uploadId, size: { ...integer, maximum: COMPUTER_LIMITS.uploadBytes }, sha256: hash }),
   branch("upload.write", ["uploadId", "offset", "data", "sha256"], { uploadId, offset: integer,

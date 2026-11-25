@@ -59,13 +59,16 @@ import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot
 import { readGatewayStatusInWorker } from "./gatewayStatusSnapshot.js";
 
 import { verifyCriticalProjectFactRecord, type CriticalProjectFactRecordVerificationInput } from "../messageProcessing/criticalFactRecord.js";
-import { readCodexHookContextInputAsync, type CodexHookContextReadRequest, type CodexHookContextWorkerReply } from "./codexHookContextRead.js";
+import { readCodexHookContextInputAsync, readCodexHookKnowledgeBatch, readCodexHookPlanCatalog,
+  type CodexHookContextReadRequest, type CodexHookKnowledgeBatch, type CodexHookRoleStorageFailure } from "./codexHookContextRead.js";
 import { RoleLifecycleError } from "../roleLifecycle.js";
 
 export type ManagerReadWorkerTask =
   | { type: "role_recent_memory_catalog"; roleDir: string }
   | { type: "role_memory_catalogs"; roleDir: string }
   | { type: "codex_hook_context_read"; input: CodexHookContextReadRequest }
+  | { type: "codex_hook_plan_catalog"; roleDir: string; archive: boolean }
+  | { type: "codex_hook_knowledge_batch"; batch: CodexHookKnowledgeBatch }
   | { type: "critical_fact_record_verify"; input: CriticalProjectFactRecordVerificationInput }
   | { type: "all_day_recording_read"; input: import("./allDayRecordingReadStorage.js").AllDayReadJob }
   | { type: "gateway_status_snapshot"; statusPath: string }
@@ -327,11 +330,17 @@ export async function execute(task: Exclude<ManagerReadWorkerTask, { type: "mess
     case "critical_fact_record_verify":
       verifyCriticalProjectFactRecord(task.input);
       return true;
-    case "codex_hook_context_read": {
-      try { return await readCodexHookContextInputAsync(task.input); }
+    case "codex_hook_context_read":
+    case "codex_hook_knowledge_batch":
+    case "codex_hook_plan_catalog": {
+      try {
+        if (task.type === "codex_hook_context_read") return await readCodexHookContextInputAsync(task.input);
+        if (task.type === "codex_hook_knowledge_batch") return await readCodexHookKnowledgeBatch(task.batch);
+        return await readCodexHookPlanCatalog(task.roleDir, task.archive);
+      }
       catch (error) {
         if (error instanceof RoleLifecycleError && (error.code === "ROLE_STORAGE_WAIT_TIMEOUT" || error.code === "ROLE_STORAGE_UNAVAILABLE")) {
-          return { kind: "role_storage_failure", code: error.code } satisfies CodexHookContextWorkerReply;
+          return { kind: "role_storage_failure", code: error.code } satisfies CodexHookRoleStorageFailure;
         }
         throw error;
       }

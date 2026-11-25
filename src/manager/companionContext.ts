@@ -78,7 +78,7 @@ export async function buildCompanionContext(input: {
     String(input.session[key as "roleId" | "presetId" | "activityKind"]));
   const personaFile = input.personaFile || "persona.md";
   add(personaFile, await readSource(root, personaFile, 24_000, true, true), 6000);
-  add(promptFile, render(await readSource(root, promptFile, 24_000, true, true)), 6000);
+  add(promptFile, render(await readSource(root, promptFile, 24_000, companion.promptFile !== undefined, true)), 6000);
   if (modeValue !== undefined) {
     const modeFile = templatePath(modeValue);
     if (modeFile !== promptFile) add(modeFile, render(await readSource(root, modeFile, 12_000, true, true)), 3000);

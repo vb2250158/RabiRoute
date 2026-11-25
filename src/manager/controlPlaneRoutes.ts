@@ -523,7 +523,6 @@ import {
   ManagerReadWorkerError,
   managerCatalogWorkerPool,
   managerKnowledgePageWorkerPool,
-  managerHookContextWorkerPool,
   managerPerformanceWorkerPool,
   managerReadWorkerPool
 } from "./managerReadWorkerPool.js";
@@ -577,8 +576,8 @@ import type {
 } from "../shared/speechControlContract.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import { createRoleConfigurationOperations } from "../plugins/io.rabiroute.manager.persona/src/manager/roleConfigurationRoutes.js";
-import { RoleLifecycleError, assertRoleAcceptsWork, checkedRoleDirectory, roleStorageFailure, withRoleLock } from "../roleLifecycle.js";
-import type { CodexHookContextWorkerReply } from "./codexHookContextRead.js";
+import { RoleLifecycleError, assertRoleAcceptsWork, checkedRoleDirectory, withRoleLock } from "../roleLifecycle.js";
+import { readCodexHookContextWithWorkers } from "./codexHookContextWorkers.js";
 import { handleRemotePersonaResolutionApi, resolveRemotePersonaSnapshot, validateRemotePersonaLanguageStyle, type RemotePersonaReadContext } from "./remotePersonaRoutes.js";
 import { assertLocalPersonaOwner, localPersonaMessageDirectories, localPersonaRoleForAgentTask, localPersonaRuntimeForDelivery, routeOwnsLocalPersona } from "./localPersonaOwner.js";
 import { getPlan, getPublishedPlan, listPlans, publishedRolePlans, roleKnowledgeSnapshotFromPublishedCatalog, subscribePlanUpdates, type PlanItem } from "../roleKnowledge.js";
@@ -2024,16 +2023,7 @@ const codexHookContextService = new CodexHookContextService({
     }
   },
   onHookStage: createStopStageObserver(managerOperationalLog),
-  readContext: async input => {
-    const timeoutMs = getTimeoutMs("agent.codex.hookRead", Number(process.env.RABIROUTE_CODEX_HOOK_READ_TIMEOUT_MS) || 45_000);
-    const options = { timeoutMs, signal: AbortSignal.timeout(timeoutMs) };
-    const current = input.kind === "knowledge" ? {
-      ...input, memories: await managerKnowledgePageWorkerPool.queryRoleMemoryCatalogs(input.trigger.roleDir, options)
-    } : input;
-    const reply = await managerHookContextWorkerPool.run<CodexHookContextWorkerReply>({ type: "codex_hook_context_read", input: current }, options);
-    if (reply.kind === "role_storage_failure") throw roleStorageFailure(reply.code);
-    return reply;
-  },
+  readContext: readCodexHookContextWithWorkers,
   deliverAgentCompletion: deliverAgentRuleEvent,
   resolveFollowupSource: request => isAttributedHookSource(request) ? completionHookPlanSource(request) : undefined,
   rolesRoot: () => managerRolesRoot(),

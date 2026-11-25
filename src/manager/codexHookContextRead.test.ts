@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { CodexHookContextReadReply, CodexHookContextWorkerReply } from "./codexHookContextRead.js";
-import { managerHookContextWorkerPool } from "./managerReadWorkerPool.js";
+import { managerHookContextWorkerPool, managerHookRoleWorkerPool, managerMemoryCatalogWorkerPool } from "./managerReadWorkerPool.js";
 import { readRoleMemoryCatalogsInWorker } from "../roleKnowledge.js";
 import { readCodexHookContextInputAsync } from "./codexHookContextRead.js";
+import { readCodexHookContextWithWorkers } from "./codexHookContextWorkers.js";
 
 test("Hook context consumes the current shared physical catalog without rereading memory bodies", async t => {
   const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hook-shared-memory-"));
@@ -46,9 +47,7 @@ test("physical hook worker reads current role source and storage knowledge witho
     createdAt: timestamp, updatedAt: timestamp, keywords: ["worker recall"]
   }));
   try {
-    const readSource = () => managerHookContextWorkerPool.run<CodexHookContextReadReply>({
-      type: "codex_hook_context_read", input: { kind: "role_source", rolesRoot: root, roleId: "DemoPersona" }
-    });
+    const readSource = () => managerHookRoleWorkerPool.queryHookRoleSource({ kind: "role_source", rolesRoot: root, roleId: "DemoPersona" });
     const source = await readSource();
     assert.equal(source.kind, "role_source");
     if (source.kind !== "role_source") throw new Error("Unexpected worker reply");
@@ -56,6 +55,7 @@ test("physical hook worker reads current role source and storage knowledge witho
     fs.writeFileSync(personaPath, "Updated demo persona");
     const parallel = await Promise.all(Array.from({ length: 96 }, readSource));
     assert.ok(parallel.every(reply => reply.kind === "role_source" && reply.source.persona === "Updated demo persona"));
+    assert.ok(parallel.every(reply => reply === parallel[0]), "overlapping subscribers share one worker reply");
     const knowledge = await managerHookContextWorkerPool.run<CodexHookContextReadReply>({
       type: "codex_hook_context_read", input: { kind: "knowledge", trigger: {
         kind: "user_prompt", source: "codex_hook", roleId: "DemoPersona", roleDir, signalText: "worker recall"
@@ -65,6 +65,12 @@ test("physical hook worker reads current role source and storage knowledge witho
     if (knowledge.kind !== "knowledge") throw new Error("Unexpected worker reply");
     assert.ok(knowledge.resolution.knowledge.requiredReadItems.some(item => item.id === "memory-demo"));
     assert.equal(knowledge.resolution.policy.touchViewedAt, true);
+    const match = (sessionId: string, signalText: string) => readCodexHookContextWithWorkers({ kind: "knowledge", trigger: {
+      kind: "user_prompt", source: "codex_hook", roleId: "DemoPersona", roleDir, signalText, sessionId
+    } });
+    const [matched, unrelated] = await Promise.all([match("one", "worker recall"), match("two", "unrelated request")]);
+    assert.equal(matched.kind === "knowledge" && matched.resolution.knowledge.requiredReadItems[0]?.id, "memory-demo");
+    assert.equal(unrelated.kind === "knowledge" && unrelated.resolution.knowledge.requiredReadItems.length, 0);
     const badRole = "InvalidStorage";
     fs.mkdirSync(path.join(root, ".role-state", "locks", `${badRole}.lock`));
     assert.deepEqual(await managerHookContextWorkerPool.run<CodexHookContextWorkerReply>({
@@ -78,7 +84,7 @@ test("physical hook worker reads current role source and storage knowledge witho
       } }
     }), /归档|无法读取/);
   } finally {
-    await managerHookContextWorkerPool.stop();
+    await Promise.all([managerHookContextWorkerPool.stop(), managerHookRoleWorkerPool.stop(), managerMemoryCatalogWorkerPool.stop()]);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -13,6 +13,7 @@ const hasCaptureSelector = input => [input, input.source, input.captureSpec].som
   value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined);
 const captureMaximumWidth = input => input.maxWidth ?? (hasCaptureSelector(input) ? undefined : 1920);
 const recovery = action => /\.(?:status|end|cancel|clear|stop)$/.test(action);
+const batchInputMode = input => input.inputMode ?? (input.action === "input.perform" ? "shared" : undefined);
 
 /** Authoritative ephemeral input/layer ownership; the Manager supplies trusted settings and source. */
 export class ComputerControlService {
@@ -200,20 +201,96 @@ export class ComputerControlService {
   nativeEnded(event) {
     if (this.session?.controlSessionId !== event.controlSessionId || this.session.state === "ended") return;
     this.session.state = "ended"; this.session.reason = event.reason ?? "user-exit";
-    for (const requestId of this.inflight.keys()) { const item = this.receipts.get(requestId); if (item?.controlSessionId === event.controlSessionId) item.cancelled = true; }
+    this.cancelControlInputs(event.controlSessionId);
     this.endedSessions.set(event.controlSessionId, { ...this.session }); this.notifyControl();
+  }
+  cancelControlInputs(id) {
+    for (const requestId of this.inflight.keys()) {
+      const entry = this.receipts.get(requestId);
+      if (entry?.controlSessionId === id && ["submitted", "running"].includes(entry.state)) entry.cancelled = true;
+    }
   }
   async end(id, reason = "requested") {
     const item = this.session;
     if (!item || item.controlSessionId !== id) return this.controlStatus(id);
     if (item.state === "ended" && (!this.native.child || this.native.stopping)) { this.session = null; return this.controlStatus(id); }
-    for (const requestId of this.inflight.keys()) { const entry = this.receipts.get(requestId); if (entry?.controlSessionId === id) entry.cancelled = true; }
+    this.cancelControlInputs(id);
     item.state = "ending"; this.notifyControl();
     const result = await this.native.request("control.end", { controlSessionId: id, reason });
     this.nativeEnded({ controlSessionId: id, reason });
     for (const layer of [...this.activeLayers.values()]) if (layer.controlSessionId === id) await this.clearLayer(layer.layerId);
     item.presentation = result.presentation ?? item.presentation;
     if (this.session === item) this.session = null; return this.controlStatus(id);
+  }
+  async beginControl(input, context, entry) {
+    this.check("control.begin", context);
+    if (this.session && this.session.state !== "ended") throw fault("COMPUTER_CONTROL_BUSY", "This target already has a control source.", { current: this.controlStatus() });
+    const id = randomUUID(), settings = this.settings(context, "control.begin"); entry.controlSessionId = id;
+    const item = { controlSessionId: id, requestId: input.requestId, source: this.source(context), state: "starting", createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivityMono: this.now(), context, settingsSnapshot: settings };
+    this.session = item;
+    try { item.presentation = await this.native.request("control.begin", { requestId: input.requestId, controlSessionId: id, source: item.source, settings,
+      ...(input.action === "input.perform" ? { inputMode: batchInputMode(input) } : {}) }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
+    catch (error) { item.state = error.uncertain ? "uncertain" : "ended"; if (item.state === "ended") this.endedSessions.set(id, { ...item }); throw error; }
+    if (item.state === "ended" || entry.cancelled || this.session !== item) return this.controlStatus(id);
+    if (item.presentation?.state === "ended") this.nativeEnded({ controlSessionId: id, reason: item.presentation.reason });
+    else { item.state = "active"; this.touch(item); }
+    return this.controlStatus(id);
+  }
+  async injectInput(input, context, entry, session) {
+    this.check(input.action, context); this.ownedSession(session.controlSessionId, context);
+    let captureIssue;
+    if (input.captureAfter) {
+      try { this.check("screen.capture", context); }
+      catch (error) { captureIssue = { state: "unavailable", reason: error.message }; }
+    }
+    const inputMode = batchInputMode(input);
+    const result = await this.native.request("input.execute", {
+      requestId: input.requestId, controlSessionId: session.controlSessionId, actions: input.actions,
+      source: input.source, captureSpec: normalizeComputerCaptureSpec(input), maxWidth: captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
+      instanceId: this.target(context), settings: this.settings(context, input.action), ...(inputMode === undefined ? {} : { inputMode })
+    }, { beforeSend: () => {
+      this.check(input.action, context);
+      this.ownedSession(session.controlSessionId, context);
+      if (entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original input intent ended before native admission.");
+    } });
+    if (captureIssue) result.capture = captureIssue;
+    entry.results = result.results ?? [];
+    entry.completedActions = result.completedActions ?? entry.results.filter(item => item.state === "injected").length;
+    entry.releaseState = result.releaseState;
+    entry.returnState = result.returnState;
+    if (result.state === "cancelled" || result.state === "yielded") entry.cancelled = true;
+    if (entry.completedActions) this.touch(session);
+    return { ...this.viewReceipt(entry), ...result, state: entry.cancelled ? "cancelled" : result.state };
+  }
+  async performInput(input, context, entry) {
+    let result, cleanup;
+    const cancel = () => { void this.execute({ action: "input.cancel", requestId: input.requestId }).catch(() => {}); };
+    context.signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      const opened = await this.beginControl(input, context, entry);
+      result = opened.state !== "active" || entry.cancelled
+        ? { ...this.viewReceipt(entry), state: "cancelled", reason: opened.reason }
+        : await this.injectInput(input, context, entry, this.ownedSession(opened.controlSessionId, context));
+      // Ending this short control lease must not cancel input already settled by the native owner.
+      entry.state = result.state ?? "completed";
+    } finally {
+      context.signal?.removeEventListener("abort", cancel);
+      if (entry.controlSessionId) {
+        try {
+          const status = this.controlStatus(entry.controlSessionId);
+          const ended = status.state === "ended" ? status : await this.end(entry.controlSessionId, "input-performed");
+          cleanup = { state: ended.state, reason: ended.reason };
+          if (ended.state === "ended") {
+            if (this.session?.controlSessionId === entry.controlSessionId) this.session = null;
+            this.endedSessions.delete(entry.controlSessionId);
+          }
+        } catch (error) {
+          cleanup = { state: "uncertain", reason: error.message };
+          entry.cleanupError = error.message;
+        }
+      }
+    }
+    return { ...result, controlCleanup: cleanup };
   }
   async capture(input, context = {}) {
     this.check("screen.capture", context);
@@ -272,7 +349,9 @@ export class ComputerControlService {
     if (input.action === "input.status") return this.viewReceipt(await this.receipt(input.requestId));
     if (input.action === "input.cancel") {
       const entry = await this.receipt(input.requestId); if (!entry) return { requestId: input.requestId, state: "absent" };
+      if (entry.action === "input.perform" && !["submitted", "running"].includes(entry.state)) return this.viewReceipt(entry);
       entry.cancelled = true; this.notifyItem(entry, [entry.state, true]);
+      if (entry.action === "input.perform" && !entry.controlSessionId) return this.viewReceipt(entry);
       if (entry.controlSessionId && this.endedSessions.has(entry.controlSessionId)) { await this.save(entry); return this.viewReceipt(entry); }
       await this.native.request("input.cancel", { requestId: input.requestId, controlSessionId: entry.controlSessionId });
       return this.viewReceipt(entry);
@@ -300,19 +379,12 @@ export class ComputerControlService {
     }
     return this.once(input, context, async entry => {
       if (input.action === "control.begin") {
-        if (this.session && this.session.state !== "ended") throw fault("COMPUTER_CONTROL_BUSY", "This target already has a control source.", { current: this.controlStatus() });
-        const id = randomUUID(), settings = this.settings(context, input.action); entry.controlSessionId = id;
-        const item = { controlSessionId: id, requestId: input.requestId, source: this.source(context), state: "starting", createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivityMono: this.now(), context, settingsSnapshot: settings };
-        this.session = item;
-        try { item.presentation = await this.native.request("control.begin", { requestId: input.requestId, controlSessionId: id, source: item.source, settings }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
-        catch (error) { item.state = error.uncertain ? "uncertain" : "ended"; if (item.state === "ended") this.endedSessions.set(id, { ...item }); throw error; }
-        if (item.state === "ended" || entry.cancelled || this.session !== item) return this.controlStatus(id);
-        if (item.presentation?.state === "ended") this.nativeEnded({ controlSessionId: id, reason: item.presentation.reason });
-        else { item.state = "active"; this.touch(item); }
-        return this.withCapture(this.controlStatus(id), input, context);
+        const opened = await this.beginControl(input, context, entry);
+        return opened.state === "active" ? this.withCapture(opened, input, context) : opened;
       }
-      if (input.action === "input.execute") {
-        const session = this.ownedSession(input.controlSessionId, context); entry.controlSessionId = session.controlSessionId;
+      if (input.action === "input.execute" || input.action === "input.perform") {
+        const session = input.action === "input.execute" ? this.ownedSession(input.controlSessionId, context) : undefined;
+        if (session) entry.controlSessionId = session.controlSessionId;
         if (input.source?.instanceId && this.target(context) && input.source.instanceId !== this.target(context)) throw fault("COMPUTER_SOURCE_MISMATCH", "The coordinate source belongs to another computer instance.");
         const maximum = this.settings(context, input.action).input?.maxActions ?? 128;
         if (!Array.isArray(input.actions) || !input.actions.length || input.actions.length > maximum) throw fault("COMPUTER_INPUT_BATCH_INVALID", `Input actions must contain 1..${maximum} entries.`);
@@ -320,25 +392,7 @@ export class ComputerControlService {
         const queued = this.inputQueue.then(async () => {
           entry.state = "running";
           if (entry.cancelled) return { ...this.viewReceipt(entry), state: "cancelled" };
-          this.check("input.execute", context); this.ownedSession(input.controlSessionId, context);
-          let captureIssue;
-          if (input.captureAfter) {
-            try { this.check("screen.capture", context); }
-            catch (error) { captureIssue = { state: "unavailable", reason: error.message }; }
-          }
-          const result = await this.native.request("input.execute", {
-            requestId: input.requestId, controlSessionId: input.controlSessionId, actions: input.actions,
-            source: input.source, captureSpec: normalizeComputerCaptureSpec(input), maxWidth: captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
-            instanceId: this.target(context), settings: this.settings(context, input.action)
-          });
-          if (captureIssue) result.capture = captureIssue;
-          entry.results = result.results ?? [];
-          entry.completedActions = result.completedActions ?? entry.results.filter(item => item.state === "injected").length;
-          entry.releaseState = result.releaseState;
-          entry.returnState = result.returnState;
-          if (result.state === "cancelled" || result.state === "yielded") entry.cancelled = true;
-          if (entry.completedActions) this.touch(session);
-          return { ...this.viewReceipt(entry), ...result, state: entry.cancelled ? "cancelled" : result.state };
+          return session ? this.injectInput(input, context, entry, session) : this.performInput(input, context, entry);
         });
         this.inputQueue = queued.catch(() => {}); return queued;
       }

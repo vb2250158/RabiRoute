@@ -15,12 +15,6 @@ const session: CompanionSession = {
   window: null, activityKind: "watch", version: 1
 };
 
-async function writePersona(root: string) {
-  await fs.mkdir(path.join(root, "prompts"), { recursive: true });
-  await fs.writeFile(path.join(root, "persona.md"), "A fixture persona.");
-  await fs.writeFile(path.join(root, "prompts", "companionship.md"), "Accompany the user.");
-}
-
 test("companion memory worker reads valid memories despite unavailable plans and isolates malformed records", { timeout: 30_000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "companion-memory-isolation-"));
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 20_000 });
@@ -32,7 +26,7 @@ test("companion memory worker reads valid memories despite unavailable plans and
   await fs.writeFile(path.join(root, "memory", "consolidated"), "unavailable consolidated storage");
   const valid = { id: "valid", title: "Remembered preference", focus: "Preference", content: "Keep the response brief.",
     createdAt: "2026-10-30T00:00:00.000Z", updatedAt: "2026-10-30T00:00:00.000Z", keywords: ["preference"] };
-  await writePersona(root);
+  await fs.writeFile(path.join(root, "persona.md"), "A fixture persona.");
   await fs.writeFile(path.join(recent, "a-valid.json"), JSON.stringify(valid));
   await fs.writeFile(path.join(recent, "b-broken.json"), "{broken");
   await fs.writeFile(path.join(recent, "c-valid.json"), JSON.stringify({ ...valid, id: "valid-c", title: "Another preference" }));
@@ -45,6 +39,7 @@ test("companion memory worker reads valid memories despite unavailable plans and
   assert.equal("content" in first.memories[0], false);
   const issues: RecentMemoryCatalogRead["issues"] = [];
   const context = await readCompanionContext({ roleDirectory: root, session }, { pool, onIssues: value => issues.push(...value) });
+  assert.match(context, /A fixture persona/);
   assert.match(context, /Remembered preference/);
   assert.match(context, /Another preference/);
   assert.equal(issues.length, 2);
@@ -67,7 +62,7 @@ test("companion memory worker reports a directory failure instead of publishing 
   t.after(async () => { await pool.stop(); await fs.rm(root, { recursive: true, force: true }); });
   await fs.mkdir(path.join(root, "memory"));
   await fs.writeFile(path.join(root, "memory", "recent"), "not a directory");
-  await writePersona(root);
+  await fs.writeFile(path.join(root, "persona.md"), "A fixture persona.");
   const read = () => readCompanionContext({ roleDirectory: root, session }, { pool });
   await assert.rejects(read(), { code: "COMPANION_CONTEXT_FAILED" });
   await fs.unlink(path.join(root, "memory", "recent"));

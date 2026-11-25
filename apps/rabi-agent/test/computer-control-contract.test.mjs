@@ -25,7 +25,7 @@ test('disabled features reject new work while original receipts and cleanup rema
 });
 test('all thirteen declared desktop actions are discoverable and state reads remain read only', () => {
  const names=computerRequestSchema.anyOf.map(value=>value.properties.action.const);
- const expected=['control.begin','control.status','control.end','input.execute','input.status','input.cancel','annotation.show','annotation.update','annotation.status','annotation.clear','annotation.track.start','annotation.track.status','annotation.track.stop'];
+ const expected=['control.begin','control.status','control.end','input.execute','input.perform','input.status','input.cancel','annotation.show','annotation.update','annotation.status','annotation.clear','annotation.track.start','annotation.track.status','annotation.track.stop'];
  for(const name of expected)assert.equal(names.filter(value=>value===name).length,1,name);
  for(const name of ['control.status','input.status','annotation.status','annotation.track.status'])assert.equal(isComputerReadOnlyAction(name),true);
  assert.equal(isComputerReadOnlyAction('input.execute'),false); assert.ok(computerResponseSchema.anyOf.length>6);

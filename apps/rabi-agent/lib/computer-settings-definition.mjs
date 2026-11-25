@@ -103,6 +103,16 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
         "control.returnForeground"
       ]
     },
+    "input.perform": {
+      "capability": "input",
+      "feature": "input",
+      "receipt": true,
+      "settingsPaths": [
+        "input",
+        "control.returnCursor",
+        "control.returnForeground"
+      ]
+    },
     "input.status": {
       "capability": "input",
       "feature": "input",
@@ -554,4 +564,4 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
   },
   "schemaVersion": 1
 });
-export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "0d2a48ca1d9de6d2b78402e4d6c993a505279fa24f269664c94fde488786a3dd";
+export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "db70aa01bec9bba09883edf62c2c9fd3c5742b9d937e42a888435e619feecfd6";
