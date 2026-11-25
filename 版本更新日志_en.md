@@ -6,6 +6,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.94 - 2026-11-26
+
+- Workbench canvas completes node capability definitions: asset, command, agent, human check and generate nodes carry icons, groups and fields. Node copy/paste keeps relative layout and either steps overlapping nodes aside or aligns them to the pointer.
+- Agent node targets group by local CLI, connected local agents and other computers. Selecting a target binds the exact conversation, shows its real dialogue in the node panel and allows direct sending. Multi-turn iteration folds the node's own latest 20 turns into the brief; conversation targets keep their context with the original session.
+- Groups can be arranged from the canvas: selecting a group offers grid, row and column layouts, clicking empty space clears the selection, and layout changes can be undone.
+- Fix canvas draft pagination and node field display. CLI settings now use the shared agent picker and the old standalone CLI picker is removed; workbench canvas docs updated.
+
 ## 0.15.93 - 2026-11-25
 
 - Keep shared computer-control and terminal dependencies in the core installation while the standalone Agent CLI stays optional. Match component files by exact path and verify startup and rollback with core and desktop only.
