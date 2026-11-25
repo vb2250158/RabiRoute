@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.89 - 2026-11-25
+
+- Fix a voice timer error when starting or stopping recognition on Rokid glasses so the assistant returns to wake standby after 60 seconds of inactivity.
+
 ## 0.15.88 - 2026-11-25
 
 - Preserve the quiet start of the first Android command when keyword wake falls back to local transcription. Retain up to four seconds of pre-roll and restore the usual short window after the first valid result.

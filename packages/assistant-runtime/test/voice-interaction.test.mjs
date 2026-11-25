@@ -1,9 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAiuiAssistantRuntime } from '../src/aiui-runtime.js';
-import { createVoiceInteraction, splitSpeechText } from '../src/voice-interaction.js';
+import { createVoiceIdleTimer, createVoiceInteraction, splitSpeechText } from '../src/voice-interaction.js';
 
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+test('the voice idle timer never passes a missing handle to a strict host', t => {
+  let callback;
+  let idleCalls = 0;
+  const cleared = [];
+  t.mock.method(globalThis, 'setTimeout', action => {
+    callback = action;
+    return 0;
+  });
+  t.mock.method(globalThis, 'clearTimeout', handle => {
+    assert.equal(typeof handle, 'number');
+    cleared.push(handle);
+  });
+  const timer = createVoiceIdleTimer({ isEligible: () => true, isBusy: () => false, onIdle: () => idleCalls++ });
+
+  timer.clear();
+  timer.renew();
+  timer.renew();
+  assert.deepEqual(cleared, [0]);
+  callback();
+  assert.equal(idleCalls, 1);
+  timer.clear();
+  timer.renew();
+  timer.clear();
+  timer.clear();
+  assert.deepEqual(cleared, [0, 0]);
+});
 
 test('non-streaming cues retain UTF-16 offsets across whitespace, appends and a segment flush',async()=>{
  const jobs=[],events=[];

@@ -11,6 +11,7 @@ export function createVoiceIdleTimer({ isEligible, isBusy, onIdle, timeoutMs = 6
   let timer;
 
   function clear() {
+    if (timer === undefined) return;
     clearTimeout(timer);
     timer = undefined;
   }
