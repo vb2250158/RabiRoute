@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.93 - 2026-11-25
+
+- Keep shared computer-control and terminal dependencies in the core installation while the standalone Agent CLI stays optional. Match component files by exact path and verify startup and rollback with core and desktop only.
+
 ## 0.15.92 - 2026-11-25
 
 - Preserve existing desktop settings, startup shortcuts and owned scheduled-task state on upgrades. Explicit changes retain their permission checks and transactional rollback.

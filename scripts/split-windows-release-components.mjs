@@ -18,7 +18,7 @@ import yazl from "yazl";
 const MANIFEST_FILE = "release-manifest.json";
 const COMPONENTS_FILE = "components.json";
 
-// Component rules are evaluated in order; the first matching prefix wins.
+// Directory rules end in a slash. File rules match an exact path.
 // `core` is the fallback and must never be shadowed.
 //
 // `distributionPrefixes` match paths inside the portable distribution
@@ -30,12 +30,15 @@ const COMPONENTS_FILE = "components.json";
 const definition = JSON.parse(fs.readFileSync(new URL("./windows-release-components.json", import.meta.url), "utf8"));
 if (definition.schemaVersion !== 1 || !Array.isArray(definition.components)) throw new Error("Unsupported component definition.");
 const ids = new Set(), prefixes = [];
+function matchesRule(relativePath, rule) {
+  return rule.endsWith("/") ? relativePath.startsWith(rule) : relativePath === rule;
+}
 for (const component of definition.components) {
   if (!/^[a-z][a-z0-9-]*$/.test(component.id) || ids.has(component.id) || typeof component.required !== "boolean" || !Array.isArray(component.manifestPrefixes)) throw new Error("Invalid component definition.");
   ids.add(component.id);
   for (const prefix of component.manifestPrefixes) {
-    if (typeof prefix !== "string" || !/^[A-Za-z0-9@._/-]+\/$/.test(prefix) || prefix.startsWith("/") || prefix.split("/").includes("..") || prefixes.some(other => other.toLowerCase().startsWith(prefix.toLowerCase()) || prefix.toLowerCase().startsWith(other.toLowerCase()))) throw new Error("Invalid or overlapping component prefix.");
-    prefixes.push(prefix);
+    if (typeof prefix !== "string" || !/^[A-Za-z0-9@._-]+(?:\/[A-Za-z0-9@._-]+)*\/?$/.test(prefix) || prefix.split("/").some(part => part === "." || part === "..") || prefixes.some(other => matchesRule(other, prefix.toLowerCase()) || matchesRule(prefix.toLowerCase(), other))) throw new Error("Invalid or overlapping component prefix.");
+    prefixes.push(prefix.toLowerCase());
   }
 }
 const CORE = definition.components.find(component => component.id === "core");
@@ -95,7 +98,7 @@ function prefixToRegExp(prefix) {
     .split("*")
     .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("[^/]+");
-  return new RegExp(`^${escaped}`);
+  return new RegExp(`^${escaped}${prefix.endsWith("/") ? "" : "$"}`, "i");
 }
 
 const MATCHERS = [...COMPONENT_RULES, CORE].map((component) => ({

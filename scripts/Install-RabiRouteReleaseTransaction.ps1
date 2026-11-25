@@ -234,8 +234,14 @@ function Read-Candidate([string]$Candidate, [string]$Expected) {
             $id = [string]$component.id
             if ($id -cnotmatch '^[a-z][a-z0-9-]*$' -or $trusted.ContainsKey($id) -or $component.required -isnot [bool] -or $component.manifestPrefixes -isnot [array]) { throw "Trusted component definition is invalid." }
             foreach ($prefix in @($component.manifestPrefixes)) {
-                if ($prefix -isnot [string] -or $prefix -cnotmatch '^[A-Za-z0-9@._/-]+/$' -or $prefix.StartsWith('/') -or $prefix.Split('/') -contains '..') { throw "Trusted component prefix is invalid." }
-                foreach ($other in $trustedPrefixes) { if ($prefix.StartsWith($other, [StringComparison]::OrdinalIgnoreCase) -or $other.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Trusted component prefixes overlap." } }
+                if ($prefix -isnot [string] -or $prefix -cnotmatch '^[A-Za-z0-9@._-]+(/[A-Za-z0-9@._-]+)*/?$' -or $prefix.Split('/') -contains '.' -or $prefix.Split('/') -contains '..') { throw "Trusted component prefix is invalid." }
+                foreach ($other in $trustedPrefixes) {
+                    if ([string]::Equals($prefix, $other, [StringComparison]::OrdinalIgnoreCase) -or
+                        ($other.EndsWith('/') -and $prefix.StartsWith($other, [StringComparison]::OrdinalIgnoreCase)) -or
+                        ($prefix.EndsWith('/') -and $other.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase))) {
+                        throw "Trusted component paths overlap."
+                    }
+                }
                 $trustedPrefixes.Add($prefix)
             }
             $trusted[$id] = $component
@@ -269,7 +275,8 @@ function Read-Candidate([string]$Candidate, [string]$Expected) {
     }
     function Test-ComponentOmitted([string]$Relative) {
         foreach ($prefix in $omittedPrefixes) {
-            if ($Relative.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+            if ([string]::Equals($Relative, $prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                ($prefix.EndsWith('/') -and $Relative.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase))) { return $true }
         }
         return $false
     }

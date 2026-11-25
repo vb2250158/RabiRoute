@@ -32,11 +32,19 @@
     {
       "id": "agent-cli",
       "title": "独立 Agent CLI",
-      "description": "apps/rabi-agent 命令行客户端及其原生资源。",
+      "description": "独立 Agent 与 CLI 入口、运行配置、集成钩子和独立托盘资源。Host 共用库随核心安装。",
       "required": false,
       "default": false,
       "manifestPrefixes": [
-        "apps/rabi-agent/"
+        "apps/rabi-agent/rabi-agent.mjs",
+        "apps/rabi-agent/rabi-cli.mjs",
+        "apps/rabi-agent/recover-release.mjs",
+        "apps/rabi-agent/runtime/",
+        "apps/rabi-agent/dist/agent-hooks/",
+        "apps/rabi-agent/desktop/start-windows.ps1",
+        "apps/rabi-agent/desktop/tray.ps1",
+        "apps/rabi-agent/desktop/rabi-agent.ico",
+        "apps/rabi-agent/test/"
       ]
     }
   ]
