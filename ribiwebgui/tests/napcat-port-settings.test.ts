@@ -66,6 +66,7 @@ function component(quick = false, overrides: Record<string, unknown> = {}, sourc
     if (name.endsWith("/userFacingError")) return { userFacingError: (error: Error) => error.message };
     if (name === "@shared/napcatStateContract") return napcatContract;
     if (name === "@shared/gatewayConfigModel") return gatewayModel;
+    if (name.endsWith("/webRelease")) return { webBrandIconUrl: () => "/assets/rabiroute-icon.png" };
     if (name.endsWith("/clipboard")) return { copyTextToClipboard: async (text: string) => { calls.push({ kind: "copy", value: text }); } };
     return {};
   }, { window: { clearTimeout() {}, setTimeout, location: { hostname: "127.0.0.1" } }, URL, URLSearchParams, console,

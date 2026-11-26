@@ -25,7 +25,7 @@ test("WebGUI route pages use the trusted renderer registry and asynchronous page
     "RoleKnowledgePage",
     "RuntimeLogPage",
     "PerformancePage",
-    "SpeechServicePage",
+    "LegacySpeechPage",
     "SettingsPage"
   ]) {
     assert.equal(builtinWebContributionsSource.includes(`import("./pages/${page}.vue")`), true);

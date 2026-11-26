@@ -115,9 +115,8 @@ test("Web navigation resolves activated page routes and registered slots", () =>
   assert.deepEqual(groups.personaSecondary, [], "removed persona sync contributions cannot restore a navigation entry");
   assert.deepEqual(groups.utility.map(item => item.to), [
     `/routes/${encodeURIComponent(selected)}/overview`,
-    `/routes/${encodeURIComponent(selected)}/speech`,
     "/settings"
-  ]);
+  ], "the speech page redirects to model services and no longer registers navigation");
   assert.deepEqual(groups.footer.map(item => item.to), ["/docs"]);
 });
 

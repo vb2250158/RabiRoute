@@ -68,7 +68,7 @@ test("unknown remote submission is attempted once, blocks target, and never star
   resumed.remote=new RemoteVideoCompute(f.runtime,catalog,()=>{},resumed.jobs.values());
   assert.equal((await resumed.snapshotFor("pc-b")).online,true);
   assert.equal(resumed.jobs.get(first.id).computeOutcome,"unknown");
-  await assert.rejects(f.service.submit(command,"uncertain-remote-003",undefined,{deviceId:"pc-b"}),/先启动/);
+  await assert.rejects(f.service.submit(command,"uncertain-remote-003",undefined,{deviceId:"pc-b"}),/请核对原回执/);
 });
 
 test("explicit workspace read-only mode permits discovery and blocks remote compute mutations before dispatch",async t=>{

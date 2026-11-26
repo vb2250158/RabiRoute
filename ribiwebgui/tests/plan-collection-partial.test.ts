@@ -18,6 +18,7 @@ function method(name:string){return script.statements.find(node=>ts.isFunctionDe
 function response(extra:Record<string,unknown>={}){return {items:[{id:'healthy'}],counts:{total:1},total:1,nextCursor:'next',facets:{statuses:[],tags:[]},...extra};}
 function actualHandlers(){
   const state={computed,AbortController,requestVersion:1,roleId:ref('fixture-role'),focusedPlanId:ref(''),isEnglish:ref(false),
+    route:{query:{},params:{}},readPreview:()=>undefined,writePreview:()=>{},planPreviewRows:ref<Array<Record<string,unknown>>>([]),hasMorePlans:ref(true),canLoadMorePlans:()=>true,
     showsPlanList:ref(true),showsMemoryList:ref(false),loading:ref(false),loadingMorePlans:ref(false),memoryLoading:ref(false),planListAbort:null,
     planCollectionPartial:ref(false),planCollectionDiagnostics:ref<Array<Record<string,unknown>>>([]),planError:ref(''),planPageError:ref(''),planListReady:ref(false),planCatalogInitializing:ref(false),planEventReset:ref(false),
     knowledgeCountsError:ref(''),knowledgeListLoading:ref(false),memoryError:ref(''),plans:ref<unknown[]>([]),visiblePlansForView:ref<unknown[]>([]),visibleMemoryForView:ref([]),totalMemoryForView:ref(0),

@@ -62,9 +62,10 @@ test("route-control is built and synchronized as an independent Web entry", () =
   const sync = fs.readFileSync(new URL("../../scripts/sync-plugin-web-bundles.mjs", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
   assert.doesNotMatch(vite, /readdirSync/);
-  // The app entry stays Vite's default `root/index.html`; an absolute `input`
-  // becomes an absolute chunk name on network drives and Rollup rejects it.
-  assert.doesNotMatch(vite, /input: \{/);
+  // The entry key "app" is the published contract: runtime pages load
+  // `web/assets/app-<hash>.js`, so the input must stay a literal index.html entry
+  // rather than a discovered or absolute chunk name.
+  assert.match(vite, /input: \{ app: fileURLToPath\(new URL\("\.\/index\.html", import\.meta\.url\)\) \}/);
   assert.match(vite, /preserveEntrySignatures: "exports-only"/);
   const pkg = JSON.parse(fs.readFileSync(new URL("../../src/plugins/io.rabiroute.manager.route-control/package.json", import.meta.url), "utf8"));
   assert.equal(pkg.rabi.webSource, "web/entry.ts");
