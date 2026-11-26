@@ -708,8 +708,10 @@ const mediaCanvasId = ref("");
 const workflowPanel = ref<"settings" | "run">();
 const showCliSettings = ref(false);
 const selectedEdgeId = ref("");
+// Stored edges still carry three kinds; the canvas only shows one in port and one out port.
+// The kind is decided when the drop lands, so the user never picks a port.
 type PortKind = "step" | "content" | "input";
-const workflowWire = ref<{ from: string; kind: PortKind; point: Point; pointer?: number }>();
+const workflowWire = ref<{ from: string; point: Point; pointer?: number }>();
 const pendingInput = ref<{ from: string; to: string; keys: string[] }>();
 const workspaceGraph = ref<WorkbenchCanvas>();
 const workspaceDefinition = ref<WorkbenchDefinition>();
@@ -759,11 +761,22 @@ function nodeIcon(node: { kind: string; config?: Record<string, any> }) {
   if (node.kind === "agent" && node.config?.textOutput === true) return "mdi-format-text";
   return flowIcons[node.kind] || "mdi-sitemap-outline";
 }
-function portPosition(id: string, direction: "in" | "out", kind: PortKind) {
+function portPosition(id: string, direction: "in" | "out") {
   const point = canvas.positions.value[id];
   if (!point) return;
-  return { x: point.x + 130 + (direction === "out" ? canvas.cardSize(id).width : 0), y: point.y + canvas.portOffsets(id)[kind] };
+  return { x: point.x + 130 + (direction === "out" ? canvas.cardSize(id).width : 0), y: point.y + canvas.portOffsets(id).io };
 }
+/** What a drop from `from` onto `to` should create, judged from the source's own results. */
+function resolveEdgeKind(from: string, to: string): PortKind | undefined {
+  const sourceFlow = flowNodesById.value.get(from), targetFlow = flowNodesById.value.get(to);
+  const sourceIsText = canvasItems.value.some(row => row.id === from && row.kind === "text")
+    || (sourceFlow?.kind === "agent" && sourceFlow.config.textOutput === true);
+  if (sourceIsText && canvasItems.value.some(row => row.id === to)) return "content";
+  if (!sourceFlow || !targetFlow) return undefined;
+  return workflowArtifactKeys(sourceFlow).length ? "input" : "step";
+}
+const edgeKindLabels: Record<PortKind, string> = { step: "控制", input: "材料", content: "文本" };
+const wireTargetKind = ref<PortKind>();
 const flowLinks = computed(() => {
   const graph = workspaceGraph.value;
   if (!graph) return [];
@@ -784,7 +797,7 @@ const flowWires = computed(() => {
   const view = canvas.visibleBounds.value;
   const next = new Map<string, WireGeometry>();
   const wires = flowLinks.value.flatMap(link => {
-    const start = portPosition(link.from, "out", link.kind), end = portPosition(link.to, "in", link.kind);
+    const start = portPosition(link.from, "out"), end = portPosition(link.to, "in");
     if (!start || !end) return [];
     const bend = wireBend(start, end);
     if (Math.min(start.x, end.x - bend) > view.right || Math.max(start.x + bend, end.x) < view.left ||
@@ -800,8 +813,15 @@ const flowWires = computed(() => {
 });
 const wirePreview = computed(() => {
   const wire = workflowWire.value;
-  const start = wire && portPosition(wire.from, "out", wire.kind);
+  const start = wire && portPosition(wire.from, "out");
   return start && wire ? wirePath(start, wire.point) : "";
+});
+/** Mid-point label that tells the user which edge the drop will create. */
+const wireHint = computed(() => {
+  const wire = workflowWire.value, kind = wireTargetKind.value;
+  const start = wire && portPosition(wire.from, "out");
+  if (!wire || !start || !kind) return undefined;
+  return { kind, label: edgeKindLabels[kind], x: (start.x + wire.point.x) / 2, y: (start.y + wire.point.y) / 2 };
 });
 const textSources = computed(() => [
   ...canvasItems.value,
@@ -1092,34 +1112,62 @@ function workflowPointerDown(event: PointerEvent, node: FlowNode) {
   if (busy.value || uploading.value) return;
   nodePointerDown(event, node.id, () => { selectedIds.value = [node.id]; });
 }
-function beginPort(event: PointerEvent, id: string, kind: PortKind) {
+function beginPort(event: PointerEvent, id: string) {
   if (event.isPrimary === false || event.button !== 0 || busy.value || uploading.value || canPan.value || !workspaceGraph.value) return;
-  const point = portPosition(id, "out", kind);
+  const point = portPosition(id, "out");
   if (!point) return;
   event.preventDefault();
   pendingInput.value = undefined;
-  workflowWire.value = { from: id, kind, point, pointer: event.pointerId };
+  wireTargetKind.value = undefined;
+  workflowWire.value = { from: id, point, pointer: event.pointerId };
   viewport.value?.setPointerCapture(event.pointerId);
 }
-function armPortFromKeyboard(event: MouseEvent, id: string, kind: PortKind) {
+function armPortFromKeyboard(event: MouseEvent, id: string) {
   if (event.detail || busy.value || uploading.value || canPan.value || !workspaceGraph.value) return;
-  const point = portPosition(id, "out", kind);
+  const point = portPosition(id, "out");
   if (!point) return;
   const previous = workflowWire.value;
   cancelPort();
   pendingInput.value = undefined;
-  if (previous?.from !== id || previous?.kind !== kind) workflowWire.value = { from: id, kind, point };
+  if (previous?.from !== id) workflowWire.value = { from: id, point };
 }
 function cancelPort() {
   const pointer = workflowWire.value?.pointer;
   workflowWire.value = undefined;
+  wireTargetKind.value = undefined;
   if (pointer !== undefined && viewport.value?.hasPointerCapture(pointer)) viewport.value.releasePointerCapture(pointer);
+}
+/** The parameter panel is its own canvas layer, so selecting a card never changes its size. */
+const parameterNodeId = computed(() => selectedWorkflowNode.value?.id ?? "");
+const parameterPanelStyle = computed(() => {
+  const id = parameterNodeId.value, point = id ? canvas.positions.value[id] : undefined;
+  if (!id || !point) return { left: "0px", top: "0px" };
+  return { left: `${point.x}px`, top: `${point.y + 34 + canvas.cardSize(id).height + 10}px` };
+});
+function closeCanvasOverlays() {
+  cancelPort();
+  pendingInput.value = undefined;
+  showLibrary.value = false;
+  contextMenu.value = undefined;
+  openPopover.value = "";
+  selectedIds.value = [];
+}
+/** Preview which edge the current pointer position would create. */
+function trackWireTarget(event: PointerEvent) {
+  const wire = workflowWire.value;
+  if (!wire) return;
+  const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card-port]");
+  const target = hit?.dataset.cardId;
+  wireTargetKind.value = target && target !== wire.from
+    ? (event.altKey ? "step" : resolveEdgeKind(wire.from, target))
+    : undefined;
 }
 function applyWorkspacePointer(event: PointerEvent) {
   if (!workflowWire.value) { canvas.move(event); return; }
   if (workflowWire.value.pointer !== undefined && workflowWire.value.pointer !== event.pointerId) return;
   const bounds = viewport.value?.getBoundingClientRect();
   if (bounds) workflowWire.value.point = canvas.world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+  trackWireTarget(event);
 }
 // 节点复制粘贴：Ctrl+C 记录选中节点快照，Ctrl+V 以新 id 复原；媒体卡片留在本页，工作流节点随画布保存。
 let canvasClipboard: CanvasClipboard | undefined;
@@ -1148,10 +1196,12 @@ function moveWorkspacePointer(event: PointerEvent) {
   pendingPointer = event;
   pointerFrame ??= requestAnimationFrame(() => finishPointerFrame(undefined, true));
 }
-async function connectPort(target: string, kind: PortKind) {
+async function connectPort(target: string, forced?: PortKind) {
   const wire = workflowWire.value;
-  if (!wire || wire.kind !== kind || wire.from === target) return;
+  if (!wire || wire.from === target) return;
+  const kind = forced ?? resolveEdgeKind(wire.from, target);
   cancelPort();
+  if (!kind) return;
   if (kind === "content") {
     if (canvasItems.value.length) pendingDraft = true;
     await commitWorkflow(current => ({ ...current, mediaLinks: [...(current.mediaLinks ?? []), { from: wire.from, to: target }] }));
@@ -1172,6 +1222,10 @@ async function connectPort(target: string, kind: PortKind) {
     const edge = connectGraph(current.graph, definition, { id: browserUuid(), from: wire.from, to: target, fromPort: "control", toPort: "control", condition: "success" });
     return { ...current, graph: { ...current.graph, edges: [...current.graph.edges, edge] } };
   });
+}
+async function confirmPendingInput(key: string) {
+  const input = pendingInput.value;
+  if (input) await linkWorkflowInput(input, key);
 }
 async function linkWorkflowInput(input: { from: string; to: string }, artifactKey: string) {
   const definition = workspaceDefinition.value;
@@ -1216,10 +1270,10 @@ function endWorkspaceGesture(event: PointerEvent) {
   if (wire?.pointer === event.pointerId) {
     const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-card-port],[data-card-output]");
     const target = hit?.dataset.cardId;
-    if (target && hit.dataset.cardPort === wire.kind) void action(() => connectPort(target, wire.kind));
+    if (target && target !== wire.from && hit?.dataset.cardPort) void action(() => connectPort(target, event.altKey ? "step" : undefined));
     else {
       cancelPort();
-      if (hit?.dataset.cardOutput === wire.kind && target === wire.from) workflowWire.value = { ...wire, pointer: undefined };
+      if (hit && target === wire.from) workflowWire.value = { ...wire, pointer: undefined };
     }
     return;
   }
@@ -1794,7 +1848,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
     </Teleport>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
     <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" class="mb-4">{{ error || snapshot?.computeError }}</v-alert>
-    <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-content':workflowWire?.kind==='content','linking-step':workflowWire?.kind==='step','linking-input':workflowWire?.kind==='input'}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="cancelPort(); pendingInput=undefined; showLibrary=false; contextMenu=undefined; openPopover=''">
+    <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-port':!!workflowWire}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="closeCanvasOverlays">
       <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button></nav>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
       <div class="canvas-world" :style="canvasTransform">
@@ -1824,16 +1878,15 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
       <svg v-if="flowWires.length || wirePreview" class="workspace-flow-wires" aria-hidden="true">
         <g v-for="wire in flowWires" :key="wire.id" class="flow-connection" @pointerdown="$event.button === 0 && !canPan && $event.stopPropagation()" @click.stop="selectWire(wire)">
           <path :d="wire.path" class="connection-hit" vector-effect="non-scaling-stroke" aria-hidden="true" />
-          <path :d="wire.path" :class="{ 'content-connection': wire.kind !== 'step', 'input-connection': wire.kind === 'input', 'completed-connection': wire.condition === 'completed', 'related-connection': selectedIds.includes(wire.from) || selectedIds.includes(wire.to), 'processing-connection': wire.kind !== 'step' && nodeProcessing(wire.to) }" class="connection-line" vector-effect="non-scaling-stroke" />
+          <path :d="wire.path" :class="{ 'control-connection': wire.kind === 'step', 'material-connection': wire.kind !== 'step', 'input-connection': wire.kind === 'input', 'content-connection': wire.kind === 'content', 'completed-connection': wire.condition === 'completed', 'related-connection': selectedIds.includes(wire.from) || selectedIds.includes(wire.to), 'processing-connection': wire.kind !== 'step' && nodeProcessing(wire.to) }" class="connection-line" vector-effect="non-scaling-stroke" />
         </g>
         <path v-if="wirePreview" :d="wirePreview" class="preview-connection"/>
       </svg>
+      <div v-if="wireHint" class="canvas-wire-hint" :class="`kind-${wireHint.kind}`" :style="{ left: `${wireHint.x}px`, top: `${wireHint.y}px` }">{{ wireHint.label }}</div>
       <article v-for="item in visibleMediaItems" :key="item.id" :data-canvas-node="item.id" class="canvas-object canvas-card" :class="{'canvas-selected':selectedIds.includes(item.id)}" :style="canvas.position(item.id)" @pointerdown="cardPointerDown($event,item)" @contextmenu="openCardMenu($event,item)">
         <template v-if="workspaceGraph">
-        <button class="workspace-port port-in content" :data-card-port="'content'" :data-card-id="item.id" aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(item.id, 'content'))">＋</button>
-          <template v-if="item.kind === 'text'">
-        <button class="workspace-port port-out content" :data-card-output="'content'" :data-card-id="item.id" aria-label="连接文本内容" title="连接文本内容" @pointerdown.stop="beginPort($event, item.id, 'content')" @click.stop="armPortFromKeyboard($event, item.id, 'content')">＋</button>
-          </template>
+        <button class="workspace-port port-in" :data-card-port="'in'" :data-card-id="item.id" aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(item.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
+        <button class="workspace-port port-out" :data-card-output="'out'" :data-card-id="item.id" aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, item.id)" @click.stop="armPortFromKeyboard($event, item.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
         </template>
         <button class="canvas-drag-handle" :aria-label="`移动${item.title}`" @click="!$event.detail && selectCard(item)" @keydown="nudgeCard($event,item.id)"><v-icon :icon="canvasKinds.find(row=>row.kind===item.kind)?.icon" size="16" />{{ item.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div v-if="item.kind==='video'" class="canvas-video-card" data-canvas-card-body>
@@ -1904,20 +1957,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
       </article>
       <article v-for="node in visibleFlowNodes" :key="node.id" :data-canvas-node="node.id" class="canvas-object canvas-card workflow-card"
         :class="{ 'canvas-selected': selectedIds.includes(node.id), 'workflow-card-disabled': node.enabled === false, 'creative-card': node.kind === 'agent' && node.config.textOutput === true, 'workflow-card-processing': nodeProcessing(node.id) }" :style="canvas.position(node.id)" @pointerdown="workflowPointerDown($event,node)">
-        <button v-if="node.kind==='agent'" class="workspace-port port-in content" data-card-port="content" :data-card-id="node.id"
-          aria-label="接收文本内容" title="接收文本内容" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'content'))">＋</button>
-        <button v-if="node.kind==='agent' && node.config.textOutput===true" class="workspace-port port-out content" data-card-output="content" :data-card-id="node.id"
-          aria-label="连接生成文本" title="连接生成文本" @pointerdown.stop="beginPort($event, node.id, 'content')" @click.stop="armPortFromKeyboard($event, node.id, 'content')">＋</button>
-        <button v-if="node.kind!=='asset'" class="workspace-port port-in input" data-card-port="input" :data-card-id="node.id"
-          aria-label="接收上游材料" title="接收上游材料" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'input'))"><v-icon icon="mdi-link-variant" size="13"/></button>
-        <button v-if="workflowArtifactKeys(node).length" class="workspace-port port-out input" data-card-output="input" :data-card-id="node.id"
-          aria-label="提供下游材料" title="提供下游材料" @pointerdown.stop="beginPort($event, node.id, 'input')" @click.stop="armPortFromKeyboard($event, node.id, 'input')"><v-icon icon="mdi-link-variant" size="13"/></button>
-        <template v-if="workspaceDefinition?.capabilities[node.kind]?.ports.in.includes('control')">
-        <button class="workspace-port port-in step" :data-card-port="'step'" :data-card-id="node.id" aria-label="接上一步" title="接上一步" @pointerdown.stop @click.stop="action(() => connectPort(node.id, 'step'))">＋</button>
-        </template>
-        <template v-if="workspaceDefinition?.capabilities[node.kind]?.ports.out.includes('control')">
-        <button class="workspace-port port-out step" :data-card-output="'step'" :data-card-id="node.id" aria-label="下一步" title="下一步" @pointerdown.stop="beginPort($event, node.id, 'step')" @click.stop="armPortFromKeyboard($event, node.id, 'step')">＋</button>
-        </template>
+        <button class="workspace-port port-in" data-card-port="in" :data-card-id="node.id"
+          aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(node.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
+        <button class="workspace-port port-out" data-card-output="out" :data-card-id="node.id"
+          aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, node.id)" @click.stop="armPortFromKeyboard($event, node.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
         <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @keydown="nudgeCard($event,node.id)">
           <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<v-icon icon="mdi-drag" size="16"/>
         </button>
@@ -1927,37 +1970,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
         </div>
         <button class="canvas-resize-handle" :aria-label="`调整 ${node.title || '流程节点'} 的大小`" @pointerdown.stop="canvas.beginResize($event, node.id)" @keydown="resizeCardWithKeyboard($event, node.id)" />
-        <div v-if="selectedWorkflowNode?.id === node.id" class="composer workflow-node-parameters" @pointerdown.stop @contextmenu.stop @wheel.stop>
-          <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + node.id" mode="node" @cli-settings="showCliSettings=true" :project-id="projectId" :canvas-id="mediaCanvasId"
-            :node-id="node.id" :material-inputs="node.inputs" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(node.id)?.length">
-            <template #references>
-              <div v-if="pendingInput?.to === node.id" class="canvas-reference-chips" role="group" aria-label="选择上游材料">
-                <button v-for="key in pendingInput.keys" :key="key" @click="action(() => linkWorkflowInput(pendingInput!, key))">{{ key }}</button>
-                <button @click="pendingInput=undefined">取消</button>
-              </div>
-              <div v-if="inputLinksByTarget.get(node.id)?.length" class="canvas-reference-chips" aria-label="上游来源">
-                <span v-for="source in inputLinksByTarget.get(node.id)" :key="source.from" class="canvas-source-chip">
-                  <button :title="source.artifactKeys.join('、')" :aria-label="`定位上游节点 ${source.sourceTitle}`" @click="focusInputSource(source.from)">{{ source.sourceTitle }}</button>
-                  <button :aria-label="`移除来自 ${source.sourceTitle} 的材料`" @click="action(() => removeWorkflowInput(source.from, node.id))">×</button>
-                </span>
-              </div>
-              <div v-if="contentRefs.get(node.id)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
-                <button v-for="source in contentRefs.get(node.id)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, node.id))">{{ source.title }} ×</button>
-              </div>
-              <details v-if="nodeArtifacts.length" class="canvas-node-artifacts" open>
-                <summary>已核验产物（{{ nodeArtifacts.length }}）</summary>
-                <a v-for="artifact in nodeArtifacts" :key="artifact.id" :href="managerResourceUrl(artifact.href)" :title="artifact.path" target="_blank" rel="noopener noreferrer">
-                  <v-icon icon="mdi-file-outline" size="16" aria-hidden="true"/><span>{{ artifact.name }}</span>
-                  <v-icon icon="mdi-open-in-new" size="14" aria-hidden="true"/>
-                </a>
-              </details>
-            </template>
-          </WorkbenchPanel>
-        </div>
       </article>
       <div v-if="activeVideo" class="creation-stage canvas-object" :data-canvas-node="activeVideoId" :class="{'canvas-selected':selectedIds.includes(activeVideoId)}" :style="canvas.position(activeVideoId)" @pointerdown="cardPointerDown($event,activeVideo)" @contextmenu="openCardMenu($event,activeVideo)">
         <template v-if="workspaceGraph">
-        <button class="workspace-port port-in content" :data-card-port="'content'" :data-card-id="activeVideo.id" aria-label="视频提示词内容输入" title="视频提示词内容输入" @pointerdown.stop @click.stop="action(() => connectPort(activeVideoId, 'content'))">＋</button>
+        <button class="workspace-port port-in" :data-card-port="'in'" :data-card-id="activeVideoId" aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(activeVideoId))"><v-icon icon="mdi-link-variant" size="13"/></button>
         </template>
         <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="!$event.detail && selectCard(activeVideo)" @keydown="nudgeCard($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div class="preview-stage" data-canvas-card-body>
@@ -2039,6 +2055,42 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!videoInputPrompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="snapshot && !snapshot.online" class="video-hint">提交时会启动所选电脑的生成服务。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
       </section>
       </div>
+        <div v-if="selectedWorkflowNode" class="composer workflow-node-parameters" role="dialog"
+          :aria-label="`${selectedWorkflowNode.title || '节点'}参数`" :style="parameterPanelStyle" @pointerdown.stop @contextmenu.stop @wheel.stop>
+          <header class="workflow-parameters-head">
+            <strong>{{ selectedWorkflowNode.title || workspaceDefinition?.capabilities[selectedWorkflowNode.kind]?.label || selectedWorkflowNode.kind }}</strong>
+            <span v-if="selectedWorkflowNode.approval === true" class="workflow-parameters-flag">需人工确认</span>
+            <span v-if="selectedWorkflowNode.enabled === false" class="workflow-parameters-flag muted">已停用</span>
+            <button type="button" class="workflow-parameters-close" aria-label="关闭参数面板" @click="selectedIds=[]">关闭</button>
+          </header>
+          <div class="workflow-parameters-scroll">
+            <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + parameterNodeId" mode="node" @cli-settings="showCliSettings=true" :project-id="projectId" :canvas-id="mediaCanvasId"
+              :node-id="parameterNodeId" :material-inputs="selectedWorkflowNode.inputs" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(parameterNodeId)?.length">
+              <template #references>
+                <div v-if="pendingInput && pendingInput.to === parameterNodeId" class="canvas-reference-chips" role="group" aria-label="选择上游材料">
+                  <button v-for="key in pendingInput.keys" :key="key" @click="action(() => confirmPendingInput(key))">{{ key }}</button>
+                  <button @click="pendingInput=undefined">取消</button>
+                </div>
+                <div v-if="inputLinksByTarget.get(parameterNodeId)?.length" class="canvas-reference-chips" aria-label="上游来源">
+                  <span v-for="source in inputLinksByTarget.get(parameterNodeId)" :key="source.from" class="canvas-source-chip">
+                    <button :title="source.artifactKeys.join('、')" :aria-label="`定位上游节点 ${source.sourceTitle}`" @click="focusInputSource(source.from)">{{ source.sourceTitle }}</button>
+                    <button :aria-label="`移除来自 ${source.sourceTitle} 的材料`" @click="action(() => removeWorkflowInput(source.from, parameterNodeId))">×</button>
+                  </span>
+                </div>
+                <div v-if="contentRefs.get(parameterNodeId)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
+                  <button v-for="source in contentRefs.get(parameterNodeId)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, parameterNodeId))">{{ source.title }} ×</button>
+                </div>
+                <details v-if="nodeArtifacts.length" class="canvas-node-artifacts" open>
+                  <summary>已核验产物（{{ nodeArtifacts.length }}）</summary>
+                  <a v-for="artifact in nodeArtifacts" :key="artifact.id" :href="managerResourceUrl(artifact.href)" :title="artifact.path" target="_blank" rel="noopener noreferrer">
+                    <v-icon icon="mdi-file-outline" size="16" aria-hidden="true"/><span>{{ artifact.name }}</span>
+                    <v-icon icon="mdi-open-in-new" size="14" aria-hidden="true"/>
+                  </a>
+                </details>
+              </template>
+            </WorkbenchPanel>
+          </div>
+        </div>
       </div>
       <aside v-if="showLibrary" id="video-history-panel" class="output-library" aria-label="我的作品">
         <div class="library-toolbar"><h2>我的作品 <span>{{ snapshot?.jobs.length || 0 }}</span></h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="关闭作品历史" @click="showLibrary=false" /><v-btn variant="text" size="small" prepend-icon="mdi-refresh" :disabled="busy" @click="refresh(true)">刷新</v-btn></div>
@@ -2100,25 +2152,37 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .video-heading h1 { font-size:24px; }
 .video-heading span,.video-hint,small,time { color:var(--rr-muted); }
 .workflow-dialog-content { padding:0 !important; }
-.workflow-node-parameters { margin-top:10px; }
+/* P0-2：参数面板是画布内独立浮层，只由内容和拖拽决定卡片尺寸。 */
+.workflow-node-parameters { position:absolute; z-index:6; width:320px; max-height:76vh; margin-top:0; display:flex; flex-direction:column; }
+.workflow-parameters-head { display:flex; align-items:center; gap:8px; padding:9px 10px 2px 12px; }
+.workflow-parameters-head strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.workflow-parameters-flag { flex-shrink:0; padding:1px 7px; border-radius:10px; background:var(--rr-accent-surface); color:var(--rr-heading); font-size:11px; }
+.workflow-parameters-flag.muted { background:var(--rr-subtle); color:var(--rr-muted); }
+.workflow-parameters-close { margin-left:auto; flex-shrink:0; padding:4px 8px; border-radius:8px; color:var(--rr-muted); font-size:12px; }
+.workflow-parameters-close:is(:hover,:focus-visible) { color:var(--rr-text); background:var(--rr-subtle); }
+.workflow-parameters-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 12px; }
+.canvas-wire-hint { position:absolute; z-index:5; transform:translate(-50%,-50%); padding:2px 8px; border-radius:10px; border:1px solid var(--rr-border-strong); background:var(--rr-surface); color:var(--rr-heading); font-size:11px; white-space:nowrap; pointer-events:none; }
+.canvas-wire-hint.kind-input { border-color:var(--rr-success-border); color:var(--rr-success-text); }
 .workspace-flow-wires { position:absolute; width:1px; height:1px; overflow:visible; pointer-events:none; }
 .workspace-flow-wires path { fill:none; stroke:var(--rr-accent); stroke-width:1.5; opacity:.72; pointer-events:none; }
 .workspace-flow-wires .connection-hit { stroke:transparent; stroke-width:12; pointer-events:stroke; cursor:pointer; }
-.workspace-flow-wires .content-connection { stroke:var(--rr-muted); opacity:.48; }
-.workspace-flow-wires .input-connection { stroke-dasharray:3 3; }
+/* P0-3：控制边灰实线，材料边绿虚线，选中时按类型分别高亮。 */
+.workspace-flow-wires .control-connection { stroke:var(--rr-muted); stroke-width:1.5; opacity:.78; }
+.workspace-flow-wires .material-connection { stroke:var(--rr-success-text); stroke-width:2; stroke-dasharray:6 4; opacity:.85; }
 .workspace-flow-wires path.related-connection,.flow-connection:hover > .connection-line { opacity:1; }
-.workspace-flow-wires .related-connection.content-connection { stroke:var(--rr-text); }
-.workspace-flow-wires .processing-connection.content-connection { stroke:var(--rr-accent); opacity:1; stroke-dasharray:16 8; animation:input-flow 900ms linear infinite; }
+.workspace-flow-wires .related-connection.control-connection { stroke:var(--rr-heading); stroke-width:2; }
+.workspace-flow-wires .related-connection.material-connection { stroke:var(--rr-success-text); stroke-width:2.75; stroke-dasharray:9 4; }
+.workspace-flow-wires .processing-connection { stroke:var(--rr-accent); opacity:1; stroke-dasharray:16 8; animation:input-flow 900ms linear infinite; }
 @keyframes input-flow { to { stroke-dashoffset:-24; } }
 @media (prefers-reduced-motion: reduce) { .workspace-flow-wires .processing-connection { animation:none; } }
 .workspace-flow-wires .completed-connection { stroke-dasharray:6 4; }
 .workspace-flow-wires .preview-connection { opacity:1; pointer-events:none; }
-.workspace-port { position:absolute; top:72px; z-index:3; display:grid; place-items:center; width:22px; height:22px; transform:translateY(-50%); border:1px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
-.workspace-port { opacity:0; transition:opacity 120ms ease; }
+/* P0-1：每张卡只有一个输入口和一个输出口，位置不随节点类型变化。 */
+.workspace-port { position:absolute; top:var(--canvas-port,72px); z-index:3; display:grid; place-items:center; width:22px; height:22px; transform:translateY(-50%); border:1px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
+.workspace-port { opacity:0; transition:opacity 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .canvas-object:hover > .workspace-port,.canvas-selected > .workspace-port,.workspace-port:focus-visible,
-.linking-content .workspace-port.content.port-in,.linking-step .workspace-port.step.port-in,.linking-input .workspace-port.input.port-in { opacity:1; }
-.workspace-port.content { top:var(--canvas-content-port,140px); }
-.workspace-port.input { top:var(--canvas-input-port); border-style:dashed; }
+.linking-port .workspace-port.port-in { opacity:1; }
+.linking-port .workspace-port.port-in { border-color:var(--rr-success-border); color:var(--rr-success-text); box-shadow:0 0 0 3px var(--rr-success-surface); }
 .creative-card .workflow-card-body { display:block; padding:0; }
 .canvas-object :is(.canvas-video-card,.canvas-media-card,.canvas-text-card,.preview-stage) { cursor:grab; }
 .canvas-dragging .canvas-object :is(.canvas-video-card,.canvas-media-card,.canvas-text-card,.preview-stage) { cursor:grabbing; }
@@ -2153,7 +2217,9 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-node-artifacts a:hover,.canvas-node-artifacts a:focus-visible { background:var(--rr-surface-raised,var(--rr-surface)); color:var(--rr-accent); }
 .canvas-node-artifacts a span { flex:1; overflow-wrap:anywhere; }
 .node-run-badge { position:absolute; right:10px; top:8px; padding:2px 7px; border-radius:10px; background:var(--rr-surface); color:var(--rr-heading); font-size:11px; pointer-events:none; }
-.workflow-card-disabled { opacity:.62; }
+/* P0-4：停用是状态，不是类型。虚线边框 + 降透明度 + 标题划线，运行时由 run 跳过。 */
+.workflow-card-disabled { opacity:.62; outline:1px dashed var(--rr-border-strong); outline-offset:-1px; }
+.workflow-card-disabled .canvas-drag-handle { text-decoration:line-through; }
 .video-workspace { position:absolute; inset:0; overflow:clip; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
 .video-workspace:focus { outline:none; }
 .creation-stage { position:absolute; width:calc(var(--canvas-card-width,380px) + 260px); display:flex; flex-direction:column; align-items:center; }

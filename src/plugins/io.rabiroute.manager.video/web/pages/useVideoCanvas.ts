@@ -111,9 +111,10 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
     if (selectedIds.value.length === 1) visible.add(selectedIds.value[0]!);
     return visible;
   });
+  // Every card exposes exactly one input and one output port. The edge type is
+  // decided when the drop lands, so the geometry must not vary by node kind.
   function portOffsets(id: string) {
-    const center = CARD_HEADER + cardSize(id).height / 2;
-    return { step: 72, input: center + 26, content: positions.value[id]?.height === undefined ? 140 : center < 96 ? 45 : center };
+    return { io: Math.round(CARD_HEADER + cardSize(id).height / 2) };
   }
 
   const minimap = computed(() => {
@@ -142,7 +143,7 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
     const ports = portOffsets(id);
     return { left: `${point.x}px`, top: `${point.y}px`, "--canvas-card-width": point.width === undefined ? undefined : `${width}px`,
       "--canvas-card-height": point.height === undefined ? undefined : `${height}px`,
-      "--canvas-content-port": `${ports.content}px`, "--canvas-input-port": `${ports.input}px` };
+      "--canvas-port": `${ports.io}px` };
   }
   function zoom(value: number, anchor?: Point) {
     const element = viewport.value;
