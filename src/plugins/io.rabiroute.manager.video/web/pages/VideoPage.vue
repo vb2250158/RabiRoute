@@ -2136,7 +2136,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <button class="workspace-port port-out" data-card-output="out" :data-card-id="node.id"
           aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, node.id)" @click.stop="armPortFromKeyboard($event, node.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
         <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @keydown="nudgeCard($event,node.id)">
-          <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<v-icon icon="mdi-drag" size="16"/>
+          <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}
+          <!-- §2.1: 硬闸 / 需确认 / 已禁用 are states on the title row, not new node types. -->
+          <span v-if="node.gate === true || node.config?.gate === true" class="workflow-title-badge gate">硬闸</span>
+          <span v-if="node.approval === true || node.config?.approval === true" class="workflow-title-badge approval">需确认</span>
+          <span v-if="node.enabled === false" class="workflow-title-badge disabled">已禁用</span>
+          <v-icon icon="mdi-drag" size="16"/>
         </button>
         <div class="workflow-card-body canvas-text-card" data-canvas-card-body>
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
@@ -2399,6 +2404,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .card-inline-text { position:relative; margin:0; max-height:100%; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:12px; line-height:1.6; color:var(--rr-text); -webkit-mask-image:linear-gradient(180deg,#000 70%,transparent); mask-image:linear-gradient(180deg,#000 70%,transparent); }
 .card-inline-text.truncated { --fade:1; }
 .card-inline-empty { color:var(--rr-muted); }
+/* §2.1：标题行的状态徽章（硬闸黄 / 需确认紫 / 已禁用灰）。 */
+.workflow-title-badge { margin-left:6px; padding:0 6px; border-radius:8px; font-size:10px; line-height:1.6; }
+.workflow-title-badge.gate { background:var(--rr-warning-surface); border:1px solid var(--rr-warning-border); color:var(--rr-warning-text); }
+.workflow-title-badge.approval { background:var(--rr-accent-surface); border:1px solid var(--rr-accent-border); color:var(--rr-accent-text); }
+.workflow-title-badge.disabled { background:var(--rr-subtle); border:1px solid var(--rr-border); color:var(--rr-muted); }
 /* §5.3：一套「输入材料」列表，每行 源节点名 + 产物图标 + ↗ 定位 + × 移除。 */
 .canvas-input-list { display:flex; flex-direction:column; gap:2px; margin:0 0 10px; padding:0; list-style:none; }
 .canvas-input-list > li { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; background:var(--rr-subtle); font-size:12px; }
