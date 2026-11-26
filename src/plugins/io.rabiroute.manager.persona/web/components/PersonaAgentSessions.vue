@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
 import { usePersonaService } from '../persona/personaServiceClient';
 import { createAgentSessionClient, agentSessionProject, agentSessionMembersAvailable, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
-import { agentHistoryMessages, latestAgentConversationPage, type AgentHistoryEvent, type AgentSessionMessage, type LoadOlderAgentHistory } from '../persona/agentSessionHistory';
+import { agentHistoryMessages, latestAgentConversationPage, type AgentHistoryEvent, type AgentSessionMessage, type LoadOlderAgentHistory } from '../../../../../ribiwebgui/src/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';

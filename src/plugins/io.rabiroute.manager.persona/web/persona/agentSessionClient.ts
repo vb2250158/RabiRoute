@@ -1,5 +1,5 @@
 import { agentMessagePreview } from '@shared/agentSessionMessages';
-import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from './agentSessionHistory';
+import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor } from '../../../../../ribiwebgui/src/agentSessionHistory';
 import type { GatewayDefinition } from '@shared/gatewayConfigModel';
 import { normalizeRouteAgentTargets, type RouteAgentTarget } from '@shared/routeAgentTargets';
 import { normalizeAgentInstanceBinding } from '@shared/agentInstance';
