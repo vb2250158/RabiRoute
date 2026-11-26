@@ -5,7 +5,7 @@ import { parsePluginManifest } from "../plugin-kernel/manifest.js";
 import { parsePluginProfile, type PluginPackageCatalog } from "../plugin-kernel/profile.js";
 import type { PluginPackageStore } from "./pluginPackageStore.js";
 import type { PluginManifest } from "../plugin-kernel/types.js";
-import type { PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
+import { PluginSettingsConflict, type PluginProfileSettings } from "../plugin-runtime-host/profileSettings.js";
 import type { PluginCatalogApiContext, PluginCatalogInvocation } from "./pluginCatalogRoutes.js";
 
 /** Listing an inactive package needs its manifest, never executable package preparation. */
@@ -72,6 +72,7 @@ export function createPluginManagement(options: {
       applicationGenerationId: generation.applicationGenerationId,
       managerInstanceId: generation.managerInstanceId,
       revision: snapshot.revision,
+      removedInstances: snapshot.removedInstances.map(instance => ({ instanceId: instance.id, pluginId: instance.package, version: instance.version })),
       profileMigrations: snapshot.profile.migrations ?? [],
       profileDiagnostics: snapshot.profile.diagnostics ?? [],
       instances: instances.flatMap((instance, index) => {
@@ -155,6 +156,21 @@ export function createPluginManagement(options: {
       return list(invocation);
     },
     async update(instanceId, input, invocation) {
+      if (input.version !== undefined) {
+        invocation.assertCurrent();
+        const before = await options.settings.snapshot();
+        invocation.assertCurrent();
+        if (before.revision !== input.expectedRevision) throw new PluginSettingsConflict();
+        const instance = before.profile.instances.find(item => item.id === instanceId);
+        if (!instance) throw Object.assign(new Error("Plugin instance was not found."), { status: 404, code: "PLUGIN_INSTANCE_NOT_FOUND" });
+        const selection = parsePluginProfile({ schemaVersion: 2, readyRequires: [], instances: [{ ...instance, version: input.version }] }).instances[0];
+        if (!selection) throw Object.assign(new Error("Plugin version is invalid."), { status: 400 });
+        const manifest = await options.manifest(selection.package, selection.version);
+        if (options.packages && options.packageSource) {
+          await options.packages.importDirectory(await options.packageSource(manifest.id, manifest.version), invocation.assertCurrent, manifest);
+        }
+        input = { ...input, version: selection.version };
+      }
       await options.settings.update(instanceId, input, invocation.assertCurrent);
       await options.reconcile();
       options.changed?.();

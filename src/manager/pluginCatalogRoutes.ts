@@ -18,7 +18,7 @@ export type PluginCatalogApiContext = {
   root?: () => string;
   management?: {
     list(invocation: PluginCatalogInvocation): Promise<unknown>;
-    update(instanceId: string, input: { expectedRevision: string; enabled: boolean }, invocation: PluginCatalogInvocation): Promise<unknown>;
+    update(instanceId: string, input: { expectedRevision: string; enabled?: boolean; version?: string }, invocation: PluginCatalogInvocation): Promise<unknown>;
     packages?(invocation: PluginCatalogInvocation): Promise<unknown>;
     importPackage?(sourceDirectory: string, invocation: PluginCatalogInvocation): Promise<unknown>;
     inspectUrl?(url: string, invocation: PluginCatalogInvocation, subdirectory?: string): Promise<unknown>;

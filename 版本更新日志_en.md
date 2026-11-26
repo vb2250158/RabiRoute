@@ -8,6 +8,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.99 - 2026-11-27
+
+- Consolidate installed plugin lifecycle and computer-control guidance: CAS selection of imported versions, preservation on failure, and restoration of original uninstalled instances and data. Computer-control search prioritizes execution and explains observation, batches, readback and human takeover.
+- Synchronize Core 0.1.35 and SDK 0.4.15; Android source is unchanged and retains the verified 0.3.75-dev (78) installation.
+
 - Release compact screenshot references and capture of the original observed region (Core 0.1.34, SDK 0.4.14). Android retains the verified 0.3.75-dev (78) build.
 - Allow a transport-only host reconnect while terminals or tasks are busy, preserving the worker, native terminals and input sequence. Stopping, draining, updates and candidate transitions still prevent reconnection. Existing older launchers gain this behavior only after adoption through their normal lifecycle.
 

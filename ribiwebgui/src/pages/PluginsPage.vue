@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "../i18n/index";
 import { userFacingError } from "../userFacingError";
-import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, readAvailablePluginPackages, importPluginPackage, inspectPluginPackageUrl, importPluginPackageUrl, installManagedPlugin, uninstallManagedPlugin, type AvailablePluginPackage, type RemoteArchiveInspection, type ManagedPlugin } from "../pluginManagementClient";
+import { filterManagedPlugins, pluginDisplayName, readPluginManagementCatalog, updateManagedPlugin, readAvailablePluginPackages, importPluginPackage, inspectPluginPackageUrl, importPluginPackageUrl, installManagedPlugin, uninstallManagedPlugin, type AvailablePluginPackage, type RemoteArchiveInspection, type ManagedPlugin, type RemovedPluginInstance } from "../pluginManagementClient";
 import { pluginCatalogStore } from "../pluginCatalogStore";
 import { refreshWebPluginCatalog } from "../pluginModuleBootstrap";
 
@@ -12,6 +12,8 @@ const route = useRoute();
 const router = useRouter();
 const plugins = ref<readonly ManagedPlugin[]>([]);
 const packages = ref<readonly AvailablePluginPackage[]>([]);
+const removedInstances = ref<readonly RemovedPluginInstance[]>([]);
+const versionChoice = ref("");
 const packageError = ref("");
 const packageNotice = ref("");
 const sourceDirectory = ref("");
@@ -41,6 +43,19 @@ let readSequence = 0;
 let refreshQueued = false;
 let saveQueue: Promise<void> = Promise.resolve();
 const selected = computed(() => plugins.value.find(plugin => plugin.instanceId === route.query.instance));
+const otherVersions = computed(() => {
+  const plugin = selected.value;
+  if (!plugin) return [];
+  return packages.value.filter(pack => pack.pluginId === plugin.pluginId
+    && (pack.version !== plugin.manifest.version || plugin.error && pack.version !== plugin.runningVersion)).map(pack => pack.version);
+});
+const restorableInstances = computed(() => {
+  const available = new Map(packages.value.map(pack => [packageKey(pack), pack]));
+  return removedInstances.value.flatMap(instance => {
+    const pack = available.get(packageKey(instance));
+    return pack ? [{ instance, pack }] : [];
+  });
+});
 const visiblePlugins = computed(() => filterManagedPlugins(plugins.value, query.value || "", status.value));
 const activeCount = computed(() => plugins.value.filter(plugin => plugin.status === "active").length);
 const statusLabels: Record<string, string> = {
@@ -76,14 +91,12 @@ async function refresh(): Promise<void> {
     if (native.status === "rejected") throw native.reason;
     const catalog = native.value;
     if (!live || sequence !== readSequence) return;
-    plugins.value = catalog.plugins;
-    revision.value = catalog.revision;
-    loaded.value = true;
+    acceptCatalog(catalog);
   } catch (cause) {
     if (live && sequence === readSequence && !controller.signal.aborted) error.value = userFacingError(cause);
   } finally { loading.value = false; if (refreshQueued && live) { refreshQueued = false; void refresh(); } }
 }
-async function togglePlugin(plugin: ManagedPlugin, enabled: boolean): Promise<void> {
+async function togglePlugin(plugin: ManagedPlugin, change: boolean | { version: string }): Promise<void> {
   if (saving.value.has(plugin.instanceId) || !plugin.installed) return;
   saving.value = new Set([...saving.value, plugin.instanceId]);
   delete rowErrors.value[plugin.instanceId];
@@ -92,13 +105,13 @@ async function togglePlugin(plugin: ManagedPlugin, enabled: boolean): Promise<vo
   saveQueue = saveQueue.then(async () => {
     if (!live) return;
     try {
-      await updateManagedPlugin(plugin.instanceId, revision.value, enabled);
+      await updateManagedPlugin(plugin.instanceId, revision.value, change);
       const catalog = await readPluginManagementCatalog();
       if (!live) return;
-      ++readSequence;
-      plugins.value = catalog.plugins;
-      revision.value = catalog.revision;
-      if (catalog.plugins.find(item => item.instanceId === plugin.instanceId)?.enabled !== enabled) {
+      acceptCatalog(catalog);
+      const instance = catalog.plugins.find(item => item.instanceId === plugin.instanceId);
+      const matches = typeof change === "boolean" ? instance?.enabled === change : instance?.manifest.version === change.version;
+      if (!matches) {
         rowErrors.value[plugin.instanceId] = t("插件状态未确认，请刷新后查看。");
       }
       void refreshWebPluginCatalog(true);
@@ -109,7 +122,7 @@ async function togglePlugin(plugin: ManagedPlugin, enabled: boolean): Promise<vo
         // Read its original state without replaying the mutation.
         try {
           const catalog = await readPluginManagementCatalog();
-          if (live) { ++readSequence; plugins.value = catalog.plugins; revision.value = catalog.revision; }
+          if (live) acceptCatalog(catalog);
         } catch { /* Keep the original operation error and the last confirmed list. */ }
       }
     } finally {
@@ -118,9 +131,15 @@ async function togglePlugin(plugin: ManagedPlugin, enabled: boolean): Promise<vo
   });
   await saveQueue;
 }
-function packageKey(plugin: AvailablePluginPackage): string { return `${plugin.pluginId}@${plugin.version}`; }
+function packageKey(plugin: Pick<AvailablePluginPackage, "pluginId" | "version">): string { return `${plugin.pluginId}@${plugin.version}`; }
 function acceptCatalog(catalog: Awaited<ReturnType<typeof readPluginManagementCatalog>>): void {
-  ++readSequence; plugins.value = catalog.plugins; revision.value = catalog.revision; loaded.value = true;
+  ++readSequence; plugins.value = catalog.plugins; removedInstances.value = catalog.removedInstances; revision.value = catalog.revision; loaded.value = true;
+}
+async function selectVersion(plugin: ManagedPlugin): Promise<void> {
+  const version = versionChoice.value;
+  if (!otherVersions.value.includes(version)) return;
+  versionChoice.value = "";
+  await togglePlugin(plugin, { version });
 }
 async function refreshResources(): Promise<void> {
   try { packages.value = await readAvailablePluginPackages(); } catch (cause) { packageError.value = userFacingError(cause); }
@@ -175,10 +194,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1048576).toFixed(1)} MB`;
 }
-async function installPackage(plugin: AvailablePluginPackage): Promise<void> {
-  const key = packageKey(plugin);
+async function installPackage(plugin: AvailablePluginPackage, originalInstanceId?: string): Promise<void> {
+  const key = originalInstanceId ?? packageKey(plugin);
   if (installing.value.has(key)) return;
-  const instanceId = `plugin:${crypto.randomUUID()}`;
+  const instanceId = originalInstanceId ?? `plugin:${crypto.randomUUID()}`;
   installing.value = new Set([...installing.value, key]); packageError.value = ""; packageNotice.value = "";
   saveQueue = saveQueue.then(async () => {
     if (!live) return;
@@ -191,7 +210,7 @@ async function installPackage(plugin: AvailablePluginPackage): Promise<void> {
         packageError.value = userFacingError(cause);
         try {
           const catalog = await readPluginManagementCatalog(); if (!live) return; acceptCatalog(catalog);
-          if (catalog.plugins.some(item => item.instanceId === instanceId)) packageNotice.value = t("已读取到该安装实例，请查看其运行状态。");
+          if (catalog.plugins.some(item => item.instanceId === instanceId && item.installed)) packageNotice.value = t("已读取到该安装实例，请查看其运行状态。");
         } catch { /* Reread only, never replay an uncertain install. */ }
       }
     } finally { installing.value = new Set([...installing.value].filter(id => id !== key)); }
@@ -227,6 +246,7 @@ async function uninstallPlugin(plugin: ManagedPlugin): Promise<void> {
 }
 // Reuse the shell's existing plugin catalog event refresh, without another timer or EventSource.
 watch(() => pluginCatalogStore.contributions.value, () => { if (live) void refresh(); });
+watch(() => selected.value?.instanceId, () => { versionChoice.value = ""; });
 onMounted(refresh);
 onBeforeUnmount(() => { live = false; controller?.abort(); });
 </script>
@@ -261,6 +281,10 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
         {{ t("缺少依赖") }}: {{ selected.missingCapabilities.join(", ") }}
       </v-alert>
       <section class="plugin-detail-section">
+        <form v-if="selected.installed && otherVersions.length" class="plugin-import" @submit.prevent="selectVersion(selected)">
+          <v-select v-model="versionChoice" :items="otherVersions" :label="t('已导入版本')" variant="outlined" density="compact" hide-details />
+          <v-btn type="submit" variant="tonal" :loading="saving.has(selected.instanceId)" :disabled="!versionChoice || saving.has(selected.instanceId)">{{ t("切换版本") }}</v-btn>
+        </form>
         <v-btn v-if="selected.installed" variant="outlined" color="error" :loading="saving.has(selected.instanceId)" :disabled="saving.has(selected.instanceId)" @click="uninstallPlugin(selected)">{{ t("卸载插件") }}</v-btn>
         <p class="section-note">{{ t("卸载保留设置和用户数据，之后可以重新安装。") }}</p>
       </section>
@@ -313,6 +337,16 @@ onBeforeUnmount(() => { live = false; controller?.abort(); });
         <v-btn type="submit" variant="tonal" :loading="importing" :disabled="importing || !sourceDirectory.trim()">{{ t("导入目录") }}</v-btn>
       </form>
       <v-btn variant="text" prepend-icon="mdi-link-variant" class="plugin-url-button" @click="openUrlDialog">{{ t("从 URL 安装") }}</v-btn>
+      <template v-if="restorableInstances.length">
+        <h3>{{ t("已卸载实例") }}</h3>
+        <ul class="plugin-list">
+          <li v-for="{ instance, pack } in restorableInstances" :key="instance.instanceId" class="plugin-list-row">
+            <span class="plugin-icon"><v-icon :icon="pack.manifest.icon || 'mdi-puzzle-outline'" /></span>
+            <span class="plugin-row-copy"><strong>{{ t(pack.manifest.displayName || pack.pluginId) }}</strong><span class="plugin-identifier">{{ instance.instanceId }} · v{{ instance.version }}</span></span>
+            <v-btn variant="tonal" class="plugin-install-button" :loading="installing.has(instance.instanceId)" :disabled="installing.has(instance.instanceId)" @click="installPackage(pack, instance.instanceId)">{{ t("恢复实例") }}</v-btn>
+          </li>
+        </ul>
+      </template>
       <ul class="plugin-list">
         <li v-for="plugin in packages" :key="packageKey(plugin)" class="plugin-list-row">
           <span class="plugin-icon"><v-icon :icon="plugin.manifest.icon || 'mdi-puzzle-outline'" /></span>

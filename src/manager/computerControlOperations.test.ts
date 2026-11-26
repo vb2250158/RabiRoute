@@ -17,6 +17,7 @@ import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js
 import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
 import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import { createUnifiedSearchOperation } from "./unifiedSearchOperations.js";
 
 
 async function fixture(t: import("node:test").TestContext, makeLocal?: (instanceId:string,emit:(event:Record<string,unknown>)=>void,config:ManagerConfigRepository,root:string)=>ManagerLocalComputer, resolveDefinition?:()=>ComputerSettingsDefinition) {
@@ -46,6 +47,46 @@ test("settings HTTP shares original owner, strong ETag and healthy public discov
  const sdk=createOperationSdk({request:async(method:string,url:string,options:any={})=>{const response=await fetch(f.base+url,{method,headers:options.headers,body:options.body});return {ok:response.ok,statusCode:response.status,headers:Object.fromEntries(response.headers),body:await response.text()};}});
  const described=await sdk.describe("manager.lan-agent.computer-settings.read");assert.equal(described.operation.id,"manager.lan-agent.computer-settings.read");
 });
+
+test("API search and describe expose the computer workflow and control lifecycle", async t => {
+  const f = await fixture(t);
+  const search = f.api.registerOperations("unified-search", [createUnifiedSearchOperation(f.api, {
+    roles: () => [], roleDirectory: () => "unused",
+    queryHistory: async () => { throw Error("An operations search must not read message history"); },
+    entities: async () => { throw Error("An operations search must not read device entities"); },
+  })]);
+  t.after(() => search.dispose());
+  const { createOperationSdk } = await import(new URL("../../apps/rabi-agent/lib/operation-sdk.mjs", import.meta.url).href);
+  const sdk = createOperationSdk({ request: async (method: string, url: string, options: any = {}) => {
+    const response = await fetch(f.base + url, { method, headers: options.headers, body: options.body });
+    return { ok: response.ok, statusCode: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };
+  } });
+  const id = "manager.lan-agent.computer.execute";
+  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入"].map(query => sdk.search(query)));
+  assert.equal(results[0].items[0].operationId, id);
+  for (const { items } of results) {
+    const entry = items.find((item: { operationId: string }) => item.operationId === id);
+    assert.match(entry?.summary ?? "", /screen\.capture.*input\.perform.*自动退出控制/);
+  }
+  const settings = await sdk.search("电脑控制设置");
+  assert.match(settings.items[0].operationId, /^manager\.lan-agent\.computer-settings\./);
+  const unified = await fetch(f.base + "/api/search?" + new URLSearchParams({ q: "电脑控制", scope: "operations" }));
+  assert.equal(unified.status, 200);
+  const { data } = await unified.json() as { data: { items: { excerpt: string; handle: { operationId: string } }[] } };
+  assert.equal(data.items[0]?.handle.operationId, id);
+  assert.equal(data.items[0]?.excerpt, results[0].items[0].summary);
+  const { operation } = await sdk.describe(id);
+  const description = operation.request.body.schema.description;
+  for (const term of ["imageView", "readable state", "capture that area again", "captureAfter", "task-specific rules", "controlCleanup", "physical takeover"]) {
+    assert.ok(description.includes(term), term);
+  }
+  const capture = operation.request.body.schema.anyOf.find((branch: any) => branch.properties?.action?.const === "screen.capture");
+  assert.match(capture.properties.maxWidth.description, /only downsizes/);
+  assert.equal(operation.effects.request.modes["screen.capture"], "read");
+  assert.equal(operation.effects.request.modes["input.perform"], "write");
+  assert.match(operation.recovery.description, /input\.status.*original requestId/);
+});
+
 test("new work uses feature settings but original receipt and cleanup actions remain available",async t=>{
  const f=await fixture(t);let calls=0;
  const stub={computerExecutionSource:()=>({sourceId:"fixture"}),getComputerSettings:()=>f.config.readComputerSettings(),getComputerSettingsRaw:()=>f.config.readComputerSettingsRaw(),computerCapabilities:()=>["input","annotation","tracking","files"],manageAgent:async()=>{calls++;return {state:"absent"};}};

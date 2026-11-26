@@ -193,7 +193,8 @@ export async function readPluginProfile(profilePath: string, options: Readonly<{
 }
 
 /** Apply only declared package migrations to an already parsed effective profile. */
-export async function migratePluginProfile(profile: PluginProfile, migrationsPath: string): Promise<PluginProfile> {
+export async function migratePluginProfile(profile: PluginProfile, migrationsPath: string,
+  pinnedInstances: ReadonlySet<string> = new Set()): Promise<PluginProfile> {
   let migrationText: string;
   try { migrationText = await fs.readFile(migrationsPath, "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return profile; throw error; }
@@ -223,6 +224,7 @@ export async function migratePluginProfile(profile: PluginProfile, migrationsPat
   });
   const migrations: PluginProfileMigration[] = [];
   const instances = profile.instances.flatMap(instance => {
+    if (pinnedInstances.has(instance.id)) return [instance];
     const targets = mappings.get(JSON.stringify([instance.package, instance.version]));
     if (!targets) return [instance];
     if (targets.size > 1) {

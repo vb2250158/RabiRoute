@@ -9,21 +9,24 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
     const action = update ? "instances.update" : "instances.read";
     const empty = { type: "object", additionalProperties: false };
     const contract: ApiOperationContract = {
-      operationId: `manager.plugins.${action}`, contractVersion: "1.0.0", method: update ? "PATCH" : "GET",
+      operationId: `manager.plugins.${action}`, contractVersion: "1.1.0", method: update ? "PATCH" : "GET",
       pathTemplate: update ? "/api/plugins/instances/:id" : "/api/plugins/instances", exposure: "public", transport: "http",
-      description: update ? "Save one plugin instance's enabled setting with revision CAS and start native asynchronous reconciliation; read actual lifecycle status separately."
+      description: update ? "Set the enabled state or select an installed version of the same plugin instance with revision CAS. Version selection preserves the enabled state unless explicitly supplied. Read actual lifecycle status separately."
         : "List configured plugin instances, including disabled and failed instances, without exposing raw configuration.",
       request: {
         path: update ? { type: "object", required: ["id"], additionalProperties: false, properties: { id: { type: "string", minLength: 1 } } } : empty,
         query: empty, headers: { type: "object" },
-        body: update ? { kind: "json", maxBytes: 2048, schema: { type: "object", required: ["expectedRevision", "enabled"], additionalProperties: false,
-          properties: { expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" }, enabled: { type: "boolean" } } } } : { kind: "none" }
+        body: update ? { kind: "json", maxBytes: 2048, schema: { type: "object", required: ["expectedRevision"], minProperties: 2, additionalProperties: false,
+          properties: { expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" }, enabled: { type: "boolean" },
+            version: { type: "string", pattern: "^[0-9A-Za-z][0-9A-Za-z.+_-]{0,79}$" } } } } : { kind: "none" }
       },
       responses: {
         "200": { mediaType: "application/json; charset=utf-8", schema: { type: "object", required: ["code", "data"], properties: {
           code: { const: 0 }, data: { type: "object", required: ["applicationGenerationId", "managerInstanceId", "revision", "instances"], properties: {
             applicationGenerationId: { type: "string", minLength: 1 }, managerInstanceId: { type: "string", minLength: 1 },
-            revision: { type: "string" }, instances: { type: "array", items: { type: "object", required: ["instanceId", "pluginId", "version", "enabled", "status"], properties: {
+            revision: { type: "string" }, removedInstances: { type: "array", items: { type: "object", required: ["instanceId", "pluginId", "version"], properties: {
+              instanceId: { type: "string" }, pluginId: { type: "string" }, version: { type: "string" }
+            } } }, instances: { type: "array", items: { type: "object", required: ["instanceId", "pluginId", "version", "enabled", "status"], properties: {
               instanceId: { type: "string" }, pluginId: { type: "string" }, version: { type: "string" }, runningVersion: { type: "string" }, enabled: { type: "boolean" }, status: { type: "string" }
             } } }
           } }
@@ -43,17 +46,18 @@ export function createPluginManagementOperations(context: PluginCatalogApiContex
     const prepare = (input: Omit<ApiOperationInput, "body">) => {
       const bound = owner.prepare(input.request, action, input.signal);
       return (parsed: ApiOperationInput) => {
-        const body = parsed.body as { expectedRevision?: string; enabled?: boolean } | undefined;
-        return bound.execute({ id: parsed.path.id, expectedRevision: body?.expectedRevision, enabled: body?.enabled });
+        const body = parsed.body as { expectedRevision?: string; enabled?: boolean; version?: string } | undefined;
+        return bound.execute({ id: parsed.path.id, expectedRevision: body?.expectedRevision, enabled: body?.enabled, version: body?.version });
       };
     };
     return { contract, discovery: {
-      title: update ? '修改插件实例启用状态' : '查看插件实例运行状态',
-      summary: update ? '使用当前 revision 保存实例启用设置，并读取实际 runningVersion 与状态确认结果。' : '读取插件实例、保存设置、实际运行版本及当前 revision。',
+      title: update ? '修改插件实例状态或切换版本' : '查看插件实例运行状态',
+      summary: update ? '使用当前 revision 修改启用状态，或选择原实例所属插件的已导入版本，再读取实际 runningVersion 和状态。' : '读取插件实例、可恢复的卸载实例、实际运行版本及当前 revision。',
       category: { id: 'runtime', title: '插件与运行' }, keywords: ['插件', '查看插件', 'plugin instances', update ? '启用插件' : 'plugin status'],
       ...(update ? { inputSources: [
         { field: 'path.id', operationId: 'manager.plugins.instances.read', resultPath: '/data/instances', valuePath: '/instanceId' },
-        { field: 'body.expectedRevision', operationId: 'manager.plugins.instances.read', resultPath: '/data/revision' }
+        { field: 'body.expectedRevision', operationId: 'manager.plugins.instances.read', resultPath: '/data/revision' },
+        { field: 'body.version', operationId: 'manager.plugins.packages.list', resultPath: '/data/packages', valuePath: '/version' }
       ] } : {}), relatedOperations: ['manager.plugins.packages.list', 'manager.plugins.instances.read']
     }, prepare, handler: input => prepare(input)(input) };
   });

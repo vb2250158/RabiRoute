@@ -10,21 +10,24 @@ import { createPluginManagement, readPluginManagementManifest } from "./pluginMa
 import { createPluginManagementOperations } from "./pluginManagementOperations.js";
 import { PluginPackageStore } from "./pluginPackageStore.js";
 import { createPluginCatalogOwner } from "./pluginCatalogOwner.js";
+import { PluginProfilePublication } from "./pluginProfilePublication.js";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 
-async function fixture(t: test.TestContext, readOnly = false, background = false) {
+async function fixture(t: test.TestContext, readOnly = false, background = false, trackWeb = false) {
   const f = await pluginCatalogFixture(t);
   const settings = new PluginProfileSettings({ profilePath: f.profilePath, settingsRoot: path.join(f.root, "settings") });
   const packageRoot = path.join(f.root, "packages"), runtimeRoot = path.join(f.root, "management-runtime");
   const packages = new PluginPackageCatalog([packageRoot], { trustedInProcessRoots: [packageRoot] });
+  const publication = trackWeb ? new PluginProfilePublication() : undefined;
   f.context.management = createPluginManagement({ runtime: f.runtime, settings,
     packages: new PluginPackageStore({ roots: [packageRoot], managedRoot: packageRoot, importRuntimeRoot: path.join(f.root, "imports") }),
     manifest: (id, version) => readPluginManagementManifest(packages, id, version),
     reconcile: async () => {
       const loaded = await loadPluginProfile({ profilePath: f.profilePath, profile: (await settings.snapshot()).profile,
         packageCatalog: packages, runtimeRoot, host: "manager" });
-      await f.runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires, initialization: background ? "background" : "await" });
+      const result = await f.runtime.switch(loaded.candidates, { readyRequires: loaded.profile.readyRequires, initialization: background ? "background" : "await" });
+      if (publication) f.modules.update(publication.capture(loaded, result.generation).profile!, result.generation);
     }
   });
   const registration = f.registry.registerOperations("host:management", createPluginManagementOperations(f.context, readOnly));
@@ -47,14 +50,67 @@ test("actual management HTTP uninstalls and reinstalls the original plugin insta
   assert.equal(response.status, 200, await response.clone().text());
   value = await f.list();
   assert.equal(value.instances.length, 0);
+  assert.deepEqual(value.removedInstances, [{ instanceId: "manager:catalog", pluginId: "io.test.catalog", version: "1.0.0" }]);
   assert.equal(f.runtime.current().records.length, 0);
   response = await f.fetch("/api/plugins/instances", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ expectedRevision: value.revision, pluginId: "io.test.catalog", version: "1.0.0" }) });
+    body: JSON.stringify({ expectedRevision: value.revision, pluginId: "io.test.catalog", version: "1.0.0", instanceId: value.removedInstances[0].instanceId }) });
   assert.equal(response.status, 200, await response.clone().text());
   value = await f.list();
   assert.equal(value.instances[0]?.instanceId, "manager:catalog");
   assert.equal(value.instances[0]?.status, "active");
+  assert.deepEqual(value.removedInstances, []);
   assert.deepEqual(await fs.readFile(f.profilePath), original);
+});
+
+test("HTTP selects and rolls back an immutable plugin in the same Manager with its Web revision and settings", async t => {
+  const f = await fixture(t, false, false, true);
+  const instanceId = "manager:catalog";
+  const old = await f.list();
+  const original = old.instances[0];
+  const installedManifest = JSON.parse(await fs.readFile(path.join(f.packageDirectory, "rabi.plugin.json"), "utf8"));
+  for (const version of ["2.0.0", "3.0.0"]) {
+    const directory = path.join(path.dirname(f.packageDirectory), version);
+    await fs.cp(f.packageDirectory, directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "rabi.plugin.json"), JSON.stringify({ ...installedManifest, version }));
+    await fs.writeFile(path.join(directory, "web", "nested", "client.mjs"), `export const version = ${JSON.stringify(version)};`);
+    if (version === "3.0.0") await fs.writeFile(path.join(directory, "manager.mjs"), 'export function activate() { throw Error("candidate failed"); }');
+  }
+  const configured = await f.settings.update(instanceId, { expectedRevision: old.revision, config: { account: "original" } });
+  const select = (expectedRevision: string, change: { version: string } | { enabled: boolean }) => f.fetch("/api/plugins/instances/manager%3Acatalog", {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, ...change })
+  });
+  assert.equal((await select(old.revision, { version: "2.0.0" })).status, 409);
+  assert.equal((await select(configured.revision, { version: "2.0.0" })).status, 200);
+  const updated = await f.list();
+  const active = updated.instances[0];
+  assert.equal(active.instanceId, instanceId);
+  assert.equal(active.runningVersion, "2.0.0");
+  assert.notEqual(active.runningActivationId, original.runningActivationId);
+  assert.equal(updated.applicationGenerationId, old.applicationGenerationId);
+  assert.equal(updated.managerInstanceId, old.managerInstanceId);
+  const browserModule = f.modules.list()[0]!;
+  assert.equal(browserModule.rev, active.runningPackageHash);
+  const asset = await f.fetch(`/api/plugins/modules/${browserModule.id}/${browserModule.rev}/${browserModule.entryPath}`);
+  assert.equal(await asset.text(), 'export const version = "2.0.0";');
+
+  assert.equal((await select(updated.revision, { version: "3.0.0" })).status, 200);
+  const rejected = await f.list();
+  assert.equal(rejected.instances[0].version, "3.0.0");
+  assert.equal(rejected.instances[0].runningActivationId, active.runningActivationId);
+  assert.match(rejected.instances[0].error, /candidate failed/);
+  assert.equal(f.modules.list()[0]?.rev, browserModule.rev);
+
+  assert.equal((await select(rejected.revision, { version: "1.0.0" })).status, 200);
+  const restored = await f.list();
+  assert.equal(restored.instances[0].runningPackageHash, original.runningPackageHash);
+  assert.equal((await select(restored.revision, { enabled: false })).status, 200);
+  const disabled = await f.list();
+  assert.equal((await select(disabled.revision, { version: "2.0.0" })).status, 200);
+  const saved = await f.list();
+  assert.equal(saved.instances[0].version, "2.0.0");
+  assert.equal(saved.instances[0].status, "disabled");
+  assert.equal(saved.instances[0].runningVersion, undefined);
+  assert.deepEqual((await f.settings.snapshot()).profile.instances[0]?.config, { account: "original" });
 });
 
 test("actual HTTP package import and available package listing use the original immutable package owner", async t => {

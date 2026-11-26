@@ -94,6 +94,10 @@ context.publication.add({
 
 ## 同版本包的来源
 
+通过 `manager.plugins.instances.update` 对原实例 PATCH `expectedRevision` 和 `version`，Manager 先核验同一插件的已导入包，再经原设置事务固定版本并协调生效。省略 `enabled` 沿用原启用状态。明确选定的版本随实例设置持久化，发行 Profile 的默认版本迁移继续应用于沿用默认版本的实例。选中的包仍按本代依赖与激活合同验证。候选启动失败时，从实例读回运行包哈希和失败原因。
+
+`GET /api/plugins/instances` 的 `removedInstances` 提供卸载时保留的 `instanceId`、`pluginId` 和 `version`。恢复时通过原安装操作提交这些值和当前 `expectedRevision`，沿用原配置和存储身份。退役进度继续从 `instances[].retiringActivations` 读取。
+
 指定版本的目录按 managed、bundled、additional 顺序定位，随后完成包合法性、执行策略与授权目录校验。独立安装的原包跨 Host 更新继续采用其原内容摘要。
 
 导入会核对所有根中的同版本内容摘要，确认相同后复用已有包。任一来源存在同版本内容冲突时返回 `PLUGIN_PACKAGE_VERSION_CONFLICT`，后续差量使用递增插件版本发布。

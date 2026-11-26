@@ -94,6 +94,10 @@ Here `bridge` is an existing stable host bridge, while `service` and `ownedWorke
 
 ## Package sources for the same version
 
+Use `manager.plugins.instances.update` to PATCH the original instance with `expectedRevision` and `version`. Manager verifies an imported package for the same plugin, pins the version through the existing settings transaction, and reconciles it. Omitting `enabled` preserves the current enabled state. The explicit choice persists with the instance. Release profile migrations continue to apply to instances following the default version. The selected package goes through the current dependency and activation checks. If startup fails, read the running package hash and error on the instance.
+
+`removedInstances` in `GET /api/plugins/instances` reports the `instanceId`, `pluginId` and `version` retained after uninstall. Supply those values and the current `expectedRevision` to the existing install operation to restore the original settings and storage identity. Retirement progress remains available in `instances[].retiringActivations`.
+
 A selected version is located in managed, bundled, then additional roots, followed by package, execution-policy and authorized-root validation. Independently installed packages retain their original content digest across Host updates.
 
 Import checks the same version in every root before reusing an existing package. A differing digest returns `PLUGIN_PACKAGE_VERSION_CONFLICT`; subsequent changes require an incremented plugin version.

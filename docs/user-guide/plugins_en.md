@@ -8,6 +8,10 @@ Select **Plugins** at the bottom of the sidebar. The list shows each configured 
 
 The host version appears below the RabiRoute name in the sidebar; each plugin has its own version in the list and details. **Configured version** identifies the selected package; **Running version** identifies the actual active package. They can differ while an update has not taken effect.
 
+After importing another version of the same plugin, select it under **Imported versions** in the existing instance details and choose **Switch version**. Select an earlier package to roll back. Switching keeps the instance ID, enabled state and settings. Manager adopts new packages for running instances while it stays online. Check **Running version** to confirm adoption and the instance details for any failure.
+
+Uninstalling preserves the instance's settings and data. If its package version is available, choose **Restore instance** under **Install plugins → Uninstalled instances**. **Install** and **Add instance** create a separate instance.
+
 The switch records your desired enabled state. **Running**, **Startup failed**, **Waiting for dependency** and **Stop unconfirmed** report actual execution. After a change, the page reads the result again. If the result is uncertain, refresh to inspect the original operation rather than toggling repeatedly.
 
 QQ / NapCat, WeCom, Weixin, Feishu, generic Webhook, scheduled triggers, mobile, speech input and Xiaomi Home each have their own plugin. A role's add-input menu comes from available plugin contributions. Disabling a plugin preserves its existing input configuration and shows it as unavailable. Enable it again to resume use. Removing the last input leaves an empty list instead of adding QQ automatically.
