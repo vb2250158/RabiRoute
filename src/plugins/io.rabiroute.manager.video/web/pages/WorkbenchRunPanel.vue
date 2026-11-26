@@ -3,10 +3,11 @@ import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from "vue";
 import {browserUuid} from "../../../../../ribiwebgui/src/browserUuid";
 import {managerEventSource} from "../../../../../ribiwebgui/src/managerApi";
 import {mergePage, type TextPreview} from "./workbenchEditor";
+import {graphDiff, runThreadBindings, verifyArtifactHashes} from "./workbenchRunRecord";
 const props=defineProps<{projectId:string;canvasId:string;revision:number;dirty:boolean;nodeId?:string;canRun?:boolean;saveBeforeRun?:()=>Promise<number>;saveResult?:(result:TextPreview)=>Promise<void>;states?:Record<string,{label:string}>;runStates?:Record<string,{label:string}>}>();
 const emit=defineEmits<{edition:[canvasId:string,runId:string];runSelected:[runId:string];focusNode:[nodeId:string]}>();
 type Attempt={id:string;nodeId:string;title?:string;state:string;reason?:string;outputText?:string;reusedFromAttemptId?:string;approval?:{required:boolean;requestedAt?:string};confirmation?:{mode?:string;identity:string;confirmedAt:string;basis?:unknown[]};artifacts?:{artifactId:string;key:string;bytes:number}[]};
-type Run={id:string;projectId:string;canvasId:string;state:string;reason?:string;attempts:Record<string,Attempt>;snapshot?:{graph:{nodes:{id:string;config:{instructions?:string}}[]}}};
+type Run={id:string;projectId:string;canvasId:string;state:string;reason?:string;attempts:Record<string,Attempt>;snapshot?:{graph:{nodes:{id:string;title?:string;config:{instructions?:string;target?:{agentAdapter?:string;threadId?:string;instanceBinding?:unknown}};enabled?:boolean;inputs?:unknown[];requirements?:unknown[];layout?:unknown;kind?:string;approval?:boolean}[];edges?:unknown[];groups?:unknown[]}};resumedFromRunId?:string};
 type Request={id:string;revision:number;concurrency?:number;resumeRunId?:string;nodeId?:string};
 type EditionRequest={id:string;date:string;label?:string;concurrency?:number};
 type EditionResult={trigger:{id:string;projectId:string;templateId:string;canvasId:string;date:string;runId:string;phase:string};run:Run};
@@ -147,6 +148,21 @@ async function cancel(){if(!run.value)return;const id=run.value.id;invalidate();
 async function reconcile(){if(!run.value)return;const id=run.value.id;invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/refresh`,"POST");if(!disposed&&token===epoch)await refresh(true);}
 async function complete(attempt:Attempt,withEvidence=false){if(!run.value)return;const id=run.value.id,body:Record<string,unknown>={nodeId:attempt.nodeId,attemptId:attempt.id,identity:identity.value.trim()};if(withEvidence)body.evidence=JSON.parse(evidence.value);invalidate();const token=epoch;await api(`/api/video/v2/runs/${id}/complete`,"POST",body);if(!disposed&&token===epoch)await refresh(true);}
 function instructions(id:string){return run.value?.snapshot?.graph.nodes.find(node=>node.id===id)?.config.instructions;}
+/** §9-3: the sessions this run actually used, read from its frozen graph. */
+const threadBindings=computed(() => runThreadBindings(run.value?.snapshot?.graph as any));
+/** §9-4: what changed between this run's graph and the run it resumed from. */
+const previousRun=ref<Run>();
+watch(() => run.value?.resumedFromRunId, async id => {
+  previousRun.value = undefined;
+  if (!id) return;
+  try { previousRun.value = await api<Run>(`/api/video/v2/runs/${encodeURIComponent(id)}`); } catch { previousRun.value = undefined; }
+}, { immediate: true });
+const graphChanges=computed(() => previousRun.value ? graphDiff(previousRun.value.snapshot?.graph as any, run.value?.snapshot?.graph as any) : []);
+/** §9-5: compare recorded artifact hashes with what the receipt still claims. */
+const artifactAudit=computed(() => {
+  const recorded = Object.values(run.value?.attempts ?? {}).flatMap(attempt => (attempt.artifacts ?? []) as unknown as {path:string;sha256?:string}[]);
+  return verifyArtifactHashes(recorded, recorded.filter(row => typeof row.sha256 === "string"));
+});
 async function refreshPrevious(id:string){
   const token=epoch,result=await api<Run>(`/api/video/v2/runs/${id}`);
   if(disposed||token!==epoch)return;
@@ -208,6 +224,27 @@ onBeforeUnmount(()=>{disposed=true;epoch++;historyEpoch++;actionEpoch++;controll
       </div>
     </div>
     <div v-if="run" class="run-toolbar log-controls"><v-btn :disabled="busy||logsLoading||logsAtEnd" size="small" variant="text" @click="action(refresh)">{{logsAtEnd?'已读取到日志末尾':'继续读取日志'}}</v-btn><v-btn :disabled="busy||logsLoading" size="small" variant="text" @click="action(restartLogs)">从头读取日志</v-btn><small v-if="entries.length">第 {{entries[0].sequence}}–{{entries[entries.length-1].sequence}} 条 · 最多显示最近 500 条</small></div>
+    <details v-if="run" class="run-record" open><summary>本次运行记录</summary>
+      <div class="record-grid">
+        <div><small>画布修订</small><strong>{{ run.snapshot ? (run as any).canvasRevision ?? "—" : "未冻结" }}</strong></div>
+        <div><small>续跑自</small><strong>{{ run.resumedFromRunId || "—" }}</strong></div>
+        <div><small>产物校验</small><strong :class="artifactAudit.ok ? 'ok' : 'bad'">{{ artifactAudit.ok ? `全部一致（${artifactAudit.checks.length}）` : `存在不一致（${artifactAudit.checks.filter(c=>c.state!=='ok').length}）` }}</strong></div>
+      </div>
+      <div v-if="threadBindings.length" class="record-block">
+        <small>使用的会话</small>
+        <ul><li v-for="row in threadBindings" :key="row.nodeId + row.threadId"><span>{{ row.title }}</span><code>{{ row.agentAdapter }}</code><code>{{ row.threadId }}</code></li></ul>
+      </div>
+      <div v-else class="record-block"><small>使用的会话</small><p class="record-empty">这一版图没有绑定 Agent 会话。</p></div>
+      <div v-if="graphChanges.length" class="record-block">
+        <small>与上一版的差异（{{ graphChanges.length }} 处）</small>
+        <ul><li v-for="row in graphChanges" :key="row.id"><b>{{ row.change === 'added' ? '新增' : row.change === 'removed' ? '删除' : '修改' }}</b><span>{{ row.title || row.id }}</span><em v-if="row.fields">（{{ row.fields.join('、') }}）</em></li></ul>
+      </div>
+      <div v-else-if="previousRun" class="record-block"><small>与上一版的差异</small><p class="record-empty">两张图没有节点级差异。</p></div>
+      <div v-if="!artifactAudit.ok" class="record-block">
+        <small>不一致的产物</small>
+        <ul><li v-for="row in artifactAudit.checks.filter(c=>c.state!=='ok')" :key="row.path"><b>{{ row.state }}</b><span>{{ row.path }}</span></li></ul>
+      </div>
+    </details>
     <details class="run-history"><summary @click="action(()=>loadHistory())">运行历史</summary><div v-for="row in history" :key="row.id"><button :disabled="busy||!!request" @click="action(()=>openRun(row.id))"><span>{{new Date(row.createdAt).toLocaleString()}}</span><strong>{{runStates?.[row.state]?.label||row.state}}</strong><small>画布修订 {{row.canvasRevision}}</small></button></div><v-btn v-if="historyCursor" :disabled="busy" size="small" @click="action(()=>loadHistory(true))">下一页</v-btn></details>
   </section>
 </template>
@@ -223,7 +260,24 @@ onBeforeUnmount(()=>{disposed=true;epoch++;historyEpoch++;actionEpoch++;controll
 .log-jump,.log-seq{flex-shrink:0;min-width:34px;font:inherit;color:#7d94a3;text-align:right}
 .log-jump{border:0;background:none;cursor:pointer;text-decoration:underline dotted}
 .log-jump:is(:hover,:focus-visible){color:#89dbc7}
-.log-text{flex:1;min-width:0;overflow-wrap:anywhere}button:focus-visible{outline:2px solid #89dbc7;outline-offset:3px}@media(max-width:800px){.human-evidence{flex-direction:column}.human-evidence>:first-child{max-width:none}}</style>
+.log-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.run-record{margin-top:16px;font-size:12px;color:#a5b7c4}
+.run-record summary{cursor:pointer}
+.record-grid{display:flex;flex-wrap:wrap;gap:18px;margin:10px 0}
+.record-grid>div{display:flex;flex-direction:column;gap:2px}
+.record-grid small{color:#8ea5b4;font-size:11px}
+.record-grid strong{font-size:12px;color:#cfe3ea;font-weight:500}
+.record-grid strong.ok{color:#89dbc7}
+.record-grid strong.bad{color:#fda4af}
+.record-block{margin:10px 0}
+.record-block>small{display:block;color:#8ea5b4;font-size:11px;margin-bottom:4px}
+.record-block ul{list-style:none;margin:0;padding:0}
+.record-block li{display:flex;gap:10px;align-items:baseline;padding:3px 0;border-bottom:1px solid #22313b}
+.record-block li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.record-block code{color:#a5dacf;font:11px ui-monospace,monospace}
+.record-block em{color:#829aa9;font-style:normal}
+.record-block b{flex-shrink:0;min-width:34px;font-weight:500;color:#cab680}
+.record-empty{margin:0;color:#829aa9}button:focus-visible{outline:2px solid #89dbc7;outline-offset:3px}@media(max-width:800px){.human-evidence{flex-direction:column}.human-evidence>:first-child{max-width:none}}</style>
 
 <style scoped>
 .node-run-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; color:var(--rr-muted); font-size:12px; }
