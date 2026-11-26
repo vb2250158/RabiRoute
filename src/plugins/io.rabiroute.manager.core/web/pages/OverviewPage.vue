@@ -36,18 +36,19 @@ type RoleCard = { key: string; role?: RoleSummary; routes: GatewayDefinition[] }
 const computers = computed(() => {
   const name = store.meta.rabiName?.trim() || store.meta.computerName?.trim();
   return [
-    { source: "", title: name ? `${t("本机")} · ${name}` : t("本机"), unavailable: "", trusted: true },
+    { source: "", title: name ? `${t("本机")} · ${name}` : t("本机"), unavailable: "", trusted: true, online: true },
     ...devices.value
       .filter(device => personaSourceKey(store.meta, device.deviceId))
       .map(device => ({
         source: device.deviceId,
         title: device.name,
         trusted: device.trusted,
+        online: device.online,
         unavailable: !device.online ? "离线" : !device.trusted ? "未连接" : !device.supported ? "在线 · 需要更新" : ""
       })),
     ...cachedDevices.value
       .filter(device => personaSourceKey(store.meta, device.deviceId))
-      .map(device => ({ source: device.deviceId, title: device.name, unavailable: "上次读取", trusted: true }))
+      .map(device => ({ source: device.deviceId, title: device.name, unavailable: "上次读取", trusted: true, online: false }))
   ];
 });
 
@@ -125,7 +126,7 @@ async function loadComputers(force = false): Promise<void> {
     if (!signal.aborted) devicesLoading.value = false;
   }
 
-  const sources = computers.value.filter(computer => computer.source && !computer.unavailable);
+  const sources = computers.value.filter(computer => computer.source && computer.online !== false);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(3, sources.length) }, async () => {
     while (!signal.aborted && next < sources.length) {
@@ -200,7 +201,7 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
           <span v-if="group.unavailable || group.catalog?.cached">{{ t(group.unavailable || "上次读取") }}</span>
         </header>
         <v-progress-linear v-if="group.catalog && !group.cards.length && !group.unavailable && (group.catalog.loading || (!group.catalog.loaded && !group.catalog.error))" indeterminate color="secondary" :aria-label="t('加载中')" />
-        <v-alert v-if="group.catalog?.error && !group.unavailable" :type="group.catalog.partial ? 'warning' : 'error'" variant="tonal" density="compact">
+        <v-alert v-if="group.catalog?.error && group.online !== false" :type="group.catalog.partial ? 'warning' : 'error'" variant="tonal" density="compact">
           {{ group.catalog.error }}
           <v-btn variant="text" size="small" @click="loadComputer(group.source ?? '', true, discovery?.signal)">{{ t("重试") }}</v-btn>
         </v-alert>

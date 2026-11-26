@@ -52,8 +52,10 @@ async function readJson(path: string, signal = AbortSignal.timeout(getTimeoutMs(
   if (!response.ok || ("code" in body && body.code !== 0)) {
     const message = String(body.message || body.error || `HTTP ${response.status}`);
     const knownMissingPersona = ["PERSONA_NOT_FOUND", "PERSONA_FILE_NOT_FOUND"].includes(String(body.error));
+    // 5xx already means "cannot reach right now" (transport time-out, offline PC, failing source). Listing code names
+    // one by one would only have to grow with the Relay.
     const state = response.status === 426 || body.error === "REMOTE_PERSONA_UPGRADE_REQUIRED" || (response.status === 404 && !knownMissingPersona)
-      ? "unsupported" : body.error === "REMOTE_PERSONA_UNAVAILABLE" ? "offline" : "failed";
+      ? "unsupported" : response.status >= 500 ? "offline" : "failed";
     throw new RemotePersonaReadError(state, message);
   }
   return body;
@@ -67,7 +69,8 @@ async function readPersonaManagerIdentity(path: string, requireReady: boolean, s
   if (typeof applicationGenerationId !== "string" || !applicationGenerationId.trim()
     || typeof managerInstanceId !== "string" || !managerInstanceId.trim()) throw new Error("Manager 未提供完整身份。");
   const health = meta.health as { live?: boolean; requiredReady?: boolean; state?: string } | undefined;
-  if (requireReady && (!health || health.live !== true || health.requiredReady !== true
+  // `requiredReady` only describes which declared capabilities are present; the target endpoint decides that.
+  if (requireReady && (!health || health.live !== true
     || !["healthy", "degraded"].includes(health.state || ""))) throw new Error("Manager 尚未就绪。");
   return { applicationGenerationId, managerInstanceId };
 }
@@ -202,8 +205,10 @@ export class RemotePersonaReferenceBrowser {
     this.catalogState = deviceId ? "loading" : "idle";
     if (!deviceId) return;
     const device = this.devices.find(item => item.deviceId === deviceId);
-    if (device && (!device.online || !device.supported)) {
-      this.catalogState = !device.online ? "offline" : "unsupported";
+    // Only a genuinely offline PC is refused up front. An older capability advert is not proof that the
+    // read path is missing, so try it and report the real response instead of blocking the source.
+    if (device && !device.online) {
+      this.catalogState = "offline";
       return;
     }
     try {

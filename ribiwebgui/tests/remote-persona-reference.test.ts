@@ -112,14 +112,45 @@ test("bootstrap rejects a changed local Manager identity or a different selected
   await assert.rejects(bootstrapRemotePersonaService("peer-a"), /来源 PC 不一致/);
 });
 
-test("a tunnel-capable PC without persona-reference support reports upgrade before trying any handshake", async () => {
-  let calls = 0;
-  const browser = new RemotePersonaReferenceBrowser({ devices: async () => [], personas: async () => { ++calls; return []; }, reference: async () => reference("same-role", "") });
+test("a Relay transport failure reads as unreachable instead of an unclassified service failure", async t => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const path = String(input);
+    const preparation = localPreparation(path, init);
+    if (preparation) return preparation;
+    if (path.endsWith("/meta")) return Response.json(meta);
+    return Response.json({ code: -1, error: "API_TRANSPORT_UNCONFIRMED", message: "远端 PC 未返回可用响应（API_TRANSPORT_UNCONFIRMED）。", uncertain: false }, { status: 502 });
+  });
+  await assert.rejects(remotePersonaClient.personas("peer-a"), error => error instanceof RemotePersonaReadError
+    && error.state === "offline" && /未返回可用响应/.test(error.message));
+});
+
+test("an incomplete capability advert on the source PC does not block the catalog read", async t => {
+  const degraded = { ...meta, health: { live: true, requiredReady: false, state: "degraded" } };
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/meta") return Response.json(meta);
+    if (path === "/api/rabilink/peer/persona/bootstrap") {
+      return Response.json({ code: 0, data: { deviceId: JSON.parse(String(init?.body)).deviceId } });
+    }
+    return Response.json(path.endsWith("/meta") ? degraded : { personas: [{ personaId: "same-role", name: "Remote role" }] });
+  });
+  const browser = new RemotePersonaReferenceBrowser();
+  browser.devices = [{ deviceId: "peer:a", name: "PC A", online: true, supported: true, trusted: false }];
+  await browser.selectSource("peer:a");
+  assert.equal(browser.catalogState, "ready", "`requiredReady` describes declared capabilities; the endpoint decides");
+});
+
+test("an older capability advert still gets one real read attempt instead of a pre-emptive upgrade claim", async () => {  let calls = 0;
+  const browser = new RemotePersonaReferenceBrowser({ devices: async () => [], personas: async () => {
+    ++calls;
+    throw new RemotePersonaReadError("unsupported", "远端 PC 需要升级以提供角色配置引用。");
+  }, reference: async () => reference("same-role", "") });
   browser.devices = [{ deviceId: "peer-old", name: "Old PC", online: true, supported: false, trusted: false }];
   await browser.selectSource("peer-old");
   assert.equal(browser.catalogState, "unsupported");
+  assert.equal(browser.catalogError, "远端 PC 需要升级以提供角色配置引用。");
   assert.equal(browser.sourceDeviceId, "peer-old");
-  assert.equal(calls, 0);
+  assert.equal(calls, 1, "The advert alone must not replace the real response");
 });
 
 test("remote reads use the exact device and role keys and reject owner mismatch", async t => {

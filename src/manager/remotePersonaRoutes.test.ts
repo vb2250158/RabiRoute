@@ -46,6 +46,13 @@ test("remote snapshot fails closed for untrusted, old or changed owners", async 
   let identityReads = 0;
   await assert.rejects(resolveRemotePersonaSnapshot(definition, reader({ identity: () => ++identityReads === 1 ? local : { ...local, managerInstanceId: "changed" } })), /身份/);
 });
+test("a remote PC with incomplete declared capabilities is still read through the target endpoint", async () => {
+  const degraded = { ...remote, health: { live: true, requiredReady: false, state: "degraded" } };
+  const data = await resolveRemotePersonaSnapshot(definition, reader({ fetchRemote: async (_id, pathname) =>
+    pathname === "/meta" ? reply(degraded) : reply({ code: 0, data: snapshot }) }));
+  assert.equal(data.document, snapshot.document);
+});
+
 test("remote reply cannot substitute another persona or invalid config", async () => {
   for (const corrupt of [{ ...snapshot, roleId: "Other" }, { ...snapshot, personaConfig: [] }, { ...snapshot, applicationGenerationId: "wrong" }]) {
     await assert.rejects(resolveRemotePersonaSnapshot(definition, reader({ fetchRemote: async (_id, pathname) => pathname === "/meta" ? reply(meta) : reply({ code: 0, data: corrupt }) })));

@@ -225,7 +225,10 @@ async function boundedJson(response: Response): Promise<any> {
       throw new RemotePersonaError("远端角色或正文文件不存在，请检查来源 PC。", 404, "REMOTE_PERSONA_NOT_FOUND");
     }
     const code = response.status === 404 ? "REMOTE_PERSONA_UPGRADE_REQUIRED" : response.status === 403 || response.status === 401 ? "REMOTE_PERSONA_ACCESS_DENIED" : "REMOTE_PERSONA_UNAVAILABLE";
-    throw new RemotePersonaError(response.status === 404 ? "远端 PC 需要升级以提供角色配置引用。" : "远端角色不可用，请检查 RabiLink 连接、设备身份及来源运行状态。", response.status === 404 ? 426 : response.status, code);
+    // Keep the upstream reason when it exists (transport timeout, offline PC, old host) instead of a fixed sentence.
+    const remoteMessage = typeof payload?.message === "string" ? payload.message.trim() : "";
+    throw new RemotePersonaError(remoteMessage || (response.status === 404 ? "远端 PC 需要升级以提供角色配置引用。" : "远端角色不可用，请检查 RabiLink 连接、设备身份及来源运行状态。"),
+      response.status === 404 ? 426 : response.status, code);
   }
   if (payload === undefined) throw new RemotePersonaError("远端响应不支持角色配置引用，请更新远端 PC。", 426, "REMOTE_PERSONA_UPGRADE_REQUIRED");
   return payload;
@@ -242,7 +245,7 @@ export async function resolveRemotePersonaSnapshot(definition: Pick<GatewayDefin
   const remoteGeneration = await context.remoteGeneration(deviceId);
   const before = await read("/meta");
   if (!before.applicationGenerationId || !before.managerInstanceId || before.applicationGenerationId !== remoteGeneration
-    || !before.health?.live || !before.health?.requiredReady || !["healthy", "degraded"].includes(before.health?.state)) {
+    || !before.health?.live || !["healthy", "degraded"].includes(before.health?.state)) {
     throw new RemotePersonaError("远端 Manager 身份或就绪状态不匹配。", 409, "REMOTE_MANAGER_IDENTITY_MISMATCH");
   }
   const payload = await read(`/api/roles/${encodeURIComponent(roleId)}/persona-reference?file=${encodeURIComponent(file)}`);
@@ -277,7 +280,7 @@ export async function validateRemotePersonaLanguageStyle(snapshot: RemotePersona
     return meta;
   };
   const before = await assertOwner();
-  if (!before.health?.live || !before.health?.requiredReady || !["healthy", "degraded"].includes(before.health?.state)) {
+  if (!before.health?.live || !["healthy", "degraded"].includes(before.health?.state)) {
     throw new RemotePersonaError("远端语言风格检查尚未就绪。");
   }
   const payload = await boundedJson(await context.fetchRemote(snapshot.deviceId, `/api/roles/${encodeURIComponent(snapshot.roleId)}/persona-reference/language-style`, {
