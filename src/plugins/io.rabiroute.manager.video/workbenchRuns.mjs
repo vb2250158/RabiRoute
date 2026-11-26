@@ -239,6 +239,8 @@ export class WorkbenchRuns {
         if (this.closing || this.runtime.readOnly || !this.root) throw new VideoError("运行拥有者不可用或只读。", 423);
         await this.persist(run); this.runs.set(run.id, run);
       } catch (error) { for (const directory of acquired) { await fs.unlink(path.join(directory, "owner.json")).catch(missing); await fs.rmdir(directory); } throw error; }
+      // §6.2: state the scope before any node runs, so the first line answers "what will this do".
+      await this.log(run, { stream: "status", kind: "scope", text: this.scopeLine(run) }).catch(() => {});
       this.pump(run, previous); return structuredClone(run);
     };
     const next = this.serial.then(operation); this.serial = next.catch(() => {}); return next;
@@ -330,6 +332,7 @@ export class WorkbenchRuns {
       }
       attempt.state = "running"; attempt.startedAt = timestamp(); await this.persist(run);
       if (run.cancelRequested || this.closing) { attempt.state = "cancelled"; continue; }
+      await this.log(run, { attemptId: attempt.id, nodeId: node.id, stream: "status", kind: "start", text: this.startLine(node, run) });
       try {
         let receipt;
         if (node.kind === "asset") {
@@ -370,7 +373,9 @@ export class WorkbenchRuns {
         if(node.kind==="asset")attempt.artifacts.push({artifactId:randomUUID(),attemptId:attempt.id,machineId:run.machineId,key:node.config.artifactKey||"asset",root:node.config.ref.root,path:node.config.ref.path,...receipt.asset});
         attempt.receipt = receipt; attempt.state = "succeeded";
       } catch (error) { attempt.state = error.uncertain?"interrupted":run.cancelRequested ? "cancelled" : "failed";if(error.uncertain)attempt.uncertain=true;attempt.reason = error.message; }
-      attempt.finishedAt = timestamp(); await this.persist(run);
+      attempt.finishedAt = timestamp();
+      await this.log(run, { attemptId: attempt.id, nodeId: node.id, stream: "status", kind: attempt.state === "succeeded" ? "finish" : "error", text: this.finishLine(node, attempt) });
+      await this.persist(run);
     }};
     const remaining=new Set(order.filter(id=>run.selected.includes(id)));
     while(remaining.size&&!run.cancelRequested&&!this.closing) {
@@ -644,6 +649,46 @@ export class WorkbenchRuns {
     const previous=this.logWrites.get(run.id)||Promise.resolve();
     const next=previous.then(async()=>{const row={sequence:++run.sequence,at:timestamp(),...entry};await fs.appendFile(path.join(this.root,"runs",`${run.id}.jsonl`),JSON.stringify(row)+"\n");});
     this.logWrites.set(run.id,next);return next.finally(()=>{if(this.logWrites.get(run.id)===next)this.logWrites.delete(run.id);});
+  }
+  /**
+   * §7.1: a command node and a model node must not read the same in the log.
+   * Only this helper decides the wording; the raw stream keeps the tool output.
+   */
+  startLine(node, run) {
+    const title = node.title || node.id;
+    if (node.kind === "command") {
+      const argv = Array.isArray(node.config.argv) ? node.config.argv.filter(value => typeof value === "string") : [];
+      const tool = typeof node.config.toolKey === "string" && node.config.toolKey ? node.config.toolKey : "命令";
+      const line = argv.length ? `${tool} ${argv.join(" ")}` : tool;
+      return `▶ ${title} 执行 ${line}`;
+    }
+    if (node.kind === "agent" || node.kind === "generate") {
+      const sources = (node.inputs ?? []).map(input => {
+        const producer = run.snapshot.graph.nodes.find(candidate => candidate.id === input.producerNodeId);
+        return `${producer?.title || input.producerNodeId}(${input.artifactKey})`;
+      });
+      const what = node.kind === "generate" ? "调用媒体生成" : "调用模型生成";
+      return sources.length ? `▶ ${title} 接收 ${sources.length} 份材料：${sources.join("、")} → ${what}` : `▶ ${title} ${what}`;
+    }
+    if (node.kind === "human") return `▶ ${title} 等待人工确认`;
+    if (node.kind === "asset") return `▶ ${title} 读取材料 ${node.config.ref?.path || ""}`.trim();
+    return `▶ ${title} 开始`;
+  }
+  /** §7.1: a finished node names the artifacts it produced, so the log alone answers "what came out". */
+  finishLine(node, attempt) {
+    const title = node.title || node.id;
+    if (attempt.state !== "succeeded") return `✗ ${title} ${attempt.state}${attempt.reason ? `：${attempt.reason}` : ""}`;
+    const names = (attempt.artifacts ?? []).map(artifact => artifact.path?.split("/").at(-1) || artifact.key).filter(Boolean);
+    return names.length ? `✓ ${title} 生成完成 → ${names.join("、")}` : `✓ ${title} 完成`;
+  }
+  /** §6.2: the first line states the scope, before any node runs. */
+  scopeLine(run) {
+    const nodes = run.snapshot.graph.nodes;
+    const disabled = nodes.filter(node => node.enabled === false).length;
+    const approvals = nodes.filter(node => node.approval === true || node.config?.approval === true).map(node => node.title || node.id);
+    const parts = [`拓扑序 ${nodes.length} 个节点（已禁用跳过 ${disabled} 个）`];
+    if (approvals.length) parts.push(`会停下等确认：${approvals.join("、")}`);
+    return parts.join("；");
   }
   onMediaChanged(jobId) {
     const job=this.media.jobs.get(jobId);if(!job||!this.media.catalog?.states[job.status]?.terminal)return;
