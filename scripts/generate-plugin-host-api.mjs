@@ -20,6 +20,18 @@ function packageName(specifier) {
   return specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
 }
 
+async function moveDirectory(source, target) {
+  try {
+    await fs.rename(source, target);
+    return;
+  } catch (error) {
+    // SMB/NAS shares report EXDEV for a directory rename even inside one share.
+    if (!["EXDEV", "EPERM", "ENOTSUP", "EACCES", "EBUSY"].includes(error.code)) throw error;
+    await fs.cp(source, target, { recursive: true, force: true });
+    await fs.rm(source, { recursive: true, force: true });
+  }
+}
+
 async function publishGeneratedPackage(output, metadata, modules, declarations) {
   const candidate = await fs.mkdtemp(path.join(path.dirname(output), `.${path.basename(output)}-candidate-`));
   const backup = candidate + "-previous";
@@ -37,10 +49,10 @@ async function publishGeneratedPackage(output, metadata, modules, declarations) 
         await fs.writeFile(file, contents);
       }
     }
-    await fs.rename(output, backup);
-    try { await fs.rename(candidate, output); }
+    await moveDirectory(output, backup);
+    try { await moveDirectory(candidate, output); }
     catch (error) {
-      try { await fs.rename(backup, output); }
+      try { await moveDirectory(backup, output); }
       catch (restoreError) { throw new AggregateError([error, restoreError], `Host API publication failed; previous package is retained at ${backup}`); }
       throw error;
     }

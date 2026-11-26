@@ -95,7 +95,10 @@ async function hashInputs(root, inputs) {
       for (const name of (await fs.readdir(file)).sort()) await walk(path.join(file, name));
     } else if (stat.isFile()) {
       const bytes = await fs.readFile(file);
-      files.push({ path: path.relative(root, file).replaceAll("\\", "/"), sha256: createHash("sha256").update(bytes).digest("hex") });
+      // A drive-letter and a UNC spelling of the same share produce different
+      // `path.relative` prefixes; normalize so the frozen input hash is stable.
+      const relative = path.relative(root, file).replaceAll("\\", "/").replace(/^\/+/, "").toLowerCase();
+      files.push({ path: relative, sha256: createHash("sha256").update(bytes).digest("hex") });
     }
   }
   for (const input of inputs) if (await pathExists(input)) await walk(input);
@@ -180,7 +183,14 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     }
     const rawPaths = inputPaths.map(input => path.join(rawRoot, path.relative(root, input)));
     const inputs = await hashInputs(rawRoot, rawPaths);
-    if ((await hashInputs(root, inputPaths)).sha256 !== inputs.sha256) throw new Error("Plugin build inputs changed while freezing; prepare a new candidate.");
+    const live = await hashInputs(root, inputPaths);
+    if (live.sha256 !== inputs.sha256) {
+      const staged = new Set(inputs.files.map(file => `${file.path}:${file.sha256}`));
+      const current = new Set(live.files.map(file => `${file.path}:${file.sha256}`));
+      const missing = [...staged].filter(entry => !current.has(entry)).slice(0, 4);
+      const extra = [...current].filter(entry => !staged.has(entry)).slice(0, 4);
+      throw new Error(`Plugin build inputs changed while freezing (staged ${inputs.files.length} / live ${live.files.length}); onlyStaged=${JSON.stringify(missing)} onlyLive=${JSON.stringify(extra)}`);
+    }
     await options.afterInputSnapshot?.();
     await fs.mkdir(stagedProfilesRoot, { recursive: true });
     if (!targets) {

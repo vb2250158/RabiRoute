@@ -44,7 +44,8 @@ export default defineConfig(({ command }) => {
       manifest: true,
       rollupOptions: {
         preserveEntrySignatures: "exports-only",
-        // Business Web entries are built once by the official package producer.
+        // The entry name is part of the published contract: runtime pages load
+        // `web/assets/app-<hash>.js`, so the key must stay "app".
         input: { app: fileURLToPath(new URL("./index.html", import.meta.url)) }
       }
     },

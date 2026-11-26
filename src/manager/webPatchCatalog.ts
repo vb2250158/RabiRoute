@@ -331,8 +331,13 @@ export async function buildWebPatch(packageRoot: string, outputRoot: string, sig
     const destination = path.join(outputRoot, revision);
     try { await fs.rename(temporary, destination); }
     catch (error) {
-      if (!await fs.stat(destination).catch(() => undefined)) throw error;
-      await verifyWebPatch(destination, revision, signal);
+      if (await fs.stat(destination).catch(() => undefined)) {
+        await verifyWebPatch(destination, revision, signal);
+      } else if (["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+        // Network shares refuse renaming a directory inside the share; publish by copy.
+        await fs.cp(temporary, destination, { recursive: true });
+        await verifyWebPatch(destination, revision, signal);
+      } else throw error;
     }
     return revision;
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
