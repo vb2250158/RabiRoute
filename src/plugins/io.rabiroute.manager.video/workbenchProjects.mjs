@@ -60,7 +60,20 @@ export class WorkbenchProjects {
     await this.safeParent(file,access);
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(temporary, JSON.stringify(value), { flag: "wx" });
-    await fs.rename(temporary, file);
+    // §9-6: on an SMB share a rename over a file another writer is replacing can
+    // come back EPERM/EACCES/EBUSY. Retry a few times, then fail loudly instead of
+    // leaving a half-written canvas: the temp file is removed on the way out.
+    for (let attempt = 0; ; attempt++) {
+      try { await fs.rename(temporary, file); return; }
+      catch (error) {
+        const transient = error.code === "EPERM" || error.code === "EACCES" || error.code === "EBUSY";
+        if (!transient || attempt >= 4) {
+          await fs.unlink(temporary).catch(() => {});
+          throw new Error(`画布目录无法原子替换文件（${error.code || error.message}）。若项目根位于网络盘，请确认该共享支持原子重命名，否则请改到本机目录。`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+      }
+    }
   }
   async locked(key, access, operation) {
     access?.assert();
