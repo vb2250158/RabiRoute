@@ -1,4 +1,5 @@
-import { normalizeComputerCaptureSpec } from "./interactive-protocol.mjs";
+import { computerCaptureFields, normalizeComputerCaptureSpec } from "./interactive-protocol.mjs";
+import { isComputerSourceReference } from "./computer-image-view.mjs";
 import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -244,9 +245,12 @@ export class ComputerControlService {
       catch (error) { captureIssue = { state: "unavailable", reason: error.message }; }
     }
     const inputMode = batchInputMode(input);
+    const useFrameScope = isComputerSourceReference(input.source) && input.captureSpec === undefined
+      && Object.keys(computerCaptureFields).every(field => input[field] === undefined);
     const result = await this.native.request("input.execute", {
       requestId: input.requestId, controlSessionId: session.controlSessionId, actions: input.actions,
-      source: input.source, captureSpec: normalizeComputerCaptureSpec(input), maxWidth: captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
+      source: input.source, captureSpec: useFrameScope ? undefined : normalizeComputerCaptureSpec(input),
+      maxWidth: useFrameScope ? input.maxWidth : captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
       instanceId: this.target(context), settings: this.settings(context, input.action), ...(inputMode === undefined ? {} : { inputMode })
     }, { beforeSend: () => {
       this.check(input.action, context);

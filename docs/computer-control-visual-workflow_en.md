@@ -30,6 +30,8 @@ MCP returns valid images as image content, while its text receipt retains reques
 
 `source.width`, `source.height`, `frameId` and `imageItemId` identify the original cached image. After host preview resizing, `source.imageView.width` and `height` record the complete image dimensions presented to the model. Input, annotation and tracking map these coordinates back to the cached image and desktop automatically. Reuse the complete source with the coordinates read from the image.
 
+With `input.perform`, the input `source` can contain just the `frameId`, `imageItemId` and any `imageView` from the same capture. Use the coordinates shown in that image. The desktop worker checks the cached image identity and restores the original window, display and scaling. Set `captureAfter: true` to observe the original capture scope in the same batch. Older workers report that they require the complete `source`. Check the original receipt for an unexecuted batch before submitting a complete source. Observe the target again when the cached frame expires.
+
 A media-conversion failure retains the original business outcome and the corresponding media error. Query the original request for its actual execution state.
 
 ## Submit a complete input batch
@@ -39,6 +41,8 @@ Call `control.begin` to obtain a `controlSessionId`. Place one logical operation
 Before its first input, the native executor records the user's cursor and foreground. It executes actions in order, releases its own keys／buttons and returns the cursor and foreground when the batch ends. `captureAfter: true` can return the resulting image. Captures attached to other control operations also retain display, region, window, layout revision and `maxWidth` parameters.
 
 With native input batch version 2, `input.perform` acquires short-lived control, executes `actions`, and ends that control in one request. Shared mode lets the user and the agent use different input groups concurrently. Conflicting input yields to the user. A shared batch leaves focus where it is at completion. The target application still controls how clicks affect focus. When a batch uses a window capture `source`, the executor checks which window the cursor hits before pressing a button or scrolling. Use `wait.durationMs` between `move` and `press` when the target needs time to handle hover. Window-scoped keyboard input and scrolling also require the target to be foreground.
+
+When taking turns in the same app or game, use short batches with `inputMode: "exclusive"`. During a batch, physical mouse or keyboard input returns control to the user. Check `controlCleanup.state` before handing control back. Verify input delivery and the visible change in the app separately.
 
 `completedActions`, `results`, `releaseState` and `returnState` describe the executed prefix, individual action results, resource release and return outcome. `returnState.keys`, `cursor` and `foreground` report independently. Cancellation, failure, deadline and physical takeover finish through the original input owner.
 

@@ -73,6 +73,26 @@ export const computerSourceSchema = { type: 'object', description: 'Reuse the so
   imageView: { type: 'object', description: 'Actual width and height of the whole image presented to the agent after host resizing. Keep the original source width/height for cached frame identity. Use these view dimensions for coordinates.', required: ['width','height'], properties: { width: { type:'integer', minimum:1, maximum:2147483647 }, height: { type:'integer', minimum:1, maximum:2147483647 } }, additionalProperties:false },
   bounds: { type: 'object', required: ['x','y','width','height'], properties: { x: {type:'number'}, y: {type:'number'}, width: {type:'number',exclusiveMinimum:0}, height: {type:'number',exclusiveMinimum:0} }, additionalProperties:false }
 }, additionalProperties: true };
+const computerInputSourceSchema = {
+  ...computerSourceSchema,
+  description: "For input.perform, pass the complete source unchanged, or copy only frameId, imageItemId and the delivered imageView when present. Use the pixels shown in that image. The target resolves cached bounds and validates the original frame.",
+  required: [],
+  anyOf: [
+    {
+      required: computerSourceSchema.required,
+      properties: Object.fromEntries(computerSourceSchema.required.map(key => [key, computerSourceSchema.properties[key]]))
+    },
+    {
+      required: ["frameId", "imageItemId"],
+      properties: {
+        frameId: { type: "string", minLength: 1 },
+        imageItemId: { type: "string", minLength: 1 },
+        imageView: computerSourceSchema.properties.imageView
+      },
+      additionalProperties: false
+    }
+  ]
+};
 const action = (type, required, properties) => ({ type: 'object', required: ['type', ...required], properties: { type: { const: type }, ...properties }, additionalProperties: false });
 const xy = { x: {type:'number'}, y: {type:'number'} };
 const button = {enum:['left','right','middle']};
@@ -97,7 +117,7 @@ const inputMode = { enum: ['shared', 'exclusive'], description: 'Shared input al
 export const computerControlRequestBranches = [
   branch('control.begin',['requestId'],{requestId,...observation}), branch('control.status',[],{controlSessionId}), branch('control.end',['controlSessionId'],{controlSessionId,requestId}),
   branch('input.execute',['requestId','controlSessionId','actions'],{requestId,controlSessionId,actions,inputMode,...observation}),
-  branch('input.perform',['requestId','actions'],{requestId,actions,inputMode,...observation}),
+  branch('input.perform',['requestId','actions'],{requestId,actions,inputMode,...observation,source:computerInputSourceSchema}),
   branch('input.status',['requestId'],{requestId}), branch('input.cancel',['requestId'],{requestId}),
   branch('annotation.show',['requestId','source','layerId','objects'],{requestId,layerId,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]},controlSessionId}),
   branch('annotation.update',['layerId','expectedVersion'],{requestId,layerId,expectedVersion:integer,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]}}),
@@ -105,7 +125,7 @@ export const computerControlRequestBranches = [
   branch('annotation.track.start',['requestId','source','layerId','targets','taskId'],{requestId,layerId,source:computerSourceSchema,targets:{type:'array',minItems:1,items:computerTrackingTargetSchema},backend:{enum:['kcf','template']},rateHz:{type:'number',exclusiveMinimum:0},taskId:text,expiresAt:{anyOf:[{type:'string',format:'date-time'},{type:'null'}]}}),
   branch('annotation.track.status',['trackingId'],{trackingId}), branch('annotation.track.stop',['trackingId'],{trackingId})
 ];
-export const computerRequestSchema = { description: 'Reuse displayId and layoutRevision until the display layout changes. For visual input, capture a display or region and use the pixels of the image preview you inspected. Return its complete source including imageView unchanged so Rabi maps preview coordinates. Use input.perform to acquire control, run one ordered actions batch and release control in one request. input.perform defaults to shared input. Use input.execute with an already active control session. To hold a button across motion, submit press, move, optional wait, and release in one batch. Rabi releases held buttons and keys after the batch or on physical takeover. Read returnState for automatic cursor/foreground return and input.status with the original requestId for the batch result. captureAfter requests a view before automatic return.', anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
+export const computerRequestSchema = { description: 'Reuse displayId and layoutRevision until the display layout changes. For visual input, use the pixels of the image you inspected. Pass its complete source or, for input.perform, its frameId, imageItemId and any delivered imageView so Rabi maps those pixels. Use input.perform to acquire control, run one ordered actions batch and release control in one request. input.perform defaults to shared input. Use input.execute with an already active control session. To hold a button across motion, submit press, move, optional wait, and release in one batch. Rabi releases held buttons and keys after the batch or on physical takeover. Read returnState for automatic cursor/foreground return and input.status with the original requestId for the batch result. captureAfter requests a view before automatic return.', anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
   branch("file.read", ["path", "version", "offset"], { ...fileFields, version: text, offset: integer }),
   branch("upload.begin", ["uploadId", "path", "size", "sha256"], { ...fileFields, uploadId, size: { ...integer, maximum: COMPUTER_LIMITS.uploadBytes }, sha256: hash }),
   branch("upload.write", ["uploadId", "offset", "data", "sha256"], { uploadId, offset: integer,

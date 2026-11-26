@@ -8,6 +8,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Release compact screenshot references and capture of the original observed region (Core 0.1.34, SDK 0.4.14). Android retains the verified 0.3.75-dev (78) build.
+- Allow a transport-only host reconnect while terminals or tasks are busy, preserving the worker, native terminals and input sequence. Stopping, draining, updates and candidate transitions still prevent reconnection. Existing older launchers gain this behavior only after adoption through their normal lifecycle.
+
+- Computer control with `input.perform` can reference the observed screenshot, map preview coordinates, and capture the same area at the end of the batch. The CLI, MCP and agent plugins share this contract.
+
 ## 0.15.98 - 2026-11-26
 
 - Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).

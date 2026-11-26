@@ -95,7 +95,7 @@ public sealed class RabiAgentPresentation : ApplicationContext {
         start.Enabled = !running && !busy;
         pause.Enabled = running && !busy;
         restart.Enabled = running && !busy;
-        reconnect.Enabled = running && !busy;
+        reconnect.Enabled = data.ContainsKey("canReconnect") ? Flag(data, "canReconnect") : running && !busy;
         checkUpdate.Enabled = running && !busy;
         manager.Enabled = Flag(data, "canOpenManager");
         startup.Checked = Flag(data, "startup");

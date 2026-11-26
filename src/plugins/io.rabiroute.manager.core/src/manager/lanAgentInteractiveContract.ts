@@ -62,7 +62,7 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
     } } : {}),
     ...(route.key === "computer.execute" ? { discovery: {
       title: "电脑操作与屏幕标注",
-      summary: "直接操作目标电脑的文件、窗口、截图、鼠标键盘与屏幕标注，无需先投递 Agent 任务。input.perform 可在一次请求中按顺序按住、移动、等待和释放。恢复会话时可先看原桌面和任务窗口，再按已授权范围恢复宿主。完整远端主机经 ownerDeviceId 的 Peer manager 服务转接原路径与正文，按对应代理合同传 x-rabiroute-proxy-contract。",
+      summary: "直接操作目标电脑的文件、窗口、截图、鼠标键盘和屏幕标注，无需先投递 Agent 任务。看图后，用 input.perform 在一次请求里执行有序动作并释放控制；source 可用截图的完整来源，或使用当前合同允许的 frameId、imageItemId 与 imageView 简写。动作效果按回执或操作后画面确认。恢复会话时可先看原桌面和任务窗口，再按已授权范围恢复宿主。完整远端主机经 ownerDeviceId 的 Peer manager 服务转接原路径与正文，按对应代理合同传 x-rabiroute-proxy-contract。",
       relatedOperations: ["manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.rabilink.peer.http.get", "manager.rabilink.peer.http.post", "manager.rabilink.peer.http.patch"],
       category: { id: "devices", title: "设备与电脑" },
       keywords: ["电脑控制", "远程控制", "远程桌面", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],

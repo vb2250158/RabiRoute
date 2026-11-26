@@ -217,15 +217,24 @@ public static class RabiComputer {
             if(activeRequiresForeground&&GetForegroundWindow()!=inputWindow)
                 throw new InvalidOperationException("The original foreground target changed.");
         }}}
-    static Dictionary<string,object> ValidateSource(Dictionary<string,object> request,Dictionary<string,object> source){
+    static bool IsCaptureSourceReference(Dictionary<string,object> source){
+        return Str(source,"frameId")!=""&&Str(source,"imageItemId")!=""&&source.Count==(source.ContainsKey("imageView")?3:2);
+    }
+    static Dictionary<string,object> ValidateSource(Dictionary<string,object> request,Dictionary<string,object> source,bool reference=false){
         string target=Str(request,"instanceId");
         if(target!=""&&Str(source,"instanceId")!=""&&Str(source,"instanceId")!=target)throw new InvalidOperationException("The source belongs to a different computer instance.");
         string layout=Str(source,"layoutRevision");if(layout!=""&&layout!=LayoutRevision())throw new InvalidOperationException("The source display layout changed; observe again.");
         string frameId=Str(source,"frameId");if(frameId==""){if(source.ContainsKey("imageView"))throw new ArgumentException("imageView requires a cached capture source frame.");return source;}
         Dictionary<string,object> original;
         lock(frameLock){Frame frame;if(!frames.TryGetValue(frameId,out frame))throw new InvalidOperationException("The referenced original source frame is no longer cached; observe the target again.");original=new Dictionary<string,object>(frame.source);}
-        if(Str(original,"instanceId")!=Str(source,"instanceId")||target!=""&&Str(original,"instanceId")!=target||Str(original,"kind")!=Str(source,"kind")||Str(original,"windowId")!=Str(source,"windowId")||Str(original,"pid")!=Str(source,"pid"))throw new InvalidOperationException("The source frame does not match the target computer/window identity.");
-        if(SourceKey(original)!=SourceKey(source))throw new InvalidOperationException("The source frame scope/display/region/layout identity changed.");
+        if(target!=""&&Str(original,"instanceId")!=target)throw new InvalidOperationException("The source frame does not match the target computer/window identity.");
+        if(reference){
+            string cachedLayout=Str(original,"layoutRevision");
+            if(cachedLayout!=""&&cachedLayout!=LayoutRevision())throw new InvalidOperationException("The source display layout changed; observe again.");
+        }else{
+            if(Str(original,"instanceId")!=Str(source,"instanceId")||Str(original,"kind")!=Str(source,"kind")||Str(original,"windowId")!=Str(source,"windowId")||Str(original,"pid")!=Str(source,"pid"))throw new InvalidOperationException("The source frame does not match the target computer/window identity.");
+            if(SourceKey(original)!=SourceKey(source))throw new InvalidOperationException("The source frame scope/display/region/layout identity changed.");
+        }
         string imageItemId=Str(source,"imageItemId"),variant=Str(source,"coordinateVariant","image");
         Size expectedSize;
         lock(frameLock){Frame frame;if(!frames.TryGetValue(frameId,out frame))throw new InvalidOperationException("The source frame expired during validation.");
@@ -237,7 +246,7 @@ public static class RabiComputer {
             }
             if(variant=="raw")expectedSize=frame.bitmap.Size;else if(variant!="image")throw new ArgumentException("Unknown source coordinateVariant.");
         }
-        if(Num(source,"width")!=expectedSize.Width||Num(source,"height")!=expectedSize.Height)throw new InvalidOperationException("Coordinate source dimensions do not match its cached image variant.");
+        if(!reference&&(Num(source,"width")!=expectedSize.Width||Num(source,"height")!=expectedSize.Height))throw new InvalidOperationException("Coordinate source dimensions do not match its cached image variant.");
         original["width"]=expectedSize.Width;original["height"]=expectedSize.Height;original["coordinateVariant"]=variant;
         if(imageItemId!="")original["imageItemId"]=imageItemId;
         if(source.ContainsKey("imageView")){
@@ -537,7 +546,12 @@ public static class RabiComputer {
                 }
                 if(shared&&usesMouse&&(GetAsyncKeyState(1)<0||GetAsyncKeyState(2)<0||GetAsyncKeyState(4)<0))
                     throw new OperationCanceledException("physical-input-takeover");
-                source=ValidateSource(request,source);
+                bool useCaptureReference=IsCaptureSourceReference(source);
+                source=ValidateSource(request,source,useCaptureReference);
+                if(useCaptureReference&&Bool(request,"captureAfter")){
+                    request["source"]=source;
+                    CaptureSpec(request);
+                }
                 if(Get(source,"windowId")!=null){lock(stateLock){inputWindow=new IntPtr(Convert.ToInt64(Str(source,"windowId"),16));inputPid=Convert.ToUInt32(Get(source,"pid"));}}
                 var control=Obj(Get(RequestSettings(request),"control"));
                 anchor=new InputAnchor{batchId=requestId,sessionId=id,generation=Interlocked.Increment(ref batchGeneration),physicalEpoch=activePhysicalEpoch,mouseEpoch=Interlocked.Read(ref physicalMouseEpoch),cursor=Cursor.Position,foreground=GetForegroundWindow(),layoutRevision=LayoutRevision(),shared=shared,returnCursor=!legacyInput&&(!shared||usesMouse)&&Bool(control,"returnCursor",true),returnForeground=!legacyInput&&!shared&&Bool(control,"returnForeground",true),returnForegroundTimeoutMs=Num(control,"returnForegroundTimeoutMs",120)};
@@ -880,7 +894,7 @@ public static class RabiComputer {
         if(action=="annotation.track.stop"){Tracking item;lock(tracking)tracking.TryGetValue(Str(request,"trackingId"),out item);return item==null?(object)new{state="absent"}:StopTracking(item,Bool(request,"clear"),"requested");}
         if(action.StartsWith("annotation.")){object result=null;UI(()=>result=Annotation(request));return result;}
         if(Str(request,"renderer")=="qt")externalQt=true;
-        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
+        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,captureSourceReferenceVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
         throw new ArgumentException("Unsupported desktop operation.");
     }
     static void Handle(Dictionary<string,object> request){try{Emit(new{id=Get(request,"id"),result=Dispatch(request)});}catch(Exception error){var cause=error.GetBaseException();bool uncertain=false;lock(stateLock)uncertain=Str(request,"action")=="input.execute"&&(ownedKeys.Count>0||ownedButtons.Count>0||ownedUnicode.Count>0);Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=cause.Message,uncertain=uncertain}});}finally{if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;if(pendingInputCounts.TryGetValue(id,out count)){if(count<=1){pendingInputCounts.Remove(id);pendingInputSessions.Remove(id);cancelledRequests.Remove(id);}else pendingInputCounts[id]=count-1;}}if(Str(request,"action")=="control.begin")lock(stateLock){string id=Str(request,"controlSessionId");int count;if(pendingControlBegins.TryGetValue(id,out count)){if(count<=1){pendingControlBegins.Remove(id);endingControlSessions.Remove(id);}else pendingControlBegins[id]=count-1;}}}}

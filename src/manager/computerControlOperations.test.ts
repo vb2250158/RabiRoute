@@ -157,11 +157,14 @@ test("one input.perform owns shared press, move, hold and release and replays on
  const f=await fixture(t,(id,emit,config,root)=>new ManagerLocalComputer({stateDirectory:path.join(root,"local"),instanceId:id,emit,getSettings:()=>config.readComputerSettingsRaw(),computerServiceOptions:{nativeFactory:()=>native}}));
  const url=`${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
  const post=async(body:unknown)=>{const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});return {status:response.status,body:await response.json() as any};};
- const input={action:"input.perform",requestId:"shared-held-batch",source:{instanceId:f.registry.localInstanceId,kind:"desktop",coordinateSpace:"desktop"},actions:[
+ const source={frameId:"observed-frame",imageItemId:"shown-image",imageView:{width:640,height:360}};
+ const input={action:"input.perform",requestId:"shared-held-batch",source,captureAfter:true,actions:[
    {type:"press",x:100,y:100},{type:"move",x:130,y:100,durationMs:50},{type:"wait",durationMs:90},{type:"release"},
    {type:"keyDown",keys:["W"]},{type:"keyUp",keys:["W"]}
  ]};
  assert.equal((await post({...input,actions:[{type:"press",x:100}]})).status,400);
+ assert.equal((await post({...input,source:{frameId:source.frameId}})).status,400);
+ assert.equal((await post({...input,source:{...source,width:640}})).status,400);
  assert.equal(calls.length,0);
  const response=await post(input);assert.equal(response.status,200,JSON.stringify(response.body));
  const receipt=response.body.data;
@@ -171,6 +174,9 @@ test("one input.perform owns shared press, move, hold and release and replays on
  assert.deepEqual(calls.map(call=>call.action),["control.begin","input.execute","control.end"]);
  assert.equal(calls[0]!.body.inputMode,"shared");assert.equal(calls[1]!.body.inputMode,"shared");
  assert.equal(calls[1]!.body.requestId,input.requestId);assert.deepEqual(calls[1]!.body.actions,input.actions);
+ assert.deepEqual(calls[1]!.body.source,source);
+ assert.equal(calls[1]!.body.captureSpec,undefined);
+ assert.equal(calls[1]!.body.captureAfter,true);
  assert.ok(calls.every(call=>call.body.controlSessionId===receipt.controlSessionId));
  assert.deepEqual((await post(input)).body.data,receipt);
  const status=await post({action:"input.status",requestId:input.requestId});assert.equal(status.status,200);
