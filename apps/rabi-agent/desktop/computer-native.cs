@@ -59,6 +59,8 @@ public static class RabiComputer {
     static volatile bool sharedControl,activeSharedInput,activePointerInput,activeKeyboardInput,activeRequiresForeground;
     static readonly int[] physicalHeld=new int[256];
     static string presentationPhase="ready",presentationRequestId;static bool nativeBarMode=true;
+    static string observationId,observerLabel;
+    static long observationExpires;
     static object presentationReturnState,presentationDisplay,presentationRegion,presentationStopAction;
     static readonly object outputLock=new object(), stateLock=new object(), inputGate=new object(), frameLock=new object();
     static readonly UIntPtr injectionMarker=new UIntPtr(0x52414249);
@@ -100,7 +102,7 @@ public static class RabiComputer {
     static Dictionary<string,object> Bounds(Rectangle area){return new Dictionary<string,object>{{"x",area.X},{"y",area.Y},{"width",area.Width},{"height",area.Height}};}
     static void UI(Action action){if(ui==null)throw new InvalidOperationException("Desktop presentation is not ready.");ui.Send(_=>action(),null);}
     static void Redraw(){if(ui!=null)ui.Post(_=>{overlay.Invalidate();bar.RefreshStatus();PublishPresentation();},null);}
-    static void PublishPresentation(){Event("presentation",new{phase=presentationPhase,requestId=presentationRequestId,returnState=presentationReturnState,stopAction=presentationStopAction,sourceDisplay=presentationDisplay,observedRegion=presentationRegion,presentationSettings=Obj(Get(settings,"presentation")),revision=++presentationRevision,controlSessionId=session,source=bar.Source,remainingMs=Remaining(),pointer=pointerVisible?new{x=pointer.X,y=pointer.Y}:null,exitShortcut=Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"),countdownSeconds=countdown,layers=layers.Values});}
+    static void PublishPresentation(){Event("presentation",new{phase=presentationPhase,requestId=presentationRequestId,returnState=presentationReturnState,stopAction=presentationStopAction,sourceDisplay=presentationDisplay,observedRegion=presentationRegion,presentationSettings=Obj(Get(settings,"presentation")),revision=++presentationRevision,controlSessionId=session,source=bar.Source,observerLabel=observerLabel,remainingMs=Remaining(),pointer=pointerVisible?new{x=pointer.X,y=pointer.Y}:null,exitShortcut=Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"),countdownSeconds=countdown,layers=layers.Values});}
     static double? Remaining(){return session==null||!idleEnabled?(double?)null:Math.Max(0,idleSeconds*1000-lastActivity.Elapsed.TotalMilliseconds);}
     static Dictionary<string,object> MergeSettings(Dictionary<string,object> original,Dictionary<string,object> patch){
         var result=new Dictionary<string,object>(original);
@@ -200,7 +202,7 @@ public static class RabiComputer {
     }
     static void EndControl(string id,string reason,bool announce=true){
         lock(stateLock){if(session==null||session!=id)return;ReleaseOwned();session=null;sharedControl=false;pointerVisible=false;lastActivity.Reset();UnregisterHotKey(bar.Handle,1);hotkeyRegistered=false;}
-        if(ui!=null)ui.Post(_=>{presentationPhase="stopped";presentationStopAction=null;bar.RefreshStatus();overlay.Invalidate();PublishPresentation();},null);if(announce)Event("control-ended",new{controlSessionId=id,reason=reason});
+        if(ui!=null)ui.Post(_=>{ClearObservation();presentationPhase="stopped";presentationStopAction=null;bar.RefreshStatus();overlay.Invalidate();PublishPresentation();},null);if(announce)Event("control-ended",new{controlSessionId=id,reason=reason});
     }
     static void CheckInput(string id,string request){lock(stateLock){
         if(activeInputRequest!=null&&activeInputRequest==request){
@@ -493,6 +495,7 @@ public static class RabiComputer {
     }
     static void Phase(string phase,Dictionary<string,object> request=null,Dictionary<string,object> source=null,object returned=null){
         try{
+        if(request==null||Str(request,"action")!="screen.capture")ClearObservation();
         presentationPhase=phase;presentationStopAction=null;
         if(request!=null&&phase=="operating")presentationStopAction=new{action="input.cancel",requestId=Str(request,"requestId"),controlSessionId=Str(request,"controlSessionId")};
         if(request!=null&&phase=="tracking")presentationStopAction=new{action="annotation.track.stop",trackingId=Str(request,"trackingId")};
@@ -647,10 +650,36 @@ public static class RabiComputer {
     static void ApplyObservationRequestSettings(Dictionary<string,object> request){
         var selected=RequestSettings(request);lock(stateLock)settings=MergeSettings(settings,SelectSettingsDomains(selected,"presentation"));
     }
+    static void ClearObservation(){
+        observationId=null;observerLabel=null;observationExpires=0;
+    }
+    static void ShowObservation(string phase,Dictionary<string,object> request,Dictionary<string,object> source){
+        ui.Post(_=>{
+            if(session!=null||presentationStopAction!=null)return;
+            string id=Str(request,"id");
+            if(phase=="capturing"){
+                observationId=id;observationExpires=0;
+                observerLabel=Str(request,"observerLabel").Trim();
+                if(observerLabel.Length==0)observerLabel="Rabi";
+            }else{
+                if(observationId!=id)return;
+                double duration=Num(Obj(Get(settings,"presentation")),"noticeDurationMs",2500);
+                observationExpires=Stopwatch.GetTimestamp()+(long)(duration*Stopwatch.Frequency/1000);
+            }
+            Phase(phase,request,source);
+        },null);
+    }
+    static void ExpireObservation(){
+        if(observationExpires==0||Stopwatch.GetTimestamp()<observationExpires)return;
+        ClearObservation();
+        presentationPhase=null;presentationRequestId=null;presentationDisplay=null;presentationRegion=null;
+        PublishPresentation();
+    }
     static object Screen(Dictionary<string,object> request){
-        ApplyObservationRequestSettings(request);Phase("capturing",request);
-        try{var frame=Capture(request);var result=EncodeFrame(frame,request);Phase("prepared",request,frame.source);return result;}
-        catch{Phase("failed",request);throw;}
+        ApplyObservationRequestSettings(request);
+        ShowObservation("capturing",request,Obj(Get(request,"captureSpec")));
+        try{var frame=Capture(request);var result=EncodeFrame(frame,request);ShowObservation("prepared",request,frame.source);return result;}
+        catch{ShowObservation("failed",request,null);throw;}
     }
     static object EncodeFrame(Frame frame,Dictionary<string,object> request){
         bool cached=false;
@@ -840,7 +869,9 @@ public static class RabiComputer {
         if(action=="control.begin"){
             object result=null;UI(()=>{lock(stateLock){if(endingControlSessions.Contains(Str(request,"controlSessionId"))){result=new{state="ended",visible=false,reason="ended-before-native-enter"};return;}}
                 ApplyControlRequestSettings(request);
-                if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");sharedControl=Str(request,"inputMode")=="shared";session=Str(request,"controlSessionId");presentationPhase="ready";presentationRequestId=Str(request,"requestId",session);nativeBarMode=Str(request,"controlRenderer","native")!="qt";initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
+                if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");
+                ClearObservation();
+                sharedControl=Str(request,"inputMode")=="shared";session=Str(request,"controlSessionId");presentationPhase="ready";presentationRequestId=Str(request,"requestId",session);nativeBarMode=Str(request,"controlRenderer","native")!="qt";initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
         }
         if(action=="settings.patch"){UI(()=>ApplySettingsPatch(Obj(Get(request,"patch"))));return new{state="applied"};}
         if(action=="settings.update"){UI(()=>ApplySettings(Obj(Get(request,"settings"))));return new{state="applied"};}
@@ -868,7 +899,7 @@ public static class RabiComputer {
             var timer=new System.Windows.Forms.Timer();timer.Interval=100;timer.Tick+=(sender,args)=>{
                 UpdateWindowLayers();
                 foreach(string layerId in new List<string>(layers.Keys)){var layer=layers[layerId];if(Get(layer,"expiresMono")!=null&&Convert.ToDouble(Get(layer,"expiresMono"))<=Stopwatch.GetTimestamp())Annotation(new Dictionary<string,object>{{"action","annotation.clear"},{"layerId",layerId},{"version",Num(layer,"version",1)}});}
-                if(session!=null&&idleEnabled&&lastActivity.Elapsed.TotalSeconds>=idleSeconds)EndControl(session,"idle");bar.RefreshStatus();};timer.Start();ready.Set();Application.Run();timer.Stop();if(keyboardHandle!=IntPtr.Zero)UnhookWindowsHookEx(keyboardHandle);if(mouseHandle!=IntPtr.Zero)UnhookWindowsHookEx(mouseHandle);overlay.Dispose();bar.Dispose();});
+                if(session!=null&&idleEnabled&&lastActivity.Elapsed.TotalSeconds>=idleSeconds)EndControl(session,"idle");ExpireObservation();bar.RefreshStatus();};timer.Start();ready.Set();Application.Run();timer.Stop();if(keyboardHandle!=IntPtr.Zero)UnhookWindowsHookEx(keyboardHandle);if(mouseHandle!=IntPtr.Zero)UnhookWindowsHookEx(mouseHandle);overlay.Dispose();bar.Dispose();});
         gui.SetApartmentState(ApartmentState.STA);gui.Start();ready.WaitOne();
         var inputWorker=new Thread(()=>{foreach(var request in inputRequests.GetConsumingEnumerable())Handle(request);});inputWorker.IsBackground=true;inputWorker.Start();
         var recoveryWorker=new Thread(()=>{foreach(var request in recoveryReplies.GetConsumingEnumerable())Handle(request);});recoveryWorker.IsBackground=true;recoveryWorker.Start();
@@ -900,13 +931,17 @@ public static class RabiComputer {
                 if(noticeKey!=currentKey){noticeKey=currentKey;noticeClock.Restart();}
                 if(noticeClock.Elapsed.TotalMilliseconds>=Num(config,"noticeDurationMs",2500)){Hide();return;}
             }else{noticeKey=null;noticeClock.Reset();}
-            if(session==null&&presentationPhase=="ready"){Hide();return;}
+            if(session==null&&(presentationPhase==null||presentationPhase=="ready")){Hide();return;}
             if(!Visible){Show();ShowWindow(Handle,4);}
             var display=Obj(presentationDisplay);var area=Obj(Get(display,"workArea"));Rectangle work=area.Count==0?DesktopScreen.FromHandle(GetForegroundWindow()).WorkingArea:new Rectangle((int)Num(area,"x"),(int)Num(area,"y"),(int)Num(area,"width"),(int)Num(area,"height"));
             bool large=Str(config,"textSize","standard")=="large";int desiredHeight=large?90:70;if(Height!=desiredHeight){Height=desiredHeight;label.Height=Height-20;close.Top=(Height-close.Height)/2;var previousFont=label.Font;label.Font=new Font(SystemFonts.DefaultFont.FontFamily,large?13:10);if(previousFont!=SystemFonts.DefaultFont)previousFont.Dispose();}
             Location=new Point(work.Left+(work.Width-Width)/2,Str(config,"barPlacement","top-center")=="bottom-center"?work.Bottom-Height-20:work.Top+20);
-            double? remaining=Remaining();string returned=Str(Obj(presentationReturnState),"state");string status=presentationPhase=="returning"?"正在归还":presentationPhase=="returned"?(returned=="restored"?"已归还":returned=="yielded"?"已让出控制":returned=="partial"?"部分归还":"归还状态未知"):presentationPhase=="capturing"?"正在观察":presentationPhase=="prepared"?"图像已准备":"正在操作";
-            label.Text="Rabi · "+status+" · "+Str(Source,"label",Str(Source,"id"))+"\n"+(remaining.HasValue&&remaining.Value<=countdown*1000?"剩余 "+Math.Ceiling(remaining.Value/1000)+" 秒 · ":"")+Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc")+" 退出";
+            double? remaining=Remaining();string returned=Str(Obj(presentationReturnState),"state");string status=presentationPhase=="returning"?"正在归还":presentationPhase=="returned"?(returned=="restored"?"已归还":returned=="yielded"?"已让出控制":returned=="partial"?"部分归还":"归还状态未知"):presentationPhase=="ready"?"鼠标和键盘控制已就绪":presentationPhase=="operating"?"正在控制鼠标和键盘":"正在操作";
+            bool observing=session==null&&observerLabel!=null;
+            close.Visible=!observing;
+            label.Width=observing?Width-24:300;
+            label.Text=observing?observerLabel+(presentationPhase=="failed"?" 截图未完成":" 正在看你的屏幕"):
+                "Rabi · "+status+" · "+Str(Source,"label",Str(Source,"id"))+"\n"+(remaining.HasValue&&remaining.Value<=countdown*1000?"剩余 "+Math.Ceiling(remaining.Value/1000)+" 秒 · ":"")+Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc")+" 退出";
         }
         protected override void WndProc(ref Message message){if(message.Msg==0x312&&message.WParam.ToInt32()==1&&physicalExitPending){physicalExitPending=false;EndControl(session,"user-shortcut");}base.WndProc(ref message);}
     }

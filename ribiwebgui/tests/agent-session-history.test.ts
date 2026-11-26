@@ -340,30 +340,24 @@ test('task rows return before history, previews use four workers and a slow task
   assert.deepEqual(updates,['2:Fast reply']);assert(!started.includes('5'));
 });
 
-test('actual session page preserves previews after a failed more-page read and rejects late updates after search, Agent and visibility changes',async()=>{
+test('compact session page keeps task rows without requesting previews after a failed more-page read',async()=>{
   const parsed=parse(fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue',import.meta.url),'utf8'));
   const source=ts.createSourceFile('history.ts',parsed.descriptor.scriptSetup!.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
   const body=source.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(source)).join('\n');
   const emitted=ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-  const props=reactive({roleId:'role',active:true}),jobs:{signal:AbortSignal;update:(task:any)=>void}[]=[],cleanups:(()=>void)[]=[];
+  const props=reactive({roleId:'role',active:true}),cleanups:(()=>void)[]=[];
   const agents=['workbuddy','dsh'].map(provider=>({id:'local:'+provider,key:provider,provider,routes:[]}));
-  let failNextPage=false;
-  const client={agents:async()=>agents,tasks:async()=>{if(failNextPage)throw new Error('More page unavailable');return{items:[{id:'same-task',title:'Task'}],nextOffset:50};},
-    previews:async(_agent:unknown,_items:unknown,update:(task:any)=>void,signal:AbortSignal)=>{jobs.push({signal,update});return new Promise<void>((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}};
+  let failNextPage=false,previewRequests=0;
+  const client={agents:async()=>agents,tasks:async()=>{if(failNextPage)throw new Error('More page unavailable');return{items:[{id:'same-task',title:'Task',updatedAt:'2026-11-17T08:00:00Z'}],nextOffset:50};},
+    previews:async()=>{previewRequests++;}};
   const bindings={computed,nextTick,ref,watch,onBeforeUnmount:(fn:()=>void)=>cleanups.push(fn),defineProps:()=>props,
     usePersonaService:()=>({fetch,deviceId:''}),createAgentSessionClient:()=>client,useI18n:()=>({t:(text:string)=>text,locale:ref('zh-CN')}),
     pluginCatalogStore:{agentAdapters:ref([])},userFacingError:String,agentSessionMembersAvailable,agentSessionProject};
   const scope=effectScope(),state=scope.run(()=>new Function(...Object.keys(bindings),emitted+';return {tasks,agentKey,query,loadTasks,loadingTasks};')(...Object.values(bindings)))!;
   const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await nextTick();};
   try{
-    await flush();assert.equal(state.tasks.value.length,1);assert.equal(state.loadingTasks.value,false);assert.equal(jobs.length,1);
-    failNextPage=true;await state.loadTasks(true);assert.equal(state.tasks.value.length,1);assert.equal(jobs[0].signal.aborted,false);assert.equal(jobs.length,1);
-    jobs[0].update({id:'same-task',preview:'Still reading'});assert.equal(state.tasks.value[0].preview,'Still reading');failNextPage=false;
-    state.query.value='new search';await state.loadTasks();assert(jobs[0].signal.aborted);
-    jobs[0].update({id:'same-task',preview:'Old search'});assert.equal(state.tasks.value[0].preview,undefined);
-    jobs[1].update({id:'same-task',preview:'Current reply'});assert.equal(state.tasks.value[0].preview,'Current reply');
-    state.agentKey.value='dsh';await flush();assert(jobs[1].signal.aborted);jobs[1].update({id:'same-task',preview:'Wrong Agent'});assert.equal(state.tasks.value[0].preview,undefined);
-    props.active=false;await flush();assert(jobs[2].signal.aborted);jobs[2].update({id:'same-task',preview:'Hidden update'});assert.equal(state.tasks.value[0].preview,undefined);
-    props.active=true;await flush();assert.equal(jobs.length,4);jobs[3].update({id:'same-task',preview:'Resumed reply'});assert.equal(state.tasks.value[0].preview,'Resumed reply');
+    await flush();assert.equal(state.tasks.value.length,1);assert.equal(state.loadingTasks.value,false);assert.equal(previewRequests,0);
+    failNextPage=true;await state.loadTasks(true);assert.equal(state.tasks.value.length,1);assert.equal(previewRequests,0);
+    failNextPage=false;state.query.value='new search';await state.loadTasks();assert.equal(state.tasks.value.length,1);assert.equal(previewRequests,0);
   }finally{cleanups.forEach(fn=>fn());scope.stop();}
 });

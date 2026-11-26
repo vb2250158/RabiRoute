@@ -140,20 +140,25 @@ test("fresh provider admission failure creates no receipt and independent memory
   assert.deepEqual(f.callList(), []);
 });
 
-test("original A receipt retry selects retained A over currently selected B through actual child IPC", async t => {
+test("retired original A precommit receipt settles without invoking current B or replaying A", async t => {
   const f = await fixture(t);
   const patch = { title: "Original A retry" };
   const options = await f.seed("retry-original-A", patch, "A");
   f.select("B");
-  const value = await f.pool.updatePlan("Fixture", f.plan.id, patch, options);
-  assert.equal(value.title, "Original A retry [A]");
-  assert.deepEqual(f.callList(), ["A"]);
-  assert.equal(f.restores(), 1);
+  const before = f.current().inventoryHash;
+  const rejected = (error: unknown) => error instanceof ManagerStorageMutationError
+    && error.code === "aborted_before_commit" && error.commitState === "not_committed";
+  await assert.rejects(f.pool.updatePlan("Fixture", f.plan.id, patch, options), rejected);
+  await assert.rejects(f.pool.updatePlan("Fixture", f.plan.id, patch, options), rejected);
+  assert.equal(f.current().inventoryHash, before);
+  assert.deepEqual(f.callList(), []);
+  assert.equal(f.restores(), 0);
   const receipt = readDurableDeliveryReceipt(path.join(f.roleDir, "runtime"), MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, options.idempotencyKey)!;
   assert.equal((receipt.audit as { planUpdateExecutor: PlanUpdateExecutorPin }).planUpdateExecutor.version, "0.0.1");
+  assert.equal(receipt.state, "completed");
 });
 
-test("missing original executor keeps only its uncommitted operation unknown without invoking B", async t => {
+test("a proven precommit abort needs no missing original executor and never invokes B", async t => {
   const f = await fixture(t);
   const patch = { title: "Unresolved A" };
   const options = await f.seed("missing-original-A", patch, "A");
@@ -161,16 +166,19 @@ test("missing original executor keeps only its uncommitted operation unknown wit
   f.select("B");
   f.restoreUnavailable(true);
   await assert.rejects(f.pool.updatePlan("Fixture", f.plan.id, patch, options),
-    error => error instanceof ManagerStorageMutationError && error.code === "indeterminate");
+    error => error instanceof ManagerStorageMutationError && error.code === "aborted_before_commit"
+      && error.commitState === "not_committed");
   assert.equal(f.current().inventoryHash, before);
   assert.deepEqual(f.callList(), []);
-  assert.equal(readDurableDeliveryReceipt(path.join(f.roleDir, "runtime"), MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, options.idempotencyKey)!.state, "uncertain");
+  assert.equal(f.restores(), 0);
+  assert.equal(readDurableDeliveryReceipt(path.join(f.roleDir, "runtime"), MANAGER_STORAGE_MUTATION_RECEIPT_NAMESPACE, options.idempotencyKey)!.state, "completed");
 });
 
-test("frozen prepared A WAL completes generically even when its package is missing, with zero preparation calls", async t => {
+test("prepared A WAL remains uncertain without original recovery and never invokes a replacement provider", async t => {
   const f = await fixture(t);
   const patch = { title: "Frozen original A" };
   const options = await f.seed("prepared-A", patch, "A");
+  const originalReceipt = fs.readFileSync(f.receiptPath(options.idempotencyKey));
   const original = f.current();
   const module = await import(f.modules.get("A")!.entryUrl);
   const preparation = module.createPlanUpdatePreparation(planUpdatePrimitives);
@@ -189,14 +197,16 @@ test("frozen prepared A WAL completes generically even when its package is missi
   const preparationsBeforeRecovery = f.callList();
   f.select("B");
   f.restoreUnavailable(true);
-  const value = await f.pool.updatePlan("Fixture", f.plan.id, patch, options);
-  assert.equal(value.title, patch.title + " [A]");
-  assert.equal(value.storageMutationRequestId, options.idempotencyKey);
+  await assert.rejects(f.pool.updatePlan("Fixture", f.plan.id, patch, options),
+    error => error instanceof ManagerStorageMutationError && error.code === "indeterminate");
+  assert.equal(f.current().inventoryHash, original.inventoryHash);
   assert.deepEqual(f.callList(), preparationsBeforeRecovery);
   assert.equal(f.restores(), 0);
   const history = listPlanHistory(f.roleDir, f.plan.id).filter(item => item.after.storageMutationRequestId === options.idempotencyKey);
-  assert.equal(history.length, 1);
-  assert.equal(history[0].after.title, patch.title + " [A]");
+  assert.equal(history.length, 0);
+  assert.deepEqual(fs.readFileSync(f.receiptPath(options.idempotencyKey)), originalReceipt);
+  const walRoot = path.join(f.roleDir, "plans", "quarantine", "plan-storage-lifecycle-transactions", f.plan.id);
+  assert.ok(fs.readdirSync(walRoot).length > 0, "the unresolved original WAL remains available for recovery");
 });
 
 function deferred<T>() {

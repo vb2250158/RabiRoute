@@ -52,6 +52,8 @@ Physical mouse movement preserves the user's new position. Receipts distinguish 
 
 ## Operation feedback
 
+A standalone screenshot shows “〈Agent session name〉 is viewing your screen” on the target display. The notice closes automatically after the configured duration, by default 2.5 seconds after capture. When the session title is unavailable, the notice names the connection source. Screenshots taken during an active control session keep its control notice and exit action.
+
 The desktop bar follows the observed display. `presentation.barPlacement` selects top-center or bottom-center placement. Text size and motion follow current settings and theme. The bar presents the observed region, observation／operation／return phase and stop action. WebGUI receives activity updates and can expand the image.
 
 The desktop indicator uses a rounded capsule with transparent window corners. Standard text uses 280–360 logical pixels of width and 46 of height. Large text uses 58 of height. Long labels elide within the bounded width. The stop button tooltip provides the complete status, source and exit shortcut. The body and rounded corners allow click-through while the stop button remains interactive.

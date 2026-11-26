@@ -385,6 +385,7 @@ export class LanAgentRegistry {
     onComputerChanged?: (instanceId: string) => void;
     onComputerSourceCleanupError?: (instanceId:string,error:unknown)=>void;
     executionSource?: (request: http.IncomingMessage) => Pick<ComputerExecutionContext,"sourceId" | "sourceLabel" | "taskId" | "connectionId">;
+    observationLabel?: (request: http.IncomingMessage) => Promise<string | undefined>;
     listPeerComputers?: () => Promise<{ computers: Record<string, unknown>[]; sourceErrors: Array<{ ownerDeviceId: string; message: string }> }>;
     currentRelease?: (nodeId: string) => Readonly<{ version: string; releaseDigest: string }>;
     createLocalComputer?: (instanceId: string, emit: (event: Record<string, unknown>) => void) => ManagerLocalComputer;
@@ -559,6 +560,10 @@ export class LanAgentRegistry {
 
   computerExecutionSource(request: http.IncomingMessage): Pick<ComputerExecutionContext,"sourceId" | "sourceLabel" | "taskId" | "connectionId"> {
     return this.options.executionSource?.(request) ?? {sourceId:`manager:${this.localInstanceId}`,sourceLabel:"Rabi PC"};
+  }
+
+  computerObservationLabel(request: http.IncomingMessage): Promise<string | undefined> | undefined {
+    return this.options.observationLabel?.(request);
   }
 
   assertComputerFeature(instanceId: string, feature: ComputerFeature): void {

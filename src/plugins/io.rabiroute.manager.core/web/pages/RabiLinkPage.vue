@@ -19,28 +19,20 @@ import {
 } from "../../../../../ribiwebgui/src/rabiLinkHomeClient";
 import { createRabiLinkHomeLoader, type RabiLinkHomeState } from "../../../../../ribiwebgui/src/rabiLinkHomeState";
 import ComputerControlPage from "../computer/ComputerControlPage.vue";
+import { phoneDeepLink } from "../computer/phoneDevice";
 import LanAgentsPage from "../../../../../ribiwebgui/src/pages/LanAgentsPage.vue";
 import RabiLinkSettings from "../components/RabiLinkSettings.vue";
-import RabiPhoneControl from "../components/RabiPhoneControl.vue";
 
 const route = useRoute();
 const router = useRouter();
 const store = useGatewayStore();
 const { t } = useI18n();
 const tab = computed(() => rabiLinkTab(route.query.tab));
-const phoneControl = computed(() => tab.value === "computer" && route.query.deviceType === "phone");
-const deviceDirectoryActive = computed(() => tab.value === "home" || phoneControl.value);
+const deviceDirectoryActive = computed(() => tab.value === "home" || tab.value === "computer");
 const ready = ref(false);
-const computerActive = computed(() => tab.value === "computer" && !phoneControl.value);
+const computerActive = computed(() => tab.value === "computer");
 const computerVisited = ref(computerActive.value);
 watch(computerActive, value => { if (value) computerVisited.value = true; });
-function selectControl(type: "computer" | "phone") {
-  if ((type === "phone") === phoneControl.value) return;
-  void router.replace({ query: { ...route.query, deviceType: type === "phone" ? "phone" : undefined, deviceId: undefined } });
-}
-function selectPhone(id: string) {
-  void router.replace({ query: { ...route.query, deviceId: id || undefined } });
-}
 const saving = ref(false);
 const refreshing = ref(false);
 const error = ref("");
@@ -63,7 +55,7 @@ const devices = computed(() => home.value.phase === "ready" ? home.value.data.de
 }) : []);
 const labelDevice = ref<RabiLinkHomeDevice>();
 const phones = computed(() => devices.value.filter(device => device.kind === "phone"));
-const selectedPhoneId = computed(() => typeof route.query.deviceId === "string" ? route.query.deviceId : "");
+const selectedPhoneId = computed(() => phoneDeepLink(route.query));
 const alias = ref("");
 const tags = ref("");
 const labelError = ref("");
@@ -232,7 +224,7 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
                 <RouterLink
                   v-if="device.kind !== 'glasses'"
                   class="rabilink-device-link"
-                  :to="{ path: '/rabilink', query: { tab: 'computer', deviceType: device.kind === 'phone' ? 'phone' : undefined, deviceId: device.isLocal ? '' : device.id } }"
+                  :to="{ path: '/rabilink', query: { tab: 'computer', ...(device.kind === 'phone' ? { phoneId: device.id } : { deviceId: device.isLocal ? '' : device.id }) } }"
                 >{{ device.displayName }}</RouterLink>
                 <strong v-else>{{ device.displayName }}</strong>
               </div>
@@ -289,18 +281,9 @@ onBeforeUnmount(() => { disposed = true; metaRequest?.abort(); managerEvents?.cl
       </v-card>
     </v-dialog>
     <LanAgentsPage v-if="tab === 'agents'" />
-    <div v-if="tab === 'computer'" class="d-flex ga-2 mb-4" role="group" :aria-label="t('设备控制')">
-      <v-btn size="small" :variant="computerActive ? 'tonal' : 'text'" :aria-pressed="computerActive"
-        prepend-icon="mdi-monitor" @click="selectControl('computer')">{{ t('电脑控制') }}</v-btn>
-      <v-btn size="small" :variant="phoneControl ? 'tonal' : 'text'" :aria-pressed="phoneControl"
-        prepend-icon="mdi-cellphone" @click="selectControl('phone')">{{ t('手机控制') }}</v-btn>
-    </div>
-    <ComputerControlPage v-if="computerVisited" v-show="computerActive" :active="computerActive" />
-    <template v-if="phoneControl">
-      <v-alert v-if="home.phase === 'error'" type="error" variant="tonal">{{ home.error }}</v-alert>
-      <RabiPhoneControl v-else :phones="phones" :selected-id="selectedPhoneId"
-        :loading="home.phase === 'loading' || !ready" @select="selectPhone" />
-    </template>
+    <ComputerControlPage v-if="computerVisited" v-show="computerActive" :active="computerActive"
+      :phones="phones" :phones-loading="home.phase === 'loading' || !ready"
+      :phones-error="home.phase === 'error' ? home.error : ''" :phone-id="selectedPhoneId" @refresh="refreshHome" />
     <RabiLinkSettings v-show="tab === 'config'" :ready="ready" :active="tab === 'config'" @saving="onSaving" />
   </div>
 </template>

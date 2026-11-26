@@ -222,3 +222,14 @@ test('project folder view previews five sessions and expands only the requested 
   assert.equal(historyConversationRows(items,true,new Set(),options).filter(row=>row.kind==='conversation').length,8);
   assert.equal(historyConversationRows(items,false,new Set(),options).length,8);
 });
+
+test('Agent sessions use a node bar instead of a dropdown and compact rows without previews',()=>{
+  const sessions=readFileSync(componentPath('PersonaAgentSessions'),'utf8');
+  assert.doesNotMatch(sessions,/<v-menu\b/);
+  assert.match(sessions,/class="agent-node-bar"/);
+  assert.match(sessions,/compact="true"/);
+  const layout=readFileSync(componentPath('HistoryConversationLayout'),'utf8');
+  assert.match(layout,/v-if="row\.conversation\.preview"/);
+  assert.match(layout,/compact \? \(grouped \? 44 : 46\)/);
+  assert.match(layout,/history-compact \.history-project-heading/);
+});

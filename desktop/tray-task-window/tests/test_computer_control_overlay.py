@@ -1,10 +1,15 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import io
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QPalette, QColor
+from PySide6.QtTest import QTest
 from rabiroute_tray.computer_control_overlay import ControlBar, DrawingSurface, Presentation, map_source_point, centered_bar_position
 from rabiroute_tray.themes import theme_definition
 
@@ -19,6 +24,15 @@ class ComputerControlOverlayTest(unittest.TestCase):
                   "bounds": {"x": -1600, "y": 100, "width": 1600, "height": 1200}}
         self.assertEqual(map_source_point(source, 400, 300), (-800, 700))
         self.assertEqual(map_source_point({"coordinateSpace": "desktop"}, -120, 30), (-120, 30))
+
+    def test_native_pipe_reads_utf8_on_chinese_windows(self):
+        data = '{"observerLabel":"评估远程电脑控制效率"}\n'.encode("utf-8")
+        stream = io.TextIOWrapper(io.BytesIO(data), encoding="gbk")
+        bridge = SimpleNamespace(incoming=Mock(), eof=Mock())
+        with patch.object(sys, "stdin", stream):
+            Presentation.read(SimpleNamespace(bridge=bridge))
+        bridge.incoming.emit.assert_called_once_with({"observerLabel": "评估远程电脑控制效率"})
+        bridge.eof.emit.assert_called_once_with()
 
     def test_all_six_shapes_render_without_becoming_input_widgets(self):
         surface = DrawingSurface(self.app.primaryScreen())
@@ -113,22 +127,34 @@ class ComputerControlOverlayTest(unittest.TestCase):
             surface.close()
         bar.close()
 
-    def test_observation_phase_is_visible_without_claiming_model_delivery(self):
+    def test_observation_notice_names_the_session_and_expires_without_a_control_button(self):
         presentation = Presentation(self.app)
-        presentation.update({"revision": 1, "phase": "prepared", "source": {"label": "<b>Agent</b>"},
+        observed = {"revision": 1, "requestId": "observation", "phase": "capturing",
+                    "observerLabel": "<b>Agent 会话</b>", "source": {"label": "Previous controller"},
                              "sourceDisplay": {"displayId": self.app.primaryScreen().name(), "name": "屏幕 2"},
-                             "presentationSettings": {"barPlacement": "bottom-center", "textSize": "large"},
-                             "layers": []})
-        self.assertIn("画面已准备", presentation.bar.title_label.text())
-        self.assertIn("屏幕 2", presentation.bar.title_label.text())
-        self.assertIn("<b>Agent</b>", presentation.bar.subtitle_label.text())
+                    "presentationSettings": {"barPlacement": "bottom-center", "textSize": "large", "noticeDurationMs": 30},
+                    "layers": []}
+        presentation.update(observed)
+        self.assertEqual(presentation.bar.title_label.text(), "<b>Agent 会话</b> 正在看你的屏幕")
+        self.assertEqual(presentation.bar.subtitle_label.text(), "屏幕 2")
+        self.assertFalse(presentation.bar.button.isVisible())
         self.assertTrue(presentation.bar.isVisible())
         area = self.app.primaryScreen().availableGeometry()
         self.assertEqual(presentation.bar.pos(), centered_bar_position(area, presentation.bar.width(), presentation.bar.height(), "bottom-center"))
-        presentation.update({"revision": 2, "phase": "returned", "layers": []})
-        presentation.update({"revision": 3, "phase": "operating", "layers": []})
+        completed = {**observed, "revision": 2, "phase": "prepared"}
+        presentation.update(completed)
+        QTest.qWait(80)
+        self.assertFalse(presentation.bar.isVisible())
+        presentation.update({**completed, "revision": 3})
+        self.assertFalse(presentation.bar.isVisible(), "a repeated snapshot must not revive a finished notice")
+        presentation.update({**completed, "requestId": "next-observation", "revision": 4})
+        self.assertTrue(presentation.bar.isVisible())
+        presentation.update({"revision": 5, "phase": "operating", "controlSessionId": "control", "layers": []})
         presentation.hide_completed_notice()
         self.assertTrue(presentation.bar.isVisible(), "old completed notice must not hide current operation")
+        self.assertIn("正在控制鼠标和键盘", presentation.bar.title_label.text())
+        self.assertTrue(presentation.bar.button.isVisible())
+        self.assertEqual(presentation.bar.button.accessibleName(), "退出控制")
         for surface in presentation.surfaces:
             surface.close()
         presentation.bar.close()

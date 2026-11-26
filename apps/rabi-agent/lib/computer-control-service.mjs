@@ -23,7 +23,7 @@ export class ComputerControlService {
     this.activeLayers = new Map(); this.activeTrackers = new Map(); this.notified = new WeakMap();
     this.inputQueue = Promise.resolve(); this.inflight = new Map(); this.stopped = false;
     native.on?.("presentation", event => {
-      const value = Object.fromEntries(["phase", "requestId", "controlSessionId", "sourceDisplay", "observedRegion", "returnState"]
+      const value = event.phase === null ? undefined : Object.fromEntries(["phase", "requestId", "controlSessionId", "sourceDisplay", "observedRegion", "returnState"]
         .filter(key => event[key] !== undefined).map(key => [key, clone(event[key])]));
       // Pointer rendering can update every frame. Notify business observers only when operation facts change.
       if (JSON.stringify(value) === JSON.stringify(this.activity)) return;
@@ -296,7 +296,11 @@ export class ComputerControlService {
     this.check("screen.capture", context);
     const normalized = normalizeComputerCaptureSpec(input);
     const captureSpec = input.captureSpec !== undefined || hasCaptureSelector(input) || normalized.layoutRevision !== undefined ? normalized : undefined;
-    const result = await this.native.request("screen.capture", { ...input, captureSpec, maxWidth: captureMaximumWidth(input), action: undefined, instanceId: this.target(context), settings: this.settings(context, "screen.capture") });
+    const result = await this.native.request("screen.capture", {
+      ...input, captureSpec, maxWidth: captureMaximumWidth(input), action: undefined,
+      instanceId: this.target(context), settings: this.settings(context, "screen.capture"),
+      observerLabel: this.source(context).label
+    });
     context.guard?.();
     if (input.controlSessionId && input.background !== true && this.session?.controlSessionId === input.controlSessionId && this.session.source.id === this.source(context).id) {
       this.touch(this.session); await this.native.request("control.activity", { controlSessionId: input.controlSessionId });

@@ -7944,6 +7944,36 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       const peer = rabiLinkAgentTaskSource(request,rabiLinkRelayConfigForMeta(),managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
       return peer ? {sourceId:`peer:${peer.sourceDeviceId}`,sourceLabel:peer.sourceDeviceId} : {sourceId:`manager:${managerInstanceId}`,sourceLabel:"Rabi PC"};
     },
+    observationLabel: async request => {
+      const source = getTrustedLanAgentSource(request);
+      // Caller headers identify a title to display. They do not change control ownership.
+      const provider = source ? source.provider : request.headers["x-rabiroute-agent-type"];
+      const sessionId = source ? source.sessionId : request.headers["x-rabiroute-session-id"];
+      if (!isAgentAdapterType(provider) || typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+      if (!source && rabiLinkAgentTaskSource(request,rabiLinkRelayConfigForMeta(),managerHostIdentity?.applicationGenerationId ?? managerInstanceId)) return undefined;
+      const fallback = source ? undefined : provider;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const controller = new AbortController();
+      const titleBudget = new Promise<undefined>(resolve => {
+        timer = setTimeout(() => { resolve(undefined); controller.abort(); }, 400);
+      });
+      try {
+        const threadRequest = { action: "read" as const, agentAdapter: provider, threadId: sessionId };
+        const readTitle = async () => {
+          if (!source) return readAgentEndpointSummary(provider, sessionId, agentThreadRequestOptions(threadRequest, { requestSignal: controller.signal }));
+          if (!instanceThreadTransport || !lanAgentRegistry.getInstanceAgent(source.nodeId, source.agentId)) return undefined;
+          const result = await routeInstanceThread({ ...threadRequest, instanceBinding: { instanceId: source.nodeId, agentId: source.agentId } }, instanceThreadTransport);
+          return result?.statusCode === 200 ? result.data.thread as { id?: string; title?: string } | undefined : undefined;
+        };
+        const thread = await Promise.race([readTitle(), titleBudget]);
+        const title = thread?.id === sessionId ? thread.title?.trim() : undefined;
+        return title || fallback;
+      } catch {
+        return fallback;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
     computerFeaturePolicy:(instanceId,feature)=>instanceId===lanAgentRegistry.localInstanceId?configRepository.readComputerFeaturePolicy(feature):lanAgentAuthority.getComputerFeaturePolicy(instanceId,feature),
     computerSettings: (instanceId, refresh) => instanceId === lanAgentRegistry.localInstanceId ? configRepository.readComputerSettings(refresh) : lanAgentAuthority.getComputerSettings(instanceId, refresh),

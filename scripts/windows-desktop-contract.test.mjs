@@ -125,7 +125,8 @@ test("Host reports retired portable entries before composing a generation withou
 test("RabiSpeech documentation has one Host-owned lifecycle entry", () => {
   for (const docs of [speechPluginDocs, speechPluginDocsEn]) {
     assert.match(docs, /RabiRouteHost\.exe/);
-    assert.match(docs, /install-service\.ps1/);
+    assert.match(docs, /Manager/);
+    assert.match(docs, /scripts\/start\.ps1/);
     assert.doesNotMatch(docs, /install-service\.ps1\s+-StartNow/);
   }
 });
