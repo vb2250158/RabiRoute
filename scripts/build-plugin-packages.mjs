@@ -485,5 +485,9 @@ if (entryPath === fileURLToPath(import.meta.url)) {
     else options.outputDirectory = value;
   }
   const result = await buildPluginPackages(process.cwd(), options);
-  console.log(`Built ${result.copied.length} plugin packages in ${path.relative(process.cwd(), result.outputRoot)}.`);
+  // Plugin output is regenerated after build:backend's rewrite pass, so rewrite again here
+  // or every package keeps its @rabiroute/host-api/* specifier and fails at runtime.
+  const { rewriteBuiltHostApiImports } = await import("./rewrite-built-host-api-imports.mjs");
+  const rewritten = await rewriteBuiltHostApiImports(process.cwd());
+  console.log(`Built ${result.copied.length} plugin packages in ${path.relative(process.cwd(), result.outputRoot)} (rewrote ${rewritten} host-api imports).`);
 }
