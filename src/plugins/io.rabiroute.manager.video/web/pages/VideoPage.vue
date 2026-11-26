@@ -2178,7 +2178,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workspace-flow-wires .processing-connection { stroke:var(--rr-accent); opacity:1; stroke-dasharray:16 8; animation:input-flow 900ms linear infinite; }
 @keyframes input-flow { to { stroke-dashoffset:-24; } }
 @media (prefers-reduced-motion: reduce) { .workspace-flow-wires .processing-connection { animation:none; } }
-.workspace-flow-wires .completed-connection { stroke-dasharray:6 4; }
+/* A completed condition must not turn a control edge dashed: dashing is the
+   material signal. Control edges stay solid and only shift weight. */
+.workspace-flow-wires .completed-connection.material-connection { stroke-dasharray:9 4; }
+.workspace-flow-wires .completed-connection.control-connection { stroke-dasharray:none; stroke-width:1.75; }
 .workspace-flow-wires .preview-connection { opacity:1; pointer-events:none; }
 /* P0-1：每张卡只有一个输入口和一个输出口，位置不随节点类型变化。 */
 .workspace-port { position:absolute; top:var(--canvas-port,72px); z-index:3; display:grid; place-items:center; width:22px; height:22px; transform:translateY(-50%); border:1px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
