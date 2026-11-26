@@ -28,7 +28,7 @@ const props = defineProps<{
   saveResult?: (nodeId: string, result: TextPreview) => Promise<WorkbenchCanvas>;
 
 }>();
-const emit = defineEmits<{back:[];media:[canvasId:string,runId?:string];runSelected:[runId:string];cliSettings:[]}>();
+const emit = defineEmits<{back:[];media:[canvasId:string,runId?:string];runSelected:[runId:string];cliSettings:[];focusNode:[nodeId:string]}>();
 const project=ref<{title:string;revision:number;defaultCanvasId:string}>(),definition=ref<WorkbenchDefinition>();
 const listPreviewKey = (projectId: string) => ["workbench", "canvases", projectId];
 const listPreview = props.mode === "list" ? readPreview<CanvasSummary[]>(listPreviewKey(props.projectId)) : undefined;
@@ -339,7 +339,7 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
         </aside>
       </div><div v-if="mode === 'settings' && activeEdge" class="edge-inspector"><strong>{{nodeIndex.get(activeEdge.from)?.title}} → {{nodeIndex.get(activeEdge.to)?.title}}</strong><label>触发条件<select v-model="activeEdge.condition" @change="if(activeEdge.condition!=='completed')delete activeEdge.allowSkip;dirty=true"><option value="success">前置成功后</option><option value="completed">前置结束后</option></select></label><label v-if="activeEdge.condition==='completed'&&nodeIndex.get(activeEdge.from)?.optional"><input v-model="activeEdge.allowSkip" type="checkbox" @change="dirty=true"/>允许前置跳过</label><button class="text-danger" @click="removeEdge(activeEdge.id)">移除连接</button></div>
       <section v-if="mode === 'run'" aria-label="画布运行">
-        <WorkbenchRunPanel :key="projectId+':'+value.id" :project-id="projectId" :canvas-id="value.id" :revision="value.revision" :dirty="dirty||busy" :states="definition?.nodeStates" :run-states="definition?.runStates" @edition="(canvasId,runId)=>action(()=>chooseCanvas(canvasId,runId))" @run-selected="runId => emit('runSelected', runId)"/>
+        <WorkbenchRunPanel :key="projectId+':'+value.id" :project-id="projectId" :canvas-id="value.id" :revision="value.revision" :dirty="dirty||busy" :states="definition?.nodeStates" :run-states="definition?.runStates" @edition="(canvasId,runId)=>action(()=>chooseCanvas(canvasId,runId))" @run-selected="runId => emit('runSelected', runId)" @focus-node="nodeId => emit('focusNode', nodeId)"/>
       </section>
     </template>
   </section>

@@ -1338,6 +1338,12 @@ function selectWire(wire: { id: string; kind: PortKind; from: string; to: string
   if (wire.kind === "step") void action(() => openWorkflowPanel("settings", wire.id));
   else selectedIds.value = [wire.to];
 }
+/** A log line belongs to a node: select it, center it, and keep the run panel reachable. */
+async function focusRunNode(nodeId: string) {
+  if (!nodeId || !flowNodesById.value.has(nodeId)) return;
+  selectedIds.value = [nodeId];
+  canvas.center(nodeId);
+}
 function focusInputSource(id: string) {
   selectedIds.value = [id];
   canvas.center(id);
@@ -1947,7 +1953,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
     </section>
     <v-dialog v-if="workflowPanel && mediaCanvasId && !projectHome" :model-value="true" persistent max-width="760" scrollable>
       <v-card><v-card-text class="workflow-dialog-content">
-        <WorkbenchPanel :key="workflowPanel + mediaCanvasId" :project-id="projectId" :canvas-id="mediaCanvasId" :mode="workflowPanel" :edge-id="selectedEdgeId" :commit="saveInspectorDraft" @back="closeWorkflowPanel" @media="(id,runId)=>action(()=>openMediaCanvas(id,runId))" @run-selected="focusedRunId = $event"/>
+        <WorkbenchPanel :key="workflowPanel + mediaCanvasId" :project-id="projectId" :canvas-id="mediaCanvasId" :mode="workflowPanel" :edge-id="selectedEdgeId" :commit="saveInspectorDraft" @back="closeWorkflowPanel" @media="(id,runId)=>action(()=>openMediaCanvas(id,runId))" @run-selected="focusedRunId = $event" @focus-node="focusRunNode"/>
       </v-card-text></v-card>
     </v-dialog>
     <PeerServerSelect :model-value="serviceDeviceId" v-slot="computers">

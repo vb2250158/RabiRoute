@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import {computed,onBeforeUnmount,onMounted,ref,watch} from "vue";
+import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from "vue";
 import {browserUuid} from "../../../../../ribiwebgui/src/browserUuid";
 import {managerEventSource} from "../../../../../ribiwebgui/src/managerApi";
 import {mergePage, type TextPreview} from "./workbenchEditor";
 const props=defineProps<{projectId:string;canvasId:string;revision:number;dirty:boolean;nodeId?:string;canRun?:boolean;saveBeforeRun?:()=>Promise<number>;saveResult?:(result:TextPreview)=>Promise<void>;states?:Record<string,{label:string}>;runStates?:Record<string,{label:string}>}>();
-const emit=defineEmits<{edition:[canvasId:string,runId:string];runSelected:[runId:string]}>();
+const emit=defineEmits<{edition:[canvasId:string,runId:string];runSelected:[runId:string];focusNode:[nodeId:string]}>();
 type Attempt={id:string;nodeId:string;title?:string;state:string;reason?:string;outputText?:string;reusedFromAttemptId?:string;approval?:{required:boolean;requestedAt?:string};confirmation?:{mode?:string;identity:string;confirmedAt:string;basis?:unknown[]};artifacts?:{artifactId:string;key:string;bytes:number}[]};
 type Run={id:string;projectId:string;canvasId:string;state:string;reason?:string;attempts:Record<string,Attempt>;snapshot?:{graph:{nodes:{id:string;config:{instructions?:string}}[]}}};
 type Request={id:string;revision:number;concurrency?:number;resumeRunId?:string;nodeId?:string};
@@ -12,7 +12,22 @@ type EditionRequest={id:string;date:string;label?:string;concurrency?:number};
 type EditionResult={trigger:{id:string;projectId:string;templateId:string;canvasId:string;date:string;runId:string;phase:string};run:Run};
 const run=ref<Run>(),request=ref<Request>(),error=ref(""),busy=ref(false),identity=ref(""),evidence=ref("{}");
 watch(() => run.value?.id, id => { if (id && !props.nodeId) emit("runSelected", id); });
-const entries=ref<{sequence:number;stream:string;text:string}[]>([]),concurrency=ref(1);
+const entries=ref<{sequence:number;stream:string;text:string;nodeId?:string;kind?:string}[]>([]),concurrency=ref(1);
+/** §7.2: filter by status, jump to the node a line belongs to, and land on the first error. */
+const logFilter=ref<"all"|"failed"|"warn">("all");
+const logRows=computed(() => entries.value.filter(row => logFilter.value === "all"
+  || (logFilter.value === "failed" ? /^✗/.test(row.text) || row.kind === "error" || row.stream === "stderr"
+  : /^⏸/.test(row.text) || row.kind === "approval" || /warn/i.test(row.stream))));
+const logScroll=ref<HTMLElement>();
+/** Land on the first failure whenever the rows change, so a long run does not hide it. */
+async function revealFirstError() {
+  await nextTick();
+  const box = logScroll.value;
+  if (!box) return;
+  const failed = [...box.querySelectorAll<HTMLElement>("[data-log-error]")].find(row => row.offsetParent !== null);
+  if (failed) box.scrollTop = Math.max(0, failed.offsetTop - box.offsetTop - 12);
+}
+watch([() => entries.value.length, logFilter], revealFirstError, { flush: "post" });
 const history=ref<{id:string;state:string;createdAt:string;canvasRevision:number}[]>([]),historyCursor=ref<string|null>(null);
 const logsLoading=ref(false),logsAtEnd=ref(false),runLabel=computed(()=>run.value?(props.runStates?.[run.value.state]?.label||run.value.state):"");
 const nodeAttempt = computed(() => props.nodeId ? run.value?.attempts[props.nodeId] : undefined);
@@ -179,12 +194,36 @@ onBeforeUnmount(()=>{disposed=true;epoch++;historyEpoch++;actionEpoch++;controll
     <v-alert v-if="error" type="error" variant="tonal">{{error}}</v-alert><p v-if="request" class="pending-request">原运行请求尚未确认。恢复时沿用同一请求，不创建第二次运行。</p><p v-if="run?.reason" class="run-reason">{{run.reason}}</p>
     <div v-if="run" class="run-results"><article v-for="attempt in run.attempts" :key="attempt.id"><div class="attempt-main"><i class="status-dot" :class="attempt.state"/><span>{{attempt.title||attempt.nodeId}}</span><strong :class="attempt.state">{{attemptLabel(attempt)}}</strong><small v-if="attempt.reusedFromAttemptId">复用已核验产物</small><small v-if="confirmationNote(attempt)" class="attempt-confirmation">{{confirmationNote(attempt)}}</small><a v-for="artifact in attempt.artifacts" :key="artifact.artifactId" :href="'/api/video/v2/runs/'+run.id+'/artifacts?artifact='+artifact.artifactId" target="_blank" rel="noopener">{{artifact.key}} · {{artifact.bytes}} B ↗</a><v-btn v-if="waitingApproval(attempt)" :disabled="!identity.trim()||busy" size="small" color="primary" @click="action(()=>complete(attempt))">确认并继续</v-btn><template v-else-if="waitingHuman(attempt)"><v-btn :disabled="!identity.trim()||busy" size="small" color="primary" @click="action(()=>complete(attempt))">标记完成并继续</v-btn><v-btn :disabled="!identity.trim()||!evidenceReady||busy" size="small" variant="tonal" @click="action(()=>complete(attempt,true))">提交检查</v-btn></template></div><p v-if="instructions(attempt.nodeId)" class="run-reason">{{instructions(attempt.nodeId)}}</p><small v-if="attempt.reason" class="attempt-reason">{{attempt.approval?.required&&waitingStates.has(attempt.state)?'此节点需人工确认后才继续':attempt.reason}}</small></article></div>
     <div v-if="run&&pendingHumans.length" class="human-evidence"><v-text-field v-model="identity" label="确认人" hide-details/><v-textarea v-if="pendingHumans.some(attempt=>attempt.approval?.required!==true)" v-model="evidence" label="检查证据（JSON，选填）" rows="3" hide-details/></div>
-    <pre v-if="entries.length" class="run-log">{{entries.map(row=>`${row.sequence} [${row.stream}] ${row.text}`).join('\n')}}</pre><div v-if="run" class="run-toolbar log-controls"><v-btn :disabled="busy||logsLoading||logsAtEnd" size="small" variant="text" @click="action(refresh)">{{logsAtEnd?'已读取到日志末尾':'继续读取日志'}}</v-btn><v-btn :disabled="busy||logsLoading" size="small" variant="text" @click="action(restartLogs)">从头读取日志</v-btn><small v-if="entries.length">第 {{entries[0].sequence}}–{{entries[entries.length-1].sequence}} 条 · 最多显示最近 500 条</small></div>
+    <div v-if="entries.length" class="log-filters" role="group" aria-label="日志筛选">
+      <button v-for="option in [{id:'all',label:'全部'},{id:'failed',label:'失败'},{id:'warn',label:'警告'}]" :key="option.id"
+        type="button" :class="{active:logFilter===option.id}" :aria-pressed="logFilter===option.id" @click="logFilter=option.id as any">{{ option.label }}</button>
+      <small>{{ logRows.length }} / {{ entries.length }} 条</small>
+    </div>
+    <div v-if="entries.length" ref="logScroll" class="run-log" role="log" aria-label="运行日志">
+      <div v-for="row in logRows" :key="row.sequence" :data-log-error="/^✗/.test(row.text) || row.kind === 'error' ? '' : undefined"
+        :class="{ 'log-error': /^✗/.test(row.text) || row.kind === 'error', 'log-status': row.stream === 'status' }">
+        <button v-if="row.nodeId" type="button" class="log-jump" :aria-label="`定位到节点 ${row.text}`" :title="row.nodeId" @click="emit('focusNode', row.nodeId)">{{ row.sequence }}</button>
+        <span v-else class="log-seq">{{ row.sequence }}</span>
+        <span class="log-text">{{ row.text }}</span>
+      </div>
+    </div>
+    <div v-if="run" class="run-toolbar log-controls"><v-btn :disabled="busy||logsLoading||logsAtEnd" size="small" variant="text" @click="action(refresh)">{{logsAtEnd?'已读取到日志末尾':'继续读取日志'}}</v-btn><v-btn :disabled="busy||logsLoading" size="small" variant="text" @click="action(restartLogs)">从头读取日志</v-btn><small v-if="entries.length">第 {{entries[0].sequence}}–{{entries[entries.length-1].sequence}} 条 · 最多显示最近 500 条</small></div>
     <details class="run-history"><summary @click="action(()=>loadHistory())">运行历史</summary><div v-for="row in history" :key="row.id"><button :disabled="busy||!!request" @click="action(()=>openRun(row.id))"><span>{{new Date(row.createdAt).toLocaleString()}}</span><strong>{{runStates?.[row.state]?.label||row.state}}</strong><small>画布修订 {{row.canvasRevision}}</small></button></div><v-btn v-if="historyCursor" :disabled="busy" size="small" @click="action(()=>loadHistory(true))">下一页</v-btn></details>
   </section>
 </template>
 <style scoped>.edition-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #30434f;padding-bottom:14px;margin-bottom:14px;font-size:12px;color:#a5b9c6}.edition-toolbar>span{color:#c1d8d5;margin-right:6px}.edition-toolbar label{display:flex;align-items:center;gap:8px}.edition-toolbar input{padding:7px 10px;color:#eaf1f6;background:#192630;border:1px solid #405363;border-radius:6px;font:inherit}.edition-toolbar input:disabled{opacity:.6}.edition-label{max-width:180px}</style>
-<style scoped>.run-panel{border-top:1px solid var(--wb-border,#30434f);padding:16px 24px;background:#101a22}.run-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.run-heading{display:flex;flex-direction:column;min-width:100px;gap:4px}.run-heading>small{color:#93a8b7;font-size:10px;letter-spacing:2px}.run-heading>strong{font-size:13px;font-weight:550}.run-toolbar>label{font-size:12px;color:#9baebc;margin:0 8px}.run-toolbar input{width:52px;margin-left:8px;border:1px solid #344e5b;border-radius:5px;padding:6px;color:inherit;background:#192630}.run-results{max-height:280px;overflow:auto;margin-top:14px}.run-results>article{padding:10px 0;border-bottom:1px solid #2c404c}.attempt-main{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.attempt-main>span{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.attempt-main>strong{font-size:11px;font-weight:500;border:1px solid #3d5965;padding:2px 8px;border-radius:20px;color:#acbdc8}.attempt-main a{font-size:12px;color:#a5dacf;text-decoration:none;border-bottom:1px solid #3d6963}.attempt-main small,.attempt-reason{color:#a7b6c3;font-size:11px}.attempt-reason{display:block;margin:7px 24px}.status-dot{width:7px;height:7px;background:#6c8593;border-radius:50%;flex-shrink:0}.status-dot.succeeded{background:#89dbc7}.status-dot.failed{background:#e9958a}.status-dot.waiting_human,.status-dot.waiting_approval,.status-dot.waiting_agent{background:#dfc58f}.run-heading .succeeded{color:#89dbc7}.run-heading .failed{color:#e9958a}.run-log{max-height:200px;overflow:auto;background:#0b1319;padding:14px;white-space:pre-wrap;font:11px/1.8 ui-monospace,monospace;margin-top:14px;border:1px solid #2c404c;border-radius:6px}.human-evidence{display:flex;gap:12px;max-width:760px;margin-top:16px}.human-evidence>:first-child{max-width:220px}.run-history{margin-top:18px;font-size:12px;color:#a5b7c4}.run-history summary{cursor:pointer}.run-history>div{border-bottom:1px solid #2c404c}.run-history button{display:flex;gap:24px;align-items:center;width:100%;padding:12px 0;text-align:left}.run-history strong{font-weight:500}.run-history small{margin-left:auto;color:#829aa9}.run-reason,.pending-request{font-size:12px;color:#cab680;margin:10px 0;white-space:pre-wrap}.log-controls{margin-top:6px}.log-controls small{color:#8ea5b4;font-size:11px}button:focus-visible{outline:2px solid #89dbc7;outline-offset:3px}@media(max-width:800px){.human-evidence{flex-direction:column}.human-evidence>:first-child{max-width:none}}</style>
+<style scoped>.run-panel{border-top:1px solid var(--wb-border,#30434f);padding:16px 24px;background:#101a22}.run-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.run-heading{display:flex;flex-direction:column;min-width:100px;gap:4px}.run-heading>small{color:#93a8b7;font-size:10px;letter-spacing:2px}.run-heading>strong{font-size:13px;font-weight:550}.run-toolbar>label{font-size:12px;color:#9baebc;margin:0 8px}.run-toolbar input{width:52px;margin-left:8px;border:1px solid #344e5b;border-radius:5px;padding:6px;color:inherit;background:#192630}.run-results{max-height:280px;overflow:auto;margin-top:14px}.run-results>article{padding:10px 0;border-bottom:1px solid #2c404c}.attempt-main{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.attempt-main>span{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.attempt-main>strong{font-size:11px;font-weight:500;border:1px solid #3d5965;padding:2px 8px;border-radius:20px;color:#acbdc8}.attempt-main a{font-size:12px;color:#a5dacf;text-decoration:none;border-bottom:1px solid #3d6963}.attempt-main small,.attempt-reason{color:#a7b6c3;font-size:11px}.attempt-reason{display:block;margin:7px 24px}.status-dot{width:7px;height:7px;background:#6c8593;border-radius:50%;flex-shrink:0}.status-dot.succeeded{background:#89dbc7}.status-dot.failed{background:#e9958a}.status-dot.waiting_human,.status-dot.waiting_approval,.status-dot.waiting_agent{background:#dfc58f}.run-heading .succeeded{color:#89dbc7}.run-heading .failed{color:#e9958a}.run-log{max-height:200px;overflow:auto;background:#0b1319;padding:14px;white-space:pre-wrap;font:11px/1.8 ui-monospace,monospace;margin-top:14px;border:1px solid #2c404c;border-radius:6px}.human-evidence{display:flex;gap:12px;max-width:760px;margin-top:16px}.human-evidence>:first-child{max-width:220px}.run-history{margin-top:18px;font-size:12px;color:#a5b7c4}.run-history summary{cursor:pointer}.run-history>div{border-bottom:1px solid #2c404c}.run-history button{display:flex;gap:24px;align-items:center;width:100%;padding:12px 0;text-align:left}.run-history strong{font-weight:500}.run-history small{margin-left:auto;color:#829aa9}.run-reason,.pending-request{font-size:12px;color:#cab680;margin:10px 0;white-space:pre-wrap}.log-controls{margin-top:6px}.log-controls small{color:#8ea5b4;font-size:11px}
+.log-filters{display:flex;gap:6px;align-items:center;margin-top:12px;font-size:12px;color:#9baebc}
+.log-filters button{padding:3px 10px;border:1px solid #344e5b;border-radius:999px;color:#9baebc}
+.log-filters button.active{background:#1b3a40;border-color:#3e6c73;color:#eaf1f6}
+.log-filters small{margin-left:auto;color:#829aa9}
+.run-log>div{display:flex;gap:8px;align-items:baseline}
+.run-log>div.log-status .log-text{color:#cfe3ea}
+.run-log>div.log-error .log-text{color:#fda4af}
+.log-jump,.log-seq{flex-shrink:0;min-width:34px;font:inherit;color:#7d94a3;text-align:right}
+.log-jump{border:0;background:none;cursor:pointer;text-decoration:underline dotted}
+.log-jump:is(:hover,:focus-visible){color:#89dbc7}
+.log-text{flex:1;min-width:0;overflow-wrap:anywhere}button:focus-visible{outline:2px solid #89dbc7;outline-offset:3px}@media(max-width:800px){.human-evidence{flex-direction:column}.human-evidence>:first-child{max-width:none}}</style>
 
 <style scoped>
 .node-run-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; color:var(--rr-muted); font-size:12px; }
