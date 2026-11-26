@@ -6,6 +6,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.95 - 2026-11-26
+
+- Message sources gain a `bot` type: when Grok Bot is itself the source, its name, Bot ID and session ID are shown while structured fields stay `grokBot`.
+- Every message source can carry attribution: which persona it speaks for (name and ID), the authorizer (kind, name, ID) and the source configuration (automation rule, schedule, route, plan, Grok routine or manual, with config ID and schedule name/ID). Attribution is display and traceability only and never grants authority.
+- Legacy envelope stripping now also recognizes the new Bot, persona, authorizer and source-configuration labels so source headers are not mistaken for content.
+
 ## 0.15.94 - 2026-11-26
 
 - Workbench canvas completes node capability definitions: asset, command, agent, human check and generate nodes carry icons, groups and fields. Node copy/paste keeps relative layout and either steps overlapping nodes aside or aligns them to the pointer.

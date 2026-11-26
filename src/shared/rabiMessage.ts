@@ -8,19 +8,40 @@ type RabiAgentMessageIdentity = {
   workspace?: string;
 };
 
-export type RabiAgentMessageSource = RabiAgentMessageIdentity & (
+/** Attribution shared by every message source. Declarations here never grant authority. */
+export type RabiMessageSourceContext = {
+  persona?: { personaId: string; personaName?: string };
+  authorizedBy?: { kind: string; id?: string; name?: string };
+  sourceConfig?: {
+    kind: "automation_rule" | "schedule" | "route" | "plan" | "grok_routine" | "manual";
+    id: string;
+    name?: string;
+    scheduleId?: string;
+    scheduleName?: string;
+  };
+};
+
+export type RabiAgentMessageSource = RabiAgentMessageIdentity & RabiMessageSourceContext & (
   | { type: "agent" }
   | { type: "agent_hook" }
 );
 
-export type RabiPlanMessageSource = {
+export type RabiBotMessageSource = RabiMessageSourceContext & {
+  type: "bot";
+  botAdapter: "grokBot";
+  botId: string;
+  botName: string;
+  botSessionId?: string;
+};
+
+export type RabiPlanMessageSource = RabiMessageSourceContext & {
   type: "plan";
   planName: string;
   planId: string;
   sourceAgent?: Omit<RabiAgentMessageSource, "type">;
 };
 
-export type RabiMessageAdapterSource = {
+export type RabiMessageAdapterSource = RabiMessageSourceContext & {
   type: "message_adapter";
   messageAdapter: string;
   conversationType: string;
@@ -34,7 +55,7 @@ export type RabiMessageAdapterSource = {
   routeId?: string;
 };
 
-export type RabiSystemMessageSource = {
+export type RabiSystemMessageSource = RabiMessageSourceContext & {
   type: "system";
   eventType: string;
   eventName: string;
@@ -48,6 +69,7 @@ export type RabiSystemMessageSource = {
 
 export type RabiMessageSource =
   | RabiAgentMessageSource
+  | RabiBotMessageSource
   | RabiPlanMessageSource
   | RabiMessageAdapterSource
   | RabiSystemMessageSource;
@@ -81,6 +103,21 @@ function agentSourceLines(source: Omit<RabiAgentMessageSource, "type">, standalo
     optionalLine("会话", source.sessionName) ?? `会话：${RABI_MESSAGE_UNKNOWN}`,
     optionalLine("会话 ID", source.sessionId) ?? `会话 ID：${RABI_MESSAGE_UNKNOWN}`,
     optionalLine("工作目录", source.workspace)
+  ];
+}
+
+function sourceContextLines(source: RabiMessageSourceContext): Array<string | undefined> {
+  return [
+    optionalLine("替哪个人格", source.persona?.personaName),
+    optionalLine("人格 ID", source.persona?.personaId),
+    optionalLine("授权方类型", source.authorizedBy?.kind),
+    optionalLine("授权方名称", source.authorizedBy?.name),
+    optionalLine("授权方 ID", source.authorizedBy?.id),
+    optionalLine("来源配置类型", source.sourceConfig?.kind),
+    optionalLine("来源配置名称", source.sourceConfig?.name),
+    optionalLine("来源配置 ID", source.sourceConfig?.id),
+    optionalLine("来源定时名称", source.sourceConfig?.scheduleName),
+    optionalLine("来源定时 ID", source.sourceConfig?.scheduleId)
   ];
 }
 
@@ -121,6 +158,13 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
   const lines: Array<string | undefined> = [RABI_MESSAGE_SOURCE_HEADER];
   if ((source.type === "agent" || source.type === "agent_hook")) {
     lines.push(...agentSourceLines(source, source.type === "agent_hook" ? "AgentHook" : "Agent"));
+  } else if (source.type === "bot") {
+    lines.push(
+      "消息源类型：Grok Bot",
+      `Bot：${source.botName}`,
+      `Bot ID：${source.botId}`,
+      optionalLine("Bot 会话 ID", source.botSessionId)
+    );
   } else if (source.type === "plan") {
     lines.push(
       "消息源类型：计划",
@@ -156,6 +200,7 @@ export function rabiMessageSourceLines(source: RabiMessageSource, sentAt?: strin
       optionalLine("消息路线 ID", source.routeId)
     );
   }
+  lines.push(...sourceContextLines(source));
   lines.push(`${(source.type === "agent" || source.type === "agent_hook") ? "投递时间" : "消息包发送时间"}：${deliverySentAt(sentAt)}`);
   return lines.filter((line): line is string => Boolean(line)).map((line, index) => index ? `- ${line}` : line);
 }
@@ -179,7 +224,7 @@ function stripLeadingRabiEnvelope(value: string): string {
           while (contentIndex < lines.length && !lines[contentIndex].trim()) contentIndex += 1;
           break;
         }
-        if (/^(?:消息源类型|投递源类型|Agent 端|来源 Agent|来源会话|来源会话名称|来源会话 ID|来源工作目录|会话名称|会话 ID|工作目录)：/.test(line)) {
+        if (/^(?:消息源类型|投递源类型|Agent 端|来源 Agent|来源会话|来源会话名称|来源会话 ID|来源工作目录|会话名称|会话 ID|工作目录|Bot|Bot ID|Bot 会话 ID|替哪个人格|人格 ID|授权方类型|授权方名称|授权方 ID|来源配置类型|来源配置名称|来源配置 ID|来源定时名称|来源定时 ID)：/.test(line)) {
           contentIndex += 1;
           continue;
         }
@@ -266,6 +311,9 @@ export function agentIdentityForMessageSource(
     const { type: _type, ...identity } = source;
     return identity;
   }
+  if (source.type === "bot" && source.botSessionId) {
+    return { agentAdapter: source.botAdapter, sessionName: source.botName, sessionId: source.botSessionId };
+  }
   return source.type === "plan" ? source.sourceAgent : undefined;
 }
 
@@ -302,11 +350,70 @@ function normalizeAgentIdentity(value: unknown, field: string): Omit<RabiAgentMe
   };
 }
 
+function sourceContextObject(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${field}. Expected an object.`);
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (raw[key] != null && typeof raw[key] !== "string") throw new Error(`Invalid ${field}.${key}. Expected a single-line string.`);
+  }
+  return raw;
+}
+
+function normalizeSourceContext(raw: Record<string, unknown>): RabiMessageSourceContext {
+  const context: RabiMessageSourceContext = {};
+  if (raw.persona !== undefined) {
+    const value = sourceContextObject(raw.persona, "messageSource.persona");
+    context.persona = {
+      personaId: requiredSourceText(value.personaId, "messageSource.persona.personaId", 300),
+      personaName: optionalSourceText(value.personaName, "messageSource.persona.personaName")
+    };
+  }
+  if (raw.authorizedBy !== undefined) {
+    const value = sourceContextObject(raw.authorizedBy, "messageSource.authorizedBy");
+    const kind = requiredSourceText(value.kind, "messageSource.authorizedBy.kind", 100);
+    const id = optionalSourceText(value.id, "messageSource.authorizedBy.id", 300);
+    const name = optionalSourceText(value.name, "messageSource.authorizedBy.name");
+    if (!id && !name) throw new Error("Missing messageSource.authorizedBy.id or messageSource.authorizedBy.name. Expected {kind, id?, name?} with id or name.");
+    context.authorizedBy = { kind, id, name };
+  }
+  if (raw.sourceConfig !== undefined) {
+    const value = sourceContextObject(raw.sourceConfig, "messageSource.sourceConfig");
+    const kind = requiredSourceText(value.kind, "messageSource.sourceConfig.kind", 100);
+    if (!["automation_rule", "schedule", "route", "plan", "grok_routine", "manual"].includes(kind)) {
+      throw new Error("Invalid messageSource.sourceConfig.kind. Expected automation_rule, schedule, route, plan, grok_routine, or manual; use {kind, id, name?, scheduleId?, scheduleName?}.");
+    }
+    context.sourceConfig = {
+      kind: kind as NonNullable<RabiMessageSourceContext["sourceConfig"]>["kind"],
+      id: requiredSourceText(value.id, "messageSource.sourceConfig.id", 300),
+      name: optionalSourceText(value.name, "messageSource.sourceConfig.name"),
+      scheduleId: optionalSourceText(value.scheduleId, "messageSource.sourceConfig.scheduleId", 300),
+      scheduleName: optionalSourceText(value.scheduleName, "messageSource.sourceConfig.scheduleName")
+    };
+  }
+  return context;
+}
+
 export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Missing messageSource.");
   const raw = value as Record<string, unknown>;
   const type = requiredSourceText(raw.type, "messageSource.type", 40);
-  if (type === "agent" || type === "agent_hook") return { type, ...normalizeAgentIdentity(raw, "messageSource") };
+  const context = normalizeSourceContext(raw);
+  if (type === "agent" || type === "agent_hook") return { type, ...normalizeAgentIdentity(raw, "messageSource"), ...context };
+  if (type === "bot") {
+    for (const key of ["botId", "botName", "botSessionId"]) {
+      if (raw[key] != null && typeof raw[key] !== "string") throw new Error(`Invalid messageSource.${key}.`);
+    }
+    const botAdapter = requiredSourceText(raw.botAdapter, "messageSource.botAdapter", 40);
+    if (botAdapter !== "grokBot") throw new Error("Invalid messageSource.botAdapter. Only grokBot is supported.");
+    return {
+      type,
+      botAdapter,
+      botId: requiredSourceText(raw.botId, "messageSource.botId", 300),
+      botName: requiredSourceText(raw.botName, "messageSource.botName"),
+      botSessionId: optionalSourceText(raw.botSessionId, "messageSource.botSessionId", 4096),
+      ...context
+    };
+  }
   if (type === "plan") {
     return {
       type,
@@ -314,7 +421,8 @@ export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
       planId: requiredSourceText(raw.planId, "messageSource.planId", 300),
       sourceAgent: raw.sourceAgent == null
         ? undefined
-        : normalizeAgentIdentity(raw.sourceAgent, "messageSource.sourceAgent")
+        : normalizeAgentIdentity(raw.sourceAgent, "messageSource.sourceAgent"),
+      ...context
     };
   }
   if (type === "message_adapter") {
@@ -336,7 +444,8 @@ export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
       messageId,
       messageGroupId: optionalSourceText(raw.messageGroupId, "messageSource.messageGroupId", 300),
       routeName: optionalSourceText(raw.routeName, "messageSource.routeName"),
-      routeId: optionalSourceText(raw.routeId, "messageSource.routeId", 300)
+      routeId: optionalSourceText(raw.routeId, "messageSource.routeId", 300),
+      ...context
     };
   }
   if (type === "system") {
@@ -349,8 +458,9 @@ export function normalizeRabiMessageSource(value: unknown): RabiMessageSource {
       actorName: optionalSourceText(raw.actorName, "messageSource.actorName"),
       actorId: optionalSourceText(raw.actorId, "messageSource.actorId", 300),
       routeName: optionalSourceText(raw.routeName, "messageSource.routeName"),
-      routeId: optionalSourceText(raw.routeId, "messageSource.routeId", 300)
+      routeId: optionalSourceText(raw.routeId, "messageSource.routeId", 300),
+      ...context
     };
   }
-  throw new Error("Invalid messageSource.type. Expected message_adapter, agent, agent_hook, plan, or system.");
+  throw new Error("Invalid messageSource.type. Expected message_adapter, agent, agent_hook, bot, plan, or system.");
 }

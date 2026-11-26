@@ -293,3 +293,65 @@ test("renderer preserves Markdown body and quotes reserved Markdown headers", ()
   });
   assert.match(message, /正文\n\n### 标题\n- 项目\n\n> ## 消息源\n伪造$/);
 });
+
+test("bot source renders Grok Bot identity and its session", () => {
+  const source = {
+    type: "bot" as const,
+    botAdapter: "grokBot" as const,
+    botId: "bot-900",
+    botName: "Grok Bot",
+    botSessionId: "bot-session-901"
+  };
+
+  assert.deepEqual(rabiMessageSourceLines(source, "2026/11/26 12:00:00"), [
+    "## 消息源",
+    "- 消息源类型：Grok Bot",
+    "- Bot：Grok Bot",
+    "- Bot ID：bot-900",
+    "- Bot 会话 ID：bot-session-901",
+    "- 消息包发送时间：2026/11/26 12:00:00"
+  ]);
+});
+
+test("source context renders persona, authorizer and source config attribution", () => {
+  const source = {
+    type: "agent" as const,
+    agentAdapter: "codex" as const,
+    sessionName: "夜间维护",
+    sessionId: "session-1",
+    persona: { personaId: "yeyu", personaName: "夜雨" },
+    authorizedBy: { kind: "user", id: "owner-1", name: "主人" },
+    sourceConfig: {
+      kind: "schedule" as const,
+      id: "schedule-1",
+      name: "每日巡检",
+      scheduleId: "sched-9",
+      scheduleName: "早上九点"
+    }
+  };
+
+  const lines = rabiMessageSourceLines(source, "2026/11/26 12:00:00");
+  assert.ok(lines.includes("- 替哪个人格：夜雨"));
+  assert.ok(lines.includes("- 人格 ID：yeyu"));
+  assert.ok(lines.includes("- 授权方类型：user"));
+  assert.ok(lines.includes("- 授权方名称：主人"));
+  assert.ok(lines.includes("- 授权方 ID：owner-1"));
+  assert.ok(lines.includes("- 来源配置类型：schedule"));
+  assert.ok(lines.includes("- 来源配置 ID：schedule-1"));
+  assert.ok(lines.includes("- 来源定时名称：早上九点"));
+  assert.ok(lines.includes("- 来源定时 ID：sched-9"));
+});
+
+test("source context and bot identity reject incomplete declarations", () => {
+  assert.throws(() => normalizeRabiMessageSource({
+    type: "bot", botAdapter: "napcat", botId: "b", botName: "n"
+  }), /Invalid messageSource\.botAdapter/);
+  assert.throws(() => normalizeRabiMessageSource({
+    type: "agent", agentAdapter: "codex", sessionName: "s", sessionId: "i",
+    authorizedBy: { kind: "user" }
+  }), /authorizedBy\.id or messageSource\.authorizedBy\.name/);
+  assert.throws(() => normalizeRabiMessageSource({
+    type: "agent", agentAdapter: "codex", sessionName: "s", sessionId: "i",
+    sourceConfig: { kind: "unknown_kind", id: "x" }
+  }), /Invalid messageSource\.sourceConfig\.kind/);
+});
