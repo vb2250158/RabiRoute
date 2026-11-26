@@ -2154,7 +2154,9 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .video-heading span,.video-hint,small,time { color:var(--rr-muted); }
 .workflow-dialog-content { padding:0 !important; }
 /* P0-2：参数面板是画布内独立浮层，只由内容和拖拽决定卡片尺寸。 */
-.workflow-node-parameters { position:absolute; z-index:6; width:320px; max-height:76vh; margin-top:0; display:flex; flex-direction:column; }
+/* Later `.composer { width:100% }` has the same specificity, so the panel rule
+   must outrank it by class count rather than by source order. */
+.composer.workflow-node-parameters { position:absolute; z-index:6; width:320px; max-height:76vh; margin-top:0; display:flex; flex-direction:column; }
 .workflow-parameters-head { display:flex; align-items:center; gap:8px; padding:9px 10px 2px 12px; }
 .workflow-parameters-head strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .workflow-parameters-flag { flex-shrink:0; padding:1px 7px; border-radius:10px; background:var(--rr-accent-surface); color:var(--rr-heading); font-size:11px; }
