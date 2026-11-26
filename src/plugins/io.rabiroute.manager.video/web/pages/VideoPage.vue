@@ -13,6 +13,10 @@ import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
 import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
 import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, resolveEdgeKind as resolveDropEdgeKind, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
+import { cardBadges, mergedInputs, artifactKindGlyphs, type ArtifactKind, type MergedInput } from "./workbenchCardView";
+function artifactGlyph(kind: ArtifactKind) { return artifactKindGlyphs[kind]; }
+/** `@click` here feeds the action wrapper, which expects a promise. */
+async function removeMergedInputAction(row: MergedInput, target: string) { await removeMergedInput(row, target); }
 import { copiedNodeTitle, createCanvasClipboard, parseCanvasClipboard, pasteLayouts, type CanvasClipboard, type CanvasClipboardEntry } from "./canvasClipboard";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
@@ -722,6 +726,23 @@ const flowNodes = computed(() => workspaceGraph.value?.graph.nodes.filter(node =
 const visibleFlowNodes = computed(() => flowNodes.value.filter(node => canvas.visibleCardIds.value.has(node.id)));
 const flowNodesById = computed(() => new Map(flowNodes.value.map(node => [node.id, node])));
 const inputLinksByTarget = computed(() => workflowInputLinks(flowNodes.value));
+/** §5.3: material links and text links are one list, keyed by the upstream node. */
+const mergedInputsByTarget = computed(() => {
+  const byTarget = new Map<string, ReturnType<typeof mergedInputs>>();
+  const materialByTarget = inputLinksByTarget.value, textByTarget = contentRefs.value;
+  for (const node of flowNodes.value) {
+    const material = materialByTarget.get(node.id) ?? [];
+    const text = (textByTarget.get(node.id) ?? []).map(source => ({ id: source.id, title: source.title }));
+    if (!material.length && !text.length) continue;
+    byTarget.set(node.id, mergedInputs({ material, text }));
+  }
+  return byTarget;
+});
+/** Run artifacts are only loaded for the selected node, so only it can show a real count. */
+function nodeBadge(node: FlowNode) {
+  const artifacts = selectedWorkflowNodeId.value === node.id ? nodeArtifacts.value : [];
+  return cardBadges(node, artifacts, mergedInputsByTarget.value.get(node.id) ?? []);
+}
 const nodeRunStates = computed(() => {
   const activity = canvasActivity.value;
   return activity?.canvasId === mediaCanvasId.value && activity?.runId === activeCanvasRunId.value ? activity.attemptStates : undefined;
@@ -1153,6 +1174,11 @@ function closeCanvasOverlays() {
   openPopover.value = "";
   selectedIds.value = [];
 }
+/** A badge click selects the card so its parameter panel shows the same list. */
+async function selectNodeForPanel(id: string) {
+  selectedIds.value = [id];
+  contextMenu.value = undefined;
+}
 /** Preview which edge the current pointer position would create. */
 function trackWireTarget(event: PointerEvent) {
   const wire = workflowWire.value;
@@ -1242,6 +1268,11 @@ async function removeWorkflowInput(from: string, to: string) {
 async function removeContentLink(from: string, to: string) {
   await commitWorkflow(current => ({ ...current, mediaLinks: current.mediaLinks?.filter(link => link.from !== from || link.to !== to) }));
 }
+/** One merged row can carry both a material link and a text link to the same source. */
+async function removeMergedInput(row: MergedInput, target: string) {
+  if (row.kind === "material" || row.artifactKeys.length) await removeWorkflowInput(row.from, target);
+  if (row.kind === "text") await removeContentLink(row.from, target);
+}
 function selectWire(wire: { id: string; kind: PortKind; from: string; to: string }) {
   if (wire.kind === "step") void action(() => openWorkflowPanel("settings", wire.id));
   else selectedIds.value = [wire.to];
@@ -1250,6 +1281,8 @@ function focusInputSource(id: string) {
   selectedIds.value = [id];
   canvas.center(id);
 }
+/** `@click` feeds the action wrapper, which expects a promise. */
+async function focusInputSourceAction(id: string) { focusInputSource(id); }
 function nodeProcessing(id: string) {
   const state = nodeRunStates.value?.[id];
   return state === "running" || state === "waiting_agent";
@@ -1970,6 +2003,16 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
           <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
         </div>
+        <button v-if="nodeBadge(node).inputCount" type="button" class="canvas-badge canvas-badge-in"
+          :aria-label="`输入材料 ${nodeBadge(node).inputCount} 份`" :title="`输入材料 ${nodeBadge(node).inputCount} 份`"
+          @pointerdown.stop @click.stop="action(() => selectNodeForPanel(node.id))">
+          <span v-for="glyph in nodeBadge(node).inputGlyphs" :key="glyph" aria-hidden="true">{{ glyph }}</span><b>{{ nodeBadge(node).inputCount }}</b>
+        </button>
+        <button v-if="nodeBadge(node).outputCount" type="button" class="canvas-badge canvas-badge-out"
+          :aria-label="`产物 ${nodeBadge(node).outputCount} 份`" :title="`产物 ${nodeBadge(node).outputCount} 份`"
+          @pointerdown.stop @click.stop="action(() => selectNodeForPanel(node.id))">
+          <span v-for="glyph in nodeBadge(node).outputGlyphs" :key="glyph" aria-hidden="true">{{ glyph }}</span><b>{{ nodeBadge(node).outputCount }}</b>
+        </button>
         <button class="canvas-resize-handle" :aria-label="`调整 ${node.title || '流程节点'} 的大小`" @pointerdown.stop="canvas.beginResize($event, node.id)" @keydown="resizeCardWithKeyboard($event, node.id)" />
       </article>
       <div v-if="activeVideo" class="creation-stage canvas-object" :data-canvas-node="activeVideoId" :class="{'canvas-selected':selectedIds.includes(activeVideoId)}" :style="canvas.position(activeVideoId)" @pointerdown="cardPointerDown($event,activeVideo)" @contextmenu="openCardMenu($event,activeVideo)">
@@ -2072,15 +2115,14 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
                   <button v-for="key in pendingInput.keys" :key="key" @click="action(() => confirmPendingInput(key))">{{ key }}</button>
                   <button @click="pendingInput=undefined">取消</button>
                 </div>
-                <div v-if="inputLinksByTarget.get(parameterNodeId)?.length" class="canvas-reference-chips" aria-label="上游来源">
-                  <span v-for="source in inputLinksByTarget.get(parameterNodeId)" :key="source.from" class="canvas-source-chip">
-                    <button :title="source.artifactKeys.join('、')" :aria-label="`定位上游节点 ${source.sourceTitle}`" @click="focusInputSource(source.from)">{{ source.sourceTitle }}</button>
-                    <button :aria-label="`移除来自 ${source.sourceTitle} 的材料`" @click="action(() => removeWorkflowInput(source.from, parameterNodeId))">×</button>
-                  </span>
-                </div>
-                <div v-if="contentRefs.get(parameterNodeId)?.length" class="canvas-reference-chips" aria-label="来自上游的文本">
-                  <button v-for="source in contentRefs.get(parameterNodeId)" :key="source.id" :title="source.text" :aria-label="`移除来自${source.title}的输入`" @click="action(() => removeContentLink(source.id, parameterNodeId))">{{ source.title }} ×</button>
-                </div>
+                <ul v-if="mergedInputsByTarget.get(parameterNodeId)?.length" class="canvas-input-list" aria-label="输入材料">
+                  <li v-for="row in mergedInputsByTarget.get(parameterNodeId)" :key="row.from">
+                    <span class="canvas-input-glyph" aria-hidden="true">{{ row.artifactKinds.map(kind => artifactGlyph(kind)).join(" ") }}</span>
+                    <span class="canvas-input-name" :title="row.title">{{ row.title }}</span>
+                    <button type="button" class="canvas-input-action" :aria-label="`定位上游节点 ${row.title}`" title="定位到源节点" @click="action(() => focusInputSourceAction(row.from))">↗</button>
+                    <button type="button" class="canvas-input-action" :aria-label="`移除来自 ${row.title} 的输入`" title="移除" @click="action(() => removeMergedInputAction(row, parameterNodeId))">×</button>
+                  </li>
+                </ul>
                 <details v-if="nodeArtifacts.length" class="canvas-node-artifacts" open>
                   <summary>已核验产物（{{ nodeArtifacts.length }}）</summary>
                   <a v-for="artifact in nodeArtifacts" :key="artifact.id" :href="managerResourceUrl(artifact.href)" :title="artifact.path" target="_blank" rel="noopener noreferrer">
@@ -2166,6 +2208,20 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workflow-parameters-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 12px; }
 .canvas-wire-hint { position:absolute; z-index:5; transform:translate(-50%,-50%); padding:2px 8px; border-radius:10px; border:1px solid var(--rr-border-strong); background:var(--rr-surface); color:var(--rr-heading); font-size:11px; white-space:nowrap; pointer-events:none; }
 .canvas-wire-hint.kind-input { border-color:var(--rr-success-border); color:var(--rr-success-text); }
+/* §2.3：左下角输入材料、右下角产物。半透明底衬，避开右下角尺寸把手。 */
+.canvas-badge { position:absolute; bottom:6px; z-index:4; display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border-radius:10px; border:1px solid var(--rr-border); background:var(--rr-surface-glass); color:var(--rr-muted); font-size:11px; line-height:1.5; }
+.canvas-badge-in { left:8px; border-color:var(--rr-success-border); color:var(--rr-success-text); }
+.canvas-badge-out { right:26px; }
+.canvas-badge b { font-weight:600; }
+.canvas-badge:is(:hover,:focus-visible) { color:var(--rr-heading); border-color:var(--rr-accent); }
+/* §5.3：一套「输入材料」列表，每行 源节点名 + 产物图标 + ↗ 定位 + × 移除。 */
+.canvas-input-list { display:flex; flex-direction:column; gap:2px; margin:0 0 10px; padding:0; list-style:none; }
+.canvas-input-list > li { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; background:var(--rr-subtle); font-size:12px; }
+.canvas-input-list > li:hover { background:var(--rr-surface-raised,var(--rr-subtle)); }
+.canvas-input-glyph { flex-shrink:0; color:var(--rr-success-text); letter-spacing:2px; }
+.canvas-input-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--rr-text); }
+.canvas-input-action { flex-shrink:0; width:20px; height:20px; border-radius:6px; color:var(--rr-muted); }
+.canvas-input-action:is(:hover,:focus-visible) { color:var(--rr-accent); background:var(--rr-surface); }
 .workspace-flow-wires { position:absolute; width:1px; height:1px; overflow:visible; pointer-events:none; }
 .workspace-flow-wires path { fill:none; stroke:var(--rr-accent); stroke-width:1.5; opacity:.72; pointer-events:none; }
 .workspace-flow-wires .connection-hit { stroke:transparent; stroke-width:12; pointer-events:stroke; cursor:pointer; }
