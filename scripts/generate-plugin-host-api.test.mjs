@@ -88,7 +88,9 @@ test("a failed candidate exchange restores the previous complete package and mai
   const rename = fs.rename;
   fs.rename = async (from, to) => {
     if (to === f.output && path.basename(from).startsWith(".host-api-candidate-") && !from.endsWith("-previous")) {
-      throw Object.assign(new Error("Controlled candidate exchange failure"), { code: "EACCES" });
+      // Share-hostile codes (EXDEV/EPERM/EACCES/ENOTSUP/EBUSY) now fall back to a
+      // copy; a real IO failure must still roll the exchange back.
+      throw Object.assign(new Error("Controlled candidate exchange failure"), { code: "EIO" });
     }
     return rename(from, to);
   };

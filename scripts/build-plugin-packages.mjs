@@ -95,15 +95,20 @@ async function hashInputs(root, inputs) {
       for (const name of (await fs.readdir(file)).sort()) await walk(path.join(file, name));
     } else if (stat.isFile()) {
       const bytes = await fs.readFile(file);
-      // A drive-letter and a UNC spelling of the same share produce different
-      // `path.relative` prefixes; normalize so the frozen input hash is stable.
-      const relative = path.relative(root, file).replaceAll("\\", "/").replace(/^\/+/, "").toLowerCase();
+      const relative = path.relative(root, file).replaceAll("\\", "/").replace(/^\/+/, "");
       files.push({ path: relative, sha256: createHash("sha256").update(bytes).digest("hex") });
     }
   }
   for (const input of inputs) if (await pathExists(input)) await walk(input);
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, sha256: createHash("sha256").update(JSON.stringify(files)).digest("hex") };
+}
+
+/** A drive-letter and a UNC spelling of one share differ only in prefix case, so the
+ *  freeze comparison hashes a normalized view while the evidence keeps real names. */
+export function stableInputDigest(files) {
+  const normalized = files.map(file => ({ path: file.path.toLowerCase(), sha256: file.sha256 })).sort((a, b) => a.path.localeCompare(b.path));
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
 export async function buildPluginPackages(root = process.cwd(), options = {}) {
@@ -184,7 +189,7 @@ export async function buildPluginPackages(root = process.cwd(), options = {}) {
     const rawPaths = inputPaths.map(input => path.join(rawRoot, path.relative(root, input)));
     const inputs = await hashInputs(rawRoot, rawPaths);
     const live = await hashInputs(root, inputPaths);
-    if (live.sha256 !== inputs.sha256) {
+    if (stableInputDigest(live.files) !== stableInputDigest(inputs.files)) {
       const staged = new Set(inputs.files.map(file => `${file.path}:${file.sha256}`));
       const current = new Set(live.files.map(file => `${file.path}:${file.sha256}`));
       const missing = [...staged].filter(entry => !current.has(entry)).slice(0, 4);
