@@ -79,6 +79,28 @@ export function workflowInputLinks(nodes: readonly FlowNode[]) {
 export function workflowArtifactKeys(node?: FlowNode) {
   return [...new Set((node?.requirements ?? []).map(item => item?.key).filter((key): key is string => typeof key === "string" && key.length > 0))];
 }
+/** Edge kinds stay three in storage; the canvas only offers one in port and one out port. */
+export type EdgeKind = "step" | "input" | "content";
+/**
+ * What a drop onto a card should create, judged from the source's own results
+ * rather than from the port the user picked. A source with declared artifacts
+ * carries material; anything else is execution order.
+ */
+export function resolveEdgeKind(input: {
+  from: string;
+  to: string;
+  sourceNode?: FlowNode;
+  targetNode?: FlowNode;
+  textSourceIds?: readonly string[];
+  mediaIds?: readonly string[];
+}): EdgeKind | undefined {
+  if (input.from === input.to) return undefined;
+  const textSources = new Set(input.textSourceIds ?? []);
+  const mediaTargets = new Set(input.mediaIds ?? []);
+  if (textSources.has(input.from) && mediaTargets.has(input.to)) return "content";
+  if (!input.sourceNode || !input.targetNode) return undefined;
+  return workflowArtifactKeys(input.sourceNode).length ? "input" : "step";
+}
 export function connectWorkflowInput(graph: FlowGraph, definition: WorkbenchDefinition, from: string, to: string, artifactKey: string) {
   const source = graph.nodes.find(node => node.id === from);
   const target = graph.nodes.find(node => node.id === to);

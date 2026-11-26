@@ -12,7 +12,7 @@ import { readDraft, restoreMediaComputeSelection, writeDraft, type DraftRecord }
 import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
 import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
-import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
+import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, resolveEdgeKind as resolveDropEdgeKind, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
 import { copiedNodeTitle, createCanvasClipboard, parseCanvasClipboard, pasteLayouts, type CanvasClipboard, type CanvasClipboardEntry } from "./canvasClipboard";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
@@ -768,12 +768,13 @@ function portPosition(id: string, direction: "in" | "out") {
 }
 /** What a drop from `from` onto `to` should create, judged from the source's own results. */
 function resolveEdgeKind(from: string, to: string): PortKind | undefined {
-  const sourceFlow = flowNodesById.value.get(from), targetFlow = flowNodesById.value.get(to);
-  const sourceIsText = canvasItems.value.some(row => row.id === from && row.kind === "text")
-    || (sourceFlow?.kind === "agent" && sourceFlow.config.textOutput === true);
-  if (sourceIsText && canvasItems.value.some(row => row.id === to)) return "content";
-  if (!sourceFlow || !targetFlow) return undefined;
-  return workflowArtifactKeys(sourceFlow).length ? "input" : "step";
+  return resolveDropEdgeKind({
+    from, to,
+    sourceNode: flowNodesById.value.get(from),
+    targetNode: flowNodesById.value.get(to),
+    textSourceIds: textSources.value.map(row => row.id),
+    mediaIds: canvasItems.value.map(row => row.id),
+  });
 }
 const edgeKindLabels: Record<PortKind, string> = { step: "控制", input: "材料", content: "文本" };
 const wireTargetKind = ref<PortKind>();
