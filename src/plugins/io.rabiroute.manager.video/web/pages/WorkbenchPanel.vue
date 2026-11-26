@@ -67,6 +67,11 @@ async function api<T>(suffix:string,method="GET",body?:unknown,options:{root?:st
   const result=await response.json();if(!response.ok)throw new RequestError(result.message||"工作台请求失败。",response.status);return result;
 }
 async function action(fn:()=>Promise<unknown>){if(busy.value||disposed)return;const token=++actionId;busy.value=true;error.value="";try{await fn();}catch(cause){if(token===actionId&&!disposed&&!(cause instanceof Error&&cause.name==="AbortError"))error.value=cause instanceof Error?cause.message:String(cause);}finally{if(token===actionId&&!disposed)busy.value=false;}}
+/** §8.1: typing filters the page already in memory; Enter still asks the server. */
+const visibleRows=computed(() => {
+  const term = search.value.trim().toLowerCase();
+  return term ? rows.value.filter(row => String(row.name ?? "").toLowerCase().includes(term)) : rows.value;
+});
 async function list(append = false) {
   const root = base.value;
   const term = search.value;
@@ -302,7 +307,10 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
       <p v-if="listLoaded && !listLoading && !listError && !rows.length" class="list-message">
         {{ search.trim() ? '没有匹配的画布。' : '还没有画布。' }}
       </p>
-      <WorkbenchCanvasList v-if="rows.length" :rows="rows" :disabled="busy" :project-id="projectId"
+      <p v-else-if="search.trim() && !visibleRows.length" class="list-message">
+        本页没有匹配「{{ search.trim() }}」的画布。按 Enter 到服务端继续搜索。
+      </p>
+      <WorkbenchCanvasList v-if="visibleRows.length" :rows="visibleRows" :disabled="busy" :project-id="projectId"
         :resolve-cover="resolveCover" :hidden="listHidden" :focused-id="lastOpenedCanvasId"
         @open="id => action(() => chooseCanvas(id))" @copy="row => action(() => copy(row))"/>
       <div class="list-footer">

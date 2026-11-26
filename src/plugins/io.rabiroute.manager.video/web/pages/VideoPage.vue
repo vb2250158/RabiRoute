@@ -854,6 +854,23 @@ const wirePreview = computed(() => {
   const start = wire && portPosition(wire.from, "out");
   return start && wire ? wirePath(start, wire.point) : "";
 });
+/** §7.3: the two stored conditions, in the brief's own words: 完成 = success, 成功 = completed. */
+const edgeLabels: Record<string, string> = { success: "完成", completed: "成功" };
+const edgeBadges = computed(() => flowWires.value.flatMap(wire => {
+  if (wire.kind !== "step") return [];
+  const start = portPosition(wire.from, "out"), end = portPosition(wire.to, "in");
+  if (!start || !end) return [];
+  return [{ id: wire.id, edgeId: wire.id, label: edgeLabels[wire.condition] ?? wire.condition, condition: wire.condition,
+    x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }];
+}));
+async function toggleEdgeCondition(edgeId: string) {
+  const current = workspaceGraph.value;
+  const edge = current?.graph.edges.find(row => row.id === edgeId);
+  if (!current || !edge) return;
+  const next = edge.condition === "completed" ? "success" : "completed";
+  await commitWorkflow(graph => ({ ...graph, graph: { ...graph.graph,
+    edges: graph.graph.edges.map(row => row.id === edgeId ? { ...row, condition: next } : row) } }));
+}
 /** Mid-point label that tells the user which edge the drop will create. */
 const wireHint = computed(() => {
   const wire = workflowWire.value, kind = wireTargetKind.value;
@@ -2008,6 +2025,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <path v-if="wirePreview" :d="wirePreview" class="preview-connection"/>
       </svg>
       <div v-if="wireHint" class="canvas-wire-hint" :class="`kind-${wireHint.kind}`" :style="{ left: `${wireHint.x}px`, top: `${wireHint.y}px` }">{{ wireHint.label }}</div>
+      <button v-for="badge in edgeBadges" :key="badge.id" type="button" class="canvas-edge-badge" :class="`condition-${badge.condition}`"
+        :aria-label="`连接条件 ${badge.label}，点击切换`" :title="`连接条件 ${badge.label}，点击切换`"
+        :style="{ left: `${badge.x}px`, top: `${badge.y}px` }"
+        @pointerdown.stop @click.stop="action(() => toggleEdgeCondition(badge.edgeId))">{{ badge.label }}</button>
       <article v-for="item in visibleMediaItems" :key="item.id" :data-canvas-node="item.id" class="canvas-object canvas-card" :class="{'canvas-selected':selectedIds.includes(item.id)}" :style="canvas.position(item.id)" @pointerdown="cardPointerDown($event,item)" @contextmenu="openCardMenu($event,item)">
         <template v-if="workspaceGraph">
         <button class="workspace-port port-in" :data-card-port="'in'" :data-card-id="item.id" aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(item.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
@@ -2324,6 +2345,10 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workflow-parameters-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 12px; }
 .canvas-wire-hint { position:absolute; z-index:5; transform:translate(-50%,-50%); padding:2px 8px; border-radius:10px; border:1px solid var(--rr-border-strong); background:var(--rr-surface); color:var(--rr-heading); font-size:11px; white-space:nowrap; pointer-events:none; }
 .canvas-wire-hint.kind-input { border-color:var(--rr-success-border); color:var(--rr-success-text); }
+/* §7.3：连线中点显示条件徽章，点击切换 完成/成功。 */
+.canvas-edge-badge { position:absolute; z-index:5; transform:translate(-50%,-50%); padding:1px 7px; border-radius:9px; border:1px solid var(--rr-border-strong); background:var(--rr-surface-glass); color:var(--rr-muted); font-size:10px; line-height:1.6; white-space:nowrap; }
+.canvas-edge-badge.condition-completed { border-color:var(--rr-warning-border); color:var(--rr-warning-text); }
+.canvas-edge-badge:is(:hover,:focus-visible) { color:var(--rr-heading); border-color:var(--rr-accent); }
 /* §2.3：左下角输入材料、右下角产物。半透明底衬，避开右下角尺寸把手。 */
 .canvas-badge { position:absolute; bottom:6px; z-index:4; display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border-radius:10px; border:1px solid var(--rr-border); background:var(--rr-surface-glass); color:var(--rr-muted); font-size:11px; line-height:1.5; }
 .canvas-badge-in { left:8px; border-color:var(--rr-success-border); color:var(--rr-success-text); }
