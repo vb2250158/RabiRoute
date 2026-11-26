@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
-import { cliProviders, cliError, cliLoading, loadWorkbenchCli } from "./workbenchCliCatalog";
+import { computed, onMounted } from "vue";
+import { loadWorkbenchAgentCatalog, workbenchAgentCatalog, workbenchAgentLoading, workbenchCliProviders } from "./workbenchAgentCatalog";
 
 const emit = defineEmits<{ close: [] }>();
-onMounted(() => { void loadWorkbenchCli(); });
+const cliProviders = computed(() => workbenchCliProviders.value);
+const cliLoading = workbenchAgentLoading;
+const cliError = computed(() => workbenchAgentCatalog.value.error);
+onMounted(() => { void loadWorkbenchAgentCatalog(); });
 </script>
 
 <template>
@@ -22,7 +25,7 @@ onMounted(() => { void loadWorkbenchCli(); });
       </div>
     </v-card-text>
     <v-card-actions>
-      <v-btn :loading="cliLoading" prepend-icon="mdi-refresh" @click="loadWorkbenchCli(true)">重新检测</v-btn>
+      <v-btn :loading="cliLoading" prepend-icon="mdi-refresh" @click="loadWorkbenchAgentCatalog(true)">重新检测</v-btn>
       <v-spacer/>
       <v-btn @click="emit('close')">关闭</v-btn>
     </v-card-actions>

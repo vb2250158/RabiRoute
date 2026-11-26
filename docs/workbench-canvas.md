@@ -63,7 +63,11 @@ projects/<projectId>/
 
 命令节点配置 `toolKey`、字符串数组 `argv`、可选 timeoutMs 与 validationOnly。执行复用宿主 ProcessLeaseRegistry，关闭 shell、隐藏进程窗口；Python/Node 仍拥有进程账号权限，工作目录不是操作系统沙箱。
 
-Agent 节点可在节点下方先选本机 CLI，再选该 CLI 提供的模型。右上角的「Agent 设置」显示本机检测结果，并在缺少 CLI 时提供官方安装入口。使用 CLI 的节点由 Manager 管理本机执行，仍会校验结构化结果与声明的产物。
+Agent 节点的「Agent」选择器按三类分组：本机 CLI、本机已接入 Agent、其他电脑。CLI 分组列出本机检测到的 Codex CLI / WorkBuddy CLI 及其可用模型；后两组来自已连接的实例目录，选中后绑定该 Agent 的精确会话（threadId 与 instanceBinding 一起写入节点 target），同一台电脑上的会话与经由 RabiLink 连接的其他电脑上的会话都可选。右上角的「Agent 设置」显示本机 CLI 检测结果，并在缺少 CLI 时提供官方安装入口。
+
+节点设置里的「多轮迭代」打开后，节点会把自身此前的对话（最多最近 20 条，按总长截断）并入下一轮任务书，让 CLI 这类一次性进程也能在同一节点逐步迭代。会话目标不使用这段本地记录：它的上下文由原会话自己拥有。
+
+选中会话后，节点面板下方显示该会话的真实对话并可直接发送消息；消息按投递回执处理，不伪造回复。只读会话列表、历史与发送都走原 `/api/agent/threads` 或实例级 threads 入口，其他电脑由其自己的 Manager 应答。
 
 接入已有会话时，配置精确的 target（agentAdapter、threadId）、source（sourceAgentType、sourceThreadId）与 briefRef。投递由原适配器负责。正式回复的 result 使用 JSON `{ "status": "succeeded" }` 或 `{ "status": "failed", "reason": "…" }`。可用 independentFromNodeId 约束核验者与作者的会话身份。若连接器明确确认原任务尚未送出，工作台会显示等待 Agent。连接恢复后，「核对原执行」可使用同一投递编号和原任务书继续发送。结果不明时只查询原回执。
 

@@ -6,6 +6,8 @@
 
 既有媒体入口与新增 `/api/video/v2/*` 工作台入口从同一操作定义进入活动目录；包括 PNG/MP4/WAV、Range、SSE、独立画布 CAS 与运行回执。插件当前模块创建的原生 owner 直接注入工厂，不包装旧 HTTP 分发。媒体方法与正文见[可执行接口合同](../../../../docs/video-api-contract.md)，目录、绑定、节点和验收范围见[工作台画布](../../../../docs/workbench-canvas.md)。
 
+Agent 节点的目标按「本机 CLI」「本机已接入 Agent」「其他电脑」三类选择：CLI 使用本机检测到的 Codex CLI / WorkBuddy CLI 及其模型，后两类直接绑定已连接实例上的精确会话，选中的会话会在节点面板里显示真实对话并可直接发送。节点设置中的「多轮迭代」让 CLI 这类一次性进程在同一个节点内带有此前对话，会话目标不使用这段本地记录。
+
 请求授权由 Host 提供 `requestAccess(request)`；插件在异步等待和 fs/process/network/stream 派发前复核。已接受后台任务归插件生命周期，不持有原请求权限。撤销返回脱敏 403；写入结果区分 `not_started` 与 `unknown`，不承诺回滚。
 
 完整安装、接口、数据位置与验收边界见 [视频生成插件说明](../../../../docs/video-generation-plugin.md)。模型和私有运行数据不包含在此包内。

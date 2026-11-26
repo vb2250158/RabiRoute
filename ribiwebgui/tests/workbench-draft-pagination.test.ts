@@ -234,6 +234,30 @@ test("changing projects preserves its draft and ignores a late save from the old
 test("recovering a raw draft restores its selected node and unapplied editor contents",async t=>{
   const f=fixture(t),m=f.model;m.value.value=canvasRecord();m.select(m.value.value.graph.nodes[0]);edit(f,"recovered");m.recovery.value=m.draftSnapshot();m.value.value=canvasRecord();m.editor.value="";m.selected.value="";m.restoreDraft();assert.equal(m.selected.value,"first");assert.equal(m.dirty.value,true);assert.equal(m.draftPayload().graph.nodes[0].config.argv[0],"recovered");
 });
+test("legacy array drafts stay restorable after the record format changes",async t=>{
+  const f=fixture(t),m=f.model;m.value.value=canvasRecord();m.select(m.value.value.graph.nodes[0]);edit(f,"legacy");
+  const legacy=JSON.stringify([m.value.value,m.editor.value,m.variables.value,m.positions.value,m.selected.value]);
+  m.value.value=canvasRecord();m.editor.value="";m.selected.value="";
+  m.recovery.value=legacy;m.restoreDraft();assert.equal(m.selected.value,"first");assert.equal(m.draftPayload().graph.nodes[0].config.argv[0],"legacy");
+});
+test("restoring a draft keeps the current server revision so the first save is not a conflict",async t=>{
+  const f=fixture(t),m=f.model;m.value.value=canvasRecord();m.select(m.value.value.graph.nodes[0]);edit(f,"draft edit");m.dirty.value=true;
+  const raw=m.draftSnapshot(true);m.value.value={...canvasRecord(),revision:9};m.editor.value="";
+  m.recovery.value=raw;m.restoreDraft();assert.equal(m.value.value.revision,9);assert.equal(m.draftPayload().graph.nodes[0].config.argv[0],"draft edit");
+});
+test("a node panel silently resumes its own draft instead of showing a canvas warning",async t=>{
+  const f=fixture(t,"WorkbenchPanel",{projectId:"project",mode:"node",canvasId:"canvas",nodeId:"first"}),m=f.model;
+  m.value.value=canvasRecord();m.select(m.value.value.graph.nodes[0]);edit(f,"pickup");m.dirty.value=true;
+  const raw=m.draftSnapshot(true);m.value.value=canvasRecord();m.editor.value="";m.selected.value="";
+  m.recovery.value=raw;m.settleNodeDraft();
+  assert.equal(m.recovery.value,undefined);assert.ok(m.editor.value.includes("pickup"));assert.equal(m.dirty.value,true);
+});
+test("discarding a recovery point needs a second click",async t=>{
+  const f=fixture(t),m=f.model;m.value.value=canvasRecord();m.dirty.value=true;m.rememberDraft();
+  assert.ok(f.storage.has("workbench-draft:project:canvas"));m.recovery.value=f.storage.get("workbench-draft:project:canvas");
+  m.discardDraft();assert.ok(f.storage.has("workbench-draft:project:canvas"));assert.equal(m.discarding.value,true);
+  m.discardDraft();assert.equal(f.storage.has("workbench-draft:project:canvas"),false);assert.equal(m.recovery.value,undefined);
+});
 test("a foreign run is rejected before display, log access or cancellation",async t=>{
   const f=fixture(t,"WorkbenchRunPanel",{projectId:"project",canvasId:"canvas",revision:3,dirty:false}),m=f.model;f.respond(()=>({id:"foreign",projectId:"other",canvasId:"canvas",state:"running",attempts:{}}));await m.action(()=>m.openRun("foreign"));assert.equal(m.run.value,undefined);assert.equal(f.requests.length,1);assert.match(m.error.value,/不属于/);await m.cancel();assert.equal(f.requests.length,1);
 });

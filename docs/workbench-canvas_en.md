@@ -39,7 +39,11 @@ Configure trusted machine-local tools and roots in the video component's `workbe
 
 Commands use toolKey, an argv string array, optional timeoutMs and validationOnly. Environment variables are referenced from trusted machine configuration. Processes use the existing ProcessLeaseRegistry with shell disabled and hidden windows. A working directory is not an OS sandbox.
 
-In an Agent node, select a local CLI and then a model it offers. Open **Agent settings** to detect local installations or open official installation instructions. The Manager owns local CLI execution and checks the structured result and declared artifacts.
+An Agent node groups its targets into local CLIs, Agents already connected to this computer, and other computers. The CLI group lists the detected Codex CLI / WorkBuddy CLI with their models; the other two groups come from the connected instance directory, and picking one binds that Agent's exact session (threadId together with instanceBinding) into the node target, so sessions on this computer and on computers reached over RabiLink are both selectable. Open **Agent settings** to detect local installations or open official installation instructions.
+
+The node's multi-turn option feeds its own earlier turns (at most the last 20, bounded by total length) into the next brief, so a one-shot process such as a CLI can iterate inside one node. Session targets ignore that local record: their context belongs to the original session.
+
+After a session target is bound, the node panel shows that session's real conversation and lets you send a message; the message follows the delivery receipt and never fabricates a reply. Listing sessions, reading history and sending all use the original `/api/agent/threads` or instance-level threads entry, and another computer answers through its own Manager.
 
 To use an existing session, configure the exact target (agentAdapter and threadId), source (sourceAgentType and sourceThreadId), and briefRef. The original adapter owns delivery. Formal result JSON contains `status=succeeded` or `status=failed` and a reason. `independentFromNodeId` can require a reviewer task distinct from the author. If the connector confirms that the task has yet to be sent, the run waits for the Agent. After the connection is restored, checking the run can retry that delivery with its original ID and brief. If the outcome is uncertain, checking reads the original receipt.
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { wireBend } from "../../workbenchThumbnail.mjs";
 import TtsModelParameters from "../../../../../ribiwebgui/src/components/TtsModelParameters.vue";
 import {normalizeTtsParameters,ttsCommandSettings,type TtsParameters} from "../../../io.rabiroute.manager.speech/web/speech/ttsParameters";
@@ -13,6 +13,7 @@ import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
 import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
 import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
+import { copiedNodeTitle, createCanvasClipboard, parseCanvasClipboard, pasteLayouts, type CanvasClipboard, type CanvasClipboardEntry } from "./canvasClipboard";
 import { managerEventSource, managerResourceUrl } from "../../../../../ribiwebgui/src/managerApi";
 import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
 import MediaVideoPlayer from "../components/MediaVideoPlayer.vue";
@@ -220,7 +221,9 @@ function updatePopover(key: string, opened: boolean) {
 }
 function dismissCanvasPopovers(event: PointerEvent) {
   canvas.clearDragClick();
-  if ((event.target as Element).closest(".canvas-object,.canvas-tools,.workspace-tools,.canvas-minimap,.canvas-menu,.output-library,.v-overlay")) return;
+  const target = event.target as Element;
+  if (!target.closest(".canvas-group")) selectedGroupId.value = undefined;
+  if (target.closest(".canvas-object,.canvas-tools,.workspace-tools,.canvas-minimap,.canvas-menu,.output-library,.v-overlay")) return;
   openPopover.value = "";
   contextMenu.value = undefined;
 }
@@ -231,6 +234,8 @@ const canvasKinds: { kind: CanvasKind; label: string; icon: string }[] = [
   { kind: "video", label: "视频", icon: "mdi-video-outline" },
   { kind: "audio", label: "音频", icon: "mdi-music-note-outline" },
 ];
+// 文本改由可生成的文本节点承担，菜单不再提供纯文本卡片；旧画布里的文本卡片仍照原样显示。
+const mediaCanvasKinds = canvasKinds.filter(entry => entry.kind !== "text");
 function captureDraft() {
   return { prompt: prompt.value, model: model.value, mode: mode.value, width: width.value, height: height.value, frames: frames.value, seed: seed.value, firstFrame: firstFrame.value, lastFrame: lastFrame.value, firstName: firstName.value, lastName: lastName.value, shapes: { ...frameShapes.value }, references: [...references.value], quickGeneration: quickGeneration.value, generateAudio: generateAudio.value, referenceVideoSound: referenceVideoSound.value };
 }
@@ -273,7 +278,6 @@ function nodePointerDown(event: PointerEvent, id: string, select: () => void) {
   cancelPort();
   contextMenu.value = undefined;
   openPopover.value = "";
-  if (event.altKey && !canPan.value && event.button === 0 && target.closest(".creative-card .node-text-preview:not(.muted)")) return;
   canvas.begin(event, id, select);
 }
 function cardPointerDown(event: PointerEvent, item: CanvasItem) {
@@ -739,11 +743,22 @@ watch([projectId, mediaCanvasId, activeCanvasRunId, selectedWorkflowNodeId, sele
     }
   });
 const flowPositions = computed(() => Object.fromEntries(flowNodes.value.map(node => [node.id, node.layout ?? { x: 0, y: 0 }])));
-const workflowCardKinds = [
-  { kind: "text-generation", label: "文本生成" }, { kind: "agent", label: "Agent" }, { kind: "command", label: "命令" },
-  { kind: "human", label: "人工检查" }, { kind: "generate", label: "生成" }
+// 创作画布只突出「写东西和做素材」的节点；自动化节点默认收起，需要编排时再展开。
+type CanvasNodeEntry = { kind: string; label: string; nodeKind: string; group: "creative" | "pipeline"; icon: string; config?: () => Record<string, unknown> };
+const workflowCardKinds: CanvasNodeEntry[] = [
+  { kind: "text", label: "文本", nodeKind: "agent", group: "creative", icon: "mdi-format-text", config: () => ({ textPrompt: "", textOutput: true }) },
+  { kind: "agent", label: "Agent", nodeKind: "agent", group: "creative", icon: "mdi-robot-outline" },
+  { kind: "command", label: "命令", nodeKind: "command", group: "pipeline", icon: "mdi-console" },
+  { kind: "human", label: "人工检查", nodeKind: "human", group: "pipeline", icon: "mdi-account-check-outline" },
+  { kind: "generate", label: "生成", nodeKind: "generate", group: "pipeline", icon: "mdi-creation" }
 ];
+const pipelineNodeKinds = workflowCardKinds.filter(entry => entry.group === "pipeline");
+const showPipelineNodes = ref(false);
 const flowIcons: Record<string, string> = { command: "mdi-console", agent: "mdi-robot-outline", human: "mdi-account-check-outline", asset: "mdi-file-outline", generate: "mdi-creation" };
+function nodeIcon(node: { kind: string; config?: Record<string, any> }) {
+  if (node.kind === "agent" && node.config?.textOutput === true) return "mdi-format-text";
+  return flowIcons[node.kind] || "mdi-sitemap-outline";
+}
 function portPosition(id: string, direction: "in" | "out", kind: PortKind) {
   const point = canvas.positions.value[id];
   if (!point) return;
@@ -1032,21 +1047,38 @@ async function saveNodeResult(nodeId: string, textPreview: TextPreview) {
   const current = workspaceGraph.value;
   if (!current || !current.graph.nodes.some(node => node.id === nodeId)) throw new Error("当前节点已移除。");
   if (current.graph.nodes.some(node => node.id === nodeId && node.textPreview?.attemptId === textPreview.attemptId)) return current;
-  return saveWorkflowNodes(nodes => nodes.map(node => node.id === nodeId ? { ...node, textPreview } : node));
+  // 生成文本直接成为节点正文，节点上看到的就是最新内容，不需要再区分「预览」和「正文」。
+  return saveWorkflowNodes(nodes => nodes.map(node => node.id === nodeId ? { ...node, config: node.config.textOutput === true ? { ...node.config, text: textPreview.text } : node.config, textPreview } : node));
+}
+function nodeText(node: FlowNode) {
+  return typeof node.config.text === "string" && node.config.text.length ? node.config.text : (node.textPreview?.text || "");
+}
+function writeNodeText(node: FlowNode, value: string) {
+  node.config = { ...node.config, text: value };
+}
+async function persistNodeText(node: FlowNode) {
+  const text = typeof node.config.text === "string" ? node.config.text : undefined;
+  if (text === undefined) return;
+  try {
+    await saveWorkflowNodes(nodes => nodes.map(row => row.id === node.id ? { ...row, config: { ...row.config, text } } : row));
+  } catch (failure) {
+    notice.value = failure instanceof Error ? failure.message : "文本保存失败。";
+  }
 }
 async function addWorkflowCard(entry: string) {
-  const kind = entry === "text-generation" ? "agent" : entry;
+  const preset = workflowCardKinds.find(row => row.kind === entry);
   const position = contextMenu.value?.world;
   contextMenu.value = undefined;
+  if (!preset) throw new Error("无法读取节点类型。");
   if (canvasItems.value.length) pendingDraft = true;
   const current = workspaceGraph.value;
-  const label = workflowCardKinds.find(row => row.kind === entry)?.label;
-  if (!current || !label) throw new Error("无法读取节点类型。");
+  if (!current) throw new Error("无法读取节点类型。");
   const id = browserUuid();
   canvas.add(id);
   try {
     const layout = position ?? canvas.positions.value[id];
-    const node = { id, kind, title: label, config: initialFlowNodeConfig(kind), layout, enabled: true };
+    const count = flowNodes.value.filter(node => (node.title || "").replace(/\s+\d+$/, "") === preset.label).length + 1;
+    const node = { id, kind: preset.nodeKind, title: `${preset.label} ${count}`, config: preset.config ? preset.config() : initialFlowNodeConfig(preset.nodeKind), layout, enabled: true };
     await saveWorkflowNodes(nodes => [...nodes, node]);
     if (layout) canvas.positions.value[id] = layout;
     selectedIds.value = [id];
@@ -1089,6 +1121,10 @@ function applyWorkspacePointer(event: PointerEvent) {
   const bounds = viewport.value?.getBoundingClientRect();
   if (bounds) workflowWire.value.point = canvas.world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
 }
+// 节点复制粘贴：Ctrl+C 记录选中节点快照，Ctrl+V 以新 id 复原；媒体卡片留在本页，工作流节点随画布保存。
+let canvasClipboard: CanvasClipboard | undefined;
+let canvasPasteRound = 0;
+let pointerWorldPoint: Point | undefined;
 let pointerFrame: number | undefined;
 let pendingPointer: PointerEvent | undefined;
 function finishPointerFrame(pointerId?: number, apply = false) {
@@ -1100,6 +1136,8 @@ function finishPointerFrame(pointerId?: number, apply = false) {
   if (apply && event) applyWorkspacePointer(event);
 }
 function moveWorkspacePointer(event: PointerEvent) {
+  const bounds = viewport.value?.getBoundingClientRect();
+  if (bounds) pointerWorldPoint = canvas.world({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   const wire = workflowWire.value;
   if (!wire && !canvas.moving(event.pointerId)) {
     // Capture the pointer as soon as it crosses the drag threshold, before the next frame.
@@ -1190,6 +1228,90 @@ function endWorkspaceGesture(event: PointerEvent) {
 function resizeCardWithKeyboard(event: KeyboardEvent, id: string) {
   if (canvas.resizeWithKeyboard(event, id)) persistWorkflowLayout();
 }
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+function writeClipboardText(text: string) {
+  try { void navigator.clipboard?.writeText(text).catch(() => {}); } catch { /* 系统剪贴板不可用时，本页仍可粘贴本次复制 */ }
+}
+async function readClipboardText() {
+  try { return await navigator.clipboard?.readText(); } catch { return undefined; }
+}
+function copySelectedNodes() {
+  const entries: CanvasClipboardEntry[] = [];
+  for (const id of selectedIds.value) {
+    const item = canvasItems.value.find(row => row.id === id);
+    if (item) {
+      const { id: _id, ...data } = item;
+      const draft = id === activeVideoId.value ? captureDraft() : drafts.get(id);
+      const layout = canvas.positions.value[id];
+      entries.push({ type: "media", data: cloneJson(data) as unknown as Record<string, unknown>,
+        ...(draft ? { draft: cloneJson(draft) as unknown as Record<string, unknown> } : {}),
+        ...(layout ? { layout: { ...layout } } : {}) });
+      continue;
+    }
+    const node = flowNodesById.value.get(id);
+    if (!node) continue;
+    const { id: _nodeId, textPreview: _preview, inputs: _inputs, requirements: _requirements, layout: _layout, ...data } = node;
+    const layout = canvas.positions.value[id] ?? node.layout;
+    entries.push({ type: "workflow", data: cloneJson(data) as unknown as Record<string, unknown>, ...(layout ? { layout: { ...layout } } : {}) });
+  }
+  if (!entries.length) { notice.value = "先在画布上选中节点，再按 Ctrl+C 复制。"; return; }
+  canvasClipboard = createCanvasClipboard(entries);
+  canvasPasteRound = 0;
+  writeClipboardText(JSON.stringify(canvasClipboard));
+  notice.value = `已复制 ${entries.length} 个节点，按 Ctrl+V 粘贴。`;
+}
+async function pasteNodes() {
+  const clipboard = canvasClipboard ?? parseCanvasClipboard(await readClipboardText());
+  if (!clipboard?.entries.length) { notice.value = "剪贴板里没有画布节点，先选中节点按 Ctrl+C 复制。"; return; }
+  const layouts = pasteLayouts(clipboard.entries, pointerWorldPoint ? { anchor: pointerWorldPoint } : { offset: 40 + canvasPasteRound * 40 });
+  canvasPasteRound += 1;
+  const nodes = clipboard.entries.flatMap((entry, index) => entry.type !== "workflow" ? [] : [{
+    ...cloneJson(entry.data), id: browserUuid(),
+    title: copiedNodeTitle(String(entry.data.title ?? ""), workspaceDefinition.value?.capabilities[String(entry.data.kind)]?.label || "节点"),
+    enabled: entry.data.enabled !== false, layout: layouts[index]!
+  } as unknown as FlowNode]);
+  // 先保存流程节点再放媒体卡片，保存失败时画布不会只贴一半。
+  if (nodes.length) await saveWorkflowNodes(current => [...current, ...nodes]);
+  const media: CanvasItem[] = [];
+  for (const [index, entry] of clipboard.entries.entries()) {
+    if (entry.type !== "media") continue;
+    const item = { ...cloneJson(entry.data), id: browserUuid(), title: copiedNodeTitle(String(entry.data.title ?? ""), "节点") } as unknown as CanvasItem;
+    canvasItems.value.push(item); canvas.add(item.id);
+    canvas.positions.value[item.id] = layouts[index]!;
+    if (entry.draft) drafts.set(item.id, cloneJson(entry.draft) as unknown as ReturnType<typeof captureDraft>);
+    media.push(item);
+  }
+  const pasted = [...media.map(item => item.id), ...nodes.map(node => node.id)];
+  if (!pasted.length) return;
+  selectedIds.value = pasted;
+  const video = media.find(item => item.kind === "video");
+  if (video) selectCanvasVideo(video);
+  notice.value = `已粘贴 ${pasted.length} 个节点。`;
+}
+// 画布页面内统一处理复制粘贴：焦点在输入框、编辑器或浮层里时保留浏览器默认行为。
+let canvasShortcutsActive = true;
+function canvasClipboardShortcut(event: KeyboardEvent) {
+  if (!canvasShortcutsActive || event.defaultPrevented || event.isComposing) return;
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  const key = event.key.toLowerCase();
+  if (key !== "c" && key !== "v") return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("input,textarea,select,[contenteditable],.composer,.v-overlay")) return;
+  if (document.activeElement instanceof Element && document.activeElement.closest("input,textarea,select,[contenteditable]")) return;
+  if (key === "c") {
+    // 选中节点内文字时保留浏览器复制文本的行为，没有选中节点时也不接管。
+    if (!selectedIds.value.length || (window.getSelection?.()?.toString() ?? "").trim()) return;
+    event.preventDefault();
+    copySelectedNodes();
+    return;
+  }
+  event.preventDefault();
+  void pasteNodes().catch(failure => { notice.value = failure instanceof Error ? failure.message : "粘贴失败。"; });
+}
+onActivated(() => { canvasShortcutsActive = true; });
+onDeactivated(() => { canvasShortcutsActive = false; });
 function nudgeCard(event: KeyboardEvent, id?: string) {
   if (canvas.nudge(event, id)) persistWorkflowLayout();
 }
@@ -1207,6 +1329,9 @@ function canvasKeyDown(event: KeyboardEvent) {
   if (event.code === "Space" && !(event.target as Element).closest("button,a,summary")) {
     event.preventDefault();
     canvas.spacePan.value = true;
+  } else if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "g") {
+    event.preventDefault();
+    createGroup();
   } else if ((event.ctrlKey || event.metaKey) && !event.altKey && ["z", "y"].includes(event.key.toLowerCase())) {
     event.preventDefault();
     restoreCanvasLayout(event.key.toLowerCase() === "z" && !event.shiftKey);
@@ -1236,6 +1361,131 @@ function persistWorkflowLayout() {
       notice.value = failure instanceof Error ? failure.message : "节点位置与尺寸保存失败。";
     }
   })().finally(() => { workflowLayoutFlight = undefined; });
+}
+// 画布分组：组框渲染、Ctrl+G 成组、整组拖动、右下角缩放、取消分组
+type GroupRect = { x: number; y: number; width: number; height: number };
+const GROUP_HEAD = 26;
+const groupDraft = ref<{ id: string; rect: GroupRect }>();
+function groupRectOf(group: { layout?: GroupRect }): GroupRect | undefined {
+  const layout = group.layout;
+  return layout && Number.isFinite(layout.x) && Number.isFinite(layout.y)
+    && Number.isFinite(layout.width) && Number.isFinite(layout.height) && layout.width > 0 && layout.height > 0 ? layout : undefined;
+}
+const layoutGroups = computed(() => (workspaceGraph.value?.graph.groups ?? [])
+  .filter(group => !!groupRectOf(group as { layout?: GroupRect }))
+  .map(group => groupDraft.value?.id === group.id ? { ...group, layout: groupDraft.value.rect } : group));
+function groupStyle(group: any) {
+  const rect = groupRectOf(group);
+  return rect ? { left: `${rect.x}px`, top: `${rect.y}px`, width: `${rect.width}px`, height: `${rect.height}px` } : {};
+}
+function selectionBounds(ids: string[]): GroupRect | undefined {
+  const rows = ids.flatMap(id => {
+    const rect = canvas.cardRect(id);
+    return rect ? [{ x: rect.x, y: rect.y, width: rect.width, height: rect.height }] : [];
+  });
+  if (!rows.length) return undefined;
+  const left = Math.min(...rows.map(row => row.x)) - 24;
+  const top = Math.min(...rows.map(row => row.y)) - GROUP_HEAD - 24;
+  return { x: left, y: top, width: Math.max(...rows.map(row => row.x + row.width)) - left + 24,
+    height: Math.max(...rows.map(row => row.y + row.height)) - top + 24 };
+}
+async function saveGroups(edit: (groups: any[]) => any[]) {
+  return commitWorkflow(current => ({ ...current, graph: { ...current.graph, groups: edit(current.graph.groups as any[]) } }));
+}
+function createGroup() {
+  const ids = [...selectedIds.value].filter(id => !!canvas.positions.value[id]);
+  if (!ids.length) { notice.value = "先选中要成组的节点。"; return; }
+  const rect = selectionBounds(ids);
+  if (!rect) return;
+  const name = `分组${(workspaceGraph.value?.graph.groups.length ?? 0) + 1}`;
+  void saveGroups(groups => [...groups, { id: browserUuid(), name, nodeIds: ids, layout: rect }])
+    .then(() => { notice.value = `已成组：${name}（${ids.length} 个节点）`; })
+    .catch(failure => { notice.value = failure instanceof Error ? failure.message : "成组失败。"; });
+}
+const selectedGroupId = ref<string>();
+function removeGroup(group: { id: string }) {
+  selectedGroupId.value = undefined;
+  void saveGroups(groups => groups.filter(row => row.id !== group.id));
+}
+function selectGroup(group: { id: string }) {
+  selectedGroupId.value = selectedGroupId.value === group.id ? undefined : group.id;
+}
+type ArrangeMode = "grid" | "row" | "col";
+const ARRANGE_LABELS: Record<ArrangeMode, string> = { grid: "网格排列", row: "横向排列", col: "纵向排列" };
+const ARRANGE_MODES: ArrangeMode[] = ["grid", "row", "col"];
+function arrangeGroup(group: any, mode: ArrangeMode) {
+  const ids = (group.nodeIds as string[]).filter(id => !!canvas.positions.value[id]);
+  if (ids.length < 2) { notice.value = "分组里至少要有两个节点才能整理。"; return; }
+  const rect = groupRectOf(group) ?? selectionBounds(ids);
+  if (!rect) return;
+  const sizes = ids.map(id => canvas.cardSize(id));
+  const cellW = Math.max(...sizes.map(size => size.width));
+  const cellH = Math.max(...sizes.map(size => size.height));
+  const gap = 24;
+  let columns: number;
+  if (mode === "row") columns = ids.length;
+  else if (mode === "col") columns = 1;
+  else columns = Math.max(1, Math.floor((Math.max(cellW, rect.width - 48) + gap) / (cellW + gap)));
+  const rows = Math.ceil(ids.length / columns);
+  const contentW = columns * cellW + (columns - 1) * gap;
+  const contentH = rows * cellH + (rows - 1) * gap;
+  const originX = rect.x + Math.max(24, (rect.width - contentW) / 2);
+  const originY = rect.y + GROUP_HEAD + 24;
+  const after: Record<string, { x: number; y: number }> = {};
+  ids.forEach((id, index) => {
+    after[id] = { x: originX + (index % columns) * (cellW + gap), y: originY + Math.floor(index / columns) * (cellH + gap) };
+  });
+  const nextRect: GroupRect = { ...rect, width: Math.max(rect.width, contentW + 48), height: Math.max(rect.height, contentH + GROUP_HEAD + 48) };
+  canvas.applyLayout(after);
+  persistWorkflowLayout();
+  void saveGroups(groups => groups.map(row => row.id === group.id ? { ...row, layout: nextRect } : row));
+  notice.value = `已按${ARRANGE_LABELS[mode]}整理 ${ids.length} 个节点。`;
+}
+type GroupCorner = "nw" | "ne" | "sw" | "se";
+const GROUP_CORNERS: GroupCorner[] = ["nw", "ne", "sw", "se"];
+const groupGesture = ref<{ id: string; mode: "move" | "resize"; corner?: GroupCorner; startX: number; startY: number;
+  rect: GroupRect; members: Record<string, { x: number; y: number }>; moved: boolean }>();
+function beginGroupGesture(event: PointerEvent, group: any, mode: "move" | "resize", corner?: GroupCorner) {
+  const rect = groupRectOf(group);
+  if (event.button !== 0 || !rect) return;
+  event.preventDefault(); event.stopPropagation();
+  const members: Record<string, { x: number; y: number }> = {};
+  for (const id of group.nodeIds) { const point = canvas.positions.value[id]; if (point) members[id] = { x: point.x, y: point.y }; }
+  groupGesture.value = { id: group.id, mode, corner, startX: event.clientX, startY: event.clientY, rect: { ...rect }, members, moved: false };
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+}
+function moveGroupGesture(event: PointerEvent) {
+  const gesture = groupGesture.value;
+  if (!gesture) return;
+  const dx = (event.clientX - gesture.startX) / canvas.scale.value;
+  const dy = (event.clientY - gesture.startY) / canvas.scale.value;
+  if (gesture.mode === "move") {
+    groupDraft.value = { id: gesture.id, rect: { ...gesture.rect, x: gesture.rect.x + dx, y: gesture.rect.y + dy } };
+    for (const [id, point] of Object.entries(gesture.members)) {
+      canvas.positions.value[id] = { ...(canvas.positions.value[id] ?? {}), x: point.x + dx, y: point.y + dy };
+    }
+  } else {
+    const signX = gesture.corner === "sw" || gesture.corner === "nw" ? -1 : 1;
+    const signY = gesture.corner === "ne" || gesture.corner === "nw" ? -1 : 1;
+    const width = Math.max(160, gesture.rect.width + dx * signX);
+    const height = Math.max(100, gesture.rect.height + dy * signY);
+    groupDraft.value = { id: gesture.id, rect: {
+      x: signX < 0 ? gesture.rect.x + gesture.rect.width - width : gesture.rect.x,
+      y: signY < 0 ? gesture.rect.y + gesture.rect.height - height : gesture.rect.y,
+      width, height } };
+  }
+  gesture.moved = true;
+}
+function endGroupGesture() {
+  const gesture = groupGesture.value;
+  if (!gesture) return;
+  groupGesture.value = undefined;
+  const rect = groupDraft.value?.id === gesture.id ? groupDraft.value.rect : undefined;
+  groupDraft.value = undefined;
+  if (!gesture.moved) { selectGroup({ id: gesture.id }); return; }
+  if (!rect) return;
+  void saveGroups(groups => groups.map(row => row.id === gesture.id ? { ...row, layout: rect } : row));
+  if (gesture.mode === "move") persistWorkflowLayout();
 }
 async function createProject() {
   const project = await request<{ id: string }>("/v2/projects", {
@@ -1374,7 +1624,10 @@ async function restoreCanvasDraft(record: DraftRecord<SavedCanvas>) {
       selectedIds.value = [];
       canvas.positions.value = flowPositions.value;
       await nextTick();
-      canvas.fit();
+      // 步骤多的画布不再一进来就缩成全图：先给一个可读的落点，全貌交给「适应画布」。
+      const anchor = flowNodes.value[0]?.id;
+      if (flowNodes.value.length > 6 && anchor) { canvas.zoom(1); canvas.center(anchor); }
+      else canvas.fit();
     } else if (!record.value) {
       if (mediaCanvasId.value && record.title === "新画布") projectTitle.value = "未命名画布";
       serviceDeviceId.value = "";
@@ -1442,6 +1695,7 @@ onMounted(() => {
   } else void loadProjects();
   window.addEventListener("beforeunload", protectUnsavedDraft);
   window.addEventListener("keyup", releaseCanvasSpace);
+  document.addEventListener("keydown", canvasClipboardShortcut);
 });
 onBeforeUnmount(() => {
   finishPointerFrame();
@@ -1449,6 +1703,7 @@ onBeforeUnmount(() => {
   projectsRequest?.abort();
   window.removeEventListener("beforeunload", protectUnsavedDraft);
   window.removeEventListener("keyup", releaseCanvasSpace);
+  document.removeEventListener("keydown", canvasClipboardShortcut);
 });
 watch([projectId, mediaCanvasId], () => {
   canvas.clearHistory();
@@ -1524,23 +1779,48 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
     </v-dialog>
     <PeerServerSelect :model-value="serviceDeviceId" v-slot="computers">
     <div v-show="!projectHome && !!mediaCanvasId">
+    <Teleport v-if="!projectHome && !!mediaCanvasId" to="#page-topbar-controls" defer>
     <div class="video-heading workspace-heading">
-      <v-btn prepend-icon="mdi-arrow-left" variant="text" @click="action(showProjectCanvases)">画布列表</v-btn>
+      <v-btn prepend-icon="mdi-arrow-left" variant="text" size="small" @click="action(showProjectCanvases)">画布列表</v-btn>
       <strong v-if="flowNodes.length && !canvasItems.length">{{projectTitle}}</strong>
       <input v-else v-model="projectTitle" class="project-title" aria-label="画布名称" maxlength="100" />
-      <div><h1>工作台</h1><span>{{ statusError || (snapshot ? (snapshot.computeError ? '服务暂不可用' : snapshot.online ? '服务已就绪' : '按需启动') : '正在连接') }}</span></div>
-      <v-btn v-if="statusError" variant="text" @click="refresh()">重试服务连接</v-btn>
-      <v-btn v-if="mediaCanvasId" variant="text" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
-      <v-btn v-if="flowNodes.length" variant="text" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
-
+      <span class="canvas-status">{{ statusError || (snapshot ? (snapshot.computeError ? '服务暂不可用' : snapshot.online ? '服务已就绪' : '按需启动') : '正在连接') }}</span>
+      <v-btn v-if="statusError" variant="text" size="small" @click="refresh()">重试连接</v-btn>
+      <v-spacer />
+      <v-btn v-if="mediaCanvasId" variant="text" size="small" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
+      <v-btn v-if="flowNodes.length" variant="text" size="small" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
       <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
     </div>
+    </Teleport>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
     <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" class="mb-4">{{ error || snapshot?.computeError }}</v-alert>
     <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-content':workflowWire?.kind==='content','linking-step':workflowWire?.kind==='step','linking-input':workflowWire?.kind==='input'}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="cancelPort(); pendingInput=undefined; showLibrary=false; contextMenu=undefined; openPopover=''">
       <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button></nav>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
       <div class="canvas-world" :style="canvasTransform">
+      <section v-for="group in layoutGroups" :key="group.id" class="canvas-group" :class="{ selected: selectedGroupId === group.id }" :style="groupStyle(group)"
+        @pointerdown.stop="beginGroupGesture($event, group, 'move')" @pointermove="moveGroupGesture"
+        @pointerup="endGroupGesture" @pointercancel="endGroupGesture">
+        <header class="canvas-group-head" :aria-pressed="selectedGroupId === group.id">
+          <v-icon icon="mdi-group" size="14" />
+          <span>{{ group.name || '分组' }}</span>
+          <small>{{ group.nodeIds.length }}</small>
+        </header>
+        <div v-if="selectedGroupId === group.id" class="canvas-group-toolbar" role="toolbar" :aria-label="`${group.name || '分组'}操作`" @pointerdown.stop @click.stop>
+          <details class="group-arrange">
+            <summary><v-icon icon="mdi-view-grid-outline" size="14" />整理<v-icon icon="mdi-chevron-down" size="13" /></summary>
+            <div class="group-arrange-menu" role="menu">
+              <button v-for="mode in ARRANGE_MODES" :key="mode" type="button" role="menuitem" @click="arrangeGroup(group, mode)">{{ ARRANGE_LABELS[mode] }}</button>
+            </div>
+          </details>
+          <span class="group-tool-divider" />
+          <button type="button" class="group-tool-danger" @click="removeGroup(group)">取消分组</button>
+        </div>
+        <button v-for="corner in GROUP_CORNERS" :key="corner" type="button"
+          :class="`canvas-group-resize corner-${corner}`" :aria-label="`调整分组大小 ${corner}`"
+          @pointerdown.stop="beginGroupGesture($event, group, 'resize', corner)" @pointermove="moveGroupGesture"
+          @pointerup="endGroupGesture" @pointercancel="endGroupGesture" />
+      </section>
       <svg v-if="flowWires.length || wirePreview" class="workspace-flow-wires" aria-hidden="true">
         <g v-for="wire in flowWires" :key="wire.id" class="flow-connection" @pointerdown="$event.button === 0 && !canPan && $event.stopPropagation()" @click.stop="selectWire(wire)">
           <path :d="wire.path" class="connection-hit" vector-effect="non-scaling-stroke" aria-hidden="true" />
@@ -1639,11 +1919,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <button class="workspace-port port-out step" :data-card-output="'step'" :data-card-id="node.id" aria-label="下一步" title="下一步" @pointerdown.stop="beginPort($event, node.id, 'step')" @click.stop="armPortFromKeyboard($event, node.id, 'step')">＋</button>
         </template>
         <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @keydown="nudgeCard($event,node.id)">
-          <v-icon :icon="flowIcons[node.kind] || 'mdi-sitemap-outline'" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<v-icon icon="mdi-drag" size="16"/>
+          <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<v-icon icon="mdi-drag" size="16"/>
         </button>
         <div class="workflow-card-body canvas-text-card" data-canvas-card-body>
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
-          <p v-if="node.config.textOutput===true" class="node-text-preview" :class="{muted:!node.textPreview?.text}" tabindex="0" @wheel.stop>{{ node.textPreview?.text || '等待生成' }}</p>
+          <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
           <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
         </div>
         <button class="canvas-resize-handle" :aria-label="`调整 ${node.title || '流程节点'} 的大小`" @pointerdown.stop="canvas.beginResize($event, node.id)" @keydown="resizeCardWithKeyboard($event, node.id)" />
@@ -1774,11 +2054,16 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           <hr /><button role="menuitem" class="delete-node" :disabled="busy || uploading" @click="deleteCard"><v-icon icon="mdi-trash-can-outline" size="17" />删除节点</button>
         </template>
         <template v-else>
-        <button v-for="entry in canvasKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="addCanvasItem(entry.kind)"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}卡片</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('text'))"><v-icon icon="mdi-format-text" size="17" />添加文本</button>
+        <button v-for="entry in mediaCanvasKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="addCanvasItem(entry.kind)"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('agent'))"><v-icon icon="mdi-robot-outline" size="17" />添加 Agent</button>
         <hr />
-        <button v-for="entry in workflowCardKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard(entry.kind))">
-          <v-icon :icon="flowIcons[entry.kind]" size="17"/>添加{{ workspaceDefinition?.capabilities[entry.kind]?.label || entry.label }}节点
+        <button role="menuitem" class="menu-group-toggle" :aria-expanded="showPipelineNodes" @click.stop="showPipelineNodes = !showPipelineNodes">
+          <v-icon icon="mdi-tune-variant" size="17" />自动化节点<v-icon :icon="showPipelineNodes ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="15" class="menu-caret" />
         </button>
+        <template v-if="showPipelineNodes">
+          <button v-for="entry in pipelineNodeKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard(entry.kind))"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}节点</button>
+        </template>
         <hr /><button role="menuitem" @click="showLibrary=true; contextMenu=undefined"><v-icon icon="mdi-history" size="17" />从作品历史添加</button><button role="menuitem" @click="canvas.fit(); contextMenu=undefined"><v-icon icon="mdi-fit-to-screen-outline" size="17" />适应画布</button>
         </template>
       </div>
@@ -1841,6 +2126,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-dragging .preview-stage :deep(.media-video-player video) { cursor:grabbing; }
 .creative-card .node-text-preview { overflow:auto; user-select:text; }
 .creative-card .node-text-preview.muted { color:var(--rr-muted); }
+.creative-card .node-text-editor { width:100%; resize:none; border:0; outline:none; background:transparent; font:inherit; user-select:text; }
+.creative-card .node-text-editor::placeholder { color:var(--rr-muted); }
 .workspace-port.port-in { left:-11px; }
 .workspace-port.port-out { right:-11px; }
 .creation-stage .workspace-port.port-in { left:119px; }
@@ -1867,7 +2154,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-node-artifacts a span { flex:1; overflow-wrap:anywhere; }
 .node-run-badge { position:absolute; right:10px; top:8px; padding:2px 7px; border-radius:10px; background:var(--rr-surface); color:var(--rr-heading); font-size:11px; pointer-events:none; }
 .workflow-card-disabled { opacity:.62; }
-.video-workspace { position:absolute; inset:64px 0 0; overflow:clip; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
+.video-workspace { position:absolute; inset:0; overflow:clip; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
 .video-workspace:focus { outline:none; }
 .creation-stage { position:absolute; width:calc(var(--canvas-card-width,380px) + 260px); display:flex; flex-direction:column; align-items:center; }
 .preview-stage { flex-shrink:0; width:var(--canvas-card-width,380px); height:var(--canvas-card-height,214px); background:var(--rr-surface); border:1px solid var(--rr-border-strong); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--rr-text); box-shadow:var(--rr-shadow-card); }
@@ -1938,10 +2225,12 @@ summary { cursor:pointer; }
 .work-card time { padding:0 12px; font-size:11px; }
 .library-empty { padding:24px 8px; text-align:center; color:var(--rr-muted); font-size:14px; }
 .workbench-project-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-.workspace-heading { height:64px; padding:0 24px; margin:0; gap:10px; }
-.workspace-heading>div:first-child { display:flex; align-items:center; gap:14px; }
-.workspace-heading h1 { font-size:16px; font-weight:600; }
-.workspace-heading span { font-size:11px; }
+.workspace-heading { display:flex; align-items:center; gap:8px; width:100%; height:auto; padding:0; margin:0; min-width:0; }
+.workspace-heading>strong { overflow:hidden; max-width:300px; font-size:13px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-heading .canvas-status { overflow:hidden; color:var(--rr-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-heading .project-title { min-width:140px; max-width:300px; padding:4px 6px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--rr-text); font-size:13px; }
+.workspace-heading .project-title:is(:hover,:focus-within) { border-color:var(--rr-border); background:var(--rr-surface); }
+.workspace-heading :deep(.v-btn) { font-size:12px; letter-spacing:0; }
 .workspace-heading :deep(.v-switch) { flex:0 0 auto; }
 .workspace-tools { position:absolute; z-index:6; left:16px; top:50%; transform:translateY(-50%); display:grid; gap:4px; padding:6px; border:1px solid var(--rr-border); border-radius:24px; background:var(--rr-surface); }
 .workspace-tools button { width:36px; height:40px; border-radius:18px; color:var(--rr-text); }
@@ -1954,12 +2243,12 @@ summary { cursor:pointer; }
 .result-actions .video-hint { margin:0; font-size:10px; }
 .result-prompt { font-size:10px; color:var(--rr-muted); text-align:center; }
 .result-prompt p { text-align:left; }
-.video-page>.v-alert { position:absolute; top:64px; left:72px; right:16px; z-index:8; }
+.video-page>.v-alert { position:absolute; top:10px; left:72px; right:16px; z-index:8; }
 .generate-feedback p { font-size:11px; margin-bottom:10px; }
 .asset-help { font-size:10px; }
 @media(max-width:600px) {
-  .workspace-heading { padding:0 12px; }
-  .workspace-heading>div:first-child { display:block; }
+  .workspace-heading { gap:4px; }
+  .workspace-heading .canvas-status { display:none; }
 
 
   .workspace-tools { left:10px; }
@@ -1993,6 +2282,8 @@ summary { cursor:pointer; }
 .canvas-menu button { display:flex; gap:10px; align-items:center; width:100%; min-height:40px; padding:8px 10px; text-align:left; font-size:13px; border-radius:8px; }
 .canvas-menu button:hover { background:var(--rr-accent-surface); }
 .canvas-menu hr { border:0; border-top:1px solid var(--rr-border-soft); margin:5px; }
+.canvas-menu .menu-group-toggle { color:var(--rr-muted); font-size:12px; }
+.canvas-menu .menu-group-toggle .menu-caret { margin-left:auto; }
 .canvas-tools { position:absolute; z-index:7; bottom:18px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:4px; padding:6px; border:1px solid var(--rr-border); border-radius:26px; background:var(--rr-surface); box-shadow:var(--rr-shadow-menu); }
 .canvas-tools button { min-width:34px; height:34px; border-radius:18px; font-size:20px; }
 .canvas-tools .zoom-label { min-width:58px; font-size:12px; }
@@ -2114,4 +2405,29 @@ summary { cursor:pointer; }
 .card-replace-upload { position:absolute; right:10px; top:10px; opacity:0; }
 .canvas-media-card:hover .card-replace-upload,.card-replace-upload:focus-within { opacity:1; }
 .canvas-card-empty audio { width:88%; }
+</style>
+
+<style scoped>
+.canvas-group { position:absolute; border:1px solid var(--rr-border-strong,rgba(127,127,127,.5)); border-radius:16px; background:color-mix(in srgb, var(--rr-surface,#15181e) 88%, transparent); pointer-events:auto; touch-action:none; }
+.canvas-group.selected { border-color:var(--rr-accent); box-shadow:0 0 0 3px var(--rr-accent-surface); z-index:5; }
+.canvas-group-head { display:flex; align-items:center; gap:7px; height:32px; box-sizing:border-box; padding:0 12px; font-size:12px; color:var(--rr-heading,var(--rr-text,#e6e8ee)); cursor:move; user-select:none; }
+.canvas-group-head small { color:var(--rr-muted,#9aa0a6); font-size:11px; }
+.canvas-group-toolbar { position:absolute; top:-46px; left:0; z-index:6; display:flex; align-items:center; gap:2px; padding:5px 6px; border:1px solid var(--rr-border); border-radius:22px; background:var(--rr-surface); box-shadow:var(--rr-shadow-menu); white-space:nowrap; }
+.canvas-group-toolbar > button { padding:5px 10px; border-radius:14px; font-size:11px; color:var(--rr-muted); }
+.canvas-group-toolbar > button:is(:hover,:focus-visible) { background:var(--rr-accent-surface); color:var(--rr-heading); }
+.group-arrange { position:relative; }
+.group-arrange summary { display:flex; align-items:center; gap:5px; padding:5px 10px; border-radius:14px; font-size:11px; color:var(--rr-muted); cursor:pointer; list-style:none; }
+.group-arrange summary::-webkit-details-marker { display:none; }
+.group-arrange[open] summary { background:var(--rr-accent-surface); color:var(--rr-heading); }
+.group-arrange-menu { position:absolute; top:calc(100% + 6px); left:0; display:grid; gap:2px; min-width:132px; padding:5px; border:1px solid var(--rr-border); border-radius:10px; background:var(--rr-surface); box-shadow:var(--rr-shadow-menu); }
+.group-arrange-menu button { padding:7px 9px; border-radius:6px; text-align:left; font-size:11px; color:var(--rr-text); }
+.group-arrange-menu button:is(:hover,:focus-visible) { background:var(--rr-accent-surface); color:var(--rr-heading); }
+.group-tool-divider { width:1px; height:16px; background:var(--rr-border); margin:0 4px; }
+.group-tool-danger { color:var(--rr-error-text,var(--rr-muted)) !important; }
+.canvas-group-resize { position:absolute; width:12px; height:12px; padding:0; border:1px solid var(--rr-border,rgba(127,127,127,.5)); border-radius:3px; background:var(--rr-surface,#1b1b22); opacity:.5; transition:opacity .12s; }
+.canvas-group:hover .canvas-group-resize,.canvas-group-resize:focus-visible { opacity:1; }
+.canvas-group-resize.corner-nw { left:-6px; top:-6px; cursor:nwse-resize; }
+.canvas-group-resize.corner-ne { right:-6px; top:-6px; cursor:nesw-resize; }
+.canvas-group-resize.corner-sw { left:-6px; bottom:-6px; cursor:nesw-resize; }
+.canvas-group-resize.corner-se { right:-6px; bottom:-6px; cursor:nwse-resize; }
 </style>

@@ -12,7 +12,11 @@ export type FlowGraph = { nodes:FlowNode[]; edges:FlowEdge[]; groups:FlowGroup[]
 export type MediaLink = { from: string; to: string };
 export type WorkflowInputLink = MediaLink & { sourceTitle: string; artifactKeys: string[] };
 export type WorkbenchCanvas = { mediaLinks?: MediaLink[]; version:number; id:string; name:string; revision:number; workspaceBindingKey:string; variables:unknown[]; graph:FlowGraph; [key:string]:unknown };
-export type WorkbenchDefinition = { capabilities:Record<string,{label:string;ports:{in:string[];out:string[]}}>; edgeConditions:string[]; nodeStates:Record<string,{label:string}>; runStates?:Record<string,{label:string}>; [key:string]:unknown };
+export type WorkbenchDefinition = { capabilities:Record<string,WorkbenchCapability>; edgeConditions:string[]; nodeStates:Record<string,{label:string}>; runStates?:Record<string,{label:string}>; [key:string]:unknown };
+export function nodeConfigFields(definition: WorkbenchDefinition | undefined, kind: string): ConfigField[] {
+  const defined = definition?.capabilities?.[kind]?.fields;
+  return Array.isArray(defined) && defined.length ? defined : (configFields[kind] ?? []);
+}
 export type WorkbenchRunReceipt = {
   id: string;
   projectId: string;
@@ -118,10 +122,12 @@ export function groupBounds(group:FlowGroup,positions:Record<string,Point>) {
 export function mergePage<T extends {id:string}>(current:T[],incoming:T[],limit=LIST_LIMIT){const all=[...new Map([...current,...incoming].map(row=>[row.id,row])).values()];return {rows:all.slice(-limit),removed:Math.max(0,all.length-limit)};}
 export function visibleList(length:number,scrollTop:number,height:number,rowHeight=80){const offset=Math.max(0,Math.min(scrollTop,Math.max(0,length*rowHeight-height))),start=Math.max(0,Math.floor(offset/rowHeight)-3),end=Math.min(length,Math.ceil((offset+height)/rowHeight)+3);return {start,end,top:start*rowHeight,bottom:Math.max(0,(length-end)*rowHeight)};}
 export type ConfigField={path:string;label:string;type?:"number"|"boolean"|"lines"|"textarea"|"select";options?:string[]};
+export type WorkbenchCapability = { label:string; ports:{in:string[];out:string[]}; icon?:string; group?:string; executable?:boolean; fields?:ConfigField[] };
 const roots=["canvas","materials","output","runtime"];
+// 兜底字段表：节点定义里声明了 fields 就以定义为准，新增参数不必再改前端。
 export const configFields:Record<string,ConfigField[]>={
   command:[{path:"toolKey",label:"命令工具"},{path:"argv",label:"命令参数（每行一项）",type:"lines"},{path:"timeoutMs",label:"超时（毫秒）",type:"number"},{path:"validationOnly",label:"仅校验输入",type:"boolean"}],
-  agent:[{path:"agentBindingKey",label:"Agent 绑定"},{path:"target.agentAdapter",label:"目标适配器"},{path:"target.threadId",label:"目标对话"},{path:"source.sourceAgentType",label:"发起适配器"},{path:"source.sourceThreadId",label:"发起对话"},{path:"briefRef.root",label:"任务书位置",type:"select",options:roots},{path:"briefRef.path",label:"任务书相对路径"},{path:"independentFromNodeId",label:"独立核验的原作者节点"},{path:"contextProjection.ref.root",label:"结构化上下文位置",type:"select",options:roots},{path:"contextProjection.ref.path",label:"结构化上下文相对路径"},{path:"contextProjection.list",label:"上下文列表字段"},{path:"contextProjection.fields",label:"传递字段（每行一项）",type:"lines"}],
+  agent:[{path:"multiTurn",label:"多轮迭代（带上此前对话）",type:"boolean"},{path:"agentBindingKey",label:"Agent 绑定"},{path:"target.agentAdapter",label:"目标适配器"},{path:"target.threadId",label:"目标对话"},{path:"source.sourceAgentType",label:"发起适配器"},{path:"source.sourceThreadId",label:"发起对话"},{path:"briefRef.root",label:"任务书位置",type:"select",options:roots},{path:"briefRef.path",label:"任务书相对路径"},{path:"independentFromNodeId",label:"独立核验的原作者节点"},{path:"contextProjection.ref.root",label:"结构化上下文位置",type:"select",options:roots},{path:"contextProjection.ref.path",label:"结构化上下文相对路径"},{path:"contextProjection.list",label:"上下文列表字段"},{path:"contextProjection.fields",label:"传递字段（每行一项）",type:"lines"}],
   asset:[{path:"mediaKind",label:"材料类型",type:"select",options:["text","image","video","audio"]},{path:"ref.root",label:"材料位置",type:"select",options:roots},{path:"ref.path",label:"材料相对路径"},{path:"artifactKey",label:"产物名称"}],
   human:[{path:"instructions",label:"检查内容",type:"textarea"}],
   generate:[{path:"command.model",label:"模型"},{path:"command.prompt",label:"生成提示词",type:"textarea"},{path:"command.width",label:"宽度",type:"number"},{path:"command.height",label:"高度",type:"number"},{path:"command.frames",label:"帧数",type:"number"},{path:"command.seed",label:"种子",type:"number"},{path:"deviceId",label:"生成设备"}]

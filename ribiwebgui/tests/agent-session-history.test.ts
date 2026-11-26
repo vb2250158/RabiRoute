@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
-import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, latestAgentConversationPage } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionHistory';
+import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, latestAgentConversationPage } from '../src/agentSessionHistory';
 import { createAgentSessionClient, personaSessionAgents, agentSessionProject, agentSessionMembersAvailable } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';

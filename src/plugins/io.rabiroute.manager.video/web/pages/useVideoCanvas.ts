@@ -97,6 +97,10 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   function cardBounds(id: string, point: Point) {
     return { id, x: point.x + CARD_LEFT, y: point.y + CARD_HEADER, ...cardSize(id) };
   }
+  function cardRect(id: string) {
+    const point = positions.value[id];
+    return point ? cardBounds(id, point) : undefined;
+  }
   const visibleCardIds = computed(() => {
     const view = visibleBounds.value;
     const visible = new Set<string>();
@@ -319,6 +323,17 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
     const bounds = viewport.value!.getBoundingClientRect();
     zoom(scale.value * Math.exp(-event.deltaY * unit * 0.0015), { x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   }
+  function applyLayout(after: Record<string, NodeLayout>) {
+    const before: Record<string, NodeLayout> = {};
+    for (const [id, next] of Object.entries(after)) {
+      const current = positions.value[id];
+      if (!current) continue;
+      if (current.x === next.x && current.y === next.y && current.width === next.width && current.height === next.height) continue;
+      before[id] = { ...current };
+      positions.value[id] = { ...current, ...next };
+    }
+    return recordLayout(before);
+  }
   function recordLayout(before: Record<string, NodeLayout>) {
     const after: Record<string, NodeLayout> = {};
     const changed: Record<string, NodeLayout> = {};
@@ -385,5 +400,5 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   onBeforeUnmount(() => observer?.disconnect());
   function world(point: Point) { return { x: (point.x - offset.value.x) / scale.value, y: (point.y - offset.value.y) / scale.value }; }
   function moving(pointerId: number) { return gesture?.pointer === pointerId && gesture.started; }
-  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, visibleBounds, visibleCardIds, add, position, cardSize, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, moving, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory };
+  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, visibleBounds, visibleCardIds, add, position, cardSize, cardRect, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, moving, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory, applyLayout };
 }
