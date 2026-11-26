@@ -675,3 +675,118 @@ test("creative node receives both canvas texts and returns a reusable result wit
   assert.match(observed.prompt, /大肥鱼\n\n红雨衣/u);
   assert.match(observed.responseInstruction, /"text"/u);
 });
+
+test("a human step can be marked done without evidence and only releases its successors", async t => {
+  const f = await fixture(t);
+  const human = { id: "review", kind: "human", config: { instructions: "看一眼再继续" } };
+  const run = await f.run([f.command("before"), human, f.command("after")], [f.edge("before", "review"), f.edge("review", "after")]);
+  assert.equal(run.state, "waiting_human");
+  assert.equal(run.attempts.review.state, "waiting_human");
+  assert.equal(run.attempts.before.state, "succeeded");
+  assert.equal(run.attempts.after.state, "pending");
+  await assert.rejects(fs.stat(path.join(f.output, "after.txt")), { code: "ENOENT" });
+
+  await assert.rejects(f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: " " }), error => error.status === 409);
+  await assert.rejects(f.owner.completeHuman(run.id, { nodeId: "review", attemptId: randomUUID(), identity: "复核同学" }), error => error.status === 409);
+  assert.equal((await f.owner.read(run.id)).attempts.review.state, "waiting_human");
+
+  const upstream = JSON.stringify(run.attempts.before);
+  await f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: "复核同学" });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.equal(done.attempts.review.state, "succeeded");
+  assert.equal(done.attempts.review.confirmation.mode, "confirm");
+  assert.equal(done.attempts.review.confirmation.identity, "复核同学");
+  assert.match(done.attempts.review.confirmation.confirmedAt, /^\d{4}-\d{2}-\d{2}T/u);
+  assert.deepEqual(done.attempts.review.confirmation.basis.map(row => [row.source, row.path]), [["upstream", "before.txt"]]);
+  assert.equal(JSON.stringify(done.attempts.before), upstream, "the finished upstream attempt is never re-executed");
+  assert.equal(done.attempts.after.state, "succeeded");
+  assert.equal(await fs.readFile(path.join(f.output, "after.txt"), "utf8"), "after");
+  await assert.rejects(f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: "再来一次" }), error => error.status === 409);
+});
+
+test("an approval command pauses before dispatch and runs only after the confirmation", async t => {
+  const f = await fixture(t);
+  f.projects.definition = structuredClone(f.projects.definition);
+  delete f.projects.definition.nodeStates.waiting_approval;
+  const gated = { ...f.command("gated"), approval: true }, tail = f.command("tail");
+  const run = await f.run([f.command("head"), gated, tail], [f.edge("head", "gated"), f.edge("gated", "tail")]);
+  assert.equal(run.state, "waiting_human");
+  assert.equal(run.attempts.gated.state, "waiting_human", "an undeclared approval state falls back to the existing human wait");
+  assert.equal(run.attempts.gated.approval.required, true);
+  assert.equal(run.attempts.gated.startedAt, undefined);
+  assert.ok(run.waiting.some(row => row.nodeId === "gated"));
+  await assert.rejects(fs.stat(path.join(f.output, "gated.txt")), { code: "ENOENT" });
+  const upstream = JSON.stringify(run.attempts.head);
+
+  await f.owner.pump(f.owner.runs.get(run.id));
+  await f.owner.flights.get(run.id);
+  await assert.rejects(fs.stat(path.join(f.output, "gated.txt")), { code: "ENOENT" }, "a background repump cannot approve itself");
+
+  await f.owner.completeHuman(run.id, { nodeId: "gated", attemptId: run.attempts.gated.id, identity: "值班同学" });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.equal(done.attempts.gated.state, "succeeded");
+  assert.equal(done.attempts.gated.confirmation.mode, "approval");
+  assert.equal(done.attempts.gated.receipt.completed, true);
+  assert.equal(JSON.stringify(done.attempts.head), upstream);
+  assert.equal(await fs.readFile(path.join(f.output, "gated.txt"), "utf8"), "gated");
+  assert.equal(await fs.readFile(path.join(f.output, "tail.txt"), "utf8"), "tail");
+});
+
+test("an approval declared on the node config uses the new state once the definition declares it", async t => {
+  const f = await fixture(t);
+  f.projects.definition = structuredClone(f.projects.definition);
+  f.projects.definition.nodeStates.waiting_approval = { label: "等待确认", terminal: false };
+  const gated = { id: "gated", kind: "command", config: { toolKey: "node", approval: true, argv: ["-e", "console.log('ran')"] } };
+  const run = await f.run([gated]);
+  assert.equal(run.state, "waiting_human", "the run still reports the existing 等待人工 summary");
+  assert.equal(run.attempts.gated.state, "waiting_approval");
+  await f.owner.completeHuman(run.id, { nodeId: "gated", attemptId: run.attempts.gated.id, identity: "值班同学" });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.equal(done.attempts.gated.state, "succeeded");
+  assert.equal(done.attempts.gated.confirmation.mode, "approval");
+});
+
+test("the original evidence submission still passes and records the confirmation basis", async t => {
+  const f = await fixture(t);
+  const human = { id: "review", kind: "human", config: { instructions: "核对截图" },
+    requirements: [{ key: "shot", root: "output", path: "shot.txt", type: "file", freshness: "produced", required: true }] };
+  const run = await f.run([human, f.command("after")], [f.edge("review", "after")]);
+  assert.equal(run.attempts.review.state, "waiting_human");
+  await fs.writeFile(path.join(f.output, "shot.txt"), "人工截图");
+  await f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: "检查人", evidence: { review: "approved" } });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.equal(done.attempts.review.confirmation.mode, "evidence");
+  assert.equal(done.attempts.review.confirmation.identity, "检查人");
+  assert.deepEqual(done.attempts.review.receipt.evidence, { review: "approved" });
+  assert.equal(done.attempts.review.artifacts[0].key, "shot");
+  assert.equal(done.attempts.review.validation[0].passed, true);
+  assert.ok(done.attempts.review.confirmation.basis.some(row => row.source === "confirmed" && row.path === "shot.txt"));
+});
+
+test("an evidence-free confirmation still checks declared artifacts and never advances silently", async t => {
+  const f = await fixture(t);
+  const human = { id: "review", kind: "human", config: {},
+    requirements: [{ key: "shot", root: "output", path: "shot.txt", type: "file", freshness: "produced", required: true }] };
+  const run = await f.run([human, f.command("after")], [f.edge("review", "after")]);
+  await assert.rejects(f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: "检查人" }),
+    error => error.status === 409 && /产物校验失败：shot/u.test(error.message));
+  const waiting = await f.owner.read(run.id);
+  assert.equal(waiting.state, "waiting_human");
+  assert.equal(waiting.attempts.review.state, "waiting_human");
+  assert.equal(waiting.attempts.after.state, "pending");
+  await fs.writeFile(path.join(f.output, "shot.txt"), "人工截图");
+  await f.owner.completeHuman(run.id, { nodeId: "review", attemptId: run.attempts.review.id, identity: "检查人" });
+  await f.owner.flights.get(run.id);
+  const done = await f.owner.read(run.id);
+  assert.equal(done.state, "succeeded");
+  assert.equal(done.attempts.review.confirmation.mode, "confirm");
+  assert.equal(done.attempts.review.artifacts[0].key, "shot");
+});

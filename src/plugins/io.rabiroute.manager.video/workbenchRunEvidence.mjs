@@ -10,6 +10,7 @@ const legacyStates = {
   skipped: "skip",
   cancelled: "skip",
   waiting_human: "wait",
+  waiting_approval: "wait",
   waiting_agent: "running",
   running: "running"
 };

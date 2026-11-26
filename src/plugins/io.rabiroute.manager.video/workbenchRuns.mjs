@@ -17,6 +17,11 @@ const hash = value => createHash("sha256").update(JSON.stringify(value)).digest(
 const terminalRuns = new Set(Object.entries(definition.runStates).filter(([,row])=>row.terminal).map(([state])=>state));
 const timestamp = () => new Date().toISOString();
 const missing = error => { if (error.code === "ENOENT") return undefined; throw error; };
+// Old records always read both names; only the declared one is ever written.
+const waitingHumanStates = new Set(["waiting_human", "waiting_approval"]);
+const isWaitingHuman = state => waitingHumanStates.has(state);
+/** Approvals may be declared on the node or, through the field form, on its config. */
+const needsApproval = node => node?.approval === true || node?.config?.approval === true;
 
 function agentEndpoint(node, binding, key, requiredField) {
   const configured = node?.config[key];
@@ -60,6 +65,8 @@ export class WorkbenchRuns {
     });
   }
   listCli(refresh = false) { return this.cli.list(refresh); }
+  /** A new state is written only once the published definition declares it; readers accept both. */
+  approvalState() { return Object.hasOwn(this.projects.definition?.nodeStates ?? {}, "waiting_approval") ? "waiting_approval" : "waiting_human"; }
   resolveCli(node, binding) {
     const profile = binding.workbuddyCli;
     return this.cli.resolve(node.config.cli,binding.roots.project || binding.roots.runtime,binding.roots.output,{
@@ -308,6 +315,16 @@ export class WorkbenchRuns {
       attempt.baseline ??= await inspectRequirements(node.requirements, run.binding.roots);
       if (run.cancelRequested || this.closing) { attempt.state = "cancelled"; continue; }
       if (node.kind === "human") { attempt.state = "waiting_human"; await this.persist(run); continue; }
+      if (needsApproval(node) && !attempt.confirmation) {
+        const state = this.approvalState();
+        if (attempt.state !== state || attempt.approval?.required !== true) {
+          attempt.state = state;
+          attempt.approval = { required: true, requestedAt: attempt.approval?.requestedAt ?? timestamp() };
+          attempt.reason = "approval_required";
+          await this.persist(run);
+        }
+        continue;
+      }
       if (node.kind === "agent" && !node.config.cli) {
         await this.agent(run,node,attempt); await this.persist(run); continue;
       }
@@ -369,12 +386,12 @@ export class WorkbenchRuns {
   summarize(run) {
     const attempts = Object.values(run.attempts), nodes = new Map(run.snapshot.graph.nodes.map(node => [node.id, node]));
     run.failures = attempts.filter(row => ["failed", "blocked", "interrupted"].includes(row.state)).map(row => row.nodeId);
-    run.waiting = attempts.filter(row => ["waiting_human", "waiting_agent"].includes(row.state)).map(row => ({ nodeId: row.nodeId, state: row.state }));
+    run.waiting = attempts.filter(row => isWaitingHuman(row.state) || row.state === "waiting_agent").map(row => ({ nodeId: row.nodeId, state: row.state }));
     const active = attempts.some(row => ["running", "cancelling"].includes(row.state)||row.state==="waiting_agent"&&row.dispatchStarted&&!row.completionConfirmed&&!preparedAgentCanRetry(row, row.originalReceipt));
     run.state = run.cancelRequested ? active || attempts.some(row => row.uncertain) ? "cancelling" : "cancelled"
       : active ? "running" : attempts.some(row => row.state === "failed" && nodes.get(row.nodeId).gate) ? "failed"
       : attempts.some(row => row.state === "interrupted") ? "interrupted"
-      : run.waiting.some(row => row.state === "waiting_human") ? "waiting_human"
+      : run.waiting.some(row => isWaitingHuman(row.state)) ? "waiting_human"
       : run.waiting.length ? "waiting_agent"
       : run.failures.length ? "completed_with_errors"
       : attempts.every(row => this.projects.definition.nodeStates[row.state]?.terminal) ? "succeeded" : "interrupted";
@@ -671,12 +688,56 @@ export class WorkbenchRuns {
     const extension=path.extname(artifact.path).toLowerCase(),mime={".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".mp4":"video/mp4",".wav":"audio/wav",".mp3":"audio/mpeg",".txt":"text/plain; charset=utf-8",".json":"text/plain; charset=utf-8",".md":"text/plain; charset=utf-8"}[extension]||"application/octet-stream";
     access?.assert();return openMedia(request,file,mime,path.basename(artifact.path),access,{signal});
   }
+  /** What a confirmation relies on: frozen inputs, upstream products and the products it accounts for. */
+  confirmationBasis(run, attempt, own = []) {
+    const rows = [], seen = new Set();
+    const add = (source, row) => {
+      if (!row || typeof row.root !== "string" || typeof row.path !== "string") return;
+      const identity = `${source}\u0000${row.root}\u0000${row.path}\u0000${row.sha256 ?? ""}`;
+      if (seen.has(identity) || rows.length >= 200) return;
+      seen.add(identity);
+      rows.push({ source, ...(row.key === undefined ? {} : { key: row.key }), root: row.root, path: row.path,
+        ...(row.sha256 === undefined ? {} : { sha256: row.sha256 }), ...(row.bytes === undefined ? {} : { bytes: row.bytes }) });
+    };
+    for (const row of attempt.inputEvidence ?? []) add("input", row.ref ? { ...row, root: row.ref.root, path: row.ref.path } : row);
+    for (const other of Object.values(run.attempts)) if (other.nodeId !== attempt.nodeId) for (const row of other.artifacts ?? []) add("upstream", row);
+    for (const row of own ?? []) add("confirmed", row);
+    return rows;
+  }
+  /** Declared requirements are still checked without client evidence: an unchanged pre-existing file is not a produced one. */
+  async confirmDeclaredArtifacts(run, node, attempt, identity, confirmedAt) {
+    const observed = await inspectRequirements(node.requirements, run.binding.roots).catch(error => { throw new VideoError(error.message, 409); });
+    const baseline = attempt.baseline ?? [];
+    const changed = observed.filter(row => { const old = baseline.find(before => before.key === row.key && before.root === row.root && before.path === row.path); return !old || old.sha256 !== row.sha256; });
+    const evidence = { confirmedBy: identity, confirmedAt, writes: changed.map(row => ({ ...row, attemptId: attempt.id })), validated: observed, reused: [] };
+    await this.applyHumanArtifacts(run, node, attempt, evidence,
+      "；免证据确认只核对当前已声明产物，如需提交产物证据请带 evidence 重新提交。");
+  }
+  async applyHumanArtifacts(run, node, attempt, evidence, hint = "") {
+    try { Object.assign(attempt, await validateArtifacts(node, run.binding.roots, attempt.baseline ?? [], evidence ?? {}, attempt.id, run.machineId)); }
+    catch (error) { throw new VideoError(error.message + hint, 409); }
+  }
+  /** Human results: the original evidence submission, or an explicit confirmation that only releases successors. */
   async completeHuman(id, body, access) {
-    access?.beforeMutation(); const run = this.runs.get(this.projects.id(id)), attempt = run?.attempts[body?.nodeId];
-    if (!attempt || run.cancelRequested || attempt.state !== "waiting_human" || attempt.id !== body.attemptId || typeof body.identity !== "string" || !body.identity.trim() || !body.evidence) throw new VideoError("人工提交需要原 attempt、身份与证据。", 409);
+    access?.beforeMutation(); const run = this.runs.get(this.projects.id(id)), attempt = run?.attempts?.[body?.nodeId];
+    const identity = typeof body?.identity === "string" ? body.identity.trim() : "", confirmedAt = timestamp();
+    if (!attempt || attempt.id !== body?.attemptId || run.cancelRequested || !isWaitingHuman(attempt.state) || !identity) throw new VideoError("人工提交需要等待中的原 attempt 与确认人身份。", 409);
+    if (identity.length > 200) throw new VideoError("确认人身份最多 200 个字符。", 400);
     const node = run.snapshot.graph.nodes.find(node => node.id === body.nodeId);
-    Object.assign(attempt, await validateArtifacts(node, run.binding.roots, attempt.baseline, body.evidence, attempt.id, run.machineId));
-    attempt.state = "succeeded"; attempt.receipt = { identity: body.identity, evidence: body.evidence }; await this.persist(run); this.pump(run); return this.read(id);
+    if (!node) throw new VideoError("人工提交的节点不存在。", 409);
+    if (attempt.approval?.required === true) {
+      // The node has not run yet: the confirmation releases its own dispatch, never marks it done.
+      attempt.confirmation = { mode: "approval", identity, confirmedAt, basis: this.confirmationBasis(run, attempt),
+        ...(body.evidence === undefined ? {} : { evidence: body.evidence }) };
+      delete attempt.reason;
+      await this.persist(run); this.pump(run); return this.read(id);
+    }
+    const evidence = body.evidence === undefined || body.evidence === null ? undefined : body.evidence;
+    if (evidence === undefined && Array.isArray(node.requirements) && node.requirements.length) await this.confirmDeclaredArtifacts(run, node, attempt, identity, confirmedAt);
+    else await this.applyHumanArtifacts(run, node, attempt, evidence);
+    attempt.confirmation = { mode: evidence === undefined ? "confirm" : "evidence", identity, confirmedAt, basis: this.confirmationBasis(run, attempt, attempt.artifacts) };
+    attempt.receipt = { identity, confirmedAt, ...(evidence === undefined ? {} : { evidence }) };
+    attempt.state = "succeeded"; attempt.finishedAt = timestamp(); await this.persist(run); this.pump(run); return this.read(id);
   }
   async cancel(id, access) {
     access?.beforeMutation();await this.read(id);const run = this.runs.get(id);
@@ -689,7 +750,7 @@ export class WorkbenchRuns {
         try {await Promise.race([process.cancel(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("termination_unconfirmed")),3000);})]);attempt.state="cancelled";}
         catch {attempt.uncertain=true;}finally{clearTimeout(timer);}
       }
-      else if (["pending", "ready", "waiting_human"].includes(attempt.state)) attempt.state = "cancelled";
+      else if (["pending", "ready", "waiting_human", "waiting_approval"].includes(attempt.state)) attempt.state = "cancelled";
       else if(attempt.state==="running"&&attempt.dispatchStarted){attempt.state="cancelling";attempt.uncertain=true;attempt.reason="original_agent_claim_release_required";}
       else if (["running", "cancelling"].includes(attempt.state) && attempt.jobId) await this.cancelMedia(attempt);
       else if (["running", "cancelling"].includes(attempt.state) && attempt.mediaRequestStarted) {attempt.state="cancelling";attempt.uncertain=true;attempt.reason="original_media_submission_outcome_unknown";}

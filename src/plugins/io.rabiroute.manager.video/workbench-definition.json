@@ -16,7 +16,8 @@
         { "path": "toolKey", "label": "命令工具" },
         { "path": "argv", "label": "命令参数（每行一项）", "type": "lines" },
         { "path": "timeoutMs", "label": "超时（毫秒）", "type": "number" },
-        { "path": "validationOnly", "label": "仅校验输入", "type": "boolean" }
+        { "path": "validationOnly", "label": "仅校验输入", "type": "boolean" },
+        { "path": "approval", "label": "需人工确认后才继续", "type": "boolean" }
       ]
     },
     "agent": {
@@ -62,6 +63,7 @@
   "runStates": {
     "running": {"label":"运行中","terminal":false},
     "waiting_human": {"label":"等待人工","terminal":false},
+    "waiting_approval": {"label":"等待确认","terminal":false},
     "waiting_agent": {"label":"等待 Agent","terminal":false},
     "cancelling": {"label":"正在停止","terminal":false},
     "cancelled": {"label":"已停止","terminal":true},
@@ -79,6 +81,7 @@
     "skipped": { "label": "已跳过", "terminal": true },
     "blocked": { "label": "依赖阻塞", "terminal": true },
     "waiting_human": { "label": "等待人工", "terminal": false },
+    "waiting_approval": { "label": "等待确认", "terminal": false },
     "waiting_agent": { "label": "等待 Agent", "terminal": false },
     "cancelling": { "label": "正在停止", "terminal": false },
     "cancelled": { "label": "已停止", "terminal": true },
