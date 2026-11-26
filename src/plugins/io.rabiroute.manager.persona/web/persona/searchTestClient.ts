@@ -1,4 +1,5 @@
 import type { GatewayDefinition } from '@shared/gatewayConfigModel';
+import { unifiedSearchLimits } from '@shared/unifiedSearchContract';
 import { resolvePrimaryAgentTarget } from '@shared/routeAgentTargets';
 import type { WebRendererContribution } from '../../../../../ribiwebgui/src/pluginRenderers';
 
@@ -53,6 +54,7 @@ export type SearchTestBody = {
   code?: number;
   requestId?: string;
   message?: string;
+  errorCode?: string;
   data?: {
     capabilities?: { scopes?: string[]; sources?: { scope: string; legend: string; kinds: string[] }[] };
     items?: SearchTestItem[];
@@ -66,6 +68,13 @@ export type SearchTestBody = {
 export function parseSearchTestParameters(parameters: string): Record<string, unknown> {
   const input = JSON.parse(parameters);
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('查询参数需要是 JSON 对象。');
+  const raw = (input as Record<string, unknown>).limit;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const numeric = typeof raw === 'number' ? raw : Number(raw);
+    // Only a numeric page size is rejected here. Anything unparsable is left to the authoritative server check so a real 400 receipt stays inspectable.
+    if (Number.isFinite(numeric) && (!Number.isInteger(numeric) || numeric < 1 || numeric > unifiedSearchLimits.limit))
+      throw new Error(`每页数量需要是 1 到 ${unifiedSearchLimits.limit} 的整数。`);
+  }
   return input;
 }
 
@@ -117,4 +126,11 @@ export async function runSearchTest(request: typeof fetch, parameters: string, i
   try { body = JSON.parse(text); }
   catch { body = { message: text || response.statusText }; }
   return { request: { method: 'GET', url, headers }, status: response.status, durationMs: Math.round(performance.now() - began), body };
+}
+
+/** A cursor conflict is recoverable: restarting the same query starts a new snapshot. */
+export function searchTestCursorExpired(receipt: Pick<SearchTestReceipt, 'status' | 'body'>) {
+  if (receipt.status !== 409) return false;
+  const code = String(receipt.body.errorCode ?? '').toUpperCase();
+  return code.endsWith('CURSOR_EXPIRED') || /snapshot changed/i.test(String(receipt.body.message ?? ''));
 }

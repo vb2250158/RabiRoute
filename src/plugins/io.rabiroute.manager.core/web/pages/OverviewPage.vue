@@ -154,11 +154,6 @@ onBeforeUnmount(registerPageSaveAction({
   save: () => store.saveChangedRoutes()
 }));
 
-function toggleGatewayEnabled(gateway: GatewayDefinition, enabled: boolean | null): void {
-  gateway.enabled = enabled === true;
-  store.touch();
-}
-
 async function runGatewayAction(id: string, action: "start" | "stop" | "restart"): Promise<void> {
   if (!id || gatewayActionId.value) return;
   gatewayActionId.value = `${id}:${action}`;
@@ -268,16 +263,6 @@ async function deleteGateway(gateway: GatewayDefinition): Promise<void> {
                       </span>
                     </div>
                     <div class="route-card-actions">
-                      <v-switch
-                        :model-value="gw.enabled !== false"
-                        color="success"
-                        density="compact"
-                        inset
-                        hide-details
-                        :title="t('启用 / 禁用此路由')"
-                        :aria-label="t('启用 / 禁用此路由')"
-                        @update:model-value="toggleGatewayEnabled(gw, $event)"
-                      />
                       <v-btn
                         icon="mdi-restart"
                         size="small"
@@ -466,9 +451,5 @@ a.route-card-identity:focus-visible .route-card-title {
 
 .route-card-actions {
   gap: 4px;
-}
-
-.route-card-actions :deep(.v-switch) {
-  margin-inline-end: auto;
 }
 </style>

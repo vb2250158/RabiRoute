@@ -360,9 +360,10 @@
         "0.1.19",
         "0.1.20",
         "0.1.21",
-        "0.1.28"
+        "0.1.28",
+        "0.1.29"
       ],
-      "toVersion": "0.1.29"
+      "toVersion": "0.1.30"
     },
     {
       "packageId": "io.rabiroute.manager.desktop",
@@ -440,9 +441,10 @@
         "0.1.8",
         "0.1.9",
         "0.1.10",
-        "0.1.11"
+        "0.1.11",
+        "0.1.12"
       ],
-      "toVersion": "0.1.12"
+      "toVersion": "0.1.13"
     },
     {
       "packageId": "io.rabiroute.manager.message-processing-automation",
@@ -515,9 +517,10 @@
         "0.1.44",
         "0.1.45",
         "0.1.46",
-        "0.1.47"
+        "0.1.47",
+        "0.1.48"
       ],
-      "toVersion": "0.1.48"
+      "toVersion": "0.1.49"
     },
     {
       "packageId": "io.rabiroute.manager.plan-feedback-delivery",

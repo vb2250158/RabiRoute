@@ -1,6 +1,6 @@
 {
   "name": "io.rabiroute.manager.message-adapter-control",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "license": "MIT",
   "files": [

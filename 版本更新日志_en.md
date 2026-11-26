@@ -87,6 +87,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Unified search (`GET /api/search`) keeps its defaults and parameter bounds in one declaration read by the manager parser, the `capabilities.defaults` response, the operation descriptions, the Message history → Search API test form and `scripts/lib/query-rabi-search.mjs`. The search test now rejects a numeric page size outside 1–200 before sending while leaving unparsable values to the server's real 400, and an explicit `budgetMs` in the script is no longer silently lowered below the budget this call can still afford.
+
+- Message adapters (io.rabiroute.manager.message-adapter-control) 0.1.13 and Core (io.rabiroute.manager.core) 0.1.30 remove the Route enable switch: the message page header collapses into one row where the configuration name sits beside Channel check, Open route configuration and Delete, and the configuration-name label is removed. Routes no longer carry a disabled restriction, and legacy disabled values normalize to enabled on load and save.
+
+- Persona (io.rabiroute.manager.persona) 0.1.49 restructures Expression and voice: voice profile status and delivery notes, the language-style guard Skill and speech wake keywords now share one main card and rule cards. The search API test reuses the shared search contract, rejecting a numeric page size outside the shared 1–200 bound before sending, and treats an expired cursor (409) as retryable with an error banner.
+
 - Persona (io.rabiroute.manager.persona) 0.1.46 updates live position from new messages, capture events and Return to live, removing idle periodic refresh.
 
 - Core (io.rabiroute.manager.core) 0.1.21 displays authorized devices as responsive cards and opens the exact computer control target by source.

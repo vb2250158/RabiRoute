@@ -29,7 +29,7 @@ Keep filters and page size unchanged across pages. A change in Manager identity,
 
 ## Test from the page
 
-On a persona’s Message history page, select Search API test beside All-day recording. Choose a caller identity and persona scope, enter keywords and select a source, then search. Leave the keywords blank to browse. Advanced settings contains matching, sorting, page size, search budget, caller overrides and full JSON editing. Reopening the dialog retains the current persona’s conditions and results. Switching personas initializes a new context.
+On a persona’s Message history page, select Search API test beside All-day recording. Choose a caller identity and persona scope, enter keywords and select a source, then search. Leave the keywords blank to browse. Advanced settings contains matching, sorting, page size, search budget, caller overrides and full JSON editing. A numeric page size outside the shared 1–200 bound is rejected before sending, while unparsable values still reach the server's own error. Reopening the dialog retains the current persona’s conditions and results. Switching personas initializes a new context.
 
 Caller identity comes from the current persona or a Route’s configured primary Agent and is recorded as request metadata. Persona scope controls the separate `agent` parameter. Enter a missing primary Agent session ID in Advanced settings. Requests use the page owner’s authenticated Manager connection.
 

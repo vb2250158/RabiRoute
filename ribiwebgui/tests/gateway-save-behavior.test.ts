@@ -234,11 +234,11 @@ test("saving a captured route ID does not save the newly selected route", async 
 
 test("saving one route preserves another route's local draft and remote update", async () => {
   const f = await fixture();
-  f.store.gateways[0].enabled = false;
+  f.store.gateways[0].name = "local route change";
   f.store.gateways[1].name = "local draft";
   f.rows[1].heartbeatMessage = "remote update";
   await f.store.save();
-  assert.equal(f.rows[0].enabled, false);
+  assert.equal(f.rows[0].name, "local route change");
   assert.equal(f.rows[1].heartbeatMessage, "remote update");
   assert.notEqual(f.rows[1].name, "local draft");
   assert.equal(f.store.gateways[1].name, "local draft");
@@ -247,18 +247,19 @@ test("saving one route preserves another route's local draft and remote update",
 
 test("reverting an edit clears dirty without saving", async () => {
   const f = await fixture();
-  f.store.gateways[0].enabled = false;
+  const originalName = f.store.gateways[0].name;
+  f.store.gateways[0].name = "reverted edit";
   f.store.touch();
   assert.equal(f.store.dirty, true);
-  f.store.gateways[0].enabled = true;
+  f.store.gateways[0].name = originalName;
   f.store.touch();
   assert.equal(f.store.dirty, false);
 });
 
 test("overview saves changed routes individually without changing the selected route", async () => {
   const f = await fixture();
-  f.store.gateways[0].enabled = false;
-  f.store.gateways[1].enabled = false;
+  f.store.gateways[0].name = "first local change";
+  f.store.gateways[1].name = "second local change";
   await f.store.saveChangedRoutes();
   assert.equal(f.writes, 2);
   assert.equal(f.store.selectedGatewayId, "a");
@@ -271,7 +272,7 @@ test("a late acknowledgement preserves newer edits and concurrent clicks share o
   let entered!: () => void;
   const reached = new Promise<void>(resolve => { entered = resolve; });
   f.delay(async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); });
-  f.store.gateways[0].enabled = false;
+  f.store.gateways[0].name = "first change";
   const first = f.store.save();
   const second = f.store.save();
   await reached;
@@ -309,7 +310,7 @@ test("a second save cannot claim changed fields or another route were included i
 
 test("a lost committed response is recovered without resubmitting the write", async () => {
   const f = await fixture();
-  f.store.gateways[0].enabled = false;
+  f.store.gateways[0].name = "changed before save";
   f.loseResponse();
   await f.store.save();
   assert.equal(f.writes, 1);

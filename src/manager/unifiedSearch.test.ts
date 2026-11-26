@@ -17,6 +17,7 @@ import { fixtureApiContract } from './apiOperationContractFixtures.js';
 import { normalizeHomeAssistantState } from '../plugins/io.rabiroute.manager.xiaomi-home/src/integrations/xiaomiHome/managerApi.js';
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { runUnifiedSearch, parseSearchQuery, type SearchLane } from './unifiedSearch.js';
+import { unifiedSearchDefaults, unifiedSearchLimits } from '../shared/unifiedSearchContract.js';
 import { createSearchLanes } from './unifiedSearchSources.js';
 import { createPersonaSkillOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaSkillOperations.js';
 import { createPersonaHistoryOperations } from '../plugins/io.rabiroute.manager.persona/src/manager/personaHistoryOperations.js';
@@ -371,6 +372,20 @@ test('scenario 12 — changed source versions invalidate cursors, and page facet
     assert.equal(expired.status, 409);
     assert.equal(expired.errorCode, 'KNOWLEDGE_CURSOR_EXPIRED');
 });
+test('scenario 12b — a knowledge write outside this page keeps the cursor runnable', async (t) => {
+    const f = await fixture(t), query = 'scope=knowledge&q=' + encodeURIComponent('卧室');
+    const first = await f.read(query + '&limit=1');
+    assert.equal(first.status, 200);
+    assert.ok(first.data.nextCursor);
+    const index = f.service.ensure('first', f.roleDirectory('first')), version = index.status().version;
+    index.upsert({ kind: 'recent', item: { id: 'unrelated', title: 'unrelated', focus: 'unrelated', content: 'nothing matching this query', keywords: ['unrelated'], createdAt: updated, updatedAt: updated } });
+    assert.notEqual(index.status().version, version);
+    const next = await f.read(query + '&limit=1&cursor=' + encodeURIComponent(first.data.nextCursor));
+    assert.equal(next.status, 200, JSON.stringify({ errorCode: next.errorCode, source: next.source, message: next.message }));
+    assert.ok(next.data.items.length);
+    const keys = [...first.data.items, ...next.data.items].map((item: any) => JSON.stringify([item.source, item.origin]));
+    assert.equal(new Set(keys).size, keys.length);
+});
 test('optional caller metadata, all-role defaults, unknown roles, reserved scopes and time filtering use one contract', async (t) => {
     const f = await fixture(t);
     for (const headers of [{}, { 'x-rabiroute-agent-type': 'new-type' }, { 'x-rabiroute-agent-type': 'new-type', 'x-rabiroute-session-id': 'new-id' }] as Record<string, string>[]) {
@@ -397,6 +412,20 @@ test('optional caller metadata, all-role defaults, unknown roles, reserved scope
     const tail = await f.read('scope=messages&limit=2&cursor=' + encodeURIComponent(browse.data.nextCursor));
     assert.equal(tail.status, 200);
     assert.equal(tail.data.items.length, 1);
+});
+test('declared defaults and page bounds are the shared contract the parser enforces', async (t) => {
+    const f = await fixture(t);
+    const declared = await f.read('scope=knowledge');
+    assert.equal(declared.status, 200);
+    assert.deepEqual(declared.data.capabilities.defaults, unifiedSearchDefaults);
+    assert.ok(declared.data.items.length <= unifiedSearchDefaults.limit);
+    const bounded = await f.read(`scope=knowledge&limit=${unifiedSearchLimits.limit}`);
+    assert.equal(bounded.status, 200);
+    for (const limit of [0, unifiedSearchLimits.limit + 1]) {
+        const rejected = await f.read(`scope=knowledge&limit=${limit}`);
+        assert.equal(rejected.status, 400, `limit=${limit}`);
+        assert.equal(rejected.errorCode, 'SEARCH_PARAMETER_INVALID');
+    }
 });
 test('one registered search operation is visible and callable through HTTP, OpenAPI, MCP, CLI and the WebGUI catalog client', async (t) => {
     const f = await fixture(t);

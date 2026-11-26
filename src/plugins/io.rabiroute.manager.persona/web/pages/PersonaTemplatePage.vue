@@ -252,6 +252,18 @@ const voiceProfile = computed(() => {
   const roleId = gateway.value?.agentRoleId || "";
   return (isRemotePersona.value ? remoteVoiceProfiles.value : speech.personas).find(persona => persona.id === roleId);
 });
+const voiceProfileState = computed<{ label: string; detail: string; color: "success" | "secondary" | undefined }>(() => {
+  const profile = voiceProfile.value;
+  if (!profile) return { label: "未读取", detail: "尚未读取", color: undefined };
+  if (profile.voiceReady) return { label: "已配置", detail: "已配置角色声线", color: "success" };
+  return { label: "默认声线", detail: "使用模型默认声线", color: "secondary" };
+});
+const voiceLanguageLabel = computed(() => {
+  const language = voiceProfile.value?.language?.trim();
+  if (!language) return "未配置";
+  const labels: Record<string, string> = { zh: "中文", "zh-CN": "中文", "zh-TW": "繁体中文", en: "英语", ja: "日语" };
+  return labels[language] || language;
+});
 const selectedRoleTitle = computed(() => store.catalog.find(role => role.roleId === store.selectedRoleId)?.title || store.selectedRoleId);
 const hasPersona = computed(() => Boolean(gateway.value?.agentRoleId));
 const authoritativeIdentityParticipantIds = computed(() => new Set(identityParticipants.value
@@ -1892,154 +1904,107 @@ onBeforeUnmount(() => {
 
         <v-window-item value="expression">
           <div class="persona-tab-panel">
+            <div v-if="hasPersona" class="expression-layout">
+              <v-card class="app-card glass-card section-card expression-primary">
+                <div class="section-title-row">
+                  <div>
+                    <div class="section-title">角色语音</div>
+                    <div class="section-note">TTS 模型、声线、语言与语速统一由该角色的 voice-profile.json 管理。</div>
+                  </div>
+                  <div class="persona-action-row">
+                    <v-chip size="small" variant="tonal" :color="voiceProfileState.color">{{ voiceProfileState.label }}</v-chip>
+                    <v-btn size="small" color="secondary" variant="tonal" prepend-icon="mdi-account-voice" to="/speech">测试角色 TTS</v-btn>
+                  </div>
+                </div>
 
-      <div v-if="hasPersona" class="two-column">
-        <v-card class="app-card glass-card section-card">
-          <div class="section-title-row">
-            <div>
-              <div class="section-title">语言风格风控</div>
-              <div class="section-note">角色外发消息默认按目标 Skill 校验。</div>
-            </div>
-          </div>
-          <v-text-field
-            :model-value="gateway.languageStyle?.styleSkillUrl || ''"
-            label="目标语言风格 Skill URL"
-            placeholder="file:///.../Skill 或 https://.../Skill"
-            hint="可填写 Skill 目录、SKILL.md 或 references/style-data.json。留空表示不校验。"
-            persistent-hint
-            clearable
-            @update:model-value="setLanguageStyleSkillUrl"
-          />
-          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
-            styleValidation 默认为 1。校验失败先返回原因；确认原文合适后，使用同一 deliveryId 并传 styleValidation=0。
-          </v-alert>
-        </v-card>
+                <dl class="persona-speech-facts">
+                  <div>
+                    <dt>声线状态</dt>
+                    <dd :class="{ 'is-positive': voiceProfileState.color === 'success' }">{{ voiceProfileState.detail }}</dd>
+                  </div>
+                  <div>
+                    <dt>TTS 模型</dt>
+                    <dd class="is-mono" data-no-i18n>{{ voiceProfile?.defaultModel || "未配置" }}</dd>
+                  </div>
+                  <div>
+                    <dt>语言</dt>
+                    <dd>{{ voiceLanguageLabel }}</dd>
+                  </div>
+                  <div>
+                    <dt>语速</dt>
+                    <dd>{{ voiceProfile?.speed != null ? `${voiceProfile.speed}×` : "未配置" }}</dd>
+                  </div>
+                </dl>
 
-        <v-card class="app-card glass-card section-card">
-          <div class="section-title-row">
-            <div>
-              <div class="section-title">角色语音</div>
-              <div class="section-note">
-                TTS 模型、声线、语言、语速和发声说明统一由当前角色的 <code>voice/voice-profile.json</code> 管理。
-              </div>
-            </div>
-            <div class="d-flex ga-2 flex-wrap">
-              <v-btn
-                size="small"
-                variant="text"
-                prepend-icon="mdi-refresh"
-                :loading="voiceProfileRefreshing"
-                @click="refreshVoiceProfile"
-              >
-                刷新摘要
-              </v-btn>
-              <v-btn
-                size="small"
-                variant="tonal"
-                prepend-icon="mdi-account-edit-outline"
-                @click="store.openConfigFile('role', '', store.selectedRoleId)"
-              >
-                打开 persona.md
-              </v-btn>
-              <v-btn
-                size="small"
-                color="secondary"
-                variant="tonal"
-                prepend-icon="mdi-content-copy"
-                @click="copyVoiceProfilePath"
-              >
-                复制 voice-profile 路径
-              </v-btn>
-              <v-btn size="small" variant="text" prepend-icon="mdi-account-voice" to="/speech">
-                测试角色 TTS
-              </v-btn>
-            </div>
-          </div>
-          <v-alert v-if="voiceProfileError" type="warning" variant="tonal" density="compact" class="mb-3">
-            {{ voiceProfileError }}
-          </v-alert>
-          <v-alert v-if="voiceProfileCopyResult" type="info" variant="tonal" density="compact" class="mb-3">
-            {{ voiceProfileCopyResult }}
-          </v-alert>
-          <div class="persona-speech-summary">
-            <div>
-              <span>声线状态</span>
-              <b>{{ voiceProfile ? (voiceProfile.voiceReady ? "已配置角色声线" : "使用模型默认声线") : "尚未读取" }}</b>
-            </div>
-            <div>
-              <span>TTS 模型</span>
-              <b data-no-i18n>{{ voiceProfile?.defaultModel || "未配置" }}</b>
-            </div>
-            <div>
-              <span>语言</span>
-              <b data-no-i18n>{{ voiceProfile?.language || "未配置" }}</b>
-            </div>
-            <div>
-              <span>语速</span>
-              <b>{{ voiceProfile?.speed != null ? `${voiceProfile.speed}×` : "未配置" }}</b>
-            </div>
-          </div>
-          <v-textarea
-            class="mt-3"
-            :model-value="voiceProfile?.instructions || voiceProfile?.voiceStyleSummary || '未配置'"
-            label="发声说明 / 表达方式"
-            rows="3"
-            auto-grow
-            readonly
-            hide-details
-          />
-          <v-text-field
-            class="mt-3"
-            :model-value="voiceProfilePath"
-            label="voice-profile.json 路径"
-            readonly
-            hide-details
-            data-no-i18n
-          />
-          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
-            <code>voice-profile.json</code> 是角色 TTS 的唯一配置入口。WebGUI 只读取安全摘要，不显示真实 voice ID 或 API key；复制路径后可直接编辑模型、声线绑定、语言、语速和发声说明。
-          </v-alert>
-        </v-card>
+                <div class="persona-speech-quote">
+                  <span>发声说明 / 表达方式</span>
+                  <p>{{ voiceProfile?.instructions || voiceProfile?.voiceStyleSummary || "尚未填写发声说明。" }}</p>
+                </div>
 
-        <v-card class="app-card glass-card section-card">
-          <div class="section-title-row">
-            <div>
-              <div class="section-title">语音唤醒</div>
-              <div class="section-note">关键词归角色所有，所有绑定该角色的语音 Route 共用。</div>
-            </div>
-            <v-chip
-              :color="gateway.speechPushMode === 'keyword' ? 'success' : 'secondary'"
-              variant="tonal"
-            >
-              {{ gateway.speechPushMode === "keyword" ? "当前 Route：关键词唤醒" : "当前 Route：热投递" }}
-            </v-chip>
-          </div>
-          <v-combobox
-            :model-value="gateway.speechTriggerKeywords || []"
-            label="语音唤醒关键词"
-            multiple
-            chips
-            closable-chips
-            clearable
-            hint="输入关键词后按 Enter。空白、重复项和大小写匹配由配置层统一归一化。"
-            persistent-hint
-            @update:model-value="setSpeechTriggerKeywords"
-          />
-          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
-            关闭 Route 的“热投递”后，只有 ASR 文本命中这里的关键词才提醒 Agent；所有 ASR 仍会持续记录。
-          </v-alert>
-          <v-alert
-            v-if="gateway.speechPushMode === 'keyword' && !(gateway.speechTriggerKeywords || []).length"
-            class="mt-3"
-            type="warning"
-            variant="tonal"
-            density="compact"
-          >
-            当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入角色名和常用称呼。
-          </v-alert>
-        </v-card>
-      </div>
+                <div class="persona-file-row">
+                  <v-icon class="persona-file-icon" size="20" aria-hidden="true">mdi-file-code-outline</v-icon>
+                  <div class="persona-file-copy">
+                    <span>voice-profile.json 路径</span>
+                    <b data-no-i18n :title="voiceProfilePath">{{ voiceProfilePath }}</b>
+                  </div>
+                  <v-btn size="small" variant="text" prepend-icon="mdi-content-copy" @click="copyVoiceProfilePath">复制路径</v-btn>
+                </div>
 
+                <v-alert v-if="voiceProfileError" class="mt-3" type="warning" variant="tonal" density="compact">{{ voiceProfileError }}</v-alert>
+                <v-alert v-if="voiceProfileCopyResult" class="mt-3" type="info" variant="tonal" density="compact">{{ voiceProfileCopyResult }}</v-alert>
+
+                <div class="persona-card-footer">
+                  <div class="persona-action-row">
+                    <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="voiceProfileRefreshing" @click="refreshVoiceProfile">刷新摘要</v-btn>
+                    <v-btn size="small" variant="text" prepend-icon="mdi-account-edit-outline" @click="store.openConfigFile('role', '', store.selectedRoleId)">打开 persona.md</v-btn>
+                  </div>
+                  <p class="persona-card-hint">WebGUI 只读取安全摘要，不显示真实 voice ID 或 API key；改配置请直接编辑 voice-profile.json。</p>
+                </div>
+              </v-card>
+
+              <v-card class="app-card glass-card section-card">
+                <div class="section-title-row">
+                  <div>
+                    <div class="section-title">语言风格风控</div>
+                    <div class="section-note">角色外发消息默认按目标 Skill 校验。</div>
+                  </div>
+                  <v-chip size="small" variant="tonal" :color="gateway.languageStyle?.styleSkillUrl ? 'secondary' : undefined">{{ gateway.languageStyle?.styleSkillUrl ? "已配置" : "未配置" }}</v-chip>
+                </div>
+                <v-text-field
+                  :model-value="gateway.languageStyle?.styleSkillUrl || ''"
+                  label="目标语言风格 Skill URL"
+                  placeholder="file:///.../Skill 或 https://.../Skill"
+                  hint="Skill 目录、SKILL.md 或 references/style-data.json；留空表示不校验。"
+                  persistent-hint
+                  clearable
+                  @update:model-value="setLanguageStyleSkillUrl"
+                />
+                <p class="persona-card-hint mt-1">校验失败会先返回原因；确认原文合适后，用同一 deliveryId 并传 styleValidation=0。</p>
+              </v-card>
+
+              <v-card class="app-card glass-card section-card">
+                <div class="section-title-row">
+                  <div>
+                    <div class="section-title">语音唤醒</div>
+                    <div class="section-note">关键词归角色所有，绑定该角色的语音 Route 共用。</div>
+                  </div>
+                  <v-chip size="small" variant="tonal" :color="gateway.speechPushMode === 'keyword' ? 'success' : 'secondary'">{{ gateway.speechPushMode === "keyword" ? "关键词唤醒" : "热投递" }}</v-chip>
+                </div>
+                <v-combobox
+                  :model-value="gateway.speechTriggerKeywords || []"
+                  label="语音唤醒关键词"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  hint="输入关键词后按 Enter。空白、重复项和大小写匹配由配置层统一归一化。"
+                  persistent-hint
+                  @update:model-value="setSpeechTriggerKeywords"
+                />
+                <p v-if="gateway.speechPushMode === 'keyword' && !(gateway.speechTriggerKeywords || []).length" class="persona-card-hint mt-1 is-warning">当前关键词为空：转写会继续记录，但不会唤醒 Agent。建议至少加入角色名和常用称呼。</p>
+                <p class="persona-card-hint mt-1">关闭 Route 的热投递后，只有 ASR 文本命中这里的关键词才提醒 Agent；所有 ASR 仍会持续记录。</p>
+              </v-card>
+            </div>
           </div>
         </v-window-item>
 
@@ -2888,4 +2853,168 @@ onBeforeUnmount(() => {
     transition: none !important;
   }
 }
+
+/* 表达与语音：主卡 + 两张规则卡，统一标题行 / 状态 facts / 底部说明结构 */
+.expression-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(min(320px, 100%), .85fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.expression-layout > .expression-primary {
+  grid-row: span 2;
+}
+
+.persona-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.persona-speech-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.persona-speech-facts > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--rr-border-faint);
+  border-radius: 11px;
+  background: var(--rr-surface);
+}
+
+.persona-speech-facts dt {
+  color: var(--rr-muted-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.persona-speech-facts dd {
+  margin: 0;
+  color: var(--rr-heading);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.persona-speech-facts dd.is-mono {
+  font-family: var(--rr-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.persona-speech-facts dd.is-positive {
+  color: var(--rr-success-text);
+}
+
+.persona-speech-quote {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--rr-accent-border);
+  border-radius: 0 10px 10px 0;
+  background: var(--rr-surface-glass);
+}
+
+.persona-speech-quote span {
+  color: var(--rr-muted-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.persona-speech-quote p {
+  margin: 0;
+  color: var(--rr-heading);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.persona-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--rr-border-faint);
+  border-radius: 10px;
+  background: var(--rr-surface);
+}
+
+.persona-file-icon {
+  flex: 0 0 auto;
+  color: var(--rr-accent-text);
+}
+
+.persona-file-copy {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.persona-file-copy span {
+  color: var(--rr-muted-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.persona-file-copy b {
+  color: var(--rr-heading);
+  font-family: var(--rr-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.persona-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rr-border-faint);
+}
+
+.persona-card-hint {
+  margin: 0;
+  color: var(--rr-muted-soft);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.persona-card-hint + .persona-card-hint {
+  margin-top: 6px;
+}
+
+.persona-card-hint.is-warning {
+  color: var(--rr-warning-text);
+}
+
+@media (max-width: 1280px) {
+  .expression-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .expression-layout > .expression-primary {
+    grid-row: auto;
+  }
+}
+
 </style>

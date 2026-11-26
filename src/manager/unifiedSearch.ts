@@ -4,6 +4,7 @@ import { apiDigest } from './apiOperationContract.js';
 import type { ApiCatalogSnapshot } from './apiOperationCatalog.js';
 import { normalizeSearchText, searchTerms, textMatches } from './searchText.js';
 import { normalizeSearchEvidence, type SearchEvidence, type SearchConflict } from '../shared/searchEvidence.js';
+import { readSearchChoice, readSearchInteger, unifiedSearchDefaults, unifiedSearchLimits } from '../shared/unifiedSearchContract.js';
 export type SearchItem = {
     source: string;
     kind: string;
@@ -81,18 +82,16 @@ export function parseSearchQuery(params: URLSearchParams, snapshot: ApiCatalogSn
     if (unknown.length)
         throw new SearchError(400, 'UNKNOWN_SCOPE', 'Select registered search scopes.', { legalValues: scopes, reservedScopes: reservedScopes.filter(scope => !scopes.includes(scope)), unknown });
     const integer = (key: string, fallback: number, maximum: number) => {
-        const raw = params.get(key);
-        if (raw === null)
-            return fallback;
-        if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) > maximum)
+        const value = readSearchInteger(params, key, fallback, maximum);
+        if (value === undefined)
             throw new SearchError(400, 'SEARCH_PARAMETER_INVALID', `${key} must be an integer from 1 to ${maximum}.`, { field: key });
-        return Number(raw);
+        return value;
     };
     const choice = <T extends string>(key: string, choices: readonly T[], fallback: T): T => {
-        const raw = params.get(key) ?? fallback;
-        if (!choices.includes(raw as T))
+        const value = readSearchChoice(params, key, choices, fallback);
+        if (value === undefined)
             throw new SearchError(400, 'SEARCH_PARAMETER_INVALID', `Invalid ${key}.`, { field: key, legalValues: choices });
-        return raw as T;
+        return value;
     };
     const time = (key: string) => {
         if (!params.has(key))
@@ -108,9 +107,9 @@ export function parseSearchQuery(params: URLSearchParams, snapshot: ApiCatalogSn
         throw new SearchError(400, 'SEARCH_EXPANSION_UNSUPPORTED', 'Synonym expansion is reserved for a later version. Omit expand.');
     return { q: params.get('q')?.trim() ?? '', scopes: !requested.length || requested.includes('all') ? [...new Set([...scopes, ...requested.filter(scope => scope !== 'all')])] : requested,
         kinds: values(params.get('kind')), agent: params.get('agent') || undefined, adapter: params.get('adapter') || undefined, from, to,
-        match: choice('match', ['any', 'all'], 'any'), mode: choice('mode', ['keywords', 'fulltext'], 'keywords'), strict: choice('strict', ['0', '1'], '0') === '1',
-        limit: integer('limit', 20, 200), cursor: params.get('cursor') || undefined, budgetMs: integer('budgetMs', 3000, 2147483647),
-        sort: choice('sort', ['relevance', 'recent'], 'relevance'), includeArchives: choice('includeArchives', ['0', '1'], '0') === '1' };
+        match: choice('match', ['any', 'all'], unifiedSearchDefaults.match), mode: choice('mode', ['keywords', 'fulltext'], unifiedSearchDefaults.mode), strict: choice('strict', ['0', '1'], unifiedSearchDefaults.strict ? '1' : '0') === '1',
+        limit: integer('limit', unifiedSearchDefaults.limit, unifiedSearchLimits.limit), cursor: params.get('cursor') || undefined, budgetMs: integer('budgetMs', unifiedSearchDefaults.budgetMs, unifiedSearchLimits.budgetMs),
+        sort: choice('sort', ['relevance', 'recent'], unifiedSearchDefaults.sort), includeArchives: choice('includeArchives', ['0', '1'], unifiedSearchDefaults.includeArchives ? '1' : '0') === '1' };
 }
 type Cursor = {
     version: 1;
@@ -273,7 +272,13 @@ export async function runUnifiedSearch(options: {
         versions[lane.key] = batch.version;
         if (batch.snapshot !== undefined) snapshots[lane.key] = batch.snapshot;
         inventories[lane.key] = batch.windowStart === undefined ? apiDigest(items.map(item => item.key)) : batch.version;
-        if (cursor && (cursor.versions[lane.key] !== batch.version || cursor.inventories[lane.key] !== inventories[lane.key])) {
+        // An owner-paged lane continues from its own window snapshot, so its version
+        // must hold. A lane that returns the whole candidate set is bound by the
+        // digest of the exact keys this cursor pages over; otherwise a write that
+        // never reaches this page (updated viewedAt, unrelated record) expires a
+        // perfectly runnable cursor.
+        const versionBound = batch.windowStart !== undefined;
+        if (cursor && ((versionBound && cursor.versions[lane.key] !== batch.version) || cursor.inventories[lane.key] !== inventories[lane.key])) {
             const code = lane.source === 'knowledge' ? 'KNOWLEDGE_CURSOR_EXPIRED' : lane.source === 'messages' ? 'MESSAGE_HISTORY_CURSOR_EXPIRED' : 'SEARCH_CURSOR_EXPIRED';
             throw new SearchError(409, code, 'A source snapshot changed. Restart the query.', { source: lane.source });
         }
@@ -343,7 +348,7 @@ export async function runUnifiedSearch(options: {
                 applicationGenerationId: snapshot.applicationGenerationId, managerInstanceId: snapshot.managerInstanceId,
                 capabilities: { scopes: [...new Set(snapshot.searchSources.map(source => source.scope))].sort(), sources: snapshot.searchSources,
                     filters: ['scope', 'kind', 'agent', 'adapter', 'from', 'to', 'includeArchives'], parameters: ['q', 'scope', 'kind', 'agent', 'adapter', 'from', 'to', 'match', 'mode', 'strict', 'limit', 'cursor', 'budgetMs', 'sort', 'includeArchives', 'expand'],
-                    defaults: { scope: 'all', match: 'any', mode: 'keywords', strict: 0, limit: 20, budgetMs: 3000, sort: 'relevance', includeArchives: 0 },
+                    defaults: { ...unifiedSearchDefaults },
                     reservedScopes: reservedScopes.filter(scope => !snapshot.searchSources.some(source => source.scope === scope)), operationsUrl: '/api/agent/operations', contractUrl: '/api/agent/help?operationId=manager.search' },
                 legend: Object.fromEntries(snapshot.searchSources.map(source => [source.scope, { description: source.legend, kinds: source.kinds }])),
                 facets: { countScope: 'page', bySource: by('source'), byKind: by('kind'), byAgent: by('agent') },

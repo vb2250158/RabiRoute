@@ -32,7 +32,11 @@ test("persona configuration splits dense content into accessible page tabs", () 
 
 test("each persona page tab owns one coherent group of existing cards", () => {
   assert.match(pageSection("profile", "expression"), /角色配置[\s\S]*persona\.md 摘要/);
-  assert.match(pageSection("expression", "avatar"), /语言风格风控[\s\S]*角色语音[\s\S]*语音唤醒/);
+  const expressionSection = pageSection("expression", "avatar");
+  assert.match(expressionSection, /class="expression-layout"/);
+  assert.match(expressionSection, /角色语音[\s\S]*语言风格风控[\s\S]*语音唤醒/);
+  assert.match(expressionSection, /persona-speech-facts[\s\S]*persona-speech-quote[\s\S]*persona-file-row/);
+  assert.doesNotMatch(expressionSection, /readonly/);
   assert.match(pageSection("avatar", "identity"), /PersonaDesktopPetPanel/);
   assert.match(pageSection("avatar", "identity"), /<PersonaCompanionActivity[^>]*activePersonaPageTab === 'avatar'/);
   assert.match(pageSection("identity", "automation"), /<PersonaIdentityRelationsCard[\s\S]*声纹识别工具/);

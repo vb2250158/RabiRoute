@@ -63,10 +63,10 @@ test("the role list displays catalog roles while host settings live on the Setti
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });
 
-test("role cards show connector icons and use the configured route switch", () => {
+test("role cards show connector icons and open route actions without an enable switch", () => {
   assert.match(overviewSource, /<MessageConnectorIcon\b/);
-  assert.match(overviewSource, /:model-value="gw\.enabled !== false"/);
   assert.match(overviewSource, /<v-menu\b/);
+  assert.doesNotMatch(overviewSource, /gw\.enabled !== false|toggleGatewayEnabled/);
   assert.doesNotMatch(overviewSource, /可接收消息|runtime\.running|route-card-selected|roles\.selectedRoleId/);
 });
 

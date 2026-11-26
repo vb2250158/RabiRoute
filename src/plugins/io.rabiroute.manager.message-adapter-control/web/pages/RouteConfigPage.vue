@@ -481,7 +481,6 @@ function channelCheckOverallLabel(): string {
   if (messageAdapterScan.value.loading || agentScan.value.loading) return "正在检查通道";
   if (messageAdapterScan.value.error) return "通道检查失败";
   if (!messageAdapterScan.value.checkedAt) return "尚未检查";
-  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "当前 Route 已停用";
   if (runtime.value.running === false) return "Manager 未运行";
   const scans = enabledChannelCheckScans();
   if (!scans.length) return "没有启用的通道";
@@ -500,7 +499,7 @@ function channelCheckOverallLabel(): string {
 function channelCheckOverallColor(): string {
   const label = channelCheckOverallLabel();
   if (label === "通道检查失败") return "error";
-  if (["正在检查通道", "尚未检查", "没有启用的通道", "当前 Route 已停用"].includes(label)) return "secondary";
+  if (["正在检查通道", "尚未检查", "没有启用的通道"].includes(label)) return "secondary";
   if (label !== "通道状态正常") return "warning";
   return "success";
 }
@@ -631,20 +630,6 @@ const channelCheckAgentItems = computed(() => visibleAgentItems.value.map(agent 
   ...agent,
   primary: primaryLocalAgentType.value === agent.type
 })));
-
-function channelManagerConnectionLabel(): string {
-  return gateway.value?.enabled === false || runtime.value.enabled === false ? "已禁用" : "已启用";
-}
-
-function channelManagerConnectionColor(): string {
-  return gateway.value?.enabled === false || runtime.value.enabled === false ? "secondary" : "success";
-}
-
-function channelManagerDetail(): string {
-  return gateway.value?.enabled === false || runtime.value.enabled === false
-    ? "当前 Route 已禁用。"
-    : "当前 Route 已启用。";
-}
 
 function channelAgentConnectionLabel(type: AgentAdapterType): string {
   const state = agentStateFor(type);
@@ -1047,14 +1032,25 @@ watch(() => gateway.value?.id, () => {
 </script>
 <template>
   <div class="page-shell">
-    <div class="page-header">
-      <div>
+    <div class="page-header route-config-header">
+      <div class="route-config-heading">
         <h2 v-if="embedded" class="section-title">消息路由</h2>
         <h1 v-else class="page-title">消息</h1>
         <div class="page-subtitle">配置消息端和 Agent 端。</div>
       </div>
       <div class="page-actions" v-if="gateway">
-        <v-switch v-model="gateway.enabled" label="是否启用" color="success" inset hide-details @update:model-value="touch" />
+        <v-text-field
+          class="route-config-name-field"
+          :model-value="gateway.configName"
+          density="compact"
+          variant="outlined"
+          hide-details="auto"
+          placeholder="配置名"
+          aria-label="配置名"
+          title="用于 data/route 下的目录名"
+          :error-messages="configNameError"
+          @update:model-value="renameCurrentConfig"
+        />
         <v-btn prepend-icon="mdi-connection" color="secondary" variant="tonal" :loading="messageAdapterScan.loading && channelCheckDialogOpen" @click="openChannelCheckDialog">
           通道检查
         </v-btn>
@@ -1072,19 +1068,6 @@ watch(() => gateway.value?.id, () => {
 
     <template v-if="gateway">
       <RoleBindingEditor v-if="!embedded" />
-      <div class="status-row mb-4" style="gap:8px">
-        <span class="route-config-muted-label">配置名</span>
-        <v-text-field
-          :model-value="gateway.configName"
-          density="compact"
-          variant="outlined"
-          style="max-width:260px"
-          hint="用于 data/route 下的目录名"
-          persistent-hint
-          :error-messages="configNameError"
-          @update:model-value="renameCurrentConfig"
-        />
-      </div>
 
       <v-card class="app-card glass-card section-card connector-section">
         <div class="section-title-row">
@@ -1624,13 +1607,11 @@ watch(() => gateway.value?.id, () => {
                 <v-icon size="18">mdi-routes</v-icon>
                 <span>分诊与路由</span>
               </div>
-              <div class="channel-topology-node channel-topology-manager-node" :data-tone="channelManagerConnectionColor()">
+              <div class="channel-topology-node channel-topology-manager-node" data-tone="success">
                 <v-icon class="channel-topology-manager-icon">mdi-router-network</v-icon>
                 <strong>Rabi Manager</strong>
-                <v-chip size="small" :color="channelManagerConnectionColor()" variant="tonal">
-                  {{ channelManagerConnectionLabel() }}
-                </v-chip>
-                <small>{{ channelManagerDetail() }}</small>
+                <v-chip size="small" color="success" variant="tonal">已启用</v-chip>
+                <small>当前 Route 已启用。</small>
               </div>
             </section>
 
@@ -1741,6 +1722,22 @@ watch(() => gateway.value?.id, () => {
 </template>
 
 <style scoped>
+.route-config-header {
+  align-items: flex-end;
+}
+
+.route-config-name-field {
+  flex: 0 0 210px;
+  width: 210px;
+}
+
+@media (max-width: 720px) {
+  .route-config-name-field {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}
+
 .connector-section {
   container: connectors / inline-size;
 }
