@@ -711,6 +711,20 @@ const projectHome = ref(!projectId.value);
 const mediaCanvasId = ref("");
 const workflowPanel = ref<"settings" | "run">();
 const showCliSettings = ref(false);
+/** §1.1: the content window edits the node's own text and writes it back on save. */
+const nodeEditorId = ref("");
+const nodeEditorNode = computed(() => nodeEditorId.value ? flowNodesById.value.get(nodeEditorId.value) : undefined);
+const nodeEditorDraft = ref("");
+const nodeEditorSize = ref(16);
+watch(nodeEditorNode, node => { nodeEditorDraft.value = node ? nodeText(node) : ""; }, { immediate: true });
+function closeNodeEditor() { nodeEditorId.value = ""; }
+async function saveNodeEditor() {
+  const node = nodeEditorNode.value;
+  if (!node) return;
+  node.config = { ...node.config, text: nodeEditorDraft.value };
+  await persistNodeText(node);
+  closeNodeEditor();
+}
 const selectedEdgeId = ref("");
 // Stored edges still carry three kinds; the canvas only shows one in port and one out port.
 // The kind is decided when the drop lands, so the user never picks a port.
@@ -1107,6 +1121,51 @@ async function persistNodeText(node: FlowNode) {
     notice.value = failure instanceof Error ? failure.message : "文本保存失败。";
   }
 }
+/** §5.2: the toolbar is its own canvas layer above the card, never a second in-card path. */
+const TOOLBAR_TEXT_STEPS = [12, 14, 16, 20, 24, 30] as const;
+const toolbarTextSize = ref<Record<string, number>>({});
+function textSize(nodeId: string) { return toolbarTextSize.value[nodeId] ?? 16; }
+function stepTextSize(node: FlowNode, direction: -1 | 1) {
+  const current = textSize(node.id);
+  const index = TOOLBAR_TEXT_STEPS.findIndex(size => size >= current);
+  const from = index < 0 ? TOOLBAR_TEXT_STEPS.length - 1 : index;
+  const next = TOOLBAR_TEXT_STEPS[Math.max(0, Math.min(TOOLBAR_TEXT_STEPS.length - 1, from + direction))];
+  toolbarTextSize.value = { ...toolbarTextSize.value, [node.id]: next ?? 16 };
+}
+/** Downloads whatever the card currently holds: its text, or its verified artifact links. */
+async function downloadNodeContent(node: FlowNode) {
+  const text = nodeText(node);
+  if (text.trim()) {
+    try {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${(node.title || node.id).replace(/[\\/:*?"<>|]/g, "_")}.txt`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      return;
+    } catch { /* fall through to the notice below */ }
+  }
+  notice.value = nodeArtifacts.value.length
+    ? "产物请从参数框的「已核验产物」下载，这里可导出节点正文。"
+    : "这个节点还没有可下载的内容。";
+}
+async function openNodeEditor(node: FlowNode) {
+  selectedIds.value = [node.id];
+  nodeEditorId.value = node.id;
+}
+/**
+ * The toolbar sits in the workspace layer (outside the zoomed world), so it has to
+ * project world coordinates the same way `.canvas-world` does: world * scale + offset.
+ */
+const toolbarNode = computed(() => selectedWorkflowNode.value);
+const toolbarStyle = computed(() => {
+  const node = toolbarNode.value, point = node ? canvas.positions.value[node.id] : undefined;
+  if (!node || !point) return { left: "0px", top: "0px", display: "none" };
+  const scale = canvas.scale.value, offset = canvas.offset.value;
+  return { left: `${offset.x + (point.x + 130) * scale}px`, top: `${offset.y + point.y * scale - 44}px` };
+});
 async function addWorkflowCard(entry: string) {
   const preset = workflowCardKinds.find(row => row.kind === entry);
   const position = contextMenu.value?.world;
@@ -2000,7 +2059,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         </button>
         <div class="workflow-card-body canvas-text-card" data-canvas-card-body>
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
-          <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
+          <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :style="{ fontSize: `${textSize(node.id)}px` }" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
           <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
         </div>
         <button v-if="nodeBadge(node).inputCount" type="button" class="canvas-badge canvas-badge-in"
@@ -2135,6 +2194,27 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           </div>
         </div>
       </div>
+      <div v-if="toolbarNode" class="canvas-toolbar" role="toolbar" :aria-label="`${toolbarNode.title || '节点'}工具`" :style="toolbarStyle" @pointerdown.stop @click.stop>
+        <template v-if="toolbarNode.config.textOutput === true">
+          <button type="button" aria-label="缩小字号" title="缩小字号" @click="action(async () => stepTextSize(toolbarNode!, -1))">A-</button>
+          <button type="button" aria-label="放大字号" title="放大字号" @click="action(async () => stepTextSize(toolbarNode!, 1))">A+</button>
+        </template>
+        <button type="button" aria-label="编辑内容" title="编辑内容" @click="action(() => openNodeEditor(toolbarNode!))">编辑</button>
+        <button type="button" aria-label="下载内容" title="下载内容" @click="action(() => downloadNodeContent(toolbarNode!))">下载</button>
+      </div>
+      <div v-if="nodeEditorNode" class="canvas-editor-backdrop" @pointerdown.self="closeNodeEditor">
+        <section class="canvas-editor" role="dialog" aria-modal="true" :aria-label="`${nodeEditorNode.title || '节点'}内容`" @pointerdown.stop>
+          <header>
+            <strong>{{ nodeEditorNode.title || nodeEditorNode.id }}</strong>
+            <span class="canvas-editor-size">{{ nodeEditorSize }}px</span>
+            <button type="button" aria-label="缩小字号" @click="nodeEditorSize = Math.max(11, nodeEditorSize - 1)">A-</button>
+            <button type="button" aria-label="放大字号" @click="nodeEditorSize = Math.min(34, nodeEditorSize + 1)">A+</button>
+            <button type="button" aria-label="保存内容" @click="action(saveNodeEditor)">保存</button>
+            <button type="button" aria-label="关闭内容窗口" @click="closeNodeEditor">关闭</button>
+          </header>
+          <textarea v-model="nodeEditorDraft" :style="{ fontSize: `${nodeEditorSize}px` }" :aria-label="`${nodeEditorNode.title || '节点'}全文`" />
+        </section>
+      </div>
       <aside v-if="showLibrary" id="video-history-panel" class="output-library" aria-label="我的作品">
         <div class="library-toolbar"><h2>我的作品 <span>{{ snapshot?.jobs.length || 0 }}</span></h2><v-btn icon="mdi-close" variant="text" size="small" aria-label="关闭作品历史" @click="showLibrary=false" /><v-btn variant="text" size="small" prepend-icon="mdi-refresh" :disabled="busy" @click="refresh(true)">刷新</v-btn></div>
         <div class="library-filters"><v-select v-model="filter" :items="[{title:'全部',value:'all'},{title:'进行中',value:'pending'},{title:'已完成',value:'succeeded'},{title:'失败',value:'failed'}]" label="状态" hide-details density="compact" variant="outlined" /><v-text-field v-model="search" label="搜索提示词" prepend-inner-icon="mdi-magnify" hide-details density="compact" variant="outlined" clearable /></div>
@@ -2222,6 +2302,19 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-input-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--rr-text); }
 .canvas-input-action { flex-shrink:0; width:20px; height:20px; border-radius:6px; color:var(--rr-muted); }
 .canvas-input-action:is(:hover,:focus-visible) { color:var(--rr-accent); background:var(--rr-surface); }
+/* §5.2：工具条是画布浮层，浮在卡片上方 8px，不进卡片内部。 */
+.canvas-toolbar { position:absolute; z-index:7; display:flex; gap:2px; padding:3px; border:1px solid var(--rr-border); border-radius:999px; background:var(--rr-surface-glass); box-shadow:var(--rr-shadow-menu); }
+.canvas-toolbar button { padding:3px 9px; border-radius:999px; color:var(--rr-muted); font-size:12px; line-height:1.4; }
+.canvas-toolbar button:is(:hover,:focus-visible) { color:var(--rr-heading); background:var(--rr-subtle); }
+/* §1.1：内容窗口是画布级覆盖层，编辑全文后写回节点自身。 */
+.canvas-editor-backdrop { position:absolute; inset:0; z-index:20; display:grid; place-items:center; background:rgba(0,0,0,.42); }
+.canvas-editor { display:flex; flex-direction:column; width:min(760px,calc(100% - 48px)); max-height:calc(100% - 80px); border:1px solid var(--rr-border-strong); border-radius:14px; background:var(--rr-surface); box-shadow:var(--rr-shadow-menu); overflow:hidden; }
+.canvas-editor > header { display:flex; align-items:center; gap:6px; padding:10px 12px; border-bottom:1px solid var(--rr-border); }
+.canvas-editor > header strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.canvas-editor-size { color:var(--rr-muted); font-size:11px; }
+.canvas-editor > header button { padding:4px 9px; border-radius:8px; color:var(--rr-muted); font-size:12px; }
+.canvas-editor > header button:is(:hover,:focus-visible) { color:var(--rr-heading); background:var(--rr-subtle); }
+.canvas-editor textarea { flex:1; min-height:320px; max-height:60vh; padding:14px 16px; border:0; outline:none; resize:none; background:transparent; color:var(--rr-text); font-family:inherit; line-height:1.7; }
 .workspace-flow-wires { position:absolute; width:1px; height:1px; overflow:visible; pointer-events:none; }
 .workspace-flow-wires path { fill:none; stroke:var(--rr-accent); stroke-width:1.5; opacity:.72; pointer-events:none; }
 .workspace-flow-wires .connection-hit { stroke:transparent; stroke-width:12; pointer-events:stroke; cursor:pointer; }
