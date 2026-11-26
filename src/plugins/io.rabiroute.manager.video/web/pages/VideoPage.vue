@@ -787,7 +787,9 @@ const workflowCardKinds: CanvasNodeEntry[] = [
   { kind: "agent", label: "Agent", nodeKind: "agent", group: "creative", icon: "mdi-robot-outline" },
   { kind: "command", label: "命令", nodeKind: "command", group: "pipeline", icon: "mdi-console" },
   { kind: "human", label: "人工检查", nodeKind: "human", group: "pipeline", icon: "mdi-account-check-outline" },
-  { kind: "generate", label: "生成", nodeKind: "generate", group: "pipeline", icon: "mdi-creation" }
+  { kind: "generate", label: "生成", nodeKind: "generate", group: "pipeline", icon: "mdi-creation" },
+  // §6.1 预演台：一份可先空跑的 agent 节点，用来验证上下文与产物路径，不产生真实发布动作。
+  { kind: "rehearsal", label: "预演台", nodeKind: "agent", group: "creative", icon: "mdi-play-circle-outline", config: () => ({ textPrompt: "", textOutput: false, rehearsal: true }) }
 ];
 const pipelineNodeKinds = workflowCardKinds.filter(entry => entry.group === "pipeline");
 const showPipelineNodes = ref(false);
@@ -1351,6 +1353,30 @@ function backgroundPointerDown(event: PointerEvent) {
   cancelPort();
   canvas.backgroundDown(event);
   contextMenu.value = undefined;
+}
+/** The menu's 上传 entry routes each file to the media card kind its extension implies. */
+async function uploadFromMenu(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  input.value = "";
+  if (!files.length) return;
+  for (const file of files) {
+    const kind = /\.(png|jpe?g|webp|gif)$/i.test(file.name) ? "image"
+      : /\.(mp4|mov|webm)$/i.test(file.name) ? "video"
+      : /\.(wav|mp3|m4a|flac|ogg)$/i.test(file.name) ? "audio" : undefined;
+    if (!kind) { notice.value = `无法判断 ${file.name} 的类型，只支持图片、视频和音频。`; continue; }
+    addCanvasItem(kind as CanvasKind);
+    const created = canvasItems.value[canvasItems.value.length - 1];
+    if (created) await uploadCanvasAsset({ target: { files: [file], value: "" } } as unknown as Event, created);
+  }
+}
+/** §6.1: double-clicking empty canvas opens the add-node menu at the pointer. */
+function backgroundDoubleClick(event: MouseEvent) {
+  if (busy.value || uploading.value || canPan.value) return;
+  const target = event.target as HTMLElement;
+  if (target.closest(".canvas-object,.canvas-group,.canvas-tools,.workspace-tools,.canvas-minimap,.canvas-menu,.output-library,.v-overlay,.canvas-toolbar,.canvas-editor-backdrop")) return;
+  event.preventDefault();
+  openCanvasMenu(event);
 }
 function cancelWorkspaceGesture(event: PointerEvent) {
   finishPointerFrame(event.pointerId);
@@ -1941,7 +1967,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
     </Teleport>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
     <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" class="mb-4">{{ error || snapshot?.computeError }}</v-alert>
-    <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-port':!!workflowWire}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="closeCanvasOverlays">
+    <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-port':!!workflowWire}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @dblclick="backgroundDoubleClick" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="closeCanvasOverlays">
       <nav class="workspace-tools" aria-label="创作工具"><button aria-label="添加画布卡片" @click="openCanvasMenu"><v-icon icon="mdi-plus" size="23" /></button><button :class="{active:showLibrary}" :aria-expanded="showLibrary" aria-controls="video-history-panel" aria-label="作品历史" @click="showLibrary=!showLibrary"><v-icon icon="mdi-history" size="23" /></button></nav>
       <div v-if="marquee" class="canvas-selection-box" :style="{left:marquee.x+'px',top:marquee.y+'px',width:marquee.width+'px',height:marquee.height+'px'}" />
       <div class="canvas-world" :style="canvasTransform">
@@ -2229,17 +2255,21 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           <hr /><button role="menuitem" class="delete-node" :disabled="busy || uploading" @click="deleteCard"><v-icon icon="mdi-trash-can-outline" size="17" />删除节点</button>
         </template>
         <template v-else>
-        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('text'))"><v-icon icon="mdi-format-text" size="17" />添加文本</button>
-        <button v-for="entry in mediaCanvasKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="addCanvasItem(entry.kind)"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}</button>
-        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('agent'))"><v-icon icon="mdi-robot-outline" size="17" />添加 Agent</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('text'))"><v-icon icon="mdi-format-text" size="17" />文本</button>
+        <button v-for="entry in mediaCanvasKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="addCanvasItem(entry.kind)"><v-icon :icon="entry.icon" size="17" />{{ entry.label }}</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('agent'))"><v-icon icon="mdi-robot-outline" size="17" />Agent</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard('rehearsal'))"><v-icon icon="mdi-play-circle-outline" size="17" />预演台</button>
         <hr />
         <button role="menuitem" class="menu-group-toggle" :aria-expanded="showPipelineNodes" @click.stop="showPipelineNodes = !showPipelineNodes">
           <v-icon icon="mdi-tune-variant" size="17" />自动化节点<v-icon :icon="showPipelineNodes ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="15" class="menu-caret" />
         </button>
         <template v-if="showPipelineNodes">
-          <button v-for="entry in pipelineNodeKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard(entry.kind))"><v-icon :icon="entry.icon" size="17" />添加{{ entry.label }}节点</button>
+          <button v-for="entry in pipelineNodeKinds" :key="entry.kind" role="menuitem" :disabled="busy || uploading" @click="action(() => addWorkflowCard(entry.kind))">添加{{ entry.label }}节点</button>
         </template>
-        <hr /><button role="menuitem" @click="showLibrary=true; contextMenu=undefined"><v-icon icon="mdi-history" size="17" />从作品历史添加</button><button role="menuitem" @click="canvas.fit(); contextMenu=undefined"><v-icon icon="mdi-fit-to-screen-outline" size="17" />适应画布</button>
+        <hr />
+        <button role="menuitem" @click="canvas.fit(); contextMenu=undefined"><v-icon icon="mdi-fit-to-screen-outline" size="17" />适应屏幕</button>
+        <button role="menuitem" :disabled="busy || uploading" @click="action(pasteNodes)"><v-icon icon="mdi-content-paste" size="17" />粘贴</button>
+        <button role="menuitem" @click="contextMenu=undefined"><label class="menu-upload">上传<input type="file" multiple aria-label="上传材料" @click.stop @change="uploadFromMenu($event)" /></label></button>
         </template>
       </div>
       <aside class="canvas-minimap" aria-label="画布小地图" @pointerdown.stop @contextmenu.stop @wheel.stop>
