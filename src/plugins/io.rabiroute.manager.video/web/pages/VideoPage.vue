@@ -13,7 +13,8 @@ import { useVideoCanvas, type NodeLayout } from "./useVideoCanvas";
 import WorkbenchPanel from "./WorkbenchPanel.vue";
 import WorkbenchCliSettings from "./WorkbenchCliSettings.vue";
 import { wirePath, connectGraph, linkedText, connectWorkflowInput, workflowArtifactKeys, workflowInputLinks, workflowRunArtifacts, initialFlowNodeConfig, resolveEdgeKind as resolveDropEdgeKind, type CanvasCover, type CanvasPreview, type Point, type FlowNode, type TextPreview, type WorkbenchCanvas, type WorkbenchDefinition, type WorkbenchRunReceipt } from "./workbenchEditor";
-import { cardBadges, mergedInputs, artifactKindGlyphs, type ArtifactKind, type MergedInput } from "./workbenchCardView";
+import { cardBadges, mergedInputs, artifactKindGlyphs, artifactKind, type ArtifactKind, type MergedInput } from "./workbenchCardView";
+import { previewFor, previewText, primaryArtifact } from "./workbenchArtifactPreview";
 function artifactGlyph(kind: ArtifactKind) { return artifactKindGlyphs[kind]; }
 /** `@click` here feeds the action wrapper, which expects a promise. */
 async function removeMergedInputAction(row: MergedInput, target: string) { await removeMergedInput(row, target); }
@@ -1361,6 +1362,33 @@ async function focusRunNode(nodeId: string) {
   selectedIds.value = [nodeId];
   canvas.center(nodeId);
 }
+/** §2.2: preview the first verified artifact inside the card; text is fetched from the run endpoint. */
+const previewTexts = ref<Record<string, string>>({});
+const cardPreviews = computed(() => {
+  const rows = new Map<string, { mode: string; url?: string; reason?: string; text?: string; truncated?: boolean }>();
+  const artifacts = selectedWorkflowNodeId.value ? { [selectedWorkflowNodeId.value]: nodeArtifacts.value } : {};
+  for (const [nodeId, list] of Object.entries(artifacts)) {
+    const first = primaryArtifact(list.map(item => ({ id: item.id, name: item.name, path: item.path, href: item.href })));
+    const preview = previewFor(first, managerResourceUrl);
+    if (preview.mode === "text") {
+      const body = previewTexts.value[first!.id];
+      rows.set(nodeId, body === undefined ? { mode: "loading" }
+        : { mode: "text", ...previewText(body) });
+    } else rows.set(nodeId, preview as never);
+  }
+  return rows;
+});
+watch(nodeArtifacts, async list => {
+  const first = primaryArtifact(list.map(item => ({ id: item.id, name: item.name, path: item.path, href: item.href })));
+  if (!first || artifactKind(first.path) !== "text") return;
+  if (previewTexts.value[first.id] !== undefined) return;
+  try {
+    const response = await fetch(managerResourceUrl(first.href), { cache: "no-store" });
+    if (!response.ok) throw new Error("无法读取产物");
+    const text = await response.text();
+    previewTexts.value = { ...previewTexts.value, [first.id]: text };
+  } catch { /* keep the declared type label when the body cannot be read */ }
+}, { immediate: true });
 function focusInputSource(id: string) {
   selectedIds.value = [id];
   canvas.center(id);
@@ -2113,7 +2141,17 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <div class="workflow-card-body canvas-text-card" data-canvas-card-body>
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
           <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :style="{ fontSize: `${textSize(node.id)}px` }" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
-          <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
+          <template v-else>
+            <!-- §2.2: the first command artifact previews inline instead of opening a new tab. -->
+            <template v-if="cardPreviews.get(node.id)">
+              <img v-if="cardPreviews.get(node.id)!.mode === 'image'" class="card-inline-preview" :src="(cardPreviews.get(node.id) as any).url" :alt="node.title" draggable="false" />
+              <video v-else-if="cardPreviews.get(node.id)!.mode === 'video'" class="card-inline-preview" :src="(cardPreviews.get(node.id) as any).url" preload="metadata" muted playsinline />
+              <audio v-else-if="cardPreviews.get(node.id)!.mode === 'audio'" class="card-inline-audio" :src="(cardPreviews.get(node.id) as any).url" controls preload="metadata" @pointerdown.stop />
+              <pre v-else-if="cardPreviews.get(node.id)!.mode === 'text'" class="card-inline-text" :class="{ truncated: (cardPreviews.get(node.id) as any).truncated }" @pointerdown.stop>{{ (cardPreviews.get(node.id) as any).text }}</pre>
+              <span v-else class="card-inline-empty">{{ (cardPreviews.get(node.id) as any).reason }}</span>
+            </template>
+            <span v-else>{{ workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}<template v-if="node.enabled === false"> · 已停用</template></span>
+          </template>
         </div>
         <button v-if="nodeBadge(node).inputCount" type="button" class="canvas-badge canvas-badge-in"
           :aria-label="`输入材料 ${nodeBadge(node).inputCount} 份`" :title="`输入材料 ${nodeBadge(node).inputCount} 份`"
@@ -2355,6 +2393,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-badge-out { right:26px; }
 .canvas-badge b { font-weight:600; }
 .canvas-badge:is(:hover,:focus-visible) { color:var(--rr-heading); border-color:var(--rr-accent); }
+/* §2.2：卡片主体直接显示产物——文本前几行带底部渐隐，图片/视频首帧，音频波形条。 */
+.card-inline-preview { width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.card-inline-audio { width:92%; }
+.card-inline-text { position:relative; margin:0; max-height:100%; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:12px; line-height:1.6; color:var(--rr-text); -webkit-mask-image:linear-gradient(180deg,#000 70%,transparent); mask-image:linear-gradient(180deg,#000 70%,transparent); }
+.card-inline-text.truncated { --fade:1; }
+.card-inline-empty { color:var(--rr-muted); }
 /* §5.3：一套「输入材料」列表，每行 源节点名 + 产物图标 + ↗ 定位 + × 移除。 */
 .canvas-input-list { display:flex; flex-direction:column; gap:2px; margin:0 0 10px; padding:0; list-style:none; }
 .canvas-input-list > li { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; background:var(--rr-subtle); font-size:12px; }
