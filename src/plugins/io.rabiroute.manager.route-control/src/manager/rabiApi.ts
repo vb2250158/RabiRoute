@@ -970,6 +970,34 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
       return instance ? await proxyJson(instance, target, init, getTimeoutMs("manager.instances.proxy", 3000), assertCurrent) : missingInstance(guid);
     } catch (error) { return failed(error, 502); }
   };
+  const phoneOperation = async (channel: "files" | "location" | "screen", deviceId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<ApiOperationResult> => {
+    const { relay } = homeConfig();
+    const headers = { "cache-control": "no-store" };
+    const prefix = `PHONE_${channel.toUpperCase()}`;
+    if (!relay.enabled || !relay.url.trim() || !relay.token.trim()) {
+      return { status: 503, body: { code: -1, errorCode: "RABILINK_HOME_NOT_CONFIGURED" }, headers };
+    }
+    try {
+      const base = new URL(relay.url);
+      if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error("Invalid Relay URL");
+      const deadline = AbortSignal.timeout(35_000);
+      const response = await fetch(base.href.replace(/\/+$/, "") + "/api/rabilink/mobile/" + channel, {
+        method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+        headers: { "x-rabilink-token": relay.token, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ ...input, targetId: deviceId })
+      });
+      const current = homeConfig().relay;
+      if (!current.enabled || current.url !== relay.url || current.token !== relay.token) {
+        await response.body?.cancel();
+        return { status: 409, body: { code: -1, errorCode: prefix + "_CREDENTIAL_CHANGED" }, headers };
+      }
+      const body: unknown = await response.json();
+      return { status: response.status, body, headers };
+    } catch {
+      signal?.throwIfAborted();
+      return { status: 502, body: { code: -1, errorCode: prefix + "_TRANSPORT_UNCONFIRMED" }, headers };
+    }
+  };
   return Object.freeze({
     assertLifecycle(request: http.IncomingMessage): ApiOperationResult | undefined {
       const expectedGeneration = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
@@ -1023,33 +1051,12 @@ export function createRabiApiOwner(ctx: RabiApiContext) {
     homeDevice(deviceId: string, signal?: AbortSignal): Promise<ApiOperationResult> {
       return homeResponse(async () => findHomeDevice((await homeDevices(signal)).devices, deviceId));
     },
-    async phoneFiles(deviceId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<ApiOperationResult> {
-      const { relay } = homeConfig();
-      const headers = { "cache-control": "no-store" };
-      if (!relay.enabled || !relay.url.trim() || !relay.token.trim()) {
-        return { status: 503, body: { code: -1, errorCode: "RABILINK_HOME_NOT_CONFIGURED" }, headers };
-      }
-      try {
-        const base = new URL(relay.url);
-        if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error("Invalid Relay URL");
-        const deadline = AbortSignal.timeout(35_000);
-        const response = await fetch(base.href.replace(/\/+$/, "") + "/api/rabilink/mobile/files", {
-          method: "POST", redirect: "error", signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
-          headers: { "x-rabilink-token": relay.token, "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ ...input, targetId: deviceId })
-        });
-        const current = homeConfig().relay;
-        if (!current.enabled || current.url !== relay.url || current.token !== relay.token) {
-          await response.body?.cancel();
-          return { status: 409, body: { code: -1, errorCode: "PHONE_FILES_CREDENTIAL_CHANGED" }, headers };
-        }
-        const body: unknown = await response.json();
-        return { status: response.status, body, headers };
-      } catch {
-        signal?.throwIfAborted();
-        return { status: 502, body: { code: -1, errorCode: "PHONE_FILES_TRANSPORT_UNCONFIRMED" }, headers };
-      }
-    },
+    phoneFiles: (deviceId: string, input: Record<string, unknown>, signal?: AbortSignal) =>
+      phoneOperation("files", deviceId, input, signal),
+    phoneLocation: (deviceId: string, input: Record<string, unknown>, signal?: AbortSignal) =>
+      phoneOperation("location", deviceId, input, signal),
+    phoneScreen: (deviceId: string, input: Record<string, unknown>, signal?: AbortSignal) =>
+      phoneOperation("screen", deviceId, input, signal),
     updateDeviceLabels(deviceId: string, body: DeviceLabels & { guid: string; expectedRevision: string }, assertCurrent: () => void, signal?: AbortSignal): Promise<ApiOperationResult> {
       return homeResponse(async () => {
         const { scope, legacyScope, devices } = await homeDirectory(signal);

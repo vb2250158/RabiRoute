@@ -10,7 +10,7 @@
       "description": "查询文件和上传、下载"
     },
     "observation": {
-      "title": "窗口与截图",
+      "title": "窗口、截图与录屏",
       "description": "查看窗口和电脑画面"
     },
     "agentTasks": {
@@ -18,9 +18,13 @@
       "description": "向这台电脑上的智能体分派工作"
     },
     "input": {
-      "title": "鼠标与键盘",
-      "description": "点击、输入文字、滚动、拖拽和快捷键"
+      "title": "前台共享键鼠",
+      "description": "在当前桌面使用鼠标和键盘，真人输入冲突时让位"
     },
+    "backgroundInput": {"title":"后台窗口输入","description":"将鼠标和键盘消息发给指定窗口或控件"},
+    "backgroundCapture": {"title":"后台窗口截图","description":"尝试读取被遮挡或最小化的窗口"},
+    "windowActivation": {"title":"切换前台窗口","description":"恢复目标窗口并请求将它切到前台"},
+    "gamepad": {"title":"独立玩家手柄","description":"为 Agent 使用独立的虚拟 Xbox 手柄"},
     "annotation": {
       "title": "屏幕标注",
       "description": "显示框、箭头和文字，与鼠标键盘独立"
@@ -55,7 +59,7 @@
           },
           "observation": {
             "type": "boolean",
-            "title": "窗口与截图",
+            "title": "窗口、截图与录屏",
             "default": true,
             "description": "查看窗口和电脑画面"
           },
@@ -67,16 +71,30 @@
           },
           "input": {
             "type": "boolean",
-            "title": "鼠标与键盘",
+            "title": "前台共享键鼠",
             "default": true,
-            "description": "点击、输入文字、滚动、拖拽和快捷键"
+            "description": "在当前桌面使用鼠标和键盘，真人输入冲突时让位"
           },
+          "backgroundInput":{"type":"boolean","title":"后台窗口输入","default":true},
+          "backgroundCapture":{"type":"boolean","title":"后台窗口截图","default":true},
+          "windowActivation":{"type":"boolean","title":"切换前台窗口","default":true},
+          "gamepad":{"type":"boolean","title":"独立玩家手柄","default":true},
           "annotation": {
             "type": "boolean",
             "title": "屏幕标注",
             "default": true,
             "description": "显示框、箭头和文字，与鼠标键盘独立"
           }
+        }
+      },
+      "recording": {
+        "type": "object",
+        "title": "录屏缓存",
+        "additionalProperties": true,
+        "properties": {
+          "cacheMaxGiB": {"type":"integer","minimum":1,"maximum":1024,"default":8,"title":"录屏缓存上限 (GiB)"},
+          "retentionDays": {"type":"integer","minimum":0,"maximum":3650,"default":0,"title":"缓存保留天数（0 为关闭）"},
+          "maxDurationMinutes": {"type":"integer","minimum":1,"maximum":1440,"default":60,"title":"单次录屏最长分钟数"}
         }
       },
       "control": {
@@ -442,6 +460,15 @@
       "capability": "windows",
       "readOnly": true
     },
+    "windows.activate": {"feature":"windowActivation","capability":"windowActivation","receipt":true},
+    "input.background": {"feature":"backgroundInput","capability":"backgroundInput","receipt":true,"settingsPaths":["input.maxActions"]},
+    "screen.capture.background": {
+      "feature":"backgroundCapture","capability":"backgroundCapture","readOnly":true,
+      "settingsPaths":["annotation.tracking.frameCacheFrames","annotation.tracking.frameCacheBytes","annotation.tracking.frameCacheAgeMs","presentation"]
+    },
+    "input.gamepad": {"feature":"gamepad","capability":"gamepad","receipt":true},
+    "input.gamepad.status": {"feature":"gamepad","capability":"gamepad","readOnly":true,"recovery":true},
+    "input.gamepad.close": {"feature":"gamepad","capability":"gamepad","recovery":true},
     "screen.capture": {
       "feature": "observation",
       "capability": "screenshots",
@@ -453,6 +480,14 @@
         "presentation"
       ]
     },
+    "recording.start": {"feature":"observation","capability":"screenRecording","settingsPaths":["recording"]},
+    "recording.clip": {"feature":"observation","capability":"screenRecording","settingsPaths":["recording"]},
+    "recording.save": {"feature":"observation","capability":"screenRecording"},
+    "recording.cache.status": {"feature":"observation","capability":"screenRecording","readOnly":true,"recovery":true},
+    "recording.status": {"feature":"observation","capability":"screenRecording","readOnly":true,"recovery":true},
+    "recording.pause": {"feature":"observation","capability":"screenRecording"},
+    "recording.resume": {"feature":"observation","capability":"screenRecording"},
+    "recording.stop": {"feature":"observation","capability":"screenRecording","recovery":true},
     "screen.wait": {
       "feature": "observation",
       "capability": "screenshots",

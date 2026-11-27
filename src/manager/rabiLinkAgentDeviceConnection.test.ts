@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { IncomingMessage } from 'node:http';
 import { markAuthenticatedConnectionRequest } from './connectionRequestAccess.js';
 import { issueInternalManagerHopHeaders } from '../shared/internalManagerHop.js';
-import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope } from './rabiLinkAgentDeviceConnection.js';
+import { encodeComputerPeerSource, rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope, rabiLinkPeerComputerSource } from './rabiLinkAgentDeviceConnection.js';
+import { COMPUTER_PEER_SOURCE_HEADER } from '../shared/peerTunnelContract.js';
 
 test('only the current loopback transport may assert device receipt ownership; app management remains separate', () => {
   const config = { enabled: true, url: 'https://relay.example', token: 'fixture-token', deviceId: 'pc-owner' };
@@ -42,4 +43,27 @@ test('signed native identity rechecks the original ingress authority before rece
   assert.equal(rabiLinkAgentDevicePrincipal(request, config, 'generation-one')?.deviceOwner, true);
   active = false;
   assert.equal(rabiLinkAgentDevicePrincipal(request, config, 'generation-one'), null);
+});
+
+test('computer sources stay scoped to their attested device, including named and legacy calls', () => {
+  const generation = 'computer-fixture', scope = 'c'.repeat(64);
+  const method = 'POST', url = '/api/lan-agent/instances/windows-fixture/computer';
+  const request = (deviceId?: string, actor?: string) => ({
+    method, url, socket: { remoteAddress: '127.0.0.1' }, headers: {
+      ...(deviceId ? issueInternalManagerHopHeaders({ kind: 'peer', generation, scope, deviceId, method, target: url }) : {}),
+      ...(actor ? { [COMPUTER_PEER_SOURCE_HEADER]: actor } : {})
+    }
+  }) as unknown as IncomingMessage;
+  const actor = encodeComputerPeerSource('same-local-thread', '远端\n游戏会话');
+  const originA = rabiLinkPeerComputerSource(request('host-a', actor), generation, scope);
+  const originB = rabiLinkPeerComputerSource(request('host-b', actor), generation, scope);
+  assert.equal(originA?.sourceLabel, '远端游戏会话');
+  assert.notEqual(originA?.sourceId, originB?.sourceId);
+  assert.deepEqual(rabiLinkPeerComputerSource(request('host-b', 'invalid'), generation, scope),
+    { sourceId: 'peer:host-b', sourceLabel: 'host-b' });
+  const local = request(undefined, actor);
+  markAuthenticatedConnectionRequest(local);
+  assert.equal(rabiLinkPeerComputerSource(local, generation, scope), undefined);
+  assert.equal(rabiLinkPeerComputerSource(request('$application', actor), generation, scope), undefined);
+  assert.equal(rabiLinkPeerComputerSource(request('host-b', actor), 'stale-generation', scope), undefined);
 });

@@ -62,7 +62,7 @@ test("API search and describe expose the computer workflow and control lifecycle
     return { ok: response.ok, statusCode: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };
   } });
   const id = "manager.lan-agent.computer.execute";
-  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入", "等待画面变化"].map(query => sdk.search(query)));
+  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入", "等待画面变化", "录屏"].map(query => sdk.search(query)));
   assert.equal(results[0].items[0].operationId, id);
   for (const { items } of results) {
     const entry = items.find((item: { operationId: string }) => item.operationId === id);
@@ -85,7 +85,32 @@ test("API search and describe expose the computer workflow and control lifecycle
   assert.equal(operation.effects.request.modes["screen.capture"], "read");
   assert.equal(operation.effects.request.modes["screen.wait"], "read");
   assert.equal(operation.effects.request.modes["input.perform"], "write");
+  assert.equal(operation.effects.request.modes["recording.start"], "write");
+  assert.equal(operation.effects.request.modes["recording.status"], "read");
+  const recording = operation.request.body.schema.anyOf.find((branch: any) => branch.properties?.action?.const === "recording.start");
+  assert.ok(recording.properties.windows && recording.properties.pauses && recording.required.includes("endAt"));
   assert.match(operation.recovery.description, /input\.status.*original requestId/);
+});
+
+test("Agent recording schedules on its selected device and exposes cache policy in the same contract", { skip: process.platform !== "win32" }, async t => {
+  const f = await fixture(t, (instanceId, emit, config, root) => new ManagerLocalComputer({
+    instanceId, emit, stateDirectory: path.join(root, "local-computer"), getSettings: () => config.readComputerSettingsRaw(),
+  }));
+  const endpoint = f.base + "/api/lan-agent/instances/" + f.registry.localInstanceId + "/computer";
+  const post = (body: Record<string, unknown>) => fetch(endpoint, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const cache = await post({ action: "recording.cache.status" });
+  assert.equal(cache.status, 200);
+  assert.equal((await cache.json() as any).data.retentionDays, 0);
+  const recordingId = "3f2226dc-ebf4-4ccc-a08c-8471a69db6c1";
+  const startAt = Date.now() + 60_000;
+  const accept = await post({ action: "recording.start", recordingId, startAt, endAt: startAt + 30_000, permanent: true });
+  assert.equal(accept.status, 200, await accept.clone().text());
+  assert.equal((await accept.json() as any).data.state, "scheduled");
+  const status = await post({ action: "recording.status", recordingId });
+  assert.deepEqual((await status.json() as any).data.files, []);
+  const stop = await post({ action: "recording.stop", recordingId });
+  assert.equal((await stop.json() as any).data.state, "cancelled");
 });
 
 test("screen wait uses the observation owner and keeps the returned capture in the media contract", async t => {
@@ -112,6 +137,76 @@ test("screen wait uses the observation owner and keeps the returned capture in t
   assert.deepEqual((await result.json() as any).data, { state: "changed", capture: { mimeType: "image/png", source } });
   assert.deepEqual(calls.map(call => call.action), ["screen.wait"]);
   assert.deepEqual(calls[0]!.body.source, source);
+});
+
+test("change-aware input readback waits after release and preserves the original input receipt", async t => {
+  const calls: string[] = [];
+  const waits: any[] = [];
+  let finishWait!: (value: unknown) => void;
+  let startWait!: () => void;
+  const waiting = new Promise<void>(resolve => { startWait = resolve; });
+  const native = Object.assign(new EventEmitter(), {
+    async request(action: string, body: any, options?: { beforeSend?: () => void }) {
+      options?.beforeSend?.();
+      calls.push(action);
+      if (action === "control.begin") return { state: "active" };
+      if (action === "control.end") return { state: "ended" };
+      if (action === "input.execute") {
+        assert.equal(body.captureAfter, false);
+        return body.requestId === "takeover"
+          ? { state: "cancelled", completedActions: 0, reason: "physical-input-takeover" }
+          : { state: "injected", completedActions: 1, releaseState: "released" };
+      }
+      if (action !== "screen.wait") throw new Error("Unexpected action " + action);
+      waits.push(body);
+      if (waits.length > 1) return { state: "unchanged" };
+      return new Promise(resolve => { finishWait = resolve; startWait(); });
+    },
+    async close() {},
+  });
+  const f = await fixture(t, (instanceId, emit, config, root) => new ManagerLocalComputer({
+    instanceId, emit, stateDirectory: path.join(root, "local-computer"),
+    getSettings: () => config.readComputerSettingsRaw(), computerServiceOptions: { nativeFactory: () => native },
+  }));
+  const endpoint = `${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
+  const post = async (body: unknown) => {
+    const r = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, body: await r.json() as any };
+  };
+  const source = { kind: "desktop", scope: "region", coordinateSpace: "capture", instanceId: f.registry.localInstanceId,
+    displayId: "display", region: { x: 0, y: 0, width: 100, height: 100 }, frameId: "region-frame", imageItemId: "region-image",
+    width: 100, height: 100 };
+  const input = { action: "input.perform", requestId: "readback", source: { frameId: "input-frame", imageItemId: "input-image" },
+    actions: [{ type: "click", x: 10, y: 10 }], captureAfter: { waitMs: 400, source } };
+  assert.equal((await post({ ...input, captureAfter: { waitMs: 400 } })).status, 400);
+  assert.equal((await post({ ...input, captureAfter: { waitMs: 6000, source } })).status, 400);
+  assert.deepEqual(calls, []);
+  const original = post(input);
+  await Promise.race([waiting, original.then(result => { throw new Error("Request returned before observation: " + JSON.stringify(result)); })]);
+  const capture = { mimeType: "image/png", frameId: "new-frame", source: { ...source, frameId: "new-frame" } };
+  try {
+    assert.deepEqual(calls, ["control.begin", "input.execute", "control.end", "screen.wait"]);
+    assert.equal(waits[0].waitMs, 400);
+    assert.deepEqual(waits[0].source, source);
+    assert.equal((await post({ action: "control.status" })).body.data.state, "absent");
+    const next = await post({ ...input, requestId: "other-input", captureAfter: false });
+    assert.equal(next.body.data.state, "injected");
+  } finally {
+    finishWait({ state: "changed", capture });
+  }
+  const response = await original;
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(response.body.data.capture, capture);
+  assert.equal(response.body.data.controlCleanup.state, "ended");
+  assert.deepEqual((await post(input)).body.data, response.body.data);
+  assert.deepEqual((await post({ action: "input.status", requestId: input.requestId })).body.data.result, response.body.data);
+  const unchanged = await post({ ...input, requestId: "unchanged", source, captureAfter: { waitMs: 200 } });
+  assert.equal(unchanged.body.data.state, "injected");
+  assert.deepEqual(unchanged.body.data.capture, { state: "unchanged" });
+  const takeover = await post({ ...input, requestId: "takeover" });
+  assert.equal(takeover.body.data.state, "cancelled");
+  assert.equal(takeover.body.data.reason, "physical-input-takeover");
+  assert.equal(waits.length, 2);
 });
 
 test("new work uses feature settings but original receipt and cleanup actions remain available",async t=>{
@@ -223,6 +318,7 @@ test("one input.perform owns shared press, move, hold and release and replays on
    return {state:action==="control.end"?"ended":"active"};
  },async close(){}});
  const f=await fixture(t,(id,emit,config,root)=>new ManagerLocalComputer({stateDirectory:path.join(root,"local"),instanceId:id,emit,getSettings:()=>config.readComputerSettingsRaw(),computerServiceOptions:{nativeFactory:()=>native}}));
+ t.mock.method(f.registry,"computerObservationLabel",async()=>"窗口操作 · 测试会话");
  const url=`${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
  const post=async(body:unknown)=>{const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});return {status:response.status,body:await response.json() as any};};
  const source={frameId:"observed-frame",imageItemId:"shown-image",imageView:{width:640,height:360}};
@@ -241,6 +337,7 @@ test("one input.perform owns shared press, move, hold and release and replays on
  assert.deepEqual(receipt.controlCleanup,{state:"ended",reason:"input-performed"});
  assert.deepEqual(calls.map(call=>call.action),["control.begin","input.execute","control.end"]);
  assert.equal(calls[0]!.body.inputMode,"shared");assert.equal(calls[1]!.body.inputMode,"shared");
+ assert.equal(calls[0]!.body.source.label,"窗口操作 · 测试会话");
  assert.equal(calls[1]!.body.requestId,input.requestId);assert.deepEqual(calls[1]!.body.actions,input.actions);
  assert.deepEqual(calls[1]!.body.source,source);
  assert.equal(calls[1]!.body.captureSpec,undefined);

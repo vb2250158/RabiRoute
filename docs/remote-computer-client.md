@@ -6,7 +6,9 @@
 
 完整 Rabi 主机通过 RabiLink 连接后直接提供自身电脑能力，无需再安装一个自连接的客户端。当前源码在 **RabiLink → 设备控制** 页面把本机、完整主机、轻量节点与已连接手机列在同一个列表里，电脑行按上报的系统显示 Windows、Mac 或 Linux 图标；设置和执行保持在各自原 Manager；轻量客户端只用于未运行完整主机的电脑。使用方法见[电脑控制](user-guide/computer-control.md)，安装版与真实双机仍按实际版本和证据验收，见[架构与验收范围](connected-host-agent-architecture.md)。
 
-已配置且鉴权的电脑连接默认可调用 Manager 的全部公开接口，无需逐 Agent／会话登记或另加逐接口资格。电脑控制使用一个总开关及终端命令、文件操作、窗口与截图、智能体任务、鼠标与键盘、屏幕标注六项开关；缺省开启，保留已有显式关闭值。这些用户可见设置控制对应电脑的新工作，电脑操作的原结果查询与停止、取消、清理入口保留，配置与其他无依赖服务继续可用。来源任务存在时记录真实来源；没有任务上下文的连接不必虚构 Agent 或会话。
+已配置且鉴权的电脑连接默认可调用 Manager 的全部公开接口，无需逐 Agent／会话登记。每台电脑有总开关，以及桌面操作、指定窗口操作、独立输入设备和其他电脑能力下的功能开关。未配置项默认开启，保留已有显式关闭值。原结果查询与停止、取消、清理入口保留。来源任务存在时记录真实来源。
+
+Agent 经 Rabi 搜索发现统一的电脑操作合同。Manager 按执行实例路由并提供设置，目标电脑的执行端持有控制会话、窗口身份、独立手柄和操作回执。窗口能力归属目标电脑及其 Windows 桌面，切前台、后台截图和后台接收键鼠各自授权。手柄归属目标电脑上的独立设备，由游戏决定玩家分配。
 
 主机电脑上的 Rabi 服务统一保存角色、计划、记忆、Skill、消息记录和调度流程，承担常驻管理职责，不需要另设主控 Agent。完整主机由 Manager 持有本机电脑服务，轻量电脑运行 Rabi Agent 客户端；两者复用该平台支持的执行实现。普通已鉴权 Agent 均可查询计划、记忆和 Skill，也可按接口合同调用电脑能力；是否为主角色不构成额外许可。
 
@@ -100,7 +102,7 @@ Windows 构建通过 `scripts/build-agent-native-assets.mjs` 将托盘、终端�
 
 `windows.list` 可传 `query`（标题筛选）及 `limit`（1..200，默认 100），返回 `windows` 和 `truncated`。每个窗口包含 `windowId`、`pid`、`title`、`minimized`、`bounds`。
 
-`screen.capture` 不传窗口时获取当前虚拟桌面；指定窗口时同时传查询得到的 `windowId` 和 `pid`，防止句柄复用。`maxWidth` 为 320..3840，默认 1920。结果包含 `mimeType: "image/png"`、base64 `data`、`width`、`height`、`bounds`、`capturedAt`，主机可直接显示或保存 PNG。
+`screen.capture` 不传窗口时获取当前虚拟桌面；指定窗口时同时传查询得到的 `windowId` 和 `pid`，防止句柄复用。`maxWidth` 为 320..3840，不传时保留原始尺寸。结果包含 `mimeType: "image/png"`、base64 `data`、`width`、`height`、`bounds`、`capturedAt`，主机可直接显示或保存 PNG。
 
 截图需要交互式 Windows 桌面，最多 32 百万原始像素及 8 MiB PNG；最小化、受保护或不支持 `PrintWindow` 的窗口可能失败或返回无效画面。电脑操控也可以通过终端运行系统命令与脚本；文件和图片优先使用上述接口。
 
@@ -113,3 +115,9 @@ Windows 构建通过 `scripts/build-agent-native-assets.mjs` 将托盘、终端�
 本机安装验收已通过：从隔离测试主控下载并核验签名发布清单中的 44 个文件，安装客户端 0.2.2 及依赖，以普通 `--run` 启动。空 Agent 列表下，CMD 和 PowerShell 的新增、即时输入、查询、调整尺寸和退出可用；131,077 字节二进制文件经三个数据块上传、下载并完整比对；桌面与指定测试窗口返回有效 PNG。状态回读确认一个主程序及其连接器、托盘子程序；主程序正常退出和异常终止测试均确认所属子程序清理。高负载首次回归出现启动超时，失败项已逐项复测；嵌套 Shell 测试只延长准备期限，退出清理仍限 15 秒。
 
 上述安装与主控在同一台 Windows 电脑的隔离目录运行，测试完成后均已停止。正式主控部署、真实双机与长期运行验收仍待完成。
+
+## 录屏
+
+在「远程控制 → 窗口、截图与录屏」选择目标 Windows 电脑。可录桌面或选择多个窗口。Agent 调用 `manager.lan-agent.computer.execute`，路径传目标 `instanceId`，正文传 `action: "recording.start"`、`recordingId`（UUID）及必填 `endAt`。可选 `startAt`、`pauses: [{startAt,endAt}]` 和 `windows: [{windowId,pid}]`。时间为 Unix 毫秒，窗口身份取自 `windows.list`。用 `recording.status/pause/resume/stop` 查询或控制原任务。目标机需要可访问 `ffmpeg.exe`，也可通过 `RABI_AGENT_FFMPEG` 指定。每个窗口、每段连续采集产生一份原始尺寸的无损 FFV1 MKV，通过同一设备的文件接口下载。录屏和暂停期间，目标电脑显示发起者及「结束录屏」按钮。
+
+每台电脑可在「窗口、截图与录屏」设置缓存上限、保留天数和单次最长录屏时间。默认 8 GiB、保留天数 0（关闭定时删除）、最长 60 分钟。保留时间从完成起算。启用后每 5 分钟以及开始下一次录像时清理过期缓存。Agent 可调用 `recording.cache.status` 查看使用量，通过 `manager.lan-agent.computer-settings.patch` 修改 `recording.cacheMaxGiB`、`recording.retentionDays`、`recording.maxDurationMinutes`。开始时传 `permanent: true`，或用 `recording.save` 永久保存。`recording.clip` 用源 ID、新录像 ID 和起止 Unix 毫秒提取片段，可指定永久保存，保留原录像。暂停区间没有画面，跨暂停裁剪返回多段文件。

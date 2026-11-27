@@ -4,6 +4,7 @@ import { hasAuthenticatedConnectionRequest } from './connectionRequestAccess.js'
 import { validateInternalManagerHop } from '../shared/internalManagerHop.js';
 import type { RabiLinkAgentPrincipal } from './rabiLinkAgentDevices.js';
 import { isLoopbackRemoteAddress } from './webguiLanAccess.js';
+import { COMPUTER_PEER_SOURCE_HEADER } from '../shared/peerTunnelContract.js';
 
 export type RabiLinkConnectionConfig = { enabled: boolean; url: string; token: string; deviceId: string };
 export function rabiLinkConnectionScope(config: RabiLinkConnectionConfig): string {
@@ -43,4 +44,23 @@ export function rabiLinkAgentDevicePrincipal(request: IncomingMessage, config: R
 export function rabiLinkAgentTaskSource(request: IncomingMessage, config: RabiLinkConnectionConfig, generation: string): RabiLinkAgentPrincipal | undefined {
   const principal = rabiLinkAgentDevicePrincipal(request, config, generation);
   return principal?.deviceOwner ? principal : undefined;
+}
+
+/** Keep a stable origin-issued session key even when its display title changes. */
+export function encodeComputerPeerSource(sourceId: string, label?: string): string {
+  const key = createHash('sha256').update(sourceId).digest('hex');
+  const title = [...(label ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim()].slice(0, 80).join('');
+  return key + '.' + Buffer.from(title, 'utf8').toString('base64url');
+}
+
+export function rabiLinkPeerComputerSource(request: IncomingMessage, generation: string, scope: string):
+  { sourceId: string; sourceLabel: string } | undefined {
+  hasAuthenticatedConnectionRequest(request);
+  const hop = validateInternalManagerHop(request, { generation, scope });
+  if (!hop || hop.deviceId.startsWith('$')) return undefined;
+  const raw = request.headers[COMPUTER_PEER_SOURCE_HEADER];
+  const actor = typeof raw === 'string' && raw.length <= 492 ? /^([a-f0-9]{64})\.([A-Za-z0-9_-]*)$/.exec(raw) : null;
+  if (!actor) return { sourceId: 'peer:' + hop.deviceId, sourceLabel: hop.deviceId };
+  const title = Buffer.from(actor[2]!, 'base64url').toString('utf8').replace(/[\x00-\x1f\x7f]/g, '').trim();
+  return { sourceId: JSON.stringify(['peer', hop.deviceId, actor[1]]), sourceLabel: title || hop.deviceId };
 }

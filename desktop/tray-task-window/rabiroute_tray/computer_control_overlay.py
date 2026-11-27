@@ -138,12 +138,33 @@ class DrawingSurface(QWidget):
                         for offset in (-0.5, 0.5):
                             end = points[-1] - QPointF(12 * math.cos(angle + offset), 12 * math.sin(angle + offset))
                             painter.drawLine(points[-1], end)
-        pointer = self.state.get("pointer")
-        if pointer and self.state.get("controlSessionId"):
+        pointers = self.state.get("pointers")
+        if pointers is None:
+            pointer = self.state.get("pointer")
+            source = self.state.get("source") or {}
+            pointers = ([{**pointer, "space": "desktop", "label": source.get("label")}]
+                        if pointer and self.state.get("controlSessionId") else [])
+        labels = []
+        for pointer in pointers:
+            if pointer.get("space") != "desktop":
+                continue
             point = self.point({"coordinateSpace": "desktop"}, pointer["x"], pointer["y"])
-            painter.setPen(QPen(QColor("#3de0cf"), 3))
+            if not 0 <= point.x() < self.width() or not 0 <= point.y() < self.height():
+                continue
+            label = str(pointer.get("label") or "").strip() or "Rabi"
+            painter.setPen(QPen(QColor(pointer.get("color") or "#3de0cf"), 3))
             painter.drawEllipse(point, 7, 7)
-            painter.drawText(point + QPointF(12, 0), "Rabi")
+            width = self.fontMetrics().horizontalAdvance(label) + 8
+            height = self.fontMetrics().height() + 4
+            x = min(max(0, point.x() + 12), max(0, self.width() - width))
+            y = min(max(0, point.y() - height / 2), max(0, self.height() - height))
+            rect = QRectF(x, y, width, height)
+            # Move only the label. A shared landing point retains its exact coordinates.
+            while any(rect.intersects(other) for other in labels):
+                rect.translate(0, -height if y > self.height() / 2 else height)
+            labels.append(rect)
+            painter.fillRect(rect, QColor(16, 23, 31, 215))
+            painter.drawText(rect.topLeft() + QPointF(4, 2 + self.fontMetrics().ascent()), label)
 
 
 def centered_bar_position(work_area: QRect, width: int, height: int, placement: str) -> QPoint:
@@ -191,12 +212,20 @@ class ControlBar(QWidget):
         text.setSpacing(0)
         text.addWidget(self.title_label)
         text.addWidget(self.subtitle_label)
-        layout = QHBoxLayout(self)
+        primary = QHBoxLayout()
+        primary.setSpacing(9)
+        primary.addWidget(self.avatar)
+        primary.addLayout(text, 1)
+        primary.addWidget(self.button)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 6, 9, 6)
-        layout.setSpacing(9)
-        layout.addWidget(self.avatar)
-        layout.addLayout(text, 1)
-        layout.addWidget(self.button)
+        layout.setSpacing(2)
+        layout.addLayout(primary)
+        self.secondary = QVBoxLayout()
+        self.secondary.setSpacing(2)
+        layout.addLayout(self.secondary)
+        self.secondary_content = []
+        self.secondary_controls = []
         self.apply_appearance(False)
 
     def apply_appearance(self, large: bool) -> None:
@@ -226,19 +255,78 @@ class ControlBar(QWidget):
         subtitle_font.setPixelSize(13 if large else 11)
         self.subtitle_label.setFont(subtitle_font)
         self.button.setFixedSize(36 if large else 28, 36 if large else 28)
-        self.setFixedHeight(58 if large else 46)
+        self.resize_secondary()
+        self.update_height()
         self.update()
 
+    def update_height(self):
+        primary = not self.title_label.isHidden()
+        rows = len(self.secondary_controls)
+        row_height = 36 if self.large_text else 28
+        self.setFixedHeight((58 if self.large_text else 46) + row_height * max(0, rows - (not primary)))
+
+    def set_secondary_activities(self, rows, stop):
+        if self.secondary_content == rows:
+            return
+        self.secondary_content = rows
+        for widget, _, _ in self.secondary_controls:
+            self.secondary.removeWidget(widget)
+            widget.hide()
+            widget.deleteLater()
+        self.secondary_controls = []
+        for activity in rows:
+            widget = QWidget(self)
+            layout = QHBoxLayout(widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            label = ElidedLabel(widget)
+            label.setObjectName("controlTitle")
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            name = activity.get("label") or "Rabi"
+            mode = activity.get("mode")
+            phase = activity.get("phase")
+            if mode == "observation":
+                text = f"{name} 截图未完成" if phase == "failed" else f"{name} 正在看你的屏幕"
+            elif mode == "gamepad":
+                text = f"{name} 正在操作手柄"
+            else:
+                target = activity.get("windowTitle") or "后台窗口"
+                text = f"{name} {'已发送输入' if phase == 'completed' else '正在操作'} · {target}"
+            label.setText(text)
+            label.setToolTip(text)
+            button = QPushButton("■", widget)
+            button.setObjectName("controlStop")
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setAccessibleName(f"停止 {name} 的操作")
+            button.setToolTip(button.accessibleName())
+            action = activity.get("stopAction")
+            button.setVisible(bool(action))
+            if action:
+                button.clicked.connect(lambda _checked=False, action=action: stop(action))
+            layout.addWidget(label, 1)
+            layout.addWidget(button)
+            self.secondary.addWidget(widget)
+            self.secondary_controls.append((widget, label, button))
+        self.resize_secondary()
+        self.update_height()
+
+    def resize_secondary(self):
+        size = 36 if self.large_text else 28
+        for widget, label, button in self.secondary_controls:
+            label.setFont(self.title_label.font())
+            widget.setFixedHeight(size)
+            button.setFixedSize(size, size)
+
     def preferred_width(self) -> int:
-        text_width = max(label.fontMetrics().horizontalAdvance(label.text())
-                         for label in (self.title_label, self.subtitle_label))
+        labels = (self.title_label, self.subtitle_label, *(label for _, label, _ in self.secondary_controls))
+        text_width = max(label.fontMetrics().horizontalAdvance(label.text()) for label in labels)
         return min(440 if self.large_text else 360, max(320 if self.large_text else 280, text_width + 88))
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         body = QRectF(self.rect()).adjusted(2, 2, -2, -3)
-        radius = body.height() / 2
+        radius = min(body.height() / 2, 24)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(0, 0, 0, 24))
         painter.drawRoundedRect(body.translated(0, 2), radius, radius)
@@ -253,12 +341,15 @@ class ControlBar(QWidget):
             self.title_label.setText(title)
         if self.subtitle_label.text() != subtitle:
             self.subtitle_label.setText(subtitle)
+        self.title_label.setVisible(bool(title))
+        self.avatar.setVisible(bool(title))
         self.subtitle_label.setVisible(bool(subtitle))
         self.button.setVisible(bool(action))
         self.button.setText("×" if action == "关闭提示" else "■")
         self.button.setAccessibleName(action)
         self.button.setToolTip(f"{action}\n{title}\n{subtitle}")
         self.setAccessibleName(title)
+        self.update_height()
 
     def nativeEvent(self, event_type, message):
         if os.name == "nt":
@@ -279,7 +370,9 @@ class ControlBar(QWidget):
                     if width > 0 and height > 0:
                         local = QPoint(round(point.x * self.width() / width),
                                        round(point.y * self.height() / height))
-                        if not self.button.isVisible() or not self.button.geometry().contains(local):
+                        buttons = (self.button, *(button for _, _, button in self.secondary_controls))
+                        if not any(button.isVisible() and QRect(button.mapTo(self, QPoint()), button.size()).contains(local)
+                                   for button in buttons):
                             return True, -1
         return super().nativeEvent(event_type, message)
 
@@ -378,18 +471,25 @@ class Presentation:
 
     def stop(self):
         action = self.state.get("stopAction")
-        if isinstance(action, dict) and action.get("action") in (
-                "input.cancel", "control.end", "annotation.track.stop"):
-            print(json.dumps({"event": "stop-operation", **action}), flush=True)
+        if isinstance(action, dict):
+            self.stop_operation(action)
         elif self.state.get("controlSessionId"):
             print(json.dumps({"event": "exit-control", "controlSessionId": self.state["controlSessionId"]}), flush=True)
         else:
             self.bar.hide()
 
+    def stop_operation(self, action):
+        if action.get("action") in ("input.cancel", "input.detached.cancel", "control.end", "annotation.track.stop"):
+            print(json.dumps({"event": "stop-operation", **action}), flush=True)
+
     def hide_completed_notice(self):
         if self._notice_key is not None:
             self._notice_expired = True
-            self.bar.hide()
+            if self.bar.secondary_controls:
+                self.bar.set_content("", "", "")
+                self.reposition()
+            else:
+                self.bar.hide()
 
     def update(self, state):
         snapshot = state.get("presentationTheme")
@@ -412,6 +512,11 @@ class Presentation:
         timed = phase in ("returned", "stopped") or (observing and phase != "capturing")
         notice_key = (state.get("requestId"), phase) if timed else None
         settings = state.get("presentationSettings") or {}
+        appearance_key = (self.resolved_theme, settings.get("textSize", "standard"))
+        if appearance_key != self._appearance_key:
+            self.bar.apply_appearance(settings.get("textSize") == "large")
+            self._appearance_key = appearance_key
+        self.bar.set_secondary_activities(state.get("activities") or [], self.stop_operation)
         if notice_key != self._notice_key:
             self._notice_timer.stop()
             self._notice_key = notice_key
@@ -455,10 +560,6 @@ class Presentation:
                 detail = f"{label} · 可展开查看画面与来源"
             elif phase == "returned":
                 detail = f"{label} · 本批次操作结束"
-            appearance_key = (self.resolved_theme, settings.get("textSize", "standard"))
-            if appearance_key != self._appearance_key:
-                self.bar.apply_appearance(settings.get("textSize") == "large")
-                self._appearance_key = appearance_key
             action_label = "停止本次操作" if state.get("stopAction") else "退出控制" if state.get("controlSessionId") else "关闭提示"
             if observing:
                 observer = state.get("observerLabel") or "Rabi"
@@ -466,6 +567,11 @@ class Presentation:
                 detail = display_id or ""
                 action_label = ""
             self.bar.set_content(title, detail, action_label)
+            self.reposition()
+            self.bar.show()
+            self.bar.ensure_native_visible()
+        elif self.bar.secondary_controls:
+            self.bar.set_content("", "", "")
             self.reposition()
             self.bar.show()
             self.bar.ensure_native_visible()

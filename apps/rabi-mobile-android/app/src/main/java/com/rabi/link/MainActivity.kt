@@ -1496,6 +1496,7 @@ class MainActivity : Activity() {
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_palette, "皮肤与外观", grouped = true) { RabiAppearanceActivity.open(this) },
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "记录与设备", grouped = true) { openAllDayRecording() },
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "位置记录", grouped = true) { startActivity(Intent(this, com.rabi.link.location.LocationSettingsActivity::class.java)) },
+            RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "共享手机屏幕", grouped = true) { startActivity(Intent(this, com.rabi.link.phonecontrol.PhoneScreenShareActivity::class.java)) },
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_account, "连接与电脑", serverCard(), grouped = true),
             RabiMobileUi.actionRow(this, R.drawable.ic_ui_devices, "文件操作", grouped = true) { showPhoneFileSettings() },
             RabiMobileUi.settingsGroup(this, R.drawable.ic_ui_volume, "语音与消息", conversationCard(), grouped = true),

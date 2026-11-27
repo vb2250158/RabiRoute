@@ -3,7 +3,7 @@ import test from 'node:test';
 import { instanceAgentActionDefinition, DEFAULT_COMPUTER_SETTINGS, COMPUTER_FEATURES, normalizeComputerSettings, patchComputerSettings, assertComputerActionEnabled, isComputerReadOnlyAction } from '../lib/computer-control-contract.mjs';
 import { computerRequestSchema, computerResponseSchema } from '../lib/interactive-protocol.mjs';
 
-test('computer defaults keep six public features enabled and dynamic annotation off', () => {
+test('computer defaults keep public features enabled and dynamic annotation off', () => {
  const value=normalizeComputerSettings(); assert.equal(value.enabled,true);
  assert.deepEqual(Object.keys(value.features),Object.keys(COMPUTER_FEATURES)); assert.ok(Object.values(value.features).every(Boolean));
  assert.equal(value.control.idleTimeoutSeconds,120); assert.equal(value.control.exitShortcut,'Ctrl+Alt+Esc'); assert.equal(value.annotation.dynamicEnabled,false);

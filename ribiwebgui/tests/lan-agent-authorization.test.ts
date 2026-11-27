@@ -8,6 +8,7 @@ import { ComputerControlClient } from "../../src/plugins/io.rabiroute.manager.co
 import { createComputerControlState } from "../../src/plugins/io.rabiroute.manager.core/web/computer/computerControlState";
 import { normalizeComputerSettings, computerSettingsSchema } from "../../src/shared/agentInteractiveProtocol";
 import { agentInstanceDisplayName } from "../../src/shared/agentInstance.js";
+import { useI18n } from "../src/i18n/index.js";
 
 const settingsSource = fs.readFileSync(new URL("../src/components/InstanceAgentSettings.vue", import.meta.url), "utf8");
 const pageSource = fs.readFileSync(new URL("../src/pages/LanAgentsPage.vue", import.meta.url), "utf8");
@@ -47,7 +48,7 @@ function page(responses: Reply[], deviceId = "") {
   const transport = requests(responses);
   const state = evaluate(pageSource, "instances, error, connectionToken, refresh, connectionAvailable", {
     ...transport, window: { location: { origin: "https://manager.test", hostname: "manager.test" } }, useGatewayStore: () => ({ gateways: [] }),
-    useRoute: () => ({ query: { deviceId } }), useRouter: () => ({ replace: () => {} })
+    useRoute: () => ({ query: { deviceId } }), useRouter: () => ({ replace: () => {} }), useI18n
   });
   state.connectionToken.value = "fixture-admin";
   return { state, ...transport };

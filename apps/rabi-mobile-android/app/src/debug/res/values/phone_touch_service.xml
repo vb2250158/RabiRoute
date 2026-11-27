@@ -1,0 +1,4 @@
+<resources>
+    <string name="phone_touch_service_label">RabiLink 手机触屏</string>
+    <string name="phone_touch_service_description">启用后，已授权的 Rabi 会话可在你共享屏幕时执行点按、长按、滑动和返回。触屏操作会显示操作会话和停止按钮。</string>
+</resources>

@@ -15,7 +15,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { appendDeviceLogs, deviceLogFacets, readDeviceLogs } from "./rabilink-device-log-store.mjs";
 import { RabiLinkEventHub } from "./rabilink-event-hub.mjs";
 import { RelayProxyRequestQueue } from "./rabilink-proxy-request-queue.mjs";
-import { createPhoneFilesRelay, phoneFilesCapability, phoneFilesPath } from "./rabilink-phone-files.mjs";
+import { createPhoneFilesRelay, phoneFilesCapability, phoneFilesPath, createPhoneLocationRelay, phoneLocationCapability, phoneLocationPath, createPhoneScreenRelay, phoneScreenCapability, phoneScreenPath, phoneInputCapability, phoneAppsCapability } from "./rabilink-phone-files.mjs";
 
 const port = Number(process.env.PORT || process.env.RABILINK_RELAY_PORT || 0);
 const host = process.env.HOST || process.env.RABILINK_RELAY_HOST || "0.0.0.0";
@@ -97,6 +97,13 @@ let outboxCursorGeneration = "";
 let outboxCursorHighWater = 0;
 const relayEventHub = new RabiLinkEventHub();
 const phoneFiles = createPhoneFilesRelay({ events: relayEventHub, sendJson, selectPhone, callerIsCurrent: phoneFilesCallerIsCurrent });
+const phoneLocation = createPhoneLocationRelay({ events: relayEventHub, sendJson, selectPhone, callerIsCurrent: phoneFilesCallerIsCurrent });
+const phoneScreen = createPhoneScreenRelay({ events: relayEventHub, sendJson, selectPhone, callerIsCurrent: phoneFilesCallerIsCurrent });
+const phoneRelayChannels = [
+  { path: phoneFilesPath, handler: phoneFiles, label: "Phone file", maxBytes: 256 * 1024 },
+  { path: phoneLocationPath, handler: phoneLocation, label: "Phone location", maxBytes: 16 * 1024 },
+  { path: phoneScreenPath, handler: phoneScreen, label: "Phone screen", maxBytes: 8 * 1024, resultMaxBytes: 6 * 1024 * 1024 },
+];
 const webguiEventHub = new RabiLinkEventHub();
 
 function scheduleLeaseAvailability(eventType, appId, targetDeviceId, leaseUntil, data = {}) {
@@ -3090,23 +3097,38 @@ function handleRelayEventStream(req, url, res, body = {}) {
   const deviceKind = stringValue(url.searchParams.get("deviceKind") || body?.deviceKind);
   const isPhone = !auth.pcCredential && !auth.deviceBinding && deviceKind === "phone"
     && /^rabi-phone-[a-z0-9]{1,89}$/.test(deviceId) && !deviceGuid;
-  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || (isPhone ? "Android 手机" : deviceId));
+  const deviceName = stringValue(url.searchParams.get("deviceName") || body?.deviceName || (isPhone ? "手机" : deviceId));
   const phoneSecret = req.headers["x-rabilink-phone-session"];
-  const closePhoneFiles = isPhone && typeof phoneSecret === "string" && /^[a-f0-9]{64}$/.test(phoneSecret)
-    ? phoneFiles.connect(appId, deviceId, sha256(auth.app.token), phoneSecret) : undefined;
-  const capabilities = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "")
-    .filter(capability => capability !== phoneFilesCapability && (capability !== "phone-file-control-v1" || closePhoneFiles));
+  const advertised = normalizeWorkerCapabilities(url.searchParams.get("capabilities") || body?.capabilities || "");
+  const canRegisterPhoneChannels = isPhone && typeof phoneSecret === "string" && /^[a-f0-9]{64}$/.test(phoneSecret);
+  const phoneTokenHash = canRegisterPhoneChannels ? sha256(auth.app.token) : "";
+  const legacyFilesCapability = "phone-file-control-v1";
+  const declaredPhoneChannels = url.searchParams.get("phoneChannels") === "declared";
+  // Older phones obtain the file channel from their session header, including when they advertise screen or location.
+  const supportsPhoneFiles = !declaredPhoneChannels || advertised.includes(phoneFilesCapability) || advertised.includes(legacyFilesCapability);
+  const closePhoneFiles = canRegisterPhoneChannels && supportsPhoneFiles
+    ? phoneFiles.connect(appId, deviceId, phoneTokenHash, phoneSecret) : undefined;
+  const closePhoneLocation = canRegisterPhoneChannels && advertised.includes(phoneLocationCapability)
+    ? phoneLocation.connect(appId, deviceId, phoneTokenHash, phoneSecret) : undefined;
+  const closePhoneScreen = canRegisterPhoneChannels && advertised.includes(phoneScreenCapability)
+    ? phoneScreen.connect(appId, deviceId, phoneTokenHash, phoneSecret) : undefined;
+  const capabilities = advertised.filter(capability => capability !== phoneFilesCapability &&
+    (capability !== legacyFilesCapability || closePhoneFiles) && (capability !== phoneLocationCapability || closePhoneLocation) &&
+    (![phoneScreenCapability, phoneInputCapability, phoneAppsCapability].includes(capability) || closePhoneScreen));
   if (closePhoneFiles) capabilities.push(phoneFilesCapability);
   const peerUrls = url.searchParams.has("peerUrls") ? normalizeWorkerPeerUrls(url.searchParams.get("peerUrls")) : null;
   if (deviceId || deviceGuid) {
     recordWorkerSeen(appId, deviceId || deviceName || deviceGuid, deviceName || deviceId || deviceGuid, deviceGuid, capabilities, peerUrls, deviceKind);
   }
+  if (canRegisterPhoneChannels && declaredPhoneChannels) res.setHeader("x-rabilink-phone-channels", "declared");
   const subscription = relayEventHub.subscribe(res, { appId, deviceId, deviceGuid, deviceKind });
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     closePhoneFiles?.();
+    closePhoneLocation?.();
+    closePhoneScreen?.();
     subscription.close();
     recordWorkerDisconnected(appId, deviceId, deviceGuid);
   };
@@ -5653,11 +5675,13 @@ const server = http.createServer(async (req, res) => {
     const webguiWorkerEvent = url.pathname === "/worker/webgui-events";
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
     const peerRpcProxy = url.pathname === "/api/rabilink/peer/proxy";
-    if (url.pathname === phoneFilesPath || url.pathname.startsWith(phoneFilesPath + "/")) {
+    const phoneChannel = phoneRelayChannels.find(channel => url.pathname === channel.path || url.pathname.startsWith(channel.path + "/"));
+    if (phoneChannel) {
       const auth = authorizeRabiLinkRequest(req, url, {});
       if (!auth.ok) return sendRabiLinkAuthError(res, auth);
-      const input = req.method === "POST" ? await readBody(req, { maxBytes: 256 * 1024, label: "Phone file" }) : {};
-      return await phoneFiles.handle(req, url, res, auth, input);
+      const maxBytes = url.pathname === `${phoneChannel.path}/result` ? phoneChannel.resultMaxBytes ?? phoneChannel.maxBytes : phoneChannel.maxBytes;
+      const input = req.method === "POST" ? await readBody(req, { maxBytes, label: phoneChannel.label }) : {};
+      return await phoneChannel.handler.handle(req, url, res, auth, input);
     }
     const body = req.method === "GET"
       ? {}

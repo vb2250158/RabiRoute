@@ -11,6 +11,14 @@ import type { RouteActivationFeedback } from "../src/routeActivationFeedback";
 Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
 const { useGatewayStore } = await import("../src/stores/gatewayStore");
 
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+}
+
 async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled: true }, { id: "b", configName: "b", enabled: true }]) {
   setActivePinia(createPinia());
   const store = useGatewayStore();
@@ -27,6 +35,8 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
   let generation = "test-generation";
   let revision = "a".repeat(64);
   let activation: RouteActivationFeedback | undefined;
+  let activationAfterRecovery: RouteActivationFeedback | undefined;
+  let resolvedActivationReads = 0;
   const committed = new Set<string>();
   const payload = () => ({ code: 0, data: { config: { gateways: rows }, manager: [] }, routeCatalog: { routeConfigHash: revision }, ...(activation ? { activation } : {}) });
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
@@ -36,7 +46,9 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
       recoveries++;
       if (recoveryUnavailable) throw new TypeError("recovery unavailable");
       const operationId = decodeURIComponent(url.split("/mutations/")[1]);
-      return Response.json({ ...payload(), receipt: { operationId, state: committed.has(operationId) ? "committed" : "not_committed" } });
+      const followUp = activationAfterRecovery;
+      if (followUp) resolvedActivationReads++;
+      return Response.json({ ...payload(), ...(followUp ? { activation: followUp } : {}), receipt: { operationId, state: committed.has(operationId) ? "committed" : "not_committed" } });
     }
     if (init?.method === "PUT") {
       writes++;
@@ -76,14 +88,16 @@ async function fixture(initialRows: any[] = [{ id: "a", configName: "a", enabled
     beforeCatalogReply(action: () => void) { beforeCatalogReply = action; },
     changeGeneration() { generation = "next-generation"; },
     changeRevision() { revision = "b".repeat(64); },
-    activation(value: RouteActivationFeedback) { activation = value; }
+    activation(value: RouteActivationFeedback) { activation = value; },
+    get resolvedActivationReads() { return resolvedActivationReads; },
+    activationAfterRecovery(value: RouteActivationFeedback) { activationAfterRecovery = value; }
   };
 }
 
 test("a committed save displays the native activation outcome and keeps the Route editable", async () => {
   for (const [state, message] of [
     ["applied", "当前路线已保存并生效"],
-    ["requested", "当前路线已保存，等待运行端生效"],
+    ["requested", "当前路线已保存"],
     ["rejected", "当前路线已保存，运行端未应用本次更新"],
     ["uncertain", "当前路线已保存，运行生效待确认"]
   ]) {
@@ -114,6 +128,42 @@ test("original-operation recovery preserves an uncertain native result without r
   assert.equal(f.recoveries, 1);
   assert.equal(f.store.saveState, "saved");
   assert.equal(f.store.saveMessage, "当前路线已保存，运行生效待确认");
+});
+
+test("a requested activation never shows a waiting hint and is followed to the real outcome", async () => {
+  const f = await fixture();
+  f.activation({ state: "requested" });
+  f.activationAfterRecovery({ state: "applied" });
+  f.store.gateways[0].name = "needs gateway restart";
+  await f.store.save("a");
+  assert.equal(f.store.saveState, "saved");
+  assert.equal(f.store.saveMessage, "当前路线已保存", "A pending restart must not surface as a wait");
+  assert.equal(f.store.activationFollowUp.length > 0, true);
+  await waitFor(() => f.store.saveMessage === "当前路线已保存并生效", 10_000);
+  assert.equal(f.store.saveMessage, "当前路线已保存并生效");
+  assert.equal(f.store.activationFollowUp, "");
+  assert.equal(f.writes, 1, "Following an activation never resubmits the write");
+  assert.ok(f.resolvedActivationReads >= 1, "The follow-up must read the original operation");
+});
+
+test("a requested activation that never confirms keeps only the saved wording", async () => {
+  const f = await fixture();
+  f.activation({ state: "requested" });
+  f.store.gateways[0].name = "never confirmed";
+  await f.store.save("a");
+  assert.equal(f.store.saveMessage, "当前路线已保存");
+  assert.equal(f.writes, 1);
+  assert.equal(f.rows[0].name, "never confirmed", "The saved value is already durable");
+});
+
+test("an applied activation is reported immediately without a follow-up read", async () => {
+  const f = await fixture();
+  f.activation({ state: "applied" });
+  f.store.gateways[0].name = "hot applied";
+  await f.store.save("a");
+  assert.equal(f.store.saveMessage, "当前路线已保存并生效");
+  assert.equal(f.store.activationFollowUp, "");
+  assert.equal(f.resolvedActivationReads, 0);
 });
 
 test("a successful changed endpoint with an unavailable sibling displays a partial-entry warning", async () => {

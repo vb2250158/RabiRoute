@@ -6,9 +6,22 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased
+## 0.15.101 - 2026-11-28
+
+- Windows device control supports foreground activation, background capture and input, gamepads, capture on change, and screen recording. Observation and input indicators show the session name and clear at the end of the corresponding activity.
+- Android adds direct screen viewing, touch input, one-shot location with optional Amap place names, and virtual displays on local or remote ADB bridges. Android 15 or later supports an independent controller when the system confirms the display association.
+- Connector SDK 0.4.17, Android slim client 0.3.76-dev (79), full variant 0.3.6 (9).
+- Plugin versions `io.rabiroute.agent.antigravity` 0.1.7, `io.rabiroute.agent.codex` 0.1.19, `io.rabiroute.agent.workbuddy` 0.1.17, `io.rabiroute.manager.core` 0.1.37, `io.rabiroute.manager.persona` 0.1.70, `io.rabiroute.manager.route-control` 0.1.12, `rabi-speech` 0.1.8.
+
+- Add a dedicated Windows screen recorder to remote control. Agents can select the device, windows and schedule. The target displays the initiator and a stop button. Computer screenshots and new screen images in the message timeline preserve native resolution. Remove the legacy standalone recording page and startup capture restoration.
+
+- The screenshot window now carries the RabiRoute brand icon, and “Send to” gains a three-stage Agent picker: choose the Agent, then the first row of its task list is “New session”, and picking it shows that Agent’s projects on the right so the session is created in that project with the screenshot as its first message. A new session has no ID yet, so an uncertain result only reports that the original delivery needs checking without resending.
+- A role target now shows the persona name and avatar instead of the Route name and a generic folder icon; the first character of the name stands in when no avatar can be read.
+- A new session's first message can now carry the screenshot: Codex and DSH use native image input, while WorkBuddy follows its existing convention of writing readable local image paths into the body for that session's Read tool. A missing image fails loudly instead of being dropped.
 
 - Core plugin `io.rabiroute.manager.core` 0.1.36 and Rabi Agent 0.4.16 add `screen.wait`. The target Windows computer waits for a change in the previous screenshot area and returns a new image when it changes. The user retains mouse and keyboard access while it waits.
+
+- RabiLink Recent tasks supports Simplified Chinese, English, and Japanese. Recognized task statuses and system messages in existing records follow the interface language.
 
 ## 0.15.100 - 2026-11-27
 
@@ -37,9 +50,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Show the actual session name in screenshot notices, clear them automatically and decode Qt input as UTF-8 while keeping observation separate from mouse and keyboard control.
 
 - RabiLink **Device control** no longer splits computers and phones behind two tabs: both share one list, and each row leads with a Windows, Mac, Linux, Android or iOS icon based on the reported system, keeping a generic computer or phone icon when nothing is reported. Search, type and online-state filters apply to both kinds, and a Home phone card now expands that phone's row directly.
-- Message history **Agent sessions** now reads per node instead of the selected role: this PC, RabiLink remote PCs and remote Agent instances are all selectable with the same session list, search, project grouping, pagination, history, sub-Agents and sending. Remote reads and writes go through the owning computer's Manager; an offline node or failed read keeps local content and the real error (io.rabiroute.manager.persona 0.1.53).
+- Message history **Agent sessions** now reads per node instead of the selected role: this PC, RabiLink remote PCs and remote Agent instances are all selectable with the same session list, search, project grouping, pagination, history, sub-Agents and sending. Remote reads and writes go through the owning computer's Manager; an offline node or failed read keeps local content and the real error (io.rabiroute.manager.persona 0.1.70).
 - The Agent session list now puts devices in a top bar, keeps collapsible projects with session counts and latest times, shows only a title and time per session, marks the selected row with a leading accent bar, and adds empty states, loading skeletons, clear-search and tighter row heights.
-- Remote persona reads now follow the real response for older PCs (io.rabiroute.manager.persona 0.1.53, io.rabiroute.manager.core 0.1.31): a source reachable through the account Relay is no longer marked "update required" just because its capability advert is old. The role list and source selector read first and report an upgrade only when the endpoint is genuinely missing (404/426).
+- Remote persona reads now follow the real response for older PCs (io.rabiroute.manager.persona 0.1.70, io.rabiroute.manager.core 0.1.31): a source reachable through the account Relay is no longer marked "update required" just because its capability advert is old. The role list and source selector read first and report an upgrade only when the endpoint is genuinely missing (404/426).
 - A structured Relay failure keeps its original `code` with one explanation line instead of a self-invented status table or a generic `Remote response unavailable.`
 - Reads require the source Manager to be `live` with `healthy` / `degraded` state; `requiredReady` only reports whether declared capabilities are present and no longer blocks the read.
 
@@ -159,7 +172,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ## 0.15.77 - 2026-11-24
 
 - Adopt the role list, underline tabs and role timeline; improve speech status refresh, page loading, HTML share thumbnails, connector icons, pet frame caching and screenshot target selection.
-- endpoint.rabilink 0.1.10; manager.core 0.1.18; manager.desktop 0.1.6; manager.html-shares 0.1.7; manager.message-adapter-control 0.1.12; manager.performance 0.1.11; manager.persona 0.1.41; manager.speech 0.1.14; manager.xiaomi-home 0.1.15.
+- endpoint.rabilink 0.1.10; manager.core 0.1.18; manager.desktop 0.1.6; manager.html-shares 0.1.7; manager.message-adapter-control 0.1.12; manager.performance 0.1.11; manager.persona 0.1.70; manager.speech 0.1.14; manager.xiaomi-home 0.1.15.
 
 - Roles displays unarchived roles from the selected PC, three cards per row on desktop. Linked routes show their message connectors as icons.
 
@@ -515,7 +528,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - `io.rabiroute.endpoint.napcat 0.1.12` validates quoted file messages through the current exact platform source, retains image-description review, and rechecks source bindings at every send boundary after asynchronous preparation.
 - `io.rabiroute.agent.codex 0.1.10` separates root chats and working child agents using native relationships, reads latest visible-message previews and retains exact child-session queries.
 - `io.rabiroute.agent.workbuddy 0.1.6` is formally adopted; a new original-task message and formal reply pass. Delivery now uses the exact-ID native reply entry, retaining native queue and permission handling and retiring generic runs sending/polling. HTTP 200 acknowledges admission or queueing only. Automatic authentication, queries and native history remain; old unknown receipts are unchanged and never automatically resent. Actual approvals, image reading, desktop live rendering, other-target integration and creation/initialization/task migration remain unverified.
-- `io.rabiroute.manager.persona 0.1.25` renders task lists before DSH and WorkBuddy previews, fills previews progressively with four bounded workers, cancels stale requests and continues preview reads when loading more fails.
+- `io.rabiroute.manager.persona 0.1.70` renders task lists before DSH and WorkBuddy previews, fills previews progressively with four bounded workers, cancels stale requests and continues preview reads when loading more fails.
 - Unify plugin operation/data-source discovery, expose role Skills and real handles, retain message continuations across appends, and bind catalog subscriptions before publication. Independently versioned plugins: `io.rabiroute.agent.device-agent 0.1.4`、`io.rabiroute.manager.agent-adapter-catalog 0.1.4`、`io.rabiroute.manager.agent-communication 0.1.7`、`io.rabiroute.manager.agent-state-control 0.1.4`、`io.rabiroute.manager.agent-thread-control 0.1.7`、`io.rabiroute.manager.core 0.1.10`、`io.rabiroute.manager.gateway-runtime 0.1.4`、`io.rabiroute.manager.performance 0.1.7`、`io.rabiroute.manager.rabilink-relay 0.1.4`、`io.rabiroute.manager.remote-agent 0.1.4`、`io.rabiroute.manager.speech 0.1.7`、`io.rabiroute.manager.video 0.2.4`、`io.rabiroute.manager.xiaomi-home 0.1.8`.
 
 
@@ -527,8 +540,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Read Host control requests before collecting caller metadata for mutations. Timeouts, access failures and invalid protocol responses report an unknown state while mutation authorization and auditing stay intact.
 - `io.rabiroute.agent.codex 0.1.9` filters internal Guardian approval children before pagination while retaining exact-ID reads.
-- `io.rabiroute.manager.persona 0.1.22` aligns channel actions with the tabs and adds collapsible project groups with a persistent flat-view preference.
-- `io.rabiroute.manager.persona 0.1.23` adds a fixed search form with results, source-status and request/response tabs, caller and scope selection, advanced JSON, detail and copy actions, cursor pagination, expandable text and retained results after failed searches.
+- `io.rabiroute.manager.persona 0.1.70` aligns channel actions with the tabs and adds collapsible project groups with a persistent flat-view preference.
+- `io.rabiroute.manager.persona 0.1.70` adds a fixed search form with results, source-status and request/response tabs, caller and scope selection, advanced JSON, detail and copy actions, cursor pagination, expandable text and retained results after failed searches.
 - `io.rabiroute.manager.performance 0.1.6`, `io.rabiroute.manager.video 0.2.3` and `io.rabiroute.manager.voice-assistant 1.1.12` share theme colors and measured page-header layout.
 
 
@@ -680,7 +693,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Advance io.rabiroute.manager.voice-assistant to 1.0.2 with owned English and Japanese translation registration and disposal. Complete translations for computer-control settings and new phone recording status messages.
 - Integrate upstream dynamic listener ports, the desktop voice assistant and recording-page changes. Explicit configured ports retain their values. New listeners without a configured port use system allocation and publish the actual address through their existing owner.
 - Windows Host advances a generation after the original Manager, Tray and Job have actually exited. Unconfirmed exits retain the original cleanup owner and request record. The Host version advances to 0.15.3.
-- Give changed existing packages distinct versions and synchronize the desktop profile. The affected versions are io.rabiroute.agent.astrbot 0.1.4, io.rabiroute.agent.dsh 0.1.6, io.rabiroute.endpoint.feishu 0.1.5, io.rabiroute.endpoint.napcat 0.1.9, io.rabiroute.endpoint.rabilink 0.1.5, io.rabiroute.manager.core 0.1.9, io.rabiroute.manager.diagnostics 0.1.7, io.rabiroute.manager.persona 0.1.15, io.rabiroute.manager.route-control 0.1.5 and io.rabiroute.manager.speech 0.1.5.
+- Give changed existing packages distinct versions and synchronize the desktop profile. The affected versions are io.rabiroute.agent.astrbot 0.1.4, io.rabiroute.agent.dsh 0.1.6, io.rabiroute.endpoint.feishu 0.1.5, io.rabiroute.endpoint.napcat 0.1.9, io.rabiroute.endpoint.rabilink 0.1.5, io.rabiroute.manager.core 0.1.9, io.rabiroute.manager.diagnostics 0.1.7, io.rabiroute.manager.persona 0.1.70, io.rabiroute.manager.route-control 0.1.5 and io.rabiroute.manager.speech 0.1.5.
 - Advance Host API to 1.15.0 and Plugin SDK to 1.4.0 for the added listener-access contracts and synchronize dependency metadata. Rabi Agent advances to 0.4.6 for the owner-lease and endpoint-session changes. Adoption by remote nodes is verified in their own normal maintenance windows.
 
 ## Unreleased
@@ -961,7 +974,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Independently advance `io.rabiroute.manager.performance` to 0.1.3 with an on-demand, approximately ten-second Manager CPU profile download. Historical recording and a debug listener are unnecessary; concurrent callers share one capture and retirement cancels and joins only its own Session.
 - Check original identity and receipt digest before recovering committed plan-feedback transactions, avoiding redundant write leases and heartbeat Workers. Pending transactions retain their original lease, recheck and local error handling.
 - Independently advance `io.rabiroute.manager.agent-communication` to 0.1.3 with precise upload-format fields. Received content inconsistent with length or digest points to the body while preserving original receipts, HTTP status and frozen content.
-- Advance Host API to 1.6.0 for the optional public upload-error field. SDK 1.1.1, persona 0.1.6 and other plugins remain unchanged. Other deep API error classification continues in the original task.
+- Advance Host API to 1.6.0 for the optional public upload-error field. SDK 1.1.1, persona 0.1.70 and other plugins remain unchanged. Other deep API error classification continues in the original task.
 
 ## 0.10.1 - 2026-11-07
 

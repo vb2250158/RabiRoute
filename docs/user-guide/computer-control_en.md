@@ -12,11 +12,22 @@ The complete feature ships with 0.13.0 and updated Windows executors. Older node
 
 ## Choose features
 
-Each computer has a master switch and six switches: terminal commands, files, windows/capture, Agent tasks, mouse/keyboard, and annotations. Missing settings default to enabled. Disabling a feature stops new work through that entry while retaining original status and cleanup. A terminal or Agent can independently operate files or input; these switches describe their own entry points.
+Each computer has a master switch and separate switches for the desktop, individual window actions, and the player controller. Terminal commands, files, and Agent tasks have their own settings. Missing settings default to enabled. Status and cleanup remain available for previously accepted work. Update the executor on an older node to use capabilities it does not yet advertise.
 
 Settings save to the target's existing configuration owner. The UI distinguishes storage confirmation from executor application. If application remains unconfirmed, inspect original work status without repeating the settings write.
 
 ## Input and observation
+
+| Target | Operation | API |
+| --- | --- | --- |
+| The computer's desktop | Discover windows and displays, capture or wait for changes | `windows.list`, `displays.list`, `screen.capture`, `screen.wait` |
+| The computer's desktop | Shared foreground keyboard and mouse, independent screen annotations | `input.perform`, `control.*`, `annotation.*` |
+| A selected window | Restore and request foreground focus, attempt a background capture, or post input | `windows.activate`, `screen.capture.background`, `input.background` |
+| An independent input device | Xbox-compatible controller that can run alongside physical keyboard and mouse input | `input.gamepad`, `input.gamepad.status`, `input.gamepad.close` |
+
+Use the window handle and PID returned by `windows.list`. Background input takes receiver client-area coordinates and can address a child control in the same window. The app and Windows decide whether a minimized window processes messages or provides an image. A `posted` receipt confirms message delivery to the queue. Observe the app to confirm the effect. Foreground activation reports `foreground` or `denied`.
+
+Foreground input arbitrates mouse and keyboard separately. People and Agents can use different channels, with physical input taking priority during a conflict on the same channel. The application still decides which player receives its desktop input. The controller requires ViGEmBus on the Windows target. Assign it to the appropriate player in the game. It returns to neutral after each batch and can be disconnected explicitly.
 
 1. Select a computer and read its windows or capture a frame.
 2. Choose “Begin manual control”, or let an Agent call `control.begin`.

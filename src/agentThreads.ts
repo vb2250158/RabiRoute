@@ -70,6 +70,7 @@ const renameDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute
 const resolveDshSession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["resolveDshSession"]>("dsh","resolveDshSession");
 const sendDshSessionMessage=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.dsh/src/dshSessionBridge.js")["sendDshSessionMessage"]>("dsh","sendDshSessionMessage");
 const readAntigravitySession=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.js")["readAntigravitySession"]>("antigravity","readAntigravitySession");
+const listAntigravitySessions=agentNativeFunction<typeof import("./plugins/io.rabiroute.agent.antigravity/src/antigravitySessionStore.js")["listAntigravitySessions"]>("antigravity","listAntigravitySessions");
 
 const maxThreadIdLength = 512;
 const maxQueryLength = 240;
@@ -138,7 +139,8 @@ export type AgentThreadSummary = {
   archived?: boolean;
 };
 
-export type AgentInitialThreadCreationInput = { intentId: string; title: string; workspace: string; prompt: string };
+/** Local images referenced by the first message when an owner's composer accepts text only. */
+export type AgentInitialThreadCreationInput = { intentId: string; title: string; workspace: string; prompt: string; imagePaths?: string[] };
 
 export type AgentInitialThreadCreationResult =
   | { state: "created"; intentId: string; thread: AgentThreadSummary & { cwd: string }; sequence?: number }
@@ -169,6 +171,8 @@ export type AgentThreadDriver = {
     cwd: string;
     developerInstructions: string;
     sandbox: CodexTurnSandbox;
+    /** Screenshot and other image attachments delivered with the first message. */
+    imagePaths?: string[];
     onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void;
   }) => Promise<CodexThreadCreateResult>;
   rename?: (params: { threadId: string; title: string; cwd: string }) => Promise<AgentThreadSummary>;
@@ -579,6 +583,21 @@ async function listThreadsForAdapter(
       allowedWorkspaces
     });
   }
+  if (adapter === "antigravity" && driver === defaultDriver) {
+    // Without this branch Antigravity falls through to the Codex lister, which returns Codex
+    // ids that Antigravity's own reader then cannot find. The index below is the real source.
+    const page = await listAntigravitySessions({ limit, offset, query });
+    const workspaceKeys = new Set(allowedWorkspaces.map((workspace: string) => canonicalWorkspace(workspace)));
+    return page.sessions
+      .filter((session: { workspaceUris: string[] }) => workspaceKeys.size === 0 || session.workspaceUris.some((uri: string) => workspaceKeys.has(canonicalWorkspace(uri))))
+      .map((session: { id: string; title: string; updatedAt?: string; workspaceUris: string[] }) => ({
+        id: session.id,
+        title: session.title,
+        ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+        ...(session.workspaceUris[0] ? { cwd: session.workspaceUris[0] } : {}),
+        archived: false
+      }));
+  }
   if (driver === defaultDriver && scopedAgentManagerCapabilities(adapter).sessionOperations) {
     return invokeScopedAgentManagerOperation(adapter, "threads.list", { query, limit, offset, allowedWorkspaces }, {
       assertCurrent: options.requestAuthority, signal: options.requestSignal
@@ -780,6 +799,8 @@ async function createThread(
       )
     : "";
   const sandbox = normalizeSandbox(request.sandbox);
+  // A screenshot-delivered task carries its image on the very first message.
+  const imagePaths = imagePathsForDelivery(request.imagePaths);
   const createParams: Parameters<AgentThreadDriver["create"]>[0] = {
     title,
     prompt,
@@ -793,7 +814,8 @@ async function createThread(
       ...commonWorkspaceDeliveryPolicyLines,
       "多步任务开始后要让当前任务中的人看得出你准备做什么；取得阶段结果、遇到风险或进入等待时主动更新，不要等别人追问。"
     ].join("\n"),
-    sandbox
+    sandbox,
+    ...(imagePaths.length ? { imagePaths } : {})
   };
   if (onCreationStage) createParams.onCreationStage = onCreationStage;
   return driver.create(createParams);
@@ -1253,9 +1275,11 @@ async function executeAgentThreadRequest(
         contextBlocks: deliveryBlocks(request.contextBlocks, "contextBlocks"),
         controlBlocks: deliveryBlocks(request.controlBlocks, "controlBlocks") });
       options.assertNewAgentTask?.();
+      // Its composer inserts text only, so the owner receives local image references in the body.
       const input: AgentInitialThreadCreationInput = { intentId, title, workspace: cwd, prompt };
+      const creationImages = imagePathsForDelivery(request.imagePaths);
       const result = await invokeScopedAgentManagerOperation<AgentInitialThreadCreationResult>(
-        agentAdapter, "threads.create", input,
+        agentAdapter, "threads.create", creationImages.length ? { ...input, imagePaths: creationImages } : input,
         { assertCurrent: options.requestAuthority, signal: options.requestSignal }
       );
       if (result.intentId !== intentId || (result.state === "created" && normalizePathForComparison(result.thread.cwd) !== normalizePathForComparison(cwd))) {

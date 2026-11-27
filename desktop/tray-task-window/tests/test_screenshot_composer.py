@@ -11,8 +11,8 @@ from types import SimpleNamespace
 from pathlib import Path
 from threading import Event
 from unittest.mock import patch
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QCursor, QInputMethodEvent
+from PySide6.QtCore import QBuffer, QObject, Qt, Signal
+from PySide6.QtGui import QCursor, QInputMethodEvent, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialogButtonBox
 
@@ -69,6 +69,9 @@ class FakeManager:
         self.queries.append((provider, query, offset))
         return {"code": 0, "threads": [{"id": f"{provider}-full-id-{offset}", "title": "同名对话", "cwd": f"C:/{provider}"}],
                 "nextOffset": 100 if offset == 0 else None}
+
+    def screenshot_projects(self, provider):
+        return [f"C:/{provider}/one", f"C:/{provider}/two"]
 
     def screenshot_asr_model(self):
         if self.voice_error:
@@ -133,28 +136,29 @@ class ScreenshotComposerTest(unittest.TestCase):
         self.wait_for(lambda: ("codex", "", 0) in self.manager.queries)
         self.assertIsNone(c.delivery_selection)
         QTest.mouseMove(channels.viewport(), channels.visualItemRect(channels.item(1)).center())
-        self.wait_for(lambda: threads.count() == 2 and ("workbuddy", "", 0) in self.manager.queries)
+        self.wait_for(lambda: threads.count() == 3 and ("workbuddy", "", 0) in self.manager.queries)
         QTest.mouseMove(threads.viewport(), threads.visualItemRect(threads.item(1)).center())
         self.assertTrue(picker._panel.isVisible())
         self.click_item(threads, 1)
-        self.wait_for(lambda: threads.count() == 2 and isinstance(threads.item(1).data(Qt.ItemDataRole.UserRole), dict))
+        self.wait_for(lambda: threads.count() == 3 and isinstance(threads.item(1).data(Qt.ItemDataRole.UserRole), dict))
         self.click_item(threads, 1)
         self.assertFalse(picker._panel.isVisible())
+        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-0")
         c._text.setPlainText("请检查")
         c._send()
-        self.assertEqual(emitted, [("agent:workbuddy:workbuddy-full-id-100", "请检查")])
-        self.wait_for(lambda: (self.manager.preferences.get("lastTarget") or {}).get("threadId") == "workbuddy-full-id-100")
+        self.assertEqual(emitted, [("agent:workbuddy:workbuddy-full-id-0", "请检查")])
+        self.wait_for(lambda: (self.manager.preferences.get("lastTarget") or {}).get("threadId") == "workbuddy-full-id-0")
         c.close()
         c = self.open()
         self.wait_for(lambda: c.delivery_selection is not None)
-        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-100")
+        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-0")
         self.assertEqual(c.delivery_selection["provider"], "workbuddy")
         QTest.mouseClick(c._target, Qt.MouseButton.LeftButton)
         QTest.keyClicks(c._target, "old")
         self.wait_for(lambda: ("workbuddy", "old", 0) in self.manager.queries)
         QTest.keyClick(c._target, Qt.Key.Key_Escape)
         self.assertFalse(c._target._panel.isVisible())
-        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-100")
+        self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-0")
 
     def test_focus_search_and_keyboard_confirm_without_sending(self):
         c = self.open()
@@ -163,11 +167,14 @@ class ScreenshotComposerTest(unittest.TestCase):
         c.send_requested.connect(lambda *args: emitted.append(args))
         QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
         QTest.keyClicks(picker, "C:/workbuddy")
-        self.wait_for(lambda: picker._threads.count() == 2)
+        self.wait_for(lambda: picker._threads.count() == 3)
         self.assertEqual(self.manager.queries, [("workbuddy", "C:/workbuddy", 0)])
         QTest.keyClick(picker, Qt.Key.Key_Return)
         self.assertIsNone(c.delivery_selection)
+        # Down lands on 新建会话 first; a second Down reaches the real task below it.
         QTest.keyClick(picker, Qt.Key.Key_Down)
+        self.assertEqual(picker._threads.currentRow(), 0)
+        QTest.keyClick(picker._threads, Qt.Key.Key_Down)
         QTest.keyClick(picker._threads, Qt.Key.Key_Return)
         self.assertEqual(c.delivery_selection["threadId"], "workbuddy-full-id-0")
         self.assertEqual(emitted, [])
@@ -190,13 +197,13 @@ class ScreenshotComposerTest(unittest.TestCase):
             self.wait_for(started.is_set)
             channels = picker._channels
             QTest.mouseMove(channels.viewport(), channels.visualItemRect(channels.item(1)).center())
-            self.wait_for(lambda: picker._threads.count() == 2)
+            self.wait_for(lambda: picker._threads.count() == 3)
             self.assertIn(("codex", "history", 0), self.manager.queries)
         finally:
             release.set()
         self.wait_for(replied.is_set)
         QTest.qWait(40)
-        self.click_item(picker._threads, 0)
+        self.click_item(picker._threads, 1)
         self.assertEqual(picker.selection["threadId"], "codex-full-id-0")
 
     def test_input_method_text_filters_roles_and_selects_a_role(self):
@@ -238,6 +245,63 @@ class ScreenshotComposerTest(unittest.TestCase):
         self.assertFalse(c._voice.active)
         c._voice.text_ready.emit(c._voice.revision, "关闭后")
         self.assertEqual(c._text.toPlainText(), "语音文字")
+
+    def test_role_target_shows_the_persona_avatar_instead_of_a_folder(self):
+        png = QPixmap(24, 24)
+        png.fill(Qt.GlobalColor.magenta)
+        buffer = QBuffer()
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        png.save(buffer, "PNG")
+
+        class AvatarManager(FakeManager):
+            def role_avatar(self, role_id):
+                return bytes(buffer.data())
+
+        buffered = AvatarManager()
+        with patch("rabiroute_tray.screenshot_composer.ScreenshotVoiceInput", FakeVoice):
+            composer = ScreenshotComposer(Path("missing.png"), [SelectionDeliveryTarget("role-route", "星海建造师", "XinghaI")],
+                                          manager=buffered)
+            composer.show()
+            self.wait_for(lambda: composer._preferences_loaded)
+            picker = composer._target
+            QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+            item = picker._channels.item(0)
+            self.assertEqual(item.text(), "星海建造师")
+            self.assertFalse(item.icon().isNull())
+            self.wait_for(lambda: bool(picker._avatars.get("XinghaI")))
+            self.assertFalse(picker._channels.item(0).icon().isNull())
+            composer.close()
+
+    def test_every_agent_end_offers_a_new_session_that_carries_the_image(self):
+        c = self.open()
+        picker = c._target
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        for row in (1, 2, 3):
+            QTest.mouseMove(picker._channels.viewport(), picker._channels.visualItemRect(picker._channels.item(row)).center())
+            self.wait_for(lambda: picker._threads.count() == 3)
+            self.assertEqual(picker._threads.item(0).data(Qt.ItemDataRole.UserRole), "__new_session__",
+                             f"row {row} ({picker._provider}) must offer 新建会话")
+
+    def test_new_session_stage_selects_agent_and_project_without_touching_an_existing_task(self):
+        c = self.open()
+        picker = c._target
+        emitted = []
+        c.send_requested.connect(lambda key, text: emitted.append((key, text)))
+        QTest.mouseClick(picker, Qt.MouseButton.LeftButton)
+        QTest.mouseMove(picker._channels.viewport(), picker._channels.visualItemRect(picker._channels.item(2)).center())
+        self.wait_for(lambda: picker._threads.count() == 3)
+        self.click_item(picker._threads, 0)
+        self.wait_for(lambda: picker._projects_view.count() == 2)
+        self.assertTrue(picker._projects_view.isVisible())
+        self.assertEqual(picker._projects_view.item(0).text(), "one · C:/codex/one")
+        self.assertIsNone(c.delivery_selection)
+        self.click_item(picker._projects_view, 1)
+        self.assertFalse(picker._panel.isVisible())
+        self.assertEqual(c.delivery_selection, {"kind": "new", "provider": "codex", "cwd": "C:/codex/two"})
+        self.assertEqual(picker.text(), "Codex · 新建会话 · two")
+        c._text.setPlainText("看图")
+        c._send()
+        self.assertEqual(emitted, [("agent:codex:", "看图")])
 
     def test_uncertain_delivery_only_reconciles_original_intent(self):
         c = self.open()

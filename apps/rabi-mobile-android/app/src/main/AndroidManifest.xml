@@ -42,6 +42,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -72,6 +73,8 @@
         <activity android:name=".assistant.MobileAssistantActivity" android:exported="false" />
         <activity android:name=".recording.RabiRecordingHubActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".location.LocationSettingsActivity" android:exported="false" />
+        <activity android:name=".phonecontrol.PhoneScreenShareActivity" android:exported="false" />
+        <service android:name=".phonecontrol.PhoneScreenShareService" android:exported="false" android:foregroundServiceType="mediaProjection" />
         <service android:name="com.amap.api.location.APSService" android:exported="false" />
         <activity android:name=".modules.rokid.RabiLiveRecordingActivity" android:exported="false" />
         <activity android:name=".modules.rokid.RokidBlePingActivity" android:exported="false" />

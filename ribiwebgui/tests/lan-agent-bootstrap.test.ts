@@ -5,11 +5,12 @@ import vm from "node:vm";
 import ts from "typescript";
 import { buildLanAgentBootstrapPrompt } from "../src/lanAgentBootstrap";
 import { peerManagerPath } from "../src/peerManagerTarget";
+import { useI18n } from "../src/i18n/index";
 
 const pageBindings = {
   computed: (read: () => unknown) => ({ get value() { return read(); } }),
   watch: () => {}, onBeforeUnmount: () => {},
-  useRoute: () => ({ query: {} }), useRouter: () => ({ replace: () => {} }), peerManagerPath
+  useRoute: () => ({ query: {} }), useRouter: () => ({ replace: () => {} }), peerManagerPath, useI18n
 };
 
 test("a known Manager selects a distinct node directory while retaining its existing enrollment", () => {

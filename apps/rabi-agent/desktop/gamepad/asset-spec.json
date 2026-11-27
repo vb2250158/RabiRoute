@@ -1,0 +1,10 @@
+{
+  "archive": "https://api.nuget.org/v3-flatcontainer/nefarius.vigem.client/1.21.256/nefarius.vigem.client.1.21.256.nupkg",
+  "archiveSha256": "ff460031b33e0882cd1166fe2d072d0fe97578480c61ed85dccfa6c930fdb55e",
+  "assembly": "lib/netstandard2.0/Nefarius.ViGEm.Client.dll",
+  "files": [
+    {"name":"ViGEmClient-x86.dll","resource":"costura32.vigemclient.dll","sha256":"5115f9a8b913b110d531a494387c6c7ed908dafff75995f1ed33bd892602753f"},
+    {"name":"ViGEmClient-x64.dll","resource":"costura64.vigemclient.dll","sha256":"00303f99e1968d523fbd08a7c691d60d145b7335059ec593947841d124c10875"}
+  ],
+  "notice": "THIRD-PARTY-NOTICES.ViGEmClient.txt"
+}

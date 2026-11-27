@@ -82,10 +82,13 @@ export class NativeComputerClient extends EventEmitter {
   async request(action, body = {}, options = {}) {
     if (this.stopping) throw new Error("Computer native owner is stopping.");
     const waitingForScreen = action === "screen.wait";
-    const observation = action === "screen.capture" || waitingForScreen;
+    const observation = action === "screen.capture" || action === "screen.capture.background" || waitingForScreen;
+    const detachedInput = action === "input.background" || action === "input.gamepad";
+    const detached = detachedInput || action === "windows.activate";
+    const usesWindowInput = detached || action.startsWith("input.gamepad.") || action === "screen.capture.background" || action === "windows.list" && body.parent !== undefined;
     options.signal?.throwIfAborted();
     if (this.presentationIssue && ["annotation.show", "annotation.update", "annotation.track.start"].includes(action)) throw Object.assign(new Error(this.presentationIssue.message), { code: "COMPUTER_ANNOTATION_UNAVAILABLE", field: "qtPackageRef" });
-    if (this.qt && !this.presentationIssue && (action === "control.begin" || observation || ["annotation.show", "annotation.update", "annotation.track.start"].includes(action))) {
+    if (this.qt && !this.presentationIssue && (action === "control.begin" || observation || detachedInput || ["annotation.show", "annotation.update", "annotation.track.start"].includes(action))) {
       try { await this.qt.start(); this.qtAvailable = true; }
       catch (cause) {
         this.qtAvailable = false;
@@ -99,6 +102,16 @@ export class NativeComputerClient extends EventEmitter {
     const scopedCapture = action === "screen.capture" && (body.captureSpec || [body, body.source].some(value => value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined));
     const batch = action === "input.execute" && Array.isArray(body.actions);
     const sharedControl = action === "control.begin" && body.inputMode === "shared";
+    if (usesWindowInput && (await this.readNativeCapabilities()).windowInputVersion !== 1) {
+      throw Object.assign(new Error("Select an updated Windows desktop resource for this action."), {
+        code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "windowInputVersion"
+      });
+    }
+    if (action === "screen.capture.background" && body.receiverWindowId !== undefined && (await this.readNativeCapabilities()).windowClientPreviewVersion !== 1) {
+      throw Object.assign(new Error("Select an updated Windows desktop resource to map a child receiver in the window preview."), {
+        code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "windowClientPreviewVersion"
+      });
+    }
     if (waitingForScreen && (await this.readNativeCapabilities()).screenWaitVersion !== 1) {
       throw Object.assign(new Error("The selected native desktop worker does not support waiting for a screen change."), {
         code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "screenWaitVersion"
@@ -121,7 +134,12 @@ export class NativeComputerClient extends EventEmitter {
     options.signal?.throwIfAborted();
     this.start(); const id = randomUUID();
     const timeoutMs = this.timeout("agent.computer.process", 30000);
-    body = { ...body, ...(action === "input.execute" ? { deadlineUtcMs: Date.now() + timeoutMs } : {}), renderer: this.qt ? "qt" : "native", controlRenderer: this.qtAvailable ? "qt" : "native" };
+    const renderer = this.qtAvailable ? "qt" : "native";
+    body = { ...body, ...(action === "input.execute" || detached ? { deadlineUtcMs: Date.now() + timeoutMs } : {}), renderer, controlRenderer: renderer };
+    const cancelDetached = () => {
+      if (!this.child || this.stopping) return;
+      void this.request("input.detached.cancel", { requestId: body.requestId }).catch(error => this.emit("diagnostic", { code: error.code, message: error.message }));
+    };
     const cancelScreenWait = () => {
       if (!this.child || this.stopping) return;
       void this.request("screen.wait.cancel", { captureId: id }).catch(error => this.emit("diagnostic", { code: error.code, message: error.message }));
@@ -135,6 +153,7 @@ export class NativeComputerClient extends EventEmitter {
           void this.request("input.cancel", { requestId: body.requestId, controlSessionId: body.controlSessionId, reason: "deadline" })
             .catch(error => this.emit("diagnostic", { code: error.code, message: error.message }));
         }
+        if (detached) cancelDetached();
         if (waitingForScreen) {
           cancelScreenWait();
           reject(Object.assign(new Error("Waiting for a screen change timed out."), { code: "COMPUTER_SCREEN_WAIT_TIMEOUT" }));
@@ -144,14 +163,18 @@ export class NativeComputerClient extends EventEmitter {
       }, timeoutMs);
       this.pending.set(id, { action, resolve, reject, timer });
       if (waitingForScreen) options.signal?.addEventListener("abort", cancelScreenWait, { once: true });
+      if (detached) options.signal?.addEventListener("abort", cancelDetached, { once: true });
       this.child.stdin.write(JSON.stringify({ ...body, id, action }) + "\n", error => {
         if (!error || !this.pending.delete(id)) return;
         clearTimeout(timer); reject(Object.assign(error, { code: "COMPUTER_RESULT_UNCERTAIN", uncertain: true }));
       });
     });
-    if (!waitingForScreen) return result;
+    if (!waitingForScreen && !detached) return result;
     try { return await result; }
-    finally { options.signal?.removeEventListener("abort", cancelScreenWait); }
+    finally {
+      if (waitingForScreen) options.signal?.removeEventListener("abort", cancelScreenWait);
+      if (detached) options.signal?.removeEventListener("abort", cancelDetached);
+    }
   }
   readNativeCapabilities() {
     if (!this.nativeCapabilities) {
@@ -164,6 +187,7 @@ export class NativeComputerClient extends EventEmitter {
   stopOperation(operation = {}) {
     const fields = {
       "input.cancel": ["requestId", "controlSessionId"],
+      "input.detached.cancel": ["requestId"],
       "control.end": ["controlSessionId"],
       "annotation.track.stop": ["trackingId"]
     }[operation.action];

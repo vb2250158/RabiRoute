@@ -10,6 +10,7 @@ Start with the user guide for everyday operation, use the API reference for inte
 
 - [Computer control](user-guide/computer-control_en.md): flat computer directory, visible feature settings, input, capture and static/dynamic annotations.
 - [Visual computer operation](computer-control-visual-workflow_en.md) covers display and region capture, image delivery, batch return and operation feedback.
+- [Phone control and location access proposal](mobile-device-control_en.md) covers the shared API, Android and iPhone executors, and the existing Amap integration.
 
 - [Host and plugin boundaries](host-plugin-boundaries_en.md)
 - [Workbench canvases](workbench-canvas_en.md): independent folders, copying, graph execution and migration boundaries.

@@ -71,6 +71,72 @@ class ComputerControlOverlayTest(unittest.TestCase):
             surface.close()
         presentation.bar.close()
 
+    def test_pointer_paints_the_current_session_name_and_clears_with_its_control(self):
+        surface = DrawingSurface(self.app.primaryScreen())
+        self.addCleanup(surface.close)
+        surface.physical = (0, 0, 320, 240)
+        surface.state = {"controlSessionId": "fixture", "pointer": {"x": 90, "y": 60},
+                         "source": {"label": "设备操作 · 测试会话"}}
+        with patch("rabiroute_tray.computer_control_overlay.QPainter") as painter:
+            surface.paintEvent(None)
+            self.assertEqual(painter.return_value.drawText.call_args.args[-1], "设备操作 · 测试会话")
+            painter.return_value.drawText.reset_mock()
+            surface.state.pop("controlSessionId")
+            surface.paintEvent(None)
+            painter.return_value.drawText.assert_not_called()
+
+    def test_concurrent_pointers_keep_both_landing_points_and_offset_the_labels(self):
+        surface = DrawingSurface(self.app.primaryScreen())
+        self.addCleanup(surface.close)
+        surface.physical = (0, 0, 320, 240)
+        surface.resize(320, 240)
+        pointers = [
+            {"id": "first", "label": "前台会话", "space": "desktop", "x": 90, "y": 60, "color": "#3de0cf"},
+            {"id": "second", "label": "后台会话", "space": "desktop", "x": 90, "y": 60, "color": "#b6a0ff"},
+            {"id": "third", "label": "最小化窗口", "space": "window-client", "x": 90, "y": 60},
+        ]
+        with patch("rabiroute_tray.computer_control_overlay.QPainter") as factory:
+            painter = factory.return_value
+            surface.state = {"pointers": pointers}
+            surface.paintEvent(None)
+            points = [call.args[0] for call in painter.drawEllipse.call_args_list]
+            self.assertEqual(points, [QPointF(90, 60), QPointF(90, 60)])
+            labels = [call.args for call in painter.drawText.call_args_list]
+            self.assertEqual([label for _, label in labels], ["前台会话", "后台会话"])
+            self.assertNotEqual(labels[0][0], labels[1][0])
+            painter.reset_mock()
+            surface.state = {"pointers": pointers[1:]}
+            surface.paintEvent(None)
+            self.assertEqual(painter.drawText.call_args.args[-1], "后台会话")
+
+    def test_control_and_observation_keep_independent_rows_and_only_control_can_stop(self):
+        presentation = Presentation(self.app)
+        for surface in presentation.surfaces:
+            self.addCleanup(surface.close)
+        self.addCleanup(presentation.bar.close)
+        viewing = {"id": "observe", "mode": "observation", "phase": "capturing", "label": "看图会话"}
+        background = {"id": "background", "mode": "background", "phase": "operating", "label": "后台会话",
+                      "windowTitle": "测试窗口", "stopAction": {"action": "input.detached.cancel", "requestId": "background"}}
+        with patch("builtins.print") as output:
+            presentation.update({"revision": 1, "phase": "operating", "controlSessionId": "foreground",
+                                 "source": {"label": "前台会话"}, "activities": [background, viewing]})
+            controls = presentation.bar.secondary_controls
+            self.assertIn("前台会话", presentation.bar.subtitle_label.text())
+            self.assertIn("后台会话 正在操作", controls[0][1].text())
+            self.assertTrue(controls[0][2].isVisible())
+            self.assertEqual(controls[1][1].text(), "看图会话 正在看你的屏幕")
+            self.assertFalse(controls[1][2].isVisible())
+            controls[0][2].click()
+            self.assertIn('"requestId": "background"', output.call_args.args[0])
+            presentation.update({"revision": 2, "phase": "stopped", "activities": [viewing]})
+            presentation.hide_completed_notice()
+            self.assertTrue(presentation.bar.isVisible())
+            self.assertTrue(presentation.bar.title_label.isHidden())
+            self.assertEqual(presentation.bar.secondary_controls[0][1].text(), "看图会话 正在看你的屏幕")
+            presentation.update({"revision": 3, "activities": []})
+            self.assertFalse(presentation.bar.isVisible())
+            QTest.qWait(1)
+
     def test_centered_bar_respects_negative_screen_and_bottom_work_area(self):
         area = QRect(-1600, 100, 1600, 900)
         top = centered_bar_position(area, 480, 64, "top-center")

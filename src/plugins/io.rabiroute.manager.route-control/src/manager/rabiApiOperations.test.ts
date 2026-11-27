@@ -63,14 +63,15 @@ async function fixture(t: test.TestContext) {
   return { root, globalConfig, definitions, registry, registration, request, holdSync, authority, credential, context, routeHash };
 }
 
-test("all 19 control operations use one executable catalog and an enrolled empty node reads native identity/configuration", async t => {
+test("control operations use one executable catalog and an enrolled empty node reads native identity/configuration", async t => {
   const f = await fixture(t);
-  assert.equal(f.definitions.length, 19);
+  assert.equal(f.definitions.length, 20);
   assert.ok(f.definitions.every(value => value.contract.exposure === "public"));
   for (const [id, method, path] of [
     ["manager.route-control.link-home.device.read", "GET", "/api/rabi/link-home/devices/:deviceId"],
     ["manager.route-control.link-home.device.labels.update", "PATCH", "/api/rabi/link-home/devices/:deviceId/labels"],
-    ["manager.route-control.link-home.device.phone-files.execute", "POST", "/api/rabi/link-home/devices/:deviceId/files"]
+    ["manager.route-control.link-home.device.phone-files.execute", "POST", "/api/rabi/link-home/devices/:deviceId/files"],
+    ["manager.route-control.link-home.device.location.execute", "POST", "/api/rabi/link-home/devices/:deviceId/location"]
   ]) {
     const matches = f.definitions.filter(value => value.contract.operationId === id);
     assert.equal(matches.length, 1);
@@ -87,10 +88,10 @@ test("all 19 control operations use one executable catalog and an enrolled empty
   assert.equal(files.schema.additionalProperties, false);
   assert.ok(files.schema.properties.action.enum.includes("file.list"));
   assert.ok(files.schema.properties.action.enum.includes("upload.commit"));
-  for (const [url, method] of [["/api/rabi/link-home/devices/phone", "GET"], ["/api/rabi/link-home/devices/phone/labels", "PATCH"], ["/api/rabi/link-home/devices/phone/files", "POST"]]) {
+  for (const [url, method] of [["/api/rabi/link-home/devices/phone", "GET"], ["/api/rabi/link-home/devices/phone/labels", "PATCH"], ["/api/rabi/link-home/devices/phone/files", "POST"], ["/api/rabi/link-home/devices/phone/location", "POST"]]) {
     assert.equal((await f.request(url, method, undefined, { authorization: "Bearer invalid" })).status, 401);
   }
-  assert.equal(f.registry.catalogSnapshot().operations.length, 19);
+  assert.equal(f.registry.catalogSnapshot().operations.length, 20);
   const response = await f.request("/api/rabi/identity?ignored=yes"); assert.equal(response.status, 200);
   assert.equal((await response.json()).data.guid, f.globalConfig.read().rabiGuid);
   const configuration = await f.request("/manager-config"); assert.equal(configuration.status, 200); assert.equal((await configuration.json()).routeDir, "routes");

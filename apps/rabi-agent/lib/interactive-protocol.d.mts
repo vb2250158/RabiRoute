@@ -12,6 +12,7 @@ export const terminalEventSchema: Readonly<Record<string, unknown>>;
 export const terminalReadSchema: Readonly<Record<string, unknown>>;
 export const computerRequestSchema: Readonly<Record<string, unknown>>;
 export const computerResponseSchema: Readonly<Record<string, unknown>>;
+export const COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY: "captureAfterWait-v1";
 
 export const computerSourceSchema: Readonly<Record<string, unknown>>;
 export const computerInputActionSchema: Readonly<Record<string, unknown>>;

@@ -2,12 +2,14 @@ import { createManagerTransportIdentity } from "./managerTransportIdentity.js";
 import { assertComputerFeaturePolicyEnabled } from "../shared/agentInteractiveProtocol.js";
 import {createComputerSettingsDefinition, type ComputerSettingsDefinition} from "../../apps/rabi-agent/lib/computer-control-contract.mjs";
 import type { ComputerPresentationTheme } from "../../apps/rabi-agent/lib/computer-service.mjs";
-import { computerAgentSourceId, endComputerTrackingForPlan } from "./computerTaskLifecycle.js";
+import { computerAgentSession, computerAgentSourceId, endComputerTrackingForPlan } from "./computerTaskLifecycle.js";
+import { AndroidDisplayControl } from "./androidDisplayControl.js";
+import { createAndroidDisplayRouting } from "./androidDisplayRouting.js";
 import { resolvePluginPackageRoots } from "../shared/pluginPackageRoots.js";
 import { WebSocketServer } from "ws";
 import { TunnelRtc } from "../peerTunnel/rtc.js";
 import { websocketChannel, connectWebsocket } from "../peerTunnel/channel.js";
-import { PEER_TRANSPORT_PRIORITY } from "../shared/peerTunnelContract.js";
+import { COMPUTER_PEER_SOURCE_HEADER, PEER_TRANSPORT_PRIORITY } from "../shared/peerTunnelContract.js";
 import { joinChildProcess } from "../runtime/joinedChildProcess.js";
 import { MessageEndpointManagers } from "../plugin-runtime-host/messageEndpointManagers.js";
 import { createMessageEndpointHostPorts } from "../runtime/messageEndpointHostPorts.js";
@@ -49,7 +51,7 @@ import { createDeviceAgentPeerAuthority } from "./deviceAgentPeerAuthority.js";
 import { createRabiLinkMobileOwner } from "../plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOwner.js";
 import { createRabiLinkMobileOperations } from "../plugins/io.rabiroute.endpoint.rabilink/src/manager/rabiLinkMobileOperations.js";
 import { RabiLinkDeviceConnections } from "./rabiLinkDeviceConnections.js";
-import { rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
+import { encodeComputerPeerSource, rabiLinkAgentDevicePrincipal, rabiLinkAgentTaskSource, rabiLinkConnectionScope, rabiLinkPeerComputerSource, rabiLinkTrustedTransport, rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 import { recordingManifestHash } from "./recordingArchiveContract.js";
 import { createAllDayRecording } from "./allDayRecordingRoutes.js";
 import { ALL_DAY_MESSAGE_INGRESS, handleAllDayMessageIngress } from "./allDayMessageIngress.js";
@@ -486,6 +488,7 @@ import {
 } from "./webguiLanAccess.js";
 import { publicRabiLinkRelayConfig } from "../shared/rabiLinkRelayPublicConfig.js";
 import { createRabiControlOperations } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.js";
+import type { DeviceComputerPort } from "../plugins/io.rabiroute.manager.route-control/src/manager/deviceControlOperations.js";
 import { parseGatewayReadyLine } from "../gatewayLifecycle.js";
 import { createGatewayOutputLineReader, GATEWAY_MESSAGE_HISTORY_PREFIX } from "../gatewayMessageHistory.js";
 import { gatewayMessageHistoryEvents, localMessageHistoryEvents } from "./gatewayMessageHistoryEvents.js";
@@ -2639,7 +2642,7 @@ async function requestPeerManagerResult(targetDeviceId: string, method: string, 
   }));
 }
 async function withPeerManagerResponse<T>(targetDeviceId: string, method: string, pathname: string, body: unknown,
-  readResponse: (response: Response) => Promise<T>): Promise<T> {
+  readResponse: (response: Response) => Promise<T>, signal?: AbortSignal, targetHeaders?: Record<string, string>): Promise<T> {
   const original = rabiLinkRelayConfigForMeta(), scope = rabiLinkConnectionScope(original);
   const peer = activePeerTunnel, ownerInstanceId = rabiGlobalConfig.read().rabiGuid;
   if (!scope) throw Object.assign(new Error("DEVICE_AGENT_CONNECTION_CHANGED"), { statusCode: 401 });
@@ -2651,17 +2654,78 @@ async function withPeerManagerResponse<T>(targetDeviceId: string, method: string
     }
   };
   assertCurrent();
+  signal?.throwIfAborted();
+  const deadline = AbortSignal.timeout(getTimeoutMs("backend.manager.controlPlaneRoutes.requestDeviceAgentPeerApi.AbortSignal.timeout.request", 30_000));
   const response = targetDeviceId === original.deviceId
-    ? await rabiLinkRequestLocal(pathname, method, body)
+    ? await rabiLinkRequestLocal(pathname, method, body, targetHeaders)
     : peer ? await peer.fetch(targetDeviceId, "manager", pathname, {
-        method, signal: AbortSignal.timeout(getTimeoutMs("backend.manager.controlPlaneRoutes.requestDeviceAgentPeerApi.AbortSignal.timeout.request", 30_000)),
-        ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+        method, signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
+        headers: { ...targetHeaders, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
       }) : undefined;
   assertCurrent();
   if (!response) throw Object.assign(new Error("DEVICE_AGENT_PEER_UNAVAILABLE"), { statusCode: 503 });
   const value = await readResponse(response);
+  signal?.throwIfAborted();
   assertCurrent();
   return value;
+}
+
+function readPeerComputerSource(request: http.IncomingMessage) {
+  if (request.headers["x-rabilink-internal-hop"] === undefined) return undefined;
+  const generation = managerHostIdentity?.applicationGenerationId ?? managerInstanceId;
+  const scope = rabiLinkRequestScope(request, generation);
+  return scope ? rabiLinkPeerComputerSource(request, generation, scope) : undefined;
+}
+
+function createDeviceComputerPort(registry: LanAgentRegistry, routes: ManagerPluginRouteRegistry, androidDisplays?: AndroidDisplayControl): DeviceComputerPort {
+  const operation = createLanAgentComputerOperations({
+    registry, isManagementRequestAuthorized: () => false
+  })[0]!;
+  return {
+    operation,
+    list: () => registry.listComputers(),
+    androidDisplays: androidDisplays && createAndroidDisplayRouting(androidDisplays, {
+      localDeviceId: () => rabiLinkRelayConfigForMeta().deviceId,
+      peers: async () => (await activePeerTunnel?.directory())?.peers ?? [],
+      async request(ownerDeviceId, method, pathname, body, signal, source) {
+        const actor = source && (readPeerComputerSource(source.request) ?? computerAgentSession(source.request, registry.localInstanceId));
+        const targetHeaders = actor ? { [COMPUTER_PEER_SOURCE_HEADER]: encodeComputerPeerSource(actor.sourceId, source?.label || actor.sourceLabel) } : undefined;
+        return withPeerManagerResponse(ownerDeviceId, method, pathname, body, async response => ({
+          status: response.status, body: await response.json() as Record<string, unknown>
+        }), signal, targetHeaders);
+      }
+    }),
+    observationLabel: async request => readPeerComputerSource(request)?.sourceLabel ?? registry.computerObservationLabel(request),
+    async invoke(input, target) {
+      input.signal?.throwIfAborted();
+      const pathname = `/api/lan-agent/instances/${encodeURIComponent(target.instanceId)}/computer`;
+      if (target.ownerDeviceId) {
+        if (target.ownerDeviceId === rabiLinkRelayConfigForMeta().deviceId) {
+          return { status: 409, body: { code: -1, errorCode: "DEVICE_CONTROL_TARGET_CHANGED", message: "Refresh the device directory and select its local target." } };
+        }
+        const source = computerAgentSession(input.request, registry.localInstanceId);
+        let targetHeaders: Record<string, string> | undefined;
+        if (source) {
+          const action = (input.body as Record<string, unknown>).action;
+          const title = ["screen.capture", "screen.capture.background", "screen.wait", "control.begin", "input.perform",
+            "input.background", "input.gamepad", "recording.start"].includes(String(action))
+            ? await registry.computerObservationLabel(input.request) : undefined;
+          input.signal?.throwIfAborted();
+          hasAuthenticatedConnectionRequest(input.request);
+          targetHeaders = { [COMPUTER_PEER_SOURCE_HEADER]: encodeComputerPeerSource(source.sourceId, title || source.sourceLabel) };
+        }
+        return withPeerManagerResponse(target.ownerDeviceId, "POST", pathname, input.body,
+          async response => ({ status: response.status, body: await response.json(), headers: { "cache-control": "no-store" } }), input.signal, targetHeaders);
+      }
+      if (!routes.catalogSnapshot().operations.some(item => item.contract.operationId === operation.contract.operationId)) {
+        return { status: 503, body: { code: -1, errorCode: "DEVICE_COMPUTER_OWNER_UNAVAILABLE", message: "The original computer API is unavailable." } };
+      }
+      const url = new URL(input.url);
+      url.pathname = pathname;
+      return operation.handler({ ...input, url, path: { instanceId: target.instanceId } });
+    }
+  };
 }
 function deviceAgentHostContext(endpointManagerInstanceId: string) {
   const config = rabiLinkRelayConfigForMeta();
@@ -7941,8 +8005,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     executionSource: request => {
       const source = getTrustedLanAgentSource(request);
       if (source) return {sourceId:computerAgentSourceId(source.nodeId,source.provider,source.sessionId),sourceLabel:source.sessionName || source.provider || source.nodeId,taskId:source.sessionId,connectionId:lanAgentRegistry.computerConnectionId(source.nodeId)};
-      const peer = rabiLinkAgentTaskSource(request,rabiLinkRelayConfigForMeta(),managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
-      return peer ? {sourceId:`peer:${peer.sourceDeviceId}`,sourceLabel:peer.sourceDeviceId} : {sourceId:`manager:${managerInstanceId}`,sourceLabel:"Rabi PC"};
+      return readPeerComputerSource(request) ?? computerAgentSession(request, lanAgentRegistry.localInstanceId)
+        ?? {sourceId:`manager:${managerInstanceId}`,sourceLabel:"Rabi PC"};
     },
     observationLabel: async request => {
       const source = getTrustedLanAgentSource(request);
@@ -7950,7 +8014,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       const provider = source ? source.provider : request.headers["x-rabiroute-agent-type"];
       const sessionId = source ? source.sessionId : request.headers["x-rabiroute-session-id"];
       if (!isAgentAdapterType(provider) || typeof sessionId !== "string" || !sessionId.trim()) return undefined;
-      if (!source && rabiLinkAgentTaskSource(request,rabiLinkRelayConfigForMeta(),managerHostIdentity?.applicationGenerationId ?? managerInstanceId)) return undefined;
+      if (!source && readPeerComputerSource(request)) return undefined;
       const fallback = source ? undefined : provider;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const controller = new AbortController();
@@ -8062,6 +8126,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     await lanAgentRegistry.stopLocalComputer();
   });
   managerRuntimeOwner.register("computer_source_lifecycle",()=>lanAgentRegistry.stopComputerSourceLifecycle());
+  const androidDisplays = managerReadOnly ? undefined : new AndroidDisplayControl(process.env.RABI_ANDROID_DISPLAY_BRIDGES);
+  if (androidDisplays) managerRuntimeOwner.register("android_displays", () => androidDisplays.stop());
   const computerPlanLog = managerOperationalLog.bind("computer.control", "warn");
   const computerPlanPending = new Set<Promise<unknown>>();
   const stopComputerPlanLifecycle = subscribeKnowledgeChanges((_roleDir, change) => {
@@ -8454,6 +8520,7 @@ get managerReadOnly() { return managerReadOnly; },
 get path() { return path; },
 get rootDir() { return rootDir; } }) }),
     Object.freeze({ capability: "host.manager.route-control@2", value: Object.freeze({ ...managerFeatureHostPorts, get managerPluginRoutes() { return managerPluginRoutes; },
+get createDeviceComputerPort() { return () => createDeviceComputerPort(lanAgentRegistry, managerPluginRoutes, androidDisplays); },
 get rabiLinkHostAccount() { return rabiLinkHostAccount; },
 get rootDir() { return rootDir; },
 get routeRoot() { return managerRouteRoot(); },
@@ -9758,9 +9825,6 @@ createManagerEventOperationDefinition
     setImmediate(() => {
       if (managerRuntimeOwner.isTearingDown()) return;
       watchVoiceReceivedAutomation();
-      void allDayRecording.service.restore().catch(error => {
-        console.error("All-day recording could not restore its saved intent:", error);
-      });
     });
   }
   planStorageStartupLifecycle.start();

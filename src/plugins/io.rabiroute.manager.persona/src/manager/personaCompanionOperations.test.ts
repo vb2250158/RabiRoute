@@ -33,15 +33,20 @@ async function fixture(t:test.TestContext){
   const call=(suffix='',method='GET',body?:unknown,headers:Record<string,string>={})=>new Promise<{status:number;body:any;bytes:Buffer;contentType:string}>((resolve,reject)=>{const request=http.request(base+'/api/roles/Example/companion'+suffix,{method,headers:{authorization:'Bearer '+credential.token,'content-type':'application/json',...headers}},response=>{const chunks:Buffer[]=[];response.on('data',chunk=>chunks.push(Buffer.from(chunk)));response.on('error',reject);response.on('end',()=>{const bytes=Buffer.concat(chunks),contentType=String(response.headers['content-type']);resolve({status:response.statusCode!,body:contentType.startsWith('application/json')?JSON.parse(bytes.toString()):undefined,bytes,contentType});});});request.on('error',reject);request.end(body===undefined?undefined:JSON.stringify(body));});
   return {context,root,identity,connection,behavior,service,ports,continuation,definitions,call,delivered,spoken,records};
 }
-test('all eight companion operations succeed for an empty authenticated node through original native activity and frame owner',async t=>{
-  const f=await fixture(t);assert.equal(f.definitions.length,8);
+test('all nine companion operations succeed for an empty authenticated node through original native activity and frame owner',async t=>{
+  const f=await fixture(t);assert.equal(f.definitions.length,9);
   assert.equal((await f.call()).body.data.session,null);assert.equal((await f.call('/last')).body.data.id,'original-summary');
   const accepted=await f.call('/start','POST',start);assert.equal(accepted.status,200,JSON.stringify(accepted.body));const session=accepted.body.data.session;assert.equal(session.gatewayId,'original-route');
   const replay=await f.call('/start','POST',start);assert.equal(replay.body.data.session.id,session.id);assert.equal((await f.continuation.read('Example'))?.gatewayId,'original-route');
-  const observed=await f.call('/observation','POST',{sessionId:session.id,revision:session.revision,observation:{sequence:1,capturedAt:Date.now(),source:'window',jpeg:jpeg.toString('base64')}});assert.equal(observed.status,200);
+  const capturedAt=Date.now()+1, startedAt=session.observationStartedAt??session.startedAt;
+  const clip=Buffer.from([82,73,70,70,4,0,0,0,65,86,73,32]);
+  const observed=await f.call('/observation','POST',{sessionId:session.id,revision:session.revision,observation:{sequence:1,capturedAt,source:'window',jpeg:jpeg.toString('base64'),
+    interval:{startedAt,endedAt:capturedAt,frameTimes:[startedAt,capturedAt],sampleCount:2,coverageStartedAt:startedAt,jpeg:jpeg.toString('base64')},
+    video:{startedAt,endedAt:capturedAt,avi:clip.toString('base64')}}});assert.equal(observed.status,200,JSON.stringify(observed.body));
   const review=await f.call('/review','POST',{sessionId:session.id,revision:session.revision,text:''});assert.equal(review.status,200);const reviewId=review.body.data.session.review.id;assert.equal(f.delivered.length,1);
   const frame=await f.call('/frame?reviewId='+reviewId);assert.equal(frame.status,200);assert.equal(frame.contentType,'image/jpeg');assert.deepEqual(frame.bytes,jpeg);
-  const input={sessionId:session.id,revision:session.revision,reviewId,text:'Original reply',activityKind:'watch'};
+  const video=await f.call('/clip?reviewId='+reviewId);assert.equal(video.status,200);assert.equal(video.contentType,'video/x-msvideo');assert.deepEqual(video.bytes,clip);
+  const input={sessionId:session.id,revision:session.revision,reviewId,text:'Original reply' ,activityKind:'watch'};
   const reply=await f.call('/reply','POST',input);assert.equal(reply.status,200);assert.equal(reply.body.data.session.notes.length,1);assert.equal((await f.call('/reply','POST',input)).body.data.session.notes.length,1);
   const stopped=await f.call('/command','POST',{sessionId:session.id,revision:session.revision,action:'stop'});assert.equal(stopped.status,200);assert.equal(await f.continuation.read('Example'),null);assert.equal((await f.call('/frame?reviewId='+reviewId)).status,404);
 });

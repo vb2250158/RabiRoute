@@ -55,7 +55,7 @@ const hostDependencies = { capture: async () => [], startMicrophone: async () =>
 
 test("screen rules save one captured image per enrolled role and search returns its original media", async t => {
   const f = await fixture(t);
-  const frame = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const frame = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]);
   let captures = 0;
   const changed: string[] = [];
   f.runtime.service = new AllDayRecordingService(f.runtime.store, {
@@ -63,7 +63,7 @@ test("screen rules save one captured image per enrolled role and search returns 
     capture: async settings => {
       captures += 1;
       assert.deepEqual(settings.sources, { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true });
-      return [{ source: "screen", jpeg: frame.toString("base64") }];
+      return [{ source: "screen", png: frame.toString("base64") }];
     },
     changed: roleId => changed.push(roleId),
   });
@@ -85,7 +85,7 @@ test("screen rules save one captured image per enrolled role and search returns 
   const batch = await lane!.read({ signal: new AbortController().signal, deadlineAt: performance.now() + 1000, query, position: 0 });
   assert.equal(batch.items[0]?.origin.recordId, events[0]?.id);
   const link = batch.items[0]?.handle.detailUrl;
-  assert.ok(link);
+  assert.ok(link?.endsWith(".png"));
   assert.deepEqual((await f.invoke(f.request(false, "GET", link.split("/all-day-recording/")[1]))).body, frame);
 });
 
@@ -155,7 +155,7 @@ test("queued recording control revalidates before writes or Host dispatch", asyn
   f.revoke(); release.resolve();
   await first; await rejected;
   assert.equal((await service.snapshot("persona")).running, false);
-  assert.equal(await f.runtime.store.enabledRole(), null);
+  assert.equal(await (await f.runtime.service.snapshot("persona")).enabled, false);
 });
 
 test("revocation after filesystem await or before rename suppresses publication and cleans partials", async t => {

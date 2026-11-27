@@ -33,6 +33,8 @@ Windows connector 0.2.2 provides both shells by default. In **RabiLink → Remot
 
 ## Three user steps
 
+Recent tasks shows statuses and common system messages in the selected interface language, including for existing records. Other results keep their original wording for diagnosis.
+
 Windows connector `0.2.1` provides a local tray: double-click for status/logs, or use the menu to control the connector, open host management and change login startup. One main program owns the connector and tray children and releases them on exit; Codex/DSH remain independent. After upgrading an older node, exit its original main program normally and launch once through the existing launcher; enrollment and task bindings remain. Local isolated tray validation is covered; real two-computer upgrades and login startup are pending. See [Windows tray](../apps/rabi-agent/README_en.md#windows-tray-021-experimental).
 
 Multi-instance enrollment uses a host-signed node release of 0.4.8 or later. Copy a separate prompt from each host. An existing node for that host keeps its configuration. An additional host uses `RabiAgent/instances/<host GUID>/config.json` in the current user profile and a separate login startup entry. On Windows, each tray icon identifies its host. The hosts can belong to different accounts.

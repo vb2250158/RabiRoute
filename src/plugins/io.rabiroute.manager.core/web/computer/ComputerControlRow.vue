@@ -6,11 +6,12 @@ import type { ComputerControlClient } from "./computerControlClient";
 import { createComputerControlState } from "./computerControlState";
 import { type ComputerTarget, type ComputerFieldSchema, writeField } from "./computerControlPresentation";
 import { deviceSystemIcon, deviceSystemName } from "./deviceSystem";
-import { COMPUTER_ACTIONS, isComputerReadOnlyAction } from "@shared/agentInteractiveProtocol";
+import { COMPUTER_ACTIONS, computerActionDefinition, isComputerReadOnlyAction } from "@shared/agentInteractiveProtocol";
 import { browserUuid } from "../../../../../ribiwebgui/src/browserUuid";
 import { managerAccessToken } from "../../../../../ribiwebgui/src/managerApi";
 import { userFacingError } from "../../../../../ribiwebgui/src/userFacingError";
 import ComputerControlSchemaFields from "./ComputerControlSchemaFields.vue";
+import ComputerRecordingPanel from "./ComputerRecordingPanel.vue";
 import ComputerControlObservation from "./ComputerControlObservation.vue";
 import ComputerControlInput from "./ComputerControlInput.vue";
 import ComputerControlCanvas from "./ComputerControlCanvas.vue";
@@ -26,14 +27,24 @@ const workReadAt=ref<number>();const workIssue=ref("");
 const settingsError=ref("");
 const loading = ref(false); const busy = ref(""); const error = ref(""); const receipt = ref<Record<string, unknown>>();
 const activity = computed(() => control.value?.activity as Record<string, unknown> | undefined);
+type ComputerActivityRow = { id: string; mode: string; phase: string; label: string; windowTitle?: string; canStop: boolean };
+const otherActivities = computed(() => (activity.value?.activities ?? []) as ComputerActivityRow[]);
 const activitySummary = computed(() => {
   const labels: Record<string, string> = {
     capturing: "正在获取画面", prepared: "图像已准备，模型送达待确认", provided: "已提供给模型",
     operating: "正在操作", returning: "正在归还鼠标和前台", returned: "本批次操作已结束",
     tracking: "正在跟踪目标", stopped: "本次操作已停止", failed: "本次操作需要处理", ready: "控制已就绪"
   };
-  return activity.value ? t(labels[String(activity.value.phase)] || "状态待确认") : "";
+  if (activity.value?.observerLabel) {
+    return `${activity.value.observerLabel} ${t(activity.value.phase === "failed" ? "截图未完成" : "正在看你的屏幕")}`;
+  }
+  return activity.value?.phase ? t(labels[String(activity.value.phase)] || "状态待确认") : "";
 });
+function activityText(row: ComputerActivityRow): string {
+  if (row.mode === "observation") return t(row.phase === "failed" ? "截图未完成" : "正在看你的屏幕");
+  if (row.mode === "gamepad") return t("正在操作手柄");
+  return t(row.phase === "completed" ? "已向后台窗口发送输入" : "正在操作后台窗口");
+}
 const returnResult = computed(() => {
   const value = activity.value ? activity.value.returnState : receipt.value?.returnState;
   return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
@@ -52,6 +63,7 @@ const displays = ref<Record<string, unknown>[]>([]);
 const foregroundDisplayId = ref<string>();
 const displayLayoutRevision = ref<string>();
 const control = ref<Record<string, unknown>>(); const terminal = ref(false); const image = ref<Record<string, unknown>>();
+const imageFeature = ref("observation");
 const knownLayers = ref<Record<string, unknown>[]>([]); const knownTracking = ref<Record<string, unknown>[]>([]);
 const layer = ref<Record<string, unknown>>(); const tracking = ref<Record<string, unknown>>();
 const inputRequestId = ref("");
@@ -77,11 +89,28 @@ const trackingRows = computed(() => {const rows=new Map(knownTracking.value.map(
 const trackingActive=computed(()=>trackingRows.value.some(value=>["tracking","running"].includes(String(value.state))));
 const hasTrackingWork=computed(()=>trackingRows.value.some(value=>typeof value.trackingId === "string" && !["stopped","expired","absent"].includes(String(value.state))));
 const trackingSummary=computed(()=>{const labels:Record<string,string>={tracking:"跟踪中",running:"跟踪中",lost:"跟踪目标丢失",ambiguous:"跟踪目标不明确",paused:"跟踪已暂停",stopping:"正在停止跟踪",uncertain:"跟踪状态待确认",failed:"跟踪失败",stopped:"跟踪已停止",expired:"跟踪已到期",absent:"当前没有该工作"};return [...new Set(trackingRows.value.map(value=>t(labels[String(value.state)] || String(value.state))))].join(" / ");});
-const workResult = computed(() => ({injected:"输入已注入；应用效果尚未验证",running:"正在执行",cancelled:"剩余动作已取消",uncertain:"结果待确认",failed:"执行失败",visible:"标注已显示",cleared:"标注已清除",stopped:"跟踪已停止",active:"正在控制",ended:"控制已退出",absent:"当前没有该工作"}[String(receipt.value?.state)] || ""));
-function available(feature: string) { if(!located.value)return false;if(feature === "terminal")return props.target.terminalShells?.length !== 0; if(!props.target.capabilities)return !["input","annotation"].includes(feature);return Object.values(COMPUTER_ACTIONS).some(definition=>definition.feature === feature && props.target.capabilities!.includes(definition.capability)); }
+const workResult = computed(() => ({injected:"输入已注入；应用效果尚未验证",posted:"输入已发送给窗口，应用效果待确认",activated:"目标窗口已切到前台",denied:"Windows 未允许切到前台",running:"正在执行",cancelled:"剩余动作已取消",uncertain:"结果待确认",failed:"执行失败",visible:"标注已显示",cleared:"标注已清除",stopped:"跟踪已停止",active:"正在控制",ended:"控制已退出",absent:"当前没有该工作"}[String(receipt.value?.state)] || ""));
+function available(feature: string) { if(!located.value)return false;if(feature === "terminal")return props.target.terminalShells?.length !== 0; if(!props.target.capabilities)return ["files","observation"].includes(feature);return Object.values(COMPUTER_ACTIONS).some(definition=>definition.feature === feature && props.target.capabilities!.includes(definition.capability)); }
 
 const settingSchema = computed(() => draft.value?.saved.schema as ComputerFieldSchema | undefined);
-const labels = [ { id:"terminal", title:"终端命令", icon:"mdi-console" }, {id:"files",title:"文件操作",icon:"mdi-folder-outline"}, {id:"observation",title:"窗口与截图",icon:"mdi-monitor-screenshot"}, {id:"agentTasks",title:"智能体任务",icon:"mdi-robot-outline"}, {id:"input",title:"鼠标与键盘",icon:"mdi-mouse"}, {id:"annotation",title:"屏幕标注",icon:"mdi-vector-square"} ];
+const groups = [
+  { title: "桌面", features: [
+    { id:"observation", title:"窗口、截图与录屏", icon:"mdi-monitor-screenshot" },
+    { id:"input", title:"前台共享键鼠", icon:"mdi-mouse" },
+    { id:"annotation", title:"屏幕标注", icon:"mdi-vector-square" }
+  ] },
+  { title: "指定窗口", features: [
+    { id:"windowActivation", title:"切换前台窗口", icon:"mdi-dock-window" },
+    { id:"backgroundCapture", title:"后台窗口截图", icon:"mdi-monitor-screenshot" },
+    { id:"backgroundInput", title:"后台窗口输入", icon:"mdi-keyboard-outline" }
+  ] },
+  { title: "独立输入设备", features: [{ id:"gamepad", title:"独立玩家手柄", icon:"mdi-gamepad-variant-outline" }] },
+  { title: "其他电脑能力", features: [
+    { id:"terminal", title:"终端命令", icon:"mdi-console" },
+    { id:"files", title:"文件操作", icon:"mdi-folder-outline" },
+    { id:"agentTasks", title:"智能体任务", icon:"mdi-robot-outline" }
+  ] }
+];
 
 const settingsDiagnostics = computed(() => {
   const values=draft.value?.saved.diagnostics;
@@ -114,7 +143,7 @@ function edit(path: string[], value: unknown) {
   const current = draft.value; if (!current) return;
   current.value = writeField(current.value, path, value); current.changes.set(path.join("."), value); current.revision++;
   void save();
-  if (path.join(".") === "features.observation" && value === false || path.length === 1 && path[0] === "enabled" && value === false) { image.value = undefined; ++observationRevision; }
+  if (value === false && (path.join(".") === `features.${imageFeature.value}` || path.join(".") === "enabled")) { image.value = undefined; ++observationRevision; }
 }
 async function save(manual=false) {
   const current = draft.value; if (!current || current.saving || current.readbackUnconfirmed && !manual) return;
@@ -126,11 +155,12 @@ async function save(manual=false) {
 }
 async function run(body: Record<string, unknown>) {
   if (!located.value) return;
-  const action = String(body.action); const lane=laneFor(action); const recovery=["control.end","input.cancel","annotation.clear","annotation.track.stop"].includes(action);
+  const action = String(body.action); const lane=laneFor(action); const definition = computerActionDefinition(action);
+  const recovery=definition?.recovery && !definition.readOnly;
   if (pending.has(lane) && !recovery) return;
   const sequence=(laneVersions.get(lane)||0)+1;laneVersions.set(lane,sequence);pending.set(lane,{sequence,action});
   const captureRevision = observationRevision; const request = { ...body }; ++actionRevision;
-  if (["control.begin", "input.execute", "annotation.show", "annotation.update", "annotation.track.start"].includes(action)) request.requestId ||= browserUuid();
+  if (definition?.receipt || action === "annotation.update") request.requestId ||= browserUuid();
   if (["control.end", "input.execute"].includes(action) && sessionId.value) request.controlSessionId = sessionId.value;
   if (["input.execute", "annotation.show", "annotation.track.start"].includes(action) && !request.source && image.value?.source) request.source = image.value.source;
   if (action === "input.execute") inputRequestId.value = String(request.requestId);
@@ -148,8 +178,12 @@ async function run(body: Record<string, unknown>) {
     if (action.startsWith("control.")) {control.value = result;workReadAt.value=Date.now();}
     if (action.startsWith("annotation.track.")) tracking.value = result;
     else if (action.startsWith("annotation.")) layer.value = result;
-    const capture = action === "screen.capture" ? result : result.capture;
-    if (captureRevision === observationRevision && capture && typeof capture === "object" && features.value.observation !== false && enabled.value) image.value = capture as Record<string, unknown>;
+    const captureFeature = action === "screen.capture.background" ? "backgroundCapture" : "observation";
+    const capture = action === "screen.capture" || action === "screen.capture.background" ? result : result.capture;
+    if (captureRevision === observationRevision && capture && typeof capture === "object" && features.value[captureFeature] !== false && enabled.value) {
+      image.value = capture as Record<string, unknown>;
+      imageFeature.value = captureFeature;
+    }
   } catch (reason) { if (!disposed && sequence === laneVersions.get(lane)) error.value = isComputerReadOnlyAction(action) ? userFacingError(reason) : `${userFacingError(reason)}；可查询原操作状态，未自动重发。`; }
   finally { if (!disposed && sequence === laneVersions.get(lane)) {pending.delete(lane);busy.value=Array.from(pending.values()).at(-1)?.action || "";} }
 }
@@ -166,7 +200,8 @@ function openTerminal() { terminal.value=true; }
 function endControl() { void run({ action:"control.end", controlSessionId:sessionId.value }); }
 async function loadWork() {
  if (workLoaded || !connected.value || !located.value) return; workLoaded = true; const revision = actionRevision;const sequence=++workSequence;workController?.abort();const controller=new AbortController();workController=controller;workIssue.value="";
- const results = await Promise.allSettled([available("input") || available("observation") || sessionId.value ? props.client.action(props.target,{action:"control.status"},controller.signal) : Promise.resolve(undefined), available("annotation") || knownLayers.value.length || layer.value || tracking.value ? props.client.action(props.target,{action:"annotation.status"},controller.signal) : Promise.resolve(undefined)]);
+ const hasActivity = sessionId.value || ["input","observation","backgroundInput","backgroundCapture","gamepad"].some(available);
+ const results = await Promise.allSettled([hasActivity ? props.client.action(props.target,{action:"control.status"},controller.signal) : Promise.resolve(undefined), available("annotation") || knownLayers.value.length || layer.value || tracking.value ? props.client.action(props.target,{action:"annotation.status"},controller.signal) : Promise.resolve(undefined)]);
  if (disposed || revision !== actionRevision || sequence !== workSequence || controller.signal.aborted) return;
  if(results.some(value=>value.status === "rejected"))workIssue.value=t("工作状态暂未更新；保留上次读取的状态。");
  if (results[0]?.status === "fulfilled" && results[0].value) {control.value = results[0].value;workReadAt.value=Date.now();}
@@ -199,31 +234,43 @@ onBeforeUnmount(() => { disposed = true; ++readRevision; ++actionRevision; readC
       <p v-if="workResult" class="computer-note" role="status">{{ workResult }}</p>
       <p v-if="workIssue" class="computer-note" role="status">{{ workIssue }}</p>
       <p v-if="workReadAt" class="computer-note">{{ t('最近状态读取：') }} {{ new Date(workReadAt).toLocaleTimeString() }} · {{ t('目标端退出后可刷新工作状态确认。') }}</p>
-      <p v-if="activitySummary" role="status" class="computer-activity">{{ activitySummary }}<span v-if="activity?.sourceDisplay"> · {{ (activity.sourceDisplay as any).displayId }}</span></p>
+      <section v-if="activitySummary || otherActivities.length" aria-live="polite" class="computer-activity">
+        <div v-if="activitySummary">{{ activitySummary }}<span v-if="activity?.sourceDisplay"> · {{ (activity.sourceDisplay as any).displayId }}</span></div>
+        <div v-for="row in otherActivities" :key="row.id" class="computer-activity-row">
+          <span>{{ row.label }} {{ activityText(row) }}<template v-if="row.windowTitle"> · {{ row.windowTitle }}</template></span>
+          <v-btn v-if="row.canStop" :disabled="!connected" variant="text" size="small" :aria-label="`${t('停止本次操作')} · ${row.label}`" @click="run({action:'input.cancel', requestId:row.id})">{{ t('停止本次操作') }}</v-btn>
+        </div>
+      </section>
       <section class="computer-work"><div><strong>{{ controlSummary }}</strong><span v-if="control?.source && (control.source as Record<string,unknown>).label"> · {{ (control.source as Record<string,unknown>).label }}</span><span v-if="control?.source && (control.source as Record<string,unknown>).taskId">{{ t(' · 关联任务（详情）') }}</span><p v-if="control?.remainingMs !== undefined" class="computer-note">{{ t('空闲退出剩余 ') }}{{ control.remainingMs === null ? t('已关闭') : Math.ceil(Number(control.remainingMs) / 1000) }}{{ t(' 秒 · ') }}{{ control.exitShortcut || t('快捷键状态未提供') }}</p><p v-if="control?.presentation" class="computer-note">{{ t('Agent 指针：') }}{{ (control.presentation as any)?.pointer ? t('已显示') : t('未显示') }}{{ t(' · 退出快捷键：') }}{{ (control.presentation as any)?.hotkey?.registered ? t('已注册') : (control.presentation as any)?.hotkey?.error || t('注册失败或冲突') }}</p></div><div class="work-buttons"><v-btn :disabled="!connected || !enabled || features.input === false || !available('input') || hasControlSession" :loading="busy === 'control.begin'" variant="tonal" @click="run({action:'control.begin',captureAfter:false})">{{ t('开始手动控制') }}</v-btn><v-btn :disabled="!hasControlSession" :loading="busy === 'control.end'" variant="tonal" @click="endControl">{{ t('退出控制') }}</v-btn><v-btn :disabled="!connected || !hasTrackingWork" :loading="busy === 'annotation.track.stop'" variant="text" @click="stopTracking">{{ t('停止跟踪') }}</v-btn><v-btn :disabled="!connected || !(layer?.layerId || tracking?.layerId)" :loading="busy === 'annotation.clear'" variant="text" @click="clearLayer">{{ t('清除标注') }}</v-btn><v-btn variant="text" :disabled="!connected" @click="refreshWork">{{ t('刷新工作状态') }}</v-btn><v-btn variant="text" :disabled="!connected || !(available('annotation') || knownLayers.length || layer?.layerId || tracking?.trackingId)" @click="clearAllLayers">{{ t('清除全部标注') }}</v-btn></div></section>
       <template v-if="draft && settingSchema">
         <v-switch :model-value="enabled" :label="t('启用此电脑')" :loading="draft.saving" @update:model-value="edit(['enabled'],$event)" />
       </template>
       <p class="computer-note">{{ t('终端和智能体也可能通过各自工具操作文件或鼠标键盘。') }}</p>
-      <details v-for="feature in labels" :key="feature.id" class="computer-feature">
-          <summary><v-icon :icon="feature.icon" /><h3>{{ t(feature.title) }}</h3><v-switch v-if="draft && settingSchema" :model-value="features[feature.id] !== false" :disabled="!enabled" hide-details density="compact" :aria-label="t(feature.title)" @click.stop @keydown.stop @update:model-value="edit(['features',feature.id],$event)" /></summary>
+      <section v-for="group in groups" :key="group.title" class="computer-capability-group">
+        <h3>{{ t(group.title) }}</h3>
+        <details v-for="feature in group.features" :key="feature.id" class="computer-feature">
+          <summary><v-icon :icon="feature.icon" /><h4>{{ t(feature.title) }}</h4><v-switch v-if="draft && settingSchema" :model-value="features[feature.id] !== false" :disabled="!enabled" hide-details density="compact" :aria-label="t(feature.title)" @click.stop @keydown.stop @update:model-value="edit(['features',feature.id],$event)" /></summary>
           <p v-if="feature.id !== 'agentTasks' && !available(feature.id)" class="computer-note">{{ t('此执行端尚未声明支持此功能，保存的开关选择仍保留。更新对应客户端后可刷新能力。') }}</p>
           <template v-if="feature.id === 'terminal'"><p class="computer-note">{{ t('Shell、工作目录、尺寸和会话输出使用原终端面板。') }}</p><v-btn variant="tonal" :disabled="!connected || !enabled || features.terminal === false || !available('terminal')" @click="openTerminal">{{ t('打开终端') }}</v-btn></template>
           <template v-else-if="feature.id === 'files'"><ComputerControlFiles :call="body => client.action(target,body)" :disabled="!connected || !enabled || features.files === false || !available('files')" /></template>
           <template v-else-if="feature.id === 'agentTasks'"><p class="computer-note">{{ t('任务绑定和执行程序继续使用原智能体配置。') }}</p><v-btn variant="tonal" :disabled="!located" :to="{path:'/rabilink',query:{tab:'agents',deviceId:target.ownerDeviceId || undefined,instanceId:target.instanceId}}">{{ t('前往此电脑的智能体任务配置') }}</v-btn></template>
-          <template v-else-if="feature.id === 'observation'"><ComputerControlObservation :windows="windows" :displays="displays" :foreground-display-id="foregroundDisplayId" :layout-revision="displayLayoutRevision" :capabilities="target.capabilities" :disabled="!connected || !enabled || features.observation === false" :busy="!!busy" @source-change="invalidateObservation" @submit="run" /></template>
+          <template v-else-if="feature.id === 'observation'"><ComputerControlObservation :windows="windows" :displays="displays" :foreground-display-id="foregroundDisplayId" :layout-revision="displayLayoutRevision" :capabilities="target.capabilities" :disabled="!connected || !enabled || features.observation === false" :busy="!!busy" @source-change="invalidateObservation" @submit="run" />
+            <ComputerRecordingPanel v-if="target.capabilities?.includes('screenRecording')" :client="client" :target="target" :enabled="connected && enabled && features.observation !== false" />
+            <ComputerControlSchemaFields v-if="draft && settingSchema?.properties?.recording"
+              :schema="{...settingSchema, properties:{recording:settingSchema.properties.recording}}" :model-value="draft.value" :disabled="!enabled" @change="edit" /></template>
           <template v-else-if="feature.id === 'input'"><ComputerControlInput :session-id="controlling ? sessionId : ''" :request-id="inputRequestId" :disabled="!connected || !enabled || features.input === false || !available('input') || !controlling" :busy="!!busy" @submit="run" /></template>
-          <template v-else><ComputerControlActionForm :capabilities="target.capabilities" :group="feature.id === 'input' ? 'input' : feature.id" :busy="!!busy" :disabled="!connected || !enabled || features[feature.id] === false || !available(feature.id)" @submit="run" /></template>
-      </details>
+          <template v-else><ComputerControlActionForm :capabilities="target.capabilities" :group="feature.id" :windows="windows" :can-list-windows="connected && enabled && features.observation !== false && target.capabilities?.includes('windows')" :busy="!!busy" :disabled="!connected || !enabled || features[feature.id] === false || !available(feature.id)" @submit="run" /></template>
+        </details>
+      </section>
       <template v-if="draft && settingSchema">
-        <details class="computer-settings"><summary>{{ t('控制体验、标注与资源参数') }}</summary><ComputerControlSchemaFields :schema="{...settingSchema,properties:Object.fromEntries(Object.entries(settingSchema.properties || {}).filter(([key])=>!['enabled','features'].includes(key)))}" :model-value="draft.value" :disabled="!enabled" :disabled-paths="(settings.annotation as Record<string,unknown>)?.dynamicEnabled === true ? [] : ['annotation.backend','annotation.rateHz','annotation.tracking']" @change="edit" /><p class="computer-note">{{ t('动态标注默认关闭。开启只允许此模式，按“开始跟踪”才会持续采集并增加处理开销。') }}</p></details>
+        <details class="computer-settings"><summary>{{ t('控制体验、标注与资源参数') }}</summary><ComputerControlSchemaFields :schema="{...settingSchema,properties:Object.fromEntries(Object.entries(settingSchema.properties || {}).filter(([key])=>!['enabled','features','recording'].includes(key)))}" :model-value="draft.value" :disabled="!enabled" :disabled-paths="(settings.annotation as Record<string,unknown>)?.dynamicEnabled === true ? [] : ['annotation.backend','annotation.rateHz','annotation.tracking']" @change="edit" /><p class="computer-note">{{ t('动态标注默认关闭。开启只允许此模式，按“开始跟踪”才会持续采集并增加处理开销。') }}</p></details>
         <v-alert v-if="draft.application?.state === 'unconfirmed'" type="warning" variant="tonal">{{ t('设置已保存；执行应用或停止仍待确认。') }} {{ draft.application.issue ? t(draft.application.issue) : '' }}</v-alert>
         <p v-else-if="draft.application?.state === 'offline'" class="computer-note">{{ t('设置已保存；目标离线，执行应用尚未确认。') }}</p>
         <p v-if="draft.application?.readbackIssue" class="computer-note">{{ t(draft.application.readbackIssue) }}</p>
         <div class="computer-save"><v-btn variant="tonal" :loading="draft.saving" :disabled="draft.saving || !defaultPaths.length" @click="restoreDefaults">{{ t('恢复默认设置') }}</v-btn><v-btn color="primary" :loading="draft.saving" :disabled="!draft.changes.size" @click="save(true)">{{ t(draft.readbackUnconfirmed ? '按最新版本重新应用编辑值' : '保存设置') }}</v-btn><span role="status">{{ draft.readbackUnconfirmed ? t('修改已提交，回读待确认') : draft.error ? `未保存：${draft.error}` : draft.saving ? t('保存中…') : draft.changes.size ? t('有未保存的修改') : t('设置已回读') }}</span><v-btn v-if="draft.conflict" variant="text" @click="save(true)">{{ t('按新版本保存保留的修改') }}</v-btn></div>
       </template>
       <section v-if="trackingRows.length" class="computer-tracking"><h3>{{ t('当前跟踪') }}</h3><div v-for="record in trackingRows" :key="String(record.trackingId)"><p class="computer-note">{{ record.state }}{{ t(' · 实际频率 ') }}{{ (record.metrics as any)?.rateHz ?? t('未测量') }}{{ t(' 次/秒 · 分析宽度 ') }}{{ (record.effective as any)?.maxAnalysisWidth ?? t('未测量') }}{{ t(' · 处理 ') }}{{ (record.metrics as any)?.processingMs ?? t('未测量') }} ms</p><p v-if="(record.effective as any)?.reason" class="computer-note">{{ (record.effective as any).reason }}</p><ul><li v-for="target in (record.targets as any[] || [])" :key="target.id">{{ target.description || target.id }} · {{ target.state }}<span v-if="target.similarity !== undefined">{{ t(' · 模板相似值 ') }}{{ target.similarity }}</span></li></ul></div></section>
-      <figure v-if="screenshotUrl && active && image" class="computer-preview"><ComputerControlCanvas :image="image" :disabled="!enabled || features.annotation === false || !available('annotation')" :tracking-supported="target.capabilities?.includes('tracking') === true" :busy="!!busy" :dynamic-enabled="(settings.annotation as Record<string,unknown>)?.dynamicEnabled === true" :duration-ms="(settings.annotation as Record<string,unknown>)?.staticDurationMs" :backend="(settings.annotation as Record<string,unknown>)?.backend" :rate-hz="(settings.annotation as Record<string,unknown>)?.rateHz" @show="run" @track="run" /><div class="work-buttons"><v-btn :href="screenshotUrl" target="_blank" rel="noopener noreferrer" variant="text">{{ t('查看原图') }}</v-btn><v-btn :href="screenshotUrl" :download="`${target.name}-screen.png`" variant="text">{{ t('保存截图') }}</v-btn></div><figcaption>{{ image?.capturedAt || t('时间未提供') }}{{ t(' · 当前图像仅为观察；指针或预览不代表输入成功。') }}</figcaption></figure>
+      <figure v-if="screenshotUrl && active && image" class="computer-preview"><ComputerControlCanvas :image="image" :window-points="activity?.windowPointers" :disabled="!enabled || features.annotation === false || !available('annotation')" :tracking-supported="target.capabilities?.includes('tracking') === true" :busy="!!busy" :dynamic-enabled="(settings.annotation as Record<string,unknown>)?.dynamicEnabled === true" :duration-ms="(settings.annotation as Record<string,unknown>)?.staticDurationMs" :backend="(settings.annotation as Record<string,unknown>)?.backend" :rate-hz="(settings.annotation as Record<string,unknown>)?.rateHz" @show="run" @track="run" /><div class="work-buttons"><v-btn :href="screenshotUrl" target="_blank" rel="noopener noreferrer" variant="text">{{ t('查看原图') }}</v-btn><v-btn :href="screenshotUrl" :download="`${target.name}-screen.png`" variant="text">{{ t('保存截图') }}</v-btn></div><figcaption>{{ image?.capturedAt || t('时间未提供') }}{{ t(' · 当前图像仅为观察；指针或预览不代表输入成功。') }}</figcaption></figure>
       <details v-if="active && (image || returnResult)" class="computer-information">
         <summary>{{ t('当前画面与操作结果') }}</summary>
         <dl>
@@ -246,7 +293,10 @@ onBeforeUnmount(() => { disposed = true; ++readRevision; ++actionRevision; readC
   </article>
 </template>
 <style scoped>
+.computer-capability-group>h3{margin:0 0 6px;font-size:.9rem;color:var(--rr-muted)}
+.computer-feature h4{font-size:1rem;flex:1;margin:0}
 .computer-activity { padding: 10px 14px; margin: 8px 0; border-inline-start: 3px solid rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), .08); border-radius: 8px; font-weight: 600; }
+.computer-activity-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; overflow-wrap: anywhere; }
 .computer-information { border: 1px solid rgb(var(--v-theme-outline-variant)); border-radius: 10px; padding: 12px; }
 .computer-information summary { cursor: pointer; font-weight: 600; }
 .computer-information dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 12px 0 0; }

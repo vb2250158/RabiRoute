@@ -747,6 +747,37 @@ test("Agent thread send accepts absent attribution without inventing a source ow
   assert.deepEqual(result.data.warnings, ["未提供 messageSource，本次投递使用「未知」来源"]);
 });
 
+test("Agent create carries screenshot images into the first message", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-create-image-"));
+  try {
+    const image = path.join(directory, "capture.png");
+    fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    let created: { imagePaths?: string[] } = {};
+    const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+      create: async value => {
+        created = value;
+        return { id: "019f0000-0000-7000-8000-000000000232", title: value.title,
+          updatedAt: "", source: "test", initialTurnStatus: "started" };
+      }, send: async () => undefined };
+    const result = await handleAgentThreadRequest({ action: "create", title: "截图任务", prompt: "看图。",
+      cwd: directory, imagePaths: [image] }, { allowedWorkspaces: [directory] }, driver);
+    assert.equal(result.statusCode, 201);
+    assert.deepEqual(created.imagePaths, [image]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("Agent create rejects a missing screenshot instead of dropping it", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-create-image-"));
+  try {
+    const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },
+      create: async value => ({ id: "019f0000-0000-7000-8000-000000000233", title: value.title,
+        updatedAt: "", source: "test", initialTurnStatus: "started" }), send: async () => undefined };
+    await assert.rejects(handleAgentThreadRequest({ action: "create", title: "截图任务", prompt: "看图。",
+      cwd: directory, imagePaths: [path.join(directory, "missing.png")] },
+      { allowedWorkspaces: [directory] }, driver), /Image attachment does not exist/);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("Agent create accepts a prompt without source attribution", async () => {
   let creates = 0;
   const driver: AgentThreadDriver = { read: async () => { throw new Error("No source read"); },

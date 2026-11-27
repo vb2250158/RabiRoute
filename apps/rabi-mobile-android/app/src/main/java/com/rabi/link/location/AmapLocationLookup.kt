@@ -18,7 +18,7 @@ class AmapLocationLookup(private val context: Context, private val reserve: () -
     private val done = CountDownLatch(1)
     private val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
     private var client: AMapLocationClient? = null
-    fun resolve(key: String, point: LocationPoint? = null): String {
+    fun resolve(key: String, point: LocationPoint? = null, maxWaitMs: Long = Long.MAX_VALUE): String {
         check(Looper.myLooper() != Looper.getMainLooper())
         check(LocationSettings(context).privacyAccepted) { "请先阅读并同意高德定位隐私说明" }
         check(key.isNotBlank()) { "请先保存高德 Android Key" }
@@ -37,7 +37,7 @@ class AmapLocationLookup(private val context: Context, private val reserve: () -
                         isOnceLocationLatest = true
                         isNeedAddress = true
                         isLocationCacheEnable = false
-                        httpTimeOut = com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.location.http",10000)
+                        httpTimeOut = minOf(com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.location.http",10000).toLong(), maxWaitMs)
                         AMapLocationClientOption.setLocationProtocol(AMapLocationClientOption.AMapLocationProtocol.HTTPS)
                     })
                     setLocationListener { location ->
@@ -54,7 +54,8 @@ class AmapLocationLookup(private val context: Context, private val reserve: () -
             }
         }
         try {
-            if(!done.await(com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.location.lookup",20000), TimeUnit.MILLISECONDS)) throw IllegalStateException("高德定位超时，系统 GPS 继续记录")
+            val waitMs = minOf(com.rabi.link.transport.ScopedManagerTimeouts.active(context).get("android.location.lookup",20000), maxWaitMs)
+            if(!done.await(waitMs, TimeUnit.MILLISECONDS)) throw IllegalStateException("高德定位超时，系统 GPS 继续记录")
             return answer.get()?.getOrThrow() ?: throw IllegalStateException("高德没有返回位置")
         } finally {
             close()

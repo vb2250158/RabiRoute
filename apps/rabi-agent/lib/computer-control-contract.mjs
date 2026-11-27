@@ -20,7 +20,10 @@ function merge(base, patch) { const next = { ...base }; for (const [key, value] 
 function validate(value, schema, field) {
   if (schema.anyOf) { if (value === null && schema.anyOf.some(s => s.type === 'null')) return; return validate(value, schema.anyOf.find(s => s.type !== 'null'), field); }
   if (schema.type === 'object') { if (!object(value)) throw new TypeError(`${field} must be an object.`); for (const [key, entry] of Object.entries(value)) if (Object.hasOwn(schema.properties ?? {}, key)) validate(entry, schema.properties[key], `${field}.${key}`); return; }
-  if (typeof value !== schema.type || schema.type === 'number' && (!Number.isFinite(value) || value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity)) || schema.enum && !schema.enum.includes(value) || schema.minLength && value.length < schema.minLength) throw new TypeError(`Invalid ${field}.`);
+  const numeric = schema.type === 'number' || schema.type === 'integer';
+  const wrongType = schema.type === 'integer' ? !Number.isSafeInteger(value) : typeof value !== schema.type;
+  const outsideRange = numeric && (!Number.isFinite(value) || value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity));
+  if (wrongType || outsideRange || schema.enum && !schema.enum.includes(value) || schema.minLength && value.length < schema.minLength) throw new TypeError(`Invalid ${field}.`);
 }
 
 

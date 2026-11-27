@@ -18,15 +18,41 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 
-/** Consumes file requests from the phone's existing authenticated Relay event connection. */
+/** Consumes requests scoped to one capability on the authenticated phone connection. */
 public final class RabiPhoneFileConnection implements AutoCloseable {
-    private static final String PATH = "/api/rabilink/mobile/files";
     private static final int MAX_RESPONSE = 256 * 1024;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Context context;
+    private final com.rabi.link.location.PhoneLocationAccess location;
+    private final com.rabi.link.phonecontrol.PhoneScreenAccess screen;
+    private final com.rabi.link.phonecontrol.PhoneInputAccess input;
+    private final ExecutorService screenWaiters;
+    private final ExecutorService phoneInputs;
+    private final String path;
+    private final String errorPrefix;
 
     public RabiPhoneFileConnection(Context context) {
+        this(context, "files", "PHONE_FILES");
+    }
+
+    public static RabiPhoneFileConnection location(Context context) {
+        return new RabiPhoneFileConnection(context, "location", "PHONE_LOCATION");
+    }
+
+    public static RabiPhoneFileConnection screen(Context context) {
+        return new RabiPhoneFileConnection(context, "screen", "PHONE_SCREEN");
+    }
+
+    private RabiPhoneFileConnection(Context context, String channel, String errorPrefix) {
         this.context = context.getApplicationContext();
+        this.location = "location".equals(channel) ? new com.rabi.link.location.PhoneLocationAccess(this.context) : null;
+        this.screen = "screen".equals(channel) ? new com.rabi.link.phonecontrol.PhoneScreenAccess() : null;
+        this.input = screen != null && com.rabi.link.phonecontrol.PhoneInputAccess.supported(this.context)
+                ? new com.rabi.link.phonecontrol.PhoneInputAccess(this.context) : null;
+        this.screenWaiters = screen == null ? null : Executors.newFixedThreadPool(2);
+        this.phoneInputs = input == null ? null : Executors.newFixedThreadPool(2);
+        this.path = "/api/rabilink/mobile/" + channel;
+        this.errorPrefix = errorPrefix;
     }
 
     public static String newSession() {
@@ -57,51 +83,80 @@ public final class RabiPhoneFileConnection implements AutoCloseable {
             JSONObject job = post(base, token, session, "claim", identity).optJSONObject("data");
             if (job == null) return;
             long deadline = SystemClock.elapsedRealtime() + job.optLong("remainingMs");
-            Runnable guard = () -> {
-                if (!connected.getAsBoolean() || SystemClock.elapsedRealtime() >= deadline) {
-                    throw new java.util.concurrent.CancellationException("PHONE_FILES_SESSION_CHANGED");
-                }
-            };
-            int status = 200;
-            JSONObject result;
-            try {
-                guard.run();
-                String action = job.getString("action");
-                JSONObject input = job.getJSONObject("input");
-                JSONObject data;
-                if ("file.settings.read".equals(action) || "file.settings.update".equals(action)) {
-                    if ("file.settings.update".equals(action)) {
-                        Object enabled = input.opt("enabled");
-                        if (!(enabled instanceof Boolean)) throw new RabiPhoneFiles.Failure(400, "PHONE_FILES_REQUEST_INVALID");
-                        RabiPhoneFiles.setEnabled(context, new RabiLinkRelayConfig(base, token, true), (Boolean) enabled);
-                    }
-                    data = RabiPhoneFiles.status(context, base, token);
-                } else {
-                    Runnable access = () -> {
-                        guard.run();
-                        RabiPhoneFiles.requireAccess(context, base, token);
-                    };
-                    access.run();
-                    data = RabiPhoneFiles.open(context, base, token).execute(action, input, access);
-                }
-                result = new JSONObject().put("code", 0).put("data", data);
-            } catch (RabiPhoneFiles.Failure error) {
-                status = error.getStatus();
-                result = new JSONObject().put("code", -1).put("errorCode", error.getCode());
-            } catch (java.util.concurrent.CancellationException error) {
-                status = 409;
-                result = new JSONObject().put("code", -1).put("errorCode", "PHONE_FILES_SESSION_CHANGED");
-            } catch (Exception error) {
-                status = 500;
-                result = new JSONObject().put("code", -1).put("errorCode", "PHONE_FILE_IO_FAILED");
+            String action = job.getString("action");
+            ExecutorService executor = "screen.wait".equals(action) ? screenWaiters
+                    : ("input.perform".equals(action) || "apps.open".equals(action)) ? phoneInputs : null;
+            if (executor != null) {
+                // Long work leaves the claim worker free to serve stop and status.
+                executor.execute(() -> {
+                    try { complete(base, token, phoneId, session, connected, job, deadline); }
+                    catch (Exception ignored) { /* The original receipt owns expiry and recovery. */ }
+                });
+            } else {
+                complete(base, token, phoneId, session, connected, job, deadline);
             }
-            post(base, token, session, "result", new JSONObject().put("phoneId", phoneId)
-                    .put("requestId", job.getString("id")).put("status", status).put("result", result));
         }
     }
 
-    private static JSONObject post(String base, String token, String session, String operation, JSONObject body) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(base + PATH + "/" + operation).openConnection();
+    private void complete(String base, String token, String phoneId, String session, BooleanSupplier connected,
+                          JSONObject job, long deadline) throws Exception {
+        Runnable guard = () -> {
+            if (!connected.getAsBoolean() || SystemClock.elapsedRealtime() >= deadline) {
+                throw new java.util.concurrent.CancellationException(errorPrefix + "_SESSION_CHANGED");
+            }
+        };
+        int status = 200;
+        JSONObject result;
+        try {
+            guard.run();
+            String action = job.getString("action");
+            JSONObject input = job.getJSONObject("input");
+            JSONObject data;
+            if (location != null) {
+                data = location.execute(action, input, guard);
+            } else if (screen != null) {
+                if (action.startsWith("input.") || action.startsWith("apps.")) {
+                    if (this.input == null) throw new RabiPhoneFiles.Failure(503, "PHONE_INPUT_UNAVAILABLE");
+                    data = this.input.execute(action, input, guard, phoneId);
+                } else {
+                    data = screen.execute(action, input, guard, phoneId);
+                }
+            } else if ("file.settings.read".equals(action) || "file.settings.update".equals(action)) {
+                if ("file.settings.update".equals(action)) {
+                    Object enabled = input.opt("enabled");
+                    if (!(enabled instanceof Boolean)) throw new RabiPhoneFiles.Failure(400, "PHONE_FILES_REQUEST_INVALID");
+                    RabiPhoneFiles.setEnabled(context, new RabiLinkRelayConfig(base, token, true), (Boolean) enabled);
+                }
+                data = RabiPhoneFiles.status(context, base, token);
+            } else {
+                Runnable access = () -> {
+                    guard.run();
+                    RabiPhoneFiles.requireAccess(context, base, token);
+                };
+                access.run();
+                data = RabiPhoneFiles.open(context, base, token).execute(action, input, access);
+            }
+            result = new JSONObject().put("code", 0).put("data", data);
+        } catch (RabiPhoneFiles.Failure error) {
+            status = error.getStatus();
+            result = new JSONObject().put("code", -1).put("errorCode", error.getCode());
+        } catch (java.util.concurrent.CancellationException error) {
+            status = 409;
+            result = new JSONObject().put("code", -1).put("errorCode", errorPrefix + "_SESSION_CHANGED");
+        } catch (IllegalArgumentException error) {
+            boolean files = location == null && screen == null;
+            status = files ? 500 : 400;
+            result = new JSONObject().put("code", -1).put("errorCode", files ? "PHONE_FILE_IO_FAILED" : errorPrefix + "_REQUEST_INVALID");
+        } catch (Exception error) {
+            status = 500;
+            result = new JSONObject().put("code", -1).put("errorCode", location == null && screen == null ? "PHONE_FILE_IO_FAILED" : errorPrefix + "_READ_FAILED");
+        }
+        post(base, token, session, "result", new JSONObject().put("phoneId", phoneId)
+                .put("requestId", job.getString("id")).put("status", status).put("result", result));
+    }
+
+    private JSONObject post(String base, String token, String session, String operation, JSONObject body) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(base + path + "/" + operation).openConnection();
         try {
             connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("POST");
@@ -132,5 +187,7 @@ public final class RabiPhoneFileConnection implements AutoCloseable {
     @Override
     public void close() {
         worker.shutdownNow();
+        if (screenWaiters != null) screenWaiters.shutdownNow();
+        if (phoneInputs != null) phoneInputs.shutdownNow();
     }
 }

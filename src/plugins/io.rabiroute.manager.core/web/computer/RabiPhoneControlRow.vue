@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "../../../../../ribiwebgui/src/i18n/index";
 import { requestPhoneFileOperation } from "../../../../../ribiwebgui/src/rabiLinkHomeClient";
 import RabiPhoneFilesDialog from "../components/RabiPhoneFilesDialog.vue";
+import RabiPhoneLocationControl from "./RabiPhoneLocationControl.vue";
+import RabiPhoneScreenControl from "./RabiPhoneScreenControl.vue";
 import { deviceSystemIcon, deviceSystemName } from "./deviceSystem";
 import type { PhoneDevice } from "./phoneDevice";
 
@@ -92,6 +94,10 @@ watch(() => {
           @update:model-value="value => updateStatus(value === true)" />
         <v-progress-circular v-else-if="busy" indeterminate size="20" />
       </div>
+      <RabiPhoneLocationControl v-if="expanded && phone.online && phone.capabilities.includes('phone-location-v1')"
+        :key="`${phone.id}:${phone.guid}`" :phone="phone" />
+      <RabiPhoneScreenControl v-if="expanded && phone.online && phone.capabilities.includes('phone-screen-v1')"
+        :key="`screen:${phone.id}:${phone.guid}`" :phone="phone" />
     </div>
     <RabiPhoneFilesDialog v-if="showFiles" :device="phone" :title="phone.displayName" @close="showFiles = false" />
   </article>

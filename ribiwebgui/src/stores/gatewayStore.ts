@@ -20,7 +20,7 @@ import {
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import { agentAdapterValues } from "@shared/gatewayConfigModel";
 import { cloneGatewayValue, mergeGatewayDraft, sameGatewayValue } from "../gatewayDraft";
-import { routeActivationSaveMessage, type RouteActivationFeedback } from "../routeActivationFeedback";
+import { routeActivationFollowUpPending, routeActivationSaveMessage, type RouteActivationFeedback } from "../routeActivationFeedback";
 import { localAgentTargetKey } from "@shared/routeAgentTargets";
 import { applyRouteAgentDraft } from "../routeAgentTargetEditor";
 import {
@@ -40,6 +40,10 @@ type LoadOptions = {
 };
 
 const routeCatalogMutationLedger = new RouteCatalogMutationLedger();
+
+/** A Gateway restart is bounded by Manager readiness; follow the same operation for this long. */
+const ROUTE_ACTIVATION_FOLLOW_UP_MS = 60_000;
+const ROUTE_ACTIVATION_POLL_MS = 1_500;
 
 export type GatewayRouteSummary = Readonly<{
   id: string;
@@ -108,6 +112,8 @@ export const useGatewayStore = defineStore("gateway", () => {
   ));
   const saveState = ref<"idle" | "saving" | "confirming" | "saved" | "conflict" | "error">("idle");
   const saveMessage = ref("");
+  /** The exact operation whose native activation is still pending, if any. */
+  const activationFollowUp = ref("");
   let saveFlight: Promise<void> | undefined;
   let saveFlightDraft: { routeId: string | undefined; draft: GatewayDefinition | undefined } | undefined;
   const pendingSaveDrafts = new Map<string, { id: string; submitted: GatewayDefinition }>();
@@ -191,7 +197,10 @@ export const useGatewayStore = defineStore("gateway", () => {
   }
 
   function touch(): void {
-    if (saveState.value === "saved") saveMessage.value = "";
+    if (saveState.value === "saved") {
+      saveMessage.value = "";
+      activationFollowUp.value = "";
+    }
   }
 
   function openQuickSetup(): void {
@@ -503,6 +512,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     if (!routeId) return;
     saving.value = true;
     error.value = "";
+    // A newer save owns the banner; the previous operation's activation no longer describes it.
+    activationFollowUp.value = "";
     saveState.value = "saving";
     saveMessage.value = "正在保存当前路线";
     let pending: PendingRouteCatalogMutation | undefined;
@@ -533,6 +544,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       applyRouteCatalogVersion(latest.routeCatalog);
       pending = await routeCatalogMutationLedger.retain("save", { id, definition }, routeCatalogRevisionHash.value);
       pendingSaveDrafts.set(pending.operationId, { id, submitted });
+      const operationId = pending.operationId;
       saveState.value = "saving";
       saveMessage.value = "正在保存当前路线";
       const result = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/${encodeURIComponent(id)}/config`, {
@@ -561,6 +573,7 @@ export const useGatewayStore = defineStore("gateway", () => {
       pending = undefined;
       saveState.value = "saved";
       saveMessage.value = routeActivationSaveMessage(body.activation);
+      if (routeActivationFollowUpPending(body.activation)) void followRouteActivation(operationId);
     } catch (saveError) {
       if (pending && submitted) {
         try {
@@ -584,6 +597,47 @@ export const useGatewayStore = defineStore("gateway", () => {
       throw saveError;
     } finally {
       saving.value = false;
+    }
+  }
+
+  /**
+   * The Manager returns `requested` when the Gateway child must restart for this Route.
+   * That restart normally finishes within seconds, so poll the *same* operation until its
+   * activation reaches a terminal state and then show the real outcome. This never
+   * resubmits the write and never clears an unsaved draft.
+   */
+  async function followRouteActivation(operationId: string): Promise<void> {
+    if (activationFollowUp.value === operationId) return;
+    activationFollowUp.value = operationId;
+    const deadline = Date.now() + ROUTE_ACTIVATION_FOLLOW_UP_MS;
+    try {
+      while (activationFollowUp.value === operationId) {
+        await new Promise<void>(resolve => globalThis.setTimeout(resolve, ROUTE_ACTIVATION_POLL_MS));
+        if (activationFollowUp.value !== operationId) return;
+        let activation: RouteActivationFeedback | undefined;
+        try {
+          const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/mutations/${encodeURIComponent(operationId)}`, {});
+          if (!response.ok) {
+            // A Gateway restart can briefly disturb the Manager; give up only at the deadline.
+            if (Date.now() >= deadline) return;
+            continue;
+          }
+          activation = ((await response.json().catch(() => ({}))) as { activation?: RouteActivationFeedback }).activation;
+        } catch {
+          // A transient Manager restart window is expected here; retry until the deadline.
+          if (Date.now() >= deadline) return;
+          continue;
+        }
+        if (!activation) return;
+        if (!routeActivationFollowUpPending(activation)) {
+          // Only report this activation while the save result still owns the banner.
+          if (saveState.value === "saved" && saveMessage.value) saveMessage.value = routeActivationSaveMessage(activation);
+          return;
+        }
+        if (Date.now() >= deadline) return;
+      }
+    } finally {
+      if (activationFollowUp.value === operationId) activationFollowUp.value = "";
     }
   }
 
@@ -1013,6 +1067,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     saving,
     saveState,
     saveMessage,
+    activationFollowUp,
     dirty,
     error,
     quickSetupDialogOpen,

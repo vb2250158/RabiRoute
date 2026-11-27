@@ -7,9 +7,12 @@ import {
 } from "./workbuddyDesktopComposer.js";
 import { readWorkbuddyDesktopCreationReceipt, snapshotWorkbuddyDesktopIds } from "./workbuddyDesktopCreationReceipt.js";
 import { normalizeWorkbuddyWorkspace } from "./workbuddySessionStore.js";
+import { prepareWorkbuddyReplyText } from "./workbuddySessionBridge.js";
 import type { WorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
 
-export type WorkbuddyDesktopCreationInput = { intentId: string; title: string; workspace: string; workspaceLabel: string; prompt: string; layout?: WorkbuddyDesktopLayout };
+export type WorkbuddyDesktopCreationInput = { intentId: string; title: string; workspace: string; workspaceLabel: string; prompt: string; layout?: WorkbuddyDesktopLayout;
+  /** Local images referenced by the first message; the desktop composer inserts text only. */
+  imagePaths?: string[] };
 export type WorkbuddyDesktopCreationResult =
   | { state: "created"; thread: { id: string; title: string; cwd: string }; sequence: number; intentId: string }
   | { state: "pending"; intentId: string }
@@ -26,8 +29,10 @@ function identifyIntent(input: WorkbuddyDesktopCreationInput, journalDir: string
   }
   const idHash = hash(intentId);
   const filename = path.join(journalDir, `${idHash}.json`);
-  const digest = hash(JSON.stringify([workspace, input.workspaceLabel.trim(), input.title.trim(), input.prompt]));
-  return { workspace, intentId, filename, digest, marker: `RABI_WB_CREATE_${idHash}` };
+  // The composer inserts text only, so images travel as local path references in the same body.
+  const prompt = prepareWorkbuddyReplyText(input.prompt, input.imagePaths ?? []);
+  const digest = hash(JSON.stringify([workspace, input.workspaceLabel.trim(), input.title.trim(), prompt]));
+  return { workspace, intentId, filename, digest, marker: `RABI_WB_CREATE_${idHash}`, prompt };
 }
 
 async function readIntent(file: string): Promise<Intent | null> {
@@ -77,7 +82,7 @@ export function createWorkbuddyDesktopCreator(port: WorkbuddyDesktopComposerPort
     const result = queue.then(async (): Promise<WorkbuddyDesktopCreationResult> => {
       signal?.throwIfAborted();
       const expected = identifyIntent(input, journalDir);
-      const { workspace, intentId, filename, digest, marker } = expected;
+      const { workspace, intentId, filename, digest, marker, prompt } = expected;
       const pending = { state: "pending", intentId } as const;
       const previous = await readIntent(filename);
       if (previous) return reconcileIntent(previous, expected, signal);
@@ -88,7 +93,7 @@ export function createWorkbuddyDesktopCreator(port: WorkbuddyDesktopComposerPort
       try {
         await submitWorkbuddyDesktopComposer(port, {
           workspace: input.workspace,
-          prompt: `${input.prompt}\n\n[WorkBuddy 创建编号] ${marker}`,
+          prompt: `${prompt}\n\n[WorkBuddy 创建编号] ${marker}`,
           signal,
           layout: input.layout,
           beforeSubmit: async () => {

@@ -17,7 +17,7 @@ export type PersonaCompanionContext={
   last(roleId:string):Promise<unknown>;
   continuation?:CompanionContinuationStore;
 };
-export type PersonaCompanionAction='snapshot'|'last'|'frame'|'start'|'command'|'observation'|'review'|'reply';
+export type PersonaCompanionAction='snapshot'|'last'|'frame'|'clip'|'start'|'command'|'observation'|'review'|'reply';
 
 /** Original activity owner; preparation captures connection, role root and service before body consumption. */
 export function createPersonaCompanionOwner(context:PersonaCompanionContext){
@@ -28,15 +28,16 @@ export function createPersonaCompanionOwner(context:PersonaCompanionContext){
     const directory=context.roleDirectory(roleId),service=context.service;let attempted=false;
     const assertCurrent=()=>{try{current();}catch(error){throw Object.assign(error as object,{statusCode:(error as {statusCode?:number}).statusCode??403});}if(context.roleDirectory(roleId)!==directory||context.service!==service)throw new CompanionError('Original activity owner changed',409);
       if(!originallyAuthenticated&&(!localModelSettingsRequestAllowed(request)||!context.local(request)||request.headers['x-rabilink-tunnel-local']))throw new CompanionError('Activity authorization denied',403);
-      if(!['snapshot','last','frame'].includes(action)&&context.readOnly())throw new CompanionError('Read only',403);
+      if(!['snapshot','last','frame','clip'].includes(action)&&context.readOnly())throw new CompanionError('Read only',403);
     };
     assertCurrent();
-    if(!['snapshot','last','frame'].includes(action)&&!String(request.headers['content-type']).toLowerCase().startsWith('application/json'))throw new CompanionError('Use application/json',415);
+    if(!['snapshot','last','frame','clip'].includes(action)&&!String(request.headers['content-type']).toLowerCase().startsWith('application/json'))throw new CompanionError('Use application/json',415);
     return {assertCurrent,mutationOutcome:()=>attempted?'unknown' as const:'not_started' as const,
       async execute(body:unknown,query:URLSearchParams){
         assertCurrent();
         if(action==='snapshot'){const snapshot=service.snapshot(roleId);const resumeIntent=snapshot.session?.status==='active'||snapshot.session?.status==='paused'?null:await context.continuation?.read(roleId)??null;assertCurrent();return {...snapshot,resumeIntent};}
         if(action==='last'){const data=await context.last(roleId);assertCurrent();return data;}
+        if(action==='clip'){const bytes=service.clipFor(roleId,query.get('reviewId')||'');assertCurrent();return bytes;}
         if(action==='frame'){const bytes=service.frameFor(roleId,query.get('reviewId')||'');assertCurrent();return bytes;}
         if(!body||typeof body!=='object'||Array.isArray(body))throw new CompanionError('Expected JSON object');
         const input=body as Record<string,any>;let data:unknown;

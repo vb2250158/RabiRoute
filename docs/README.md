@@ -10,6 +10,7 @@
 
 - [电脑控制](user-guide/computer-control.md)：平级电脑目录、可见功能开关、输入、截图和静态/动态标注。
 - [电脑视觉操作](computer-control-visual-workflow.md)：单屏与区域截图、图像送达、整批输入归还和操作提示。
+- [手机控制与定位访问方案](mobile-device-control.md)涵盖统一接口、Android 与 iPhone 执行端和高德复用。
 
 - [宿主与插件边界](host-plugin-boundaries.md)
 - [工作台画布](workbench-canvas.md)：独立画布目录、复制、节点运行与迁移边界。

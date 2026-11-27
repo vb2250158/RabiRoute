@@ -10,6 +10,8 @@ import { computerDeepLink, filterComputers } from "./computerControlPresentation
 import { deviceSystemName } from "./deviceSystem";
 import ComputerControlRow from "./ComputerControlRow.vue";
 import RabiPhoneControlRow from "./RabiPhoneControlRow.vue";
+import AndroidDisplayRow from "./AndroidDisplayRow.vue";
+import { readAndroidDisplayDirectory, type AndroidDisplayDirectoryEntry } from "../../../../../ribiwebgui/src/rabiLinkHomeClient";
 import type { PhoneDevice } from "./phoneDevice";
 const { t } = useI18n();
 const props = defineProps<{ active?: boolean; phones?: PhoneDevice[]; phonesLoading?: boolean; phonesError?: string; phoneId?: string }>();
@@ -20,6 +22,8 @@ const controller = createComputerControlState(reactive); const state = controlle
 const query = ref(""); const kind = ref("all"); const status = ref("all");
 const section = ref<HTMLElement>();
 const expandedPhones = reactive(new Set<string>());
+const androidDisplays = ref<AndroidDisplayDirectoryEntry[]>([]);
+let displayRead: AbortController | undefined;
 const rows = computed(() => filterComputers(state.rows, query.value, "all", status.value));
 const showComputers = computed(() => kind.value !== "phone");
 const showPhones = computed(() => kind.value !== "computer");
@@ -32,6 +36,18 @@ const phones = computed(() => (props.phones ?? []).filter(phone => {
   const system = deviceSystemName({ deviceKind: "phone", platform: phone.platform, deviceModel: phone.deviceModel, name: phone.displayName, id: phone.id });
   return [phone.displayName, phone.id, phone.guid, system].some(value => value?.toLocaleLowerCase().includes(text));
 }));
+const visibleDisplays = computed(() => androidDisplays.value.filter(entry => showPhones.value &&
+  (status.value === "all" || status.value === (entry.online ? "online" : "offline")) &&
+  entry.name.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase())));
+async function refreshDisplays() {
+  displayRead?.abort();
+  const current = new AbortController();
+  displayRead = current;
+  try {
+    const rows = await readAndroidDisplayDirectory(current.signal, managerAccessToken());
+    if (!current.signal.aborted) androidDisplays.value = rows;
+  } catch { /* The existing computer and phone directories remain usable. */ }
+}
 function openLinkedComputer() {
   if (props.active === false) return;
   const id = computerDeepLink(route.query, state.rows);
@@ -58,14 +74,14 @@ async function openLinkedPhone() {
 }
 async function refresh() {
   emit("refresh");
-  await controller.refresh(signal => client.list(signal));
+  await Promise.all([controller.refresh(signal => client.list(signal)), refreshDisplays()]);
   openLinkedComputer();
 }
 watch([() => props.active, () => route.query], openLinkedComputer);
 watch([() => props.active, () => props.phoneId, () => props.phones], () => { void openLinkedPhone(); });
 function toggle(id: string) { if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id); }
 function togglePhone(id: string) { if (expandedPhones.has(id)) expandedPhones.delete(id); else expandedPhones.add(id); }
-onMounted(() => { void refresh(); }); onBeforeUnmount(() => {events.dispose();controller.dispose();});
+onMounted(() => { void refresh(); }); onBeforeUnmount(() => {displayRead?.abort();events.dispose();controller.dispose();});
 </script>
 <template>
   <section ref="section" class="computer-page" aria-labelledby="computer-title">
@@ -74,10 +90,12 @@ onMounted(() => { void refresh(); }); onBeforeUnmount(() => {events.dispose();co
     <v-alert v-if="state.error" type="warning" variant="tonal">{{ state.error }}{{ t(' · 保留最近读取的信息。') }}</v-alert>
     <v-alert v-if="props.phonesError" type="warning" variant="tonal">{{ props.phonesError }}</v-alert>
     <v-progress-linear v-if="props.phonesLoading" indeterminate :aria-label="t('正在读取已连接设备')" />
-    <p v-if="!state.loading && !rows.length && !phones.length" class="computer-empty">{{ t('没有匹配的设备。') }}</p>
-    <p v-else-if="!state.loading && kind === 'phone' && !phones.length" class="computer-empty">{{ t('暂无已连接的手机') }}</p>
+    <p v-if="!state.loading && !rows.length && !phones.length && !visibleDisplays.length" class="computer-empty">{{ t('没有匹配的设备。') }}</p>
+    <p v-else-if="!state.loading && kind === 'phone' && !phones.length && !visibleDisplays.length" class="computer-empty">{{ t('暂无已连接的手机') }}</p>
     <ComputerControlRow v-for="target in state.rows" v-show="visibleIds.has(target.id)" :key="target.id" :target="target" :client="client" :events="events" :expanded="state.expanded.has(target.id)" :active="props.active !== false && visibleIds.has(target.id)" @toggle="toggle(target.id)" />
     <RabiPhoneControlRow v-for="phone in phones" :key="phone.id" :phone="phone" :expanded="expandedPhones.has(phone.id)" @toggle="togglePhone(phone.id)" />
+    <AndroidDisplayRow v-for="display in visibleDisplays" :key="(display.target.ownerDeviceId || '') + ':' + display.target.bridgeId + ':' + (display.target.surfaceId || '')" :entry="display"
+      :active="props.active !== false" @refresh="refreshDisplays" />
   </section>
 </template>
 <style scoped>

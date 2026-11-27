@@ -22,7 +22,7 @@
     {
       "id": "manager:core",
       "package": "io.rabiroute.manager.core",
-      "version": "0.1.36",
+      "version": "0.1.37",
       "enabled": true,
       "config": {},
       "grants": []
@@ -30,7 +30,7 @@
     {
       "id": "manager:persona",
       "package": "io.rabiroute.manager.persona",
-      "version": "0.1.54",
+      "version": "0.1.70",
       "enabled": true,
       "config": {},
       "grants": []
@@ -62,7 +62,7 @@
     {
       "id": "manager:route-control",
       "package": "io.rabiroute.manager.route-control",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "enabled": true,
       "config": {},
       "grants": []
@@ -313,7 +313,7 @@
     {
       "id": "agent:codex",
       "package": "io.rabiroute.agent.codex",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "enabled": true,
       "config": {},
       "grants": []
@@ -353,7 +353,7 @@
     {
       "id": "agent:workbuddy",
       "package": "io.rabiroute.agent.workbuddy",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "enabled": true,
       "config": {},
       "grants": []
@@ -361,7 +361,7 @@
     {
       "id": "agent:antigravity",
       "package": "io.rabiroute.agent.antigravity",
-      "version": "0.1.5",
+      "version": "0.1.7",
       "enabled": true,
       "config": {},
       "grants": []

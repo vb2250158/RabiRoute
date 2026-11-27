@@ -18,6 +18,11 @@ using DesktopScreen=System.Windows.Forms.Screen;
 
 public static class RabiComputer {
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int left,top,right,bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct WindowPlacement {
+        public int length,flags,showCommand;
+        public Point minimized,maximized;
+        public Rect normal;
+    }
     [StructLayout(LayoutKind.Sequential)] struct MouseInput { public int x,y; public uint data,flags,time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] struct KeyInput { public ushort key,scan; public uint flags,time; public UIntPtr extra; }
     [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MouseInput mouse; [FieldOffset(0)] public KeyInput key; }
@@ -27,6 +32,14 @@ public static class RabiComputer {
     delegate bool WindowCallback(IntPtr window,IntPtr context);
     delegate IntPtr HookCallback(int code,IntPtr message,IntPtr data);
     [DllImport("user32.dll")] static extern bool EnumWindows(WindowCallback callback,IntPtr context);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent,WindowCallback callback,IntPtr context);
+    [DllImport("user32.dll")] static extern bool IsChild(IntPtr parent,IntPtr window);
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window,out Rect rect);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window,ref Point point);
+    [DllImport("user32.dll")] static extern bool GetWindowPlacement(IntPtr window,ref WindowPlacement placement);
+    [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr window,int command);
+    [DllImport("user32.dll",SetLastError=true)] static extern bool PostMessageW(IntPtr window,uint message,UIntPtr wParam,IntPtr lParam);
+    [DllImport("user32.dll")] static extern uint MapVirtualKeyW(uint key,uint mapType);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
@@ -36,6 +49,7 @@ public static class RabiComputer {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window,out Rect rect);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr window,uint affinity);
     [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int size);
@@ -59,11 +73,16 @@ public static class RabiComputer {
     static volatile bool sharedControl,activeSharedInput,activePointerInput,activeKeyboardInput,activeRequiresForeground;
     static readonly int[] physicalHeld=new int[256];
     static string presentationPhase="ready",presentationRequestId;static bool nativeBarMode=true;
-    static string observationId,observerLabel;
-    static long observationExpires;
+    static string observationId,observerLabel,foregroundOwner;
+    static readonly Dictionary<string,DesktopActivity> observations=new Dictionary<string,DesktopActivity>();
+    static readonly Dictionary<string,DesktopActivity> detachedActivities=new Dictionary<string,DesktopActivity>();
     static object presentationReturnState,presentationDisplay,presentationRegion,presentationStopAction;
     static readonly object outputLock=new object(), stateLock=new object(), inputGate=new object(), frameLock=new object();
     static readonly object screenWaitLock=new object();
+    static readonly object backgroundGate=new object();
+    static readonly object windowClientLock=new object();
+    static readonly Dictionary<Tuple<IntPtr,IntPtr>,WindowClientMap> windowClientMaps=new Dictionary<Tuple<IntPtr,IntPtr>,WindowClientMap>();
+    static readonly ConcurrentDictionary<string,CancellationTokenSource> detachedJobs=new ConcurrentDictionary<string,CancellationTokenSource>();
     static string screenWaitId;
     static CancellationTokenSource screenWaitCancellation;
     static readonly UIntPtr injectionMarker=new UIntPtr(0x52414249);
@@ -86,11 +105,29 @@ public static class RabiComputer {
     static int budgetOverruns;static long memorySampleAt,sampledNativePrivateBytes;static DateTime memorySampleUtc;
     static readonly BlockingCollection<Dictionary<string,object>> inputRequests=new BlockingCollection<Dictionary<string,object>>();
     static readonly BlockingCollection<Dictionary<string,object>> recoveryReplies=new BlockingCollection<Dictionary<string,object>>();
-    static Overlay overlay; static ControlBar bar; static SynchronizationContext ui; static Dictionary<string,object> settings=new Dictionary<string,object>();
+    static Overlay overlay; static ControlBar bar; static RecordingBar recordingBar; static SynchronizationContext ui; static Dictionary<string,object> settings=new Dictionary<string,object>();
     static string session=null; static bool stopping=false, exitOnLocal=false, showPointer=true, pointerVisible=false, externalQt=false;
     static Point pointer; static Stopwatch lastActivity=new Stopwatch(); static double idleSeconds=120,countdown=10; static bool idleEnabled=true;
     static HookCallback keyboardHook,mouseHook; static IntPtr keyboardHandle,mouseHandle; static bool hotkeyRegistered=false; static string hotkeyError=null;
     static int presentationRevision; static int lastPhysicalX=int.MinValue,lastPhysicalY=int.MinValue; static uint exitKey; static bool physicalExitPending; static Thread trackingWorker;
+    // Owned by the presentation thread. Entries use the original native request lifecycle.
+    class DesktopActivity {
+        public string id,owner,label,phase,mode,windowTitle;
+        public Dictionary<string,object> request,source;
+        public long expires;
+        public int order;
+        public IntPtr window,receiver;
+        public uint pid;
+        public Point? clientPoint;
+        public string clientRevision;
+    }
+    class WindowClientMap {
+        public uint pid,thread,dpi;
+        public Size frame;
+        public Rectangle client;
+        public string revision;
+    }
+    static int activityOrder;
     class Frame : IDisposable { public string id;public Bitmap bitmap;public Rectangle bounds;public Dictionary<string,object> source;public DateTime created;public bool shared;public Dictionary<string,Size> imageItems=new Dictionary<string,Size>(); public void Dispose(){if(!shared)bitmap.Dispose();} }
     class Tracking { public string id,layerId,sourceKey;public int version,targetCount;public long created=Stopwatch.GetTimestamp();public double lastCostMs;public object engine;public MethodInfo step;public Dictionary<string,object> request,status;public volatile bool stopped;public volatile bool inFlight;public volatile bool initialized;public bool finalized;public string stopReason;public Dictionary<string,object> pendingSettings;public DateTime? expires;public double rate;public long due; }
     static object Get(Dictionary<string,object> value,string key,object fallback=null){object result;return value!=null&&value.TryGetValue(key,out result)?result:fallback;}
@@ -105,7 +142,92 @@ public static class RabiComputer {
     static Dictionary<string,object> Bounds(Rectangle area){return new Dictionary<string,object>{{"x",area.X},{"y",area.Y},{"width",area.Width},{"height",area.Height}};}
     static void UI(Action action){if(ui==null)throw new InvalidOperationException("Desktop presentation is not ready.");ui.Send(_=>action(),null);}
     static void Redraw(){if(ui!=null)ui.Post(_=>{overlay.Invalidate();bar.RefreshStatus();PublishPresentation();},null);}
-    static void PublishPresentation(){Event("presentation",new{phase=presentationPhase,requestId=presentationRequestId,returnState=presentationReturnState,stopAction=presentationStopAction,sourceDisplay=presentationDisplay,observedRegion=presentationRegion,presentationSettings=Obj(Get(settings,"presentation")),revision=++presentationRevision,controlSessionId=session,source=bar.Source,observerLabel=observerLabel,remainingMs=Remaining(),pointer=pointerVisible?new{x=pointer.X,y=pointer.Y}:null,exitShortcut=Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"),countdownSeconds=countdown,layers=layers.Values});}
+    static void PublishPresentation(){Event("presentation",new{phase=presentationPhase,requestId=presentationRequestId,returnState=presentationReturnState,stopAction=presentationStopAction,sourceDisplay=presentationDisplay,observedRegion=presentationRegion,presentationSettings=Obj(Get(settings,"presentation")),revision=++presentationRevision,controlSessionId=session,source=bar.Source,observerLabel=observerLabel,remainingMs=Remaining(),pointer=pointerVisible?new{x=pointer.X,y=pointer.Y}:null,activities=AdditionalActivities(),pointers=PresentationPointers(),windowPointers=WindowPointers(),exitShortcut=Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"),countdownSeconds=countdown,layers=layers.Values});}
+    static string ActivityLabel(string label){return String.IsNullOrWhiteSpace(label)?"Rabi":label.Trim();}
+    static bool ObservationComesFirst(DesktopActivity candidate,DesktopActivity previous){
+        if(previous==null)return true;
+        bool capturing=candidate.phase=="capturing",wasCapturing=previous.phase=="capturing";
+        return capturing==wasCapturing?candidate.order>previous.order:capturing;
+    }
+    static List<DesktopActivity> VisibleObservations(){
+        var latest=new Dictionary<string,DesktopActivity>();
+        foreach(var observation in observations.Values){
+            if(session!=null&&observation.owner==foregroundOwner)continue;
+            DesktopActivity previous;latest.TryGetValue(observation.owner,out previous);
+            if(ObservationComesFirst(observation,previous))latest[observation.owner]=observation;
+        }
+        var result=new List<DesktopActivity>(latest.Values);
+        result.Sort((a,b)=>ObservationComesFirst(a,b)?-1:ObservationComesFirst(b,a)?1:0);
+        return result;
+    }
+    static List<DesktopActivity> AdditionalActivityRows(){
+        var rows=new List<DesktopActivity>(detachedActivities.Values);
+        rows.Sort((a,b)=>a.order.CompareTo(b.order));
+        var operators=new HashSet<string>();
+        foreach(var item in rows)operators.Add(item.owner);
+        foreach(var observation in VisibleObservations())if(observation.id!=observationId&&!operators.Contains(observation.owner))rows.Add(observation);
+        return rows;
+    }
+    static string ActivityText(DesktopActivity item){
+        if(item.mode=="observation")return item.label+(item.phase=="failed"?" 截图未完成":" 正在看你的屏幕");
+        if(item.mode=="gamepad")return item.label+" 正在操作手柄";
+        return item.label+(item.phase=="completed"?" 已发送输入 · ":" 正在操作 · ")+(String.IsNullOrEmpty(item.windowTitle)?"后台窗口":item.windowTitle);
+    }
+    static void ApplyPresentationRenderer(Dictionary<string,object> request){
+        externalQt=Str(request,"renderer","native")=="qt";
+        nativeBarMode=Str(request,"controlRenderer","native")!="qt";
+    }
+    static object AdditionalActivities(){
+        var result=new List<object>();
+        foreach(var activity in AdditionalActivityRows()){
+            object stopAction=activity.mode!="observation"&&activity.expires==0?new{action="input.detached.cancel",requestId=activity.id}:null;
+            result.Add(new{id=activity.id,label=activity.label,phase=activity.phase,mode=activity.mode,windowTitle=activity.windowTitle,stopAction});
+        }
+        return result;
+    }
+    static List<DesktopActivity> VisibleBackgroundPointers(){
+        var entries=new List<DesktopActivity>();var owners=new HashSet<string>();
+        var ordered=new List<DesktopActivity>(detachedActivities.Values);ordered.Sort((a,b)=>b.order.CompareTo(a.order));
+        if(session!=null&&showPointer&&pointerVisible)owners.Add(foregroundOwner);
+        foreach(var item in ordered)if(item.clientPoint.HasValue&&owners.Add(item.owner))entries.Add(item);
+        return entries;
+    }
+    static bool BackgroundDesktopPoint(DesktopActivity item,out Point point){
+        point=item.clientPoint.GetValueOrDefault();
+        if(!BackgroundTargetSame(item)||IsIconic(item.window)||!IsWindowVisible(item.receiver))return false;
+        Rect region;if(!GetClientRect(item.receiver,out region)||point.X>=region.right||point.Y>=region.bottom)return false;
+        if(!ClientToScreen(item.receiver,ref point))return false;
+        var hit=WindowFromPoint(point);
+        return hit==item.window||GetAncestor(hit,2)==item.window;
+    }
+    static bool BackgroundTargetSame(DesktopActivity item){
+        return IsWindow(item.window)&&Pid(item.window)==item.pid&&IsWindow(item.receiver)&&
+            (item.receiver==item.window||IsChild(item.window,item.receiver));
+    }
+    static string BackgroundPointerColor(DesktopActivity item){
+        var colors=new[]{"#b6a0ff","#ffb465","#ff83b6","#a9de68"};
+        int value;
+        return colors[item.owner.Length>=2&&Int32.TryParse(item.owner.Substring(0,2),System.Globalization.NumberStyles.HexNumber,null,out value)?value%colors.Length:0];
+    }
+    static object PresentationPointers(){
+        var result=new List<object>();
+        if(showPointer&&pointerVisible&&session!=null)result.Add(new{id=foregroundOwner??session,label=ActivityLabel(Str(bar.Source,"label")),color="#3de0cf",space="desktop",x=pointer.X,y=pointer.Y});
+        foreach(var item in VisibleBackgroundPointers()){
+            Point point;string color=BackgroundPointerColor(item);
+            if(BackgroundDesktopPoint(item,out point))result.Add(new{id=item.owner,label=item.label,color,space="desktop",x=point.X,y=point.Y});
+            else if(BackgroundTargetSame(item))result.Add(WindowPointer(item));
+        }
+        return result;
+    }
+    static object WindowPointer(DesktopActivity item){
+        var point=item.clientPoint.Value;
+        return new{id=item.owner,label=item.label,color=BackgroundPointerColor(item),space="window-client",windowId=item.window.ToInt64().ToString("x"),receiverId=item.receiver.ToInt64().ToString("x"),pid=item.pid,clientRevision=item.clientRevision,x=point.X,y=point.Y};
+    }
+    static object WindowPointers(){
+        var result=new List<object>();
+        foreach(var item in VisibleBackgroundPointers())if(BackgroundTargetSame(item))result.Add(WindowPointer(item));
+        return result;
+    }
     static double? Remaining(){return session==null||!idleEnabled?(double?)null:Math.Max(0,idleSeconds*1000-lastActivity.Elapsed.TotalMilliseconds);}
     static Dictionary<string,object> MergeSettings(Dictionary<string,object> original,Dictionary<string,object> patch){
         var result=new Dictionary<string,object>(original);
@@ -507,7 +629,8 @@ public static class RabiComputer {
     }
     static void Phase(string phase,Dictionary<string,object> request=null,Dictionary<string,object> source=null,object returned=null){
         try{
-        if(request==null||Str(request,"action")!="screen.capture"&&Str(request,"action")!="screen.wait")ClearObservation();
+        string action=Str(request,"action");
+        if(action!="screen.capture"&&action!="screen.capture.background"&&action!="screen.wait")ClearObservation();
         presentationPhase=phase;presentationStopAction=null;
         if(request!=null&&phase=="operating")presentationStopAction=new{action="input.cancel",requestId=Str(request,"requestId"),controlSessionId=Str(request,"controlSessionId")};
         if(request!=null&&phase=="tracking")presentationStopAction=new{action="annotation.track.stop",trackingId=Str(request,"trackingId")};
@@ -520,6 +643,24 @@ public static class RabiComputer {
         presentationReturnState=returned;Redraw();
         }catch(Exception error){try{Event("diagnostic",new{code="COMPUTER_PRESENTATION_FAILED",message=error.Message});}catch(IOException){}}
     }
+    static bool UsesPointer(string action){
+        return action=="move"||action=="press"||action=="release"||action=="click"||action=="drag"||action=="scroll";
+    }
+    static void SelectSharedInputChannels(string action,string sessionId,string requestId){
+        lock(stateLock){
+            CheckInput(sessionId,requestId);
+            bool pointer=UsesPointer(action);
+            bool keyboard=action=="text"||action=="key"||action=="keyDown"||action=="keyUp";
+            if(pointer&&ownedButtons.Count==0&&(GetAsyncKeyState(1)<0||GetAsyncKeyState(2)<0||GetAsyncKeyState(4)<0))
+                throw new OperationCanceledException("physical-input-takeover");
+            if(!activePointerInput)activeMouseEpoch=Interlocked.Read(ref physicalMouseEpoch);
+            if(!activeKeyboardInput)activeKeyboardEpoch=Interlocked.Read(ref physicalKeyboardEpoch);
+            activePointerInput=pointer||ownedButtons.Count>0;
+            activeKeyboardInput=keyboard||ownedKeys.Count>0||ownedUnicode.Count>0;
+            activeRequiresForeground=activeKeyboardInput||action=="scroll";
+            CheckInput(sessionId,requestId);
+        }
+    }
     static object ExecuteInputBatch(Dictionary<string,object> request){
         string id=Str(request,"controlSessionId"),requestId=Str(request,"requestId");
         var results=new List<object>();var source=Obj(Get(request,"source"));var actions=Items(Get(request,"actions"));
@@ -527,14 +668,7 @@ public static class RabiComputer {
         bool legacyInput=actions.Count==0&&Get(request,"input")!=null;
         if(legacyInput)actions.Add(Get(request,"input"));
         bool shared=Str(request,"inputMode")=="shared";
-        bool usesMouse=false,usesKeyboard=false,usesWheel=false;
-        foreach(var action in actions){
-            switch(Str(Obj(action),"type")){
-                case "move":case "press":case "release":case "click":case "drag":usesMouse=true;break;
-                case "scroll":usesMouse=true;usesWheel=true;break;
-                case "text":case "key":case "keyDown":case "keyUp":usesKeyboard=true;break;
-            }
-        }
+        bool usesMouse=actions.Exists(action=>UsesPointer(Str(Obj(action),"type")));
         var result=new Dictionary<string,object>{{"batchId",requestId},{"state","injected"},{"results",results},{"completedActions",0},{"injectedEvents",0u}};
         Frame captured=null;InputAnchor anchor=null;bool released=false;uint total=0;int completed=0;
         int segment=Math.Max(1,(int)Num(Obj(Get(RequestSettings(request),"input")),"nativeSegmentMs",16));
@@ -542,13 +676,11 @@ public static class RabiComputer {
             try{
                 lock(stateLock){
                     inputWindow=IntPtr.Zero;CheckInput(id,requestId);
-                    activePointerInput=usesMouse;activeKeyboardInput=usesKeyboard;activeSharedInput=shared;
-                    activeRequiresForeground=!shared||usesKeyboard||usesWheel;
+                    activePointerInput=false;activeKeyboardInput=false;activeSharedInput=shared;
+                    activeRequiresForeground=!shared;
                     activePhysicalEpoch=Interlocked.Read(ref physicalInputEpoch);activeMouseEpoch=Interlocked.Read(ref physicalMouseEpoch);activeKeyboardEpoch=Interlocked.Read(ref physicalKeyboardEpoch);
                     activeDeadlineUtcMs=(long)Num(request,"deadlineUtcMs");activeInputRequest=requestId;activeInputSession=id;
                 }
-                if(shared&&usesMouse&&(GetAsyncKeyState(1)<0||GetAsyncKeyState(2)<0||GetAsyncKeyState(4)<0))
-                    throw new OperationCanceledException("physical-input-takeover");
                 bool useCaptureReference=IsCaptureSourceReference(source);
                 source=ValidateSource(request,source,useCaptureReference);
                 if(useCaptureReference&&Bool(request,"captureAfter")){
@@ -562,12 +694,16 @@ public static class RabiComputer {
                 if(actions.Count==0)throw new ArgumentException("Input actions must not be empty.");
                 for(int index=0;index<actions.Count;index++){
                     CheckInput(id,requestId);
-                    var item=ExecuteInputAction(Obj(actions[index]),source,id,requestId,segment);item["index"]=index;results.Add(item);total+=Convert.ToUInt32(Get(item,"injectedEvents",0));
+                    var next=Obj(actions[index]);
+                    if(shared)SelectSharedInputChannels(Str(next,"type"),id,requestId);
+                    var item=ExecuteInputAction(next,source,id,requestId,segment);item["index"]=index;results.Add(item);total+=Convert.ToUInt32(Get(item,"injectedEvents",0));
                     if(Str(item,"state")!="injected"){result["state"]=Get(item,"state");result["reason"]=Get(item,"reason");break;}
                     completed++;lastActivity.Restart();
+                    if(shared)SelectSharedInputChannels("",id,requestId);
                 }
                 if(Str(result,"state")=="injected"){
                     CheckInput(id,requestId);ReleaseOwned();released=true;
+                    if(shared)SelectSharedInputChannels("",id,requestId);
                     if(Bool(request,"captureAfter")){
                         // Result capture uses the visible raw desktop rectangle. PrintWindow is never called while holding the user's cursor.
                         try{CheckInput(id,requestId);captured=Capture(request,null,true);CheckInput(id,requestId);}
@@ -580,7 +716,7 @@ public static class RabiComputer {
                 Phase("returning",request,source);
                 try{if(!released){ReleaseOwned();released=true;}}catch(Exception error){result["releaseReason"]=error.Message;}
                 var returned=ReturnInput(anchor,Str(result,"reason",Str(result,"state")),released);result["returnState"]=returned;
-                if(Str(returned,"state")=="yielded"||Str(result,"reason")=="physical-input-takeover"){result["state"]="yielded";result["reason"]="physical-input-takeover";}
+                if((!shared&&Str(returned,"state")=="yielded")||Str(result,"reason")=="physical-input-takeover"){result["state"]="yielded";result["reason"]="physical-input-takeover";}
                 result["releaseState"]=released?"released":"uncertain";result["completedActions"]=completed;result["injectedEvents"]=total;
                 if(Str(result,"state")!="injected"&&captured!=null){captured.Dispose();captured=null;}
                 lock(stateLock){activeInputRequest=null;activeInputSession=null;inputWindow=IntPtr.Zero;activeDeadlineUtcMs=0;activeSharedInput=false;activePointerInput=false;activeKeyboardInput=false;activeRequiresForeground=false;}
@@ -592,9 +728,132 @@ public static class RabiComputer {
         if(Bool(request,"captureAfter")&&!result.ContainsKey("capture"))result["capture"]=new{state="unavailable",reason="input-"+Str(result,"state")};
         return result;
     }
+    static IntPtr WindowTarget(Dictionary<string,object> request){
+        long value;
+        if(!Int64.TryParse(Str(request,"windowId"),System.Globalization.NumberStyles.HexNumber,null,out value)||value<=0)
+            throw new ArgumentException("A valid windowId from windows.list is required.");
+        var window=new IntPtr(value);uint pid=Convert.ToUInt32(Get(request,"pid",0));
+        if(pid==0||!IsWindow(window)||Pid(window)!=pid)throw new InvalidOperationException("The original window identity changed.");
+        return window;
+    }
+    static object ActivateWindow(Dictionary<string,object> request,CancellationToken cancellation){
+        var window=WindowTarget(request);
+        cancellation.ThrowIfCancellationRequested();
+        if(IsIconic(window)){
+            ShowWindowAsync(window,9);
+            var timer=Stopwatch.StartNew();
+            while(IsIconic(window)&&timer.ElapsedMilliseconds<300){
+                if(cancellation.WaitHandle.WaitOne(15))return new{state="cancelled"};
+            }
+        }
+        cancellation.ThrowIfCancellationRequested();
+        if(WindowTarget(request)!=window)throw new InvalidOperationException("The original window identity changed.");
+        if(!IsIconic(window)&&GetForegroundWindow()!=window)SetForegroundWindow(window);
+        return new{state=GetForegroundWindow()==window&&!IsIconic(window)?"foreground":"denied",minimized=IsIconic(window)};
+    }
+    static IntPtr BackgroundReceiver(IntPtr parent,Dictionary<string,object> request){
+        string receiver=Str(request,"receiverWindowId");
+        if(receiver=="")return parent;
+        long value;
+        if(!Int64.TryParse(receiver,System.Globalization.NumberStyles.HexNumber,null,out value)||value<=0)
+            throw new ArgumentException("Invalid receiverWindowId.");
+        var child=new IntPtr(value);
+        if(Pid(child)!=Pid(parent)||!IsChild(parent,child))throw new InvalidOperationException("The receiver no longer belongs to the original window.");
+        return child;
+    }
+    static void PostWindowInput(IntPtr receiver,uint message,uint parameter,uint detail){
+        if(!PostMessageW(receiver,message,(UIntPtr)parameter,new IntPtr(unchecked((int)detail))))throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    static int BackgroundCoordinate(Dictionary<string,object> action,string field){
+        double n=Num(action,field,-1);
+        if(n<0||n>32767||n!=Math.Truncate(n))throw new ArgumentException("Invalid client-area coordinate "+field+".");
+        return (int)n;
+    }
+    static object BackgroundInput(Dictionary<string,object> request,CancellationToken cancellation){
+        lock(backgroundGate){
+            var parent=WindowTarget(request);
+            var receiver=BackgroundReceiver(parent,request);
+            var actions=Get(request,"actions") as IList;
+            int budget=(int)Num(Obj(Get(RequestSettings(request),"input")),"maxActions",128);
+            if(actions==null||actions.Count<1||actions.Count>budget)throw new ArgumentException("Invalid background input batch size.");
+            var messages=new List<Tuple<int,uint,uint,uint>>();
+            for(int index=0;index<actions.Count;index++){
+                var action=Obj(actions[index]);
+                string type=Str(action,"type");
+                if(type=="move"||type=="click"){
+                    uint position=(uint)(BackgroundCoordinate(action,"x")|(BackgroundCoordinate(action,"y")<<16));
+                    if(type=="move")messages.Add(Tuple.Create(index,0x200u,0u,position));
+                    else{
+                        string button=Str(action,"button","left");
+                        uint down=button=="left"?0x201u:button=="right"?0x204u:button=="middle"?0x207u:0u;
+                        if(down==0)throw new ArgumentException("Unknown mouse button.");
+                        uint flag=button=="left"?1u:button=="right"?2u:16u;
+                        messages.Add(Tuple.Create(index,down,flag,position));
+                        messages.Add(Tuple.Create(index,down+1,0u,position));
+                    }
+                }else if(type=="text"){
+                    string text=Str(action,"text");
+                    if(text.Length<1||text.Length>512)throw new ArgumentException("Background text must be 1..512 UTF-16 characters.");
+                    foreach(char ch in text)messages.Add(Tuple.Create(index,0x102u,(uint)ch,1u));
+                }else if(type=="key"){
+                    uint key=KeyCode(Str(action,"key"));
+                    if(key>255||key==0x10||key==0x11||key==0x12||key==0x5b)throw new ArgumentException("Send a single non-modifier virtual key or use text.");
+                    uint scan=MapVirtualKeyW(key,4), detail=1u|((scan&255u)<<16)|((scan&0xff00u)==0xe000u?1u<<24:0u);
+                    messages.Add(Tuple.Create(index,0x100u,key,detail));
+                    messages.Add(Tuple.Create(index,0x101u,key,detail|0xc0000000u));
+                }else throw new ArgumentException("Unsupported background action.");
+                if(messages.Count>4096)throw new ArgumentException("Background batch exceeds 4096 window messages.");
+            }
+            int posted=0, completed=0;
+            bool finished=false;
+            Rectangle frame;
+            var clientMap=TryWindowCaptureBounds(parent,IsIconic(parent),out frame)?ReadWindowClientMap(parent,receiver,frame):null;
+            StartDetachedActivity(request,"background",parent,receiver,clientMap);
+            try{
+                for(int i=0;i<messages.Count;i++){
+                    var m=messages[i];
+                    // Do not split one mouse or key pair because cancellation arrived after its down message.
+                    if(i==0||messages[i-1].Item1!=m.Item1)cancellation.ThrowIfCancellationRequested();
+                    if(WindowTarget(request)!=parent||BackgroundReceiver(parent,request)!=receiver)throw new InvalidOperationException("The receiver changed during input.");
+                    PostWindowInput(receiver,m.Item2,m.Item3,m.Item4);posted++;
+                    if(i+1==messages.Count||messages[i+1].Item1!=m.Item1){
+                        completed++;
+                        if(m.Item2>=0x200&&m.Item2<=0x208)SetDetachedPointer(request,m.Item4);
+                    }
+                }
+                finished=true;
+                return new{state="posted",completedActions=completed,postedMessages=posted,minimized=IsIconic(parent)};
+            }catch(Exception error){
+                return new{state=error is OperationCanceledException?"cancelled":posted>0?"partial":"failed",completedActions=completed,postedMessages=posted,reason=error.Message};
+            }finally{FinishDetachedActivity(request,finished);}
+        }
+    }
     static object Windows(Dictionary<string,object> request){
         var windows=new List<object>();int limit=(int)Num(request,"limit",100);if(limit<1||limit>200)throw new ArgumentException("Window limit must be 1..200.");string query=Str(request,"query");if(query.Length>256)throw new ArgumentException("Window query is too long.");bool truncated=false;
-        EnumWindows((window,context)=>{if(!IsWindowVisible(window)||window==overlay.Handle||window==bar.Handle)return true;var title=new System.Text.StringBuilder(1024);GetWindowTextW(window,title,title.Capacity);if(title.Length==0||title.ToString().IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)return true;if(windows.Count==limit){truncated=true;return false;}Rect rect;if(GetWindowRect(window,out rect))windows.Add(new{windowId=window.ToInt64().ToString("x"),pid=Pid(window),title=title.ToString(),minimized=IsIconic(window),bounds=Bounds(new Rectangle(rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top))});return true;},IntPtr.Zero);return new{windows=windows,truncated=truncated};
+        var parentSpec=Obj(Get(request,"parent"));
+        IntPtr parent=parentSpec.Count==0?IntPtr.Zero:WindowTarget(parentSpec);
+        WindowCallback collect=(window,context)=>{
+            if(parent==IntPtr.Zero&&(!IsWindowVisible(window)||window==overlay.Handle||window==bar.Handle))return true;
+            var title=new StringBuilder(1024);GetWindowTextW(window,title,title.Capacity);
+            if(parent==IntPtr.Zero&&title.Length==0||title.ToString().IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)return true;
+            if(windows.Count==limit){truncated=true;return false;}
+            Rect rect,client;
+            if(GetWindowRect(window,out rect)&&GetClientRect(window,out client)){
+                var bounds=Rectangle.FromLTRB(rect.left,rect.top,rect.right,rect.bottom);
+                var root=parent==IntPtr.Zero?window:parent;
+                Rect frame=rect;
+                if(!IsIconic(root)&&(root==window||GetWindowRect(root,out frame)))
+                    ReadWindowClientMap(root,window,Rectangle.FromLTRB(frame.left,frame.top,frame.right,frame.bottom));
+                windows.Add(new{
+                    windowId=window.ToInt64().ToString("x"), pid=Pid(window), title=title.ToString(), minimized=IsIconic(window),
+                    clientWidth=client.right-client.left,clientHeight=client.bottom-client.top,bounds=Bounds(bounds)
+                });
+            }
+            return true;
+        };
+        if(parent==IntPtr.Zero)EnumWindows(collect,IntPtr.Zero);
+        else EnumChildWindows(parent,collect,IntPtr.Zero);
+        return new{windows=windows,truncated=truncated};
     }
     static double DisplayScale(DesktopScreen display){
         try{uint x,y;if(GetDpiForMonitor(MonitorFromPoint(new Point(display.Bounds.Left+1,display.Bounds.Top+1),2),0,out x,out y)==0)return x/96.0;}catch(DllNotFoundException){}catch(EntryPointNotFoundException){}
@@ -627,14 +886,60 @@ public static class RabiComputer {
         if(scope!="display"&&scope!="region"&&result.ContainsKey("displayId"))throw new ArgumentException("Capture displayId requires display or region scope.");
         return result;
     }
-    static Rectangle ResolveCaptureArea(Dictionary<string,object> spec,out IntPtr target,out uint expected){
+    static bool TryWindowCaptureBounds(IntPtr window,bool minimized,out Rectangle bounds){
+        Rect rect;
+        bounds=Rectangle.Empty;
+        if(minimized){
+            var placement=new WindowPlacement{length=Marshal.SizeOf(typeof(WindowPlacement))};
+            if(!GetWindowPlacement(window,ref placement))return false;
+            rect=placement.normal;
+        }else if(!GetWindowRect(window,out rect))return false;
+        bounds=Rectangle.FromLTRB(rect.left,rect.top,rect.right,rect.bottom);
+        return true;
+    }
+    static WindowClientMap ReadWindowClientMap(IntPtr window,IntPtr receiver,Rectangle frame){
+        uint pid;
+        uint thread=GetWindowThreadProcessId(receiver,out pid);
+        if(thread==0||pid!=Pid(window))return null;
+        uint dpi=0;
+        try{dpi=GetDpiForWindow(receiver);}catch(EntryPointNotFoundException){}
+        var key=Tuple.Create(window,receiver);
+        lock(windowClientLock){
+            if(IsIconic(window)){
+                WindowClientMap known;
+                return windowClientMaps.TryGetValue(key,out known)&&known.pid==pid&&known.thread==thread&&known.dpi==dpi&&known.frame==frame.Size?known:null;
+            }
+            Rect rawClient;
+            var origin=new Point();
+            if(!GetClientRect(receiver,out rawClient)||!ClientToScreen(receiver,ref origin)||rawClient.right<=0||rawClient.bottom<=0){
+                windowClientMaps.Remove(key);
+                return null;
+            }
+            var client=new Rectangle(origin.X-frame.X,origin.Y-frame.Y,rawClient.right,rawClient.bottom);
+            var map=new WindowClientMap{pid=pid,thread=thread,dpi=dpi,frame=frame.Size,client=client,
+                revision=pid+":"+thread+":"+dpi+":"+frame.Width+":"+frame.Height+":"+client.X+":"+client.Y+":"+client.Width+":"+client.Height};
+            if(windowClientMaps.Count>=256&&!windowClientMaps.ContainsKey(key)){
+                using(var entries=windowClientMaps.Keys.GetEnumerator()){
+                    entries.MoveNext();
+                    windowClientMaps.Remove(entries.Current);
+                }
+            }
+            windowClientMaps[key]=map;
+            return map;
+        }
+    }
+    static Rectangle ResolveCaptureArea(Dictionary<string,object> spec,out IntPtr target,out uint expected,bool allowMinimized=false){
         target=IntPtr.Zero;expected=0;string scope=Str(spec,"scope"),revision=Str(spec,"layoutRevision");
         if(revision!=""&&revision!=LayoutRevision())throw new InvalidOperationException("Display layout changed; query displays.list and observe again.");
         if(scope=="window"){
             if(Str(spec,"windowId")==""||Get(spec,"pid")==null)throw new ArgumentException("Window capture needs windowId and pid.");
-            target=new IntPtr(Convert.ToInt64(Str(spec,"windowId"),16));expected=Convert.ToUInt32(Get(spec,"pid"));Rect rect;
-            if(!IsWindow(target)||Pid(target)!=expected||IsIconic(target)||!GetWindowRect(target,out rect))throw new InvalidOperationException("Window changed or is minimized; query its current identity.");
-            return new Rectangle(rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top);
+            target=new IntPtr(Convert.ToInt64(Str(spec,"windowId"),16));expected=Convert.ToUInt32(Get(spec,"pid"));
+            if(!IsWindow(target)||Pid(target)!=expected)throw new InvalidOperationException("Window identity changed.");
+            bool minimized=IsIconic(target);
+            if(minimized&&!allowMinimized)throw new InvalidOperationException("Window is minimized; restore it or use background capture.");
+            Rectangle bounds;
+            if(!TryWindowCaptureBounds(target,minimized,out bounds))throw new InvalidOperationException(minimized?"The minimized window has no restored bounds.":"Cannot read window bounds.");
+            return bounds;
         }
         if(scope=="virtual")return SystemInformation.VirtualScreen;
         DesktopScreen selected=null;foreach(var display in DesktopScreen.AllScreens)if(display.DeviceName==Str(spec,"displayId"))selected=display;
@@ -651,46 +956,118 @@ public static class RabiComputer {
     }
     static Frame Capture(Dictionary<string,object> request,Bitmap reusable=null,bool visibleOnly=false){
         var spec=CaptureSpec(request);var supplied=Obj(Get(request,"source"));IntPtr target;uint expected;
-        Rectangle bounds=ResolveCaptureArea(spec,out target,out expected);string layoutRevision=LayoutRevision();
+        string action=Str(request,"action");
+        bool background=action=="screen.capture.background"||action=="recording.frame";
+        bool preview=action=="screen.capture.background";
+        Rectangle bounds=ResolveCaptureArea(spec,out target,out expected,background);string layoutRevision=LayoutRevision();
+        if(background&&target==IntPtr.Zero)throw new ArgumentException("Background capture requires a windowId and pid.");
+        var receiver=preview?BackgroundReceiver(target,request):target;
+        bool minimized=background&&IsIconic(target);
+        var client=preview?ReadWindowClientMap(target,receiver,bounds):null;
         if(bounds.Width<1||bounds.Height<1||(long)bounds.Width*bounds.Height>33554432)throw new InvalidOperationException("Raw capture exceeds 32 megapixels; select a display or smaller region.");
         Bitmap bitmap=reusable!=null&&reusable.Width==bounds.Width&&reusable.Height==bounds.Height?reusable:new Bitmap(bounds.Width,bounds.Height,PixelFormat.Format32bppArgb);
-        try{using(var graphics=Graphics.FromImage(bitmap)){if(target==IntPtr.Zero||visibleOnly)graphics.CopyFromScreen(bounds.Left,bounds.Top,0,0,bounds.Size);else{var dc=graphics.GetHdc();try{if(!PrintWindow(target,dc,2))throw new InvalidOperationException("This window does not support capture.");}finally{graphics.ReleaseHdc(dc);}}}
+        try{using(var graphics=Graphics.FromImage(bitmap)){
+            if(target==IntPtr.Zero||visibleOnly)graphics.CopyFromScreen(bounds.Left,bounds.Top,0,0,bounds.Size);
+            else{
+                var dc=graphics.GetHdc();
+                try{if(!PrintWindow(target,dc,2))throw new InvalidOperationException("This window does not support capture.");}
+                finally{graphics.ReleaseHdc(dc);}
+            }
+        }
             if(target!=IntPtr.Zero&&(!IsWindow(target)||Pid(target)!=expected))throw new InvalidOperationException("Window identity changed during capture.");
+            if(client!=null){
+                Rectangle current;
+                var confirmed=IsIconic(target)==minimized&&(receiver==target||IsChild(target,receiver))&&
+                    TryWindowCaptureBounds(target,minimized,out current)?ReadWindowClientMap(target,receiver,current):null;
+                if(confirmed==null||confirmed.revision!=client.revision)client=null;
+            }
             if(layoutRevision!=LayoutRevision())throw new InvalidOperationException("Display layout changed during capture; query displays.list again.");
             var result=new Frame{id=Guid.NewGuid().ToString(),bitmap=bitmap,bounds=bounds,created=DateTime.UtcNow,source=new Dictionary<string,object>(spec)};
             result.source["kind"]=target==IntPtr.Zero?"desktop":"window";result.source["coordinateSpace"]="capture";result.source["coordinateVariant"]="raw";result.source["bounds"]=Bounds(bounds);result.source["rawBounds"]=Bounds(bounds);result.source["layoutRevision"]=layoutRevision;
             result.source["instanceId"]=Get(supplied,"instanceId",Get(request,"instanceId"));result.source["frameId"]=result.id;result.source["capturedAt"]=result.created.ToString("o");result.source["width"]=bitmap.Width;result.source["height"]=bitmap.Height;
-            if(visibleOnly)result.source["captureMethod"]="visible-desktop";return result;
+            if(visibleOnly)result.source["captureMethod"]="visible-desktop";
+            else if(background){result.source["captureMethod"]="window-print";result.source["minimized"]=minimized;}
+            if(client!=null)result.source["previewClient"]=new{receiverId=receiver.ToInt64().ToString("x"),revision=client.revision,
+                x=client.client.X,y=client.client.Y,width=client.client.Width,height=client.client.Height,frameWidth=bounds.Width,frameHeight=bounds.Height};
+            return result;
         }catch{bitmap.Dispose();throw;}
     }
     static byte[] Pixels(Bitmap bitmap,byte[] reusable=null){var area=new Rectangle(0,0,bitmap.Width,bitmap.Height);var bits=bitmap.LockBits(area,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);try{var bytes=reusable!=null&&reusable.Length==bitmap.Width*bitmap.Height*4?reusable:new byte[bitmap.Width*bitmap.Height*4];for(int y=0;y<bitmap.Height;y++)Marshal.Copy(IntPtr.Add(bits.Scan0,y*bits.Stride),bytes,y*bitmap.Width*4,bitmap.Width*4);return bytes;}finally{bitmap.UnlockBits(bits);}}
     static void ApplyObservationRequestSettings(Dictionary<string,object> request){
         var selected=RequestSettings(request);lock(stateLock)settings=MergeSettings(settings,SelectSettingsDomains(selected,"presentation"));
     }
-    static void ClearObservation(){
-        observationId=null;observerLabel=null;observationExpires=0;
+    static void ClearObservation(){observationId=null;observerLabel=null;}
+    static long NoticeUntil(){
+        double duration=Num(Obj(Get(settings,"presentation")),"noticeDurationMs",2500);
+        return Stopwatch.GetTimestamp()+(long)(duration*Stopwatch.Frequency/1000);
+    }
+    static void RefreshObservations(){
+        if(session==null&&presentationStopAction==null){
+            var visible=VisibleObservations();
+            if(visible.Count>0&&(observationId!=null||presentationPhase==null||presentationPhase=="ready")){
+                var observation=visible[0];
+                observationId=observation.id;observerLabel=observation.label;
+                Phase(observation.phase,observation.request,observation.source);
+                return;
+            }
+            if(observationId!=null){
+                ClearObservation();
+                presentationPhase=null;presentationRequestId=null;presentationDisplay=null;presentationRegion=null;
+            }
+        }
+        Redraw();
     }
     static void ShowObservation(string phase,Dictionary<string,object> request,Dictionary<string,object> source){
+        if(Bool(request,"inlineObservation"))return;
         ui.Post(_=>{
-            if(session!=null||presentationStopAction!=null)return;
             string id=Str(request,"id");
+            DesktopActivity item;
             if(phase=="capturing"){
-                observationId=id;observationExpires=0;
-                observerLabel=Str(request,"observerLabel").Trim();
-                if(observerLabel.Length==0)observerLabel="Rabi";
+                item=new DesktopActivity{id=id,owner=Str(request,"observerOwner",id),label=ActivityLabel(Str(request,"observerLabel")),mode="observation",request=request,order=++activityOrder};
+                observations[id]=item;
             }else{
-                if(observationId!=id)return;
-                double duration=Num(Obj(Get(settings,"presentation")),"noticeDurationMs",2500);
-                observationExpires=Stopwatch.GetTimestamp()+(long)(duration*Stopwatch.Frequency/1000);
+                if(!observations.TryGetValue(id,out item))return;
+                item.expires=NoticeUntil();
             }
-            Phase(phase,request,source);
+            item.phase=phase;item.source=source;
+            if(session==null&&presentationStopAction==null&&observationId==null&&presentationPhase!="tracking"){
+                observationId=id;observerLabel=item.label;
+            }
+            ApplyPresentationRenderer(request);
+            RefreshObservations();
         },null);
     }
     static void ExpireObservation(){
-        if(observationExpires==0||Stopwatch.GetTimestamp()<observationExpires)return;
-        ClearObservation();
-        presentationPhase=null;presentationRequestId=null;presentationDisplay=null;presentationRegion=null;
-        PublishPresentation();
+        long now=Stopwatch.GetTimestamp();
+        var expired=new List<string>();
+        foreach(var item in observations.Values)if(item.expires!=0&&item.expires<=now)expired.Add(item.id);
+        foreach(string id in expired)observations.Remove(id);
+        if(expired.Count>0)RefreshObservations();
+        expired.Clear();
+        foreach(var item in detachedActivities.Values)if(item.expires!=0&&item.expires<=now)expired.Add(item.id);
+        foreach(string id in expired)detachedActivities.Remove(id);
+        if(expired.Count>0)Redraw();
+    }
+    static void StartDetachedActivity(Dictionary<string,object> request,string mode,IntPtr window,IntPtr receiver,WindowClientMap client=null){
+        string id=Str(request,"requestId");
+        var title=new StringBuilder(256);
+        if(window!=IntPtr.Zero)GetWindowTextW(window,title,title.Capacity);
+        var item=new DesktopActivity{id=id,owner=Str(request,"owner",id),label=ActivityLabel(Str(Obj(Get(request,"source")),"label")),mode=mode,phase="operating",window=window,receiver=receiver,pid=window==IntPtr.Zero?0:Pid(window),windowTitle=title.ToString(),clientRevision=client==null?null:client.revision};
+        ui.Post(_=>{item.order=++activityOrder;detachedActivities[id]=item;ApplyPresentationRenderer(request);Redraw();},null);
+    }
+    static void SetDetachedPointer(Dictionary<string,object> request,uint position){
+        if(!Bool(Obj(Get(RequestSettings(request),"control")),"showPointer",true))return;
+        string id=Str(request,"requestId");var point=new Point((int)(position&0xffff),(int)(position>>16));
+        ui.Post(_=>{DesktopActivity item;if(detachedActivities.TryGetValue(id,out item)){item.clientPoint=point;Redraw();}},null);
+    }
+    static void FinishDetachedActivity(Dictionary<string,object> request,bool completed){
+        string id=Str(request,"requestId");
+        ui.Post(_=>{
+            DesktopActivity item;if(!detachedActivities.TryGetValue(id,out item))return;
+            if(completed&&item.clientPoint.HasValue){item.expires=NoticeUntil();item.phase="completed";}
+            else detachedActivities.Remove(id);
+            Redraw();
+        },null);
     }
     static object Screen(Dictionary<string,object> request){
         ApplyObservationRequestSettings(request);
@@ -776,11 +1153,10 @@ public static class RabiComputer {
     static object EncodeFrame(Frame frame,Dictionary<string,object> request){
         bool cached=false;
         try{
-            bool explicitScope=Get(request,"scope")!=null||Get(Obj(Get(request,"captureSpec")),"scope")!=null||Get(Obj(Get(request,"source")),"scope")!=null;
-            int maximum=(int)Num(request,"maxWidth",explicitScope?frame.bitmap.Width:Math.Min(1920,frame.bitmap.Width));if(maximum<1||maximum>3840&&request.ContainsKey("maxWidth"))throw new ArgumentException("maxWidth must be 1..3840.");
+            int maximum=(int)Num(request,"maxWidth",frame.bitmap.Width);if(maximum<1||maximum>3840&&request.ContainsKey("maxWidth"))throw new ArgumentException("maxWidth must be 1..3840.");
             int width=Math.Min(maximum,frame.bitmap.Width),height=Math.Max(1,(int)((long)frame.bitmap.Height*width/frame.bitmap.Width));
-            using(var output=new Bitmap(frame.bitmap,new Size(width,height)))using(var bytes=new MemoryStream()){
-                output.Save(bytes,ImageFormat.Png);if(bytes.Length>8388608)throw new InvalidOperationException("Screenshot PNG exceeds 8 MiB; select maxWidth or a smaller display region.");
+            using(var scaled=width==frame.bitmap.Width?null:new Bitmap(frame.bitmap,new Size(width,height)))using(var bytes=new MemoryStream()){
+                (scaled??frame.bitmap).Save(bytes,ImageFormat.Png);if(bytes.Length>8388608)throw new InvalidOperationException("Screenshot PNG exceeds 8 MiB; select maxWidth or a smaller display region.");
                 var source=new Dictionary<string,object>(frame.source);source["width"]=width;source["height"]=height;
                 string imageItemId=Guid.NewGuid().ToString();source["imageItemId"]=imageItemId;source["coordinateVariant"]="image";frame.imageItems[imageItemId]=new Size(width,height);
                 lock(frameLock){frames.Add(frame.id,frame);frameOrder.Add(frame.id);EvictFrames(RequestSettings(request));cached=frames.ContainsKey(frame.id);}
@@ -953,7 +1329,22 @@ public static class RabiComputer {
 
         if(action=="displays.list")return Displays();
         if(action=="windows.list")return Windows(request);
-        if(action=="screen.capture")return Screen(request);
+        if(action=="recording.presentation"){
+            recordingBar.UpdateState(Str(request,"recordingId"),Str(request,"sourceLabel"),Str(request,"state"));
+            return new{state="shown",visible=recordingBar.Visible};
+        }
+        if(action=="recording.frame"){
+            var frame=Capture(request);
+            try{using(var bytes=new MemoryStream()){
+                frame.bitmap.Save(bytes,ImageFormat.Png);
+                if(bytes.Length>8388608)throw new InvalidOperationException("Recording window frame exceeds 8 MiB.");
+                return new{width=frame.bitmap.Width,height=frame.bitmap.Height,data=Convert.ToBase64String(bytes.ToArray())};
+            }}finally{frame.Dispose();}
+        }
+        if(action=="screen.capture"||action=="screen.capture.background")return Screen(request);
+        if(action=="input.detached.cancel"){CancelDetached(Str(request,"requestId"));return new{state="cancellation-requested"};}
+        if(action=="input.gamepad.status")return VirtualXboxPad.Status(Str(request,"owner"));
+        if(action=="input.gamepad.close")return VirtualXboxPad.Close(Str(request,"owner"));
         if(action=="input.execute")return ExecuteInputBatch(request);
         if(action=="input.cancel"){MarkInputCancelled(request);lock(inputGate)return new{state="cancelled",releaseState="released",workState="settled"};}
         if(action=="control.activity"){if(session==Str(request,"controlSessionId"))lastActivity.Restart();return new{state=session==null?"absent":"active"};}
@@ -963,6 +1354,7 @@ public static class RabiComputer {
                 ApplyControlRequestSettings(request);
                 if(!Bool(settings,"enabled",true)||!Bool(Obj(Get(settings,"features")),"input",true))throw new InvalidOperationException("Native input was disabled before control began.");
                 ClearObservation();
+                foregroundOwner=Str(request,"owner",Str(request,"controlSessionId"));
                 sharedControl=Str(request,"inputMode")=="shared";session=Str(request,"controlSessionId");presentationPhase="ready";presentationRequestId=Str(request,"requestId",session);nativeBarMode=Str(request,"controlRenderer","native")!="qt";initialPhysicalKeys.Clear();for(uint key=1;key<256;key++)if(GetAsyncKeyState((int)key)<0)initialPhysicalKeys.Add(key);lastActivity.Restart();bar.Source=Obj(Get(request,"source"));externalQt=Str(request,"renderer")=="qt";RegisterExit(Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc"));if(Str(request,"controlRenderer")!="qt"){bar.Show();ShowWindow(bar.Handle,4);}PublishPresentation();result=new{state="active",visible=Str(request,"controlRenderer")=="qt"||IsWindowVisible(bar.Handle),pointer=showPointer,hotkey=new{registered=hotkeyRegistered,error=hotkeyError},renderRevision=externalQt?presentationRevision:0};});return result;
         }
         if(action=="settings.patch"){UI(()=>ApplySettingsPatch(Obj(Get(request,"patch"))));return new{state="applied"};}
@@ -972,7 +1364,7 @@ public static class RabiComputer {
         if(action=="annotation.track.stop"){Tracking item;lock(tracking)tracking.TryGetValue(Str(request,"trackingId"),out item);return item==null?(object)new{state="absent"}:StopTracking(item,Bool(request,"clear"),"requested");}
         if(action.StartsWith("annotation.")){object result=null;UI(()=>result=Annotation(request));return result;}
         if(Str(request,"renderer")=="qt")externalQt=true;
-        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,captureSourceReferenceVersion=1,screenWaitVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
+        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,captureSourceReferenceVersion=1,screenWaitVersion=1,windowInputVersion=1,windowClientPreviewVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking","backgroundInput","backgroundCapture","windowActivation","gamepad","windowClientPreview"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
         throw new ArgumentException("Unsupported desktop operation.");
     }
     static void Handle(Dictionary<string,object> request){try{Emit(new{id=Get(request,"id"),result=Dispatch(request)});}catch(Exception error){var cause=error.GetBaseException();bool uncertain=false;lock(stateLock)uncertain=Str(request,"action")=="input.execute"&&(ownedKeys.Count>0||ownedButtons.Count>0||ownedUnicode.Count>0);Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=cause.Message,uncertain=uncertain}});}finally{if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;if(pendingInputCounts.TryGetValue(id,out count)){if(count<=1){pendingInputCounts.Remove(id);pendingInputSessions.Remove(id);cancelledRequests.Remove(id);}else pendingInputCounts[id]=count-1;}}if(Str(request,"action")=="control.begin")lock(stateLock){string id=Str(request,"controlSessionId");int count;if(pendingControlBegins.TryGetValue(id,out count)){if(count<=1){pendingControlBegins.Remove(id);endingControlSessions.Remove(id);}else pendingControlBegins[id]=count-1;}}}}
@@ -982,21 +1374,199 @@ public static class RabiComputer {
     }}
     static void ReserveControlBegin(Dictionary<string,object> request){lock(stateLock){string id=Str(request,"controlSessionId");int count;pendingControlBegins.TryGetValue(id,out count);pendingControlBegins[id]=count+1;}}
     static void MarkControlEnded(Dictionary<string,object> request){string id=Str(request,"controlSessionId");lock(stateLock){if(pendingControlBegins.ContainsKey(id)||session==id)endingControlSessions.Add(id);}EndControl(id,Str(request,"reason","requested"),false);}
+    static void CancelDetached(string id){
+        CancellationTokenSource pending;
+        if(detachedJobs.TryGetValue(id,out pending)){try{pending.Cancel();}catch(ObjectDisposedException){}}
+    }
+    static void QueueDetached(Dictionary<string,object> request){
+        string id=Str(request,"requestId"), action=Str(request,"action");
+        var pending=new CancellationTokenSource();
+        if(id==""||!detachedJobs.TryAdd(id,pending)){
+            pending.Dispose();Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_REQUEST_CONFLICT",message="A unique requestId is required for detached input.",uncertain=false}});return;
+        }
+        double remaining=Num(request,"deadlineUtcMs",UtcMilliseconds()+30000)-UtcMilliseconds();
+        pending.CancelAfter((int)Math.Max(0,Math.Min(30000,remaining)));
+        ThreadPool.QueueUserWorkItem(_=>{
+            object result;
+            try{
+                pending.Token.ThrowIfCancellationRequested();
+                if(action=="input.background")result=BackgroundInput(request,pending.Token);
+                else if(action=="windows.activate")result=ActivateWindow(request,pending.Token);
+                else result=VirtualXboxPad.Perform(request,pending.Token);
+            }
+            catch(OperationCanceledException){result=new{state="cancelled"};}
+            catch(Exception error){result=new{state="failed",reason=error.GetBaseException().Message};}
+            finally{CancellationTokenSource removed;detachedJobs.TryRemove(id,out removed);pending.Dispose();}
+            Emit(new{id=Get(request,"id"),result});
+        });
+    }
+    // The installed ViGEmBus creates a real, separate XInput slot. Load only the pinned client next to the worker.
+    static class VirtualXboxPad {
+        const uint Success=0x20000000;
+        static readonly object gate=new object();
+        static readonly Stopwatch idle=Stopwatch.StartNew();
+        static readonly Dictionary<string,ushort> buttons=new Dictionary<string,ushort>{
+            {"Up",1},{"Down",2},{"Left",4},{"Right",8},{"Start",16},{"Back",32},{"LS",64},{"RS",128},
+            {"LB",256},{"RB",512},{"A",4096},{"B",8192},{"X",16384},{"Y",32768}
+        };
+        [StructLayout(LayoutKind.Sequential)] struct Report { public ushort buttons; public byte lt,rt; public short lx,ly,rx,ry; }
+        struct FrameState { public Report report; public int ms; }
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr Allocate();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void Free(IntPtr handle);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate uint Connect(IntPtr client);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate uint Target(IntPtr client,IntPtr pad);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate uint Update(IntPtr client,IntPtr pad,Report report);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate uint UserIndex(IntPtr client,IntPtr pad,out uint index);
+        [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true,SetLastError=true)] static extern IntPtr LoadLibraryExW(string file,IntPtr reserved,uint flags);
+        [DllImport("kernel32.dll",CharSet=CharSet.Ansi,ExactSpelling=true)] static extern IntPtr GetProcAddress(IntPtr module,string name);
+        static IntPtr library,client,pad;
+        static Update send;
+        static Target remove;
+        static UserIndex indexOf;
+        static Free disconnect,freeClient,freePad;
+        static volatile string owner, activeRequest, activeIdentity;
+        static string LibraryPath(){return Path.Combine(NativeDirectory,Environment.Is64BitProcess?"ViGEmClient-x64.dll":"ViGEmClient-x86.dll");}
+        static T Bind<T>(string name) where T:class {
+            IntPtr proc=GetProcAddress(library,name);
+            if(proc==IntPtr.Zero)throw new MissingMethodException(name);
+            return (T)(object)Marshal.GetDelegateForFunctionPointer(proc,typeof(T));
+        }
+        static void Checked(uint result,string step){
+            if(result!=Success)throw new InvalidOperationException(step+" returned ViGEm status 0x"+result.ToString("x8")+".");
+        }
+        static void Open(string identity){
+            if(library==IntPtr.Zero){
+                string file=LibraryPath();
+                if(!File.Exists(file))throw new InvalidOperationException("The desktop resource is missing its ViGEm client library.");
+                library=LoadLibraryExW(file,IntPtr.Zero,0x900);
+                if(library==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            freeClient=Bind<Free>("vigem_free");
+            freePad=Bind<Free>("vigem_target_free");
+            disconnect=Bind<Free>("vigem_disconnect");
+            remove=Bind<Target>("vigem_target_remove");
+            send=Bind<Update>("vigem_target_x360_update");
+            indexOf=Bind<UserIndex>("vigem_target_x360_get_user_index");
+            client=Bind<Allocate>("vigem_alloc")();
+            if(client==IntPtr.Zero)throw new InvalidOperationException("Cannot allocate the ViGEm client.");
+            bool connected=false;
+            try{
+                Checked(Bind<Connect>("vigem_connect")(client),"Connect virtual controller bus");
+                connected=true;
+                pad=Bind<Allocate>("vigem_target_x360_alloc")();
+                if(pad==IntPtr.Zero)throw new InvalidOperationException("Cannot allocate the virtual controller.");
+                Checked(Bind<Target>("vigem_target_add")(client,pad),"Attach virtual controller");
+                owner=identity;idle.Restart();
+            }catch{
+                if(pad!=IntPtr.Zero){freePad(pad);pad=IntPtr.Zero;}
+                if(connected)disconnect(client);
+                freeClient(client);client=IntPtr.Zero;
+                throw;
+            }
+        }
+        static uint? Slot(){uint index;return pad!=IntPtr.Zero&&indexOf(client,pad,out index)==Success?(uint?)index:null;}
+        static void Disconnect(){
+            if(pad==IntPtr.Zero)return;
+            send(client,pad,new Report());
+            remove(client,pad);freePad(pad);pad=IntPtr.Zero;
+            disconnect(client);freeClient(client);client=IntPtr.Zero;owner=null;
+        }
+        static int Value(Dictionary<string,object> field,string name,int min,int max,int fallback=0){
+            double value=Num(field,name,fallback);
+            if(Double.IsNaN(value)||value<min||value>max||value!=Math.Truncate(value))throw new ArgumentException("Invalid gamepad "+name+".");
+            return (int)value;
+        }
+        public static object Perform(Dictionary<string,object> request,CancellationToken cancellation){
+            string identity=Str(request,"owner");
+            if(identity.Length!=64)throw new ArgumentException("A trusted gamepad owner is required.");
+            var raw=Get(request,"frames") as IList;
+            if(raw==null||raw.Count<1||raw.Count>32)throw new ArgumentException("A gamepad batch needs 1..32 frames.");
+            int duration=0;
+            var frames=new List<FrameState>();
+            foreach(var item in raw){
+                var f=Obj(item);
+                int ms=Value(f,"durationMs",1,1000);
+                duration+=ms;
+                if(duration>8000)throw new ArgumentException("A gamepad batch can hold controls for at most 8000 ms.");
+                var report=new Report {
+                    lx=(short)Value(f,"leftX",-32768,32767),ly=(short)Value(f,"leftY",-32768,32767),
+                    rx=(short)Value(f,"rightX",-32768,32767),ry=(short)Value(f,"rightY",-32768,32767),
+                    lt=(byte)Value(f,"leftTrigger",0,255),rt=(byte)Value(f,"rightTrigger",0,255)
+                };
+                var pressed=Get(f,"buttons") as IList;
+                if(pressed!=null)foreach(var name in pressed){
+                    ushort mask;
+                    if(!buttons.TryGetValue(Convert.ToString(name),out mask))throw new ArgumentException("Unknown gamepad button.");
+                    report.buttons|=mask;
+                }
+                frames.Add(new FrameState{report=report,ms=ms});
+            }
+            lock(gate){
+                cancellation.ThrowIfCancellationRequested();
+                if(pad!=IntPtr.Zero&&owner!=identity)return new{state="busy",connected=false};
+                activeRequest=Str(request,"requestId");
+                activeIdentity=identity;
+                int completed=0;
+                try{
+                    if(pad==IntPtr.Zero)Open(identity);
+                    StartDetachedActivity(request,"gamepad",IntPtr.Zero,IntPtr.Zero);
+                    foreach(var frame in frames){
+                        cancellation.ThrowIfCancellationRequested();
+                        Checked(send(client,pad,frame.report),"Update virtual controller");
+                        if(cancellation.WaitHandle.WaitOne(frame.ms))throw new OperationCanceledException();
+                        completed++;
+                    }
+                    return new{state="sent",connected=true,userIndex=Slot(),completedActions=completed};
+                }catch(OperationCanceledException){return new{state="cancelled",connected=pad!=IntPtr.Zero,completedActions=completed};}
+                catch(Exception error){return new{state=pad==IntPtr.Zero?"unavailable":"partial",connected=pad!=IntPtr.Zero,completedActions=completed,reason=error.Message};}
+                finally{
+                    activeIdentity=null;
+                    activeRequest=null;
+                    if(pad!=IntPtr.Zero&&send(client,pad,new Report())!=Success)Disconnect();
+                    idle.Restart();
+                    FinishDetachedActivity(request,false);
+                }
+            }
+        }
+        public static object Status(string identity){
+            if(!Monitor.TryEnter(gate))return new{state="running",connected=owner==identity};
+            try{
+                if(pad!=IntPtr.Zero)return owner==identity?(object)new{state="connected",connected=true,userIndex=Slot()}:new{state="busy",connected=false};
+                using(var driver=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\ViGEmBus")){
+                    return new{state=driver!=null&&File.Exists(LibraryPath())?"ready":"unavailable",connected=false};
+                }
+            }finally{Monitor.Exit(gate);}
+        }
+        public static object Close(string identity){
+            string request=activeRequest;
+            if(activeIdentity==identity&&request!=null)CancelDetached(request);
+            lock(gate){
+                if(owner!=identity)return new{state="absent"};
+                Disconnect();return new{state="closed"};
+            }
+        }
+        public static void Expire(){
+            if(idle.ElapsedMilliseconds<60000||!Monitor.TryEnter(gate))return;
+            try{if(idle.ElapsedMilliseconds>=60000)Disconnect();}finally{Monitor.Exit(gate);}
+        }
+        public static void Shutdown(){lock(gate)Disconnect();}
+    }
     public static void Run(){
         SetProcessDpiAwarenessContext((IntPtr)(-4));var ready=new ManualResetEvent(false);
-        var gui=new Thread(()=>{Application.EnableVisualStyles();overlay=new Overlay();bar=new ControlBar();var ignored=overlay.Handle;ignored=bar.Handle;ui=new WindowsFormsSynchronizationContext();overlay.Show();ShowWindow(overlay.Handle,4);
+        var gui=new Thread(()=>{Application.EnableVisualStyles();overlay=new Overlay();bar=new ControlBar();recordingBar=new RecordingBar();var ignored=overlay.Handle;ignored=bar.Handle;ui=new WindowsFormsSynchronizationContext();overlay.Show();ShowWindow(overlay.Handle,4);
             keyboardHook=(code,message,data)=>{if(code>=0){var value=(KeyHookData)Marshal.PtrToStructure(data,typeof(KeyHookData));if((value.flags&0x10)==0&&value.extra!=injectionMarker){RememberPhysical(PhysicalKeyCode(value),(value.flags&0x80)==0);Interlocked.Increment(ref physicalInputEpoch);Interlocked.Increment(ref physicalKeyboardEpoch);if(session==null)return CallNextHookEx(keyboardHandle,code,message,data);if((value.flags&0x80)!=0){initialPhysicalKeys.Remove(value.key);physicalExitPending=false;}else if(initialPhysicalKeys.Contains(value.key))return CallNextHookEx(keyboardHandle,code,message,data);if(value.key==exitKey&&(message.ToInt32()==0x100||message.ToInt32()==0x104))physicalExitPending=true;if(ExitsOnPhysical(false))EndControl(session,"local-input");}}return CallNextHookEx(keyboardHandle,code,message,data);};
             mouseHook=(code,message,data)=>{if(code>=0){var value=(MouseHookData)Marshal.PtrToStructure(data,typeof(MouseHookData));if((value.flags&1)==0&&value.extra!=injectionMarker){switch(message.ToInt32()){case 0x201:RememberPhysical(1,true);break;case 0x202:RememberPhysical(1,false);break;case 0x204:RememberPhysical(2,true);break;case 0x205:RememberPhysical(2,false);break;case 0x207:RememberPhysical(4,true);break;case 0x208:RememberPhysical(4,false);break;}bool moved=lastPhysicalX==int.MinValue||value.x!=lastPhysicalX||value.y!=lastPhysicalY;lastPhysicalX=value.x;lastPhysicalY=value.y;if(moved||message.ToInt32()!=0x200){Interlocked.Increment(ref physicalInputEpoch);Interlocked.Increment(ref physicalMouseEpoch);if(session!=null&&ExitsOnPhysical(true))EndControl(session,"local-input");}}}return CallNextHookEx(mouseHandle,code,message,data);};
             keyboardHandle=SetWindowsHookExW(13,keyboardHook,GetModuleHandleW(null),0);mouseHandle=SetWindowsHookExW(14,mouseHook,GetModuleHandleW(null),0);
             var timer=new System.Windows.Forms.Timer();timer.Interval=100;timer.Tick+=(sender,args)=>{
                 UpdateWindowLayers();
                 foreach(string layerId in new List<string>(layers.Keys)){var layer=layers[layerId];if(Get(layer,"expiresMono")!=null&&Convert.ToDouble(Get(layer,"expiresMono"))<=Stopwatch.GetTimestamp())Annotation(new Dictionary<string,object>{{"action","annotation.clear"},{"layerId",layerId},{"version",Num(layer,"version",1)}});}
-                if(session!=null&&idleEnabled&&lastActivity.Elapsed.TotalSeconds>=idleSeconds)EndControl(session,"idle");ExpireObservation();bar.RefreshStatus();};timer.Start();ready.Set();Application.Run();timer.Stop();if(keyboardHandle!=IntPtr.Zero)UnhookWindowsHookEx(keyboardHandle);if(mouseHandle!=IntPtr.Zero)UnhookWindowsHookEx(mouseHandle);overlay.Dispose();bar.Dispose();});
+                if(session!=null&&idleEnabled&&lastActivity.Elapsed.TotalSeconds>=idleSeconds)EndControl(session,"idle");VirtualXboxPad.Expire();ExpireObservation();bar.RefreshStatus();recordingBar.Expire();};timer.Start();ready.Set();Application.Run();timer.Stop();if(keyboardHandle!=IntPtr.Zero)UnhookWindowsHookEx(keyboardHandle);if(mouseHandle!=IntPtr.Zero)UnhookWindowsHookEx(mouseHandle);overlay.Dispose();bar.Dispose();recordingBar.Dispose();});
         gui.SetApartmentState(ApartmentState.STA);gui.Start();ready.WaitOne();
         var inputWorker=new Thread(()=>{foreach(var request in inputRequests.GetConsumingEnumerable())Handle(request);});inputWorker.IsBackground=true;inputWorker.Start();
         var recoveryWorker=new Thread(()=>{foreach(var request in recoveryReplies.GetConsumingEnumerable())Handle(request);});recoveryWorker.IsBackground=true;recoveryWorker.Start();
         try{string line;while((line=Console.ReadLine())!=null){var request=new JavaScriptSerializer{MaxJsonLength=20000000}.Deserialize<Dictionary<string,object>>(line);if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;pendingInputCounts.TryGetValue(id,out count);pendingInputCounts[id]=count+1;if(count==0)pendingInputSessions[id]=Str(request,"controlSessionId");}string action=Str(request,"action");
             if(action=="input.execute")inputRequests.Add(request);
+            else if(action=="input.background"||action=="windows.activate"||action=="input.gamepad")QueueDetached(request);
             else if(action=="screen.wait")QueueScreenWait(request);
             else if(action=="screen.wait.cancel"){
                 lock(screenWaitLock){if(screenWaitCancellation!=null&&screenWaitId==Str(request,"captureId"))screenWaitCancellation.Cancel();}
@@ -1005,48 +1575,116 @@ public static class RabiComputer {
             else if(action=="input.cancel"){MarkInputCancelled(request);recoveryReplies.Add(request);}
             else if(action=="control.end"){MarkControlEnded(request);recoveryReplies.Add(request);}
             else if(action=="control.begin"){ReserveControlBegin(request);ui.Post(_=>Handle(request),null);}
-            else if(action=="control.end"||action=="control.activity"||action=="settings.update"||action=="annotation.show"||action=="annotation.update"||action=="annotation.clear"||action=="annotation.track.stop")ui.Post(_=>Handle(request),null);
+            else if(action=="recording.presentation"||action=="control.end"||action=="control.activity"||action=="settings.update"||action=="annotation.show"||action=="annotation.update"||action=="annotation.clear"||action=="annotation.track.stop")ui.Post(_=>Handle(request),null);
             else ThreadPool.QueueUserWorkItem(_=>Handle(request));}}
-        finally{stopping=true;lock(screenWaitLock){if(screenWaitCancellation!=null)screenWaitCancellation.Cancel();}inputRequests.CompleteAdding();recoveryReplies.CompleteAdding();try{EndControl(session,"owner-disconnected");ReleaseOwned();}finally{lock(tracking)foreach(var item in tracking.Values)item.stopped=true;if(ui!=null)ui.Post(_=>{layers.Clear();Application.ExitThread();},null);gui.Join(5000);lock(frameLock){foreach(var frame in frames.Values)frame.Dispose();frames.Clear();}}}
+        finally{stopping=true;foreach(string id in detachedJobs.Keys)CancelDetached(id);VirtualXboxPad.Shutdown();lock(screenWaitLock){if(screenWaitCancellation!=null)screenWaitCancellation.Cancel();}inputRequests.CompleteAdding();recoveryReplies.CompleteAdding();try{EndControl(session,"owner-disconnected");ReleaseOwned();}finally{lock(tracking)foreach(var item in tracking.Values)item.stopped=true;if(ui!=null)ui.Post(_=>{layers.Clear();Application.ExitThread();},null);gui.Join(5000);lock(frameLock){foreach(var frame in frames.Values)frame.Dispose();frames.Clear();}}}
     }
     class ControlBar:Form {
         public Dictionary<string,object> Source=new Dictionary<string,object>();Label label;Button close;
-        string noticeKey,dismissedKey;readonly Stopwatch noticeClock=new Stopwatch();
+        string noticeKey,dismissedKey,activityLayoutKey;readonly Stopwatch noticeClock=new Stopwatch();
+        readonly List<Panel> activityRows=new List<Panel>();
         public ControlBar(){FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;Size=new Size(410,70);Location=new Point(SystemInformation.VirtualScreen.Right-430,SystemInformation.VirtualScreen.Top+20);BackColor=Color.FromArgb(26,39,49);ForeColor=Color.White;
             label=new Label{Left=12,Top=10,Width=300,Height=52};Controls.Add(label);close=new Button{Text="退出控制",Left=314,Top=14,Width=86,Height=40};close.Click+=(s,e)=>{if(activeInputRequest!=null)MarkInputCancelled(new Dictionary<string,object>{{"requestId",activeInputRequest},{"controlSessionId",activeInputSession}});else if(session!=null)EndControl(session,"user-exit");else{dismissedKey=presentationRequestId+":"+presentationPhase;Hide();}};Controls.Add(close);
             Point start=Point.Empty;label.MouseDown+=(s,e)=>{if(e.Button==MouseButtons.Left)start=e.Location;};label.MouseMove+=(s,e)=>{if(e.Button==MouseButtons.Left)Location=new Point(Left+e.X-start.X,Top+e.Y-start.Y);};}
         protected override bool ShowWithoutActivation{get{return true;}}
         protected override CreateParams CreateParams{get{var value=base.CreateParams;value.ExStyle|=0x08000000|0x80;return value;}}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);SetWindowDisplayAffinity(Handle,0x11);}
+        void RefreshActivityRows(List<DesktopActivity> extraRows,int primaryHeight,bool large){
+            var key=new StringBuilder().Append(primaryHeight).Append(large);
+            foreach(var item in extraRows)key.Append('|').Append(item.order).Append(':').Append(item.phase);
+            if(activityLayoutKey==key.ToString())return;
+            activityLayoutKey=key.ToString();
+            foreach(var row in activityRows){Controls.Remove(row);row.Dispose();}
+            activityRows.Clear();
+            int height=large?40:32,top=primaryHeight;
+            foreach(var item in extraRows){
+                var row=new Panel{Left=10,Top=top,Width=Width-20,Height=height};
+                bool stoppable=item.mode!="observation"&&item.expires==0;
+                string text=ActivityText(item);
+                var caption=new Label{Left=2,Top=0,Width=row.Width-(stoppable?72:0),Height=height,Text=text,AccessibleName=text,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft,Font=label.Font};
+                row.Controls.Add(caption);
+                if(stoppable){
+                    string id=item.id;var button=new Button{Text="停止",AccessibleName="停止 "+item.label+" 的操作",Left=row.Width-68,Top=1,Width=66,Height=height-2};
+                    button.Click+=(s,e)=>CancelDetached(id);row.Controls.Add(button);
+                }
+                Controls.Add(row);activityRows.Add(row);top+=height;
+            }
+            Height=top;
+        }
         public void RefreshStatus(){
             if(!nativeBarMode){Hide();return;}
             string currentKey=presentationRequestId+":"+presentationPhase;
-            if(currentKey==dismissedKey){Hide();return;}
+            bool primary=currentKey!=dismissedKey&&(session!=null||presentationPhase!=null&&presentationPhase!="ready");
             bool notice=presentationPhase=="returned"||presentationPhase=="stopped"||presentationPhase=="failed";
             var config=Obj(Get(settings,"presentation"));
             if(notice){
                 if(noticeKey!=currentKey){noticeKey=currentKey;noticeClock.Restart();}
-                if(noticeClock.Elapsed.TotalMilliseconds>=Num(config,"noticeDurationMs",2500)){Hide();return;}
+                if(noticeClock.Elapsed.TotalMilliseconds>=Num(config,"noticeDurationMs",2500))primary=false;
             }else{noticeKey=null;noticeClock.Reset();}
-            if(session==null&&(presentationPhase==null||presentationPhase=="ready")){Hide();return;}
+            var otherRows=AdditionalActivityRows();
+            if(!primary&&otherRows.Count==0){Hide();return;}
             if(!Visible){Show();ShowWindow(Handle,4);}
             var display=Obj(presentationDisplay);var area=Obj(Get(display,"workArea"));Rectangle work=area.Count==0?DesktopScreen.FromHandle(GetForegroundWindow()).WorkingArea:new Rectangle((int)Num(area,"x"),(int)Num(area,"y"),(int)Num(area,"width"),(int)Num(area,"height"));
-            bool large=Str(config,"textSize","standard")=="large";int desiredHeight=large?90:70;if(Height!=desiredHeight){Height=desiredHeight;label.Height=Height-20;close.Top=(Height-close.Height)/2;var previousFont=label.Font;label.Font=new Font(SystemFonts.DefaultFont.FontFamily,large?13:10);if(previousFont!=SystemFonts.DefaultFont)previousFont.Dispose();}
+            bool large=Str(config,"textSize","standard")=="large";int primaryHeight=large?90:70;
+            if(label.Height!=primaryHeight-20){label.Height=primaryHeight-20;close.Top=(primaryHeight-close.Height)/2;var previousFont=label.Font;label.Font=new Font(SystemFonts.DefaultFont.FontFamily,large?13:10);if(previousFont!=SystemFonts.DefaultFont)previousFont.Dispose();}
+            RefreshActivityRows(otherRows,primary?primaryHeight:0,large);
             Location=new Point(work.Left+(work.Width-Width)/2,Str(config,"barPlacement","top-center")=="bottom-center"?work.Bottom-Height-20:work.Top+20);
             double? remaining=Remaining();string returned=Str(Obj(presentationReturnState),"state");string status=presentationPhase=="returning"?"正在归还":presentationPhase=="returned"?(returned=="restored"?"已归还":returned=="yielded"?"已让出控制":returned=="partial"?"部分归还":"归还状态未知"):presentationPhase=="ready"?"鼠标和键盘控制已就绪":presentationPhase=="operating"?"正在控制鼠标和键盘":"正在操作";
             bool observing=session==null&&observerLabel!=null;
-            close.Visible=!observing;
+            label.Visible=primary;close.Visible=primary&&!observing;
             label.Width=observing?Width-24:300;
             label.Text=observing?observerLabel+(presentationPhase=="failed"?" 截图未完成":" 正在看你的屏幕"):
                 "Rabi · "+status+" · "+Str(Source,"label",Str(Source,"id"))+"\n"+(remaining.HasValue&&remaining.Value<=countdown*1000?"剩余 "+Math.Ceiling(remaining.Value/1000)+" 秒 · ":"")+Str(Obj(Get(settings,"control")),"exitShortcut","Ctrl+Alt+Esc")+" 退出";
         }
         protected override void WndProc(ref Message message){if(message.Msg==0x312&&message.WParam.ToInt32()==1&&physicalExitPending){physicalExitPending=false;EndControl(session,"user-shortcut");}base.WndProc(ref message);}
     }
+    class RecordingBar:Form {
+        readonly Label label;
+        readonly Button stop;
+        string recordingId;
+        long until;
+        public RecordingBar(){
+            FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;
+            Size=new Size(360,54);BackColor=Color.FromArgb(95,34,45);ForeColor=Color.White;
+            label=new Label{Left=12,Top=9,Width=250,Height=36,AutoEllipsis=true};Controls.Add(label);
+            stop=new Button{Left=264,Top=10,Width=86,Height=34,Text="结束录屏"};
+            stop.Click+=(s,e)=>{if(recordingId!=null)Event("recording-stop",new{recordingId=recordingId});};
+            Controls.Add(stop);
+        }
+        protected override bool ShowWithoutActivation{get{return true;}}
+        protected override CreateParams CreateParams{get{var value=base.CreateParams;value.ExStyle|=0x08000000|0x80;return value;}}
+        protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);SetWindowDisplayAffinity(Handle,0x11);}
+        public void UpdateState(string id,string source,string state){
+            if(state!="recording"&&state!="paused"){if(recordingId==id){Hide();recordingId=null;}return;}
+            recordingId=id;until=Stopwatch.GetTimestamp()+5*Stopwatch.Frequency;
+            label.Text=source+(state=="paused"?" · 录屏已暂停":" · 正在录屏");
+            var work=DesktopScreen.FromHandle(GetForegroundWindow()).WorkingArea;
+            var placement=Str(Obj(Get(settings,"presentation")),"barPlacement","top-center");
+            Location=new Point(work.Left+(work.Width-Width)/2,placement=="bottom-center"?work.Top+16:work.Bottom-Height-16);
+            if(!Visible){Show();ShowWindow(Handle,4);}
+        }
+        public void Expire(){if(Visible&&Stopwatch.GetTimestamp()>=until){Hide();recordingId=null;}}
+    }
     class Overlay:Form {
         public Overlay(){FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;Bounds=SystemInformation.VirtualScreen;BackColor=Color.Magenta;TransparencyKey=Color.Magenta;DoubleBuffered=true;}
         protected override bool ShowWithoutActivation{get{return true;}}
         protected override CreateParams CreateParams{get{var value=base.CreateParams;value.ExStyle|=0x80000|0x20|0x08000000|0x80;return value;}}
         protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);SetWindowDisplayAffinity(Handle,0x11);}
+        void DrawPointer(Graphics graphics,Point position,string label,Color color,List<RectangleF> labels){
+            var point=new Point(position.X-Left,position.Y-Top);
+            using(var pen=new Pen(color,3))graphics.DrawEllipse(pen,point.X-7,point.Y-7,14,14);
+            var font=SystemFonts.DefaultFont;var size=graphics.MeasureString(label,font);
+            var rect=new RectangleF(Math.Max(0,Math.Min(point.X+12,Width-size.Width-8)),Math.Max(0,Math.Min(point.Y-size.Height/2,Height-size.Height-4)),size.Width+8,size.Height+4);
+            bool overlap;int direction=point.Y>Height/2?-1:1;
+            do{
+                overlap=false;
+                foreach(var other in labels)if(rect.IntersectsWith(other)){overlap=true;break;}
+                if(overlap)rect.Offset(0,direction*rect.Height);
+            }while(overlap);
+            labels.Add(rect);
+            using(var background=new SolidBrush(Color.FromArgb(215,16,23,31)))graphics.FillRectangle(background,rect);
+            graphics.DrawString(label,font,Brushes.White,rect.X+4,rect.Y+2);
+        }
         protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);if(externalQt)return;e.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             foreach(var layer in layers.Values)foreach(var entry in Items(Get(layer,"objects"))){var shape=Obj(entry);var source=Obj(Get(layer,"source"));var style=Obj(Get(shape,"style"));string type=Str(shape,"type");Color color;try{color=ColorTranslator.FromHtml(Str(style,"color","#3de0cf"));}catch{color=Color.Cyan;}color=Color.FromArgb((int)(255*Math.Max(0,Math.Min(1,Num(style,"opacity",1)))),color);
                 using(var pen=new Pen(color,(float)Num(style,"lineWidth",2)))using(var brush=new SolidBrush(color)){
@@ -1056,7 +1694,11 @@ public static class RabiComputer {
                     else{var points=new List<Point>();foreach(var point in Items(Get(shape,"points"))){var q=Position(Obj(point),source,"x","y");points.Add(new Point(q.X-Left,q.Y-Top));}if(points.Count>=2){if(type=="arrow")pen.CustomEndCap=new System.Drawing.Drawing2D.AdjustableArrowCap(4,5);e.Graphics.DrawLines(pen,points.ToArray());}}
                 }
             }
-            if(pointerVisible&&session!=null){var q=new Point(pointer.X-Left,pointer.Y-Top);using(var pen=new Pen(Color.Cyan,3))e.Graphics.DrawEllipse(pen,q.X-7,q.Y-7,14,14);e.Graphics.DrawString("Rabi",SystemFonts.DefaultFont,Brushes.White,q.X+12,q.Y);}
+            var labels=new List<RectangleF>();
+            if(showPointer&&pointerVisible&&session!=null)DrawPointer(e.Graphics,pointer,ActivityLabel(Str(bar.Source,"label")),Color.Cyan,labels);
+            foreach(var item in VisibleBackgroundPointers()){
+                Point point;if(BackgroundDesktopPoint(item,out point))DrawPointer(e.Graphics,point,item.label,ColorTranslator.FromHtml(BackgroundPointerColor(item)),labels);
+            }
         }
     }
 }

@@ -54,14 +54,11 @@ test("background index repair coalesces without blocking available history and r
   assert.deepEqual(await fs.readdir(directory),before);
 });
 
-test("status settings and intent survive slow storage after owner initialization and follow writes", async t => {
+test("status settings and devices remain readable after owner initialization and a slow storage failure", async t => {
   const store = await fixture(t);
-  await store.configure("one",DEFAULT_ALL_DAY_SETTINGS); await store.enableRole("one");
+  await store.configure("one",DEFAULT_ALL_DAY_SETTINGS);
   await store.mobileDevices();
   t.mock.method(fs,"readFile",async () => { throw new Error("NAS read unavailable"); });
-  assert.equal(await store.enabledRole(),"one");
   assert.deepEqual(await store.settings("one"),DEFAULT_ALL_DAY_SETTINGS);
   assert.deepEqual(await store.mobileDevices(),[]);
-  await store.enableRole(null);
-  assert.equal(await store.enabledRole(),null);
 });

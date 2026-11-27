@@ -12,9 +12,9 @@ const fault = (code, reason, extra = {}) => Object.assign(new Error(reason), { c
 const clone = value => structuredClone(value);
 const hasCaptureSelector = input => [input, input.source, input.captureSpec].some(value =>
   value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined);
-const captureMaximumWidth = input => input.maxWidth ?? (hasCaptureSelector(input) ? undefined : 1920);
-const recovery = action => /\.(?:status|end|cancel|clear|stop)$/.test(action);
+const recovery = action => /\.(?:status|end|cancel|clear|stop|close)$/.test(action);
 const batchInputMode = input => input.inputMode ?? (input.action === "input.perform" ? "shared" : undefined);
+const detachedActions = new Set(["input.background", "input.gamepad", "windows.activate"]);
 
 /** Authoritative ephemeral input/layer ownership; the Manager supplies trusted settings and source. */
 export class ComputerControlService {
@@ -24,9 +24,13 @@ export class ComputerControlService {
     this.activeLayers = new Map(); this.activeTrackers = new Map(); this.notified = new WeakMap();
     this.inputQueue = Promise.resolve(); this.inflight = new Map(); this.stopped = false;
     native.on?.("presentation", event => {
-      const value = event.phase === null ? undefined : Object.fromEntries(["phase", "requestId", "controlSessionId", "sourceDisplay", "observedRegion", "returnState"]
+      const rows = Array.isArray(event.activities) ? event.activities : [];
+      const windowPointers = Array.isArray(event.windowPointers) ? event.windowPointers : [];
+      const value = event.phase === null && !rows.length && !windowPointers.length ? undefined : Object.fromEntries(["phase", "requestId", "controlSessionId", "observerLabel", "sourceDisplay", "observedRegion", "returnState"]
         .filter(key => event[key] !== undefined).map(key => [key, clone(event[key])]));
-      // Pointer rendering can update every frame. Notify business observers only when operation facts change.
+      if (value && rows.length) value.activities = rows.map(({ id, mode, phase, label, windowTitle, stopAction }) => ({ id, mode, phase, label, windowTitle, canStop: stopAction?.action === "input.detached.cancel" }));
+      if (value && windowPointers.length) value.windowPointers = clone(windowPointers);
+      // Foreground pointer motion stays on the target; window previews need their window-relative points.
       if (JSON.stringify(value) === JSON.stringify(this.activity)) return;
       this.activity = value;
       this.notifyItem(this, [value]);
@@ -55,7 +59,7 @@ export class ComputerControlService {
       for (const item of [...this.activeTrackers.values()]) { item.state = "stopped"; item.stopped = true; this.notifyTracker(item); }
     });
     native.on?.("closed", () => {
-      if (this.activity) { this.activity = { ...this.activity, phase: "failed", returnState: undefined }; this.notifyItem(this, [this.activity]); }
+      if (this.activity) { this.activity = { ...this.activity, phase: "failed", returnState: undefined, observerLabel: undefined, activities: undefined, windowPointers: undefined }; this.notifyItem(this, [this.activity]); }
       if (this.session?.state === "active") { this.session.state = "uncertain"; this.session.reason = "native-helper-closed"; }
       for (const requestId of this.inflight.keys()) { const item = this.receipts.get(requestId); if (item && ["running", "submitted"].includes(item.state)) { item.state = "uncertain"; item.uncertain = true; void this.save(item).catch(() => {}); this.notifyItem(item, [item.state, Boolean(item.cancelled)]); } }
       this.notifyControl();
@@ -133,7 +137,7 @@ export class ComputerControlService {
     const signature = hash({ input, sourceId: this.source(context).id });
     const current = this.inflight.get(input.requestId);
     if (current) return current.signature === signature ? current.promise : Promise.reject(fault("COMPUTER_REQUEST_CONFLICT", "The original requestId belongs to different content or source."));
-    const claim = { signature, connectionId: context.connectionId, cancelled: false };
+    const claim = { signature, action: input.action, sourceId: this.source(context).id, taskId: context.taskId, connectionId: context.connectionId, cancelled: false };
     const promise = Promise.resolve().then(() => this.runOnce(input, context, run, claim)); claim.promise = promise;
     this.inflight.set(input.requestId, claim);
     void promise.then(() => this.inflight.delete(input.requestId), () => this.inflight.delete(input.requestId));
@@ -229,7 +233,7 @@ export class ComputerControlService {
     const id = randomUUID(), settings = this.settings(context, "control.begin"); entry.controlSessionId = id;
     const item = { controlSessionId: id, requestId: input.requestId, source: this.source(context), state: "starting", createdAt: new Date().toISOString(), lastActivityAt: new Date().toISOString(), lastActivityMono: this.now(), context, settingsSnapshot: settings };
     this.session = item;
-    try { item.presentation = await this.native.request("control.begin", { requestId: input.requestId, controlSessionId: id, source: item.source, settings,
+    try { item.presentation = await this.native.request("control.begin", { requestId: input.requestId, controlSessionId: id, source: item.source, settings, owner: this.gamepadOwner(context),
       ...(input.action === "input.perform" ? { inputMode: batchInputMode(input) } : {}) }, { beforeSend: () => { if (this.session !== item || item.state !== "starting" || entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original control intent ended before native admission."); this.check("control.begin", context); } }); }
     catch (error) { item.state = error.uncertain ? "uncertain" : "ended"; if (item.state === "ended") this.endedSessions.set(id, { ...item }); throw error; }
     if (item.state === "ended" || entry.cancelled || this.session !== item) return this.controlStatus(id);
@@ -240,7 +244,7 @@ export class ComputerControlService {
   async injectInput(input, context, entry, session) {
     this.check(input.action, context); this.ownedSession(session.controlSessionId, context);
     let captureIssue;
-    if (input.captureAfter) {
+    if (input.captureAfter === true) {
       try { this.check("screen.capture", context); }
       catch (error) { captureIssue = { state: "unavailable", reason: error.message }; }
     }
@@ -250,7 +254,7 @@ export class ComputerControlService {
     const result = await this.native.request("input.execute", {
       requestId: input.requestId, controlSessionId: session.controlSessionId, actions: input.actions,
       source: input.source, captureSpec: useFrameScope ? undefined : normalizeComputerCaptureSpec(input),
-      maxWidth: useFrameScope ? input.maxWidth : captureMaximumWidth(input), captureAfter: input.captureAfter === true && !captureIssue,
+      maxWidth: input.maxWidth, captureAfter: input.captureAfter === true && !captureIssue,
       instanceId: this.target(context), settings: this.settings(context, input.action), ...(inputMode === undefined ? {} : { inputMode })
     }, { beforeSend: () => {
       this.check(input.action, context);
@@ -297,16 +301,17 @@ export class ComputerControlService {
     return { ...result, controlCleanup: cleanup };
   }
   async capture(input, context = {}) {
-    this.check("screen.capture", context);
+    const action = input.action === "screen.capture.background" ? input.action : "screen.capture";
+    this.check(action, context);
     const normalized = normalizeComputerCaptureSpec(input);
     const captureSpec = input.captureSpec !== undefined || hasCaptureSelector(input) || normalized.layoutRevision !== undefined ? normalized : undefined;
-    const result = await this.native.request("screen.capture", {
-      ...input, captureSpec, maxWidth: captureMaximumWidth(input), action: undefined,
-      instanceId: this.target(context), settings: this.settings(context, "screen.capture"),
-      observerLabel: this.source(context).label
+    const result = await this.native.request(action, {
+      ...input, captureSpec, maxWidth: input.maxWidth, action: undefined,
+      instanceId: this.target(context), settings: this.settings(context, action),
+      observerLabel: this.source(context).label, observerOwner: this.gamepadOwner(context), inlineObservation: context.operationInput?.action === "input.perform"
     });
     context.guard?.();
-    if (input.controlSessionId && input.background !== true && this.session?.controlSessionId === input.controlSessionId && this.session.source.id === this.source(context).id) {
+    if (action === "screen.capture" && input.controlSessionId && input.background !== true && this.session?.controlSessionId === input.controlSessionId && this.session.source.id === this.source(context).id) {
       this.touch(this.session); await this.native.request("control.activity", { controlSessionId: input.controlSessionId });
     }
     return result;
@@ -315,9 +320,48 @@ export class ComputerControlService {
     this.check("screen.wait", context);
     const result = await this.native.request("screen.wait", {
       source: input.source, waitMs: input.waitMs, instanceId: this.target(context),
-      settings: this.settings(context, "screen.wait"), observerLabel: this.source(context).label
+      settings: this.settings(context, "screen.wait"), observerLabel: this.source(context).label,
+      observerOwner: this.gamepadOwner(context), inlineObservation: context.operationInput?.action === "input.perform"
     }, { signal: context.signal, beforeSend: () => this.check("screen.wait", context) });
     this.check("screen.wait", context);
+    return result;
+  }
+  async captureAfterChange(result, observation, context) {
+    if (!["injected", "completed"].includes(result.state) || result.controlCleanup?.state !== "ended") {
+      return { ...result, capture: { state: "unavailable", reason: "input-or-cleanup-incomplete" } };
+    }
+    try {
+      const { state, capture } = await this.waitForScreen(observation, context);
+      return { ...result, capture: capture ?? { state } };
+    } catch (error) {
+      const capture = context.signal?.aborted ? { state: "cancelled" } : { state: "unavailable", reason: error.message };
+      return { ...result, capture };
+    }
+  }
+  gamepadOwner(context) {
+    const source = this.source(context);
+    return hash({ source: source.id, task: source.taskId, connection: source.connectionId });
+  }
+  async detachedInput(input, context, entry) {
+    const action = input.action;
+    if (action === "input.background" && (!Array.isArray(input.actions) || !input.actions.length ||
+      input.actions.length > (this.settings(context, action).input?.maxActions ?? 128))) {
+      throw fault("COMPUTER_INPUT_BATCH_INVALID", "Background actions exceed the configured batch limit.");
+    }
+    entry.state = "running";
+    const result = await this.native.request(action, { ...input, owner: this.gamepadOwner(context), source: this.source(context),
+      instanceId: this.target(context), settings: this.settings(context, action) }, { signal: context.signal, beforeSend: () => {
+      this.check(action, context);
+      if (entry.cancelled) throw fault("COMPUTER_SOURCE_CLOSED", "The original input intent ended before native admission.");
+      if (action === "input.gamepad" && !this.gamepadContext) this.gamepadContext = context;
+    } });
+    if (action === "input.gamepad" && result.connected && result.state !== "busy") this.gamepadContext = context;
+    return result;
+  }
+  async closeOwnedGamepad(context) {
+    const owner = this.gamepadOwner(context);
+    const result = await this.native.request("input.gamepad.close", { owner });
+    if (this.gamepadContext && this.gamepadOwner(this.gamepadContext) === owner) this.gamepadContext = undefined;
     return result;
   }
   async withCapture(result, input, context) {
@@ -364,10 +408,16 @@ export class ComputerControlService {
     if (input.action === "control.status") return this.controlStatus(input.controlSessionId);
     if (input.action === "control.end") return this.end(input.controlSessionId ?? this.session?.controlSessionId, "requested");
     if (input.action === "input.status") return this.viewReceipt(await this.receipt(input.requestId));
+    if (input.action === "input.gamepad.status") return this.native.request(input.action, { owner: this.gamepadOwner(context) });
+    if (input.action === "input.gamepad.close") return this.closeOwnedGamepad(context);
     if (input.action === "input.cancel") {
       const entry = await this.receipt(input.requestId); if (!entry) return { requestId: input.requestId, state: "absent" };
       if (entry.action === "input.perform" && !["submitted", "running"].includes(entry.state)) return this.viewReceipt(entry);
       entry.cancelled = true; this.notifyItem(entry, [entry.state, true]);
+      if (detachedActions.has(entry.action)) {
+        if (entry.state === "running") await this.native.request("input.detached.cancel", { requestId: input.requestId });
+        return this.viewReceipt(entry);
+      }
       if (entry.action === "input.perform" && !entry.controlSessionId) return this.viewReceipt(entry);
       if (entry.controlSessionId && this.endedSessions.has(entry.controlSessionId)) { await this.save(entry); return this.viewReceipt(entry); }
       await this.native.request("input.cancel", { requestId: input.requestId, controlSessionId: entry.controlSessionId });
@@ -395,12 +445,26 @@ export class ComputerControlService {
       Object.assign(layer, { objects, source }); this.notifyLayer(layer); return this.execute({ action: "annotation.status", layerId: layer.layerId }, context);
     }
     return this.once(input, context, async entry => {
+      if (detachedActions.has(input.action)) {
+        return this.detachedInput(input, context, entry);
+      }
       if (input.action === "control.begin") {
         const opened = await this.beginControl(input, context, entry);
         return opened.state === "active" ? this.withCapture(opened, input, context) : opened;
       }
       if (input.action === "input.execute" || input.action === "input.perform") {
         const session = input.action === "input.execute" ? this.ownedSession(input.controlSessionId, context) : undefined;
+        let observation;
+        if (!session && input.captureAfter && typeof input.captureAfter === "object") {
+          const { waitMs, source = input.source } = input.captureAfter;
+          if (!Number.isInteger(waitMs) || waitMs < 100 || waitMs > 5000 || !source?.frameId || !source?.imageItemId || !source?.kind) {
+            throw fault("COMPUTER_CAPTURE_AFTER_INVALID", "Change-aware capture requires waitMs from 100 to 5000 and a complete screenshot source.");
+          }
+          if (source.instanceId && this.target(context) && source.instanceId !== this.target(context)) {
+            throw fault("COMPUTER_SOURCE_MISMATCH", "The observation source belongs to another computer instance.");
+          }
+          observation = { source, waitMs };
+        }
         if (session) entry.controlSessionId = session.controlSessionId;
         if (input.source?.instanceId && this.target(context) && input.source.instanceId !== this.target(context)) throw fault("COMPUTER_SOURCE_MISMATCH", "The coordinate source belongs to another computer instance.");
         const maximum = this.settings(context, input.action).input?.maxActions ?? 128;
@@ -411,7 +475,8 @@ export class ComputerControlService {
           if (entry.cancelled) return { ...this.viewReceipt(entry), state: "cancelled" };
           return session ? this.injectInput(input, context, entry, session) : this.performInput(input, context, entry);
         });
-        this.inputQueue = queued.catch(() => {}); return queued;
+        this.inputQueue = queued.catch(() => {});
+        return observation ? queued.then(result => this.captureAfterChange(result, observation, context)) : queued;
       }
       if (input.action === "annotation.show") {
         const previous = this.layers.get(input.layerId);
@@ -464,6 +529,22 @@ export class ComputerControlService {
     if (input && (!input.enabled || !input.allowed)) {
       await this.end(this.session?.controlSessionId, "settings-disabled");
     }
+    const disabledClaims = [];
+    const detachedPolicies = new Map();
+    for (const claim of this.inflight.values()) {
+      if (!detachedActions.has(claim.action)) continue;
+      if (!detachedPolicies.has(claim.action)) {
+        const feature = definition.actionDefinition(claim.action)?.feature;
+        detachedPolicies.set(claim.action, feature ? readPolicy(feature) : undefined);
+      }
+      const policy = detachedPolicies.get(claim.action);
+      if (policy && (!policy.enabled || !policy.allowed)) disabledClaims.push(claim);
+    }
+    if (disabledClaims.length) await this.retireScope(null, [], disabledClaims, "settings-disabled");
+    if (this.gamepadContext) {
+      const gamepad = readPolicy("gamepad");
+      if (gamepad && (!gamepad.enabled || !gamepad.allowed)) await this.closeOwnedGamepad(this.gamepadContext);
+    }
     if (annotation && (!annotation.enabled || !annotation.allowed)) {
       await Promise.all([...this.activeLayers.keys()].map(id => this.clearLayer(id)));
     } else if (this.activeTrackers.size) {
@@ -495,34 +576,50 @@ export class ComputerControlService {
   async endTask(taskId, sourceId) {
     if (!sourceId) return { state: "unknown", reason: "The original sourceId is needed to identify this task's resources without affecting another source." };
     if (this.session?.source.taskId === taskId && this.session.source.id === sourceId) await this.end(this.session.controlSessionId, "task-ended");
+    const claims = [...this.inflight.values()].filter(claim => claim.taskId === taskId && claim.sourceId === sourceId && detachedActions.has(claim.action));
+    if (claims.length) await this.retireScope(null, [], claims, "task-ended");
+    if (this.gamepadContext?.taskId === taskId && this.source(this.gamepadContext).id === sourceId) await this.closeOwnedGamepad(this.gamepadContext);
     for (const layer of [...this.activeLayers.values()]) if (layer.taskId === taskId && layer.sourceId === sourceId) await this.clearLayer(layer.layerId);
     return { state: "ended", taskId, sourceId };
   }
   async retireScope(session, layers, claims, reason) {
     for (const claim of claims) claim.cancelled = true;
     const selected = new Set(claims);
-    for (const [requestId, claim] of this.inflight) if (selected.has(claim)) { const entry = this.receipts.get(requestId); if (entry) entry.cancelled = true; }
+    const pendingDetached = [];
+    for (const [requestId, claim] of this.inflight) if (selected.has(claim)) {
+      const entry = this.receipts.get(requestId);
+      if (!entry) continue;
+      entry.cancelled = true;
+      if (entry.state === "running" && detachedActions.has(entry.action)) {
+        pendingDetached.push(this.native.request("input.detached.cancel", { requestId }));
+      }
+    }
     const outcomes = await Promise.allSettled([
       ...(session ? [this.end(session.controlSessionId, reason)] : []),
       ...layers.map(original => this.clearLayer(original.id, original)),
+      ...pendingDetached,
       ...claims.map(claim => claim.promise)
     ]);
     // The original call retains its business cancellation; only cleanup failures affect retirement.
-    const failures = outcomes.slice(0, Number(Boolean(session)) + layers.length).filter(item => item.status === "rejected").map(item => item.reason);
+    const failures = outcomes.slice(0, Number(Boolean(session)) + layers.length + pendingDetached.length).filter(item => item.status === "rejected").map(item => item.reason);
     if (failures.length) throw new AggregateError(failures, "Original computer source cleanup remains unconfirmed.");
     return { state: "ended" };
   }
   async connectionClosed() {
     const session = this.session;
     const layers = [...this.activeLayers.values()].map(layer => ({ id: layer.layerId, layer, version: layer.version }));
-    return this.retireScope(session, layers, [...this.inflight.values()], "connection-closed");
+    const result = await this.retireScope(session, layers, [...this.inflight.values()], "connection-closed");
+    if (this.gamepadContext) await this.closeOwnedGamepad(this.gamepadContext);
+    return result;
   }
   async endSource(connectionId) {
     if (!connectionId) return { state: "absent" };
     const session = this.session?.source.connectionId === connectionId ? this.session : null;
     const layers = [...this.activeLayers.values()].filter(layer => layer.connectionId === connectionId).map(layer => ({ id: layer.layerId, layer, version: layer.version }));
     const claims = [...this.inflight.values()].filter(claim => claim.connectionId === connectionId);
-    return this.retireScope(session, layers, claims, "source-connection-closed");
+    const result = await this.retireScope(session, layers, claims, "source-connection-closed");
+    if (this.gamepadContext?.connectionId === connectionId) await this.closeOwnedGamepad(this.gamepadContext);
+    return result;
   }
   async retireNativeGeneration(native) {
     if (this.desktopRetirement) return this.desktopRetirement;
@@ -548,6 +645,7 @@ export class ComputerControlService {
       this.activeLayers.clear(); this.activeTrackers.clear();
       // Original receipts/body hashes and ended-session observations stay on this owner.
       this.inputQueue = Promise.resolve();
+      this.gamepadContext = undefined;
     })();
     this.desktopRetirement = retirement;
     try { await retirement; }

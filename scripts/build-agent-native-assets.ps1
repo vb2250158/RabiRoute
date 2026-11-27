@@ -38,6 +38,8 @@ try {
     }
 . (Join-Path $PSScriptRoot 'lib/build-computer-tracking.ps1')
 Build-ComputerTrackingAssets -AgentRoot $agentDirectory -Stage $stage
+. (Join-Path $PSScriptRoot 'lib/build-computer-gamepad.ps1')
+Build-ComputerGamepadAssets -AgentRoot $agentDirectory -Stage $stage
 foreach ($module in $modules) {
     $source = [IO.File]::ReadAllText((Join-Path $agentDirectory $module.source))
     if ($module.rawSource) {

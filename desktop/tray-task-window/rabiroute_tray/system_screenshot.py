@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .desktop_capture import capture_desktop_pixels
+from .desktop_adapter import project_app_icon
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QRectF, QSize, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QFont, QFontMetrics, QBrush, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -3091,7 +3092,8 @@ class SystemScreenshotController(QObject):
         if self._send_task is not None or self._composer is not None:
             return
         targets = self._delivery_targets_provider()
-        composer = ScreenshotComposer(image_path, targets, manager=self._manager)
+        composer = ScreenshotComposer(image_path, targets, manager=self._manager,
+                                      app_icon=project_app_icon(self._project_root))
         self._composer = composer
         composer.send_requested.connect(self._send_screenshot)
         composer.finished.connect(lambda _result: self._clear_composer(composer))
@@ -3133,29 +3135,43 @@ class SystemScreenshotController(QObject):
             if not isinstance(result, RolePanelSendResult):
                 result = RolePanelSendResult(ok=False, message="未知发送结果")
             if result.ok:
-                label = (f"{frozen_selection['provider']} · {frozen_selection['threadId']}" if frozen_selection["kind"] == "agent" else
-                    next((target.label for target in self._delivery_targets_provider() if target.gateway_id == gateway_id), gateway_id))
-                self._notify("系统截图", f"已投递至 {label}。", False)
+                if frozen_selection["kind"] == "new":
+                    message = f"已新建会话并投递至 {frozen_selection['provider']} · {frozen_selection['cwd']}。"
+                elif frozen_selection["kind"] == "agent":
+                    message = f"已投递至 {frozen_selection['provider']} · {frozen_selection['threadId']}。"
+                else:
+                    label = next((target.label for target in self._delivery_targets_provider()
+                                  if target.gateway_id == gateway_id), gateway_id)
+                    message = f"已投递至 {label}。"
+                self._notify("系统截图", message, False)
                 if self._composer is not None:
                     self._composer.accept()
             elif self._composer is not None:
                 self._composer.set_sending(False)
                 self._composer.set_error(f"投递失败：{result.message or '未知错误'}")
-                if result.uncertain and frozen_selection["kind"] == "agent":
+                if result.uncertain and frozen_selection["kind"] in ("agent", "new"):
                     self._composer.set_error(f"投递结果待核对：{result.message}（{delivery_id}）")
                     self._composer.set_delivery_uncertain(reconcile)
 
         def reconcile() -> None:
             if self._send_task is not None:
                 return
+            # A new session has no thread ID yet, so only the original delivery ID can be inspected.
+            if frozen_selection["kind"] == "new":
+                self._composer.set_error(f"新建会话结果待核对，请在 WebGUI 的 Agent 会话中确认后重试（{delivery_id}）。")
+                return
             self._send_task = start_qt_task(
                 lambda: self._manager.reconcile_screenshot_delivery(frozen_selection, delivery_id), completed,
                 on_error=lambda error: RolePanelSendResult(ok=False, message=str(error), uncertain=True),
             )
 
-        self._send_task = start_qt_task(
-            lambda: (self._manager.send_screenshot_to_thread(frozen_selection, text, str(composer.image_path), delivery_id)
-                     if frozen_selection["kind"] == "agent" else self._manager.send_role_panel_message(gateway_id, text, [attachment])),
-            completed,
-            on_error=lambda error: RolePanelSendResult(ok=False, message=str(error), uncertain=frozen_selection["kind"] == "agent"),
-        )
+        def send() -> RolePanelSendResult:
+            if frozen_selection["kind"] == "new":
+                return self._manager.create_screenshot_session(frozen_selection, text, str(composer.image_path), delivery_id)
+            if frozen_selection["kind"] == "agent":
+                return self._manager.send_screenshot_to_thread(frozen_selection, text, str(composer.image_path), delivery_id)
+            return self._manager.send_role_panel_message(gateway_id, text, [attachment])
+
+        self._send_task = start_qt_task(send, completed,
+            on_error=lambda error: RolePanelSendResult(ok=False, message=str(error),
+                uncertain=frozen_selection["kind"] in ("agent", "new")))

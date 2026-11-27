@@ -1,5 +1,7 @@
 import test from "node:test";import assert from "node:assert/strict";
-import {endComputerTrackingForPlan,computerAgentSourceId} from "./computerTaskLifecycle.js";
+import type { IncomingMessage } from "node:http";
+import {computerAgentSession,endComputerTrackingForPlan,computerAgentSourceId} from "./computerTaskLifecycle.js";
+import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import type {LanAgentRegistry} from "./lanAgentRegistry.js";
 test("only a true plan end with an exact local-owner instance binding clears its source task across capable computers",async()=>{
  const calls:unknown[]=[];const errors:string[]=[];
@@ -13,4 +15,18 @@ test("only a true plan end with an exact local-owner instance binding clears its
  await endComputerTrackingForPlan({activationStatus:"已归档",taskBinding:{agentType:"codex",sessionId:"local-unattributed"}},registry,"this-pc",()=>{});
  assert.equal(calls.length,0,"neither a foreign manager nor an unrecorded local task is guessed");
  assert.notEqual(computerAgentSourceId("node-a","codex","same"),computerAgentSourceId("node-b","codex","same"));
+});
+
+test("authenticated local Agent sessions use the same ownership key as the task lifecycle", () => {
+ const request = (id: string) => ({
+   socket: { remoteAddress: "127.0.0.1" },
+   headers: { "x-rabiroute-agent-type": "codex", "x-rabiroute-session-id": id }
+ }) as unknown as IncomingMessage;
+ const first = request("session-a"), second = request("session-b");
+ assert.equal(computerAgentSession(first, "this-host"), undefined);
+ markAuthenticatedConnectionRequest(first); markAuthenticatedConnectionRequest(second);
+ const a = computerAgentSession(first, "this-host"), b = computerAgentSession(second, "this-host");
+ assert.equal(a?.sourceId, computerAgentSourceId("this-host", "codex", "session-a"));
+ assert.equal(a?.taskId, "session-a");
+ assert.notEqual(a?.sourceId, b?.sourceId);
 });

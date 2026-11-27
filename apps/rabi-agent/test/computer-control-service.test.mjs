@@ -521,12 +521,42 @@ test("native activity is readable without control and pointer-only frames do not
   await f.owner.stop();
 });
 
+test("native observation and detached input status survive without a foreground session", async () => {
+  const f = fixture();
+  const watching = { id: "capture", mode: "observation", phase: "prepared", label: "看图会话" };
+  const background = { id: "original-batch", mode: "background", phase: "operating", label: "后台会话", windowTitle: "窗口" };
+  f.native.emit("presentation", { phase: null, activities: [watching, {
+    ...background, stopAction: { action: "input.detached.cancel", requestId: "original-batch" }
+  }] });
+  assert.deepEqual(f.owner.controlStatus().activity.activities, [
+    { ...watching, windowTitle: undefined, canStop: false }, { ...background, canStop: true }
+  ]);
+  f.native.emit("presentation", { phase: null, activities: [watching] });
+  assert.equal(f.owner.controlStatus().activity.activities[0].label, watching.label);
+  f.native.emit("presentation", { phase: null, activities: [] });
+  assert.equal(f.owner.controlStatus().activity, undefined);
+  await f.owner.stop();
+});
+
+test("window preview points survive independently of foreground activity and clear precisely", async () => {
+  const f = fixture();
+  const point = { id: "session-a", label: "会话甲", windowId: "2a", receiverId: "2b", pid: 7, clientRevision: "layout", x: 55, y: 9, space: "window-client" };
+  const second = { ...point, id: "session-b", label: "会话乙", x: 14 };
+  f.native.emit("presentation", { phase: null, activities: [], windowPointers: [point, second] });
+  assert.deepEqual(f.owner.controlStatus().activity.windowPointers, [point, second]);
+  f.native.emit("presentation", { phase: null, activities: [], windowPointers: [second] });
+  assert.deepEqual(f.owner.controlStatus().activity.windowPointers, [second]);
+  f.native.emit("presentation", { phase: null, activities: [], windowPointers: [] });
+  assert.equal(f.owner.controlStatus().activity, undefined);
+  await f.owner.stop();
+});
+
 
 const captureAfterCases = [
   { name: "flat region", input: { scope: "region", displayId: "display-two", layoutRevision: "original-layout", region: { x: 3, y: 4, width: 100, height: 80 }, maxWidth: 640 }, expected: { scope: "region", displayId: "display-two", layoutRevision: "original-layout", region: { x: 3, y: 4, width: 100, height: 80 } }, maxWidth: 640 },
   { name: "captureSpec display", input: { captureSpec: { scope: "display", displayId: "display-two" } }, expected: { scope: "display", displayId: "display-two" } },
   { name: "flat window", input: { windowId: "a1", pid: 42, maxWidth: 512 }, expected: { scope: "window", windowId: "a1", pid: 42 }, maxWidth: 512 },
-  { name: "legacy source window", input: { source: { kind: "window", windowId: "a1", pid: 42, coordinateSpace: "desktop" } }, expected: { scope: "window", windowId: "a1", pid: 42 }, maxWidth: 1920 },
+  { name: "legacy source window", input: { source: { kind: "window", windowId: "a1", pid: 42, coordinateSpace: "desktop" } }, expected: { scope: "window", windowId: "a1", pid: 42 } },
 ];
 for (const scenario of captureAfterCases) {
   test(`control begin captureAfter preserves ${scenario.name}`, async () => {

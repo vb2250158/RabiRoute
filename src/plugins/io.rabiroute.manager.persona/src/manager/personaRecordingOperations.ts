@@ -1,3 +1,4 @@
+import { ALL_DAY_MEDIA_FILE_PATTERN } from '@rabiroute/host-api/shared/allDayRecording';
 import { apiDigest,type ApiOperationContract,type ApiOperationDefinition,type ApiOperationInput,type ApiOperationResult,type ApiResponseContract } from '@rabiroute/host-api/manager/apiOperationContract';
 import { errorResponsePresentation } from '@rabiroute/host-api/shared/errorPresentation';
 import { ALL_DAY_REVIEW_SOURCES, ALL_DAY_SOURCES, type AllDayEvent } from '@rabiroute/host-api/shared/allDayRecording';
@@ -39,7 +40,7 @@ export function createPersonaRecordingOperations(context:PersonaRecordingContext
     const path=prefix+'/:roleId/all-day-recording'+suffix,media=action==='audio'||action==='media';
     const contract:ApiOperationContract={operationId:'manager.personas.recording.'+action+(prefix==='/roles'?'.alias':''),contractVersion:'1.0.0',method,pathTemplate:path,exposure:'public',transport:'http',description:'Use the role’s original Host recording service, persistent events, bounded historical projections, controlled media and authenticated phone audio.',
       ...(action==='page'&&prefix==='/api/roles'?{searchable:{scope:'events',legend:'角色记录里的画面采集 / saved screen and camera captures',kinds:['capture']}}:{}),
-      request:{path:object({roleId:str,...(suffix.includes(':day')?{day:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$'}}:{}),...(action==='media'?{file:{type:'string',pattern:'^[a-f0-9]{64}\\.(jpg|wav)$'}}:{})},['roleId',...(suffix.includes(':day')?['day']:[]),...(action==='media'?['file']:[])]),query:object({}),headers:object({}),body:action==='settings'?{kind:'json',maxBytes:0,allowAnyContentType:true,emptyValue:{},schema:true}:{kind:'none',allowIgnoredBody:true}},
+      request:{path:object({roleId:str,...(suffix.includes(':day')?{day:{type:'string',pattern:'^\\d{4}-\\d{2}-\\d{2}$'}}:{}),...(action==='media'?{file:{type:'string',pattern:ALL_DAY_MEDIA_FILE_PATTERN}}:{})},['roleId',...(suffix.includes(':day')?['day']:[]),...(action==='media'?['file']:[])]),query:object({}),headers:object({}),body:action==='settings'?{kind:'json',maxBytes:0,allowAnyContentType:true,emptyValue:{},schema:true}:{kind:'none',allowIgnoredBody:true}},
       responses:media?{default:binary,...Object.fromEntries([400,403,404,409,415].map(status=>[status,{...failure,alternatives:[binary]}]))}:{200:json(response),...Object.fromEntries([400,403,404,409,415].map(status=>[status,failure]))},
       effects:{mode:['settings','start','stop','repair'].includes(action)?'native-recording-control':'read',description:'The original service serializes configuration/start/stop and retains the sole Host capture owner. Explicit repair queues native derived-index work without waiting for a scan. Catalog/recent reads may populate bounded projections; raw durable events are not deleted.'},
       recovery:{strategy:'original-recording-readback',description:'Read original settings, enabled/running state and event IDs before retrying uncertain controls. Native start/stop and index-repair deduplication remain authoritative; HTTP queued or loading is not worker completion. Reconcile the original phone event before requesting its private media.'},
@@ -57,7 +58,7 @@ export function createPersonaRecordingOperations(context:PersonaRecordingContext
           const recent = result.loading && !result.events.length
             ? (await owner.prepare(request,roleId,'recent',signal).execute(undefined,new URLSearchParams()) as {events:AllDayEvent[]}).events : [];
           const items=[...(result.events.length ? result.events : recent)].flatMap(event=>{
-            if (event.kind!=='image' || event.state!=='saved' || !event.media || !/^media\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.jpg$/.test(event.media)
+            if (event.kind!=='image' || event.state!=='saved' || !event.media || !/^media\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.(jpg|png)$/.test(event.media)
                 || !Number.isFinite(event.startedAt) || event.startedAt >= to) return [];
             const detailUrl='/api/roles/'+encodeURIComponent(roleId)+'/all-day-recording/'+event.media;
             const observedAt=new Date(event.startedAt).toISOString();

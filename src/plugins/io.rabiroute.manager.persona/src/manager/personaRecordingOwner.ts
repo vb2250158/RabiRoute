@@ -1,3 +1,4 @@
+import { ALL_DAY_MEDIA_FILE_PATTERN, ALL_DAY_MEDIA_TYPES } from '@rabiroute/host-api/shared/allDayRecording';
 import type http from 'node:http';
 import type { createAllDayRecording } from '@rabiroute/host-api/manager/allDayRecordingRoutes';
 import { recordingOperation } from '@rabiroute/host-api/manager/allDayRecording';
@@ -28,9 +29,17 @@ export function createPersonaRecordingOwner(context:PersonaRecordingContext){ret
     else if(action==='transcripts'||action==='events')data=await recordingOperation(assertCurrent,()=>action==='transcripts'?reads.transcripts(roleId,Number(query.get('since')),Number(query.get('until'))):reads.timeline(roleId,Number(query.get('since')),Number(query.get('until'))));
     else if(action==='settings'){attempted=true;data=await service.configure(roleId,body,assertCurrent);assertCurrent();reads.invalidate(roleId);}
     else if(action==='start'){attempted=true;data=await service.start(roleId,assertCurrent);}
-    else if(action==='stop'){attempted=true;data=await service.stop(roleId,false,assertCurrent);}
+    else if(action==='stop'){attempted=true;data=await service.stop(roleId,assertCurrent);}
     else if(action==='repair'){assertCurrent();attempted=true;runtime.repairIndex(roleId,path.day);data={queued:true};}
-    else if(action==='media'){const file=path.file;if(!/^\d{4}-\d{2}-\d{2}$/.test(path.day)||!file||!/[a-f0-9]{64}\.(jpg|wav)$/.test(file))throw failure('Invalid recording media');const extension=file.slice(-3);const bytes=await recordingOperation(assertCurrent,()=>reads.media(roleId,path.day,file.slice(0,-4),extension,signal));assertCurrent();return {status:200,contentType:extension==='wav'?'audio/wav':'image/jpeg',bytes};}
+    else if(action==='media'){
+      const file=path.file;
+      const match=file?.match(new RegExp(ALL_DAY_MEDIA_FILE_PATTERN));
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(path.day)||!match)throw failure('Invalid recording media');
+      const extension=match[1] as keyof typeof ALL_DAY_MEDIA_TYPES;
+      const bytes=await recordingOperation(assertCurrent,()=>reads.media(roleId,path.day,file.slice(0,-4),extension,signal));
+      assertCurrent();
+      return {status:200,contentType:ALL_DAY_MEDIA_TYPES[extension],bytes};
+    }
     else {
       const timeline=await recordingOperation(assertCurrent,()=>reads.timeline(roleId,Number(query.get('since')),Number(query.get('until'))));const event=timeline.events.find(row=>row.id===query.get('id'));
       if(!event&&(timeline.loading||timeline.pendingDays.length))throw failure('Recording history is loading; retry playback when ready',409);

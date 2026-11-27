@@ -15,6 +15,7 @@ export type CompanionObservation = {
   window?: { id: string; title: string; processName: string };
   media?: { kind: "video" | "audio" | "unknown"; status: "playing" | "paused"; title: string };
   interval?: { startedAt: number; endedAt: number; frameTimes: number[]; sampleCount: number; coverageStartedAt: number; jpeg: string };
+  video?: { startedAt: number; endedAt: number; avi: string };
   audio?: { startedAt: number; endedAt: number; pcm: string; status: "ready" | "starting" | "unavailable"; missingMs: number; suppressedMs: number; error?: string };
 };
 export type CompanionObservationPolicy = {

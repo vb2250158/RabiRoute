@@ -48,13 +48,98 @@ async function createApp(baseUrl) {
   return { token: (await appResponse.json()).app.token, cookie };
 }
 
-async function subscribe(baseUrl, token, identity) {
+async function subscribe(baseUrl, token, identity, secret) {
   const response = await fetch(`${baseUrl}/api/rabilink/events?${new URLSearchParams(identity)}`, {
-    headers: { "x-rabilink-token": token, accept: "text/event-stream" }
+    headers: { "x-rabilink-token": token, accept: "text/event-stream", ...(secret ? { "x-rabilink-phone-session": secret } : {}) }
   });
   assert.equal(response.status, 200);
   return response;
 }
+
+test("phone screen and location connect independently of files and input", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-phone-channels-"));
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [path.resolve("scripts/rabilink-relay-server.mjs")], {
+    windowsHide: true,
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), RABILINK_RELAY_DATA_DIR: directory,
+      RABILINK_RELAY_WEBGUI_DIST_DIR: path.join(directory, "missing-webgui") },
+    stdio: ["ignore", "ignore", "inherit"]
+  });
+  const subscriptions = [];
+  t.after(async () => {
+    await Promise.allSettled(subscriptions.map(response => response.body?.cancel()));
+    if (child.exitCode == null && child.signalCode == null) {
+      const stopped = new Promise(resolve => child.once("exit", resolve));
+      child.kill();
+      await stopped;
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await waitForHealth(baseUrl, child);
+  const { token } = await createApp(baseUrl);
+  const secret = "1".repeat(64);
+  const readPhone = "rabi-phone-readonly";
+  const androidPhone = "rabi-phone-android";
+  const legacyPhone = "rabi-phone-legacy";
+  const noSessionPhone = "rabi-phone-nosession";
+  for (const [id, capabilities, session] of [
+    [readPhone, "phone-location-v1,phone-screen-v1", secret],
+    [androidPhone, "phone-file-control-v1,phone-location-v1,phone-screen-v1,phone-input-v1,phone-apps-v1", "2".repeat(64)],
+    [legacyPhone, "", "3".repeat(64)],
+    [noSessionPhone, "phone-location-v1,phone-screen-v1", ""]
+  ]) {
+    const mode = id === readPhone || id === noSessionPhone ? { phoneChannels: "declared" } : {};
+    const stream = await subscribe(baseUrl, token, { deviceId: id, deviceKind: "phone", capabilities, ...mode }, session);
+    subscriptions.push(stream);
+    assert.equal(stream.headers.get("x-rabilink-phone-channels"), id === readPhone ? "declared" : null);
+  }
+  const directoryResponse = await fetch(`${baseUrl}/api/rabilink/peers?includePortable=phone`, { headers: { "x-rabilink-token": token } });
+  assert.equal(directoryResponse.status, 200);
+  const { peers } = await directoryResponse.json();
+  const caps = id => peers.find(row => row.id === id).capabilities;
+  assert.deepEqual([...caps(readPhone)].sort(), ["phone-location-v1", "phone-screen-v1"]);
+  assert.ok(caps(androidPhone).includes("phone-files-v1"));
+  assert.ok(caps(androidPhone).includes("phone-input-v1"));
+  assert.deepEqual(caps(legacyPhone), ["phone-files-v1"]);
+  assert.deepEqual(caps(noSessionPhone), []);
+
+  const post = (path, body, session) => fetch(`${baseUrl}/api/rabilink/mobile/${path}`, {
+    method: "POST", signal: AbortSignal.timeout(4000),
+    headers: { "x-rabilink-token": token, "content-type": "application/json",
+      ...(session ? { "x-rabilink-phone-session": session } : {}) },
+    body: JSON.stringify(body)
+  });
+  const unsupported = async (path, body, errorCode) => {
+    const response = await post(path, { targetId: readPhone, targetGuid: "", ...body });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).errorCode, errorCode);
+  };
+  await unsupported("files", { action: "file.list" }, "PHONE_FILES_NOT_CONNECTED");
+  await unsupported("screen", { action: "input.perform" }, "PHONE_INPUT_UNAVAILABLE");
+  assert.equal((await post("screen/claim", { phoneId: readPhone }, "2".repeat(64))).status, 403);
+
+  const position = { state: "ok", precision: "approximate", latitude: 0, longitude: 0, coordinateSystem: "WGS84",
+    observedAt: "2026-11-28T00:00:00Z", provider: "core-location", accuracyMeters: 1500 };
+  const capture = { state: "captured", frameId: "fixture-frame", width: 1, height: 1, mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X438AAAAASUVORK5CYII=" };
+  for (const [channel, action, data] of [["location", "location.read", position], ["screen", "screen.capture", capture]]) {
+    const pending = post(channel, { action, targetId: readPhone, targetGuid: "" });
+    let claim;
+    for (let i = 0; i < 30 && !claim; i++) {
+      const response = await post(channel + "/claim", { phoneId: readPhone }, secret);
+      assert.equal(response.status, 200);
+      claim = (await response.json()).data;
+      if (!claim) await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.equal(claim?.action, action);
+    const response = await post(channel + "/result", { phoneId: readPhone, requestId: claim.id, status: 200, result: { code: 0, data } }, secret);
+    assert.equal(response.status, 200);
+    const read = await pending;
+    assert.equal(read.status, 200);
+    assert.deepEqual((await read.json()).data, data);
+  }
+});
 
 test("mobile PC picker exposes only processing workers", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-mobile-workers-"));

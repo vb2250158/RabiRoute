@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import { renameFileWithRetry } from "../shared/filePersistence.js";
-import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_REVIEW_SOURCES, ALL_DAY_REVIEW_TYPES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayMessageSource, hasRecordingSources, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import { ALL_DAY_CAPTURE_SOURCES, ALL_DAY_MEDIA_TYPES, ALL_DAY_REVIEW_SOURCES, ALL_DAY_REVIEW_TYPES, ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, allDayMessageSource, hasRecordingSources, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayCatalog, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
 import type { MessageEventCategory } from "../shared/personaEventTypes.js";
 import type { HomeAssistantActivityPort, HomeAssistantActivityRecord, HomeAssistantActivityRequest } from "../shared/homeAssistantActivity.js";
 import { MOBILE_RECORDING_MAX_CHUNKS, MOBILE_RECORDING_TEXT_MAX_CODE_UNITS, MOBILE_RECORDING_EVENT_ID_PATTERN, MOBILE_RECORDING_TRANSCRIPTION_STATES, RESOURCE_HASH_PATTERN } from "./resourceCacheProtocol.js";
@@ -16,6 +16,7 @@ export async function recordingOperation<T>(authorize: RecordingAuthorization | 
   catch (error) { authorize?.(); throw error; }
 }
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const mobileEventPattern = new RegExp(MOBILE_RECORDING_EVENT_ID_PATTERN), mobileChunkPattern = new RegExp(RESOURCE_HASH_PATTERN);
 const activityDayStart = (time: number) => new Date(time).setHours(0, 0, 0, 0);
@@ -207,7 +208,6 @@ async function scanDay(directory: string, day: string, authorize?: RecordingAuth
   return events;
 }
 export class AllDayRecordingStore {
-  private intent?: Promise<string | null>;
   private readonly settingReads = new Map<string, Promise<AllDaySettings>>();
   private deviceRead?: Promise<{ id: string; lastReceivedAt: number }[]>;
   private repairQueue: Promise<unknown> = Promise.resolve();
@@ -216,19 +216,6 @@ export class AllDayRecordingStore {
     scan?(directory: string, day: string): Promise<AllDayEvent[]>;
     committed?(role: string | null, event: AllDayEvent, bytes: Buffer | undefined, indexComplete: boolean): void;
   } = {}) {}
-  async enabledRole(authorize?: RecordingAuthorization): Promise<string | null> {
-    authorize?.();
-    const pending = this.intent ??= (async () => {
-      const value = await jsonOr<{roleId: string | null}>(path.join(this.mobileRoot, "capture-intent.json"), {roleId:null});
-      if (value.roleId !== null && (typeof value.roleId !== "string" || !value.roleId || value.roleId.length > 128 || /[\\/\x00-\x1f]/.test(value.roleId) || [".",".."].includes(value.roleId))) throw new Error("Invalid saved recording persona");
-      return value.roleId;
-    })();
-    try { return await recordingOperation(authorize, () => pending); } catch (error) { if(this.intent === pending) this.intent = undefined; throw error; }
-  }
-  async enableRole(roleId: string | null, authorize?: RecordingAuthorization) {
-    await atomicRecordingJson(path.join(this.mobileRoot, "capture-intent.json"), {roleId},authorize);
-    this.intent = Promise.resolve(roleId);
-  }
   directory(roleId: string) { return path.join(this.roleDirectory(roleId), "all-day-recording", hash(this.hostId)); }
   async settings(roleId: string, authorize?: RecordingAuthorization): Promise<AllDaySettings> {
     authorize?.();
@@ -277,9 +264,14 @@ export class AllDayRecordingStore {
     const root = this.directory(roleId);
     const key = hash(event.id);
     if (image) {
-      const audio = event.kind === "audio";
-      if (image.length > 16 * 1024 * 1024 || (audio ? image.subarray(0, 4).toString() !== "RIFF" : image[0] !== 0xff || image[1] !== 0xd8)) throw new Error("Invalid recording media");
-      const media = path.join("media", recordingDay(event.startedAt), `${key}.${audio ? "wav" : "jpg"}`);
+      const extension = event.kind === "audio"
+        ? (image.subarray(0, 4).toString() === "RIFF" ? "wav" : undefined)
+        : (event.kind === "image" && image.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ? "png"
+          : image[0] === 0xff && image[1] === 0xd8 ? "jpg" : undefined);
+      if (!extension) throw new Error("Invalid recording media");
+      const maxBytes = (extension === "png" ? 128 : 16) * 1024 * 1024;
+      if (image.length > maxBytes) throw new Error(`Recording media exceeds ${maxBytes / 1024 / 1024} MiB`);
+      const media = path.join("media", recordingDay(event.startedAt), `${key}.${extension}`);
       const destination = path.join(root, media);
       await recordingOperation(authorize, () => fs.mkdir(path.dirname(destination), { recursive: true }));
       const temporary = `${destination}.${randomUUID()}.partial`;
@@ -428,12 +420,12 @@ export class AllDayRecordingStore {
     return operation;
   }
   async media(roleId: string, day: string, id: string, extension = "jpg", authorize?: RecordingAuthorization): Promise<Buffer> {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^[a-f0-9]{64}$/.test(id) || !["jpg", "wav"].includes(extension)) throw new Error("Invalid media reference");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^[a-f0-9]{64}$/.test(id) || !Object.hasOwn(ALL_DAY_MEDIA_TYPES, extension)) throw new Error("Invalid media reference");
     return recordingOperation(authorize, () => fs.readFile(path.join(this.directory(roleId), "media", day, `${id}.${extension}`)));
   }
 }
 
-export type RecordingSample = { source: "screen" | "window" | "camera"; text?: string; jpeg?: string; error?: string };
+export type RecordingSample = { source: "screen" | "window" | "camera"; text?: string; png?: string; jpeg?: string; error?: string };
 export type AllDayCaptureDependencies = {
   prepare?(): Promise<void>;
   capture(settings: AllDaySettings, sessionId: string, authorize?: RecordingAuthorization): Promise<RecordingSample[]>;
@@ -474,7 +466,6 @@ export class AllDayRecordingService {
       ? { roleId: session.roleId, startedAt: session.homeAssistantSince ?? session.startedAt } : null;
   }
   private notifyActivity(): void { for (const listener of this.activityListeners) listener(this.activityRequest()); }
-  async restore() { const roleId = await this.store.enabledRole(); if (roleId) await this.start(roleId); }
   private serialize<T>(action: () => Promise<T>, authorize?: RecordingAuthorization): Promise<T> {
     const result = this.transition.catch(() => undefined).then(() => recordingOperation(authorize, action));
     this.transition = result;
@@ -482,7 +473,7 @@ export class AllDayRecordingService {
   }
   async snapshot(roleId: string, authorize?: RecordingAuthorization): Promise<AllDaySnapshot> {
     const session = this.session?.roleId === roleId ? this.session : null;
-    return { settings: await this.store.settings(roleId, authorize), enabled: await this.store.enabledRole(authorize) === roleId, sourceErrors:session ? {...this.sourceErrors} : {}, running: !!session && !session.stopping, preparing: !!session?.preparing, activeRoleId: this.session?.roleId ?? null, startedAt: session?.startedAt ?? null, lastSampleAt: session?.lastSampleAt ?? null, error: session?.error ?? "" };
+    return { settings: await this.store.settings(roleId, authorize), enabled: !!session && !session.stopping, sourceErrors:session ? {...this.sourceErrors} : {}, running: !!session && !session.stopping, preparing: !!session?.preparing, activeRoleId: this.session?.roleId ?? null, startedAt: session?.startedAt ?? null, lastSampleAt: session?.lastSampleAt ?? null, error: session?.error ?? "" };
   }
   configure(roleId: string, input: unknown, authorize?: RecordingAuthorization) {
     return this.serialize(async () => {
@@ -521,11 +512,10 @@ export class AllDayRecordingService {
         return this.snapshot(roleId, authorize);
       }
       const settings = await this.store.settings(roleId, authorize);
-      if (!hasRecordingSources(settings) && await this.store.enabledRole(authorize) !== roleId) throw new Error("Select at least one recording source");
+      if (!hasRecordingSources(settings)) throw new Error("Select at least one recording source");
       const now = Date.now();
       this.sourceErrors = settings.sources.homeAssistant ? { homeAssistant: "Home Assistant 活动连接尚未就绪" } : {};
       const session: RecordingSession = { homeAssistantSince: settings.sources.homeAssistant ? activityDayStart(now) : undefined, roleId, id: randomUUID(), settings, startedAt: now, audioSince: now, lastSampleAt: null, error: "", stopping: false, windowTitle: null };
-      await this.store.enableRole(roleId, authorize);
       this.session = session;
       let snapshot: AllDaySnapshot;
       try {
@@ -541,9 +531,8 @@ export class AllDayRecordingService {
       return snapshot;
     }, authorize);
   }
-  stop(roleId: string, preserveIntent = false, authorize?: RecordingAuthorization) {
+  stop(roleId: string, authorize?: RecordingAuthorization) {
     return this.serialize(async () => {
-      if (!preserveIntent && await this.store.enabledRole(authorize) === roleId) await this.store.enableRole(null, authorize);
       const session = this.session;
       if (!session || session.roleId !== roleId) return this.snapshot(roleId, authorize);
       session.stopping = true;
@@ -568,7 +557,7 @@ export class AllDayRecordingService {
       return this.snapshot(roleId, authorize);
     }, authorize);
   }
-  async dispose() { if (this.session) await this.stop(this.session.roleId, true); }
+  async dispose() { if (this.session) await this.stop(this.session.roleId); }
 
   async recordScreensForRules(roles: () => readonly string[]): Promise<void> {
     const eligible = () => roles().filter(roleId => this.session?.roleId !== roleId || !this.session.settings.sources.screen);
@@ -582,8 +571,9 @@ export class AllDayRecordingService {
       ...DEFAULT_ALL_DAY_SETTINGS, sources: { ...DEFAULT_ALL_DAY_SETTINGS.sources, screen: true }
     }, id);
     const sample = samples.find(item => item.source === "screen");
-    if (!sample?.jpeg) throw new Error(sample?.error || "Screen capture returned no image");
-    const bytes = Buffer.from(sample.jpeg, "base64");
+    const encoded = sample?.png ?? sample?.jpeg;
+    if (!sample || !encoded) throw new Error(sample?.error || "Screen capture returned no image");
+    const bytes = Buffer.from(encoded, "base64");
     const committed = await Promise.allSettled(eligible().filter(roleId => requested.includes(roleId)).map(async roleId => {
       await this.store.append(roleId, { id, startedAt: time, endedAt: time, source: "screen", deviceId: this.store.hostId,
         kind: "image", text: sample.text || "", state: "saved" }, bytes, () => {
@@ -810,7 +800,8 @@ export class AllDayRecordingService {
       else successful = true;
       if (sample.source === "window" && !sample.error && session.windowTitle === sample.text) continue;
       if (sample.source === "window" && !sample.error) session.windowTitle = sample.text ?? "";
-      await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: sample.source, deviceId: this.store.hostId, kind: sample.jpeg ? "image" : sample.source === "window" ? "window" : "status", text: sample.error ?? sample.text ?? "", state: sample.error ? "error" : "saved" }, sample.jpeg ? Buffer.from(sample.jpeg, "base64") : undefined);
+      const encoded = sample.png ?? sample.jpeg;
+      await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: sample.source, deviceId: this.store.hostId, kind: encoded ? "image" : sample.source === "window" ? "window" : "status", text: sample.error ?? sample.text ?? "", state: sample.error ? "error" : "saved" }, encoded ? Buffer.from(encoded, "base64") : undefined);
     }
     if (!this.dependencies.watchAudio) {
       try { await this.collectAudio(session); }

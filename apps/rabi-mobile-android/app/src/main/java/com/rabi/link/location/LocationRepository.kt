@@ -79,16 +79,17 @@ class LocationRepository(context: Context, databaseName: String = "rabi-location
         db.beginTransaction()
         try {
             db.update("points", ContentValues().apply { put("address", label) }, "id=?", arrayOf(id.toString()))
-            if (cache) {
-                db.insertOrThrow("addresses", null, ContentValues().apply {
-                    put("time", System.currentTimeMillis()); put("latitude", point.latitude); put("longitude", point.longitude); put("label", label)
-                })
-                // Address labels are a replaceable cache, never source track points.
-                db.execSQL("DELETE FROM addresses WHERE id NOT IN (SELECT id FROM addresses ORDER BY time DESC LIMIT 1000)")
-            }
+            if (cache) cachePlace(point, label)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         changes.incrementAndGet()
+    }
+    fun cachePlace(point: LocationPoint, label: String) {
+        val db = writableDatabase
+        db.insertOrThrow("addresses", null, ContentValues().apply {
+            put("time", System.currentTimeMillis()); put("latitude", point.latitude); put("longitude", point.longitude); put("label", label)
+        })
+        db.execSQL("DELETE FROM addresses WHERE id NOT IN (SELECT id FROM addresses ORDER BY time DESC LIMIT 1000)")
     }
     fun export(from: Long, until: Long, output: OutputStream) {
         output.bufferedWriter(Charsets.UTF_8).use { writer ->

@@ -14,12 +14,23 @@ import javax.crypto.spec.GCMParameterSpec
 class LocationSettings(context: Context) {
     private val prefs = context.getSharedPreferences("rabi_location", Context.MODE_PRIVATE)
     val enabled get() = prefs.getBoolean("enabled", false)
+    val remoteAccess get() = prefs.getBoolean("remoteAccess", true)
     val addresses get() = prefs.getBoolean("addresses", false)
     val monthlyLimit get() = prefs.getInt("monthlyLimit", LocationPolicy.DEFAULT_MONTHLY_LIMIT)
     val hasKey get() = !prefs.getString("encryptedKey", "").isNullOrEmpty()
     val privacyAccepted get() = prefs.getBoolean("amapPrivacyAccepted", false)
     val sampling get() = SamplingConfig(prefs.getLong("normalIntervalMs", 60_000),
         prefs.getLong("fastIntervalMs", 5_000), prefs.getFloat("distanceMeters", 10f).toDouble())
+    fun setRemoteAccess(enabled: Boolean) {
+        check(prefs.edit().putBoolean("remoteAccess", enabled).commit()) { "定位访问设置保存失败" }
+    }
+    fun reserveAddressAttempt(now: Long): Boolean = synchronized(addressAttemptLock) {
+        LocationPolicy.addressDue(now, prefs.getLong("lastAddressAttempt", 0)) &&
+            prefs.edit().putLong("lastAddressAttempt", now).commit()
+    }
+    private companion object {
+        val addressAttemptLock = Any()
+    }
     fun acceptPrivacy() { check(prefs.edit().putBoolean("amapPrivacyAccepted",true).commit()) { "隐私选择保存失败" } }
     fun save(enabled: Boolean, addresses: Boolean, monthlyLimit: Int, sampling: SamplingConfig = this.sampling) {
         require(monthlyLimit in 0..150_000) { "月上限需在 0–150000 之间" }

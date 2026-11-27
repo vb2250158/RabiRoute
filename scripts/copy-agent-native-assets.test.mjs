@@ -17,7 +17,7 @@ test("release copies source-matched assemblies and all branded native hosts with
   const temp = await mkdtemp(path.join(os.tmpdir(), "rabi-native-release-"));
   const agent = path.join(temp, "agent"), payload = path.join(temp, "payload");
   try {
-    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/computer-native.cs", "desktop/tray.ps1", "desktop/rabi-agent.ico", "package.json", "desktop/tracking/asset-spec.json", "desktop/tracking/RabiAgent.Computer.Tracking.csproj", "desktop/tracking/Engine.cs", "desktop/tracking/packages.lock.json", "desktop/tracking/THIRD-PARTY-NOTICES.txt"]) {
+    for (const relative of ["terminal/host.ps1", "desktop/computer.ps1", "desktop/computer-native.cs", "desktop/tray.ps1", "desktop/rabi-agent.ico", "package.json", "desktop/tracking/asset-spec.json", "desktop/tracking/RabiAgent.Computer.Tracking.csproj", "desktop/tracking/Engine.cs", "desktop/tracking/packages.lock.json", "desktop/tracking/THIRD-PARTY-NOTICES.txt", "desktop/gamepad/asset-spec.json", "desktop/gamepad/THIRD-PARTY-NOTICES.ViGEmClient.txt"]) {
       await mkdir(path.dirname(path.join(agent, relative)), { recursive: true });
       await copyFile(path.join(root, "apps/rabi-agent", relative), path.join(agent, relative));
     }
@@ -28,10 +28,11 @@ test("release copies source-matched assemblies and all branded native hosts with
     const native = path.join(agent, "dist/native");
     const requiredHosts = ["RabiAgent.Computer.exe", "RabiAgent.Terminal.exe", "RabiAgent.Tray.exe"];
     const tracking = JSON.parse(await readFile(path.join(native, "computer-tracking-assets.json"), "utf8"));
-    const trackingFiles = ["computer-tracking-assets.json", ...tracking.files.map(file => file.path)];
-    const built = (await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name) || requiredHosts.includes(name) || trackingFiles.includes(name)).sort();
+    const gamepad = JSON.parse(await readFile(path.join(agent, "desktop/gamepad/asset-spec.json"), "utf8"));
+    const supportingFiles = ["computer-tracking-assets.json", ...tracking.files.map(file => file.path), ...gamepad.files.map(file => file.name), gamepad.notice];
+    const built = (await readdir(native)).filter(name => /^(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(name) || requiredHosts.includes(name) || supportingFiles.includes(name)).sort();
     const copied = (await readdir(path.join(payload, "apps/rabi-agent/dist/native"))).sort();
-    assert.equal(built.length, 6 + trackingFiles.length);
+    assert.equal(built.length, 6 + supportingFiles.length);
     assert.deepEqual(copied, built);
     for (const name of built) {
       assert.deepEqual(await readFile(path.join(payload, "apps/rabi-agent/dist/native", name)), await readFile(path.join(native, name)), name);

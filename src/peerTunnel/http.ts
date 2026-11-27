@@ -5,6 +5,7 @@ import https from "node:https";
 import { Duplex, Transform, Writable, pipeline } from "node:stream";
 import type { TunnelSession, TunnelStream, TunnelRequest } from "./session.js";
 import type { ApiUpgradeInput, ApiHttpProxyInput } from "../manager/apiOperationContract.js";
+import { COMPUTER_PEER_SOURCE_HEADER } from "../shared/peerTunnelContract.js";
 
 export const PEER_PROXY_UPGRADE_HANDSHAKE_MS = 10_000;
 export const PEER_PROXY_CONTRACT_HEADER = "x-rabiroute-proxy-contract";
@@ -30,6 +31,7 @@ export function peerProxyRequestHeaders(headers: http.IncomingHttpHeaders): Reco
     delete forwarded[PEER_PROXY_TARGET_HEADERS];
     forwarded = { ...forwarded, ...tunnelHeaders(target as Record<string, unknown>) };
   }
+  delete forwarded[COMPUTER_PEER_SOURCE_HEADER];
   return forwarded;
 }
 
@@ -173,7 +175,9 @@ export async function proxyTunnel(session: TunnelSession, service: string, pathn
   const assertCurrent = () => { binding?.assertCurrent(); authorize?.(); };
   assertCurrent();
   const timing = apiRequestTimingPolicy({ method: request.method, path: pathname }, { defaultBudgetMs: getTimeoutMs("history.transport", 3000) });
-  const stream = session.open({ service, path: pathname, method: request.method || "GET", headers: binding?.requestHeaders ?? tunnelHeaders(request.headers) }, assertCurrent);
+  const headers = { ...(binding?.requestHeaders ?? tunnelHeaders(request.headers)) };
+  delete headers[COMPUTER_PEER_SOURCE_HEADER];
+  const stream = session.open({ service, path: pathname, method: request.method || "GET", headers }, assertCurrent);
   const streamClosed = stream.closed ? Promise.resolve() : new Promise<void>(resolve => stream.once("close", resolve));
   const cancel = () => { if (!response.writableFinished) stream.destroy(); };
   const requestError = (error: Error) => stream.destroy(error);
@@ -263,7 +267,8 @@ export async function proxyTunnelUpgrade(session: TunnelSession, service: string
   binding?: Pick<ApiUpgradeInput, "prepareHandshake" | "accept" | "signal" | "assertCurrent"> & { requestHeaders?: Record<string, string | string[]> }) {
   const assertCurrent = () => { binding?.assertCurrent(); authorize?.(); };
   try { assertCurrent(); } catch { socket.destroy(); return; }
-  const headers = binding ? binding.requestHeaders ?? peerProxyRequestHeaders(request.headers) : tunnelHeaders(request.headers);
+  const headers = { ...(binding?.requestHeaders ?? (binding ? peerProxyRequestHeaders(request.headers) : tunnelHeaders(request.headers))) };
+  delete headers[COMPUTER_PEER_SOURCE_HEADER];
   const stream = session.open({ service, path: pathname, method: "GET", headers, upgrade: true }, assertCurrent);
   const timer = setTimeout(() => stream.destroy(new Error("WebSocket upgrade timed out.")), getTimeoutMs("peer.proxyHandshake", PEER_PROXY_UPGRADE_HANDSHAKE_MS));
   const guards: Transform[] = [];

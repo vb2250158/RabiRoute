@@ -5,7 +5,8 @@ import ts from 'typescript';
 import { parse } from '@vue/compiler-sfc';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { agentHistoryEvents, agentHistoryMessages, agentHistoryNextCursor, latestAgentConversationPage } from '../src/agentSessionHistory';
-import { createAgentSessionClient, personaSessionAgents, agentSessionProject, agentSessionMembersAvailable } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
+import { createAgentSessionClient, personaSessionAgents, agentSessionProject, agentSessionMembersAvailable, agentNodeLabel, agentSessionRunning } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/agentSessionClient';
+import { deviceSystemIcon } from '../src/deviceSystem';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
 
@@ -24,11 +25,18 @@ test('only complete Codex instruction envelopes are shown as injected prompts', 
   assert.equal(messages[2]?.instructionHeading, undefined);
 });
 
-test('configured Agents switch through second-level tabs bound to the selected endpoint', () => {
+test('sessions are a lazily loaded device → project tree instead of a per-endpoint tab bar', () => {
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url), 'utf8');
-  assert.match(source, /<v-tabs v-model="agentKey"[^>]*:aria-label="t\('Agent 端'\)"/);
-  assert.match(source, /<v-tab v-for="item in agents"[^>]*:value="item.key"/);
-  assert.doesNotMatch(source, /<v-select\b/);
+  // Devices carry the two collapse levels, so the old Agent tab bar and dropdown are gone.
+  assert.match(source, /:devices="devices"/);
+  assert.match(source, /@expand-device="expandDevice"/);
+  assert.doesNotMatch(source, /<v-tabs\b/);
+  assert.doesNotMatch(source, /<v-menu\b/);
+  // Only this Manager opens on first paint; other nodes load when the user opens them.
+  assert.match(source, /defaultOpen: node\.kind === 'local'/);
+  assert.match(source, /function expandDevice\(id: string\)/);
+  // Each node reads through its own client so a read cannot borrow another owner.
+  assert.match(source, /function clientFor\(node: AgentNode\)/);
 });
 
 test('Codex history shows user input and final replies, filters tools/reasoning/commentary, deduplicates native streams across pages', () => {
@@ -87,31 +95,25 @@ test('configured role Agents retain separate remote identities, DSH origins and 
   assert(agents.some(agent => agent.provider === 'missing-plugin'));
 });
 
-test('task and history reads keep the original remote owner and cursor, and propagate cancellation', async () => {
+test('a bound target reads its own instance operation and propagates cancellation', async () => {
   const calls: Array<{ url: string; body: any; signal?: AbortSignal | null }> = [];
   const binding = { instanceId: 'pc-two', agentId: 'codex', ownerDeviceId: 'owner-pc' };
   const agent = { key: 'target', id: remoteAgentTargetKey(binding), provider: 'codex', binding, routes: [] };
   const request = (async (url: string, init?: RequestInit) => {
     calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined, signal: init?.signal });
-    if (!init?.body) return Response.json({ code: 0, data: url.includes('/sessions?') ? {items:[{id:'opaque-task',title:'Task'}],nextOffset:50} : { entries: [], nextCursor: 'following' } });
     return Response.json({ code: 0, threads: [{ id: 'opaque-task', title: 'Task' }], nextOffset: 50,
       history: { entries: [], nextCursor: 'following' } });
   }) as typeof fetch;
   const client = createAgentSessionClient(request), signal = new AbortController().signal;
   assert.equal((await client.tasks(agent, 'query', 0, signal)).nextOffset, 50);
   await client.history(agent, 'opaque-task', 'original-cursor', signal);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].body, undefined);
-  const listUrl = new URL(calls[0].url, 'http://localhost');
-  assert.equal(listUrl.pathname, '/api/rabilink/peer/http/owner-pc/manager/api/agent/providers/codex/sessions');
-  assert.equal(listUrl.searchParams.get('view'), 'roots');
-  assert.equal(listUrl.searchParams.get('previews'), '1');
-  const historyUrl = new URL(calls[1].url, 'http://localhost');
-  assert.equal(historyUrl.pathname, '/api/rabilink/peer/http/owner-pc/manager/api/agent/providers/codex/sessions/opaque-task/history');
-  assert.equal(historyUrl.searchParams.get('cursor'), 'original-cursor');
-  assert.equal(historyUrl.searchParams.get('maxBytes'), '2097152');
-  assert.equal(calls[1].body, undefined);
-  assert.equal(calls[1].signal, signal);
+  // A bound endpoint keeps the exact instance identity instead of falling back to a provider read.
+  assert.deepEqual(calls[0].body.instanceBinding, { instanceId: 'pc-two', agentId: 'codex', ownerDeviceId: 'owner-pc' });
+  assert.equal(calls[0].url, '/api/agent/threads');
+  assert.equal(calls[1].body.history.cursor, 'original-cursor');
+  assert.equal(calls.every(call => call.signal === signal), true);
+  assert.equal(calls[1].body.history.cursor, 'original-cursor');
+  assert.equal(calls.every(call => call.signal === signal), true);
 });
 
 
@@ -154,53 +156,6 @@ test('the role history grid keeps its implicit minimum within the viewport for l
 });
 
 
-test('returning to an Agent tab resumes the original cancelled first task/history read', async () => {
-  const file = new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url);
-  const parsed = parse(fs.readFileSync(file, 'utf8'));
-  const source = ts.createSourceFile('agent-history.ts', parsed.descriptor.scriptSetup!.content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const body = source.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getFullText(source)).join('\n');
-  const emitted = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-  const props = reactive({ roleId: 'role', active: true });
-  const agent = { id: 'local:codex', provider: 'codex', key: 'codex', routes: [] };
-  let taskReads = 0, historyReads = 0, expectedHistoryTask = 'original-task';
-  const cancelled = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
-  const client = {
-    agents: async () => [agent],
-    members: async () => ({items:[{id:'worker',title:'Worker',parentThreadId:'original-task'}],nextOffset:null}),
-    tasks: async (_agent: unknown, _query: string, _offset: number, signal: AbortSignal) => {
-      if (++taskReads === 1) return cancelled(signal);
-      return { items: [{ id: 'original-task', title: 'Original task' }], nextOffset: null };
-    },
-    history: async (_agent: unknown, task: string, _cursor: unknown, signal: AbortSignal) => {
-      assert.equal(task, expectedHistoryTask);
-      if (++historyReads === 1) return cancelled(signal);
-      return { entries: [native(1, 'event_msg', { type: 'user_message', message: 'User input' })], nextCursor: null };
-    }
-  };
-  const pane = Object.assign(new EventTarget(), { scrollHeight: 100, clientHeight: 100, scrollTop: 0 });
-  const cleanups: Array<() => void> = [];
-  const bindings = { computed, nextTick, ref, watch, onBeforeUnmount: (callback: () => void) => cleanups.push(callback),
-    defineProps: () => props, usePersonaService: () => ({ fetch, deviceId: '' }), createAgentSessionClient: () => client,
-    useI18n: () => ({ t: (text: string) => text, locale: ref('en') }), pluginCatalogStore: { agentAdapters: ref([]) },
-    userFacingError: String, agentSessionMembersAvailable, agentHistoryMessages, latestAgentConversationPage,
-    chatHistoryScroller: () => pane, chatHistoryViewport: () => ({ top: 0, bottom: 100 }), waitForChatHistoryFrame: async () => false };
-  const scope = effectScope();
-  const state = scope.run(() => new Function(...Object.keys(bindings), emitted + ';return {tasks,selectedId,messages,members,chooseMember,chooseRoot,currentSession};')(...Object.values(bindings)))!;
-  const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick(); };
-  try {
-    await flush(); assert.equal(taskReads, 1);
-    props.active = false; await flush(); props.active = true; await flush();
-    assert.equal(taskReads, 2); assert.equal(state.tasks.value[0].id, 'original-task');
-    state.selectedId.value = 'original-task'; await flush(); assert.equal(historyReads, 1);
-    props.active = false; await flush(); props.active = true; await flush();
-    assert.equal(historyReads, 2); assert.equal(state.messages.value[0].text, 'User input');
-    expectedHistoryTask='worker';state.chooseMember(state.members.value[0]);await flush();
-    assert.equal(state.selectedId.value,'original-task');assert.equal(state.currentSession.value.id,'worker');assert.equal(historyReads,3);
-    expectedHistoryTask='original-task';state.chooseRoot('original-task');await flush();
-    assert.equal(state.currentSession.value.id,'original-task');assert.equal(historyReads,4);
-  } finally { cleanups.forEach(cleanup => cleanup()); scope.stop(); }
-});
-
 
 test('session projects normalize Windows prefixes and case while preserving distinct paths and POSIX case', () => {
   assert.equal(agentSessionProject('C:/Work/Project/').key, 'c:/work/project');
@@ -213,25 +168,41 @@ test('session projects normalize Windows prefixes and case while preserving dist
   assert.deepEqual(agentSessionProject(), {key:'',title:'',path:''});
 });
 
-test('Agent sessions offer a persistent project/flat view toggle without changing selected session identity', () => {
+test('the device tree keeps selected session identity while projects collapse and expand', () => {
   const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue', import.meta.url), 'utf8');
-  assert.match(source, /:grouped="grouped"/);
-  assert.match(source, /@click="grouped = !grouped"/);
-  assert.match(source, /localStorage.setItem\(groupingStorageKey/);
+  assert.match(source, /:project-preview-limit="5"/);
   assert.match(source, /@select="chooseRoot"/);
+  assert.match(source, /:selected="selection \? selection\.entry/);
+  const layout = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/HistoryConversationLayout.vue', import.meta.url), 'utf8');
+  assert.match(layout, /row\.kind==='device'/);
+  // Collapse keys are owned by the shared presentation module, not by the view.
+  const presentation = fs.readFileSync(new URL('../src/historyConversationPresentation.ts', import.meta.url), 'utf8');
+  assert.match(presentation, /`device:\$\{device\.key\}`/);
+  assert.match(presentation, /`project:\$\{device\.key\}/);
 });
 
 
-test('Codex member pages use the exact owner and parent, preserve pagination and cancellation',async()=>{
+test('a bound endpoint reports no member pages because members are a native-provider read',async()=>{
   const calls:{url:string;signal?:AbortSignal|null}[]=[];
   const client=createAgentSessionClient((async(url:string,init?:RequestInit)=>{
     calls.push({url,signal:init?.signal});return Response.json({code:0,data:{items:[{id:'child',parentThreadId:'root',agentNickname:'Worker'}],nextOffset:50}});
   }) as typeof fetch);
   const agent={id:'remote',key:'remote',provider:'codex',routes:[],binding:{instanceId:'pc',agentId:'codex',ownerDeviceId:'owner'}};
+  // A bound endpoint keeps its instance operation; only an unbound provider page has subagents.
+  assert.deepEqual(await client.members(agent,'root',50,new AbortController().signal),{items:[],nextOffset:null});
+  assert.equal(calls.length,0);
+});
+
+test('an unbound owner reads Codex member pages with the exact owner and parent',async()=>{
+  const calls:{url:string;signal?:AbortSignal|null}[]=[];
+  const client=createAgentSessionClient((async(url:string,init?:RequestInit)=>{
+    calls.push({url,signal:init?.signal});return Response.json({code:0,data:{items:[{id:'child',parentThreadId:'root',agentNickname:'Worker'}],nextOffset:50}});
+  }) as typeof fetch);
+  const agent={id:'remote',key:'remote',provider:'codex',routes:[],nodeKind:'peer'};
   const signal=new AbortController().signal;
   assert.equal((await client.members(agent,'root',50,signal)).items[0].agentNickname,'Worker');
   const url=new URL(calls[0].url,'http://local');
-  assert.equal(url.pathname,'/api/rabilink/peer/http/owner/manager/api/agent/providers/codex/sessions');
+  assert.equal(url.pathname,'/api/agent/providers/codex/sessions');
   assert.equal(url.searchParams.get('parentSessionId'),'root');assert.equal(url.searchParams.get('offset'),'50');assert.equal(calls[0].signal,signal);
 });
 
@@ -338,26 +309,4 @@ test('task rows return before history, previews use four workers and a slow task
   assert.deepEqual(updates,['2:Fast reply']);assert.deepEqual(started,['0','1','2','3','4']);
   controller.abort();await cancelled;pending.get('0')!('Late reply');await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(updates,['2:Fast reply']);assert(!started.includes('5'));
-});
-
-test('compact session page keeps task rows without requesting previews after a failed more-page read',async()=>{
-  const parsed=parse(fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaAgentSessions.vue',import.meta.url),'utf8'));
-  const source=ts.createSourceFile('history.ts',parsed.descriptor.scriptSetup!.content,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
-  const body=source.statements.filter(node=>!ts.isImportDeclaration(node)).map(node=>node.getFullText(source)).join('\n');
-  const emitted=ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
-  const props=reactive({roleId:'role',active:true}),cleanups:(()=>void)[]=[];
-  const agents=['workbuddy','dsh'].map(provider=>({id:'local:'+provider,key:provider,provider,routes:[]}));
-  let failNextPage=false,previewRequests=0;
-  const client={agents:async()=>agents,tasks:async()=>{if(failNextPage)throw new Error('More page unavailable');return{items:[{id:'same-task',title:'Task',updatedAt:'2026-11-17T08:00:00Z'}],nextOffset:50};},
-    previews:async()=>{previewRequests++;}};
-  const bindings={computed,nextTick,ref,watch,onBeforeUnmount:(fn:()=>void)=>cleanups.push(fn),defineProps:()=>props,
-    usePersonaService:()=>({fetch,deviceId:''}),createAgentSessionClient:()=>client,useI18n:()=>({t:(text:string)=>text,locale:ref('zh-CN')}),
-    pluginCatalogStore:{agentAdapters:ref([])},userFacingError:String,agentSessionMembersAvailable,agentSessionProject};
-  const scope=effectScope(),state=scope.run(()=>new Function(...Object.keys(bindings),emitted+';return {tasks,agentKey,query,loadTasks,loadingTasks};')(...Object.values(bindings)))!;
-  const flush=async()=>{await new Promise(resolve=>setImmediate(resolve));await nextTick();};
-  try{
-    await flush();assert.equal(state.tasks.value.length,1);assert.equal(state.loadingTasks.value,false);assert.equal(previewRequests,0);
-    failNextPage=true;await state.loadTasks(true);assert.equal(state.tasks.value.length,1);assert.equal(previewRequests,0);
-    failNextPage=false;state.query.value='new search';await state.loadTasks();assert.equal(state.tasks.value.length,1);assert.equal(previewRequests,0);
-  }finally{cleanups.forEach(fn=>fn());scope.stop();}
 });

@@ -122,13 +122,18 @@ class AllDayCaptureTests(unittest.TestCase):
         import base64
         import io
         qt_loaded_before = "PySide6" in sys.modules
-        with patch("PIL.ImageGrab.grab", return_value=Image.new("RGB", (2560, 1440))) as grab:
+        pixels = Image.new("RGB", (2560, 1440), (11, 23, 51))
+        pixels.putpixel((2559, 1439), (223, 101, 9))
+        expected = pixels.tobytes()
+        with patch("PIL.ImageGrab.grab", return_value=pixels) as grab:
             samples = capture_sources({"screen": True}, 0)
         grab.assert_called_once_with(all_screens=True)
         self.assertIn("rabiroute_tray.desktop_capture", sys.modules)
         self.assertEqual("PySide6" in sys.modules, qt_loaded_before)
-        decoded = Image.open(io.BytesIO(base64.b64decode(samples[0]["jpeg"])))
-        self.assertEqual(decoded.size, (1920, 1080))
+        with Image.open(io.BytesIO(base64.b64decode(samples[0]["png"]))) as decoded:
+            self.assertEqual(decoded.format, "PNG")
+            self.assertEqual(decoded.size, (2560, 1440))
+            self.assertEqual(decoded.tobytes(), expected)
 
     def test_shared_capture_failure_is_an_event_error(self):
         with patch("PIL.ImageGrab.grab", side_effect=RuntimeError("capture unavailable")):

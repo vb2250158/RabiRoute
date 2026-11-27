@@ -71,7 +71,7 @@ test('actual shared layout keeps controlled mobile list/info state during backgr
   const state=scope.run(()=>sfcSetup('HistoryConversationLayout',{computed,ref,watch,defineProps:()=>props,
     defineEmits:()=>((...args:unknown[])=>{events.push(args);if(args[0]==='update:detailOpen')props.detailOpen=Boolean(args[1]);if(args[0]==='update:infoOpen')props.infoOpen=Boolean(args[1]);}),
     useI18n:()=>({t:(x:string)=>x,locale:ref('en')}),useHistoryConversationLayout:()=>({width:ref(260),maximum:ref(420),dragging:ref(false),start(){},move(){},stop(){},key(){},reset(){}}),
-    qqConversationTime:()=>''},'detailOpen,infoOpen,choose,back'))!;
+    historyConversationRows:()=>[], historyDeviceRows:()=>[], qqConversationTime:()=>''},'detailOpen,infoOpen,choose,back'))!;
   try {
     props.selected='qq-live:key';await nextTick();assert.equal(state.detailOpen.value,false);assert.equal(state.infoOpen.value,true);
     assert.equal(events.some(row=>row[0]==='update:detailOpen'),false);
@@ -169,7 +169,7 @@ test('actual shared SFC binds the measured right width into its grid style',()=>
   const detailsWidth=ref(222),scope=effectScope();
   const noop=()=>{};
   const state=scope.run(()=>sfcSetup('HistoryConversationLayout',{computed,ref,watch,defineProps:()=>({selected:'',hasDetails:true}),defineEmits:()=>noop,
-    useI18n:()=>({t:(text:string)=>text,locale:ref('en')}),qqConversationTime:()=>'',
+    useI18n:()=>({t:(text:string)=>text,locale:ref('en')}),qqConversationTime:()=>'', historyConversationRows:()=>[], historyDeviceRows:()=>[],
     useHistoryConversationLayout:()=>({width:ref(260),maximum:ref(420),detailsWidth,detailsMaximum:ref(420),dragging:ref(false),start:noop,move:noop,stop:noop,key:noop,reset:noop,
       details:{dragging:ref(false),start:noop,move:noop,stop:noop,key:noop,reset:noop}})},'style'))!;
   try {assert.equal(state.style.value['--history-details-width'],'222px');detailsWidth.value=342;assert.equal(state.style.value['--history-details-width'],'342px');}
@@ -223,13 +223,31 @@ test('project folder view previews five sessions and expands only the requested 
   assert.equal(historyConversationRows(items,false,new Set(),options).length,8);
 });
 
-test('Agent sessions use a node bar instead of a dropdown and compact rows without previews',()=>{
+test('a device without defaultOpen starts folded so one PC never buries the rest',async()=>{
+  const module=await import('../src/historyConversationPresentation');
+  const devices=[{key:'local',title:'本机',online:true,defaultOpen:true},{key:'peer:b',title:'远端',online:true}];
+  const items=Array.from({length:40},(_,index)=>({key:'t'+index,title:'Task '+index,preview:'',time:'2026-11-27T0'+(index%9)+':00:00Z',
+    device:devices[0],group:{key:'p',title:'P',path:'C:/p'}}));
+  // Devices with no loaded rows still render their own header row.
+  const rows=module.historyDeviceRows(items,devices,new Set(['device:peer:b']),{limit:5,expanded:new Set()});
+  assert.deepEqual(rows.filter(row=>row.kind==='device').map(row=>row.key),['device:local','device:peer:b']);
+  assert.equal(rows.find(row=>row.key==='device:peer:b')!.loaded,false);
+  const layout=readFileSync(componentPath('HistoryConversationLayout'),'utf8');
+  assert.match(layout,/defaultOpen !== true/);
+  assert.match(layout,/OPEN_PROJECTS_PER_DEVICE = 0/);
+  // Both collapse levels must reach the tree builder, not just the chevron state.
+  assert.match(layout,/collapsedKeys\.value/);
+});
+
+test('Agent sessions render a device and project tree without session previews',()=>{
   const sessions=readFileSync(componentPath('PersonaAgentSessions'),'utf8');
   assert.doesNotMatch(sessions,/<v-menu\b/);
-  assert.match(sessions,/class="agent-node-bar"/);
-  assert.match(sessions,/compact="true"/);
+  assert.doesNotMatch(sessions,/<v-tabs\b/);
+  assert.match(sessions,/:devices="devices"/);
   const layout=readFileSync(componentPath('HistoryConversationLayout'),'utf8');
-  assert.match(layout,/v-if="row\.conversation\.preview"/);
-  assert.match(layout,/compact \? \(grouped \? 44 : 46\)/);
-  assert.match(layout,/history-compact \.history-project-heading/);
+  assert.match(layout,/row\.kind==='device'/);
+  assert.match(layout,/row\.kind==='group'/);
+  // Session rows show only a title and a time; Vuetify turns a :title prop into a second title block.
+  assert.doesNotMatch(layout,/<v-list-item-subtitle/);
+  assert.match(layout,/toggleDevice\(row\)/);
 });

@@ -1,5 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
     <application android:networkSecurityConfig="@xml/debug_network_security"
-        tools:replace="android:networkSecurityConfig" />
+        tools:replace="android:networkSecurityConfig">
+        <service android:name=".phonecontrol.PhoneTouchService" android:exported="true"
+            android:label="@string/phone_touch_service_label" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/phone_touch_service" />
+        </service>
+    </application>
 </manifest>

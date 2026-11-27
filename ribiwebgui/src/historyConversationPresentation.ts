@@ -1,11 +1,76 @@
 import type { PersonaChatReply } from '@shared/personaChatHistory';
 import { personaHistoryTaskKey } from '@shared/personaChatHistory';
 
-export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string; group?:{key:string;title:string;path:string} };
+/** A node owns sessions: this Manager, a RabiLink computer or an enrolled Agent instance. */
+export type HistoryConversationDevice = { key:string; title:string; path?:string; icon?:string; online?:boolean; status?:string; defaultOpen?:boolean };
+export type HistoryConversationItem = { key:string; title:string; preview:string; time:string; subtitle?:string; agentProvider?:string; running?:boolean; device?:HistoryConversationDevice; group?:{key:string;title:string;path:string} };
 export type HistoryConversationRow =
   | { kind:'group'; key:string; title:string; path:string; count:number; latest:string }
   | { kind:'more'; key:string; groupKey:string; title:string; remaining:number }
   | { kind:'conversation'; key:string; conversation:HistoryConversationItem };
+export type HistoryDeviceRow =
+  | { kind:'device'; key:string; device:HistoryConversationDevice; count:number; latest:string; loaded:boolean }
+  | { kind:'group'; key:string; deviceKey:string; title:string; path:string; count:number; latest:string }
+  | { kind:'more'; key:string; groupKey:string; title:string; remaining:number }
+  | { kind:'conversation'; key:string; conversation:HistoryConversationItem };
+
+/** Session times arrive as ISO strings; an unknown or relative value sorts last, never first. */
+export function historyTimeValue(value:string|undefined):number {
+  const time = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+function newestFirst<T extends { time:string }>(rows:readonly T[]):T[] {
+  return [...rows].sort((left, right) => historyTimeValue(right.time) - historyTimeValue(left.time));
+}
+
+/** Two collapse levels: a device hides its projects, and a project hides its sessions. */
+export function historyDeviceRows(items:readonly HistoryConversationItem[], devices:readonly HistoryConversationDevice[], collapsed?:ReadonlySet<string>,
+  options?:{limit:number;expanded:ReadonlySet<string>}):HistoryDeviceRow[] {
+  const byDevice = new Map<string,HistoryConversationItem[]>();
+  for (const item of items) {
+    const key = item.device?.key || '';
+    if (!byDevice.has(key)) byDevice.set(key, []);
+    byDevice.get(key)!.push(item);
+  }
+  // Declared devices keep their order; a device only present in loaded rows follows them.
+  const declared = new Set(devices.map(device => device.key));
+  const ordered = [...devices, ...[...byDevice].filter(([key]) => !declared.has(key)).map(([key, group]) => group[0]!.device ?? { key, title:key })];
+  const rows: HistoryDeviceRow[] = [];
+  for (const device of ordered) {
+    const sessions = byDevice.get(device.key) ?? [];
+    const deviceKey = `device:${device.key}`;
+    const latest = sessions.reduce((newest,item) => historyTimeValue(item.time) > historyTimeValue(newest) ? item.time : newest, '');
+    rows.push({ kind:'device', key:deviceKey, device, count:sessions.length, latest, loaded: sessions.length > 0 || device.online === false });
+    if (collapsed?.has(deviceKey) || !sessions.length) continue;
+    const projects = new Map<string,HistoryConversationItem[]>();
+    for (const item of sessions) {
+      const key = item.group?.key || '';
+      if (!projects.has(key)) projects.set(key, []);
+      projects.get(key)!.push(item);
+    }
+    // Projects and their sessions are both newest-first, independent of arrival order.
+    const projectRows = [...projects].map(([projectKey, group]) => {
+      const sorted = newestFirst(group);
+      const latestInProject = sorted[0]?.time ?? '';
+      return { projectKey, group: sorted, heading: group[0]!.group, latestInProject };
+    }).sort((left, right) => historyTimeValue(right.latestInProject) - historyTimeValue(left.latestInProject));
+    for (const { projectKey, group, heading, latestInProject } of projectRows) {
+      const rowKey = `project:${device.key}:${projectKey}`;
+      rows.push({ kind:'group', key:rowKey, deviceKey, title:heading?.title ?? '', path:heading?.path ?? '', count:group.length, latest:latestInProject });
+      if (collapsed?.has(rowKey)) continue;
+      const limit = options && !options.expanded.has(rowKey) ? options.limit : group.length;
+      for (const item of group.slice(0,limit)) rows.push({ kind:'conversation', key:item.key, conversation:item });
+      if (limit < group.length) rows.push({ kind:'more', key:`more:${rowKey}`, groupKey:rowKey, title:heading?.title ?? '', remaining:group.length - limit });
+    }
+  }
+  return rows;
+}
+
+/** Loaded projects of one device, used when a caller renders its own device header. */
+export function historyProjectRows(items:readonly HistoryConversationItem[], collapsed?:ReadonlySet<string>,
+  options?:{limit:number;expanded:ReadonlySet<string>}):HistoryDeviceRow[] {
+  return historyDeviceRows(items, [], collapsed, options).filter(row => row.kind !== 'device');
+}
 
 /** Loaded projects follow their newest session, preserving source order within each project. */
 export function historyConversationRows(items:readonly HistoryConversationItem[], grouped:boolean, collapsed?:ReadonlySet<string>, options?:{limit:number;expanded:ReadonlySet<string>}):HistoryConversationRow[] {

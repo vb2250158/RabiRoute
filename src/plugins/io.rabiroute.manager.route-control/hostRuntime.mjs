@@ -32,6 +32,6 @@ export function createOwnedRuntime(ports) {
             readManagerConfig: ports.readManagerConfig,
             writeManagerConfig: ports.writeManagerConfig,
             ensureDataDirs: ports.ensureDataDirs
-        }),
+        }, ports.createDeviceComputerPort?.()),
     });
 }

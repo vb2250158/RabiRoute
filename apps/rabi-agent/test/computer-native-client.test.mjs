@@ -150,8 +150,10 @@ test("Qt stop maps only existing recovery actions and IDs without starting its r
   const client=new NativeComputerClient({launch:()=>child});let startups=0;client.qt={start:async()=>{startups++;},close:async()=>{}};
   client.stopOperation({action:"screen.capture",requestId:"bad"});
   client.stopOperation({action:"input.cancel",requestId:"batch",controlSessionId:"session",unrelated:"ignored"});
+  client.stopOperation({action:"input.detached.cancel",requestId:"background",controlSessionId:"unrelated"});
   client.stopOperation({action:"annotation.track.stop",trackingId:"tracker"});
-  await new Promise(resolve=>setImmediate(resolve));assert.equal(startups,0);assert.deepEqual(sent.map(item=>item.action),["input.cancel","annotation.track.stop"]);assert.equal(sent[0].unrelated,undefined);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(startups,0);assert.deepEqual(sent.map(item=>item.action),["input.cancel","input.detached.cancel","annotation.track.stop"]);assert.equal(sent[0].unrelated,undefined);
+  assert.equal(sent[1].requestId,"background");assert.equal(sent[1].controlSessionId,undefined);
   await client.close();
 });
 
@@ -292,6 +294,25 @@ test('image view and input batch checks share one cached native capability reque
   await client.close();
 });
 
+test("legacy background capture works and rejects an explicit child preview it cannot map", async () => {
+  const sent = [];
+  const child = childFixture((line, current) => {
+    const request = JSON.parse(line);
+    sent.push(request);
+    const result = request.action === "capabilities" ? { windowInputVersion: 1 } : { frameId: "legacy-window" };
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: request.id, result }) + "\n"));
+  });
+  const native = new NativeComputerClient({ launch: () => child });
+  try {
+    const target = { windowId: "a1", pid: 42 };
+    assert.equal((await native.request("screen.capture.background", target)).frameId, "legacy-window");
+    await assert.rejects(native.request("screen.capture.background", { ...target, receiverWindowId: "c1" }),
+      error => error.code === "COMPUTER_NATIVE_FEATURE_UNSUPPORTED" && error.field === "windowClientPreviewVersion");
+    assert.deepEqual(sent.map(request => request.action), ["capabilities", "screen.capture.background"]);
+  } finally {
+    await native.close();
+  }
+});
 
 for (const [name, input] of [
   ["overview", {}],

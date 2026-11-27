@@ -8,6 +8,7 @@ import uuid
 import io
 import wave
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -114,6 +115,11 @@ class PlanFeedbackSubmitResult:
     message: str = ""
     revision_conflict: bool = False
     uncertain: bool = False
+
+
+def screenshot_session_title() -> str:
+    """A new screenshot session is named after the moment it was started, in local time."""
+    return f"截图投递 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
 
 class ManagerClient:
@@ -306,6 +312,40 @@ class ManagerClient:
         return self._post_json("/api/agent/threads", {"action": "list", "agentAdapter": provider,
             "agentTargetId": f"local:{provider}", "query": query, "offset": offset, "limit": 100},
             timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120), headers=self._generation_headers())
+
+    def screenshot_projects(self, provider: str) -> list[str]:
+        """Projects an Agent end can start a new session in, read from its own scan metadata."""
+        # DSH has a single-end scan; every other end keeps its own project list from the shared scan.
+        path = "/api/scan/agents/dsh" if provider == "dsh" else "/api/scan/agents"
+        payload = self._get_json(path, timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120))
+        agent = (payload.get("agents") or {}).get(provider) or {}
+        projects = [str(row.get("path") or "").strip() for row in agent.get("projects") or [] if isinstance(row, dict)]
+        projects = [project for project in projects if project]
+        if projects:
+            return list(dict.fromkeys(projects))
+        return [str(path).strip() for path in payload.get("cwdOptions") or [] if str(path).strip()]
+
+    def create_screenshot_session(self, target: dict[str, str], text: str, image_path: str, delivery_id: str) -> RolePanelSendResult:
+        """Create a new session in the chosen project, then deliver the screenshot as its first turn."""
+        try:
+            payload = self._post_json("/api/agent/threads", {"action": "create", "agentAdapter": target["provider"],
+                "agentTargetId": f"local:{target['provider']}", "title": target.get("title") or screenshot_session_title(),
+                "cwd": target["cwd"], "prompt": text or "请查看这张截图。", "imagePaths": [image_path],
+                "deliveryId": delivery_id, "createIfMissing": False},
+                timeout_seconds=get_timeout_seconds("desktop.manager.operation", 120), headers=self._generation_headers())
+            accepted = payload.get("code") == 0 and not payload.get("error")
+            return RolePanelSendResult(ok=accepted and payload.get("initialTurnStatus") != "failed",
+                message=str(payload.get("message") or payload.get("initialTurnError") or payload.get("status") or "新建会话未确认"),
+                uncertain=payload.get("uncertain") is True or accepted and payload.get("initialTurnStatus") == "failed")
+        except HTTPError as error:
+            try:
+                failure = json.loads(error.read().decode("utf-8"))
+            except (OSError, ValueError):
+                failure = {}
+            return RolePanelSendResult(ok=False, message=str(failure.get("message") or error),
+                uncertain=error.code >= 500 or failure.get("uncertain") is True)
+        except (OSError, URLError, TimeoutError, ValueError) as error:
+            return RolePanelSendResult(ok=False, message=f"新建会话结果待核对（{delivery_id}）：{error}", uncertain=True)
 
     def send_screenshot_to_thread(self, target: dict[str, str], text: str, image_path: str, delivery_id: str) -> RolePanelSendResult:
         try:

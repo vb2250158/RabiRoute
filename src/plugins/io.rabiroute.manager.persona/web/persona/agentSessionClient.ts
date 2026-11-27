@@ -7,21 +7,42 @@ import { postRouteAgentThreadAction } from '../../../../../ribiwebgui/src/routeA
 import { peerManagerPath } from '../../../../../ribiwebgui/src/peerManagerTarget';
 
 export type AgentNodeKind = 'local' | 'peer' | 'instance';
-/** One selectable session source: this Manager, a RabiLink computer, or an enrolled LAN Agent instance. */
+/** One selectable session source, taken from the shared computer directory. */
 export type AgentNode = {
   id: string; kind: AgentNodeKind; name: string; online: boolean;
+  /** Directory status keeps `unknown` distinguishable from a confirmed offline PC. */
+  status?: string;
+  platform?: string; deviceKind?: string;
   deviceId?: string; instanceId?: string; detail?: string; latencyMs?: number | null;
   agents?: ReadonlyArray<{ agentId: string; name: string; provider: string; enabled?: boolean; routeId?: string; workspace?: string }>;
 };
 export type PersonaSessionAgent = RouteAgentTarget & { key: string; dshBaseUrl?: string; routes: string[]; label?: string; nodeId?: string; nodeName?: string; nodeKind?: AgentNodeKind };
-export type PersonaAgentTask = { id: string; title: string; cwd?: string; updatedAt?: string; archived?: boolean; parentThreadId?:string; agentNickname?:string; agentRole?:string; preview?:string; previewUnavailable?:boolean; lastMessageTime?:string };
+export type PersonaAgentTask = { id: string; title: string; cwd?: string; updatedAt?: string; archived?: boolean; parentThreadId?:string; agentNickname?:string; agentRole?:string; preview?:string; previewUnavailable?:boolean; lastMessageTime?:string; active?:boolean; status?:{type?:string} };
+
+/** A session is running when the owner reports it active; Codex leaves both fields empty. */
+export function agentSessionRunning(task: PersonaAgentTask): boolean {
+  return task.active === true || task.status?.type === 'active';
+}
 
 export function agentSessionMembersAvailable(agent:PersonaSessionAgent|undefined):boolean {
-  return Boolean(agent?.provider === 'codex' && agent.nodeKind !== 'instance' && (!agent.binding || agent.binding.ownerDeviceId));
+  return Boolean(agent?.provider === 'codex' && !agent.binding && (!agent.nodeKind || agent.nodeKind !== 'instance'));
 }
 
 /** Remote nodes keep the same session layout, so only genuinely executable providers become tabs. */
 export const remoteAgentProviders = ['codex', 'dsh', 'grokBot', 'workbuddy', 'antigravity', 'copilotCli'] as const;
+/**
+ * Antigravity now answers threads.list from its own conversation index and threads.history
+ * from its JSONL transcript, so it browses like the others. Copilot CLI still has no thread
+ * operations at all and stays out.
+ */
+export const historyCapableProviders = ['codex', 'dsh', 'grokBot', 'workbuddy', 'antigravity'] as const;
+/** One page covers a node's first screen; older sessions stay available through continuation. */
+export const SESSION_PAGE_SIZE = 30;
+/** A probe that cannot answer quickly is not worth blocking a node's first paint. */
+export const PROBE_TIMEOUT_MS = 4000;
+/** Adapters that answer by calling a remote vendor are slower than a local file read, but a
+ * provider stuck in its own retry loop must still not hold the list open. */
+export const PROBE_TIMEOUT_REMOTE_MS = 4000;
 
 export function agentNodeLabel(node: AgentNode): string {
   return node.name || node.deviceId || node.instanceId || node.id;
@@ -84,11 +105,22 @@ export function createAgentSessionClient(request: typeof fetch, sourceDeviceId =
     if (!response.ok || body.code === -1) throw new Error(body.message || '远端 Agent 会话操作失败。');
     return body as Record<string, any>;
   }
+  /** A local instance binding reaches the same thread operation this Manager already serves. */
+  async function postLocalThread(payload: Record<string, unknown>, signal?: AbortSignal) {
+    const response = await request('/api/agent/threads', {
+      method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
+    });
+    const body = await response.json();
+    if (!response.ok || body.code === -1) throw new Error(body.message || 'Agent 会话操作失败。');
+    return body as Record<string, any>;
+  }
   const execute = (agent: PersonaSessionAgent, payload: Record<string, unknown>, signal?: AbortSignal) => {
     const remote = Boolean(peerDevice());
-    if (agent.nodeKind === 'instance' && remote && agent.binding) {
-      return postPeerThread(peerDevice(), { ...payload, agentAdapter: agent.provider,
-        instanceBinding: { instanceId: agent.binding.instanceId, agentId: agent.binding.agentId } }, signal);
+    // An independent node posts to this Manager; a relay host's instance posts on that computer.
+    if (agent.nodeKind === 'instance' && agent.binding) {
+      const instanceBinding = { instanceId: agent.binding.instanceId, agentId: agent.binding.agentId };
+      if (remote) return postPeerThread(peerDevice(), { ...payload, agentAdapter: agent.provider, instanceBinding }, signal);
+      return postLocalThread({ ...payload, agentAdapter: agent.provider, instanceBinding }, signal);
     }
     return postRouteAgentThreadAction(
       { ...payload, ...((!remote && agent.dshBaseUrl) ? { dshBaseUrl: agent.dshBaseUrl } : {}) },
@@ -99,9 +131,9 @@ export function createAgentSessionClient(request: typeof fetch, sourceDeviceId =
   const previewCache = new Map<string,{preview:string;lastMessageTime?:string}>();
   async function readHistory(agent: PersonaSessionAgent, taskId: string, cursor?: string, signal?: AbortSignal) {
 
-      // Native provider history reads the selected PC owner; enrolled LAN instances keep their instance operation.
-      const nativeProvider = agent.nodeKind !== 'instance' && (agent.provider === 'codex' || agent.provider === 'dsh' && !agent.dshBaseUrl);
-      if (nativeProvider && (!agent.binding || agent.binding.ownerDeviceId)) {
+      // Native provider history applies to an unbound endpoint; a bound instance keeps its instance operation.
+      const nativeProvider = !agent.binding && (agent.provider === 'codex' || agent.provider === 'dsh' && !agent.dshBaseUrl);
+      if (nativeProvider) {
         const query = agent.provider === 'codex'
           ? new URLSearchParams({ view:'messages', limit: '200', maxBytes: '2097152', ...(cursor ? { cursor } : {}) })
           : new URLSearchParams({ maxMessages: '200', ...(cursor ? { beforeSeq: cursor } : {}) });
@@ -147,31 +179,45 @@ export function createAgentSessionClient(request: typeof fetch, sourceDeviceId =
   /** Probe each provider independently so one slow or missing adapter never hides the others. */
   async function providerHasSessions(deviceId: string, provider: string, signal?: AbortSignal): Promise<boolean> {
     try {
-      if (provider === 'codex' || provider === 'dsh') {
+      // A probe answers "is there a first row"; previews would make it scan every transcript.
+      const probeDeadline = AbortSignal.timeout(PROBE_TIMEOUT_MS);
+      const probe = signal ? AbortSignal.any([signal, probeDeadline]) : probeDeadline;      if (provider === 'codex' || provider === 'dsh') {
         const query = provider === 'codex'
-          ? new URLSearchParams({ view: 'roots', previews: '1', offset: '0', limit: '1' })
+          ? new URLSearchParams({ view: 'roots', offset: '0', limit: '1' })
           : new URLSearchParams({ offset: '0', limit: '1' });
-        const response = await request(providerPath(deviceId, `/api/agent/providers/${provider}/sessions?${query}`), { signal });
+        const response = await request(providerPath(deviceId, `/api/agent/providers/${provider}/sessions?${query}`), { signal: probe });
         const body = await response.json();
         return response.ok && body.code === 0 && Array.isArray(body.data?.items) && body.data.items.length > 0;
       }
-      const body = await execute({ id: `probe:${provider}`, key: `probe:${provider}`, provider, routes: [] }, { action: 'list', query: '', offset: 0, limit: 1 }, signal);
+      const body = await execute({ id: `probe:${provider}`, key: `probe:${provider}`, provider, routes: [] }, { action: 'list', query: '', offset: 0, limit: 1 }, probe);
       return Array.isArray(body.threads) && body.threads.length > 0;
     } catch {
       signal?.throwIfAborted();
       return false;
     }
   }
-  /** Every Agent provider that actually holds sessions becomes a tab; the list is no longer role-scoped. */
+  /**
+   * Every known provider is yielded at once. A provider with no sessions simply returns an
+   * empty page, so the probe round is unnecessary: the first page read doubles as the probe
+   * and the first paint, and one slow adapter never delays the others.
+   */
+  function agentForProvider(current: AgentNode, provider: string): PersonaSessionAgent {
+    return { id: `${current.kind}:${current.id}:${provider}`, provider, key: `${current.id}:${provider}`, routes: [],
+      nodeId: current.id, nodeName: current.name, nodeKind: current.kind };
+  }
+  function providerCandidates(current: AgentNode): string[] {
+    const known = historyCapableProviders as readonly string[];
+    return [...new Set((options.candidates?.() ?? historyCapableProviders).filter(provider => known.includes(provider)))];
+  }
+  /** A blocking list of providers, for callers that need the whole set before rendering. */
   async function probeAgents(current: AgentNode, signal?: AbortSignal): Promise<PersonaSessionAgent[]> {
     const deviceId = current.kind === 'peer' ? current.deviceId || '' : '';
-    const known = remoteAgentProviders as readonly string[];
-    const providers = [...new Set((options.candidates?.() ?? remoteAgentProviders).filter(provider => known.includes(provider)))];
-    const available = await Promise.all(providers.map(provider => providerHasSessions(deviceId, provider, signal)));
-    return providers.flatMap((provider, index): PersonaSessionAgent[] => available[index] ? [{
-      id: `${current.kind}:${current.id}:${provider}`, provider, key: `${current.id}:${provider}`, routes: [],
-      nodeId: current.id, nodeName: current.name, nodeKind: current.kind
-    }] : []);
+    const providers = providerCandidates(current);
+    const available: string[] = [];
+    await Promise.all(providers.map(async provider => {
+      if (await providerHasSessions(deviceId, provider, signal)) available.push(provider);
+    }));
+    return providers.filter(provider => available.includes(provider)).map(provider => agentForProvider(current, provider));
   }
   function instanceAgents(current: AgentNode): PersonaSessionAgent[] {
     const instanceId = current.instanceId || current.id;
@@ -179,31 +225,73 @@ export function createAgentSessionClient(request: typeof fetch, sourceDeviceId =
       const provider = agent.provider === 'codex-desktop' ? 'codex' : agent.provider;
       return {
         id: `instance:${current.id}:${agent.agentId}`, key: `instance:${current.id}:${agent.agentId}`, provider,
-        binding: { instanceId, agentId: agent.agentId },
+        // A relay host resolves the instance on its own computer; an independent node resolves it here.
+        binding: { instanceId, agentId: agent.agentId, ...(current.deviceId ? { ownerDeviceId: current.deviceId } : {}) },
         routes: [], label: agent.name || provider, nodeId: current.id, nodeName: current.name, nodeKind: 'instance'
       };
     });
   }
   return {
+    /**
+     * Yields each Agent endpoint as soon as it is known. A directory entry lists its endpoints,
+     * so those arrive immediately; a probed computer streams them in probe-completion order.
+     */
+    async *agentsStream(_roleId: string, signal?: AbortSignal): AsyncGenerator<PersonaSessionAgent> {
+      const current = node();
+      if (!current) { for (const agent of await this.agents(_roleId, signal)) yield agent; return; }
+      if (current.status === 'offline') return;
+      if (current.kind === 'instance') { for (const agent of instanceAgents(current)) yield agent; return; }
+      const listed = (current.agents ?? []).filter(agent => agent.enabled !== false && (current.deviceId || bindableInstanceAgent(agent.agentId)));
+      if (listed.length) {
+        for (const agent of listed) yield {
+          id: `${current.kind}:${current.id}:${agent.agentId}`, key: `${current.kind}:${current.id}:${agent.agentId}`,
+          provider: agent.provider === 'codex-desktop' ? 'codex' : agent.provider,
+          binding: current.deviceId ? undefined : { instanceId: current.instanceId || current.id, agentId: agent.agentId },
+          routes: [], label: agent.name, nodeId: current.id, nodeName: current.name, nodeKind: current.kind
+        };
+        return;
+      }
+      // No probe round: every provider is offered at once, and the caller's first page read is
+      // both the probe and the first paint. An adapter with nothing returns an empty page.
+      for (const provider of providerCandidates(current)) yield agentForProvider(current, provider);
+    },
     async agents(_roleId: string, signal?: AbortSignal) {
       const current = node();
-      if (current) return current.kind === 'instance' ? instanceAgents(current) : probeAgents(current, signal);
-      const response = await request(peerManagerPath(sourceDeviceId, '/gateways?summary=1&includeConfig=1'), { signal });
-      const body = await response.json();
-      if (!response.ok || body.code !== 0 || !Array.isArray(body.data?.config?.gateways)) {
-        throw new Error(body.message || '角色 Agent 端配置读取失败。');
+      if (!current) {
+        const response = await request(peerManagerPath(sourceDeviceId, '/gateways?summary=1&includeConfig=1'), { signal });
+        const body = await response.json();
+        if (!response.ok || body.code !== 0 || !Array.isArray(body.data?.config?.gateways)) {
+          throw new Error(body.message || '角色 Agent 端配置读取失败。');
+        }
+        return personaSessionAgents(body.data.config.gateways, _roleId);
       }
-      return personaSessionAgents(body.data.config.gateways, _roleId);
+      // A directory entry already names its Agent endpoints, so it is trusted before probing.
+      // An offline computer keeps its row but reports no readable endpoints.
+      if (current.status === 'offline') return [];
+      if (current.kind === 'instance') return instanceAgents(current);
+      const listed = (current.agents ?? []).filter(agent => agent.enabled !== false && (current.deviceId || bindableInstanceAgent(agent.agentId)));
+      if (listed.length) {
+        return listed.map(agent => ({
+          id: `${current.kind}:${current.id}:${agent.agentId}`, key: `${current.kind}:${current.id}:${agent.agentId}`,
+          provider: agent.provider === 'codex-desktop' ? 'codex' : agent.provider,
+          binding: current.deviceId ? undefined : { instanceId: current.instanceId || current.id, agentId: agent.agentId },
+          routes: [], label: agent.name, nodeId: current.id, nodeName: current.name, nodeKind: current.kind
+        }));
+      }
+      return probeAgents(current, signal);
     },
     async tasks(agent: PersonaSessionAgent, query: string, offset = 0, signal?: AbortSignal) {
-      if (agent.nodeKind !== 'instance' && agent.provider === 'codex' && agentSessionMembersAvailable(agent)) {
-        const queryString = new URLSearchParams({view:'roots',previews:'1',query,offset:String(offset),limit:'50'});
-        const response = await request(targetPath(agent.binding?.ownerDeviceId, '/api/agent/providers/codex/sessions?'+queryString), {signal});
+      // Only a native provider with a known owner reads the provider history; everything else is a binding.
+      if (!agent.binding && agent.provider === 'codex' && agentSessionMembersAvailable(agent)) {
+        // `previews=1` makes the owner scan every transcript on each page; the compact list shows
+        // only a title and a time, so the listing is read without previews.
+        const queryString = new URLSearchParams({view:'roots',query,offset:String(offset),limit:String(SESSION_PAGE_SIZE)});
+        const response = await request(targetPath(undefined, '/api/agent/providers/codex/sessions?'+queryString), {signal});
         const body = await response.json();
         if (!response.ok || body.code !== 0 || !Array.isArray(body.data?.items)) throw new Error(body.message || 'Agent 端未返回会话列表。');
         return {items:body.data.items as PersonaAgentTask[],nextOffset:body.data.nextOffset as number|null ?? null};
       }
-      const body = await execute(agent, { action: 'list', query, offset, limit: 50 }, signal);
+      const body = await execute(agent, { action: 'list', query, offset, limit: SESSION_PAGE_SIZE }, signal);
       if (!Array.isArray(body.threads)) throw new Error('Agent 端未返回会话列表。');
       const items = body.threads as PersonaAgentTask[];
       return { items, nextOffset: body.nextOffset as number | null ?? null };
@@ -230,47 +318,44 @@ export function createAgentSessionClient(request: typeof fetch, sourceDeviceId =
       return {items:body.data.items as PersonaAgentTask[],nextOffset:body.data.nextOffset as number|null ?? null};
     },
     history:readHistory,
-    /** Local Manager first, then RabiLink computers and the Agent instances enrolled on those computers. */
+    /**
+     * The computer directory is the single source of devices, so this list matches the
+     * Device control page: hosts, LAN nodes and phones share its identity, status and platform.
+     */
     async nodes(signal?: AbortSignal): Promise<AgentNode[]> {
-      const meta = await request('/meta', { signal }).then(response => response.json()).catch(() => undefined);
-      const localName = typeof meta?.rabiName === 'string' && meta.rabiName.trim() ? meta.rabiName.trim() : '本机';
-      const nodes: AgentNode[] = [{ id: 'local', kind: 'local', name: localName, online: true }];
-      const response = await request('/api/rabilink/peer/servers', { signal });
+      const response = await request('/api/computers', { signal });
       const body = await response.json();
-      if (!response.ok || !Array.isArray(body.peers)) throw new Error(body.message || '远端节点列表读取失败。');
-      const peers = (body.peers as Array<Record<string, unknown>>).flatMap(peer => {
-        const deviceId = typeof peer.deviceId === 'string' ? peer.deviceId : '';
-        if (!deviceId) return [];
-        return [{ deviceId, online: peer.online === true, name: typeof peer.name === 'string' && peer.name ? peer.name : deviceId,
-          latencyMs: typeof peer.latencyMs === 'number' ? peer.latencyMs : null }];
+      if (!response.ok || body.code !== 0 || !Array.isArray(body.data?.computers)) {
+        throw new Error(body.message || '电脑目录读取失败。');
+      }
+      return (body.data.computers as Array<Record<string, any>>).flatMap((computer): AgentNode[] => {
+        const kind = computer.kind === 'host' ? 'host' : 'node';
+        const instanceId = typeof computer.instanceId === 'string' ? computer.instanceId : '';
+        const ownerDeviceId = typeof computer.ownerDeviceId === 'string' ? computer.ownerDeviceId : '';
+        const local = computer.local === true;
+        const id = local ? 'local' : kind === 'host' && ownerDeviceId ? `peer:${ownerDeviceId}` : `node:${instanceId}`;
+        if (!local && !ownerDeviceId && !instanceId) return [];
+        const agents = (Array.isArray(computer.agents) ? computer.agents : []).flatMap((agent: Record<string, unknown>) => {
+          const agentId = typeof agent.agentId === 'string' ? agent.agentId : '';
+          const agentKind = typeof agent.provider === 'string' ? agent.provider : '';
+          if (!agentId || !agentKind) return [];
+          // A node's own Agent is an instance binding; a relay host reads its providers natively.
+          const bindable = kind === 'node' ? bindableInstanceAgent(agentId) : true;
+          return bindable ? [{ agentId, name: typeof agent.name === 'string' ? agent.name : agentId,
+            provider: agentKind, enabled: agent.enabled !== false }] : [];
+        });
+        return [{
+          id, kind: local ? 'local' : kind === 'host' ? 'peer' : 'instance',
+          name: String(computer.name || computer.hostname || instanceId || ownerDeviceId),
+          platform: typeof computer.platform === 'string' ? computer.platform : undefined,
+          deviceKind: typeof computer.deviceKind === 'string' ? computer.deviceKind : undefined,
+          status: typeof computer.status === 'string' ? computer.status : 'unknown',
+          online: local || computer.status === 'online',
+          instanceId: instanceId || undefined,
+          deviceId: ownerDeviceId || undefined,
+          agents
+        }];
       });
-      for (const peer of peers) {
-        nodes.push({ id: `peer:${peer.deviceId}`, kind: 'peer', deviceId: peer.deviceId, online: peer.online,
-          name: peer.name, latencyMs: peer.latencyMs });
-      }
-      const instanceTimeout = AbortSignal.timeout(8000);
-      const instanceSignal = signal ? AbortSignal.any([signal, instanceTimeout]) : instanceTimeout;
-      const instancePages = await Promise.allSettled(peers.filter(peer => peer.online).map(async peer => {
-        const instanceResponse = await request(peerManagerPath(peer.deviceId, '/api/lan-agent/instances'), { signal: instanceSignal });
-        const instanceBody = await instanceResponse.json();
-        if (!instanceResponse.ok || instanceBody.code !== 0 || !Array.isArray(instanceBody.instances)) return [];
-        return (instanceBody.instances as Array<Record<string, any>>).map(instance => ({ instance, peer }));
-      }));
-      for (const page of instancePages) {
-        if (page.status !== 'fulfilled') continue;
-        for (const { instance, peer } of page.value) {
-          const instanceId = typeof instance.instanceId === 'string' ? instance.instanceId : '';
-          if (!instanceId) continue;
-          nodes.push({ id: `instance:${peer.deviceId}:${instanceId}`, kind: 'instance', instanceId, deviceId: peer.deviceId,
-            online: peer.online && instance.connected !== false, name: instance.name || instance.hostname || instanceId,
-            agents: Array.isArray(instance.agents) ? instance.agents.map((agent: Record<string, unknown>) => ({
-              agentId: String(agent.agentId || ''), name: String(agent.name || agent.agentId || ''),
-              provider: String(agent.provider || ''), enabled: agent.enabled !== false,
-              routeId: typeof agent.routeId === 'string' ? agent.routeId : undefined
-            })).filter((agent: { agentId: string; provider: string }) => agent.agentId && agent.provider && bindableInstanceAgent(agent.agentId)) : [] });
-        }
-      }
-      return nodes;
     }
   };
 }

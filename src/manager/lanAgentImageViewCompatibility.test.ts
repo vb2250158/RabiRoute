@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { COMPUTER_IMAGE_VIEW_CAPABILITY } from "../../apps/rabi-agent/lib/computer-image-view.mjs";
+import { COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY } from "../../apps/rabi-agent/lib/interactive-protocol.mjs";
 
 /** The actual dispatcher uses an in-memory transport and its original pending-result path. */
 function fixture(capabilities: string[] = []) {
@@ -53,6 +54,21 @@ test("the current format declaration forwards original input without coordinate 
   assert.equal(f.sent[0]!.params.requestId, input.requestId);
 });
 
+test("change-aware readback is sent only to a node that can run it", async () => {
+  const perform = { action: "input.perform", requestId: "observed-input", actions: [{ type: "key", keys: ["Enter"] }],
+    captureAfter: { waitMs: 400, source: { frameId: "baseline" } } };
+  const legacy = fixture();
+  assert.throws(() => legacy.registry.manageAgent("node", "computer", perform, 1000), {
+    code: "COMPUTER_CAPTURE_AFTER_UNSUPPORTED", deliveryFrameSent: false, mutationOutcome: "not_started",
+  });
+  assert.equal(legacy.sent.length, 0);
+  await legacy.registry.manageAgent("node", "computer", { ...perform, captureAfter: true }, 1000);
+  assert.equal(legacy.sent[0]!.params.captureAfter, true);
+  const current = fixture([COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY]);
+  await current.registry.manageAgent("node", "computer", perform, 1000);
+  assert.deepEqual(current.sent[0]!.params.captureAfter, perform.captureAfter);
+});
+
 test("legacy text, key, unpositioned wheel, equal-size and cleanup requests remain available", async () => {
   const f = fixture();
   const requests = [
@@ -65,6 +81,27 @@ test("legacy text, key, unpositioned wheel, equal-size and cleanup requests rema
   ];
   for (const body of requests) await f.registry.manageAgent("node", "computer", body, 1000);
   assert.equal(f.sent.length, requests.length);
+});
+
+test("detached window and controller actions require the selected remote executor's capability", async () => {
+  const window = { windowId: "abc", pid: 42 };
+  const actions: Array<[string, Record<string, unknown>]> = [
+    ["windowActivation", { action: "windows.activate", ...window, requestId: "activation" }],
+    ["backgroundInput", { action: "input.background", ...window, requestId: "background", actions: [{ type: "text", text: "hello" }] }],
+    ["backgroundInput", { action: "windows.list", parent: window }],
+    ["backgroundCapture", { action: "screen.capture.background", ...window }],
+    ["gamepad", { action: "input.gamepad", requestId: "controller", frames: [{ durationMs: 25 }] }],
+  ];
+  const legacy = fixture(["windows", "screenshots", "input"]);
+  for (const [capability, body] of actions) {
+    assert.throws(() => legacy.registry.manageAgent("node", "computer", body, 1000), {
+      code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", deliveryFrameSent: false,
+    });
+    const current = fixture(["windows", capability]);
+    assert.equal((await current.registry.manageAgent("node", "computer", body, 1000)).state, "fixture-forwarded");
+    for (const [key, value] of Object.entries(body)) assert.deepEqual(current.sent[0]!.params[key], value);
+  }
+  assert.equal(legacy.sent.length, 0);
 });
 
 test("local computer execution stays with its Native capability owner", async () => {

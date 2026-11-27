@@ -6,7 +6,9 @@ import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { inflateSync } from "node:zlib";
 import { ComputerService } from "../lib/computer-service.mjs";
+import { ComputerControlService } from "../lib/computer-control-service.mjs";
 import { computerRequestSchema } from "../lib/interactive-protocol.mjs";
 const sha = value => createHash("sha256").update(value).digest("hex");
 
@@ -163,7 +165,7 @@ test("Windows helper queries and captures an owned window without any Agent back
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-screen-wait-"));
   const trigger = path.join(root, "change-color");
   const scriptPath = trigger.replaceAll("'", "''");
-  const code = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $form=New-Object System.Windows.Forms.Form; $form.Text='${title}'; $form.Width=420; $form.Height=260; $form.StartPosition='Manual'; $form.Location=New-Object System.Drawing.Point(30000,30000); $form.ShowInTaskbar=$false; $form.BackColor=[System.Drawing.Color]::Crimson; $timer=New-Object System.Windows.Forms.Timer; $timer.Interval=40; $timer.Add_Tick({if(Test-Path -LiteralPath '${scriptPath}'){$form.BackColor=[System.Drawing.Color]::ForestGreen;$form.Refresh();$timer.Stop()}}); $timer.Start(); $form.Add_Shown({[Console]::WriteLine('READY');[Console]::Out.Flush()});[System.Windows.Forms.Application]::Run($form)`;
+  const code = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $form=New-Object System.Windows.Forms.Form; $form.Text='${title}'; $form.FormBorderStyle='None'; $form.Width=420; $form.Height=260; $form.StartPosition='Manual'; $form.Location=New-Object System.Drawing.Point(30000,30000); $form.ShowInTaskbar=$false; $form.BackColor=[System.Drawing.Color]::Crimson; $timer=New-Object System.Windows.Forms.Timer; $timer.Interval=40; $timer.Add_Tick({if(Test-Path -LiteralPath '${scriptPath}'){$form.BackColor=[System.Drawing.Color]::ForestGreen;$form.Refresh();$timer.Stop()}}); $timer.Start(); $form.Add_Shown({$form.Refresh();[Console]::WriteLine('READY');[Console]::Out.Flush()});[System.Windows.Forms.Application]::Run($form)`;
   const child = spawn(path.join(process.env.SystemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),["-NoProfile","-EncodedCommand",Buffer.from(code,"utf16le").toString("base64")],{windowsHide:true,stdio:["pipe","pipe","pipe"]});
   const exited = new Promise(resolve => child.once("close",resolve));
   const service = new ComputerService();
@@ -176,22 +178,58 @@ test("Windows helper queries and captures an owned window without any Agent back
   const queried = await service.execute({ action:"windows.list",query:title });
   assert.equal(queried.windows.length,1); const window = queried.windows[0];
   assert.equal(window.pid,child.pid);
-  const captured = await service.execute({ action:"screen.capture",windowId:window.windowId,pid:window.pid,maxWidth:320 });
+  const captureWindow = () => service.execute({ action:"screen.capture",windowId:window.windowId,pid:window.pid,maxWidth:320 });
+  const topLeft = image => {
+    const png = Buffer.from(image.data, "base64");
+    assert.equal(png[24], 8);
+    assert.ok(png[25] === 2 || png[25] === 6);
+    assert.equal(png[28], 0);
+    const chunks = [];
+    for (let offset = 8; offset + 12 <= png.length;) {
+      const size = png.readUInt32BE(offset);
+      if (png.toString("ascii", offset + 4, offset + 8) === "IDAT") chunks.push(png.subarray(offset + 8, offset + 8 + size));
+      offset += size + 12;
+    }
+    // The first pixel has no prior row or column, so its RGB bytes do not depend on the PNG filter.
+    return inflateSync(Buffer.concat(chunks)).subarray(1, 4).toString("hex");
+  };
+  let captured = await captureWindow();
+  // An off-screen window can initially return an unpainted black surface even after WinForms Shown.
+  for (let i = 0; i < 5 && topLeft(captured) !== "dc143c"; i++) {
+    await new Promise(resolve => setTimeout(resolve, 75));
+    captured = await captureWindow();
+  }
+  assert.equal(topLeft(captured), "dc143c");
   const png = Buffer.from(captured.data,"base64");
   assert.equal(png.subarray(0,8).toString("hex"),"89504e470d0a1a0a");
   assert.equal(captured.mimeType,"image/png"); assert.equal(captured.width,320);
   assert.ok(captured.height>100);assert.ok(png.length<8388608);
   const wait = { action: "screen.wait", source: captured.source };
-  assert.deepEqual(await service.execute({ ...wait, waitMs: 180 }), { state: "unchanged" });
-  const changed = service.execute({ ...wait, waitMs: 3000 });
-  assert.equal((await service.execute({ action: "control.status" })).state, "absent");
-  fs.writeFileSync(trigger, "change");
-  const result = await changed;
-  assert.equal(result.state, "changed");
+  const unchanged = await service.execute({ ...wait, waitMs: 180 });
+  assert.equal(unchanged.state, "unchanged");
+  assert.equal(unchanged.capture, undefined);
+  // The off-screen form changes on its own. Stub only input so the test never moves or clicks the physical cursor.
+  const readback = new ComputerControlService({ native: {
+    async request(action, input, options) {
+      if (action === "control.begin") return { state: "active" };
+      if (action === "input.execute") return { state: "injected", completedActions: 1, releaseState: "released" };
+      if (action === "control.end") return { state: "ended" };
+      assert.equal(action, "screen.wait");
+      assert.equal((await readback.execute({ action: "control.status" })).state, "absent");
+      const capture = service.native.request(action, input, options);
+      fs.writeFileSync(trigger, "change");
+      return capture;
+    }
+  } });
+  const result = await readback.execute({ action: "input.perform", requestId: randomUUID(), source: captured.source,
+    actions: [{ type: "key", keys: ["Enter"] }], captureAfter: { waitMs: 3000 } });
+  assert.equal(result.state, "injected");
+  assert.equal(result.controlCleanup.state, "ended");
   assert.equal(result.capture.width, captured.width);
   assert.equal(result.capture.source.windowId, window.windowId);
   assert.notEqual(result.capture.source.frameId, captured.source.frameId);
   assert.notEqual(result.capture.data, captured.data);
+  assert.equal(topLeft(result.capture), "228b22");
   const abort = new AbortController();
   const pending = service.execute({ ...wait, source: result.capture.source, waitMs: 5000 }, { signal: abort.signal });
   const rejected = assert.rejects(pending, { name: "AbortError" });
@@ -203,6 +241,65 @@ test("Windows helper queries and captures an owned window without any Agent back
   await assert.rejects(service.execute({ action:"screen.capture",windowId:window.windowId,pid:window.pid+1 }),/changed/);
   const desktop = await service.execute({ action:"screen.capture",maxWidth:320 });
   assert.equal(desktop.width,320); assert.equal(desktop.mimeType,"image/png");
+});
+
+test("Windows helper addresses an owned minimized child without leasing desktop input", { skip: process.platform !== "win32" }, async t => {
+  const title = "RabiBackground-" + randomUUID();
+  const code = `
+    Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = '${title}'
+    $form.ShowInTaskbar = $false
+    $form.StartPosition = 'Manual'
+    $form.Location = New-Object System.Drawing.Point(30000,30000)
+    $form.BackColor = [System.Drawing.Color]::CornflowerBlue
+    $box = New-Object System.Windows.Forms.TextBox
+    $form.Controls.Add($box)
+    $box.Add_TextChanged({ if ($box.Text -eq 'Rabi') { [Console]::WriteLine('TEXT:Rabi'); [Console]::Out.Flush() } })
+    $form.Add_Shown({
+      $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+      [Console]::WriteLine(('READY:{0:x}:{1:x}' -f $form.Handle.ToInt64(),$box.Handle.ToInt64()))
+      [Console]::Out.Flush()
+    })
+    [System.Windows.Forms.Application]::Run($form)`;
+  const child = spawn(path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe"),
+    ["-NoProfile", "-EncodedCommand", Buffer.from(code, "utf16le").toString("base64")], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise(resolve => child.once("close", resolve));
+  const service = new ComputerService();
+  t.after(async () => { child.kill(); await Promise.all([service.stop(), exited]); });
+  let output = "";
+  child.stdout.setEncoding("utf8").on("data", data => { output += data; });
+  async function waitFor(pattern) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const match = output.match(pattern);
+      if (match) return match;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    assert.fail("Window fixture did not report " + pattern);
+  }
+  const [, windowId, receiverWindowId] = await waitFor(/READY:([0-9a-f]+):([0-9a-f]+)/);
+  const pid = child.pid;
+  const parent = { windowId, pid };
+  const target = (await service.execute({ action: "windows.list", query: title })).windows[0];
+  assert.equal(target?.minimized, true);
+  const discovered = await service.execute({ action: "windows.list", parent });
+  assert.ok(discovered.windows.some(window => window.windowId === receiverWindowId && window.pid === pid));
+  const input = { action: "input.background", ...parent, receiverWindowId, requestId: randomUUID(), actions: [{ type: "text", text: "Rabi" }] };
+  const receipt = await service.execute(input);
+  assert.equal(receipt.state, "posted", receipt.reason);
+  assert.equal(receipt.minimized, true);
+  assert.equal(receipt.postedMessages, 4);
+  await waitFor(/TEXT:Rabi/);
+  const original = await service.execute({ action: "input.status", requestId: input.requestId });
+  assert.equal(original.state, "posted");
+  assert.equal((await service.execute({ action: "control.status" })).state, "absent");
+  const background = await service.execute({ action: "screen.capture.background", ...parent, maxWidth: 160 });
+  assert.equal(background.source.windowId, windowId);
+  assert.equal(background.source.captureMethod, "window-print");
+  assert.equal(background.source.minimized, true);
+  assert.equal(background.mimeType, "image/png");
+  await assert.rejects(service.execute({ action: "screen.capture", ...parent }), /minimized/);
+  assert.equal((await service.execute({ action: "control.status" })).state, "absent");
 });
 
 test("default I/O and active uploads remain usable beyond the hot history window",async t=>{

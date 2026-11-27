@@ -91,19 +91,39 @@ function computerTrackingAssets(root) {
   return assets;
 }
 
+function computerGamepadAssets(root) {
+  const specPath = "desktop/gamepad/asset-spec.json";
+  const file = path.join(root, specPath);
+  if (!fs.existsSync(file)) return new Set();
+  const spec = JSON.parse(fs.readFileSync(file, "utf8"));
+  const directory = "dist/native/";
+  if (!fs.existsSync(path.join(root, directory, "RabiAgent.Computer.exe"))) return new Set();
+  const assets = new Set([specPath, directory + spec.notice, "desktop/gamepad/" + spec.notice]);
+  for (const item of spec.files) {
+    const relative = directory + item.name;
+    const bytes = fs.readFileSync(path.join(root, relative));
+    if (createHash("sha256").update(bytes).digest("hex") !== item.sha256) {
+      throw new Error("Computer gamepad asset differs from the pinned dependency: " + item.name);
+    }
+    assets.add(relative);
+  }
+  return assets;
+}
+
 /** The signed source release and explicit Windows bundle share one asset inventory. */
 export function collectReleaseAssetPaths(root, relative = "", options = {}) {
   const trackingAssets = options.trackingAssets ?? computerTrackingAssets(root);
+  const gamepadAssets = options.gamepadAssets ?? computerGamepadAssets(root);
   const assets = fs.readdirSync(path.join(root, relative), { withFileTypes: true }).flatMap(entry => {
     const child = relative ? `${relative}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       if (child === "node_modules" || child === "test" || child === "windows-runtime") return [];
-      return collectReleaseAssetPaths(root, child, { ...options, trackingAssets });
+      return collectReleaseAssetPaths(root, child, { ...options, trackingAssets, gamepadAssets });
     }
     if (!entry.isFile()) return [];
     // runtime/ is the native-runtime builder's public output closure, including
     // generated JS, JSON manifests and future package resources.
-    if (trackingAssets.has(child) || child.startsWith("runtime/") || entry.name === "package.json" || child === "package-lock.json" || entry.name.endsWith(".mjs")
+    if (trackingAssets.has(child) || gamepadAssets.has(child) || child.startsWith("runtime/") || entry.name === "package.json" || child === "package-lock.json" || entry.name.endsWith(".mjs")
       || ["desktop/tray.ps1", "desktop/start-windows.ps1", "desktop/rabi-agent.ico", "desktop/computer.ps1", "desktop/computer-native.cs", "terminal/host.ps1"].includes(child)
       || /^dist\/native\/(terminal|computer|tray)-[a-f0-9]{64}\.dll$/.test(child)
       || /^dist\/native\/RabiAgent\.(Terminal|Computer|Tray)\.exe$/.test(child)

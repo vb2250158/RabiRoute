@@ -81,6 +81,16 @@ class LocationSettingsActivity : Activity() {
         })
         body.addView(button("暂停全天记录") { runCatching { RabiConversationService.pauseRecording(this) }.onFailure { toast("暂停失败，请在记录页重试") } })
         body.addView(button("打开系统定位设置") { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) })
+        body.addView(RabiMobileUi.styleSwitch(this, Switch(this).apply {
+            text = "允许已连接设备读取当前位置"
+            isChecked = config.remoteAccess
+            setOnCheckedChangeListener { _, checked ->
+                runCatching { config.setRemoteAccess(checked) }.onFailure {
+                    isChecked = config.remoteAccess
+                    toast("定位访问设置保存失败")
+                }
+            }
+        }))
         body.addView(text("高德地点名称（可选）", 19f))
         body.addView(text("使用高德 Android 定位 SDK 补充地点名称。Key 使用 Android Keystore 加密，仅保存在本机；留空表示保留已保存的 Key。"))
         body.addView(button("高德定位隐私说明") { showPrivacy {} })

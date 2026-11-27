@@ -1,4 +1,5 @@
 import { COMPUTER_IMAGE_VIEW_CAPABILITY, computerRequestUsesImageView } from "../../apps/rabi-agent/lib/computer-image-view.mjs";
+import { COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY } from "../../apps/rabi-agent/lib/interactive-protocol.mjs";
 export { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
 import { recoverDisabledAgentTask } from "./disabledAgentTaskRecovery.js";
 import { hostname } from "node:os";
@@ -665,6 +666,24 @@ export class LanAgentRegistry {
       });
     }
 
+    if (operation === "computer") {
+      const action = String(body.action);
+      const capability = action === "windows.list" && body.parent !== undefined ? "backgroundInput" : computerActionDefinition(action)?.capability;
+      if (capability && ["backgroundInput","backgroundCapture","windowActivation","gamepad","screenRecording"].includes(capability)
+        && !this.nodes.get(instanceId)?.computerCapabilities?.includes(capability)) {
+        throw Object.assign(new Error("Update the selected computer's Agent to use " + action + "."), {
+          code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", deliveryFrameSent: false, mutationOutcome: "not_started"
+        });
+      }
+    }
+    if (operation === "computer" && body.action === "input.perform" && body.captureAfter && typeof body.captureAfter === "object"
+      && !this.nodes.get(instanceId)?.computerCapabilities?.includes(COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY)) {
+      throw Object.assign(new Error("Change-aware capture requires captureAfterWait-v1 on the selected computer."), {
+        code: "COMPUTER_CAPTURE_AFTER_UNSUPPORTED", field: "captureAfter", deliveryFrameSent: false,
+        instanceId, requestId: body.requestId, mutationOutcome: "not_started",
+        nextAction: "Update the target Agent, or use captureAfter: true when immediate readback is sufficient."
+      });
+    }
     if (operation === "computer" && computerRequestUsesImageView(String(body.action), body)
       && !this.nodes.get(instanceId)?.computerCapabilities?.includes(COMPUTER_IMAGE_VIEW_CAPABILITY)) {
       throw Object.assign(new Error("Scaled image coordinates require imageView-v1 on the selected computer."), {

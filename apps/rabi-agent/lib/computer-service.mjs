@@ -1,12 +1,13 @@
 import { COMPUTER_IMAGE_VIEW_CAPABILITY } from "./computer-image-view.mjs";
 import {BOOTSTRAP_COMPUTER_SETTINGS_DEFINITION as bootstrapDefinition} from "./computer-control-contract.mjs";
 import { UploadHistoryStore } from "./upload-history-store.mjs";
-import { COMPUTER_LIMITS } from "./interactive-protocol.mjs";
+import { COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY, COMPUTER_LIMITS } from "./interactive-protocol.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { DesktopNativeSlot } from "./desktop-native-slot.mjs";
 import { NativeComputerClient } from "./computer-native-client.mjs";
+import { ScreenRecording } from "./screen-recording.mjs";
 import { ComputerControlService } from "./computer-control-service.mjs";
 import { assertComputerActionEnabled, computerActionDefinition } from "./computer-control-contract.mjs";
 
@@ -49,10 +50,26 @@ export class ComputerService {
       retire: native => this.control.retireNativeGeneration(native),
       resume: () => this.control.resumeNativeGeneration()
     });
+    this.recording = new ScreenRecording({
+      root: uploadHistoryRoot ? path.join(path.dirname(uploadHistoryRoot), "screen-recordings") : undefined,
+      listWindows: () => this.desktop({ action: "windows.list", limit: 200 }),
+      captureWindow: (target, signal) => this.native.request("recording.frame", target, { signal }),
+      present: payload => this.native.request("recording.presentation", payload),
+      policy: () => (this.getDefinition?.() ?? bootstrapDefinition).normalizeForAction(this.getSettings?.(), "recording.start").recording
+        ?? bootstrapDefinition.defaults.recording,
+      changed: () => { onChange(); onControlChange(); },
+      authorize: () => (this.getDefinition?.() ?? bootstrapDefinition).assertAction(this.getSettings?.(), "recording.start",
+        typeof this.instanceId === "function" ? this.instanceId() : this.instanceId)
+    });
+    this.native.on("recording-stop", ({ recordingId }) => {
+      void this.recording.execute({ action: "recording.stop", recordingId }).catch(() => {});
+    });
     this.control = new ComputerControlService({ native: this.native, instanceId, onChange: () => { onChange(); onControlChange(); }, receiptRoot: receiptRoot ?? (uploadHistoryRoot ? path.join(path.dirname(uploadHistoryRoot), "computer-receipts") : undefined) });
   }
   get capabilities() {
-    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation", COMPUTER_IMAGE_VIEW_CAPABILITY, ...((this.native.capabilities ? this.native.capabilities.trackingAvailable : this.native.status().release?.version === "builtin" && fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url))) ? ["tracking"] : [])] : [])];
+    return ["files", ...(process.platform === "win32" ? ["windows", "screenshots", "input", "annotation",
+      "backgroundInput", "backgroundCapture", "windowClientPreview", "windowActivation", "gamepad", "screenRecording", COMPUTER_IMAGE_VIEW_CAPABILITY, COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY,
+      ...((this.native.capabilities ? this.native.capabilities.trackingAvailable : this.native.status().release?.version === "builtin" && fs.existsSync(new URL("../dist/native/RabiAgent.Computer.Tracking.dll", import.meta.url))) ? ["tracking"] : [])] : [])];
   }
   async desktopReleaseStatus() { try { await this.native.ready(); } catch { /* Status reports the original desktop-local failure. */ } return this.native.status(); }
   prepareDesktopRelease(reference) { return this.native.prepare(reference); }
@@ -62,21 +79,25 @@ export class ComputerService {
   connectionClosed() { return this.control.connectionClosed(); }
   endSource(connectionId) { return this.control.endSource(connectionId); }
   endTask(taskId, sourceId) { return this.control.endTask(taskId, sourceId); }
-  get activeCount() { return this.pending + this.activeUploads() + this.control.activeCount; }
+  get activeCount() { return this.pending + this.activeUploads() + this.control.activeCount + this.recording.activeCount; }
   activeUploads() { return [...this.uploads.values()].filter(item => !this.terminalClosed(item)).length + this.history.openHandleCount; }
   terminalClosed(item) { return ["committed", "aborted"].includes(item.state) && item.fdClosed === true && item.temporaryRemoved === true && Number.isSafeInteger(item.confirmedAt); }
   async execute(input, context = {}) {
     context = { getDefinition:this.getDefinition, getSettings: this.getSettings, instanceId: typeof this.instanceId === "function" ? this.instanceId() : this.instanceId, ...context };
-    if (/^(?:control\.|input\.|annotation\.)/.test(String(input.action))) return this.control.execute(input, context);
+    if (input.action === "windows.activate" || /^(?:control\.|input\.|annotation\.)/.test(String(input.action))) return this.control.execute(input, context);
     context.guard?.();
     if (!computerActionDefinition(input.action)?.recovery) (context.getDefinition?.()??bootstrapDefinition).assertAction(context.getSettings?.() ?? context.settings, input.action, context.instanceId);
     if (this.stopped) throw new Error("Computer service is stopped.");
     if (this.maxConcurrentIo > 0 && this.pending >= this.maxConcurrentIo) throw capacityError("RABI_AGENT_COMPUTER_MAX_CONCURRENT_IO", this.maxConcurrentIo);
     this.pending++; this.onChange();
     try {
+      if (String(input.action).startsWith("recording.")) {
+        if (process.platform !== "win32") throw new Error("Screen recording requires Windows on the selected device.");
+        return await this.recording.execute(input, context.guard, context.sourceLabel);
+      }
       if (input.action === "file.stat" || input.action === "file.read") return await this.readFile(input);
       if (String(input.action).startsWith("upload.")) return await this.upload(input);
-      if (["windows.list", "displays.list", "screen.capture", "screen.wait"].includes(input.action)) return await this.desktop(input, context);
+      if (["windows.list", "displays.list", "screen.capture", "screen.capture.background", "screen.wait"].includes(input.action)) return await this.desktop(input, context);
       throw new Error("Unsupported computer operation.");
     } finally { this.pending--; this.onChange(); }
   }
@@ -87,6 +108,10 @@ export class ComputerService {
       const before = await file.stat();
       if (!before.isFile()) throw new Error("The path is not a regular file.");
       const currentVersion = version(before);
+      if (String(input.action).startsWith("recording.")) {
+        if (process.platform !== "win32") throw new Error("Screen recording requires Windows on the selected device.");
+        return await this.recording.execute(input, context.guard, context.sourceLabel);
+      }
       if (input.action === "file.stat") return { path: target, size: before.size, version: currentVersion, chunkBytes: CHUNK_BYTES };
       if (input.version !== currentVersion) throw new Error("The file changed; restart the download using a fresh file.stat result.");
       if (!Number.isSafeInteger(input.offset) || input.offset < 0 || input.offset > before.size) throw new Error("Invalid file offset.");
@@ -209,7 +234,7 @@ export class ComputerService {
   }
   desktop(input, context = {}) {
     if (process.platform !== "win32") throw new Error("Window queries and screenshots require Windows.");
-    if (input.action === "screen.capture") return this.control.capture(input, context);
+    if (input.action === "screen.capture" || input.action === "screen.capture.background") return this.control.capture(input, context);
     if (input.action === "screen.wait") return this.control.waitForScreen(input, context);
     return this.native.request(input.action, { ...input, action: undefined });
   }
@@ -217,7 +242,8 @@ export class ComputerService {
   stop() {
     if (this.stopOwner) return this.stopOwner;
     this.stopped = true;
-    const stoppingControl = this.control.stop();
+    const stoppingRecording = this.recording.close();
+    const stoppingControl = stoppingRecording.finally(() => this.control.stop());
     const stoppingResources = this.stopResources();
     this.stopOwner = Promise.allSettled([stoppingControl, stoppingResources]).then(results => {
       const failures = results.filter(result => result.status === "rejected").flatMap(result => result.reason instanceof AggregateError ? result.reason.errors : [result.reason]);

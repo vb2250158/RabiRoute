@@ -5,13 +5,15 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { configureTimeouts, readTimeoutOverrides } from "../shared/timeoutSettings.js";
 import type { TunnelChannel } from "./channel.js";
-import { proxyTunnel, serveTunnel, tunnelFetch, tunnelHeaders } from "./http.js";
+import { peerProxyRequestHeaders, proxyTunnel, serveTunnel, tunnelFetch, tunnelHeaders } from "./http.js";
 import { TunnelSession, type TunnelStream } from "./session.js";
 import { SpeechApiOwner, createSpeechApiOperations } from "../plugins/io.rabiroute.manager.speech/src/manager/speechApiOperations.js";
 import type { SpeechApiContext } from "../manager/speechApiContext.js";
 import { ManagerPluginRouteRegistry } from "../manager/managerPluginRouteRegistry.js";
 import { issueInternalManagerHopHeaders, validateInternalManagerHop } from "../shared/internalManagerHop.js";
 import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
+import { COMPUTER_PEER_SOURCE_HEADER } from "../shared/peerTunnelContract.js";
+import { encodeComputerPeerSource, rabiLinkPeerComputerSource } from "../manager/rabiLinkAgentDeviceConnection.js";
 
 test('message history tunnel deadline includes the response body and cancels the upstream', { timeout: 2500 }, async t => {
   const { caller, receiver } = sessions(t);
@@ -101,6 +103,34 @@ test("generic Manager and owned resource tunnels sign each actual HTTP path afte
     assert.equal(result.headers.get("x-secret-version"), "v-next");
   }
   assert.equal(seen.length, 3); assert.equal(new Set(seen).size, 3);
+});
+
+test("the Manager-owned computer call carries two named sessions over one authenticated peer", async t => {
+  const { caller, receiver } = sessions(t);
+  const generation = "computer-fixture", scope = "b".repeat(64);
+  const endpoint = "/api/lan-agent/instances/windows-fixture/computer";
+  const deviceId = "origin-fixture";
+  const baseUrl = await server(t, (request, response) => {
+    response.end(JSON.stringify(rabiLinkPeerComputerSource(request, generation, scope)));
+  });
+  const internalHeaders = (method: string, target: string) =>
+    issueInternalManagerHopHeaders({ kind: "peer", generation, scope, deviceId, method, target });
+  serveTunnel(receiver, () => ({ manager: { baseUrl, internalHeaders } }));
+  const send = async (sourceId: string, label: string) => (await tunnelFetch(caller, "manager", endpoint, {
+    method: "POST", headers: { [COMPUTER_PEER_SOURCE_HEADER]: encodeComputerPeerSource(sourceId, label) },
+    body: JSON.stringify({ action: "input.background" })
+  })).json() as Promise<{ sourceId: string; sourceLabel: string }>;
+  const [first, second, renamed] = await Promise.all([
+    send("session-a", "设备会话甲"), send("session-b", "设备会话乙"), send("session-a", "设备会话甲新名称")
+  ]);
+  assert.deepEqual([first.sourceLabel, second.sourceLabel, renamed.sourceLabel], ["设备会话甲", "设备会话乙", "设备会话甲新名称"]);
+  assert.notEqual(first.sourceId, second.sourceId);
+  assert.equal(first.sourceId, renamed.sourceId);
+  const header = encodeComputerPeerSource("untrusted", "任意窗口会话");
+  assert.deepEqual(peerProxyRequestHeaders({
+    [COMPUTER_PEER_SOURCE_HEADER]: header, "x-future-contract": "keep",
+    "x-rabiroute-target-headers": JSON.stringify({ [COMPUTER_PEER_SOURCE_HEADER]: header })
+  }), { "x-future-contract": "keep" });
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;

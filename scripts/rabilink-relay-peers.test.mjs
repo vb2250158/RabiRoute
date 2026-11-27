@@ -199,6 +199,64 @@ test("peer discovery and RPC stay isolated while retired synchronization is unav
     assert.deepEqual(await returned.json(), receipt);
     await phoneReader.cancel();
 
+    const locationStream = await fetch(`${baseUrl}/api/rabilink/events?deviceId=${phoneId}&deviceKind=phone&deviceName=Fixture%20phone&capabilities=phone-location-v1`, {
+      headers: { "x-rabilink-token": tokenA, "x-rabilink-phone-session": phoneSecret }
+    });
+    assert.equal(locationStream.status, 200);
+    const locationPost = (token, suffix, body, session) => fetch(baseUrl + "/api/rabilink/mobile/location" + suffix, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": token,
+        ...(session ? { "x-rabilink-phone-session": session } : {}) }, body: JSON.stringify(body)
+    });
+    const locationInput = { targetId: phone.id, targetGuid: phone.guid, action: "location.read", includePlace: true };
+    assert.ok((await accountDirectory("?includePortable=phone")).find(peer => peer.deviceKind === "phone").capabilities.includes("phone-location-v1"));
+    assert.equal((await post(accountToken, "", locationInput)).status, 400);
+    assert.equal((await locationPost(accountToken, "", { ...locationInput, targetGuid: "wrong-guid" })).status, 404);
+    const locationCall = locationPost(accountToken, "", locationInput);
+    const locationReader = await waitForSseEvent(locationStream, "phone_location_available");
+    assert.equal((await locationPost(tokenA, "/claim", { phoneId }, "b".repeat(64))).status, 403);
+    const locationClaim = (await (await locationPost(tokenA, "/claim", { phoneId }, phoneSecret)).json()).data;
+    assert.equal(locationClaim.action, "location.read");
+    assert.deepEqual(locationClaim.input, { includePlace: true });
+    const locationResult = { code: 0, data: { state: "ok", latitude: 0, longitude: 0, coordinateSystem: "WGS84", placeState: "unavailable" } };
+    const reply = { phoneId, requestId: locationClaim.id, status: 200, result: locationResult };
+    assert.equal((await post(tokenA, "/result", reply, phoneSecret)).status, 404);
+    assert.equal((await locationPost(tokenA, "/result", reply, phoneSecret)).status, 200);
+    const locationResponse = await locationCall;
+    assert.equal(locationResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await locationResponse.json(), locationResult);
+    await locationReader.cancel();
+
+    const screenStream = await fetch(`${baseUrl}/api/rabilink/events?deviceId=${phoneId}&deviceKind=phone&deviceName=Fixture%20phone&capabilities=phone-screen-v1`, {
+      headers: { "x-rabilink-token": tokenA, "x-rabilink-phone-session": phoneSecret }
+    });
+    assert.equal(screenStream.status, 200);
+    assert.ok((await accountDirectory("?includePortable=phone")).find(peer => peer.deviceKind === "phone").capabilities.includes("phone-screen-v1"));
+    const screenPost = (token, suffix, body, session) => fetch(baseUrl + "/api/rabilink/mobile/screen" + suffix, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": token,
+        ...(session ? { "x-rabilink-phone-session": session } : {}) }, body: JSON.stringify(body)
+    });
+    const screenInput = { targetId: phone.id, targetGuid: phone.guid, action: "screen.capture", maxWidth: 32, observerLabel: "测试会话" };
+    assert.equal((await screenPost(accountToken, "", { ...screenInput, targetGuid: "wrong-guid" })).status, 404);
+    const touchWithoutDriver = await screenPost(accountToken, "", { targetId: phone.id, targetGuid: phone.guid, action: "input.status", requestId: "fixture" });
+    assert.equal(touchWithoutDriver.status, 503);
+    assert.equal((await touchWithoutDriver.json()).errorCode, "PHONE_INPUT_UNAVAILABLE");
+    const appsWithoutDriver = await screenPost(accountToken, "", { targetId: phone.id, targetGuid: phone.guid, action: "apps.list" });
+    assert.equal(appsWithoutDriver.status, 503);
+    assert.equal((await appsWithoutDriver.json()).errorCode, "PHONE_APPS_UNAVAILABLE");
+    const screenCall = screenPost(accountToken, "", screenInput);
+    const screenReader = await waitForSseEvent(screenStream, "phone_screen_available");
+    assert.equal((await screenPost(tokenA, "/claim", { phoneId }, "b".repeat(64))).status, 403);
+    const screenClaim = (await (await screenPost(tokenA, "/claim", { phoneId }, phoneSecret)).json()).data;
+    assert.equal(screenClaim.action, "screen.capture");
+    assert.deepEqual(screenClaim.input, { maxWidth: 32, observerLabel: "测试会话" });
+    const screenResult = { code: 0, data: { mimeType: "image/png", data: Buffer.alloc(240_000, 42).toString("base64") } };
+    const screenReply = { phoneId, requestId: screenClaim.id, status: 200, result: screenResult };
+    assert.equal((await screenPost(tokenA, "/result", screenReply, phoneSecret)).status, 200);
+    const screenResponse = await screenCall;
+    assert.equal(screenResponse.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(await screenResponse.json(), screenResult);
+    await screenReader.cancel();
+
     await liveEvents.body.cancel();
     const stillConnectedResponse = await fetch(`${baseUrl}/api/rabilink/peers?deviceId=pc-a&deviceGuid=guid-a`, {
       headers: { "x-rabilink-token": tokenA }

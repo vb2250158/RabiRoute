@@ -135,9 +135,8 @@ class LocationController(private val context: Context) : AutoCloseable {
         if (!settings.addresses || !settings.hasKey || point.accuracy > LocationPolicy.CACHE_RADIUS_METERS) return
         val now = System.currentTimeMillis()
         repository.cached(point, now)?.let { repository.label(id, point, it, false); changed(); return }
-        val prefs = context.getSharedPreferences("rabi_location", Context.MODE_PRIVATE)
-        if (!LocationPolicy.addressDue(now, prefs.getLong("lastAddressAttempt", 0)) || !querying.compareAndSet(false, true)) return
-        if (!prefs.edit().putLong("lastAddressAttempt", now).commit()) { querying.set(false); status("地址查询状态保存失败，GPS 继续记录"); return }
+        if (!querying.compareAndSet(false, true)) return
+        if (!settings.reserveAddressAttempt(now)) { querying.set(false); return }
         network.execute {
             try {
                 if (!accepts(epoch) || !settings.addresses) return@execute

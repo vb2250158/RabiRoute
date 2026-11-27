@@ -34,6 +34,8 @@ When the next step depends on a UI update, pass the previous image's complete `s
 
 With `input.perform`, the input `source` can contain just the `frameId`, `imageItemId` and any `imageView` from the same capture. Use the coordinates shown in that image. The desktop worker checks the cached image identity and restores the original window, display and scaling. Set `captureAfter: true` to observe the original capture scope in the same batch. Older workers report that they require the complete `source`. Check the original receipt for an unexecuted batch before submitting a complete source. Observe the target again when the cached frame expires.
 
+When the next step depends on a UI update after input, set `captureAfter: { "waitMs": 400 }`. Rabi releases input after the batch and waits for a pixel change in the baseline capture scope for up to the requested time (100–5000 ms). A change returns a fresh image in `capture`. When no image is returned, read `capture.state` and keep the original input receipt. To watch a smaller area, capture that region first and pass its complete source as `captureAfter.source`. If omitted, Rabi uses the complete top-level `source`. Remote nodes advertise this option as `captureAfterWait-v1`.
+
 A media-conversion failure retains the original business outcome and the corresponding media error. Query the original request for its actual execution state.
 
 ## Submit a complete input batch

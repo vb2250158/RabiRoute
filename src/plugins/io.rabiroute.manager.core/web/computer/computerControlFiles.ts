@@ -11,7 +11,7 @@ async function fileHash(file: Blob, signal: AbortSignal): Promise<string> {
  const finish=()=>{signal.removeEventListener("abort",abort);worker.terminate();};worker.onmessage=event=>{finish();event.data.error?reject(new Error(event.data.error)):resolve(event.data.sha256);};worker.onerror=event=>{finish();reject(new Error(event.message));};if(signal.aborted)abort();else worker.postMessage(file);});
 }
 function base64(bytes: Uint8Array): string { let value = ""; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value); }
-function unbase64(value: string): Uint8Array { return Uint8Array.from(atob(value), character => character.charCodeAt(0)); }
+function unbase64(value: string): Uint8Array<ArrayBuffer> { return Uint8Array.from(atob(value), character => character.charCodeAt(0)); }
 /** Browser adapter for the existing upload/read wire protocol. The target owns durable transfer state. */
 export class ComputerControlFiles {
   constructor(private readonly call: ComputerFileCall) {}
@@ -27,14 +27,21 @@ export class ComputerControlFiles {
     check(); current = await this.call({action:"upload.commit",uploadId}); progress(current as ComputerFileProgress); return current;
   }
   async download(path: string, signal: AbortSignal, progress: (value: ComputerFileProgress) => void): Promise<Blob> {
-    const info = await this.call({action:"file.stat",path}); let offset = 0; const chunks: BlobPart[] = [];
+    const chunks: BlobPart[] = [];
+    await this.downloadTo(path, signal, progress, bytes => { chunks.push(bytes); });
+    return new Blob(chunks);
+  }
+  async downloadTo(path: string, signal: AbortSignal, progress: (value: ComputerFileProgress) => void,
+    write: (bytes: Uint8Array<ArrayBuffer>) => void | Promise<void>): Promise<void> {
+    const info = await this.call({action:"file.stat",path}); let offset = 0;
     while (offset < Number(info.size)) {
       if (signal.aborted) throw new DOMException("下载已停止。", "AbortError");
       const result = await this.call({action:"file.read",path,version:info.version,offset}); const bytes = unbase64(String(result.data));
       if (await sha256(bytes) !== result.sha256 || Number(result.offset) !== offset || Number(result.nextOffset) !== offset + bytes.length || result.version !== info.version) throw new Error("文件分块校验不一致，未保存下载文件。");
-      chunks.push(bytes as BlobPart); offset = Number(result.nextOffset); progress({path,size:Number(info.size),offset,state:offset === Number(info.size) ? "verified" : "reading"});
+      signal.throwIfAborted();
+      await write(bytes);
+      offset = Number(result.nextOffset); progress({path,size:Number(info.size),offset,state:offset === Number(info.size) ? "verified" : "reading"});
       if (!bytes.length && offset < Number(info.size)) throw new Error("文件读取没有继续推进，请按原版本检查。");
     }
-    return new Blob(chunks);
   }
 }

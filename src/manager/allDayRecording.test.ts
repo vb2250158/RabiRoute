@@ -466,7 +466,7 @@ test("unavailable microphone preserves enabled intent without blocking screen ca
   assert.match((await service.snapshot("one")).sourceErrors!.microphone!,/unavailable/);
 });
 
-test("enable survives shutdown, runtime source changes persist, explicit disable survives restart", async t => {
+test("legacy capture intent is ignored, while saved source settings still load", async t => {
   const store = await fixture(t);
   const deps = {changed:()=>{},capture:async()=>[],startMicrophone:async()=>"resident",stopMicrophone:async()=>{},audio:async()=>[],audioFile:async()=>Buffer.alloc(0)};
   await store.configure("one",{...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,screen:true}});
@@ -474,13 +474,17 @@ test("enable survives shutdown, runtime source changes persist, explicit disable
   await first.start("one"); await first.dispose();
   const second = new AllDayRecordingService(store,deps);
   t.after(()=>second.dispose());
-  await second.restore();
-  assert.equal((await second.snapshot("one")).running,true);
+  await fs.mkdir(store.mobileRoot, { recursive: true });
+  await fs.writeFile(path.join(store.mobileRoot, "capture-intent.json"), JSON.stringify({ roleId: "one" }));
+  assert.equal((await second.snapshot("one")).running,false);
+  assert.equal((await second.snapshot("one")).enabled,false);
+  assert.equal((await second.snapshot("one")).settings.sources.screen,true);
+  await second.start("one");
   await second.configure("one",{...DEFAULT_ALL_DAY_SETTINGS,sources:{...DEFAULT_ALL_DAY_SETTINGS.sources,window:true}});
   assert.equal((await second.snapshot("one")).settings.sources.screen,false);
   assert.equal((await second.snapshot("one")).running,true);
   await second.stop("one");
-  const third = new AllDayRecordingService(store,deps); await third.restore();
+  const third = new AllDayRecordingService(store,deps);
   assert.equal((await third.snapshot("one")).enabled,false);
   assert.equal((await third.snapshot("one")).running,false);
 });

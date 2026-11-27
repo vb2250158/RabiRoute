@@ -585,7 +585,8 @@ export function createCodexRuntime(options: { desktopBridgeOptions?: CodexDeskto
         threadId: bootstrap.threadId,
         prompt: initialDelivery.prompt,
         cwd: normalizedParams.cwd,
-        sandbox: normalizedParams.sandbox
+        sandbox: normalizedParams.sandbox,
+        ...(normalizedParams.imagePaths?.length ? { imagePaths: normalizedParams.imagePaths } : {})
       });
       try {
         await waitForDesktopFirstMessage(bootstrap.threadId);

@@ -77,17 +77,70 @@ export async function saveRabiLinkDeviceLabels(device: RabiLinkHomeDevice, label
   }
 }
 
-export async function requestPhoneFileOperation(device: Pick<RabiLinkHomeDevice, "id" | "guid">,
+async function requestPhoneOperation(channel: "files" | "location", device: Pick<RabiLinkHomeDevice, "id" | "guid">,
   input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const response = await fetch(`/api/rabi/link-home/devices/${encodeURIComponent(device.id)}/files`, {
+  const response = await fetch(`/api/rabi/link-home/devices/${encodeURIComponent(device.id)}/${channel}`, {
     method: "POST", signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...input, targetGuid: device.guid })
   });
+  return readPhoneOperationResult(response, `PHONE_${channel.toUpperCase()}_TRANSPORT_UNCONFIRMED`);
+}
+
+async function readPhoneOperationResult(response: Response, transportError: string): Promise<Record<string, unknown>> {
   const payload = await response.json().catch(() => null);
   if (!response.ok || payload?.code !== 0 || !record(payload?.data)) {
-    throw new Error(typeof payload?.errorCode === "string" ? payload.errorCode : "PHONE_FILES_TRANSPORT_UNCONFIRMED");
+    throw new Error(typeof payload?.errorCode === "string" ? payload.errorCode
+      : transportError);
   }
   return payload.data;
+}
+
+export function requestPhoneFileOperation(device: Pick<RabiLinkHomeDevice, "id" | "guid">,
+  input: Record<string, unknown>, signal: AbortSignal) {
+  return requestPhoneOperation("files", device, input, signal);
+}
+
+export function requestPhoneLocationOperation(device: Pick<RabiLinkHomeDevice, "id" | "guid">,
+  input: Record<string, unknown>, signal: AbortSignal) {
+  return requestPhoneOperation("location", device, input, signal);
+}
+
+export type PhoneControlAction = { action: "screen.status" | "screen.capture" | "apps.list" }
+  | { action: "screen.wait"; source: Record<string, unknown>; waitMs?: number }
+  | { action: "input.perform"; requestId: string; source: Record<string, unknown>; captureAfter?: boolean | { waitMs: number }; actions: Array<{ type: "click"; x: number; y: number } | { type: "back" }> }
+  | { action: "apps.open"; requestId: string; appId: string; source?: Record<string, unknown>; captureAfter?: boolean | { waitMs: number } }
+  | { action: "input.status" | "input.cancel"; requestId: string };
+
+export type AndroidDisplayTarget = { kind: "android-display"; bridgeId: string; surfaceId?: string; ownerDeviceId?: string };
+type DeviceScreenTarget = { kind: "phone"; deviceId: string; guid: string } | AndroidDisplayTarget;
+export type AndroidDisplayDirectoryEntry = { target: AndroidDisplayTarget; name: string; online: boolean };
+
+export async function readAndroidDisplayDirectory(signal: AbortSignal, accessToken?: string): Promise<AndroidDisplayDirectoryEntry[]> {
+  const response = await fetch("/api/device-control/targets?kind=android-display", {
+    signal, headers: accessToken ? { authorization: `Bearer ${accessToken}` } : {}
+  });
+  if (response.status === 404) return [];
+  const payload = await readPhoneOperationResult(response, "ANDROID_DISPLAY_DIRECTORY_UNAVAILABLE");
+  return Array.isArray(payload.targets) ? payload.targets.filter((entry): entry is AndroidDisplayDirectoryEntry =>
+    entry?.target?.kind === "android-display" && typeof entry.target.bridgeId === "string" &&
+    (entry.target.surfaceId === undefined || typeof entry.target.surfaceId === "string") &&
+    (entry.target.ownerDeviceId === undefined || typeof entry.target.ownerDeviceId === "string") &&
+    typeof entry.name === "string" && typeof entry.online === "boolean") : [];
+}
+
+export function requestPhoneScreenOperation(device: Pick<RabiLinkHomeDevice, "id" | "guid">, input: PhoneControlAction,
+  signal: AbortSignal, accessToken?: string) {
+  return requestDeviceScreenOperation({ kind: "phone", deviceId: device.id, guid: device.guid }, input, signal, accessToken);
+}
+
+export async function requestDeviceScreenOperation(target: DeviceScreenTarget,
+  input: PhoneControlAction | { action: "display.open"; requestId: string } | { action: "display.close" },
+  signal: AbortSignal, accessToken?: string) {
+  const response = await fetch("/api/device-control/execute", {
+    method: "POST", signal, headers: { "content-type": "application/json", ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
+    body: JSON.stringify({ ...input, target })
+  });
+  return readPhoneOperationResult(response, "PHONE_SCREEN_TRANSPORT_UNCONFIRMED");
 }
 
 export function rabiLinkDeviceKind(device: RabiLinkHomeDevice): "phone" | "glasses" | "desktop" {
@@ -128,6 +181,9 @@ const capabilityLabels: Record<string, string> = {
   agent: "智能体",
   "mobile-agent": "移动智能体",
   "phone-files-v1": "文件操作",
+  "phone-screen-v1": "手机屏幕共享",
+  "phone-input-v1": "手机触屏",
+  "phone-apps-v1": "打开手机应用",
   "glasses-agent": "眼镜智能体",
   tasks: "任务处理", webgui: "网页管理",
   speech: "语音服务", tts: "语音合成", asr: "语音识别",

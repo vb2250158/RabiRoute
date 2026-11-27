@@ -1,6 +1,6 @@
 """Volatile interval recording. Manager supplies the consumed boundary.
 
-No video/audio files: JPEG samples and mono PCM expire with the activity.
+Frames, assembled video clips and mono PCM expire with the activity.
 """
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from .timeout_settings import get_timeout_seconds
 
 import base64
 import io
+import struct
 import threading
 import time
 from collections import deque
@@ -62,6 +63,50 @@ def make_storyboard(frames: list, started_at: int, policy: dict) -> dict:
     return {"startedAt": started_at, "endedAt": frames[-1][0], "frameTimes": [f[0] for f in selected],
             "sampleCount": len(frames), "coverageStartedAt": frames[0][0],
             "jpeg": base64.b64encode(out.getvalue()).decode("ascii")}
+
+
+def make_clip(frames: list, seconds_per_frame: float) -> dict | None:
+    """Mux recent captured window frames into a playable Motion JPEG AVI."""
+    limit = 768 * 1024
+    # A resize or acquisition gap marks the end of the previous continuous segment.
+    with Image.open(io.BytesIO(frames[-1][1])) as latest:
+        width, height = latest.size
+    selected, size = [], 256
+    later_at = frames[-1][0]
+    for at, jpeg, _ in reversed(frames):
+        if later_at - at > seconds_per_frame * 3000 or frames[-1][0] - at > 10_000:
+            break
+        if size + len(jpeg) + 25 > limit:
+            break
+        with Image.open(io.BytesIO(jpeg)) as image:
+            if image.size != (width, height):
+                break
+        selected.append((at, jpeg))
+        size += len(jpeg) + 25
+        later_at = at
+    if len(selected) < 2:
+        return None
+    selected.reverse()
+    microseconds = max(1, round((selected[-1][0] - selected[0][0]) * 1000 / (len(selected) - 1)))
+
+    def chunk(tag, data):
+        return tag + struct.pack("<I", len(data)) + data + b"\0" * (len(data) % 2)
+
+    frame_size = max(len(jpeg) for _, jpeg in selected)
+    avih = struct.pack("<14I", microseconds, 0, 0, 0x10, len(selected), 0, 1, frame_size, width, height, 0, 0, 0, 0)
+    strh = struct.pack("<4s4sIHH8I4h", b"vids", b"MJPG", 0, 0, 0, 0, microseconds, 1_000_000, 0,
+                       len(selected), frame_size, 0xFFFFFFFF, 0, 0, 0, width, height)
+    strf = struct.pack("<IiiHH4sIiiII", 40, width, height, 1, 24, b"MJPG", width * height * 3, 0, 0, 0, 0)
+    stream = chunk(b"LIST", b"strl" + chunk(b"strh", strh) + chunk(b"strf", strf))
+    header = chunk(b"LIST", b"hdrl" + chunk(b"avih", avih) + stream)
+    movi, index, offset = [], [], 4
+    for _, jpeg in selected:
+        item = chunk(b"00dc", jpeg)
+        index.append(struct.pack("<4sIII", b"00dc", 0x10, offset, len(jpeg)))
+        movi.append(item)
+        offset += len(item)
+    data = chunk(b"RIFF", b"AVI " + header + chunk(b"LIST", b"movi" + b"".join(movi)) + chunk(b"idx1", b"".join(index)))
+    return {"startedAt": selected[0][0], "endedAt": selected[-1][0], "avi": base64.b64encode(data).decode("ascii")}
 
 
 class CompanionRecorder:
@@ -155,8 +200,12 @@ class CompanionRecorder:
             start = max(boundary, int(session.get("audioThrough") or boundary), through - int(self.policy["audioUploadSeconds"] * 1000))
             parts = list(self.audio)
             status, error = self.audio_status, self.audio_error
+            policy = self.policy
         observation["sequence"] = sequence
-        observation["interval"] = make_storyboard(frames, boundary, self.policy)
+        observation["interval"] = make_storyboard(frames, boundary, policy)
+        clip = make_clip(frames, policy["captureSeconds"])
+        if clip:
+            observation["video"] = clip
         if through > start:
             pcm = bytearray((through - start) * 32)  # PCM16 mono, 16 kHz
             covered, suppressed = 0, 0

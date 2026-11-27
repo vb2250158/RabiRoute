@@ -7,6 +7,7 @@ export const TERMINAL_LIMITS = Object.freeze({ idPattern: "^[a-f0-9-]{36}$", inp
   minCols: 20, maxCols: 400, minRows: 5, maxRows: 200, streamQueueBytes: 524288, heartbeatMs: 25000 });
 export const COMPUTER_LIMITS = Object.freeze({ chunkBytes: 65536, chunkBase64CodeUnits: 87384, uploadBytes: Number.MAX_SAFE_INTEGER,
   uploadIdPattern: TERMINAL_LIMITS.idPattern, hashPattern: "^[a-f0-9]{64}$" });
+export const COMPUTER_CAPTURE_AFTER_WAIT_CAPABILITY = "captureAfterWait-v1";
 const text = { type: "string" }, integer = { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, bool = { type: "boolean" };
 export const terminalIdSchema = { type: "string", pattern: TERMINAL_LIMITS.idPattern };
 const hash = { type: "string", pattern: COMPUTER_LIMITS.hashPattern };
@@ -112,12 +113,50 @@ export const computerAnnotationShapeSchema = { type: 'object', required: ['id','
 export const computerTrackingTargetSchema = { type: 'object', required: ['id','bounds'], properties: { id: text, bounds: computerSourceSchema.properties.bounds, description: text, label: text }, additionalProperties: true };
 const requestId = text, controlSessionId = text, layerId = text, trackingId = text;
 const observation = { source: computerSourceSchema, captureAfter: bool, maxWidth: {type:'integer',minimum:1,maximum:3840}, ...computerCaptureFields, captureSpec: { type: "object", properties: computerCaptureFields, additionalProperties: false } };
+const screenWaitSource = { ...computerSourceSchema, required: [...computerSourceSchema.required, "frameId", "imageItemId"],
+  properties: { ...computerSourceSchema.properties, frameId: { ...text, minLength: 1 }, imageItemId: { ...text, minLength: 1 } } };
+const screenWaitMs = { type: "integer", minimum: 100, maximum: 5000 };
+const captureOnChange = {
+  type: "object", required: ["waitMs"], additionalProperties: false,
+  description: "Release input control first, then wait for a pixel change in the scope of this object's source, or the full input source if omitted. Use a previous region capture to watch a smaller area.",
+  properties: { waitMs: screenWaitMs, source: screenWaitSource }
+};
+const performObservation = {
+  if: { required: ["captureAfter"], properties: { captureAfter: { type: "object" } } },
+  then: { anyOf: [
+    { properties: { captureAfter: { type: "object", required: ["source"], properties: { source: screenWaitSource } } } },
+    { required: ["source"], properties: { source: screenWaitSource } }
+  ] }
+};
 const actions = {type:'array',minItems:1,items:computerInputActionSchema};
+const windowTarget = { windowId: { type: "string", pattern: "^[a-fA-F0-9]+$" }, pid: { type: "integer", minimum: 1 } };
+const backgroundPosition = { type: "integer", minimum: 0, maximum: 32767, description: "Native client-area pixels of the actual message receiver." };
+const backgroundActions = { type: "array", minItems: 1, items: { anyOf: [
+  action("click", ["x", "y"], { x: backgroundPosition, y: backgroundPosition, button }),
+  action("move", ["x", "y"], { x: backgroundPosition, y: backgroundPosition }),
+  action("key", ["key"], { key: { type: "string", minLength: 1, maxLength: 12 } }),
+  action("text", ["text"], { text: { type: "string", minLength: 1, maxLength: 512 } })
+] } };
+const gamepadAxis = { type: "integer", minimum: -32768, maximum: 32767 };
+const gamepadTrigger = { type: "integer", minimum: 0, maximum: 255 };
+const gamepadFrame = {
+  type: "object", required: ["durationMs"], additionalProperties: false,
+  properties: { durationMs: { type: "integer", minimum: 1, maximum: 1000 },
+    buttons: { type: "array", uniqueItems: true, items: { enum: ["A","B","X","Y","Up","Down","Left","Right","Start","Back","LB","RB","LS","RS"] } },
+    leftX: gamepadAxis, leftY: gamepadAxis, rightX: gamepadAxis, rightY: gamepadAxis, leftTrigger: gamepadTrigger, rightTrigger: gamepadTrigger }
+};
 const inputMode = { enum: ['shared', 'exclusive'], description: 'Shared input allows disjoint physical and Agent input. Physical input takes over when it conflicts with the Agent batch.' };
 export const computerControlRequestBranches = [
   branch('control.begin',['requestId'],{requestId,...observation}), branch('control.status',[],{controlSessionId}), branch('control.end',['controlSessionId'],{controlSessionId,requestId}),
   branch('input.execute',['requestId','controlSessionId','actions'],{requestId,controlSessionId,actions,inputMode,...observation}),
-  branch('input.perform',['requestId','actions'],{requestId,actions,inputMode,...observation,source:computerInputSourceSchema}),
+  { ...branch('input.perform',['requestId','actions'],{requestId,actions,inputMode,...observation,source:computerInputSourceSchema,
+    captureAfter:{ anyOf: [bool, captureOnChange] } }), ...performObservation },
+  branch("input.background", ["requestId","windowId","pid","actions"], { requestId, ...windowTarget,
+    receiverWindowId: { ...windowTarget.windowId, description: "Optional descendant HWND returned by windows.list with parent." }, actions: backgroundActions }),
+  branch("input.gamepad", ["requestId","frames"], { requestId, frames: { type: "array", minItems: 1, maxItems: 32, items: gamepadFrame,
+    description: "Ordered controller states with at most 8000 ms of total hold time. Positive X is right and positive Y is up. Controls return to neutral at batch end." } }),
+  branch("input.gamepad.status", []),
+  branch("input.gamepad.close", []),
   branch('input.status',['requestId'],{requestId}), branch('input.cancel',['requestId'],{requestId}),
   branch('annotation.show',['requestId','source','layerId','objects'],{requestId,layerId,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]},controlSessionId}),
   branch('annotation.update',['layerId','expectedVersion'],{requestId,layerId,expectedVersion:integer,source:computerSourceSchema,objects:{type:'array',items:computerAnnotationShapeSchema},durationMs:{anyOf:[integer,{type:'null'}]}}),
@@ -127,9 +166,11 @@ export const computerControlRequestBranches = [
 ];
 export const computerRequestSchema = { description: [
   'Observe the narrowest useful window, display or region with screen.capture. Keep displayId and layoutRevision while the layout is stable. Use the pixels of the image you inspected. Reuse its complete source, including imageView when present, or use frameId, imageItemId and any imageView when the target input.perform contract supports that reference. Refresh the observation if the target, layout or cached frame changes.',
-  'Use input.perform for short input. Put actions already determined from the current, readable state in one ordered batch. If a value or target needed for a decision is unclear, capture that area again before acting on it. Use task-specific rules or local computation when available. Set captureAfter: true to verify the effect or decide actions that depend on the new state. For a drag, batch press, move, optional wait and release.',
+  'Use input.perform for short input. Put actions already determined from the current, readable state in one ordered batch. If a value or target needed for a decision is unclear, capture that area again before acting on it. Use task-specific rules or local computation when available. Set captureAfter: true for immediate readback, or captureAfter: {waitMs} to release input and wait for the observed area to change in the same request. Use captureAfter.source to watch a separate previously captured region. Check capture.state when no fresh image is returned. For a drag, batch press, move, optional wait and release.',
   'input.perform owns control from acquisition through cleanup. It defaults to shared input. Use exclusive mode when taking turns on the same desktop. Keep observation read-only when no input is needed. Use explicit control.begin, input.execute and control.end for work that must retain control across requests.',
+  'Choose input.perform for foreground desktop keys and pointer, input.background for messages addressed to one Windows window or descendant, or input.gamepad for a separate Xbox-compatible controller. Background messages do not move the global pointer or change focus. Posted messages do not confirm application behavior. The controller uses its own player device, returns to neutral between batches, and can be closed with input.gamepad.close. Ask the game to assign the controller to its second player.',
   'Read completedActions, controlCleanup and returnState to verify input and cleanup. Confirm the intended UI change separately, using the returned or a fresh capture. On physical takeover, pause and observe again before resuming. When the outcome is uncertain, query input.status with the original requestId before deciding whether another input is needed.',
+  'Use recording.start to explicitly record the selected Windows device or the supplied windows.list windowId/pid pairs. Provide recordingId (UUID), endAt and optional startAt and pauses in Unix milliseconds. Use recording.status, recording.pause, recording.resume and recording.stop. Use recording.clip with sourceRecordingId, a new recordingId, startAt and endAt to extract a time range. Set permanent on start/clip or call recording.save; cached files follow recording.retentionDays. Read recording.cache.status for policy and disk use. Download completed segments using file.stat and file.read on the same device.',
   'If the next step depends on a change in the observed area, use screen.wait with the complete source of the last image. It waits on the target without holding input control and returns a fresh capture only when pixels change. Inspect the change before choosing dependent actions.'
 ].join('\n'), anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
   branch("file.read", ["path", "version", "offset"], { ...fileFields, version: text, offset: integer }),
@@ -138,14 +179,31 @@ export const computerRequestSchema = { description: [
     data: { type: "string", maxLength: COMPUTER_LIMITS.chunkBase64CodeUnits, pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" }, sha256: hash }),
   ...["upload.commit", "upload.status", "upload.abort"].map(action => branch(action, ["uploadId"], { uploadId })),
   branch("displays.list", []),
-  branch("windows.list", [], { limit: { description: "The native Windows helper applies Convert.ToInt32 and its 1..200 bound." }, query: { description: "The Windows helper applies Convert.ToString and its UTF-16 length bound." } }),
+  branch("windows.list", [], { limit: { description: "The native Windows helper applies Convert.ToInt32 and its 1..200 bound." }, query: { description: "The native Windows helper applies its UTF-16 length bound." },
+    parent: exact(windowTarget) }),
+  branch("windows.activate", ["requestId","windowId","pid"], { requestId, ...windowTarget }),
+  branch("screen.capture.background", ["windowId","pid"], { ...windowTarget, maxWidth: { type: "integer", minimum: 1, maximum: 3840 },
+    receiverWindowId: { ...text, description: "Optional child receiver whose client coordinates to map to the unchanged full-window preview. A confirmed mapping is returned in source.previewClient." }
+  }),
+  branch("recording.start", ["recordingId", "endAt"], {
+    recordingId: uploadId, startAt: integer, endAt: integer, permanent: bool,
+    fps: { type: "integer", minimum: 1, maximum: 60 },
+    windows: { type: "array", maxItems: 8, items: exact(windowTarget) },
+    pauses: { type: "array", maxItems: 32, items: exact({ startAt: integer, endAt: integer }) }
+  }),
+  branch("recording.cache.status", []),
+  branch("recording.clip", ["recordingId", "sourceRecordingId", "startAt", "endAt"], {
+    recordingId: uploadId, sourceRecordingId: uploadId, startAt: integer, endAt: integer, permanent: bool
+  }),
+  ...["recording.pause", "recording.resume", "recording.stop", "recording.save"].map(action => branch(action, ["recordingId"], { recordingId: uploadId })),
+  branch("recording.status", [], { recordingId: uploadId }),
   branch("screen.wait", ["source"], {
-    source: { ...computerSourceSchema, required: [...computerSourceSchema.required, "frameId", "imageItemId"] },
-    waitMs: { type: "integer", minimum: 100, maximum: 5000, description: "Wait up to this many milliseconds in the same capture scope. Default 2500. Unchanged and cancelled results omit the image." }
+    source: screenWaitSource,
+    waitMs: { ...screenWaitMs, description: "Wait up to this many milliseconds in the same capture scope. Default 2500. Unchanged and cancelled results omit the image." }
   }),
   branch("screen.capture", [], { ...computerCaptureFields, source: computerSourceSchema,
     captureSpec: { type: "object", properties: computerCaptureFields, additionalProperties: false },
-    maxWidth: { type: "integer", minimum: 1, maximum: 3840, description: "An output width cap that only downsizes the capture. With an explicit display or region scope, omit it to preserve native pixels. Legacy requests without selectors retain the 1920-pixel overview default. Select a smaller width when the PNG or pixel budget is exceeded." } })
+    maxWidth: { type: "integer", minimum: 1, maximum: 3840, description: "An output width cap that only downsizes the capture. Omit it to preserve native pixels for any scope. Select a smaller width when the PNG or pixel budget is exceeded." } })
 ] };
 const bounds = exact({ x: { type: "integer" }, y: { type: "integer" }, width: { type: "integer" }, height: { type: "integer" } });
 export const computerResponseSchema = { anyOf: [

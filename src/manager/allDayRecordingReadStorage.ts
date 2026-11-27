@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { promises as asyncFs } from "node:fs";
 import path from "node:path";
-import { isReviewEvent, type AllDayCatalog, type AllDayEvent } from "../shared/allDayRecording.js";
+import { ALL_DAY_MEDIA_TYPES, isReviewEvent, type AllDayCatalog, type AllDayEvent } from "../shared/allDayRecording.js";
 
 /** Only the Manager supplies these roots; HTTP callers supply no filesystem paths. */
 export type AllDayReadJob = {
@@ -47,7 +47,7 @@ async function scanOriginals(directory: string): Promise<AllDayEvent[]> {
 export function readAllDayStorage(job: AllDayReadJob): AllDayCatalog | Buffer | Promise<AllDayEvent[]> {
   if (job.day !== undefined && !validDay(job.day)) throw new Error("Invalid recording day");
   if (job.kind === "media") {
-    if (!job.day || !/^[a-f0-9]{64}$/.test(job.id ?? "") || !["jpg", "wav"].includes(job.extension ?? "")) throw new Error("Invalid media reference");
+    if (!job.day || !/^[a-f0-9]{64}$/.test(job.id ?? "") || !Object.hasOwn(ALL_DAY_MEDIA_TYPES, job.extension ?? "")) throw new Error("Invalid media reference");
     return fs.readFileSync(path.join(job.directory, "media", job.day, `${job.id}.${job.extension}`));
   }
   if (job.kind === "scan") {

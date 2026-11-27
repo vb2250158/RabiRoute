@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap, QTextCursor
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout,
                               QLabel, QPlainTextEdit, QPushButton, QVBoxLayout)
+from .desktop_adapter import project_app_icon
 from .manager_client import ManagerClient
 from .qt_async import start_qt_task
 from .system_selection import SelectionDeliveryTarget
@@ -13,15 +14,23 @@ from .screenshot_target_picker import ScreenshotTargetPicker
 from .screenshot_voice import ScreenshotVoiceInput
 
 
+def default_project_root() -> Path:
+    """The checkout root that owns `assets/`, used when no project root was passed in."""
+    return Path(__file__).resolve().parents[3]
+
+
 class ScreenshotComposer(QDialog):
     send_requested = Signal(str, str)
 
     def __init__(self, image_path: Path, targets: list[SelectionDeliveryTarget], parent: QObject | None = None,
-                 *, manager: ManagerClient | None = None) -> None:
+                 *, manager: ManagerClient | None = None, app_icon=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("发送截图")
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setModal(False)
+        icon = app_icon if app_icon is not None else project_app_icon(default_project_root())
+        if icon is not None and not icon.isNull():
+            self.setWindowIcon(icon)
         self._image_path = image_path
         self._manager = manager
         self._closed = False
@@ -223,8 +232,12 @@ class ScreenshotComposer(QDialog):
         if not selection:
             self.set_error("请选择投递目标和对应对话。")
             return
+        if selection["kind"] == "new" and not selection.get("cwd"):
+            self.set_error("请为新会话选择项目目录。")
+            return
         self._remember_target()
-        key = selection.get("gatewayId") or f"agent:{selection['provider']}:{selection['threadId']}"
+        thread_id = selection.get("threadId", "")
+        key = selection.get("gatewayId") or f"agent:{selection['provider']}:{thread_id}"
         self.send_requested.emit(key, self._text.toPlainText().strip())
 
     def _finish(self, _result) -> None:

@@ -10,6 +10,11 @@ import { managerAccessToken } from "../managerApi";
 import { peerManagerPath } from "../peerManagerTarget";
 import { buildLanAgentBootstrapPrompt, lanAgentBootstrapPlatforms, type LanAgentBootstrapPlatform } from "../lanAgentBootstrap";
 import { useGatewayStore } from "../stores/gatewayStore";
+import { useI18n } from "../i18n/index";
+import { lanAgentTaskMessage, lanAgentTaskStatus, recentTaskCopy } from "../i18n/lanAgentTasks";
+
+const { locale } = useI18n();
+const taskCopy = computed(() => recentTaskCopy[locale.value]);
 const gatewayStore = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
@@ -316,15 +321,20 @@ onBeforeUnmount(() => { refreshController?.abort(); });
       </v-expansion-panel>
     </v-expansion-panels>
 
-    <v-card class="mt-3" variant="outlined">
-      <v-card-title class="text-subtitle-1">最近任务</v-card-title>
+    <v-card class="mt-3" variant="outlined" data-no-i18n>
+      <v-card-title class="text-subtitle-1">{{ taskCopy.title }}</v-card-title>
       <v-table density="compact">
-        <thead><tr><th>节点</th><th>状态</th><th>更新时间</th><th>结果</th></tr></thead>
+        <thead>
+          <tr><th>{{ taskCopy.node }}</th><th>{{ taskCopy.status }}</th><th>{{ taskCopy.updatedAt }}</th><th>{{ taskCopy.result }}</th></tr>
+        </thead>
         <tbody>
           <tr v-for="task in tasks" :key="task.taskId">
-            <td :title="task.nodeId">{{ agentInstanceDisplayName(instances.find(instance => instance.instanceId === task.nodeId) || { instanceId: task.nodeId }) }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
+            <td :title="task.nodeId">{{ agentInstanceDisplayName(instances.find(instance => instance.instanceId === task.nodeId) || { instanceId: task.nodeId }) }}</td>
+            <td>{{ lanAgentTaskStatus(task.status, locale) }}</td>
+            <td>{{ formatTime(task.updatedAt) }}</td>
+            <td>{{ lanAgentTaskMessage(text(task.error) || text(task.result) || "—", locale) }}</td>
           </tr>
-          <tr v-if="!tasks.length"><td colspan="4" class="lan-muted">暂无任务记录。</td></tr>
+          <tr v-if="!tasks.length"><td colspan="4" class="lan-muted">{{ taskCopy.empty }}</td></tr>
         </tbody>
       </v-table>
     </v-card>

@@ -144,5 +144,19 @@ def route_menu_label(gateway: dict | None) -> str:
     return role_name
 
 
+def role_display_name(gateway: dict | None, fallback: str = "未指定角色") -> str:
+    """The persona's own name, without the route name that may wrap it.
+
+    A delivery target is a role, not a Route, so a route label such as
+    `星海建造师 策划 程序` must display as the role title `星海建造师`.
+    """
+    if not gateway:
+        return fallback
+    persona_title = _persona_title(gateway)
+    if persona_title:
+        return persona_title
+    return role_label(gateway, fallback)
+
+
 def route_status_label(gateway: dict | None) -> str:
     return f"{route_title(gateway)} / {route_subtitle(gateway)} / {route_enabled_label(gateway)} / {route_running_label(gateway)}"

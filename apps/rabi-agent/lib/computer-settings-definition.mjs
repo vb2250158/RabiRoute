@@ -88,6 +88,14 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "feature": "files",
       "readOnly": true
     },
+    "input.background": {
+      "capability": "backgroundInput",
+      "feature": "backgroundInput",
+      "receipt": true,
+      "settingsPaths": [
+        "input.maxActions"
+      ]
+    },
     "input.cancel": {
       "capability": "input",
       "feature": "input",
@@ -102,6 +110,22 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
         "control.returnCursor",
         "control.returnForeground"
       ]
+    },
+    "input.gamepad": {
+      "capability": "gamepad",
+      "feature": "gamepad",
+      "receipt": true
+    },
+    "input.gamepad.close": {
+      "capability": "gamepad",
+      "feature": "gamepad",
+      "recovery": true
+    },
+    "input.gamepad.status": {
+      "capability": "gamepad",
+      "feature": "gamepad",
+      "readOnly": true,
+      "recovery": true
     },
     "input.perform": {
       "capability": "input",
@@ -119,9 +143,63 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "readOnly": true,
       "recovery": true
     },
+    "recording.cache.status": {
+      "capability": "screenRecording",
+      "feature": "observation",
+      "readOnly": true,
+      "recovery": true
+    },
+    "recording.clip": {
+      "capability": "screenRecording",
+      "feature": "observation",
+      "settingsPaths": [
+        "recording"
+      ]
+    },
+    "recording.pause": {
+      "capability": "screenRecording",
+      "feature": "observation"
+    },
+    "recording.resume": {
+      "capability": "screenRecording",
+      "feature": "observation"
+    },
+    "recording.save": {
+      "capability": "screenRecording",
+      "feature": "observation"
+    },
+    "recording.start": {
+      "capability": "screenRecording",
+      "feature": "observation",
+      "settingsPaths": [
+        "recording"
+      ]
+    },
+    "recording.status": {
+      "capability": "screenRecording",
+      "feature": "observation",
+      "readOnly": true,
+      "recovery": true
+    },
+    "recording.stop": {
+      "capability": "screenRecording",
+      "feature": "observation",
+      "recovery": true
+    },
     "screen.capture": {
       "capability": "screenshots",
       "feature": "observation",
+      "readOnly": true,
+      "settingsPaths": [
+        "annotation.tracking.frameCacheFrames",
+        "annotation.tracking.frameCacheBytes",
+        "annotation.tracking.frameCacheAgeMs",
+        "presentation"
+      ]
+    },
+    "screen.capture.background": {
+      "capability": "backgroundCapture",
+      "feature": "backgroundCapture",
       "readOnly": true,
       "settingsPaths": [
         "annotation.tracking.frameCacheFrames",
@@ -164,6 +242,11 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "capability": "files",
       "feature": "files"
     },
+    "windows.activate": {
+      "capability": "windowActivation",
+      "feature": "windowActivation",
+      "receipt": true
+    },
     "windows.list": {
       "capability": "windows",
       "feature": "observation",
@@ -179,21 +262,37 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
       "description": "显示框、箭头和文字，与鼠标键盘独立",
       "title": "屏幕标注"
     },
+    "backgroundCapture": {
+      "description": "尝试读取被遮挡或最小化的窗口",
+      "title": "后台窗口截图"
+    },
+    "backgroundInput": {
+      "description": "将鼠标和键盘消息发给指定窗口或控件",
+      "title": "后台窗口输入"
+    },
     "files": {
       "description": "查询文件和上传、下载",
       "title": "文件操作"
     },
+    "gamepad": {
+      "description": "为 Agent 使用独立的虚拟 Xbox 手柄",
+      "title": "独立玩家手柄"
+    },
     "input": {
-      "description": "点击、输入文字、滚动、拖拽和快捷键",
-      "title": "鼠标与键盘"
+      "description": "在当前桌面使用鼠标和键盘，真人输入冲突时让位",
+      "title": "前台共享键鼠"
     },
     "observation": {
       "description": "查看窗口和电脑画面",
-      "title": "窗口与截图"
+      "title": "窗口、截图与录屏"
     },
     "terminal": {
       "description": "运行命令和读取终端输出",
       "title": "终端命令"
+    },
+    "windowActivation": {
+      "description": "恢复目标窗口并请求将它切到前台",
+      "title": "切换前台窗口"
     }
   },
   "schema": {
@@ -420,28 +519,48 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
             "title": "屏幕标注",
             "type": "boolean"
           },
+          "backgroundCapture": {
+            "default": true,
+            "title": "后台窗口截图",
+            "type": "boolean"
+          },
+          "backgroundInput": {
+            "default": true,
+            "title": "后台窗口输入",
+            "type": "boolean"
+          },
           "files": {
             "default": true,
             "description": "查询文件和上传、下载",
             "title": "文件操作",
             "type": "boolean"
           },
+          "gamepad": {
+            "default": true,
+            "title": "独立玩家手柄",
+            "type": "boolean"
+          },
           "input": {
             "default": true,
-            "description": "点击、输入文字、滚动、拖拽和快捷键",
-            "title": "鼠标与键盘",
+            "description": "在当前桌面使用鼠标和键盘，真人输入冲突时让位",
+            "title": "前台共享键鼠",
             "type": "boolean"
           },
           "observation": {
             "default": true,
             "description": "查看窗口和电脑画面",
-            "title": "窗口与截图",
+            "title": "窗口、截图与录屏",
             "type": "boolean"
           },
           "terminal": {
             "default": true,
             "description": "运行命令和读取终端输出",
             "title": "终端命令",
+            "type": "boolean"
+          },
+          "windowActivation": {
+            "default": true,
+            "title": "切换前台窗口",
             "type": "boolean"
           }
         },
@@ -568,6 +687,34 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
         },
         "title": "控制提示",
         "type": "object"
+      },
+      "recording": {
+        "additionalProperties": true,
+        "properties": {
+          "cacheMaxGiB": {
+            "default": 8,
+            "maximum": 1024,
+            "minimum": 1,
+            "title": "录屏缓存上限 (GiB)",
+            "type": "integer"
+          },
+          "maxDurationMinutes": {
+            "default": 60,
+            "maximum": 1440,
+            "minimum": 1,
+            "title": "单次录屏最长分钟数",
+            "type": "integer"
+          },
+          "retentionDays": {
+            "default": 0,
+            "maximum": 3650,
+            "minimum": 0,
+            "title": "缓存保留天数（0 为关闭）",
+            "type": "integer"
+          }
+        },
+        "title": "录屏缓存",
+        "type": "object"
       }
     },
     "title": "电脑设置",
@@ -575,4 +722,4 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
   },
   "schemaVersion": 1
 });
-export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "83468a4778fe250f30f1957cb5c4a0c546c2ae5621de611ff48bba5a14745333";
+export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "a6e4520e73a7a9d1cf3db210951e090b478c8b283fcac2ebb71a57cd7fceac1f";

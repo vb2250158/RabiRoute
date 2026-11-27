@@ -41,6 +41,8 @@ export type CodexThreadCreateParams = {
   cwd: string;
   developerInstructions: string;
   sandbox: CodexTurnSandbox;
+  /** Attach local images to the first user message of the new task. */
+  imagePaths?: string[];
   onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void;
 };
 

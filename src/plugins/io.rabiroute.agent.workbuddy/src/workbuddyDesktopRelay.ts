@@ -5,6 +5,7 @@ import path from "node:path";
 import { workbuddyHomeDir } from "./workbuddySessionStore.js";
 import type { WorkbuddyDesktopCreationInput, WorkbuddyDesktopCreationResult } from "./workbuddyDesktopCreation.js";
 import { isLegacyWorkbuddyDesktopLayout, isWorkbuddyDesktopLayout } from "./workbuddyDesktopLayout.js";
+import { prepareWorkbuddyReplyText } from "./workbuddySessionBridge.js";
 import type { WorkbuddyDesktopMessageMode, WorkbuddyDesktopMessageInput, WorkbuddyDesktopMessageResult } from "./workbuddyDesktopSteer.js";
 
 const pipePrefix = "\\\\.\\pipe\\RabiRoute.WorkBuddy.Desktop.";
@@ -43,7 +44,9 @@ function creationInput(value: unknown): value is WorkbuddyDesktopCreationInput {
   const input = value as Record<string, unknown>;
   return ["intentId", "title", "workspace", "workspaceLabel", "prompt"].every(key =>
     typeof input[key] === "string" && (input[key] as string).trim().length > 0)
-    && (input.layout === undefined || isWorkbuddyDesktopLayout(input.layout));
+    && (input.layout === undefined || isWorkbuddyDesktopLayout(input.layout))
+    && (input.imagePaths === undefined
+      || (Array.isArray(input.imagePaths) && input.imagePaths.every(file => typeof file === "string" && file.trim())));
 }
 
 function authenticates(actual: unknown, expected: string): boolean {
@@ -165,13 +168,19 @@ export async function requestWorkbuddyDesktopCreation(
   signal?.throwIfAborted();
   const relay = await findRelay(descriptor);
   if (!relay) throw new Error("WorkBuddy 桌面创建尚未连接，请先启动桌面连接器。");
-  const { layout, ...baseInput } = input;
+  const { layout, imagePaths, ...baseInput } = input;
   if (layout !== undefined && !isWorkbuddyDesktopLayout(layout)) throw new Error("WorkBuddy 桌面布局无效。");
+  // The desktop composer inserts text only; render the references once here so the
+  // worker and the intent digest both see the exact body that gets submitted.
+  const rendered = imagePaths?.length
+    ? { ...baseInput, prompt: prepareWorkbuddyReplyText(baseInput.prompt, imagePaths) }
+    : baseInput;
   const canSelectLayout = relay.composerLayoutContract === composerLayoutContract;
   if (layout && !canSelectLayout && !isLegacyWorkbuddyDesktopLayout(layout)) {
     throw new Error("当前 WorkBuddy 桌面连接器不支持所选布局，请更新桌面连接器后再提交。");
   }
-  const result = await invokeRelay<WorkbuddyDesktopCreationResult>(relay, { input: canSelectLayout ? input : baseInput }, signal);
+  const result = await invokeRelay<WorkbuddyDesktopCreationResult>(relay,
+    { input: canSelectLayout ? { ...rendered, layout } : rendered }, signal);
   if (result.intentId !== input.intentId) throw new Error("WorkBuddy 桌面创建回执与原编号不匹配。");
   return result;
 }

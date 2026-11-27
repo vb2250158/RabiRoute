@@ -59,11 +59,9 @@ def capture_sources(sources: dict, camera_index: int) -> list[dict]:
                 user.GetWindowTextW(handle, buffer, len(buffer))
                 samples.append({"source": source, "text": buffer.value})
                 continue
-            picture = capture_screen()
-            picture.thumbnail((1920, 1080))
-            output = io.BytesIO()
-            picture.convert("RGB").save(output, format="JPEG", quality=82)
-            samples.append({"source": source, "jpeg": base64.b64encode(output.getvalue()).decode("ascii")})
+            with capture_screen() as picture, io.BytesIO() as output:
+                picture.save(output, format="PNG", compress_level=3)
+                samples.append({"source": source, "png": base64.b64encode(output.getvalue()).decode("ascii")})
         except Exception as error:
             samples.append({"source": source, "error": str(error)[:500]})
     return samples

@@ -18,7 +18,7 @@ from PySide6.QtGui import QColor, QEnterEvent, QImage, QKeyEvent, QMouseEvent  #
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
-from rabiroute_tray.manager_client import DesktopSettings  # noqa: E402
+from rabiroute_tray.manager_client import DesktopSettings, RolePanelSendResult  # noqa: E402
 from rabiroute_tray.plugin_catalog import DesktopPluginHotkey  # noqa: E402
 from rabiroute_tray.system_selection import SelectionDeliveryTarget  # noqa: E402
 from rabiroute_tray.system_screenshot import (  # noqa: E402
@@ -1563,6 +1563,59 @@ class SystemScreenshotTest(unittest.TestCase):
 
         self.assertEqual(emitted, [("route-b", "请查看截图中的按钮布局。")])
         composer.close()
+
+    def test_composer_carries_the_rabiroute_brand_icon(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "capture.png"
+            image.write_bytes(b"png")
+            composer = ScreenshotComposer(image, [SelectionDeliveryTarget("route-a", "角色 A")])
+            self.assertFalse(composer.windowIcon().isNull())
+            self.assertTrue(composer.windowIcon().availableSizes())
+            composer.close()
+
+    def test_new_session_delivery_creates_the_session_in_the_chosen_project(self) -> None:
+        notifications: list[tuple[str, str, bool]] = []
+
+        class Manager:
+            def __init__(self) -> None:
+                self.created: list[dict[str, object]] = []
+                self.sent: list[object] = []
+
+            def create_screenshot_session(self, target, text, image_path, delivery_id):
+                self.created.append({"target": dict(target), "text": text, "image": image_path})
+                return RolePanelSendResult(ok=True)
+
+            def send_screenshot_to_thread(self, target, text, image_path, delivery_id):
+                self.sent.append(target)
+                return RolePanelSendResult(ok=True)
+
+            def send_role_panel_message(self, gateway_id, text, attachments):
+                self.sent.append(gateway_id)
+                return RolePanelSendResult(ok=True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "capture.png"
+            image.write_bytes(b"png")
+            manager = Manager()
+            controller = SystemScreenshotController(
+                manager,  # type: ignore[arg-type]
+                Path(directory),
+                lambda: [],
+                lambda title, message, is_error: notifications.append((title, message, is_error)),
+            )
+            composer = ScreenshotComposer(image, [SelectionDeliveryTarget("route-a", "角色 A")], manager=manager)  # type: ignore[arg-type]
+            controller._composer = composer
+            composer._target.selection = {"kind": "new", "provider": "codex", "cwd": "C:/project/two"}
+            controller._send_screenshot("agent:codex:", "看图")
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and controller._send_task is not None:
+                QApplication.processEvents()
+                time.sleep(0.01)
+            QApplication.processEvents()
+            self.assertEqual(manager.created, [{"target": {"kind": "new", "provider": "codex", "cwd": "C:/project/two"},
+                                                "text": "看图", "image": str(image)}])
+            self.assertEqual(manager.sent, [])
+            self.assertEqual(notifications, [("系统截图", "已新建会话并投递至 codex · C:/project/two。", False)])
 
 
 if __name__ == "__main__":

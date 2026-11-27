@@ -14,7 +14,13 @@ import java.util.concurrent.TimeUnit
 /** Storage checks keep fixtures isolated. Credential import is an explicit test-only action. */
 class LocationInstrumentation : Instrumentation() {
     private var action = "storage"
-    override fun onCreate(arguments: Bundle) { super.onCreate(arguments); action=arguments.getString("action","storage"); start() }
+    private var expectedAccess = "permission-required"
+    override fun onCreate(arguments: Bundle) {
+        super.onCreate(arguments)
+        action = arguments.getString("action","storage")
+        expectedAccess = arguments.getString("expect","permission-required")
+        start()
+    }
     override fun onStart() {
         val output=Bundle(); var code=Activity.RESULT_OK
         try {
@@ -31,10 +37,47 @@ class LocationInstrumentation : Instrumentation() {
                     output.putLong("latestTime",points.firstOrNull()?.point?.time ?: 0)
                     output.putInt("sdkStartsThisMonth",repository.used(System.currentTimeMillis()))
                 }
+                "remote-access" -> remoteAccess(output)
                 else -> storage(output)
             }
-        } catch(error: Throwable) { code=Activity.RESULT_CANCELED; output.putString("error",if(action=="import") "Credential import failed; no key output" else error.message ?: error.javaClass.simpleName) }
+        } catch(error: Throwable) {
+            code=Activity.RESULT_CANCELED
+            output.putString("error",if(action=="import") "Credential import failed; no key output" else error.message ?: error.javaClass.simpleName)
+            if (action != "import") {
+                error.stackTrace.firstOrNull { it.className == javaClass.name }?.let {
+                    output.putString("failureAt", "${it.methodName}:${it.lineNumber}")
+                }
+            }
+        }
         finish(code,output)
+    }
+    private fun remoteAccess(output: Bundle) {
+        val settings = LocationSettings(targetContext)
+        val enabled = settings.remoteAccess
+        val fileRecording = settings.enabled
+        val access = PhoneLocationAccess(targetContext)
+        val current = JSONObject().put("waitMs", 5_000).put("includePlace", false)
+        val guard = Runnable { }
+        try {
+            val disabled = access.execute("location.settings.update", JSONObject().put("enabled", false), guard)
+            check(!disabled.getBoolean("enabled"))
+            val blocked = access.execute("location.read", current, guard)
+            check(blocked.getString("state") == "feature-disabled" && !blocked.has("latitude"))
+            val active = access.execute("location.settings.update", JSONObject().put("enabled", true), guard)
+            check(active.getBoolean("enabled"))
+            val result = access.execute("location.read", current, guard)
+            check(result.getString("state") == expectedAccess) { "Location state was ${result.getString("state")}" }
+            if (expectedAccess == "ok") {
+                check(result.getString("coordinateSystem") == "WGS84" && result.getDouble("accuracyMeters") > 0)
+                check(result.has("latitude") && result.has("longitude") && result.has("observedAt"))
+            } else {
+                check(!result.has("latitude") && !result.has("longitude"))
+            }
+            check(settings.enabled == fileRecording)
+            output.putString("result", "PASS: independent remote access switch and permission state $expectedAccess")
+        } finally {
+            settings.setRemoteAccess(enabled)
+        }
     }
     private fun storage(output: Bundle) {
         val name="location-test-${System.nanoTime()}"

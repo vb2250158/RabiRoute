@@ -4,6 +4,7 @@ import { createManagerConfigurationOwner, createRabiApiOwner, publicRouteMutatio
 import { apiDigest, type ApiOperationDefinition, type ApiOperationInput, type ApiOperationResult, type ApiSchema } from "@rabiroute/host-api/manager/apiOperationContract";
 import { normalizeSearchText } from "@rabiroute/host-api/manager/searchText";
 import { deviceLabelLimits, type DeviceLabels } from "./rabiLinkDeviceLabels.js";
+import { createDeviceControlOperations, type DeviceComputerPort } from "./deviceControlOperations.js";
 
 const empty = { type: "object", additionalProperties: false };
 const ignored = { type: "object" };
@@ -58,6 +59,20 @@ const phoneFileInput = {
     data: { type: "string", maxLength: 87_384 }
   }
 };
+const phoneLocationSchema = {
+  anyOf: [
+    { action: "location.read", fields: {
+      maxAgeMs: { type: "integer", minimum: 1000, maximum: 120000 },
+      waitMs: { type: "integer", minimum: 100, maximum: 10000 },
+      includePlace: { type: "boolean" }
+    }, required: [] },
+    { action: "location.settings.read", fields: {}, required: [] },
+    { action: "location.settings.update", fields: { enabled: { type: "boolean" } }, required: ["enabled"] },
+  ].map(({ action, fields, required }) => ({
+    type: "object", additionalProperties: false, required: ["targetGuid", "action", ...required],
+    properties: { targetGuid: { type: "string", maxLength: 256 }, action: { const: action }, ...fields }
+  }))
+};
 const deviceSchema = {
   type: "object", required: ["id", "guid", "name", "deviceKind", "online", "capabilities", "rabiPcVersion", "isLocal"], additionalProperties: false,
   properties: { id: { type: "string" }, guid: { type: "string" }, name: { type: "string" }, deviceKind: { type: "string" },
@@ -71,7 +86,8 @@ type Guard = () => void;
 type Invoke = (input: ApiOperationInput, mutation: RouteMutationContract | undefined, assertCurrent: Guard) => ApiOperationResult | Promise<ApiOperationResult>;
 
 /** Single executable declaration source; native owner methods never decode or dispatch HTTP. */
-export function createRabiControlOperations(context: RabiApiContext, managerConfig?: ManagerConfigurationContext): readonly ApiOperationDefinition[] {
+export function createRabiControlOperations(context: RabiApiContext, managerConfig?: ManagerConfigurationContext,
+  deviceComputer?: DeviceComputerPort): readonly ApiOperationDefinition[] {
   const owner = createRabiApiOwner(context);
   const define = (name: string, method: "GET" | "POST" | "PATCH", pathTemplate: string, path: ApiSchema, body: ApiOperationDefinition["contract"]["request"]["body"], invoke: Invoke,
     options: { mutation?: boolean; effects?: string; recovery?: string; response?: ApiSchema; query?: ApiSchema; preflight?: (input: Omit<ApiOperationInput, "body">) => ApiOperationResult | undefined; lifecycle?: boolean } = {}): ApiOperationDefinition => {
@@ -105,7 +121,14 @@ export function createRabiControlOperations(context: RabiApiContext, managerConf
     }, handler: input => run(input, options.mutation ? requireRouteMutationContract(input.request) : undefined) };
   };
   const ignoredBody = { kind: "none" as const, allowIgnoredBody: true };
+  const phoneLocation = define("link-home.device.location.execute", "POST", linkHomeDevicePath + "/location", deviceIdPath,
+    { kind: "json", maxBytes: 4096, schema: phoneLocationSchema },
+    input => owner.phoneLocation(input.path.deviceId!, input.body as Record<string, unknown>, input.signal), {
+      query: empty, effects: "Read one current position from a phone that advertises location access, using its system permission. includePlace uses the phone's configured provider when available. This request is independent of location tracks.",
+      recovery: "Read location.settings.read on the same device before repeating a setting change after an uncertain result."
+    });
   const definitions: ApiOperationDefinition[] = [
+    ...(deviceComputer ? createDeviceControlOperations(deviceComputer, owner, phoneLocation) : []),
     define("timeouts.read", "GET", "/api/rabi/timeouts", empty, ignoredBody, () => owner.timeouts()),
     define("timeouts.update", "PATCH", "/api/rabi/timeouts", empty, { kind: "json", maxBytes: 0, schema: { type: "object", required: ["overrides"], additionalProperties: false, properties: { overrides: { type: "object", additionalProperties: { type: "integer", minimum: 1, maximum: 2147483647 } } } } }, (input, _, guard) => owner.updateTimeouts(input.body as { overrides: unknown }, guard, String(input.request.headers["if-match"] ?? "")), { effects: "Persist timeout overrides through the global configuration owner and publish the committed snapshot. Read back before retrying an uncertain write; this does not resend any timed-out business operation." }),
     define("identity.read", "GET", "/api/rabi/identity", empty, ignoredBody, input => owner.identity(input.request)),
@@ -134,6 +157,12 @@ export function createRabiControlOperations(context: RabiApiContext, managerConf
       }), discovery: { title: "手机文件操作", summary: "查询和设置手机文件操作开关，浏览、创建、读取、移动、删除以及上传下载文件。",
       keywords: ["Android", "手机文件", "文件传输", "phone files", "upload", "download"],
       category: { id: "devices", title: "电脑与设备" }, relatedOperations: [linkHomeDeviceId] } },
+    { ...phoneLocation,
+      contract: { ...phoneLocation.contract, effects: { ...phoneLocation.contract.effects,
+        request: { bodyPath: ["action"], modes: { "location.read": "read", "location.settings.read": "read", "location.settings.update": "write" } } } },
+      discovery: { title: "读取手机当前位置", summary: "选择公布定位访问的手机，读取一次当前坐标和定位精度。Android 有高德配置时可补充地点名称。定位访问开关与轨迹记录独立。",
+        keywords: ["手机定位", "当前位置", "定位访问", "高德", "Android", "phone location", "location.read"],
+        category: { id: "devices", title: "电脑与设备" }, relatedOperations: [linkHomeDeviceId] } },
     define("instances.list", "GET", "/api/rabi/instances", empty, ignoredBody, input => owner.instances(input.request, input.url), { query: instanceQuery }),
     define("routes.list", "GET", "/api/rabi/instances/:guid/routes", pathSchema(), ignoredBody, input => owner.routes(input.request, input.url, input.path.guid), { response: proxiedJson, query: routeQuery }),
     define("agent-options.read", "GET", routeBase + "/agent-options", pathSchema(true), ignoredBody, input => owner.agentOptions(input.request, input.url, input.path.guid, input.path.routeId), { response: proxiedJson }),

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .display_helpers import route_menu_label
+from .display_helpers import role_display_name, role_id_label
 from .manager_client import (
     ManagerClient,
     RolePanelSendResult,
@@ -56,6 +56,7 @@ class SelectedText:
 class SelectionDeliveryTarget:
     gateway_id: str
     label: str
+    role_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -308,7 +309,8 @@ def active_selection_delivery_targets(
     targets = [
         SelectionDeliveryTarget(
             gateway_id=str(gateway.get("id") or "").strip(),
-            label=route_menu_label(gateway),
+            label=role_display_name(gateway),
+            role_id=role_id_label(gateway, ""),
         )
         for gateway in gateways
         if isinstance(gateway, dict)

@@ -52,5 +52,6 @@ function Copy-AgentNativeAssets([string]$AgentRoot, [string]$PayloadRoot) {
         if ((&$hashFile (Join-Path $destination $file.path)) -ne $file.sha256) { throw 'Computer tracking copied asset differs.' }
     }
     Copy-Item -LiteralPath $trackingManifest -Destination (Join-Path $destination 'computer-tracking-assets.json')
-
+    . (Join-Path $PSScriptRoot 'build-computer-gamepad.ps1')
+    Copy-ComputerGamepadAssets -AgentRoot $AgentRoot -Source (Join-Path $AgentRoot 'dist/native') -Destination $destination
 }

@@ -159,6 +159,8 @@ public final class RabiGlassPcBackend {
     private final android.content.SharedPreferences preferences;
     private final android.content.Context context;
     private final com.rabi.link.RabiPhoneFileConnection phoneFiles;
+    private final com.rabi.link.RabiPhoneFileConnection phoneLocation;
+    private final com.rabi.link.RabiPhoneFileConnection phoneScreen;
     private final com.rabi.link.recording.AudioEventSplitter eventSplitter;
     // Writer-owned attribution for buffered speech; never use the current UI selection when sealing.
     private RabiBoundedAudioWriteQueue.Entry bufferedAudioOwner;
@@ -352,6 +354,8 @@ public final class RabiGlassPcBackend {
         eventAsr.setTranscriptListener(listener::onFinalRecordingTranscript);
         this.context = context.getApplicationContext();
         this.phoneFiles = new com.rabi.link.RabiPhoneFileConnection(this.context);
+        this.phoneLocation = com.rabi.link.RabiPhoneFileConnection.location(this.context);
+        this.phoneScreen = com.rabi.link.RabiPhoneFileConnection.screen(this.context);
         this.eventSplitter = new com.rabi.link.recording.AudioEventSplitter(() -> com.rabi.link.recording.EventSplitSettings.load(this.context));
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
         this.listener = listener;
@@ -460,6 +464,8 @@ public final class RabiGlassPcBackend {
     public void stop() {
         running = false;
         phoneFiles.close();
+        phoneLocation.close();
+        phoneScreen.close();
         audioWriteQueue.closeAdmission();
         networkWakeGate.close();
         cancelAudioStreamKeepalive();
@@ -1499,7 +1505,8 @@ public final class RabiGlassPcBackend {
                     String name = phone && !model.isEmpty() ? model : eventDeviceId;
                     URL url = new URL(eventBase + "/api/rabilink/events?deviceId=" + encode(eventDeviceId)
                             + "&deviceKind=" + encode(deviceKind) + "&deviceName=" + encode(name)
-                            + (phone ? "&capabilities=phone-file-control-v1" : "")
+                            + (phone ? "&capabilities=phone-file-control-v1,phone-location-v1,phone-screen-v1"
+                                + (com.rabi.link.phonecontrol.PhoneInputAccess.supported(context) ? ",phone-input-v1,phone-apps-v1" : "") : "")
                             + "&after=" + encode(cursor));
                     connection = (HttpURLConnection) url.openConnection();
                     fileSession = phone ? com.rabi.link.RabiPhoneFileConnection.newSession() : "";
@@ -1535,6 +1542,16 @@ public final class RabiGlassPcBackend {
                             if ("ready".equals(event) || "outbox_available".equals(event)) fetchAvailableReplies();
                             if (!fileSession.isEmpty() && ("ready".equals(event) || "phone_files_available".equals(event))) {
                                 phoneFiles.available(eventBase, eventToken, eventDeviceId, fileSession,
+                                        () -> running && connection == eventConnection && !eventReconnectRequested.get()
+                                                && eventBase.equals(baseUrl) && eventToken.equals(token));
+                            }
+                            if (!fileSession.isEmpty() && ("ready".equals(event) || "phone_location_available".equals(event))) {
+                                phoneLocation.available(eventBase, eventToken, eventDeviceId, fileSession,
+                                        () -> running && connection == eventConnection && !eventReconnectRequested.get()
+                                                && eventBase.equals(baseUrl) && eventToken.equals(token));
+                            }
+                            if (!fileSession.isEmpty() && ("ready".equals(event) || "phone_screen_available".equals(event))) {
+                                phoneScreen.available(eventBase, eventToken, eventDeviceId, fileSession,
                                         () -> running && connection == eventConnection && !eventReconnectRequested.get()
                                                 && eventBase.equals(baseUrl) && eventToken.equals(token));
                             }

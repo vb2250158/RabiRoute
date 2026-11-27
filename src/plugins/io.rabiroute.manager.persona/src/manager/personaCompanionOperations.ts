@@ -11,12 +11,13 @@ const json=(data:unknown):ApiResponseContract=>({mediaType:'application/json; ch
 const failure:ApiResponseContract={mediaType:'application/json; charset=utf-8',schema:object({code:{const:-1},message:str,uncertain:{const:true}},['code','message'])};
 function failed(error:unknown,outcome:'not_started'|'unknown'):ApiOperationResult{const status=(error as {statusCode?:number}).statusCode??400;return {status,mutationOutcome:outcome,headers:{'cache-control':'no-store'},body:errorResponsePresentation({code:-1,message:error instanceof Error?error.message:String(error),...(outcome==='unknown'?{uncertain:true}:{})},status)};}
 const inputs:Record<string,Record<string,unknown>>={start:{requestId:str,gatewayId:str,presetId:str,title:str,autoReview:bool,voice:bool,saveSummary:bool,observationOwner:str},command:{sessionId:str,revision:num,action:str,positionSeconds:num,pauseReason:str,presetId:str},observation:{sessionId:str,revision:num,observation:{type:'object'}},review:{sessionId:str,revision:num,text:str},reply:{sessionId:str,revision:num,reviewId:str,text:str,state:str,activityKind:str}};
-/** Eight concrete routes; native activity execution remains in CompanionActivity. */
+/** Nine concrete routes; native activity execution remains in CompanionActivity. */
 
 const companionPurposes: Record<string, string> = {
   "snapshot": "查询主动陪伴状态",
   "last": "读取最近陪伴活动",
   "frame": "读取陪伴画面",
+  "clip": "下载陪伴录屏片段",
   "start": "启动陪伴活动",
   "command": "控制陪伴活动",
   "observation": "提交陪伴观察",
@@ -26,15 +27,16 @@ const companionPurposes: Record<string, string> = {
 
 export function createPersonaCompanionOperations(context:PersonaCompanionContext):readonly ApiOperationDefinition[]{
   const owner=createPersonaCompanionOwner(context);
-  return (['snapshot','last','frame','start','command','observation','review','reply'] as const).map(action=>{
-    const method=['snapshot','last','frame'].includes(action)?'GET':'POST',path='/api/roles/:roleId/companion'+(action==='snapshot'?'':'/'+action);
+  return (['snapshot','last','frame','clip','start','command','observation','review','reply'] as const).map(action=>{
+    const method=['snapshot','last','frame','clip'].includes(action)?'GET':'POST',path='/api/roles/:roleId/companion'+(action==='snapshot'?'':'/'+action);
+    const binary = action==='frame'||action==='clip';
     const contract:ApiOperationContract={operationId:'manager.personas.companion.'+action,contractVersion:'1.0.0',method,pathTemplate:path,exposure:'public',transport:'http',description:'Use the original role companion activity, revisioned observations, bounded frames, reviews, replies and desktop continuation checkpoint.',
       request:{path:object({roleId:str},['roleId']),query:object({reviewId:str}),headers:object({}),body:method==='GET'?{kind:'none',allowIgnoredBody:true}:{kind:'json',maxBytes:3*1024*1024,allowAnyContentType:true,schema:object(Object.fromEntries(Object.keys(inputs[action]??{}).map(key=>[key,true])))}},
-      responses:{200:action==='frame'?{mediaType:'image/jpeg',binary:{maxBytes:Number.MAX_SAFE_INTEGER}}:json(action==='last'?{anyOf:[{type:'null'},{type:'object'}]}:snapshot),...Object.fromEntries([400,403,404,409,413,415].map(status=>[status,failure]))},
+      responses:{200:binary?{mediaType:action==='frame'?'image/jpeg':'video/x-msvideo',binary:{maxBytes:Number.MAX_SAFE_INTEGER}}:json(action==='last'?{anyOf:[{type:'null'},{type:'object'}]}:snapshot),...Object.fromEntries([400,403,404,409,413,415].map(status=>[status,failure]))},
       effects:{mode:method==='GET'?'read':'native-companion-activity',description:'Keep the original activity session, requestId fingerprint, revision, 20 second producer lease, continuation checkpoint and original Agent/TTS/summary execution ports. Starting and reviewing can invoke those native effects.'},
       recovery:{strategy:'original-session-readback',description:'Read the current session and revision. Replay start only with the same requestId and input; reply keeps native review deduplication. An attempted review/delivery or summary failure is uncertain and must be reconciled against the original session.'},
       validators:[{id:'original-owner',description:'Capture the original authenticated connection, role directory, Manager identity and service before body parsing. Public remote access needs no extra functional grant; original local-origin and readOnly checks remain.'},{id:'native-activity',description:'Native service validates settings, session IDs/revisions, frame bounds and expiry. Keep 3 MiB JSON object controls. Await original accepted execution; caller cancellation never releases native work early.'}]};
-    const prepare=(input:Omit<ApiOperationInput,'body'>)=>{try{const bound=owner.prepare(input.request,input.path.roleId,action as PersonaCompanionAction,input.signal);return async(parsed:ApiOperationInput)=>{try{const data=await bound.execute(parsed.body,parsed.url.searchParams);bound.assertCurrent();return {status:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':action==='frame'?'private, no-store':'no-store'},body:action==='frame'?data:{code:0,data}} as ApiOperationResult;}catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}};}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
+    const prepare=(input:Omit<ApiOperationInput,'body'>)=>{try{const bound=owner.prepare(input.request,input.path.roleId,action as PersonaCompanionAction,input.signal);return async(parsed:ApiOperationInput)=>{try{const data=await bound.execute(parsed.body,parsed.url.searchParams);bound.assertCurrent();return {status:200,mutationOutcome:bound.mutationOutcome(),headers:{'cache-control':binary?'private, no-store':'no-store'},body:binary?data:{code:0,data}} as ApiOperationResult;}catch(error){parsed.signal?.throwIfAborted();return failed(error,bound.mutationOutcome());}};}catch(error){input.signal?.throwIfAborted();return failed(error,'not_started');}};
     return {contract,discovery:{title:companionPurposes[action],summary:companionPurposes[action]+"。",category:{id:"knowledge.companion",title:"主动陪伴",parentId:"knowledge"},keywords:[companionPurposes[action],action.replace(/[.-]/g," "),"persona"],inputSources:[{field:"path.roleId",operationId:"manager.roles.list",resultPath:"/data/roles",valuePath:"/roleId"}]},prepare,handler:async input=>{const handler=prepare(input);return typeof handler==='function'?handler(input):handler;}};
   });
 }

@@ -1,4 +1,5 @@
 export type TunnelTransport = "lan" | "p2p" | "relay";
+export const COMPUTER_PEER_SOURCE_HEADER = "x-rabiroute-computer-peer-source";
 /** One priority for persistent peers and capability-scoped browser shares. */
 export const PEER_TRANSPORT_PRIORITY: readonly TunnelTransport[] = ["lan", "p2p", "relay"];
 export type PeerConnectionStatus = {

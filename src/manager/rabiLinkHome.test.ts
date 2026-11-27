@@ -7,11 +7,15 @@ import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import type { RabiApiContext } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApi.js";
 import { createRabiControlOperations } from "../plugins/io.rabiroute.manager.route-control/src/manager/rabiApiOperations.js";
+import type { DeviceComputerPort } from "../plugins/io.rabiroute.manager.route-control/src/manager/deviceControlOperations.js";
+import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import type { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
 import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js";
 import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
 import type { RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import { createUnifiedSearchOperation } from "./unifiedSearchOperations.js";
+import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 
 
 test("route-control installs link home from the same executable operation definitions", () => {
@@ -39,13 +43,15 @@ function send(response: http.ServerResponse, body: unknown): void {
   response.setHeader("content-type", "application/json");
   response.end(JSON.stringify(body));
 }
-async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid", fixtureRoot?: string): Promise<string> {
+async function manager(t: TestContext, read: () => RabiLinkRelayGlobalConfig, readGuid = () => "local-guid",
+  fixtureRoot?: string, computer?: DeviceComputerPort): Promise<string> {
   const rootDir = fixtureRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-home-"));
   if (!fixtureRoot) t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   const context = { rootDir, applicationGenerationId: "test-generation", managerInstanceId: "test-manager", version: () => "0.3.19", globalConfig: { read: () => ({ rabiLinkRelay: read(), rabiGuid: readGuid() }) } } as unknown as RabiApiContext;
   const registry = new ManagerPluginRouteRegistry();
   const registration = registry.registerOperations("route-control-home-test", [
-    ...createRabiControlOperations(context),
+    ...createRabiControlOperations(context, undefined, computer),
+    ...(computer ? createApiDiscoveryOperations(registry) : []),
     createUnifiedSearchOperation(registry, {
       roles: () => [{ roleId: "fixture-role" }], roleDirectory: () => rootDir,
       queryHistory: async () => [], entities: async () => { throw new Error("entity source not requested"); }
@@ -208,6 +214,165 @@ test("unsafe and conflicting version metadata does not fail the device directory
   assert.equal(result.devices.length, 2);
   assert.deepEqual(result.devices.map(item => item.rabiPcVersion), [null, null]);
   assert.deepEqual(result.devices.map(item => item.capabilities), [["webgui"], []]);
+});
+
+test("phone location forwards one authorized fix and rejects fields for other actions", async t => {
+  const position = { state: "ok", coordinateSystem: "WGS84", latitude: 45, longitude: 12, placeState: "not-configured" };
+  let calls = 0;
+  const upstream = await server(t, async (request, response) => {
+    calls++;
+    assert.equal(request.url, "/api/rabilink/mobile/location");
+    assert.equal(request.headers["x-rabilink-token"], "test-only-app-token");
+    let body = "";
+    for await (const chunk of request) body += chunk.toString();
+    assert.deepEqual(JSON.parse(body), { targetId: "rabi-phone-fixture", targetGuid: "", action: "location.read", includePlace: true });
+    send(response, { code: 0, data: position });
+  });
+  const base = await manager(t, () => config(upstream));
+  const url = base + "/api/rabi/link-home/devices/rabi-phone-fixture/location";
+  const post = (body: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await post({ targetGuid: "", action: "location.read", enabled: true })).status, 400);
+  assert.equal((await post({ targetGuid: "", action: "location.settings.update" })).status, 400);
+  assert.equal((await post({ targetGuid: "", action: "upload.status" })).status, 400);
+  const response = await post({ targetGuid: "", action: "location.read", includePlace: true });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { code: 0, data: position });
+  assert.equal(calls, 1);
+});
+
+test("unified device control keeps the selected owner, action, and receipt identity", async t => {
+  const phoneId = "legacy-fixture-route";
+  const phoneWorkerId = "rabi-phone-fixture";
+  const status = { state: "sharing", layoutRevision: "projection-1",
+    activity: {
+      observations: [{ id: "capture-view", label: "查看会话" }],
+      operation: { requestId: "original-request", label: "操作会话" },
+      pointer: { requestId: "original-request", label: "操作会话", kind: "swipe", x: .3, y: .5, startX: .2, startY: .5, remainingMs: 350 }
+    } };
+  const upstream = await server(t, async (request, response) => {
+    if (request.method === "GET") {
+      send(response, { code: 0, ok: true, appId: "fixture", peers: [{ id: phoneId, guid: "", name: "Phone",
+        deviceKind: "phone", online: true, capabilities: ["phone-location-v1", "phone-screen-v1"] }] });
+      return;
+    }
+    let raw = "";
+    for await (const chunk of request) raw += chunk.toString();
+    if (request.url === "/api/rabilink/mobile/screen") {
+      const bounds = { x: 0, y: 0, width: 1080, height: 1688 };
+      const source = { instanceId: phoneWorkerId, kind: "desktop", coordinateSpace: "capture", width: 32, height: 50, bounds, layoutRevision: "projection-1", frameId: "frame-1" };
+      const image = { mimeType: "image/png", width: 32, height: 50, bounds, capturedAt: "2026-11-27T12:00:00.000Z", source, data: "aW1hZ2U=" };
+      const input = JSON.parse(raw);
+      if (input.action === "screen.status") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "screen.status" });
+        send(response, { code: 0, data: status });
+      } else if (input.action === "input.cancel") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "input.cancel", requestId: "original-request" });
+        send(response, { code: 0, data: { state: "cancel-requested", requestId: "original-request" } });
+      } else if (input.action === "screen.wait") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "screen.wait", waitMs: 250, source, observerLabel: "测试会话" });
+        send(response, { code: 0, data: { state: "changed", capture: { ...image, source: { ...source, frameId: "frame-2" } } } });
+      } else if (input.action === "input.perform") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "input.perform", requestId: "original-request",
+          source, actions: [{ type: "click", x: 10, y: 14 }], captureAfter: { waitMs: 800 }, observerLabel: "测试会话" });
+        send(response, { code: 0, data: { state: "completed", requestId: "original-request", completedActions: 1,
+          capture: { ...image, state: "captured", frameId: "touch-frame" } } });
+      } else if (input.action === "input.status") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "input.status", requestId: "original-request" });
+        send(response, { code: 0, data: { state: "completed", requestId: "original-request", completedActions: 1,
+          capture: { state: "captured", frameId: "touch-frame" } } });
+      } else if (input.action === "apps.list") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "apps.list" });
+        send(response, { code: 0, data: { state: "ready", apps: [{ appId: "com.android.settings/.Settings", name: "Settings", packageName: "com.android.settings" }] } });
+      } else if (input.action === "apps.open") {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "apps.open", requestId: "original-launch", appId: "com.android.settings/.Settings",
+          source, captureAfter: { waitMs: 800 }, observerLabel: "测试会话" });
+        send(response, { code: 0, data: { state: "completed", requestId: "original-launch", completedActions: 1,
+          appId: "com.android.settings/.Settings", launchState: "requested", capture: { ...image, state: "captured", frameId: "launch-frame" } } });
+      } else {
+        assert.deepEqual(input, { targetId: phoneId, targetGuid: "", action: "screen.capture", maxWidth: 32, observerLabel: "测试会话" });
+        send(response, { code: 0, data: image });
+      }
+      return;
+    }
+    assert.equal(request.url, "/api/rabilink/mobile/location");
+    assert.deepEqual(JSON.parse(raw), { targetId: phoneId, targetGuid: "", action: "location.settings.read" });
+    send(response, { code: 0, data: { enabled: true, permission: "approximate" } });
+  });
+  const desktopOperation = createLanAgentComputerOperations({
+    registry: {} as LanAgentRegistry, isManagementRequestAuthorized: () => false
+  })[0]!;
+  const calls: unknown[] = [];
+  const computer: DeviceComputerPort = {
+    operation: desktopOperation,
+    observationLabel: async () => "测试会话",
+    list: async () => ({ computers: [
+      { instanceId: "local-instance", name: "Local PC", status: "online", capabilities: ["input"] },
+      { instanceId: "remote-instance", ownerDeviceId: "remote-host", name: "Remote PC", status: "online", capabilities: ["input"] },
+    ], sourceErrors: [] }),
+    async invoke(input, target) {
+      calls.push({ target, body: input.body });
+      return { status: 200, body: { code: 0, data: { state: "completed" } } };
+    }
+  };
+  const base = await manager(t, () => config(upstream), undefined, undefined, computer);
+  const directory = await fetch(base + "/api/device-control/targets");
+  assert.equal(directory.status, 200, await directory.clone().text());
+  const { data } = await directory.json();
+  assert.deepEqual(data.targets.map((row: { target: unknown }) => row.target), [
+    { kind: "computer", instanceId: "local-instance" },
+    { kind: "computer", instanceId: "remote-instance", ownerDeviceId: "remote-host" },
+    { kind: "phone", deviceId: phoneId, guid: "" },
+  ]);
+  const post = (body: unknown) => fetch(base + "/api/device-control/execute", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const body = { action: "input.status", requestId: "original-request" };
+  for (const target of data.targets.slice(0, 2).map((row: { target: unknown }) => row.target)) {
+    const response = await post({ target, ...body });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(calls.at(-1), { target, body });
+  }
+  assert.equal((await post({ target: data.targets[2].target, ...body })).status, 200);
+  const phoneStatus = await post({ target: data.targets[2].target, action: "screen.status" });
+  assert.equal(phoneStatus.status, 200);
+  assert.deepEqual((await phoneStatus.json()).data, status);
+  const stop = await post({ target: data.targets[2].target, action: "input.cancel", requestId: status.activity.operation.requestId });
+  assert.equal((await stop.json()).data.state, "cancel-requested");
+  const setting = await post({ target: data.targets[2].target, action: "location.settings.read" });
+  assert.equal(setting.status, 200, await setting.clone().text());
+  assert.deepEqual(await setting.json(), { code: 0, data: { enabled: true, permission: "approximate" } });
+  const capture = await post({ target: data.targets[2].target, action: "screen.capture", maxWidth: 32 });
+  assert.equal(capture.status, 200, await capture.clone().text());
+  const frame = (await capture.json()).data;
+  assert.equal(frame.mimeType, "image/png");
+  assert.equal(frame.source.instanceId, phoneWorkerId);
+  const touch = await post({ target: data.targets[2].target, action: "input.perform", requestId: "original-request",
+    source: frame.source, actions: [{ type: "click", x: 10, y: 14 }], captureAfter: { waitMs: 800 } });
+  assert.equal(touch.status, 200, await touch.clone().text());
+  const touchReceipt = (await touch.json()).data;
+  assert.equal(touchReceipt.completedActions, 1);
+  assert.equal(touchReceipt.capture.mimeType, "image/png");
+  assert.deepEqual((await (await post({ target: data.targets[2].target, ...body })).json()).data.capture,
+    { state: "captured", frameId: "touch-frame" });
+  assert.equal((await post({ target: data.targets[2].target, action: "input.perform", requestId: "invalid",
+    source: frame.source, actions: [{ type: "text", text: "test" }] })).status, 400);
+  const apps = await post({ target: data.targets[2].target, action: "apps.list" });
+  assert.equal(apps.status, 200, await apps.clone().text());
+  const appId = (await apps.json()).data.apps[0].appId;
+  const openBody = { target: data.targets[2].target, action: "apps.open", appId, requestId: "original-launch", captureAfter: { waitMs: 800 } };
+  assert.equal((await post(openBody)).status, 400);
+  const openApp = await post({ ...openBody, source: frame.source });
+  assert.equal(openApp.status, 200, await openApp.clone().text());
+  assert.equal((await openApp.json()).data.launchState, "requested");
+  const waiting = await post({ target: data.targets[2].target, action: "screen.wait", source: frame.source, waitMs: 250 });
+  assert.equal(waiting.status, 200, await waiting.clone().text());
+  assert.equal((await waiting.json()).data.capture.source.frameId, "frame-2");
+  assert.equal((await post({ target: data.targets[2].target, action: "screen.wait", source: { ...frame.source, frameId: "" } })).status, 400);
+  assert.equal((await post({ target: data.targets[2].target, action: "screen.capture", observerLabel: "Spoofed" })).status, 400);
+  const search = await fetch(base + "/api/search?" + new URLSearchParams({ q: "设备控制", scope: "operations", agent: "fixture-role" }));
+  assert.equal(search.status, 200, await search.clone().text());
+  const found = (await search.json()).data.items as Array<{ handle: { operationId?: string } }>;
+  assert.ok(found.some(item => item.handle.operationId === "manager.device-control.execute"));
 });
 
 test("disabled and missing configuration fail explicitly without an empty success", async t => {

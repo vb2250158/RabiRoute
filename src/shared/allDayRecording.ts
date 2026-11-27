@@ -14,6 +14,9 @@ export const DEFAULT_ALL_DAY_SETTINGS: AllDaySettings = {
   sources: { microphone: false, screen: false, window: false, camera: false, homeAssistant: false },
   intervalSeconds: 60, cameraIndex: 0, mobileDeviceIds: []
 };
+export const ALL_DAY_MEDIA_TYPES = { jpg: "image/jpeg", png: "image/png", wav: "audio/wav" } as const;
+export const ALL_DAY_MEDIA_FILE_PATTERN = "^[a-f0-9]{64}\\.(jpg|png|wav)$";
+
 export type AllDayMessageSource = `message:${MessageEventCategory}`;
 export const allDayMessageSource = (category: MessageEventCategory): AllDayMessageSource => `message:${category}`;
 export const ALL_DAY_REVIEW_SOURCES = [...ALL_DAY_SOURCES, "mobile", "session", "systemAudio", ...MESSAGE_EVENT_CATEGORIES.map(category => allDayMessageSource(category.value))] as const;

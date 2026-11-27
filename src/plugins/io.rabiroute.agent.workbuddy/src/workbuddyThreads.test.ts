@@ -421,6 +421,43 @@ test("WorkBuddy public create dispatches an exact workspace and stable intent th
   });
 });
 
+test("WorkBuddy create carries screenshot images as readable local references in the first message", { skip: process.platform !== "win32" }, async t => {
+  const root = createHome([]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const image = path.join(root, "capture.png");
+  fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const workspace = path.join(root, "one");
+  fs.mkdirSync(workspace, { recursive: true });
+  await withHome(root, async () => {
+    const calls: string[] = [];
+    const stop = await serveWorkbuddyDesktopRelay(async input => {
+      calls.push(input.prompt);
+      return { state: "created", intentId: input.intentId, sequence: 1, thread: { id: "native-image-id", title: "截图", cwd: input.workspace } };
+    }, path.join(root, "rabiroute-desktop-relay.json"));
+    try {
+      const manager = createManager({ host: { readOnly: () => false, packageRoot: root } } as AgentManagerImplementationOptions, {
+        type: "workbuddy", capability: "agent.adapter.workbuddy@1", manifest: agentAdapterManifest("workbuddy"),
+        sessionBinding: { sessionId: "workbuddySessionId", sessionName: "workbuddySessionName", workspace: "workbuddyCwd", defaultName: "WorkBuddy" }
+      }, new AbortController().signal);
+      const options = {
+        allowedWorkspaces: [workspace],
+        invokeAgentOperation: async <T>(type: string, operation: string, payload: unknown, invocation?: import("@rabiroute/plugin-sdk").AgentAdapterInvocation) => {
+          assert.equal(type, "workbuddy");
+          assert.equal(operation, "threads.create");
+          return await manager.operations[operation]!(payload, invocation) as T;
+        }
+      };
+      const result = await handleAgentThreadRequest({ action: "create", agentAdapter: "workbuddy", title: "截图",
+        cwd: workspace, deliveryId: "image-create-intent", prompt: "看图。", imagePaths: [image] }, options);
+      assert.equal(result.statusCode, 201);
+      // The desktop composer inserts text only, so the image must arrive as a Read-able local path.
+      assert.match(calls[0]!, /附件列表（请按需使用 Read \/ WebFetch 等工具查看）：/);
+      assert.match(calls[0]!, new RegExp(`capture\\.png.*${image.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      assert.match(calls[0]!, /看图。/);
+    } finally { await stop(); }
+  });
+});
+
 test("the same WorkBuddy relay accepts revised layouts while a legacy descriptor only admits the default", { skip: process.platform !== "win32" }, async t => {
   const root = createHome([]);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

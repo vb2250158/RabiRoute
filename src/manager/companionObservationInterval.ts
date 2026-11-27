@@ -3,7 +3,7 @@ import type { CompanionObservation, CompanionObservationPolicy } from "../shared
 export function readCompanionObservationPolicy(value: unknown): CompanionObservationPolicy {
   const row = value as Record<string, unknown>;
   const bounds: Record<keyof CompanionObservationPolicy, [number, number]> = {
-    captureSeconds: [0.25, 5], uploadSeconds: [0.5, 10], historySeconds: [30, 300], maxFrameBytes: [1_048_576, 67_108_864],
+    captureSeconds: [0.125, 5], uploadSeconds: [0.5, 10], historySeconds: [30, 300], maxFrameBytes: [1_048_576, 67_108_864],
     storyboardFrames: [2, 12], tileWidth: [320, 960], changeThreshold: [1, 255], audioUploadSeconds: [1, 30],
     transcriptionTimeoutSeconds: [1, 60], initialReviewSeconds: [1, 30]
   };
@@ -33,6 +33,20 @@ export function validateCompanionInterval(input: CompanionObservation, boundary:
     || !Number.isFinite(interval.coverageStartedAt) || interval.coverageStartedAt < boundary
     || interval.coverageStartedAt > interval.frameTimes[0]) throw new Error("Invalid observation interval");
   return companionJpeg(interval.jpeg);
+}
+
+export const COMPANION_CLIP_MAX_BYTES = 768 * 1024;
+export function validateCompanionClip(input: CompanionObservation, boundary: number): Buffer | null {
+  const clip = input.video;
+  if (!clip) return null;
+  if (!Number.isSafeInteger(clip.startedAt) || clip.startedAt < boundary || clip.endedAt !== input.capturedAt ||
+    clip.startedAt >= clip.endedAt || clip.endedAt - clip.startedAt > 10_000 ||
+    typeof clip.avi !== "string" || clip.avi.length > Math.ceil(COMPANION_CLIP_MAX_BYTES / 3) * 4 ||
+    !/^[A-Za-z0-9+/]+=*$/.test(clip.avi)) throw new Error("Invalid companion clip");
+  const data = Buffer.from(clip.avi, "base64");
+  if (data.length < 12 || data.length > COMPANION_CLIP_MAX_BYTES || data.toString("ascii", 0, 4) !== "RIFF" ||
+      data.toString("ascii", 8, 12) !== "AVI " || data.readUInt32LE(4) !== data.length - 8) throw new Error("Expected AVI video");
+  return data;
 }
 
 type AudioChunk = Omit<NonNullable<CompanionObservation["audio"]>, "pcm"> & { pcm: Buffer };

@@ -115,7 +115,6 @@ export const englishCatalog: Record<string, string> = {
   "配置错误": "Config error",
   "停止未确认": "Stop unconfirmed",
   "当前路线已保存并生效": "The current route has been saved and applied",
-  "当前路线已保存，等待运行端生效": "The current route has been saved; runtime application is pending",
   "当前路线已保存，运行端未应用本次更新": "The current route has been saved; the runtime did not apply this update",
   "当前路线已保存，运行生效待确认": "The current route has been saved; runtime application is unconfirmed",
   "当前路线已保存，运行生效失败": "The current route has been saved; runtime application failed",

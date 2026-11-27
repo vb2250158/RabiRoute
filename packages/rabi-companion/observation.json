@@ -1,5 +1,5 @@
 {
-  "captureSeconds": 0.5,
+  "captureSeconds": 0.125,
   "uploadSeconds": 2,
   "historySeconds": 300,
   "maxFrameBytes": 33554432,
