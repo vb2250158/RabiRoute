@@ -91,17 +91,20 @@ test("toggle uses the original instance ID and profile revision without replacin
 function pageFixture() {
   const source = fs.readFileSync(new URL("../src/pages/PluginsPage.vue", import.meta.url), "utf8");
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1].replace(/^import .*;\r?\n/gm, "");
-  const code = ts.transpileModule(script + "\nreturn { refresh, togglePlugin, selectPlugin, plugins, selected, query, visiblePlugins, error, loading, saving, rowErrors, importDirectory, installPackage, uninstallPlugin, packages, sourceDirectory, packageError, packageNotice, installing, importing };", { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+  const code = ts.transpileModule(script + "\nreturn { refresh, togglePlugin, selectPlugin, selectVersion, versionChoice, restorableInstances, plugins, selected, query, visiblePlugins, error, loading, saving, rowErrors, importDirectory, installPackage, uninstallPlugin, packages, sourceDirectory, packageError, packageNotice, installing, importing };", { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
   let fail = false, fetches = 0, unmount = () => {}, enabled = true, revision = "revision-1", catalogRefreshes = 0;
-  const updates: Array<{ instanceId: string; expectedRevision: string; value: boolean }> = [];
+  const updates: Array<{ instanceId: string; expectedRevision: string; value: boolean | { version: string } }> = [];
+  let configuredVersion: string | undefined;
   const route = { query: {} as Record<string, string> };
   const lifecycle = { installs: [] as Array<{ pluginId: string; instanceId: string; revision: string }>, uninstalls: [] as string[],
     imports: [] as string[], created: [] as Array<{ instanceId: string; pluginId: string; version: string; enabled: boolean; status: string; installed: boolean; manifest: ReturnType<typeof plugin>["manifest"]; config: object }>,
-    pendingStop: false, uncertainInstall: false };
+    removed: [] as Array<{ instanceId: string; pluginId: string; version: string }>, pendingStop: false, uncertainInstall: false };
   const nativeSnapshot = () => {
     const value = instancesResponse(revision, enabled);
+    const first = value.data.instances[0]!;
+    Object.assign(first, { version: configuredVersion ?? first.version, runningVersion: enabled ? first.version : undefined });
     value.data.instances.push(...lifecycle.created);
-    return parsePluginInstances(value);
+    return parsePluginInstances({ ...value, data: { ...value.data, removedInstances: lifecycle.removed } });
   };
   const state = vm.runInNewContext(`(function(){${code}})()`, {
     watch: () => {}, crypto: { randomUUID: () => "synthetic-install-id" },
@@ -113,6 +116,7 @@ function pageFixture() {
     readAvailablePluginPackages: async () => [], importPluginPackage: async (directory: string) => { lifecycle.imports.push(directory); return []; },
     installManagedPlugin: async (pack: { pluginId: string; version: string }, expected: string, instanceId: string) => {
       lifecycle.installs.push({ pluginId: pack.pluginId, instanceId, revision: expected });
+      lifecycle.removed = lifecycle.removed.filter(item => item.instanceId !== instanceId);
       lifecycle.created.push({ ...plugin(instanceId), pluginId: pack.pluginId, version: pack.version, config: {}, enabled: true, installed: true, status: "initializing" });
       revision = "revision-installed";
       if (lifecycle.uncertainInstall) throw new Error("Synthetic response lost after commit");
@@ -124,9 +128,12 @@ function pageFixture() {
       revision = "revision-removed"; return nativeSnapshot();
     },
     readPluginManagementCatalog: async () => { fetches++; if (fail) throw new Error("Refresh failed"); return nativeSnapshot(); },
-    updateManagedPlugin: async (instanceId: string, expectedRevision: string, value: boolean) => {
-      updates.push({ instanceId, expectedRevision, value }); if (fail) throw new Error("Toggle failed"); enabled = value; revision = "revision-2";
-      return parsePluginInstances(instancesResponse(revision, enabled));
+    updateManagedPlugin: async (instanceId: string, expectedRevision: string, value: boolean | { version: string }) => {
+      updates.push({ instanceId, expectedRevision, value }); if (fail) throw new Error("Toggle failed");
+      if (typeof value === "boolean") enabled = value;
+      else configuredVersion = value.version;
+      revision = "revision-2";
+      return nativeSnapshot();
     }, pluginCatalogStore: { contributions: { value: [] } }, refreshWebPluginCatalog: async () => { catalogRefreshes++; }
   });
   return { state, route, updates, lifecycle, fail: () => { fail = true; }, fetches: () => fetches, catalogRefreshes: () => catalogRefreshes, unmount: () => unmount() };
@@ -147,6 +154,26 @@ test("plugin list opens stable instance details and preserves useful results aft
   assert.equal(f.state.loading.value, false);
   f.state.selectPlugin(); assert.equal(f.state.selected.value, undefined);
   f.unmount();
+});
+
+test("plugin details switch the selected instance and restore uses the exact retained identity", async () => {
+  const f = pageFixture();
+  const pack = { pluginId: "io.test.speech", version: "2.0.0", source: "local", instanceIds: [], manifest: { hosts: [] } };
+  f.lifecycle.removed.push({ instanceId: "plugin:original", pluginId: pack.pluginId, version: pack.version });
+  await f.state.refresh();
+  f.state.packages.value = [pack];
+  f.state.selectPlugin(f.state.plugins.value[0]);
+  f.state.versionChoice.value = pack.version;
+  await f.state.selectVersion(f.state.selected.value);
+  assert.equal(f.updates.length, 1);
+  assert.equal(f.updates[0]?.instanceId, "speech");
+  assert.equal((f.updates[0]?.value as { version: string }).version, pack.version);
+  assert.equal(f.state.selected.value.manifest.version, pack.version);
+  assert.equal(f.state.selected.value.runningVersion, "1.2.0", "a saved selection does not claim adoption");
+  const [{ instance }] = f.state.restorableInstances.value;
+  await f.state.installPackage(pack, instance.instanceId);
+  assert.equal(f.lifecycle.installs[0]?.instanceId, "plugin:original");
+  assert.equal(f.state.restorableInstances.value.length, 0);
 });
 
 test("page confirms a toggle through independent owner readback and keeps errors local on failure", async () => {

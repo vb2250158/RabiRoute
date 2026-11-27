@@ -12,7 +12,7 @@ This directory is the RabiLink phone companion and bundled glasses frontend proj
 
 ## File operations
 
-The phone appears under **RabiLink → Connected devices**. Use the edit button to set its alias or select its name to open **Device control → Phone control**. File operations are enabled by default, with a switch on the web control page and in the Android app. For first use, grant Android's all-files access from **Settings → File operations** on the phone. This gives direct access to existing files in primary shared storage. See the [phone file API](../../docs/rabilink-relay-server_en.md#phone-file-operations) for transfer details.
+The phone appears under **RabiLink → Connected devices**. Use the edit button to set its alias or select its name to open **Device control** with this phone's row expanded. File operations are enabled by default, with a switch on the web control page and in the Android app. For first use, grant Android's all-files access from **Settings → File operations** on the phone. This gives direct access to existing files in primary shared storage. See the [phone file API](../../docs/rabilink-relay-server_en.md#phone-file-operations) for transfer details.
 
 ## Voice assistant
 

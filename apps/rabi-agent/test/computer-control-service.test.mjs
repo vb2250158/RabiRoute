@@ -475,8 +475,9 @@ test("display enumeration and canonical region requests use the shared native ow
   await f.owner.execute({ action: "displays.list" }, f.context);
   assert.equal(f.native.calls.at(-1).action, "displays.list");
   const region = { x: 7, y: 9, width: 320, height: 200 };
-  await f.owner.capture({ scope: "region", displayId: "fixture-display", region }, f.context);
+  await f.owner.capture({ scope: "region", displayId: "fixture-display", region, observerLabel: "Request body label" }, f.context);
   assert.deepEqual(f.native.calls.at(-1).body.captureSpec, { scope: "region", displayId: "fixture-display", region });
+  assert.equal(f.native.calls.at(-1).body.observerLabel, f.context.sourceLabel);
   await assert.rejects(f.owner.capture({ scope: "display", displayId: "A", source: { scope: "display", displayId: "B" } }, f.context), error => error.field === "displayId");
   await f.owner.stop();
 });

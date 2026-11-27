@@ -105,7 +105,7 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
               let value: unknown;
               if (action === "instances.update") {
                 assertCurrent(); dispatched = true;
-                value = await updateInstance.call(management, input.id!, { expectedRevision: input.expectedRevision!, enabled: input.enabled! }, invocation);
+                value = await updateInstance.call(management, input.id!, { expectedRevision: input.expectedRevision!, enabled: input.enabled, version: input.version }, invocation);
               } else value = await listInstances.call(management, invocation);
               assertCurrent();
               return { ...json(200, { code: 0, data: value }), ...(mutation ? { mutationOutcome: "unknown" as const } : {}) };
@@ -150,7 +150,7 @@ export function createPluginCatalogOwner(context: PluginCatalogApiContext, readO
             if (error instanceof ApiContractError) throw error;
             const nativeCode = (error as { code?: unknown })?.code;
             const instanceMutation = action === "instances.update" || action === "instances.install" || action === "instances.remove";
-            const packageMutation = action === "packages.import" || action === "instances.install";
+            const packageMutation = action === "packages.import" || action === "instances.install" || action === "instances.update" && input.version !== undefined;
             const hint = instanceMutation && nativeCode === "PLUGIN_SETTINGS_REVISION_CONFLICT"
               ? help(nativeCode, "body.expectedRevision", "Read GET /api/plugins/instances for data.revision and instances[].instanceId. Merge the intended change with the current state before submitting its exact revision.")
               : instanceMutation && nativeCode === "PLUGIN_INSTANCE_NOT_FOUND"

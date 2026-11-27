@@ -14,7 +14,7 @@ export type PluginProfileSettingsSnapshot = Readonly<{
   removedInstances: readonly PluginProfileEntry[];
   diagnostics: readonly Readonly<{ instanceId?: string; message: string; rowIndex?: number; source?: PluginProfileDiagnostic["source"] }>[];
 }>;
-export type PluginInstanceSettingsUpdate = Override & { expectedRevision: string };
+export type PluginInstanceSettingsUpdate = Override & { expectedRevision: string; version?: string };
 
 export class PluginSettingsConflict extends Error {
   readonly status = 409;
@@ -69,7 +69,7 @@ export class PluginProfileSettings {
           : error instanceof Error ? error.message : "Cannot read installed plugin settings." });
       }
     }
-    const rows: { instance: PluginProfileEntry; revision: string; error?: string; removed?: boolean }[] = await Promise.all([...definitions.values()].map(async instance => {
+    const rows: { instance: PluginProfileEntry; revision: string; error?: string; removed?: boolean; pinned?: boolean }[] = await Promise.all([...definitions.values()].map(async instance => {
       let raw: string | undefined;
       try { raw = extraFiles.get(instance.id) ?? await traceFsAwait(trace, "settings.instance.readFile", fs.readFile(this.settingsPath(instance.id), "utf8")); }
       catch (error) {
@@ -81,7 +81,8 @@ export class PluginProfileSettings {
         const saved = this.decodeSettings(raw, instance.id);
         const definition = this.readDefinition(saved.definition, instance.id) ?? instance;
         return { instance: { ...definition, ...(saved.enabled !== undefined ? { enabled: saved.enabled as boolean } : {}),
-          ...(saved.config !== undefined ? { config: saved.config } : {}) }, revision: raw, removed: saved.installed === false };
+          ...(saved.config !== undefined ? { config: saved.config } : {}) }, revision: raw, removed: saved.installed === false,
+          pinned: saved.pinnedVersion === definition.version };
       } catch (error) {
         return { instance: { ...instance, enabled: false }, revision: raw,
           error: error instanceof SyntaxError ? "Invalid JSON in this instance settings file."
@@ -95,7 +96,8 @@ export class PluginProfileSettings {
     // Saved instance definitions can pin an older package than the release profile.
     // Apply the same explicit migration rules after combining both sources.
     const profile = await traceFsAwait(trace, "profile.migrateEffective", migratePluginProfile(
-      { ...base, instances: rows.filter(row => !row.removed).map(row => row.instance) }, migrationsPath));
+      { ...base, instances: rows.filter(row => !row.removed).map(row => row.instance) }, migrationsPath,
+      new Set(rows.filter(row => row.pinned).map(row => row.instance.id))));
     diagnostics.unshift(...(profile.diagnostics ?? []));
     hash.update(JSON.stringify(profile));
     return { revision: hash.digest("hex"), profile,
@@ -156,6 +158,7 @@ export class PluginProfileSettings {
       const target = this.settingsPath(instanceId);
       const saved = await this.savedSettings(instanceId);
       const value = { ...saved, schemaVersion: 1, instanceId, definition: definition ?? prior,
+        ...(definition && saved.pinnedVersion !== definition.version ? { pinnedVersion: undefined } : {}),
         installed: Boolean(definition), enabled: Boolean(definition) };
       assertCurrent();
       atomicWriteFileSync(target, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
@@ -177,11 +180,14 @@ export class PluginProfileSettings {
       assertCurrent();
       if (current.revision !== input.expectedRevision) throw new PluginSettingsConflict();
       if (current.diagnostics.some(row => row.instanceId === instanceId)) throw Object.assign(new Error("Repair this plugin instance settings file before changing its enabled state."), { status: 409, code: "PLUGIN_INSTANCE_SETTINGS_INVALID" });
-      if (!current.profile.instances.some(instance => instance.id === instanceId)) throw Object.assign(new Error("Plugin instance was not found."), { status: 404, code: "PLUGIN_INSTANCE_NOT_FOUND" });
+      const instance = current.profile.instances.find(row => row.id === instanceId);
+      if (!instance) throw Object.assign(new Error("Plugin instance was not found."), { status: 404, code: "PLUGIN_INSTANCE_NOT_FOUND" });
       const target = this.settingsPath(instanceId);
       const saved = await this.savedSettings(instanceId);
+      const definition = input.version === undefined ? undefined : this.readDefinition({ ...instance, version: input.version }, instanceId);
       assertCurrent();
       const value = { ...saved, schemaVersion: 1, instanceId,
+        ...(definition ? { definition, pinnedVersion: definition.version } : {}),
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
         ...(input.config !== undefined ? { config: input.config } : {}) };
       atomicWriteFileSync(target, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });

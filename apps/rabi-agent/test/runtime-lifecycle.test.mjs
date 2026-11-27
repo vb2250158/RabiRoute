@@ -16,10 +16,11 @@ import { collectReleaseAssetPaths, readReleaseAsset } from "../lib/release-asset
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const entrypoint = fileURLToPath(new URL("../rabi-agent.mjs", import.meta.url));
 const connectionPath = "/fixture/discovered-agent-channel";
-function materializeCandidateRelease(releaseRoot) {
+function materializeCandidateRelease(releaseRoot, { headless = false } = {}) {
   const agentRoot = path.dirname(entrypoint), options = { pluginSourceRoot: fileURLToPath(new URL("../../../", import.meta.url)) };
   fs.mkdirSync(releaseRoot, { recursive: true });
   for (const relative of collectReleaseAssetPaths(agentRoot, "", options)) {
+    if (headless && ["desktop/tray.ps1", "dist/native/RabiAgent.Tray.exe"].includes(relative)) continue;
     const destination = path.join(releaseRoot, ...relative.split("/"));
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, readReleaseAsset(agentRoot, relative, options));
@@ -105,7 +106,7 @@ test("connector stop keeps cleanup failure visible without declaring success", a
   }
 });
 
-test("handoff pause deadline rejects a hung observer and restores the original owner", { timeout: 15000 }, async () => {
+test("handoff pause deadline rejects a hung original transport and restores the original owner", { timeout: 15000 }, async () => {
   const f = fixture(), c = candidate(f.root);
   const oldEntry = path.join(f.root, "old.mjs"); fs.writeFileSync(oldEntry, "");
   __test.writeCurrentRelease(f.configPath, oldEntry, "a".repeat(64)); __test.writeLauncher(f.configPath);
@@ -115,13 +116,12 @@ test("handoff pause deadline rejects a hung observer and restores the original o
   const started = new Promise(resolve => { entered = resolve; });
   const owner = new DeliveryOwner({ configPath: f.configPath, config: { ...f.config, managerGuid: "fixture-guid" },
     client: () => ({ request: async method => {
-      requests++; assert.equal(method, "GET"); entered(); await waiting;
+      requests++; assert.equal(method, "POST"); entered(); await waiting;
       return { ok: false, statusCode: 503, body: "{}" };
     } }), sendEvent: () => false });
   owner.store.submit("original-observer", "agent-delivery", { nodeId: f.config.nodeId, agentType: "codex", sessionId: "fixture-source",
     request: { action: "send", deliveryId: "original-observer", sourceThreadId: "fixture-source", threadId: "fixture-target", agentAdapter: "codex", prompt: "unchanged original" } },
     { managerGuid: "fixture-guid" });
-  owner.store.update("original-observer", "unknown");
   const running = owner.tick(); await started; f.runtime.deliveryOwner = owner;
   const timeout = f.runtime.timeout;
   f.runtime.timeout = (key, fallback) => key === "agent.update.drain" ? 40 : timeout(key, fallback);
@@ -324,13 +324,14 @@ test("candidate connection failure restores old owner without updated notificati
 test("real CLI stdin above 1 MiB reaches only ephemeral HTTP fixture unchanged", async () => {
   const f = fixture();
   const body = JSON.stringify({ text: "x".repeat(1024 * 1024 + 17) });
-  let received;
+  let received, requests = 0;
   const identity = { applicationGenerationId: "fixture-generation", managerInstanceId: "fixture-instance", health: { live: true, requiredReady: true, state: "healthy" } };
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     res.setHeader("content-type", "application/json");
     if (req.url === "/meta") res.end(JSON.stringify(identity));
-    else { received = Buffer.concat(chunks).toString(); assert.equal(req.headers["x-rabiroute-expected-manager-instance-id"], identity.managerInstanceId); res.end('{"code":0}'); }
+    else if (req.url === "/api/fixture") { requests++; received = Buffer.concat(chunks).toString(); assert.equal(req.headers["x-rabiroute-expected-manager-instance-id"], identity.managerInstanceId); res.end('{"code":0}'); }
+    else res.end('{"code":0}');
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const input = path.join(f.root, "stdin.json"); const output = path.join(f.root, "stdout.json");
@@ -340,7 +341,7 @@ test("real CLI stdin above 1 MiB reaches only ephemeral HTTP fixture unchanged",
     fs.writeFileSync(f.configPath, JSON.stringify({ ...f.config, managerUrl: `http://127.0.0.1:${server.address().port}`, agents: [{ agentId: "worker", enabled: true }] }));
     const child = spawn(process.execPath, [entrypoint, "--config", f.configPath, "--api", "POST", "/api/fixture", "--agent-type", "dsh", "--id", "fixture-session", "--body-stdin"], { stdio: [stdin, stdout, "inherit"] });
     const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
-    assert.equal(code, 0); assert.equal(received, body);
+    assert.equal(code, 0); assert.equal(received, body); assert.equal(requests, 1);
     assert.equal(JSON.parse(fs.readFileSync(output)).ok, true);
   } finally { fs.closeSync(stdin); fs.closeSync(stdout); await new Promise(resolve => server.close(resolve)); f.runtime.stop(); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
@@ -555,7 +556,7 @@ test("startup rendering escapes Windows expansion, plist XML and desktop Exec ar
 });
 
 
-async function temporaryManagerReconnectFixture(t) {
+async function temporaryManagerReconnectFixture(t, { supervised = false } = {}) {
   const f = fixture(), events = [], sockets = [], handshakes = [];
   f.runtime.connected = false;
   let identity = { guid: "fixture-guid", applicationGenerationId: "fixture-generation-one", managerInstanceId: "fixture-manager-one" };
@@ -584,18 +585,44 @@ async function temporaryManagerReconnectFixture(t) {
   Object.assign(f.config, { schemaVersion: 1, managerGuid: identity.guid, managerUrl: "http://127.0.0.1:" + server.address().port,
     releasePublicKeySha256: "a".repeat(64), defaultWorkspace: f.root, allowedWorkspaces: [f.root], agents: [], autoUpdate: false });
   fs.writeFileSync(f.configPath, JSON.stringify(f.config));
+  let owner, command;
+  if (supervised) {
+    const releaseRoot = path.join(f.root, "release");
+    materializeCandidateRelease(releaseRoot, { headless: true });
+    __test.writeCurrentRelease(f.configPath, path.join(releaseRoot, "rabi-agent.mjs"), "a".repeat(64));
+    const launcher = __test.writeLauncher(f.configPath);
+    const args = [launcher, "--config", f.configPath];
+    const env = { ...process.env, APPDATA: f.root, USERPROFILE: f.root };
+    owner = spawn(process.execPath, args, { env, windowsHide: true, stdio: ["ignore", "ignore", "inherit"] });
+    command = async action => {
+      const child = spawn(process.execPath, [...args, "--command", action], { env, windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
+      let output = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", chunk => { output += chunk; });
+      const code = await new Promise((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+      return { code, ...JSON.parse(output) };
+    };
+    t.after(async () => {
+      if (owner.exitCode !== null) return;
+      const closed = new Promise(resolve => owner.once("close", resolve));
+      const stopper = spawn(process.execPath, [...args, "--stop"], { env, windowsHide: true, stdio: "ignore" });
+      await new Promise(resolve => stopper.once("close", resolve));
+      await closed;
+    });
+  }
   t.after(async () => {
     await f.runtime.stop();
     for (const socket of ws.clients) socket.terminate();
     await new Promise(resolve => ws.close(resolve)); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
     fs.rmSync(f.root, { recursive: true, force: true });
   });
-  f.runtime.start(); await waitFor(() => f.runtime.connected && events.some(item => item.type === "hello"));
+  if (!supervised) f.runtime.start();
+  await waitFor(() => (supervised || f.runtime.connected) && events.some(item => item.type === "hello"));
   const sendRequest = params => {
     const requestId = randomUUID(); sockets.at(-1).send(JSON.stringify({ type: "manageAgent", requestId, operation: "terminal", params })); return requestId;
   };
   const responseFor = async requestId => { await waitFor(() => events.some(item => item.type === "managementResult" && item.requestId === requestId)); return events.find(item => item.type === "managementResult" && item.requestId === requestId); };
-  return { ...f, events, sockets, handshakes, sendRequest, responseFor, rpc: async params => {
+  return { ...f, events, sockets, handshakes, sendRequest, responseFor, command, rpc: async params => {
     const reply = await responseFor(sendRequest(params)); assert.equal(reply.error, undefined, JSON.stringify(reply)); return reply.result;
   }, nextGeneration() { identity = { ...identity, applicationGenerationId: "fixture-generation-two", managerInstanceId: "fixture-manager-two" }; },
     rejectOneUpgrade() { rejectUpgrade = true; }, rejectedUpgrades: () => rejectedUpgrades };
@@ -649,6 +676,33 @@ test("Manager reconnect preserves the real native terminal, ID and input receipt
   assert.equal(inputWrites, 2, "reconnect never replays native input");
   const stopping = runtime.stop(); assert.equal(runtime.stop(), stopping); await stopping; await item.closed;
   assert.equal(closeAllCalls, 1); assert.equal(childCloses, 1); assert.equal(item.state, "exited");
+});
+
+test("launcher reconnect keeps the busy worker and its native terminal across a Manager change", { skip: process.platform !== "win32", timeout: 90000 }, async t => {
+  const f = await temporaryManagerReconnectFixture(t, { supervised: true });
+  const terminalId = randomUUID();
+  const opened = await f.rpc({ action: "open", terminalId, shell: "powershell", cwd: f.root });
+  const input = "[Console]::WriteLine('BEFORE_' + (40+2)); Start-Sleep -Seconds 5; [Console]::WriteLine('AFTER_' + (90+7))\r";
+  assert.equal((await f.rpc({ action: "input", terminalId, sequence: 1, data: input })).nextInputSequence, 2);
+  const outputContains = marker => f.events.some(event => event.type === "terminalEvent" && event.event.data?.includes(marker));
+  await waitFor(() => outputContains("BEFORE_42"));
+  const before = await f.command("status");
+  assert.equal(before.busy, true);
+  assert.equal(before.canReconnect, true);
+  assert.equal((await f.command("pause")).ok, false);
+  assert.equal((await f.command("restart")).ok, false);
+  f.nextGeneration();
+  const reconnect = await f.command("reconnect");
+  assert.equal(reconnect.ok, true);
+  assert.equal(reconnect.workerPid, before.workerPid);
+  await waitFor(() => f.handshakes.length === 2 && f.events.filter(item => item.type === "hello").length === 2);
+  assert.equal(f.handshakes[1].generation, "fixture-generation-two");
+  const state = await f.rpc({ action: "get", terminalId });
+  assert.equal(state.terminalId, terminalId);
+  assert.equal(state.pid, opened.pid);
+  assert.equal(state.nextInputSequence, 2);
+  assert.equal((await f.command("status")).workerPid, before.workerPid);
+  await waitFor(() => outputContains("AFTER_97"));
 });
 
 test("a failed reconnect retries without invoking or waiting for terminal cleanup", { timeout: 20000 }, async t => {

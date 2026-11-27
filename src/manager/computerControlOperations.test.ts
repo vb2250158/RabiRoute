@@ -17,6 +17,7 @@ import { markAuthenticatedConnectionRequest } from "./connectionRequestAccess.js
 import { createLanAgentManagementOperations, type LanAgentRoutesContext } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentRoutes.js";
 import { createApiDiscoveryOperations } from "../plugins/io.rabiroute.manager.agent-communication/src/manager/apiDiscoveryRoutes.js";
 import { createLanAgentComputerOperations } from "../plugins/io.rabiroute.manager.core/src/manager/lanAgentComputerRoutes.js";
+import { createUnifiedSearchOperation } from "./unifiedSearchOperations.js";
 
 
 async function fixture(t: import("node:test").TestContext, makeLocal?: (instanceId:string,emit:(event:Record<string,unknown>)=>void,config:ManagerConfigRepository,root:string)=>ManagerLocalComputer, resolveDefinition?:()=>ComputerSettingsDefinition) {
@@ -46,6 +47,46 @@ test("settings HTTP shares original owner, strong ETag and healthy public discov
  const sdk=createOperationSdk({request:async(method:string,url:string,options:any={})=>{const response=await fetch(f.base+url,{method,headers:options.headers,body:options.body});return {ok:response.ok,statusCode:response.status,headers:Object.fromEntries(response.headers),body:await response.text()};}});
  const described=await sdk.describe("manager.lan-agent.computer-settings.read");assert.equal(described.operation.id,"manager.lan-agent.computer-settings.read");
 });
+
+test("API search and describe expose the computer workflow and control lifecycle", async t => {
+  const f = await fixture(t);
+  const search = f.api.registerOperations("unified-search", [createUnifiedSearchOperation(f.api, {
+    roles: () => [], roleDirectory: () => "unused",
+    queryHistory: async () => { throw Error("An operations search must not read message history"); },
+    entities: async () => { throw Error("An operations search must not read device entities"); },
+  })]);
+  t.after(() => search.dispose());
+  const { createOperationSdk } = await import(new URL("../../apps/rabi-agent/lib/operation-sdk.mjs", import.meta.url).href);
+  const sdk = createOperationSdk({ request: async (method: string, url: string, options: any = {}) => {
+    const response = await fetch(f.base + url, { method, headers: options.headers, body: options.body });
+    return { ok: response.ok, statusCode: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };
+  } });
+  const id = "manager.lan-agent.computer.execute";
+  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入"].map(query => sdk.search(query)));
+  assert.equal(results[0].items[0].operationId, id);
+  for (const { items } of results) {
+    const entry = items.find((item: { operationId: string }) => item.operationId === id);
+    assert.match(entry?.summary ?? "", /screen\.capture.*input\.perform.*自动退出控制/);
+  }
+  const settings = await sdk.search("电脑控制设置");
+  assert.match(settings.items[0].operationId, /^manager\.lan-agent\.computer-settings\./);
+  const unified = await fetch(f.base + "/api/search?" + new URLSearchParams({ q: "电脑控制", scope: "operations" }));
+  assert.equal(unified.status, 200);
+  const { data } = await unified.json() as { data: { items: { excerpt: string; handle: { operationId: string } }[] } };
+  assert.equal(data.items[0]?.handle.operationId, id);
+  assert.equal(data.items[0]?.excerpt, results[0].items[0].summary);
+  const { operation } = await sdk.describe(id);
+  const description = operation.request.body.schema.description;
+  for (const term of ["imageView", "readable state", "capture that area again", "captureAfter", "task-specific rules", "controlCleanup", "physical takeover"]) {
+    assert.ok(description.includes(term), term);
+  }
+  const capture = operation.request.body.schema.anyOf.find((branch: any) => branch.properties?.action?.const === "screen.capture");
+  assert.match(capture.properties.maxWidth.description, /only downsizes/);
+  assert.equal(operation.effects.request.modes["screen.capture"], "read");
+  assert.equal(operation.effects.request.modes["input.perform"], "write");
+  assert.match(operation.recovery.description, /input\.status.*original requestId/);
+});
+
 test("new work uses feature settings but original receipt and cleanup actions remain available",async t=>{
  const f=await fixture(t);let calls=0;
  const stub={computerExecutionSource:()=>({sourceId:"fixture"}),getComputerSettings:()=>f.config.readComputerSettings(),getComputerSettingsRaw:()=>f.config.readComputerSettingsRaw(),computerCapabilities:()=>["input","annotation","tracking","files"],manageAgent:async()=>{calls++;return {state:"absent"};}};
@@ -157,11 +198,14 @@ test("one input.perform owns shared press, move, hold and release and replays on
  const f=await fixture(t,(id,emit,config,root)=>new ManagerLocalComputer({stateDirectory:path.join(root,"local"),instanceId:id,emit,getSettings:()=>config.readComputerSettingsRaw(),computerServiceOptions:{nativeFactory:()=>native}}));
  const url=`${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
  const post=async(body:unknown)=>{const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});return {status:response.status,body:await response.json() as any};};
- const input={action:"input.perform",requestId:"shared-held-batch",source:{instanceId:f.registry.localInstanceId,kind:"desktop",coordinateSpace:"desktop"},actions:[
+ const source={frameId:"observed-frame",imageItemId:"shown-image",imageView:{width:640,height:360}};
+ const input={action:"input.perform",requestId:"shared-held-batch",source,captureAfter:true,actions:[
    {type:"press",x:100,y:100},{type:"move",x:130,y:100,durationMs:50},{type:"wait",durationMs:90},{type:"release"},
    {type:"keyDown",keys:["W"]},{type:"keyUp",keys:["W"]}
  ]};
  assert.equal((await post({...input,actions:[{type:"press",x:100}]})).status,400);
+ assert.equal((await post({...input,source:{frameId:source.frameId}})).status,400);
+ assert.equal((await post({...input,source:{...source,width:640}})).status,400);
  assert.equal(calls.length,0);
  const response=await post(input);assert.equal(response.status,200,JSON.stringify(response.body));
  const receipt=response.body.data;
@@ -171,6 +215,9 @@ test("one input.perform owns shared press, move, hold and release and replays on
  assert.deepEqual(calls.map(call=>call.action),["control.begin","input.execute","control.end"]);
  assert.equal(calls[0]!.body.inputMode,"shared");assert.equal(calls[1]!.body.inputMode,"shared");
  assert.equal(calls[1]!.body.requestId,input.requestId);assert.deepEqual(calls[1]!.body.actions,input.actions);
+ assert.deepEqual(calls[1]!.body.source,source);
+ assert.equal(calls[1]!.body.captureSpec,undefined);
+ assert.equal(calls[1]!.body.captureAfter,true);
  assert.ok(calls.every(call=>call.body.controlSessionId===receipt.controlSessionId));
  assert.deepEqual((await post(input)).body.data,receipt);
  const status=await post({action:"input.status",requestId:input.requestId});assert.equal(status.status,200);

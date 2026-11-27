@@ -216,6 +216,23 @@ test("package migration and old version fields preserve stable instance settings
   assert.equal((JSON.parse(await fs.readFile(f.profilePath, "utf8"))).instances[0].version, "1.0.0");
 });
 
+test("an explicit version choice survives the packaged migration, reload and reinstall", async t => {
+  const f = await fixture(t);
+  const migrationsPath = path.join(f.root, "package-migrations.json");
+  await fs.writeFile(migrationsPath, JSON.stringify({ schemaVersion: 1, packages: [
+    { packageId: "io.test.a", fromVersions: ["1.0.0"], toVersion: "2.0.0" }
+  ] }));
+  const owner = new PluginProfileSettings({ ...f.owner.options, migrationsPath });
+  const migrated = await owner.snapshot();
+  assert.equal(migrated.profile.instances[0]?.version, "2.0.0");
+  const selected = await owner.update("manager:a", { expectedRevision: migrated.revision, version: "1.0.0", config: { kept: true } });
+  const removed = await owner.uninstall("manager:a", selected.revision);
+  await owner.install(removed.removedInstances[0]!, removed.revision);
+  const reloaded = await new PluginProfileSettings(owner.options).snapshot();
+  assert.equal(reloaded.profile.instances[0]?.version, "1.0.0");
+  assert.deepEqual(reloaded.profile.instances[0]?.config, { kept: true });
+});
+
 
 test("voice assistant saved definitions migrate after overlay without rewriting instance settings", async t => {
   const f = await fixture(t);

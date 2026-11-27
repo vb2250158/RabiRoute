@@ -146,6 +146,30 @@ test("held and shared input needs the native version that owns both features", a
   }
 });
 
+test("a legacy native worker requires the full screenshot source before accepting input", async () => {
+  const sent = [];
+  const child = childFixture((line, current) => {
+    const request = JSON.parse(line);
+    sent.push(request);
+    const result = request.action === "capabilities" ? { inputBatchVersion: 2, imageViewVersion: 1 } : { state: "completed" };
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: request.id, result }) + "\n"));
+  });
+  const client = new NativeComputerClient({ launch: () => child });
+  const source = { frameId: "frame", imageItemId: "image", imageView: { width: 100, height: 50 } };
+  const input = { actions: [{ type: "click", x: 12, y: 15 }] };
+  try {
+    await assert.rejects(client.request("input.execute", { ...input, source }), {
+      code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "captureSourceReferenceVersion"
+    });
+    assert.deepEqual(sent.map(request => request.action), ["capabilities"]);
+    const complete = { ...source, instanceId: "instance", kind: "desktop", coordinateSpace: "capture", width: 200, height: 100 };
+    assert.equal((await client.request("input.execute", { ...input, source: complete })).state, "completed");
+    assert.deepEqual(sent[1].source, complete);
+  } finally {
+    await client.close();
+  }
+});
+
 test("aborting a scoped input batch cancels the original native intent and closes only its control", async () => {
   const pending = Promise.withResolvers();
   const started = Promise.withResolvers();

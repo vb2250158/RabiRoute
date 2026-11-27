@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type VNodeRef } from 'vue';
-import { usePersonaService } from '../persona/personaServiceClient';
-import { createAgentSessionClient, agentSessionProject, agentSessionMembersAvailable, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
+import { createAgentSessionClient, agentSessionProject, agentSessionMembersAvailable, agentNodeLabel, type AgentNode, type PersonaSessionAgent, type PersonaAgentTask } from '../persona/agentSessionClient';
 import { agentHistoryMessages, latestAgentConversationPage, type AgentHistoryEvent, type AgentSessionMessage, type LoadOlderAgentHistory } from '../../../../../ribiwebgui/src/agentSessionHistory';
 import { useI18n } from '../../../../../ribiwebgui/src/i18n/index';
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
 import { chatHistoryScroller, chatHistoryViewport, waitForChatHistoryFrame } from '../../../../../ribiwebgui/src/personaChatHistoryLayout';
 import { renderMarkdownPreview } from '../../../../../ribiwebgui/src/markdownPreview';
+import { peerManagerPath } from '../../../../../ribiwebgui/src/peerManagerTarget';
 import AgentAvatar from '../../../../../ribiwebgui/src/components/AgentAvatar.vue';
 import HistoryConversationLayout from './HistoryConversationLayout.vue';
 import PersonaAgentSessionComposer from './PersonaAgentSessionComposer.vue';
@@ -15,8 +15,29 @@ import ChatMessageBody from './ChatMessageBody.vue';
 import LoadOlderHistory from './LoadOlderHistory.vue';
 
 const props = defineProps<{ roleId: string; active: boolean }>();
-const service = usePersonaService(), client = createAgentSessionClient(service.fetch, service.deviceId);
+const rawFetch: typeof fetch = (input, init) => fetch(input as RequestInfo, init);
+const nodes = ref<AgentNode[]>([{ id: 'local', kind: 'local', name: '本机', online: true }]);
+const nodeKey = ref('local');
+const nodeLoading = ref(false), nodeError = ref('');
+const selectedNode = computed(() => nodes.value.find(node => node.id === nodeKey.value) ?? nodes.value[0]);
+const client = createAgentSessionClient(rawFetch, '', {
+  node: () => selectedNode.value,
+  candidates: () => [...new Set(pluginCatalogStore.agentAdapters.value.map(item => item.type))]
+});
 const { t, locale } = useI18n();
+const remote = computed(() => selectedNode.value?.kind !== 'local');
+const nodeTitle = computed(() => selectedNode.value ? agentNodeLabel(selectedNode.value) : t('本机'));
+const localNodes = computed(() => nodes.value.filter(node => node.kind === 'local'));
+const peerNodes = computed(() => nodes.value.filter(node => node.kind === 'peer'));
+const instanceNodes = computed(() => nodes.value.filter(node => node.kind === 'instance'));
+const composerRequest = computed<typeof fetch>(() => {
+  const current = selectedNode.value;
+  if ((current?.kind === 'peer' || current?.kind === 'instance') && current.deviceId) {
+    const deviceId = current.deviceId;
+    return (input, init) => typeof input === 'string' ? rawFetch(peerManagerPath(deviceId, input), init) : rawFetch(input, init);
+  }
+  return rawFetch;
+});
 const agents = ref<PersonaSessionAgent[]>([]), agentKey = ref('');
 const agent = computed(() => agents.value.find(item => item.key === agentKey.value));
 const tasks = ref<PersonaAgentTask[]>([]), selectedId = ref(''), query = ref('');
@@ -26,7 +47,7 @@ const membersAvailable = computed(() => agentSessionMembersAvailable(agent.value
 const currentSession = computed(() => selectedMember.value || selected.value);
 const currentSessionId = computed(() => currentSession.value?.id || '');
 const composerTarget = computed(() => props.active && agent.value && currentSession.value && !currentSession.value.archived
-  ? { key: JSON.stringify([props.roleId, agent.value.key, currentSessionId.value]), agent: agent.value, threadId: currentSessionId.value }
+  ? { key: JSON.stringify([nodeKey.value, agent.value.key, currentSessionId.value]), agent: agent.value, threadId: currentSessionId.value }
   : undefined);
 function refreshAfterSend(key: string) {
   if (composerTarget.value?.key === key) void loadHistory();
@@ -39,24 +60,39 @@ const listElement = ref<HTMLElement>(), virtualList = ref<{scrollToIndex(index:n
 const messages = computed(() => agentHistoryMessages(agent.value?.provider || '', events.value));
 const loadingAgents = ref(false), loadingTasks = ref(false), loadingHistory = ref(false);
 const agentError = ref(''), taskError = ref(''), historyError = ref(''), partialHistory = ref(false);
-let directoryRequest: AbortController | undefined, taskRequest: AbortController | undefined, historyRequest: AbortController | undefined, memberRequest: AbortController | undefined;
-let previewRequest: AbortController | undefined;
+let directoryRequest: AbortController | undefined, nodeRequest: AbortController | undefined, taskRequest: AbortController | undefined, historyRequest: AbortController | undefined, memberRequest: AbortController | undefined;
 let loadedRole = '';
 const label = (provider: string) => pluginCatalogStore.agentAdapters.value.find(item => item.type === provider)?.title || provider;
-const owner = (item: PersonaSessionAgent) => item.binding
+const agentLabel = (item: PersonaSessionAgent) => item.label || label(item.provider);
+const owner = (item: PersonaSessionAgent) => item.nodeName || (item.binding
   ? [item.binding.ownerDeviceId, item.binding.instanceId, item.binding.agentId].filter(Boolean).join(' / ')
-  : item.dshBaseUrl || t('本机');
+  : item.dshBaseUrl || t('本机'));
 const grouped = ref(false);
 const groupingStorageKey = 'rabiroute.history.agent-sessions.grouping';
 try { grouped.value = localStorage.getItem(groupingStorageKey) === 'project'; } catch { /* Use the flat list when storage is unavailable. */ }
 watch(grouped, value => { try { localStorage.setItem(groupingStorageKey, value ? 'project' : 'flat'); } catch { /* Keep this view preference for the current page. */ } });
 const items = computed(() => tasks.value.map(task => {
   const project = agentSessionProject(task.cwd);
-  return { key: task.id, title: task.title || task.id, preview: task.preview || (task.previewUnavailable ? t('消息摘要暂不可用') : ''),
+  return { key: task.id, title: task.title || task.id, preview: '',
     time: task.lastMessageTime || task.updatedAt || '', agentProvider: agent.value?.provider,
     group: { ...project, title: project.title || t('未指定项目') } };
 }));
 
+async function loadNodes() {
+  nodeRequest?.abort(); const request = new AbortController(); nodeRequest = request;
+  nodeLoading.value = true; nodeError.value = '';
+  try {
+    const result = await client.nodes(request.signal);
+    if (request.signal.aborted) return;
+    nodes.value = result;
+    if (!result.some(node => node.id === nodeKey.value)) nodeKey.value = 'local';
+  } catch (error) { if (!request.signal.aborted) nodeError.value = userFacingError(error); }
+  finally { if (nodeRequest === request) nodeLoading.value = false; }
+}
+function selectNode(id: string) {
+  if (id === nodeKey.value) return;
+  nodeKey.value = id;
+}
 async function loadAgents() {
   directoryRequest?.abort(); const request = new AbortController(); directoryRequest = request;
   loadingAgents.value = true; agentError.value = '';
@@ -70,7 +106,6 @@ async function loadAgents() {
 }
 async function loadTasks(more = false) {
   if (!agent.value) return;
-  if (!more) previewRequest?.abort();
   taskRequest?.abort(); const request = new AbortController(); taskRequest = request;
   loadingTasks.value = true; taskError.value = '';
   try {
@@ -79,18 +114,8 @@ async function loadTasks(more = false) {
     tasks.value = [...new Map([...(more ? tasks.value : []), ...page.items].map(task => [task.id, task])).values()];
     offset.value = page.nextOffset;
     if (!tasks.value.some(task => task.id === selectedId.value)) selectedId.value = '';
-    loadPreviews(agent.value,tasks.value.filter(task=>!task.preview&&!task.previewUnavailable));
   } catch (error) { if (!request.signal.aborted) taskError.value = userFacingError(error); }
   finally { if (taskRequest === request) loadingTasks.value = false; }
-}
-function loadPreviews(owner:PersonaSessionAgent,items:PersonaAgentTask[]) {
-  if (!['dsh','workbuddy'].includes(owner.provider) || !items.length) return;
-  previewRequest?.abort();const request=new AbortController();previewRequest=request;
-  void client.previews(owner,items,task=>{
-    if (request.signal.aborted || previewRequest!==request || agent.value?.key!==owner.key) return;
-    const index=tasks.value.findIndex(item=>item.id===task.id);
-    if(index>=0) tasks.value[index]={...tasks.value[index],...task};
-  },request.signal).catch(error=>{if(!request.signal.aborted) taskError.value=userFacingError(error);});
 }
 async function loadMembers(more=false) {
   if (!agent.value || !selectedId.value || !membersAvailable.value) return;
@@ -157,20 +182,24 @@ function toggle(id: string) {
   expanded.value = next;
 }
 watch(() => [props.roleId, props.active], () => {
-  if (!props.active) { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); previewRequest?.abort(); }
+  if (!props.active) { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); }
   if (loadedRole !== props.roleId) {
-    directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); previewRequest?.abort();
+    directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort();
     agents.value = []; agentKey.value = ''; tasks.value = []; selectedId.value = ''; events.value = [];
-    if (props.active) void loadAgents();
+    if (props.active) { void loadNodes(); void loadAgents(); }
   } else if (props.active && agent.value) {
     if (!tasks.value.length) void loadTasks();
-    else if(agent.value) loadPreviews(agent.value,tasks.value.filter(task=>!task.preview&&!task.previewUnavailable));
     if (currentSessionId.value && !events.value.length) void loadHistory();
     if (selectedId.value && membersAvailable.value && !members.value.length) void loadMembers();
   }
 }, { immediate: true });
+watch(nodeKey, () => {
+  taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort();
+  agents.value = []; agentKey.value = ''; tasks.value = []; selectedId.value = ''; events.value = []; offset.value = null;
+  if (props.active) void loadAgents();
+});
 watch(agentKey, () => {
-  taskRequest?.abort(); historyRequest?.abort(); previewRequest?.abort();
+  taskRequest?.abort(); historyRequest?.abort();
   tasks.value = []; selectedId.value = ''; query.value = ''; offset.value = null;
   if (agent.value) void loadTasks();
 });
@@ -182,23 +211,53 @@ watch(currentSessionId, () => {
   historyRequest?.abort(); events.value = []; olderHistory.value = null; historyError.value = ''; partialHistory.value = false; expanded.value = new Set();
   if (currentSessionId.value) void loadHistory();
 });
-onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); previewRequest?.abort(); });
+onBeforeUnmount(() => { directoryRequest?.abort(); nodeRequest?.abort(); taskRequest?.abort(); historyRequest?.abort(); memberRequest?.abort(); });
 </script>
 
 <template>
   <section class="agent-session-history">
-    <div class="agent-session-tabs">
-      <v-tabs v-model="agentKey" color="secondary" show-arrows :aria-label="t('Agent 端')">
-        <v-tab v-for="item in agents" :key="item.key" :value="item.key" class="agent-session-tab" :title="`${label(item.provider)} · ${owner(item)}`">
-          <AgentAvatar :provider="item.provider" :size="24" />
-          <span class="agent-tab-copy" data-no-i18n><span>{{ label(item.provider) }}</span><small>{{ owner(item) }}</small></span>
-        </v-tab>
-      </v-tabs>
-      <v-btn icon="mdi-refresh" variant="text" :loading="loadingAgents" :aria-label="t('刷新 Agent 端')" @click="loadAgents" />
+    <div class="agent-session-toolbar">
+      <div class="agent-node-bar" role="tablist" :aria-label="t('节点')">
+        <button v-for="node in localNodes" :key="node.id" type="button" role="tab" :aria-selected="nodeKey === node.id"
+          class="agent-node-chip" :class="{ 'is-active': nodeKey === node.id }" :title="`${t('本机')} · ${node.name}`" @click="selectNode(node.id)">
+          <v-icon icon="mdi-monitor" size="15" /><span data-no-i18n>{{ agentNodeLabel(node) }}</span>
+        </button>
+        <v-divider v-if="peerNodes.length" vertical class="agent-node-divider" />
+        <button v-for="node in peerNodes" :key="node.id" type="button" role="tab" :aria-selected="nodeKey === node.id"
+          class="agent-node-chip" :class="{ 'is-active': nodeKey === node.id, 'is-offline': !node.online }" :disabled="!node.online"
+          :title="`${node.name} · ${node.online ? t('在线') : t('离线')}`" @click="selectNode(node.id)">
+          <v-icon icon="mdi-laptop" size="15" /><span data-no-i18n>{{ agentNodeLabel(node) }}</span>
+          <span v-if="!node.online" class="agent-node-chip-state">{{ t('离线') }}</span>
+        </button>
+        <v-divider v-if="instanceNodes.length" vertical class="agent-node-divider" />
+        <button v-for="node in instanceNodes" :key="node.id" type="button" role="tab" :aria-selected="nodeKey === node.id"
+          class="agent-node-chip" :class="{ 'is-active': nodeKey === node.id, 'is-offline': !node.online || !node.agents?.length }"
+          :disabled="!node.online || !node.agents?.length"
+          :title="`${node.name} · ${node.online ? `${node.agents?.length || 0} ${t('个 Agent 端')}` : t('离线')}`" @click="selectNode(node.id)">
+          <v-icon icon="mdi-robot-outline" size="15" /><span data-no-i18n>{{ agentNodeLabel(node) }}</span>
+          <span v-if="node.agents?.length" class="agent-node-chip-count">{{ node.agents.length }}</span>
+          <span v-else-if="node.online" class="agent-node-chip-state">{{ t('无可绑定的 Agent 端') }}</span>
+          <span v-else class="agent-node-chip-state">{{ t('离线') }}</span>
+        </button>
+        <v-btn icon="mdi-refresh" size="x-small" variant="text" :loading="nodeLoading" :aria-label="t('刷新节点')" :title="t('刷新节点')" @click="loadNodes()" />
+      </div>
+      <div class="agent-session-tabs-row">
+        <v-tabs v-model="agentKey" color="secondary" show-arrows class="agent-session-tabs" :aria-label="t('Agent 端')">
+          <v-tab v-for="item in agents" :key="item.key" :value="item.key" class="agent-session-tab" :title="`${agentLabel(item)} · ${owner(item)}`">
+            <AgentAvatar :provider="item.provider" :size="24" />
+            <span class="agent-tab-copy" data-no-i18n><span>{{ agentLabel(item) }}</span><small>{{ owner(item) }}</small></span>
+          </v-tab>
+        </v-tabs>
+        <v-chip v-if="remote" size="small" variant="tonal" color="secondary" class="agent-remote-badge" :title="t('远端节点')">{{ t('远端') }}</v-chip>
+        <v-btn icon="mdi-refresh" variant="text" :loading="loadingAgents" :aria-label="t('刷新 Agent 端')" :title="t('刷新 Agent 端')" @click="loadAgents" />
+      </div>
     </div>
+    <v-alert v-if="nodeError" type="warning" variant="tonal" density="compact" class="mb-3">{{ nodeError }}</v-alert>
     <v-alert v-if="agentError" type="error" variant="tonal" class="mb-3">{{ agentError }}</v-alert>
-    <v-alert v-if="!agents.length && !loadingAgents && !agentError" type="info" variant="tonal">{{ t('当前角色尚未配置 Agent 端。') }}</v-alert>
-    <HistoryConversationLayout v-if="agent" :items="items" :grouped="grouped" :project-preview-limit="5" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" :has-details="membersAvailable&&Boolean(selected)" details-title="子 Agent" v-model:info-open="membersOpen" @select="chooseRoot" @back="back" @search="loadTasks()">
+    <v-alert v-if="!agents.length && !loadingAgents && !agentError" type="info" variant="tonal">
+      {{ remote ? t('该远端节点暂无可用会话，或节点上未安装受支持的 Agent 端。') : t('本机暂无可读取的 Agent 会话。') }}
+    </v-alert>
+    <HistoryConversationLayout v-if="agent" :items="items" :grouped="grouped" :compact="true" :project-preview-limit="5" :selected="selectedId" v-model:search="query" :loading="loadingTasks" :detail-open="Boolean(selected)" :has-details="membersAvailable&&Boolean(selected)" details-title="子 Agent" v-model:info-open="membersOpen" @select="chooseRoot" @back="back" @search="loadTasks()">
       <template #list-actions>
         <v-btn :icon="grouped ? 'mdi-format-list-bulleted' : 'mdi-folder-outline'" variant="text" size="small" :aria-label="t(grouped ? '平铺会话' : '按项目分组')" :title="t(grouped ? '平铺会话' : '按项目分组')" :aria-pressed="grouped" @click="grouped = !grouped" />
         <v-btn icon="mdi-magnify" variant="text" size="small" :disabled="loadingTasks" :aria-label="t('搜索会话')" @click="loadTasks()" />
@@ -212,6 +271,7 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
           <div><h3 data-no-i18n>{{ sessionTitle(currentSession) }}</h3><div class="text-caption text-medium-emphasis" data-no-i18n>{{ currentSession.cwd }}</div></div>
           <v-btn icon="mdi-refresh" variant="text" :loading="loadingHistory" :aria-label="t('刷新会话历史')" @click="loadHistory()" />
         </header>
+        <v-alert v-if="remote" type="info" variant="tonal" density="compact" class="session-remote-note">{{ t('该会话位于远端节点') }} {{ nodeTitle }}，{{ t('发送会投递到远端电脑。') }}</v-alert>
         <v-alert v-if="historyError" type="error" variant="tonal" class="mb-3">{{ historyError }}</v-alert>
         <v-alert v-if="partialHistory" type="warning" variant="tonal" class="mb-3">{{ t('部分历史记录暂时无法读取，已加载的消息仍可查看。') }}</v-alert>
         <v-progress-linear v-if="loadingHistory" indeterminate :aria-label="t('正在加载历史记录')" />
@@ -256,16 +316,27 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
           <v-btn v-if="memberOffset!==null" block variant="text" :loading="loadingMembers" @click="loadMembers(true)">{{t('加载更多子 Agent')}}</v-btn>
         </div>
       </template>
-      <template #composer><PersonaAgentSessionComposer :target="composerTarget" @sent="refreshAfterSend" /></template>
+      <template #composer><PersonaAgentSessionComposer :target="composerTarget" :request="composerRequest" @sent="refreshAfterSend" /></template>
     </HistoryConversationLayout>
   </section>
 </template>
 
 <style scoped>
 .agent-session-history{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;}
-.agent-session-tabs{flex:none;}
-.agent-session-tabs{display:flex;align-items:center;gap:8px;min-width:0;margin:4px 0 20px;border-bottom:1px solid var(--rr-border-faint);}
-.agent-session-tabs :deep(.v-tabs){flex:1;min-width:0;}
+.agent-session-toolbar{display:flex;flex-direction:column;gap:6px;min-width:0;margin:2px 0 14px;}
+.agent-node-bar{display:flex;align-items:center;gap:4px;min-width:0;overflow-x:auto;padding:1px 0;scrollbar-width:none;}
+.agent-node-bar::-webkit-scrollbar{display:none;}
+.agent-node-chip{display:inline-flex;align-items:center;gap:5px;flex:none;height:30px;padding:0 10px;border:1px solid transparent;border-radius:999px;background:rgba(var(--v-theme-on-surface),.04);color:rgba(var(--v-theme-on-surface),.72);font-size:12px;line-height:1;cursor:pointer;transition:background-color .15s ease,color .15s ease,border-color .15s ease;}
+.agent-node-chip:hover:not(:disabled){background:rgba(var(--v-theme-on-surface),.08);}
+.agent-node-chip.is-active{background:rgba(var(--v-theme-secondary),.12);border-color:rgba(var(--v-theme-secondary),.3);color:rgb(var(--v-theme-secondary));font-weight:600;}
+.agent-node-chip:disabled{cursor:not-allowed;opacity:.5;}
+.agent-node-chip.is-offline{opacity:.55;}
+.agent-node-chip-count{min-width:15px;padding:0 4px;border-radius:8px;background:rgba(var(--v-theme-on-surface),.1);font-size:10px;line-height:15px;text-align:center;font-variant-numeric:tabular-nums;}
+.agent-node-chip-state{font-size:10px;opacity:.7;}
+.agent-node-divider{align-self:center;height:16px;margin-inline:2px;}
+.agent-session-tabs-row{display:flex;align-items:center;gap:8px;min-width:0;border-bottom:1px solid var(--rr-border-faint);}
+.agent-session-tabs-row .agent-session-tabs{flex:1;min-width:0;}
+.agent-remote-badge{flex:none;}
 .agent-session-tab{text-transform:none;max-width:340px;letter-spacing:normal;}
 .agent-tab-copy{display:grid;gap:2px;min-width:0;margin-left:10px;text-align:left;}
 .agent-tab-copy small{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;opacity:.65;}
@@ -274,6 +345,7 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
 .session-member-list :deep(.agent-avatar){margin-right:8px;}
 .session-member-list :deep(.v-list-item-title),.session-member-list :deep(.v-list-item-subtitle){font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .session-parent-link{align-self:flex-start;margin-bottom:4px;}
+.session-remote-note{margin:-8px 0 16px;}
 .session-heading{position:sticky;top:0;z-index:3;background:rgb(var(--v-theme-background));display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 16px 18px;border-bottom:1px solid var(--rr-border-faint);margin-bottom:20px;}
 .session-heading h3{font-size:17px;font-weight:600;overflow-wrap:anywhere;}
 .session-messages{padding:0 16px;min-width:0;}
@@ -323,5 +395,13 @@ onBeforeUnmount(() => { directoryRequest?.abort(); taskRequest?.abort(); history
 .session-instruction-toggle:hover,.session-instruction-toggle:focus-visible{background:rgba(var(--v-theme-on-surface),.08);}
 .session-instruction-toggle>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .session-instruction pre{width:100%;margin:0;padding:12px 16px;background:rgba(var(--v-theme-on-surface),.045);border-radius:8px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;}
-@media(max-width:760px){.session-messages{padding:0 4px;}.session-message-content{max-width:calc(100% - 52px);}.session-sender{flex-wrap:wrap;gap:4px 10px;}}
+@media(max-width:760px){
+  .agent-session-toolbar{gap:4px;margin-bottom:12px;}
+  .agent-node-bar{gap:3px;}
+  .agent-node-chip{height:28px;padding:0 8px;font-size:11px;}
+  .agent-remote-badge{display:none;}
+  .session-messages{padding:0 4px;}
+  .session-message-content{max-width:calc(100% - 52px);}
+  .session-sender{flex-wrap:wrap;gap:4px 10px;}
+}
 </style>

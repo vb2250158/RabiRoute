@@ -434,7 +434,10 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
     }
     presentation?.publish();
   };
+  const canReconnect = () => !stopping && !transitioning && !candidate && Boolean(worker?.connected)
+    && (publicState.canReconnect ?? !publicState.busy);
   const publicSnapshot = () => ({
+    canReconnect: canReconnect(),
     summary: publicState.summary, running: Boolean(worker), busy: transitioning || Boolean(candidate) || publicState.busy,
     nodeLabel: [publicState.managerName || (publicState.managerOrigin && new URL(publicState.managerOrigin).host), instanceLabel].filter(Boolean).join(" · "),
     startup: startupEnabled(), canOpenManager: Boolean(publicState.managerOrigin),
@@ -571,6 +574,7 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
       } else if (message?.type === "desktopSnapshot") {
         for (const key of ["summary", "version", "agents", "task", "managerName"]) if (typeof message[key] === "string") publicState[key] = message[key].slice(0, 2048);
         publicState.busy = message.busy === true;
+        publicState.canReconnect = typeof message.canReconnect === "boolean" ? message.canReconnect : undefined;
         try {
           const origin = new URL(message.managerOrigin);
           if (["http:", "https:"].includes(origin.protocol) && !origin.username && !origin.password) publicState.managerOrigin = origin.origin;
@@ -608,6 +612,7 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
       if (child !== worker) return;
       worker = null;
       publicState.busy = false;
+      publicState.canReconnect = undefined;
       if (paused || transitioning) { publish("连接器已停止"); return; }
       if (candidate) {
         const pending = candidate.child;
@@ -676,8 +681,12 @@ async function stableLauncher(defaultConfigPath, policy, nativeSpec) {
       send(worker, { type: "desktopCheckUpdate" });
       return;
     }
+    if (action === "reconnect") {
+      if (!canReconnect()) throw new Error("Connector is not ready to reconnect.");
+      send(worker, { type: "desktopReconnect" });
+      return;
+    }
     if (transitioning || candidate || publicState.busy) throw new Error("Connector is busy.");
-    if (action === "reconnect") { send(worker, { type: "desktopReconnect" }); return; }
     if (action === "start") {
       if (worker) return;
       paused = false; failures = 0; startWorker(); return;
@@ -1104,6 +1113,7 @@ class RabiAgentRuntime {
       type: "desktopSnapshot", summary, version: AGENT_VERSION, managerOrigin, managerName: this.managerName || "",
       agents: instanceAgents(this.config).map(agent => `${agent.provider} · ${this.agentExecutionStatus.get(agent.agentId) || "按请求指定会话"}`).join("\n") || "按请求指定 Agent 类型与完整会话 ID",
       task: `${this.lastDesktopTask}${this.terminals.activeCount ? ` · ${this.terminals.activeCount} 个终端` : ""}`,
+      canReconnect: this.canReconnect(),
       busy: this.draining || Boolean(this.updatePromise) || this.pendingOperations > 0 || this.taskByThread.size > 0 || this.terminals.activeCount > 0 || this.computer.activeCount > 0,
       ...(event ? { event: boundedText(event, 500) } : {})
     };
@@ -1111,8 +1121,12 @@ class RabiAgentRuntime {
     return payload;
   }
 
+  canReconnect() {
+    return !this.stopped && !this.draining && !this.candidatePending && !this.updatePromise;
+  }
+
   reconnect() {
-    if (this.stopped || this.draining || this.updatePromise) return;
+    if (!this.canReconnect()) return;
     clearTimeout(this.retryTimer); this.retryTimer = null;
     clearInterval(this.heartbeatTimer);
     this.connectionAbort?.abort();

@@ -118,3 +118,16 @@ test("native home replaces frames and keeps administration an independent login"
   assert.doesNotMatch(page, /iframe|frameAllowed|frameLoaded|setInterval|token=|authenticated\s*=/i);
   assert.doesNotMatch(fs.readFileSync(new URL("../src/rabiLinkPresentation.ts", import.meta.url), "utf8"), /rabiLinkFrameAllowed/);
 });
+test("device control lists computers and phones in one list without a second tab switch", () => {
+  const page = source("pages/RabiLinkPage.vue");
+  assert.doesNotMatch(page, /selectControl|deviceType/);
+  assert.match(page, /<ComputerControlPage[^>]*:phones="phones"/);
+  assert.match(page, /phoneId: device\.id/);
+  const control = source("computer/ComputerControlPage.vue");
+  assert.match(control, /t\('设备控制'\)/);
+  assert.match(control, /<RabiPhoneControlRow\b/);
+  assert.doesNotMatch(control, /selectControl|deviceType/);
+  const row = source("computer/RabiPhoneControlRow.vue");
+  assert.match(row, /deviceSystemIcon\(/);
+  assert.match(source("computer/ComputerControlRow.vue"), /deviceSystemIcon\(/);
+});

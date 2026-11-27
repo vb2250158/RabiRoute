@@ -26,6 +26,7 @@ const json = (data: ApiSchema) => ({ mediaType: "application/json", schema: { ty
 export function interactiveApiContract(route: InteractiveRoute): ApiOperationContract {
   const names = [...route.pathTemplate.matchAll(/:([A-Za-z][A-Za-z0-9_]*)/g)].map(match => match[1]!);
   const stream = route.key === "terminals.events";
+  const computer = route.key === "computer.execute";
   return { operationId: `manager.lan-agent.${route.key}`, contractVersion: "1.0.0", method: route.method, pathTemplate: route.pathTemplate,
     exposure: "public", transport: stream ? "sse" : "http", description: "Use the target host's local computer services or existing connector without a second Agent registration, persona binding or execution runtime.",
     request: { path: { type: "object", required: names, properties: Object.fromEntries(names.map(name => [name, name === "terminalId" ? terminalIdSchema : text])), additionalProperties: false },
@@ -43,8 +44,11 @@ export function interactiveApiContract(route: InteractiveRoute): ApiOperationCon
       "400": failure, "401": failure, "403": failure, "409": failure, "503": failure },
     effects: { mode: stream ? "bounded-subscription" : route.method === "POST" ? "remote-interactive-action" : "remote-read",
       ...(route.key === "computer.execute" || route.key === "terminals.execute" ? { request: { bodyPath: ["action"], modes: Object.fromEntries(Object.entries(route.key === "computer.execute" ? COMPUTER_ACTIONS : TERMINAL_ACTIONS).map(([action, value]) => [action, value.readOnly ? "read" as const : "write" as const])) } } : {}),
-      description: "The original host service or connector owns sessions, ordered input, immutable upload identities, file versions and execution; the Registry retains bounded terminal output replay. Await actual command acceptance/cleanup." },
-    recovery: { strategy: "query-original-session-and-sequence", description: "Retain instanceId, terminalId/input sequence or uploadId/offset/hash. After uncertain execution, read the same terminal or upload status before retrying. Reconnect terminal output using the same after cursor and handle gap/disconnected; never replay commands because a stream ended." },
+      description: computer ? "Observation uses read-only actions. input.perform acquires and releases control inside one request; check controlCleanup. The target owns input arbitration, file versions and upload identities."
+        : "The original host service or connector owns sessions, ordered input, immutable upload identities, file versions and execution; the Registry retains bounded terminal output replay. Await actual command acceptance/cleanup." },
+    recovery: { strategy: "query-original-session-and-sequence", description: computer
+      ? "Use input.status with the original requestId on the same instance after an uncertain batch. Read control.status and end the original controlSessionId if it remains active. After physical takeover, pause and observe the current target before proceeding. For an uncertain upload, query upload.status with the original uploadId."
+      : "Retain instanceId, terminalId/input sequence or uploadId/offset/hash. After uncertain execution, read the same terminal or upload status before retrying. Reconnect terminal output using the same after cursor and handle gap/disconnected; never replay commands because a stream ended." },
     validators: [{ id: "lan-agent.interactive.original-admission", description: "Use the authenticated public connection or existing local management identity. Revalidate that original admission before remote dispatch and after awaited completion; revocation never falls back to local identity." },
       { id: "lan-agent.interactive.native-protocol", description: "The original executor validates advertised shells, absolute remote paths, UTF-8 input bytes, sequence receipts, canonical chunk bytes/digests, offsets, file versions, upload publication and native desktop conversions. Unknown body fields remain forwarded. Desktop fields preserve native conversion semantics." },
       { id: "lan-agent.interactive.replay-and-capacity", description: "Read after/waitMs use Number(first query value or zero); the replay owner validates safe ordered cursors, bounded waits, viewer counts and connection identity. All admitted callers share the same capacities. Only protocol keepalive uses a timer." }]
@@ -61,11 +65,11 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
       relatedOperations: ["manager.lan-agent.instances.list", "manager.lan-agent.terminals.execute", "manager.rabilink.peer.http.get", "manager.lan-agent.computer.execute"]
     } } : {}),
     ...(route.key === "computer.execute" ? { discovery: {
-      title: "电脑操作与屏幕标注",
-      summary: "直接操作目标电脑的文件、窗口、截图、鼠标键盘与屏幕标注，无需先投递 Agent 任务。input.perform 可在一次请求中按顺序按住、移动、等待和释放。恢复会话时可先看原桌面和任务窗口，再按已授权范围恢复宿主。完整远端主机经 ownerDeviceId 的 Peer manager 服务转接原路径与正文，按对应代理合同传 x-rabiroute-proxy-contract。",
+      title: "电脑控制",
+      summary: "先定位目标电脑和窗口，用 screen.capture 看屏幕。用 input.perform 批量执行已确定的鼠标键盘动作，按需回拍并自动退出控制，再根据实际界面决定下一步。此入口也提供文件和屏幕标注。完整远端主机按 ownerDeviceId 通过原 Peer manager 服务转接，按代理合同传 x-rabiroute-proxy-contract。",
       relatedOperations: ["manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.rabilink.peer.http.get", "manager.rabilink.peer.http.post", "manager.rabilink.peer.http.patch"],
       category: { id: "devices", title: "设备与电脑" },
-      keywords: ["电脑控制", "远程控制", "远程桌面", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],
+      keywords: ["电脑控制", "操作电脑", "控制电脑", "桌面操作", "远程控制", "远程桌面", "看屏幕", "截图", "批量输入", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "screen.capture", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],
       inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }]
     } } : {}),
     handler: async input => {

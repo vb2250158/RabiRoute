@@ -1,18 +1,19 @@
 import type { ApiOperationDefinition } from './apiOperationContract.js';
 import type { ManagerPluginRouteRegistry } from './managerPluginRouteRegistry.js';
 import { parseSearchQuery, runUnifiedSearch, SearchError } from './unifiedSearch.js';
+import { unifiedSearchDefaults, unifiedSearchLimits } from '../shared/unifiedSearchContract.js';
 import { createSearchLanes, type UnifiedSearchSourceContext } from './unifiedSearchSources.js';
 import { preparePersonaResourceAdmission, type PersonaResourceIdentity } from '../plugins/io.rabiroute.manager.persona/src/manager/personaResourceAdmission.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 const descriptions = {
-    q: 'Free text or keywords. Omit to browse the selected owner views.', scope: 'Comma-separated registered scopes. Default all. Reserved scopes are reported unsupported.',
+    q: 'Free text or keywords. Omit to browse the selected owner views.', scope: `Comma-separated registered scopes. Default ${unifiedSearchDefaults.scope}. Reserved scopes are reported unsupported.`,
     kind: 'Comma-separated owner kinds, such as plan, recent, consolidated, group or climate.', agent: 'Optional role scope. Omit to query all roles. Unknown role returns AGENT_NOT_FOUND.',
     adapter: 'Optional message endpoint adapter. Omit for all saved endpoints.', from: 'Inclusive observation time lower bound in Unix seconds.', to: 'Inclusive observation time upper bound in Unix seconds.',
-    match: 'any (default) or all keywords.', mode: 'keywords (default) or owner fulltext matching.', strict: '0 (default) or 1. Query only explicitly selected scopes and kinds.',
-    limit: 'Page size from 1 to 200. Default 20.', cursor: 'Opaque nextCursor. Keep other filters and limit unchanged. Source changes return 409.',
-    budgetMs: 'Total remaining server budget, 1..2147483647 milliseconds. Default 3000.', sort: 'relevance (default) preserves matching sources. recent orders original observation time with modification-time fallback.',
-    includeArchives: '0 (default) or 1, selects message archive coverage.', expand: 'Reserved for future synonym expansion. Omit in this version.'
+    match: `${unifiedSearchDefaults.match} (default) or all keywords.`, mode: `${unifiedSearchDefaults.mode} (default) or owner fulltext matching.`, strict: `${unifiedSearchDefaults.strict} (default) or 1. Query only explicitly selected scopes and kinds.`,
+    limit: `Page size from 1 to ${unifiedSearchLimits.limit}. Default ${unifiedSearchDefaults.limit}.`, cursor: 'Opaque nextCursor. Keep other filters and limit unchanged. Source changes return 409.',
+    budgetMs: `Total remaining server budget, 1..${unifiedSearchLimits.budgetMs} milliseconds. Default ${unifiedSearchDefaults.budgetMs}.`, sort: `${unifiedSearchDefaults.sort} (default) preserves matching sources. recent orders original observation time with modification-time fallback.`,
+    includeArchives: `${unifiedSearchDefaults.includeArchives} (default) or 1, selects message archive coverage.`, expand: 'Reserved for future synonym expansion. Omit in this version.'
 };
 const string = { type: 'string' };
 const nullableTime = { type: ['string', 'null'] };

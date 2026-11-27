@@ -4,9 +4,9 @@ English | [简体中文](computer-control.md) | [日本語](computer-control_ja.
 
 # Computer control
 
-RabiLink Home displays authorized devices as cards, three per row on wide screens. Select a PC card to open its settings in Computer control.
+RabiLink Home displays authorized devices as cards, three per row on wide screens. Select a device card to open its settings in Device control.
 
-Open **RabiLink → Device control → Computer control**. The local PC, connected RabiPC hosts and lightweight computer nodes appear in one flat list. Expanding a row reads settings and work status only. Failed reads retain recent information and show unknown status separately from offline devices.
+Open **RabiLink → Device control**. The local PC, connected RabiPC hosts, lightweight computer nodes and connected phones share one list; the leading icon reports Windows, Mac, Linux, Android or iOS, while a device without a reported system keeps a generic computer or phone icon. Expanding a row reads settings and work status only. Failed reads retain recent information and show unknown status separately from offline devices.
 
 The complete feature ships with 0.13.0 and updated Windows executors. Older nodes retain their declared capabilities; being online does not prove an update. Use actual capabilities, rather than names, IP addresses or an empty terminal-session list.
 

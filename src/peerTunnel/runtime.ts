@@ -235,7 +235,10 @@ export class PeerTunnelRuntime {
       const native = account && peer.capabilities.includes("host-account-tunnel-v1") ? this.options.accountTunnel?.() : undefined;
       const status = native ? native.connections.snapshot(native.candidate(peer)) : this.connections.snapshot(this.candidate(peer));
       const snapshot = account && peer.online ? this.accountProbes.get(peer.id) : undefined;
-      return { ...status, ...snapshot, personaSupported: peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY) };
+      // An account Relay forwards the same authenticated Manager HTTP paths, so every peer listed through it
+      // stays readable; a real 404 still reports the upgrade.
+      return { ...status, ...snapshot, personaSupported: Boolean(account)
+        || (peer.capabilities.includes(PERSONA_REFERENCE_CAPABILITY) && peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY)) };
     });
     return { selectedDeviceId: this.selected(), peers };
   }
@@ -340,7 +343,6 @@ export class PeerTunnelRuntime {
   }
   private async bootstrapApplicationConnection(id: string, scope: string): Promise<void> {
     const peer = await this.target(id);
-    if (!peer.capabilities.includes(APPLICATION_ACCESS_CAPABILITY)) throw new Error("peer_upgrade_required");
     if (!peer.supported) throw new Error("peer_upgrade_required");
     if (!peer.online) throw new Error("peer_device_offline");
     const fields = { source: this.identity.deviceId, publicKey: this.identity.publicKey, target: id, expiresAt: Date.now() + 30_000 };

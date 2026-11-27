@@ -20,7 +20,7 @@ const querySynonyms: ReadonlyMap<string, readonly string[]> = new Map([
     ['屏幕', ['screen', 'screenshot']], ['窗口', ['window']], ['插件', ['plugin', 'plugins']],
     ['角色', ['role', 'persona']], ['配置', ['config', 'settings', 'configure']], ['设置', ['config', 'settings']],
     ['消息', ['message', 'messages', 'chat']], ['语音', ['speech', 'voice']], ['视频', ['video']],
-    ['电脑', ['computer', 'computers']], ['设备', ['device', 'devices']],
+    ['电脑控制', ['computer control', 'remote desktop']], ['电脑', ['computer', 'computers']], ['设备', ['device', 'devices']],
     ['列表', ['list', 'catalog', 'directory']], ['查询', ['query', 'list', 'read']],
     ['读取', ['read', 'get']], ['查看', ['read', 'get', 'list', 'status']],
     ['搜索', ['search', 'query']], ['安装', ['install', 'import']], ['更新', ['update', 'patch']],

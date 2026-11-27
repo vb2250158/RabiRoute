@@ -7,8 +7,16 @@ import type { ApiHttpProxyInput } from "./apiOperationContract.js";
 import { rabiLinkTransportAssertionPresent } from "./rabiLinkAgentDeviceConnection.js";
 
 export type AccountProxyRelay = { url: string; token: string; accountId: string };
-type HostResult = { statusCode?: number; headers?: Record<string, string>; data?: unknown; uncertain?: boolean };
+type HostResult = { statusCode?: number; headers?: Record<string, string>; data?: unknown; uncertain?: boolean;
+  ok?: boolean; code?: string };
 const BODY_LIMIT = 180 * 1024;
+/** A Relay that cannot confirm a target answers `{ok:false, code}` without a status code. Forward that original
+ * code and uncertainty instead of keeping a status table that has to guess every future failure. */
+function unconfirmedFailure(result: HostResult) {
+  if (result.ok !== false) return undefined;
+  const code = typeof result.code === "string" && result.code ? result.code : "API_TRANSPORT_UNCONFIRMED";
+  return { code, message: `远端 PC 未返回可用响应（${code}）。请确认目标电脑在线且 RabiRoute 正在运行。`, uncertain: result.uncertain === true };
+}
 
 async function requestBody(input: ApiHttpProxyInput) {
   if (["GET", "HEAD"].includes(input.request.method || "GET")) return undefined;
@@ -76,7 +84,12 @@ export async function fetchAccountHost(relay: AccountProxyRelay, deviceId: strin
     ...(["GET", "HEAD", "OPTIONS"].includes(method) ? {} : { operationId: headers["idempotency-key"] || randomUUID() })
   }, init.signal || undefined);
   authorize();
-  if (!result.statusCode) throw new Error(result.uncertain ? "Remote outcome is uncertain." : "Remote response unavailable.");
+  if (!result.statusCode) {
+    const failure = unconfirmedFailure(result);
+    if (!failure) throw new Error(result.uncertain ? "Remote outcome is uncertain." : "Remote response unavailable.");
+    return new Response(JSON.stringify({ code: -1, error: failure.code, message: failure.message, uncertain: failure.uncertain }),
+      { status: 502, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  }
   const response = method === "HEAD" || [204, 205, 304].includes(result.statusCode) ? null : new Uint8Array(responseBody(result));
   return new Response(response, { status: result.statusCode, headers: result.headers });
 }
@@ -100,8 +113,11 @@ export async function proxyAccountHost(input: ApiHttpProxyInput, relay: AccountP
   authorize();
   if (!result.statusCode) {
     const responseHeaders = { "content-type": "application/json", "cache-control": "no-store" };
+    const failure = unconfirmedFailure(result);
+    const body = failure ? { code: -1, error: failure.code, message: failure.message, uncertain: failure.uncertain }
+      : { error: "Remote response unavailable.", uncertain: result.uncertain === true };
     input.prepareResponse(502, responseHeaders);
-    input.response.writeHead(502, responseHeaders).end(JSON.stringify({ error: "Remote response unavailable.", uncertain: result.uncertain === true }));
+    input.response.writeHead(502, responseHeaders).end(JSON.stringify(body));
     return;
   }
   const responseHeaders = tunnelHeaders(result.headers || {}, true);

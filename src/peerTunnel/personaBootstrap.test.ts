@@ -218,3 +218,15 @@ test("persona service supports same-origin redirects and upgrades with ordinary 
   assert.equal(calls, 2); assert.equal(upgrades, 1);
   assert.equal((await tunnelFetch(caller, "persona", "/api/roles/Example/../../meta")).status, 403);
 });
+
+test("an account Relay target keeps persona reads available without a current capability advert", async t => {
+  const root = folder(t);
+  const a = new PeerTunnelRuntime({ dataDir: path.join(root, "a"), deviceId: "a", generation: "a-current",
+    relay, allowApplicationConnection: () => true,
+    accountRelay: () => ({ url: "https://relay.invalid", token: "test-account", accountId: "account" }),
+    discover: async () => [{ id: "b", name: "B", deviceKind: "pc", online: true, peerUrls: [], capabilities: ["peer-tunnel-v1", "host-account-http-v1"] }],
+    signal: async () => { throw new Error("unused"); }, services: () => ({}), onStatus: () => {} });
+  t.after(() => a.stop());
+  const peers = (await a.directory()).peers;
+  assert.equal(peers[0].personaSupported, true, "A Relay-forwarded PC stays readable even when its advert predates the capability");
+});

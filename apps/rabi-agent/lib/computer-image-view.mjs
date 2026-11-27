@@ -1,5 +1,12 @@
 export const COMPUTER_IMAGE_VIEW_CAPABILITY = "imageView-v1";
 
+/** A delivered image can identify its cached source without repeating its bounds. */
+export function isComputerSourceReference(source) {
+  return typeof source?.frameId === "string" && source.frameId.length > 0
+    && typeof source.imageItemId === "string" && source.imageItemId.length > 0
+    && Object.keys(source).every(key => ["frameId", "imageItemId", "imageView"].includes(key));
+}
+
 /** Identify requests whose coordinates depend on the host's resized image. */
 export function computerRequestUsesImageView(action, body = {}) {
   const source = body?.source;

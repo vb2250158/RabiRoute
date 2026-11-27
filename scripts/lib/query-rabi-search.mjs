@@ -15,7 +15,11 @@ export async function queryRabiSearch({query={},budgetMs=3000,agentType,id,signa
       const requestBudgetMs = remaining();
       // Leave time for the server's partial response to be encoded, delivered and read.
       const responseReserveMs = Math.min(500, Math.ceil(requestBudgetMs / 5));
-      params.set('budgetMs', String(Math.max(1, requestBudgetMs - responseReserveMs)));
+      const affordableMs = Math.max(1, requestBudgetMs - responseReserveMs);
+      // An explicit server budget is honoured but never exceeds what this call can still afford.
+      const requestedMs = Number(query.budgetMs);
+      const serverBudgetMs = Number.isSafeInteger(requestedMs) && requestedMs >= 1 ? Math.max(1, Math.min(requestedMs, affordableMs)) : affordableMs;
+      params.set('budgetMs', String(serverBudgetMs));
       const headers={accept:'application/json'};
       if(typeof agentType==='string' && agentType.trim() && typeof id==='string' && id.trim()){
         headers['x-rabiroute-agent-type']=agentType.trim();headers['x-rabiroute-session-id']=id.trim();

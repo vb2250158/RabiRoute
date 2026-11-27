@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import type { GatewayDefinition } from '../../src/shared/gatewayConfigModel';
 import type { WebRendererContribution } from '../src/pluginRenderers';
 import { remoteAgentTargetKey } from '../../src/shared/routeAgentTargets';
-import { searchTestIdentities, runSearchTest, parseSearchTestParameters, searchTestResultGroups, searchTestHighlights } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/searchTestClient';
+import { searchTestIdentities, runSearchTest, parseSearchTestParameters, searchTestResultGroups, searchTestHighlights, searchTestCursorExpired } from '../../src/plugins/io.rabiroute.manager.persona/web/persona/searchTestClient';
 
 const route = { id: 'route', name: 'Route', agentRoleId: 'Role', agentAdapters: ['dsh'], primaryAgentAdapter: 'dsh' } as GatewayDefinition;
 const renderers = [{ agentType: 'dsh', agentRoute: { session: () => ({ sessionId: 'real-session-id', sessionName: 'Session', workspace: 'workspace' }) } }] as WebRendererContribution[];
@@ -57,6 +57,19 @@ test('JSON editing preserves additional query fields and rejects non-object para
   for (const value of ['null', '[]', '"text"', '{']) assert.throws(() => parseSearchTestParameters(value));
 });
 
+test('a cursor conflict is recoverable and the dialog offers a restart instead of a dead end', () => {
+  const conflict = { status: 409, body: { code: -1, errorCode: 'KNOWLEDGE_CURSOR_EXPIRED', message: 'A source snapshot changed. Restart the query.' } };
+  assert.equal(searchTestCursorExpired(conflict), true);
+  assert.equal(searchTestCursorExpired({ status: 409, body: { message: 'A source snapshot changed. Restart the query.' } }), true);
+  assert.equal(searchTestCursorExpired({ status: 409, body: { errorCode: 'SEARCH_PARAMETER_INVALID', message: 'limit must be an integer' } }), false);
+  assert.equal(searchTestCursorExpired({ status: 400, body: { errorCode: 'KNOWLEDGE_CURSOR_INVALID' } }), false);
+  assert.equal(searchTestCursorExpired({ status: 200, body: {} }), false);
+  const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaSearchTestDialog.vue', import.meta.url), 'utf8');
+  assert.match(source, /searchTestCursorExpired/);
+  assert.match(source, /t\('重新搜索'\)/);
+  assert.match(source, /!busy\.value && !expired\.value/);
+});
+
 test('repeated message presentation preserves every record and separates conversation or type changes', () => {
   const item = { source: 'messages', kind: 'message', label: 'Repeated title', excerpt: 'Content', agent: 'Role', origin: { conversationKey: 'chat1' } };
   const records = [item, { ...item, excerpt: 'Different original content' }, { ...item, origin: { conversationKey: 'chat2' } }, { ...item, source: 'knowledge' }, item];
@@ -69,4 +82,16 @@ test('search highlighting treats metacharacters and markup as literal text', () 
   assert.deepEqual(searchTestHighlights('角色 A+B <img>', '角色 A+B <img>').filter(part => part.matched).map(part => part.text), ['角色', 'A+B', '<img>']);
   assert.deepEqual(searchTestHighlights('Same same', 'same').filter(part => part.matched).map(part => part.text), ['Same', 'same']);
   assert.deepEqual(searchTestHighlights('Anything', ''), [{ text: 'Anything', matched: false }]);
+});
+
+test('the dialog reads the shared search defaults and rejects an out-of-contract page size before sending', () => {
+  const source = fs.readFileSync(new URL('../../src/plugins/io.rabiroute.manager.persona/web/components/PersonaSearchTestDialog.vue', import.meta.url), 'utf8');
+  assert.match(source, /import \{ unifiedSearchDefaults \} from '@shared\/unifiedSearchContract'/);
+  assert.match(source, /unifiedSearchDefaults\.limit/);
+  assert.match(source, /unifiedSearchDefaults\.budgetMs/);
+  assert.doesNotMatch(source, /scope: 'all', limit: 20, budgetMs: 3000/);
+  assert.equal(parseSearchTestParameters(JSON.stringify({ limit: '200' })).limit, '200');
+  for (const limit of [0, 201, -1, '2.5']) assert.throws(() => parseSearchTestParameters(JSON.stringify({ limit })), /每页数量/);
+  // Unparsable values still reach the server so its real 400 receipt remains inspectable.
+  assert.equal(parseSearchTestParameters(JSON.stringify({ limit: 'invalid' })).limit, 'invalid');
 });

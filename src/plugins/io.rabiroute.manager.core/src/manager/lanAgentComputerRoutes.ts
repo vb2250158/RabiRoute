@@ -15,6 +15,10 @@ export function createLanAgentComputerOperations(context: InteractiveContext & {
     if (!capability) throw new Error("Unknown computer action; read the current computer action contract.");
     assertTrustedLanAgentPrincipal(input.request);
     const execution = { ...context.registry.computerExecutionSource(input.request), signal: input.signal };
+    if (body.action === "screen.capture") {
+      const label = await context.registry.computerObservationLabel?.(input.request);
+      if (label) execution.sourceLabel = label;
+    }
     let data: unknown;
     try { data = await context.registry.manageAgent(instanceId, "computer", body, 45000, guard, execution); }
     catch (error) {

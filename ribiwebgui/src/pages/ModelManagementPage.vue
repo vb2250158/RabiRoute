@@ -411,22 +411,21 @@ onBeforeUnmount(() => managerEvents?.close());
         >
           {{ item.label }}
         </v-btn>
+        <v-text-field
+          v-model="search"
+          class="model-search"
+          density="compact"
+          variant="plain"
+          single-line
+          hide-details
+          clearable
+          prepend-inner-icon="mdi-magnify"
+          :placeholder="copy.search"
+          :aria-label="copy.search"
+        />
         <v-btn class="library-settings" icon="mdi-cog-outline" size="small" variant="text"
           :title="settingsLabel" :aria-label="settingsLabel" @click="openSettings(true)" />
       </div>
-
-      <v-text-field
-        v-model="search"
-        class="model-search"
-        density="compact"
-        variant="plain"
-        single-line
-        hide-details
-        clearable
-        prepend-inner-icon="mdi-magnify"
-        :placeholder="copy.search"
-        :aria-label="copy.search"
-      />
 
       <WorkbenchModels v-if="mediaKind" :kind="mediaKind" :labels="copy" :english="isEnglish" :search="search ?? ''" />
       <ModelLibraryTable v-else :rows="speechRows" :labels="copy" :loading="loading">
@@ -485,15 +484,18 @@ onBeforeUnmount(() => managerEvents?.close());
 .directory-form :deep(.v-input) { flex: 1 1 280px; min-width: 0; }
 .library-section { display: grid; min-width: 0; gap: 12px; }
 .settings-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
-.library-settings { margin-inline-start: auto; }
+.library-settings { flex: 0 0 auto; }
 .library-header h2 { margin: 0; color: var(--model-ink); font-size: 20px; }
-.model-search { width: min(390px, 100%); padding-inline: 6px; }
+.model-search { flex: 1 1 200px; min-width: 120px; max-width: 390px; margin-inline-start: auto; padding-inline: 6px; }
 .model-search :deep(.v-field) { --v-field-padding-top: 0px; --v-field-padding-bottom: 0px; }
-.capability-filter { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-input); }
+.capability-filter { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-input); }
+@media (max-width: 900px) {
+  .capability-filter { flex-wrap: wrap; }
+  .model-search { flex: 1 1 160px; margin-inline-start: 0; }
+}
 @media (max-width: 640px) {
   .model-management-page { padding: 16px; }
   .environment-actions { margin-left: 0; }
-  .capability-filter { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -183,7 +183,8 @@ test('actual endpoint directory refresh traverses new key pages before the old c
   const pages=[{conversations:old,nextConversationCursor:'z-099'},{conversations:latest,nextConversationCursor:'a-099'},{conversations:gap,nextConversationCursor:'b-099'},{conversations:old,nextConversationCursor:null}];
   const calls:string[]=[];
   const conversations={value:[] as ReturnType<typeof row>[]},selectedKey={value:''},cursor={value:null as string|null};
-  const load=actualCatalogLoader('EndpointConversationHistory',{props:{roleId:'fixture',adapter:'system'},conversations,selectedKey,cursor,loading:{value:false},error:{value:''},t:(text:string)=>text,userFacingError:String,
+  const selected={get value(){return conversations.value.find(item=>item.conversationKey===selectedKey.value);}};
+  const load=actualCatalogLoader('EndpointConversationHistory',{props:{roleId:'fixture',adapter:'system'},conversations,selectedKey,selected,cursor,usingPreview:{value:false},previewKey:[],previewAccessDenied:()=>false,writePreview:()=>{},loading:{value:false},error:{value:''},t:(text:string)=>text,userFacingError:String,
     fetch:async(url:string)=>{calls.push(url);assert.ok(pages.length);const data=pages.shift()!;return {ok:true,json:async()=>({code:0,data})};}});
   await load();selectedKey.value='z-017';
   await load();assert.equal(cursor.value,'a-099');assert.equal(selectedKey.value,'z-017');

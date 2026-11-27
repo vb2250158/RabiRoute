@@ -1753,7 +1753,7 @@ class MainActivity : Activity() {
             .setView(LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(24), dp(12), dp(24), dp(8))
-                addView(note("开启后，同一 RabiLink 连接的授权设备可从「设备控制 → 手机控制」读取和修改手机内部共享存储。"))
+                addView(note("开启后，同一 RabiLink 连接的授权设备可在「设备控制」的手机行读取和修改手机内部共享存储。"))
                 addView(note(if (granted) "Android 已授予所有文件访问权限。" else "请在 Android 系统设置中允许访问所有文件。"))
                 addView(Switch(this@MainActivity).apply {
                     text = "启用文件操作"

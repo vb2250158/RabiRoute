@@ -6,9 +6,10 @@ import { peerManagerPath } from '../../../../../ribiwebgui/src/peerManagerTarget
 import { pluginCatalogStore } from '../../../../../ribiwebgui/src/pluginCatalogStore';
 import { copyTextToClipboard } from '../../../../../ribiwebgui/src/clipboard';
 import { userFacingError } from '../../../../../ribiwebgui/src/userFacingError';
+import { unifiedSearchDefaults } from '@shared/unifiedSearchContract';
 import {
   runSearchTest, searchTestIdentities, parseSearchTestParameters, searchTestResultGroups, searchTestHighlights,
-  type SearchTestIdentity, type SearchTestReceipt, type SearchTestItem,
+  searchTestCursorExpired, type SearchTestIdentity, type SearchTestReceipt, type SearchTestItem,
 } from '../persona/searchTestClient';
 
 const props = defineProps<{ modelValue: boolean; roleId: string }>();
@@ -56,11 +57,11 @@ function field(name: string, fallback = '') {
   } });
 }
 const words = field('q');
-const source = field('scope', 'all');
-const match = field('match', 'any');
-const sort = field('sort', 'relevance');
-const limit = field('limit', '20');
-const budget = field('budgetMs', '3000');
+const source = field('scope', unifiedSearchDefaults.scope);
+const match = field('match', unifiedSearchDefaults.match);
+const sort = field('sort', unifiedSearchDefaults.sort);
+const limit = field('limit', String(unifiedSearchDefaults.limit));
+const budget = field('budgetMs', String(unifiedSearchDefaults.budgetMs));
 const range = computed({
   get: () => String(draft.value.agent || ''),
   set: (value: string) => {
@@ -90,7 +91,10 @@ const groups = computed(() => searchTestResultGroups(resultItems.value));
 const stale = computed(() => submitted.value && (parameters.value !== pretty(submitted.value.parameters)
   || callerType.value !== submitted.value.identity.agentType || callerId.value !== submitted.value.identity.sessionId));
 const nextCursor = computed(() => receipt.value?.body.data?.nextCursor);
-const canLoadMore = computed(() => Boolean(submitted.value && nextCursor.value && !stale.value && !busy.value));
+const expired = computed(() => Boolean(failedAttempt.value && searchTestCursorExpired(failedAttempt.value)));
+const errorText = computed(() => expired.value ? t('数据在翻页期间已更新，请重新搜索。') : error.value);
+// A cursor conflict cannot continue from the stale continuation; the run must restart.
+const canLoadMore = computed(() => Boolean(submitted.value && nextCursor.value && !stale.value && !busy.value && !expired.value));
 const coverage = computed(() => receipt.value?.body.data?.coverage);
 const hasGaps = computed(() => coverage.value?.state === 'partial');
 const requestLog = computed(() => failedAttempt.value ? [...pages.value, failedAttempt.value] : pages.value);
@@ -187,6 +191,15 @@ function cancel() {
   loadingMore.value = false;
   error.value = t('已取消本次测试。');
 }
+/** Restart the submitted query so a conflicted continuation pages over a new snapshot. */
+async function restart() {
+  if (!submitted.value) return;
+  draft.value = { ...submitted.value.parameters };
+  jsonMode.value = false;
+  rawParameters.value = '';
+  error.value = '';
+  await search(false);
+}
 function toggle(set: Set<number>, index: number) {
   if (set.has(index)) set.delete(index);
   else set.add(index);
@@ -236,7 +249,7 @@ function stopRequests() {
 watch(identityKey, () => { cancel(); error.value = ''; selectIdentity(); });
 watch(() => props.roleId, () => {
   stopRequests();
-  draft.value = { q: '', agent: props.roleId, scope: 'all', limit: 20, budgetMs: 3000 };
+  draft.value = { q: '', agent: props.roleId, scope: unifiedSearchDefaults.scope, limit: unifiedSearchDefaults.limit, budgetMs: unifiedSearchDefaults.budgetMs };
   jsonMode.value = false;
   rawParameters.value = '';
   identities.value = searchTestIdentities(props.roleId, [], []).identities;
@@ -322,7 +335,7 @@ onBeforeUnmount(stopRequests);
         <span v-else>{{ t('选择身份和范围，输入关键词开始搜索。') }}</span>
         <span v-if="busy" role="status">{{ loadingMore ? t('正在加载更多…') : t('正在搜索，上次结果保持可读。') }}</span>
       </div>
-      <v-alert v-if="error" type="error" variant="tonal" class="search-test-error" closable @click:close="error = ''">{{ error }}<v-btn v-if="failedAttempt" size="small" variant="text" @click="tab = 'requests'">{{ t('查看请求与返回') }}</v-btn></v-alert>
+      <v-alert v-if="error" type="error" variant="tonal" class="search-test-error" closable @click:close="error = ''">{{ errorText }}<v-btn v-if="expired && submitted" size="small" variant="text" @click="restart()">{{ t('重新搜索') }}</v-btn><v-btn v-if="failedAttempt" size="small" variant="text" @click="tab = 'requests'">{{ t('查看请求与返回') }}</v-btn></v-alert>
       <v-tabs v-model="tab" density="compact" class="search-test-tabs">
         <v-tab value="results">{{ t('搜索结果') }}</v-tab><v-tab value="coverage">{{ t('来源状态') }}</v-tab><v-tab value="requests">{{ t('请求与返回') }}</v-tab>
       </v-tabs>
@@ -348,7 +361,7 @@ onBeforeUnmount(stopRequests);
               </section>
             </article>
           </template>
-          <div v-if="receipt" ref="paginationFooter" class="search-test-pagination"><v-btn v-if="nextCursor" :disabled="!canLoadMore" :loading="loadingMore" variant="tonal" @click="search(true)">{{ t('加载更多结果') }}</v-btn><span>{{ nextCursor ? t('还有更多结果') : t('本次查询已加载完毕') }}</span></div>
+          <div v-if="receipt" ref="paginationFooter" class="search-test-pagination"><v-btn v-if="nextCursor" :disabled="!canLoadMore" :loading="loadingMore" variant="tonal" @click="search(true)">{{ t('加载更多结果') }}</v-btn><span>{{ nextCursor ? (expired ? t('数据在翻页期间已更新，请重新搜索。') : t('还有更多结果')) : t('本次查询已加载完毕') }}</span></div>
         </section>
         <section v-else-if="tab === 'coverage'" class="search-test-coverage">
           <p v-if="!coverage" class="search-test-empty">{{ t('搜索后查看各来源状态。') }}</p>

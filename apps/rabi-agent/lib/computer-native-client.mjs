@@ -1,4 +1,4 @@
-import { computerRequestUsesImageView } from "./computer-image-view.mjs";
+import { computerRequestUsesImageView, isComputerSourceReference } from "./computer-image-view.mjs";
 import { ComputerQtClient } from "./computer-qt-client.mjs";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
@@ -98,6 +98,11 @@ export class NativeComputerClient extends EventEmitter {
     const sharedControl = action === "control.begin" && body.inputMode === "shared";
     if (batch || sharedControl || action === "displays.list" || scopedCapture) {
       const capabilities = await this.readNativeCapabilities();
+      if (batch && isComputerSourceReference(body.source) && capabilities.captureSourceReferenceVersion !== 1) {
+        throw Object.assign(new Error("This desktop worker requires the complete source returned with the image."), {
+          code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "captureSourceReferenceVersion"
+        });
+      }
       const input = batch || sharedControl;
       const extended = body.inputMode === "shared" || batch && body.actions.some(item => heldActions.has(item?.type) || item?.type === "move" && item.durationMs !== undefined);
       const supported = input ? capabilities.inputBatchVersion === 2 || capabilities.inputBatchVersion === 1 && !extended

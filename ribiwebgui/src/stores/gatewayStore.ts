@@ -204,6 +204,9 @@ export const useGatewayStore = defineStore("gateway", () => {
 
   function normalizeGateways(items = gateways.value): void {
     items.forEach(gateway => {
+      // The Route enable switch is gone: routes stay enabled, and legacy disabled
+      // values are normalized here so loading or saving a route clears the restriction.
+      gateway.enabled = true;
       const agentAdapters = (Array.isArray(gateway.agentAdapters) ? gateway.agentAdapters : [])
         .map(normalizeAgentAdapterType)
         .filter((item): item is AgentAdapterType => Boolean(item));

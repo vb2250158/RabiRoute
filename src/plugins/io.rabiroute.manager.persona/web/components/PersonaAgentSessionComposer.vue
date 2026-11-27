@@ -6,10 +6,11 @@ import { chatComposerAction, readChatComposerShortcuts } from '../../../../../ri
 import { usePersonaService } from '../persona/personaServiceClient';
 import { canAttachToWebChat, createAgentWebChatClient, createWebChatIntent, type WebChatIntent, type WebChatTarget } from '../persona/agentWebChatClient';
 
-const props = defineProps<{ target?: WebChatTarget }>();
+const props = defineProps<{ target?: WebChatTarget; request?: typeof fetch }>();
 const emit = defineEmits<{ sent: [key: string] }>();
 const { t } = useI18n();
-const client = createAgentWebChatClient(usePersonaService().fetch);
+const service = usePersonaService();
+const client = computed(() => createAgentWebChatClient(props.request ?? service.fetch));
 const picker = ref<HTMLInputElement>();
 type Draft = { text: string; files: File[]; busy: boolean; status: 'editing' | 'uncertain' | 'retry'; message: string; intent?: WebChatIntent };
 const drafts = reactive(new Map<string, Draft>());
@@ -66,7 +67,7 @@ async function submit() {
   try {
     const intent = current.intent ?? await createWebChatIntent(current.text, current.files);
     current.intent = intent;
-    const result = current.status === 'uncertain' ? await client.receipt(target, intent) : await client.send(target, intent);
+    const result = current.status === 'uncertain' ? await client.value.receipt(target, intent) : await client.value.send(target, intent);
     if (result.state === 'accepted') {
       drafts.delete(target.key);
       emit('sent', target.key);

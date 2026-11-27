@@ -253,6 +253,8 @@ class ControlBar(QWidget):
             self.title_label.setText(title)
         if self.subtitle_label.text() != subtitle:
             self.subtitle_label.setText(subtitle)
+        self.subtitle_label.setVisible(bool(subtitle))
+        self.button.setVisible(bool(action))
         self.button.setText("×" if action == "关闭提示" else "■")
         self.button.setAccessibleName(action)
         self.button.setToolTip(f"{action}\n{title}\n{subtitle}")
@@ -277,7 +279,7 @@ class ControlBar(QWidget):
                     if width > 0 and height > 0:
                         local = QPoint(round(point.x * self.width() / width),
                                        round(point.y * self.height() / height))
-                        if not self.button.geometry().contains(local):
+                        if not self.button.isVisible() or not self.button.geometry().contains(local):
                             return True, -1
         return super().nativeEvent(event_type, message)
 
@@ -313,6 +315,8 @@ class Presentation:
             surface.show()
             surface.ensure_native_visible()
         self._appearance_key = None
+        self._notice_key = None
+        self._notice_expired = False
         self._notice_timer = QTimer(self.bar)
         self._notice_timer.setSingleShot(True)
         self._notice_timer.timeout.connect(self.hide_completed_notice)
@@ -383,7 +387,8 @@ class Presentation:
             self.bar.hide()
 
     def hide_completed_notice(self):
-        if self.state.get("phase") in ("returned", "stopped"):
+        if self._notice_key is not None:
+            self._notice_expired = True
             self.bar.hide()
 
     def update(self, state):
@@ -397,12 +402,23 @@ class Presentation:
                 self.resolved_theme = apply_rabi_application_theme(self.app, "system")
                 print(json.dumps({"event": "theme-diagnostic", "message": str(error), "resolved": self.resolved_theme}), flush=True)
         self.state = state
-        self._notice_timer.stop()
         for surface in self.surfaces:
             surface.state = state
             surface.repaint()
         phase = state.get("phase") or ("ready" if state.get("controlSessionId") else "")
-        if phase:
+        observing = not state.get("controlSessionId") and (
+            phase in ("capturing", "prepared", "provided") or phase == "failed" and state.get("observerLabel")
+        )
+        timed = phase in ("returned", "stopped") or (observing and phase != "capturing")
+        notice_key = (state.get("requestId"), phase) if timed else None
+        settings = state.get("presentationSettings") or {}
+        if notice_key != self._notice_key:
+            self._notice_timer.stop()
+            self._notice_key = notice_key
+            self._notice_expired = False
+            if timed:
+                self._notice_timer.start(round(settings.get("noticeDurationMs", 2500)))
+        if phase and not self._notice_expired:
             source = state.get("source", {})
             label = source.get("label") or source.get("id") or "已连接来源"
             remaining = state.get("remainingMs")
@@ -411,10 +427,10 @@ class Presentation:
             display_id = (state.get("sourceDisplay") or {}).get("name") or (state.get("sourceDisplay") or {}).get("displayId")
             titles = {
                 "capturing": "正在获取清晰画面", "prepared": "画面已准备",
-                "provided": "画面已提供给 Agent", "operating": "Rabi 正在操作",
+                "provided": "画面已提供给 Agent", "operating": "正在控制鼠标和键盘",
                 "returning": "正在归还鼠标和前台", "returned": "已归还你的鼠标和前台",
                 "tracking": "正在跟踪目标", "stopped": "本次操作已停止",
-                "failed": "本次操作需要处理", "ready": "控制已就绪，等待操作"
+                "failed": "本次操作需要处理", "ready": "鼠标和键盘控制已就绪"
             }
             title = titles.get(phase, "电脑操作状态")
             if phase == "returned":
@@ -439,18 +455,20 @@ class Presentation:
                 detail = f"{label} · 可展开查看画面与来源"
             elif phase == "returned":
                 detail = f"{label} · 本批次操作结束"
-            settings = state.get("presentationSettings") or {}
             appearance_key = (self.resolved_theme, settings.get("textSize", "standard"))
             if appearance_key != self._appearance_key:
                 self.bar.apply_appearance(settings.get("textSize") == "large")
                 self._appearance_key = appearance_key
             action_label = "停止本次操作" if state.get("stopAction") else "退出控制" if state.get("controlSessionId") else "关闭提示"
+            if observing:
+                observer = state.get("observerLabel") or "Rabi"
+                title = f"{observer} 截图未完成" if phase == "failed" else f"{observer} 正在看你的屏幕"
+                detail = display_id or ""
+                action_label = ""
             self.bar.set_content(title, detail, action_label)
             self.reposition()
             self.bar.show()
             self.bar.ensure_native_visible()
-            if phase in ("returned", "stopped"):
-                self._notice_timer.start(round(settings.get("noticeDurationMs", 2500)))
         else:
             self.bar.hide()
 
@@ -460,7 +478,7 @@ class Presentation:
 
     def read(self):
         try:
-            for line in sys.stdin:
+            for line in sys.stdin.buffer:
                 self.bridge.incoming.emit(json.loads(line))
         finally:
             self.bridge.eof.emit()

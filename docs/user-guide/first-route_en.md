@@ -49,7 +49,7 @@ In the same page's **Agent handler** card, choose **Add Agent**, select Codex, a
 
 RabiRoute stores the complete task ID. A display-name change or completed goal does not automatically create a replacement while the original ID remains valid. The original Codex/ChatGPT Desktop task executes deliveries; keep Desktop open.
 
-Confirm that the Route is enabled, then choose **Save** in the top bar. Wait for the unsaved-change notice to clear. If saving remains unconfirmed, reconcile that save instead of creating another role or Route.
+Review the Route settings, then choose **Save** in the top bar. Wait for the unsaved-change notice to clear. If saving remains unconfirmed, reconcile that save instead of creating another role or Route.
 
 ## Step 4: test one delivery
 

@@ -23,10 +23,13 @@ export type ManagedPlugin = Readonly<{
   error?: unknown;
 }>;
 
+export type RemovedPluginInstance = Readonly<{ instanceId: string; pluginId: string; version: string }>;
+
 export type PluginManagementCatalog = Readonly<{
   revision: string;
   generation: string;
   plugins: readonly ManagedPlugin[];
+  removedInstances: readonly RemovedPluginInstance[];
 }>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -44,6 +47,7 @@ export function parsePluginManagementCatalog(value: unknown): PluginManagementCa
   }
   return {
     revision: "",
+    removedInstances: [],
     generation: typeof value.data.generation === "string" ? value.data.generation : "",
     plugins: value.data.plugins.flatMap((item): ManagedPlugin[] => {
       if (!record(item) || typeof item.instanceId !== "string" || !item.instanceId || typeof item.pluginId !== "string"
@@ -81,6 +85,10 @@ export function parsePluginInstances(value: unknown, catalog?: PluginManagementC
   const native = new Map(catalog?.plugins.map(plugin => [plugin.instanceId, plugin]));
   return {
     revision: value.data.revision, generation: catalog?.generation || "",
+    removedInstances: Array.isArray(value.data.removedInstances) ? value.data.removedInstances.flatMap((item): RemovedPluginInstance[] => {
+      if (!record(item) || typeof item.instanceId !== "string" || !item.instanceId || typeof item.pluginId !== "string" || typeof item.version !== "string") return [];
+      return [{ instanceId: item.instanceId, pluginId: item.pluginId, version: item.version }];
+    }) : [],
     plugins: value.data.instances.flatMap((item): ManagedPlugin[] => {
       if (!record(item) || typeof item.instanceId !== "string" || !item.instanceId || typeof item.pluginId !== "string" || typeof item.enabled !== "boolean") return [];
       const existing = native.get(item.instanceId);
@@ -121,9 +129,9 @@ export async function readPluginManagementCatalog(signal?: AbortSignal): Promise
   return parsePluginInstances(instances.value, catalog.status === "fulfilled" ? catalog.value : undefined);
 }
 
-export async function updateManagedPlugin(instanceId: string, expectedRevision: string, enabled: boolean): Promise<PluginManagementCatalog> {
+export async function updateManagedPlugin(instanceId: string, expectedRevision: string, change: boolean | { version: string }): Promise<PluginManagementCatalog> {
   return parsePluginInstances(await request(`/api/plugins/instances/${encodeURIComponent(instanceId)}`, {
-    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, enabled })
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision, ...(typeof change === "boolean" ? { enabled: change } : change) })
   }));
 }
 

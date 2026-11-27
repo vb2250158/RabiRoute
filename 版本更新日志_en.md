@@ -6,6 +6,30 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased
+
+## 0.15.99 - 2026-11-27
+
+- Consolidate installed plugin lifecycle and computer-control guidance: CAS selection of imported versions, preservation on failure, and restoration of original uninstalled instances and data. Computer-control search prioritizes execution and explains observation, batches, readback and human takeover.
+- Synchronize Core 0.1.35 and SDK 0.4.15; Android source is unchanged and retains the verified 0.3.75-dev (78) installation.
+
+- Release compact screenshot references and capture of the original observed region (Core 0.1.34, SDK 0.4.14). Android retains the verified 0.3.75-dev (78) build.
+- Allow a transport-only host reconnect while terminals or tasks are busy, preserving the worker, native terminals and input sequence. Stopping, draining, updates and candidate transitions still prevent reconnection. Existing older launchers gain this behavior only after adoption through their normal lifecycle.
+
+- Computer control with `input.perform` can reference the observed screenshot, map preview coordinates, and capture the same area at the end of the batch. The CLI, MCP and agent plugins share this contract.
+
+## 0.15.98 - 2026-11-26
+
+- Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).
+- Show the actual session name in screenshot notices, clear them automatically and decode Qt input as UTF-8 while keeping observation separate from mouse and keyboard control.
+
+- RabiLink **Device control** no longer splits computers and phones behind two tabs: both share one list, and each row leads with a Windows, Mac, Linux, Android or iOS icon based on the reported system, keeping a generic computer or phone icon when nothing is reported. Search, type and online-state filters apply to both kinds, and a Home phone card now expands that phone's row directly.
+- Message history **Agent sessions** now reads per node instead of the selected role: this PC, RabiLink remote PCs and remote Agent instances are all selectable with the same session list, search, project grouping, pagination, history, sub-Agents and sending. Remote reads and writes go through the owning computer's Manager; an offline node or failed read keeps local content and the real error (io.rabiroute.manager.persona 0.1.53).
+- The Agent session list now puts devices in a top bar, keeps collapsible projects with session counts and latest times, shows only a title and time per session, marks the selected row with a leading accent bar, and adds empty states, loading skeletons, clear-search and tighter row heights.
+- Remote persona reads now follow the real response for older PCs (io.rabiroute.manager.persona 0.1.53, io.rabiroute.manager.core 0.1.31): a source reachable through the account Relay is no longer marked "update required" just because its capability advert is old. The role list and source selector read first and report an upgrade only when the endpoint is genuinely missing (404/426).
+- A structured Relay failure keeps its original `code` with one explanation line instead of a self-invented status table or a generic `Remote response unavailable.`
+- Reads require the source Manager to be `live` with `healthy` / `degraded` state; `requiredReady` only reports whether declared capabilities are present and no longer blocks the read.
+
 ## 0.15.95 - 2026-11-26
 
 - Message sources gain a `bot` type: when Grok Bot is itself the source, its name, Bot ID and session ID are shown while structured fields stay `grokBot`.
@@ -87,6 +111,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Windows Host switches independent tray packages, verifies generation and READY, and restores the previous tray on failure while Manager stays online.
 
 ## Unreleased
+
+## 0.15.98 - 2026-11-26
+
+- Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).
+- Show the actual session name in screenshot notices, clear them automatically and decode Qt input as UTF-8 while keeping observation separate from mouse and keyboard control.
+
+- Unified search (`GET /api/search`) keeps its defaults and parameter bounds in one declaration read by the manager parser, the `capabilities.defaults` response, the operation descriptions, the Message history → Search API test form and `scripts/lib/query-rabi-search.mjs`. The search test now rejects a numeric page size outside 1–200 before sending while leaving unparsable values to the server's real 400, and an explicit `budgetMs` in the script is no longer silently lowered below the budget this call can still afford.
+
+- Message adapters (io.rabiroute.manager.message-adapter-control) 0.1.13 and Core (io.rabiroute.manager.core) 0.1.30 remove the Route enable switch: the message page header collapses into one row where the configuration name sits beside Channel check, Open route configuration and Delete, and the configuration-name label is removed. Routes no longer carry a disabled restriction, and legacy disabled values normalize to enabled on load and save.
+
+- Persona (io.rabiroute.manager.persona) 0.1.49 restructures Expression and voice: voice profile status and delivery notes, the language-style guard Skill and speech wake keywords now share one main card and rule cards. The search API test reuses the shared search contract, rejecting a numeric page size outside the shared 1–200 bound before sending, and treats an expired cursor (409) as retryable with an error banner.
 
 - Persona (io.rabiroute.manager.persona) 0.1.46 updates live position from new messages, capture events and Return to live, removing idle periodic refresh.
 
@@ -635,7 +670,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Give changed existing packages distinct versions and synchronize the desktop profile. The affected versions are io.rabiroute.agent.astrbot 0.1.4, io.rabiroute.agent.dsh 0.1.6, io.rabiroute.endpoint.feishu 0.1.5, io.rabiroute.endpoint.napcat 0.1.9, io.rabiroute.endpoint.rabilink 0.1.5, io.rabiroute.manager.core 0.1.9, io.rabiroute.manager.diagnostics 0.1.7, io.rabiroute.manager.persona 0.1.15, io.rabiroute.manager.route-control 0.1.5 and io.rabiroute.manager.speech 0.1.5.
 - Advance Host API to 1.15.0 and Plugin SDK to 1.4.0 for the added listener-access contracts and synchronize dependency metadata. Rabi Agent advances to 0.4.6 for the owner-lease and endpoint-session changes. Adoption by remote nodes is verified in their own normal maintenance windows.
 
-## Unreleased - 2026-11-05
+## Unreleased
+
+## 0.15.98 - 2026-11-26
+
+- Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).
+- Show the actual session name in screenshot notices, clear them automatically and decode Qt input as UTF-8 while keeping observation separate from mouse and keyboard control. - 2026-11-05
 
 - 2026-11-16: Restore playback highlighting across tool waits. Shared voice responses can seal opening audio before a tool executes and resume with a new segment afterwards. Actual subtitle cues receive the segment text offset; late events from an older playback cannot end the new segment. The same reply, model/tool work and first-accepted-text interruption remain intact. All 250 regression tests pass; real WorkBuddy search, Volcano TTS and Windows playback verify advancing answer highlights and frozen highlights after interruption.
 
@@ -1224,7 +1264,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Deduplicate the local PC in the role source picker by its RabiLink device ID while retaining other PCs with the same name. Saved self references read through the local role API without rewriting connections or persona bindings.
 
 
-## Unreleased — 2026-11-02
+## Unreleased
+
+## 0.15.98 - 2026-11-26
+
+- Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).
+- Show the actual session name in screenshot notices, clear them automatically and decode Qt input as UTF-8 while keeping observation separate from mouse and keyboard control. — 2026-11-02
 
 - Group message history into channel tabs without All, discovering configured and historical channels while retaining disabled-channel history, independent pagination, directions, conversation filters and tab reading positions. Add a channel browsing API while preserving the original bounded search contract.
 

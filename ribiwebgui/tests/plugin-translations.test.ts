@@ -3,11 +3,12 @@ import fs from "node:fs";
 import test from "node:test";
 import { registerPluginTranslations, type PluginTranslationCatalogs } from "../src/i18n/translationRegistry";
 import { translateText } from "../src/i18n";
+import { englishCatalog } from "../src/i18n/catalog";
 
 test("all source Web plugins register their owned copy and release it without removing host copy", async () => {
   const sourceRoot = new URL("../../src/plugins/", import.meta.url);
   const disposers: Array<() => void> = [];
-  const owned: Array<{ source: string; translated: string }> = [];
+  const owned: Array<{ source: string; translated: string; before: string }> = [];
   const hostSettings = translateText("设置", "en");
   let registrations = 0;
   let expectedRegistrations = 0;
@@ -38,7 +39,8 @@ test("all source Web plugins register their owned copy and release it without re
       if (first) {
         const [source, translated] = first;
         assert.equal(translateText(source, "en"), translated, `${directory} must load its own catalog`);
-        owned.push({ source, translated });
+        // The host catalog keeps priority, so the unloaded baseline is what must return.
+        owned.push({ source, translated, before: englishCatalog[source] ?? source });
       }
     }
     assert.equal(registrations, expectedRegistrations);
@@ -47,6 +49,6 @@ test("all source Web plugins register their owned copy and release it without re
   } finally {
     for (const dispose of disposers.reverse()) dispose();
   }
-  for (const { source } of owned) assert.equal(translateText(source, "en"), source, "unloading removes plugin-owned copy");
+  for (const { source, before } of owned) assert.equal(translateText(source, "en"), before, "unloading restores the pre-registration baseline");
   assert.equal(translateText("设置", "en"), hostSettings);
 });
