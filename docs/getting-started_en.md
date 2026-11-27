@@ -59,12 +59,11 @@ cp -R examples/data/. data/
 
 ## Step 3: Configure a message adapter
 
-Under "Role configuration → Message connectors", add a message adapter. For QQ, choose NapCat / OneBot and set:
+Under "Role configuration → Message connectors", add a message adapter. For QQ, choose **NapCat / OneBot** and sign in with the QR code shown in the card.
 
-- WebSocket client: `ws://127.0.0.1:8789` (receive message events)
-- HTTP server: `127.0.0.1:3000` (send proactively and call OneBot APIs)
+NapCat's download, ports, and OneBot configuration are managed by RabiRoute — **you do not install or configure them yourself**. Each route binds one QQ account; use separate routes for multiple accounts. The first login needs a phone QR scan; afterwards RabiRoute restores the saved login automatically. For local scheduled triggers only, no message adapter is needed.
 
-For local scheduled triggers only, NapCat is not required. Account login and unattended recovery belong to NapCat / QQNT; see [NapCat unattended and login stability](napcat-unattended_en.md).
+If sign-in fails, see [NapCat unattended and login stability](napcat-unattended_en.md).
 
 ## Step 4: Configure the Agent adapter
 

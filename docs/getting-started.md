@@ -59,12 +59,11 @@ xcopy examples\data data /E /I
 
 ## 第 3 步：配置消息端
 
-在「角色配置 → 消息连接器」添加消息端。接 QQ 时选 NapCat / OneBot，并配好：
+在「角色配置 → 消息连接器」添加消息端。接 QQ 时选 **NapCat / OneBot**，按卡片提示扫码登录即可。
 
-- WebSocket 客户端：`ws://127.0.0.1:8789`（收消息事件）
-- HTTP 服务器：`127.0.0.1:3000`（主动发消息和调 OneBot API）
+NapCat 的下载、端口、OneBot 配置由 RabiRoute 自动管理，**不需要你手动安装或配置**。每个 Route 绑定一个 QQ；多个 QQ 用多个 Route。首次登录需要手机扫码，后续默认用已保存的登录状态自动恢复。只想本地跑定时任务时可以不接消息端。
 
-只想本地跑定时任务时可以不接 NapCat。账号登录与无值守恢复属于 NapCat / QQNT 侧，见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
+登录失败时的处理见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
 
 ## 第 4 步：配置 Agent 端
 
