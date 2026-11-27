@@ -18,9 +18,19 @@
 
 ## 安装和构建
 
-Windows 安装包直接从开始菜单运行 RabiRoute Host。Host 创建同一代 Manager 与托盘，并把操作系统分配的 Manager URL 交给托盘；从托盘打开 RibiWebGUI 即可。重复启动只激活现有 Host。
+### 先走这条快路（Windows）
 
-Windows 完整源码构建启动：双击仓库根目录的 `Start-RabiRoute-FromSource.bat`。需要已安装 Windows RabiRoute、Node.js/npm 和 .NET 9 SDK。脚本构建 Manager、WebGUI、插件、Host 与托盘，通过 Host 切换到源码构建版，沿用安装版配置和数据；首次构建会下载 Python/Qt 依赖。关闭命令窗口不会退出已启动的 Host，退出应用请使用托盘。失败日志在 `logs/source-start/`。依赖锁文件与安装版不一致时，需要先更新完整安装包。
+正常安装请按下面三步，**不要手工拼 Python / Qt / NuGet 工具链**：
+
+1. 安装 [Windows RabiRoute 安装包](https://github.com/vb2250158/RabiRoute/releases)，从开始菜单启动 RabiRoute Host。Host 会创建同一代 Manager 与托盘，并把操作系统分配的 Manager URL 交给托盘；从托盘打开 RibiWebGUI 即可。重复启动只激活现有 Host。
+2. 装好 Node.js 22.13+ 与 .NET 9 SDK。
+3. 需要跑当前源码时，双击仓库根目录的 `Start-RabiRoute-FromSource.bat`。脚本会自己构建 Manager、WebGUI、插件、Host 和托盘，通过 Host 切换到源码构建版，并沿用安装版的配置和数据。
+
+首次构建脚本会下载 Python/Qt 依赖，耗时取决于网速；这一步**是自动的**，不需要手工安装 Python、配置 pip 源、下载 NuGet 运行时包。手工搭建这些环节既慢又容易出错：慢网下载会中断，PS 5.1 写 JSON 会带 BOM，路径太长会触发 MAX_PATH——这些都是踩过的坑，走一键脚本即可全部绕开。
+
+失败日志在 `logs/source-start/`。依赖锁文件与安装版不一致时，先按提示更新完整安装包。关闭命令窗口不会退出已启动的 Host；退出应用请使用托盘。
+
+> 只有确实需要在**没有安装包的机器**上从零构建时，才需要 [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md) 里的手工步骤。普通用户不需要。
 
 ### Linux Host
 

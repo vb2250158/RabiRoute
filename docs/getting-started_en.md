@@ -16,9 +16,19 @@ English | <a href="./getting-started.md">简体中文</a> | <a href="./getting-s
 
 ## Install and start
 
-The Windows installer launches RabiRoute Host from the Start menu. Host creates same-generation Manager and tray children and passes the operating-system-assigned Manager URL to the tray; open RibiWebGUI from the tray. Repeated launch activates the existing Host.
+### Take this path first (Windows)
 
-For a full Windows source build, double-click `Start-RabiRoute-FromSource.bat` in the repository root. Requires an existing Windows RabiRoute installation, Node.js/npm, and the .NET 9 SDK. It builds Manager, WebGUI, plugins, Host, and the tray, then activates the source build through Host while retaining installed settings and data. The first build downloads Python/Qt dependencies. Closing the command window does not stop Host; quit from the tray. Failure logs are in `logs/source-start/`. If the dependency lock differs from the installed package, update the full installation first.
+A normal install is three steps. **Do not assemble a Python / Qt / NuGet toolchain by hand:**
+
+1. Install the [Windows RabiRoute package](https://github.com/vb2250158/RabiRoute/releases) and launch RabiRoute Host from the Start menu. Host creates same-generation Manager and tray children and passes the operating-system-assigned Manager URL to the tray; open RibiWebGUI from the tray. Repeated launch activates the existing Host.
+2. Install Node.js 22.13+ and the .NET 9 SDK.
+3. To run the current source, double-click `Start-RabiRoute-FromSource.bat` in the repository root. It builds Manager, WebGUI, plugins, Host, and the tray, then activates the source build through Host while retaining installed settings and data.
+
+The first build downloads Python/Qt dependencies; how long it takes depends on your connection. That step is **automatic** — you do not need to install Python by hand, configure a pip index, or download NuGet runtime packages. Manual setup has known failure modes: interrupted large downloads, PS 5.1 writing a UTF-8 BOM into JSON, and MAX_PATH errors from long build paths. The one-click script avoids all of them.
+
+Failure logs are in `logs/source-start/`. If the dependency lock differs from the installed package, update the full installation first. Closing the command window does not stop Host; quit from the tray.
+
+> Manual build steps in [Windows launcher and packaging](windows-launcher-and-packaging_en.md) are only for machines without an installation package. Regular users do not need them.
 
 ### Linux Host
 
