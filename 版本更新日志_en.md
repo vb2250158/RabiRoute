@@ -8,6 +8,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.15.101 - 2026-11-28
 
+- Fix window-list response validation in unified device control. The API passes through client-area dimensions from current connectors and accepts window lists from older connectors. Update the connector SDK to 0.4.18.
 - Windows device control supports foreground activation, background capture and input, gamepads, capture on change, and screen recording. Observation and input indicators show the session name and clear at the end of the corresponding activity.
 - Android adds direct screen viewing, touch input, one-shot location with optional Amap place names, and virtual displays on local or remote ADB bridges. Android 15 or later supports an independent controller when the system confirms the display association.
 - Connector SDK 0.4.17, Android slim client 0.3.76-dev (79), full variant 0.3.6 (9).

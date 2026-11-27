@@ -206,6 +206,8 @@ export const computerRequestSchema = { description: [
     maxWidth: { type: "integer", minimum: 1, maximum: 3840, description: "An output width cap that only downsizes the capture. Omit it to preserve native pixels for any scope. Select a smaller width when the PNG or pixel budget is exceeded." } })
 ] };
 const bounds = exact({ x: { type: "integer" }, y: { type: "integer" }, width: { type: "integer" }, height: { type: "integer" } });
+const windowSummary = exact({ windowId: text, pid: integer, title: text, minimized: bool, bounds });
+const clientExtent = { type: "integer", minimum: 0 };
 export const computerResponseSchema = { anyOf: [
   { type: 'object', required: ['layoutRevision','displays','foregroundDisplayId'], properties: { layoutRevision: text, foregroundDisplayId: text,
     displays: { type: 'array', items: { type: 'object', required: ['displayId','name','primary','nativeBounds','workArea','scale'], properties: {displayId:text,name:text,primary:bool,nativeBounds:bounds,workArea:bounds,scale:{type:'number',exclusiveMinimum:0}},additionalProperties:false } } }, additionalProperties:false },
@@ -213,7 +215,8 @@ export const computerResponseSchema = { anyOf: [
   exact({ path: text, version: text, offset: integer, nextOffset: integer, size: integer, eof: bool, data: text, sha256: hash }),
   exact({ uploadId, path: text, size: integer, sha256: hash, offset: integer, state: { enum: ["uploading", "committed", "aborted"] } }),
   exact({ uploadId, state: { const: "absent" } }),
-  exact({ windows: { type: "array", items: exact({ windowId: text, pid: integer, title: text, minimized: bool, bounds }) }, truncated: bool }),
+  exact({ windows: { type: "array", items: { ...windowSummary,
+    properties: { ...windowSummary.properties, clientWidth: clientExtent, clientHeight: clientExtent } } }, truncated: bool }),
   { type: "object", required: ["mimeType", "width", "height", "bounds", "capturedAt", "data"], additionalProperties: true, properties: { frameId: text, source: computerSourceSchema, mimeType: { const: "image/png" }, width: { ...integer, minimum: 1 }, height: { ...integer, minimum: 1 }, bounds, capturedAt: text, data: text } },
   exact({layers:{type:"array",items:{type:"object",required:["layerId","state"],properties:{layerId,state:text,version:integer},additionalProperties:true}}}),
   { type: "object", required: ["state"], properties: { status: text, state: text, requestId, controlSessionId, layerId, trackingId }, additionalProperties: true }
