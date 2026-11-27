@@ -63,6 +63,9 @@ public static class RabiComputer {
     static long observationExpires;
     static object presentationReturnState,presentationDisplay,presentationRegion,presentationStopAction;
     static readonly object outputLock=new object(), stateLock=new object(), inputGate=new object(), frameLock=new object();
+    static readonly object screenWaitLock=new object();
+    static string screenWaitId;
+    static CancellationTokenSource screenWaitCancellation;
     static readonly UIntPtr injectionMarker=new UIntPtr(0x52414249);
     static readonly HashSet<int> ownedKeys=new HashSet<int>(), ownedButtons=new HashSet<int>();
     static readonly HashSet<ushort> ownedUnicode=new HashSet<ushort>();
@@ -504,7 +507,7 @@ public static class RabiComputer {
     }
     static void Phase(string phase,Dictionary<string,object> request=null,Dictionary<string,object> source=null,object returned=null){
         try{
-        if(request==null||Str(request,"action")!="screen.capture")ClearObservation();
+        if(request==null||Str(request,"action")!="screen.capture"&&Str(request,"action")!="screen.wait")ClearObservation();
         presentationPhase=phase;presentationStopAction=null;
         if(request!=null&&phase=="operating")presentationStopAction=new{action="input.cancel",requestId=Str(request,"requestId"),controlSessionId=Str(request,"controlSessionId")};
         if(request!=null&&phase=="tracking")presentationStopAction=new{action="annotation.track.stop",trackingId=Str(request,"trackingId")};
@@ -694,6 +697,81 @@ public static class RabiComputer {
         ShowObservation("capturing",request,Obj(Get(request,"captureSpec")));
         try{var frame=Capture(request);var result=EncodeFrame(frame,request);ShowObservation("prepared",request,frame.source);return result;}
         catch{ShowObservation("failed",request,null);throw;}
+    }
+    static bool PixelsChanged(byte[] before, byte[] after){
+        for(int i=0;i<before.Length;i+=4){
+            if(before[i]!=after[i]||before[i+1]!=after[i+1]||before[i+2]!=after[i+2])return true;
+        }
+        return false;
+    }
+    static object WaitForScreen(Dictionary<string,object> request,CancellationToken cancellation){
+        const int intervalMs=125;
+        double waitMs=Num(request,"waitMs",2500);
+        if(waitMs<100||waitMs>5000||waitMs!=Math.Truncate(waitMs))throw new ArgumentException("waitMs must be an integer from 100 to 5000.");
+        var supplied=Obj(Get(request,"source"));
+        if(Str(supplied,"frameId")==""||Str(supplied,"imageItemId")=="")throw new ArgumentException("screen.wait requires the latest screenshot source.");
+        var source=ValidateSource(request,supplied);
+        byte[] before;
+        Rectangle originalBounds;
+        int originalWidth;
+        lock(frameLock){
+            EvictFrames(RequestSettings(request));
+            Frame previous;
+            if(!frames.TryGetValue(Str(source,"frameId"),out previous))throw new InvalidOperationException("The source frame is no longer cached; observe the target again.");
+            before=Pixels(previous.bitmap);
+            originalBounds=previous.bounds;
+            originalWidth=previous.bitmap.Width;
+        }
+        if(cancellation.IsCancellationRequested)return new{state="cancelled"};
+        bool visibleOnly=Str(source,"captureMethod")=="visible-desktop";
+        request["source"]=source;
+        if(Num(source,"width")==originalWidth)request.Remove("maxWidth");
+        else request["maxWidth"]=Get(source,"width");
+        if(Str(request,"renderer")=="qt")externalQt=true;
+        ApplyObservationRequestSettings(request);
+        ShowObservation("capturing",request,source);
+        byte[] current=null;
+        var timer=Stopwatch.StartNew();
+        try{
+            while(true){
+                if(cancellation.IsCancellationRequested)return new{state="cancelled"};
+                var frame=Capture(request,null,visibleOnly);
+                try{
+                    if(cancellation.IsCancellationRequested)return new{state="cancelled"};
+                    if(frame.bounds!=originalBounds)return new{state="target-changed"};
+                    current=Pixels(frame.bitmap,current);
+                    if(PixelsChanged(before,current)){
+                        var changedFrame=frame;
+                        frame=null;
+                        var capture=EncodeFrame(changedFrame,request);
+                        return new{state="changed",capture};
+                    }
+                }finally{if(frame!=null)frame.Dispose();}
+                int remaining=(int)Math.Ceiling(waitMs-timer.Elapsed.TotalMilliseconds);
+                if(remaining<=0)return new{state="unchanged"};
+                cancellation.WaitHandle.WaitOne(Math.Min(intervalMs,remaining));
+            }
+        }finally{ShowObservation("prepared",request,source);}
+    }
+    static void QueueScreenWait(Dictionary<string,object> request){
+        CancellationTokenSource cancellation;
+        lock(screenWaitLock){
+            if(screenWaitCancellation!=null){Emit(new{id=Get(request,"id"),result=new{state="busy"}});return;}
+            screenWaitId=Str(request,"id");
+            screenWaitCancellation=cancellation=new CancellationTokenSource();
+        }
+        ThreadPool.QueueUserWorkItem(_=>{
+            object result=null;
+            Exception failure=null;
+            try{result=WaitForScreen(request,cancellation.Token);}
+            catch(Exception error){failure=error.GetBaseException();}
+            finally{
+                lock(screenWaitLock){screenWaitId=null;screenWaitCancellation=null;}
+                cancellation.Dispose();
+            }
+            if(failure==null)Emit(new{id=Get(request,"id"),result});
+            else Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=failure.Message,uncertain=false}});
+        });
     }
     static object EncodeFrame(Frame frame,Dictionary<string,object> request){
         bool cached=false;
@@ -894,7 +972,7 @@ public static class RabiComputer {
         if(action=="annotation.track.stop"){Tracking item;lock(tracking)tracking.TryGetValue(Str(request,"trackingId"),out item);return item==null?(object)new{state="absent"}:StopTracking(item,Bool(request,"clear"),"requested");}
         if(action.StartsWith("annotation.")){object result=null;UI(()=>result=Annotation(request));return result;}
         if(Str(request,"renderer")=="qt")externalQt=true;
-        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,captureSourceReferenceVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
+        if(action=="capabilities"){bool inJob;IsProcessInJob(GetCurrentProcess(),IntPtr.Zero,out inJob);return new{protocolVersion=2,settingsPatchVersion=1,captureSpecVersion=1,inputBatchVersion=2,imageViewVersion=1,captureSourceReferenceVersion=1,screenWaitVersion=1,inheritedJob=inJob,features=new[]{"input","annotation","tracking"},trackingAvailable=File.Exists(Path.Combine(NativeDirectory,"RabiAgent.Computer.Tracking.dll"))};}
         throw new ArgumentException("Unsupported desktop operation.");
     }
     static void Handle(Dictionary<string,object> request){try{Emit(new{id=Get(request,"id"),result=Dispatch(request)});}catch(Exception error){var cause=error.GetBaseException();bool uncertain=false;lock(stateLock)uncertain=Str(request,"action")=="input.execute"&&(ownedKeys.Count>0||ownedButtons.Count>0||ownedUnicode.Count>0);Emit(new{id=Get(request,"id"),error=new{code="COMPUTER_NATIVE_FAILED",message=cause.Message,uncertain=uncertain}});}finally{if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;if(pendingInputCounts.TryGetValue(id,out count)){if(count<=1){pendingInputCounts.Remove(id);pendingInputSessions.Remove(id);cancelledRequests.Remove(id);}else pendingInputCounts[id]=count-1;}}if(Str(request,"action")=="control.begin")lock(stateLock){string id=Str(request,"controlSessionId");int count;if(pendingControlBegins.TryGetValue(id,out count)){if(count<=1){pendingControlBegins.Remove(id);endingControlSessions.Remove(id);}else pendingControlBegins[id]=count-1;}}}}
@@ -919,12 +997,17 @@ public static class RabiComputer {
         var recoveryWorker=new Thread(()=>{foreach(var request in recoveryReplies.GetConsumingEnumerable())Handle(request);});recoveryWorker.IsBackground=true;recoveryWorker.Start();
         try{string line;while((line=Console.ReadLine())!=null){var request=new JavaScriptSerializer{MaxJsonLength=20000000}.Deserialize<Dictionary<string,object>>(line);if(Str(request,"action")=="input.execute")lock(stateLock){string id=Str(request,"requestId");int count;pendingInputCounts.TryGetValue(id,out count);pendingInputCounts[id]=count+1;if(count==0)pendingInputSessions[id]=Str(request,"controlSessionId");}string action=Str(request,"action");
             if(action=="input.execute")inputRequests.Add(request);
+            else if(action=="screen.wait")QueueScreenWait(request);
+            else if(action=="screen.wait.cancel"){
+                lock(screenWaitLock){if(screenWaitCancellation!=null&&screenWaitId==Str(request,"captureId"))screenWaitCancellation.Cancel();}
+                Emit(new{id=Get(request,"id"),result=new{state="cancellation-requested"}});
+            }
             else if(action=="input.cancel"){MarkInputCancelled(request);recoveryReplies.Add(request);}
             else if(action=="control.end"){MarkControlEnded(request);recoveryReplies.Add(request);}
             else if(action=="control.begin"){ReserveControlBegin(request);ui.Post(_=>Handle(request),null);}
             else if(action=="control.end"||action=="control.activity"||action=="settings.update"||action=="annotation.show"||action=="annotation.update"||action=="annotation.clear"||action=="annotation.track.stop")ui.Post(_=>Handle(request),null);
             else ThreadPool.QueueUserWorkItem(_=>Handle(request));}}
-        finally{stopping=true;inputRequests.CompleteAdding();recoveryReplies.CompleteAdding();try{EndControl(session,"owner-disconnected");ReleaseOwned();}finally{lock(tracking)foreach(var item in tracking.Values)item.stopped=true;if(ui!=null)ui.Post(_=>{layers.Clear();Application.ExitThread();},null);gui.Join(5000);lock(frameLock){foreach(var frame in frames.Values)frame.Dispose();frames.Clear();}}}
+        finally{stopping=true;lock(screenWaitLock){if(screenWaitCancellation!=null)screenWaitCancellation.Cancel();}inputRequests.CompleteAdding();recoveryReplies.CompleteAdding();try{EndControl(session,"owner-disconnected");ReleaseOwned();}finally{lock(tracking)foreach(var item in tracking.Values)item.stopped=true;if(ui!=null)ui.Post(_=>{layers.Clear();Application.ExitThread();},null);gui.Join(5000);lock(frameLock){foreach(var frame in frames.Values)frame.Dispose();frames.Clear();}}}
     }
     class ControlBar:Form {
         public Dictionary<string,object> Source=new Dictionary<string,object>();Label label;Button close;

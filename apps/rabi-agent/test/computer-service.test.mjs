@@ -160,10 +160,18 @@ test("binary files transfer in checked chunks, commit once and preserve existing
 
 test("Windows helper queries and captures an owned window without any Agent backend", { skip: process.platform !== "win32" }, async t => {
   const title = `RabiCapture-${randomUUID()}`;
-  const code = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $form=New-Object System.Windows.Forms.Form; $form.Text='${title}'; $form.Width=420; $form.Height=260; $form.StartPosition='Manual'; $form.Location=New-Object System.Drawing.Point(30000,30000); $form.ShowInTaskbar=$false; $form.BackColor=[System.Drawing.Color]::Crimson; $form.Add_Shown({[Console]::WriteLine('READY');[Console]::Out.Flush()});[System.Windows.Forms.Application]::Run($form)`;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-screen-wait-"));
+  const trigger = path.join(root, "change-color");
+  const scriptPath = trigger.replaceAll("'", "''");
+  const code = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $form=New-Object System.Windows.Forms.Form; $form.Text='${title}'; $form.Width=420; $form.Height=260; $form.StartPosition='Manual'; $form.Location=New-Object System.Drawing.Point(30000,30000); $form.ShowInTaskbar=$false; $form.BackColor=[System.Drawing.Color]::Crimson; $timer=New-Object System.Windows.Forms.Timer; $timer.Interval=40; $timer.Add_Tick({if(Test-Path -LiteralPath '${scriptPath}'){$form.BackColor=[System.Drawing.Color]::ForestGreen;$form.Refresh();$timer.Stop()}}); $timer.Start(); $form.Add_Shown({[Console]::WriteLine('READY');[Console]::Out.Flush()});[System.Windows.Forms.Application]::Run($form)`;
   const child = spawn(path.join(process.env.SystemRoot,"System32/WindowsPowerShell/v1.0/powershell.exe"),["-NoProfile","-EncodedCommand",Buffer.from(code,"utf16le").toString("base64")],{windowsHide:true,stdio:["pipe","pipe","pipe"]});
   const exited = new Promise(resolve => child.once("close",resolve));
-  const service = new ComputerService(); t.after(async()=>{service.stop();child.kill();await exited;});
+  const service = new ComputerService();
+  t.after(async () => {
+    child.kill();
+    await Promise.all([service.stop(), exited]);
+    removePrivateFixture(root);
+  });
   await new Promise((resolve,reject)=>{const deadline=setTimeout(()=>reject(new Error("Window fixture timed out")),30000);child.stdout.once("data",()=>{clearTimeout(deadline);resolve();});child.once("error",reject);});
   const queried = await service.execute({ action:"windows.list",query:title });
   assert.equal(queried.windows.length,1); const window = queried.windows[0];
@@ -173,6 +181,25 @@ test("Windows helper queries and captures an owned window without any Agent back
   assert.equal(png.subarray(0,8).toString("hex"),"89504e470d0a1a0a");
   assert.equal(captured.mimeType,"image/png"); assert.equal(captured.width,320);
   assert.ok(captured.height>100);assert.ok(png.length<8388608);
+  const wait = { action: "screen.wait", source: captured.source };
+  assert.deepEqual(await service.execute({ ...wait, waitMs: 180 }), { state: "unchanged" });
+  const changed = service.execute({ ...wait, waitMs: 3000 });
+  assert.equal((await service.execute({ action: "control.status" })).state, "absent");
+  fs.writeFileSync(trigger, "change");
+  const result = await changed;
+  assert.equal(result.state, "changed");
+  assert.equal(result.capture.width, captured.width);
+  assert.equal(result.capture.source.windowId, window.windowId);
+  assert.notEqual(result.capture.source.frameId, captured.source.frameId);
+  assert.notEqual(result.capture.data, captured.data);
+  const abort = new AbortController();
+  const pending = service.execute({ ...wait, source: result.capture.source, waitMs: 5000 }, { signal: abort.signal });
+  const rejected = assert.rejects(pending, { name: "AbortError" });
+  const start = performance.now();
+  const stop = setTimeout(() => abort.abort(), 150);
+  try { await rejected; } finally { clearTimeout(stop); }
+  assert.ok(performance.now() - start < 2500);
+  assert.deepEqual(await service.execute({ ...wait, source: result.capture.source, waitMs: 150 }), { state: "unchanged" });
   await assert.rejects(service.execute({ action:"screen.capture",windowId:window.windowId,pid:window.pid+1 }),/changed/);
   const desktop = await service.execute({ action:"screen.capture",maxWidth:320 });
   assert.equal(desktop.width,320); assert.equal(desktop.mimeType,"image/png");

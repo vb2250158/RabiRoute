@@ -76,7 +76,7 @@ export class ComputerService {
     try {
       if (input.action === "file.stat" || input.action === "file.read") return await this.readFile(input);
       if (String(input.action).startsWith("upload.")) return await this.upload(input);
-      if (["windows.list", "displays.list", "screen.capture"].includes(input.action)) return await this.desktop(input, context);
+      if (["windows.list", "displays.list", "screen.capture", "screen.wait"].includes(input.action)) return await this.desktop(input, context);
       throw new Error("Unsupported computer operation.");
     } finally { this.pending--; this.onChange(); }
   }
@@ -210,6 +210,7 @@ export class ComputerService {
   desktop(input, context = {}) {
     if (process.platform !== "win32") throw new Error("Window queries and screenshots require Windows.");
     if (input.action === "screen.capture") return this.control.capture(input, context);
+    if (input.action === "screen.wait") return this.control.waitForScreen(input, context);
     return this.native.request(input.action, { ...input, action: undefined });
   }
   reconcileSettings(context = {}) { return this.control.reconcile({ getDefinition:this.getDefinition, getSettings: this.getSettings, ...context }); }

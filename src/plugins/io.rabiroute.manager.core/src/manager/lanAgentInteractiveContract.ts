@@ -66,10 +66,10 @@ export function interactiveOperation(route: InteractiveRoute, context: Interacti
     } } : {}),
     ...(route.key === "computer.execute" ? { discovery: {
       title: "电脑控制",
-      summary: "先定位目标电脑和窗口，用 screen.capture 看屏幕。用 input.perform 批量执行已确定的鼠标键盘动作，按需回拍并自动退出控制，再根据实际界面决定下一步。此入口也提供文件和屏幕标注。完整远端主机按 ownerDeviceId 通过原 Peer manager 服务转接，按代理合同传 x-rabiroute-proxy-contract。",
+      summary: "先定位目标电脑和窗口，用 screen.capture 看屏幕。用 input.perform 批量执行已确定的鼠标键盘动作，按需回拍并自动退出控制。用 screen.wait 等当前区域变化，再根据新画面决定下一步。此入口也提供文件和屏幕标注。完整远端主机按 ownerDeviceId 通过原 Peer manager 服务转接，按代理合同传 x-rabiroute-proxy-contract。",
       relatedOperations: ["manager.lan-agent.computers.list", "manager.lan-agent.terminals.list", "manager.rabilink.peer.http.get", "manager.rabilink.peer.http.post", "manager.rabilink.peer.http.patch"],
       category: { id: "devices", title: "设备与电脑" },
-      keywords: ["电脑控制", "操作电脑", "控制电脑", "桌面操作", "远程控制", "远程桌面", "看屏幕", "截图", "批量输入", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "screen.capture", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],
+      keywords: ["电脑控制", "操作电脑", "控制电脑", "桌面操作", "远程控制", "远程桌面", "看屏幕", "截图", "等待画面变化", "批量输入", "屏幕标注", "动态跟踪", "鼠标", "键盘", "拖拽", "screen.capture", "screen.wait", "input.perform", "computer control", "remote desktop", "annotation", "tracking", "shared input"],
       inputSources: [{ field: "path.instanceId", operationId: "manager.lan-agent.instances.list", resultPath: "/instances", valuePath: "/instanceId" }]
     } } : {}),
     handler: async input => {

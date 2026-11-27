@@ -8,6 +8,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+- Core plugin `io.rabiroute.manager.core` 0.1.36 and Rabi Agent 0.4.16 add `screen.wait`. The target Windows computer waits for a change in the previous screenshot area and returns a new image when it changes. The user retains mouse and keyboard access while it waits.
+
 ## 0.15.100 - 2026-11-27
 
 - Reworked workbench canvas interaction: every card exposes exactly one input and one output port (the former content / input / step pairs of six buttons are gone); a drop resolves to a control edge or a material edge from whether the source node declares artifacts. Control edges are solid grey, material edges dashed green, and a selected node highlights each kind separately. Each control edge shows a condition badge at its midpoint that toggles between "completed" and "success".
@@ -18,7 +20,6 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The canvas list filters the current page as you type and only asks the server on Enter; draft and conflict notices collapse into one line; double-clicking empty canvas opens the add-node menu (text, image, video, audio, Agent, rehearsal stage, then fit to screen, paste, upload).
 - Run records are traceable: the detail view expands the agentAdapter and threadId bound by that run's frozen graph, the node-level differences against the previous graph (added / removed / modified and the changed fields), and the artifact hash verification result; mismatched, missing or unrecorded files are listed separately.
 - Concurrent writes on a network share: measured on SMB, an atomic replace never exposes a torn file, but concurrent renames return EPERM and read-modify-write loses updates. Atomic writes now retry EPERM/EACCES/EBUSY with backoff and then fail loudly instead of reporting success.
-
 
 ## 0.15.99 - 2026-11-27
 

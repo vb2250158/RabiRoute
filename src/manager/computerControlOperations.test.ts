@@ -62,11 +62,11 @@ test("API search and describe expose the computer workflow and control lifecycle
     return { ok: response.ok, statusCode: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };
   } });
   const id = "manager.lan-agent.computer.execute";
-  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入"].map(query => sdk.search(query)));
+  const results = await Promise.all(["电脑控制", "看屏幕", "批量输入", "等待画面变化"].map(query => sdk.search(query)));
   assert.equal(results[0].items[0].operationId, id);
   for (const { items } of results) {
     const entry = items.find((item: { operationId: string }) => item.operationId === id);
-    assert.match(entry?.summary ?? "", /screen\.capture.*input\.perform.*自动退出控制/);
+    assert.match(entry?.summary ?? "", /screen\.capture.*input\.perform.*自动退出控制.*screen\.wait/);
   }
   const settings = await sdk.search("电脑控制设置");
   assert.match(settings.items[0].operationId, /^manager\.lan-agent\.computer-settings\./);
@@ -83,8 +83,35 @@ test("API search and describe expose the computer workflow and control lifecycle
   const capture = operation.request.body.schema.anyOf.find((branch: any) => branch.properties?.action?.const === "screen.capture");
   assert.match(capture.properties.maxWidth.description, /only downsizes/);
   assert.equal(operation.effects.request.modes["screen.capture"], "read");
+  assert.equal(operation.effects.request.modes["screen.wait"], "read");
   assert.equal(operation.effects.request.modes["input.perform"], "write");
   assert.match(operation.recovery.description, /input\.status.*original requestId/);
+});
+
+test("screen wait uses the observation owner and keeps the returned capture in the media contract", async t => {
+  const calls: { action: string; body: any }[] = [];
+  const native = Object.assign(new EventEmitter(), {
+    async request(action: string, body: any) {
+      calls.push({ action, body });
+      return { state: "changed", capture: { mimeType: "image/png", source: body.source } };
+    },
+    async close() {},
+  });
+  const f = await fixture(t, (instanceId, emit, config, root) => new ManagerLocalComputer({
+    instanceId, emit, stateDirectory: path.join(root, "local-computer"), getSettings: () => config.readComputerSettingsRaw(),
+    computerServiceOptions: { nativeFactory: () => native },
+  }));
+  const endpoint = `${f.base}/api/lan-agent/instances/${f.registry.localInstanceId}/computer`;
+  const source = { kind: "window", scope: "window", coordinateSpace: "capture", instanceId: f.registry.localInstanceId,
+    windowId: "bad1", pid: 123, frameId: "frame", imageItemId: "image", width: 100, height: 100 };
+  const post = (body: unknown) => fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await post({ action: "screen.wait", source: { frameId: "frame" } })).status, 400);
+  assert.equal((await post({ action: "screen.wait", source, waitMs: 6000 })).status, 400);
+  const result = await post({ action: "screen.wait", source, waitMs: 200 });
+  assert.equal(result.status, 200, await result.clone().text());
+  assert.deepEqual((await result.json() as any).data, { state: "changed", capture: { mimeType: "image/png", source } });
+  assert.deepEqual(calls.map(call => call.action), ["screen.wait"]);
+  assert.deepEqual(calls[0]!.body.source, source);
 });
 
 test("new work uses feature settings but original receipt and cleanup actions remain available",async t=>{

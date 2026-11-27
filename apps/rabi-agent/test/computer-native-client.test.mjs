@@ -52,6 +52,51 @@ test("native responses can arrive out of order while a slow capture is pending",
   await client.close();
 });
 
+test("screen wait cancellation names the original native observation without touching input", async () => {
+  const sent = [];
+  let admitted;
+  const didAdmit = new Promise(resolve => { admitted = resolve; });
+  const child = childFixture((line, current) => {
+    const request = JSON.parse(line);
+    sent.push(request);
+    const reply = (id, result) => current.stdout.write(JSON.stringify({ id, result }) + "\n");
+    if (request.action === "capabilities") setImmediate(() => reply(request.id, { screenWaitVersion: 1 }));
+    if (request.action === "screen.wait") admitted(request.id);
+    if (request.action === "screen.wait.cancel") setImmediate(() => {
+      reply(request.id, { state: "cancellation-requested" });
+      reply(request.captureId, { state: "cancelled" });
+    });
+  });
+  const client = new NativeComputerClient({ launch: () => child });
+  try {
+    const abort = new AbortController();
+    const result = client.request("screen.wait", {}, { signal: abort.signal });
+    const nativeId = await didAdmit;
+    abort.abort();
+    assert.deepEqual(await result, { state: "cancelled" });
+    assert.equal(sent[2].captureId, nativeId);
+    assert.deepEqual(sent.map(request => request.action), ["capabilities", "screen.wait", "screen.wait.cancel"]);
+  } finally {
+    await client.close();
+  }
+});
+
+test("legacy native desktop reports screen wait unavailable before observation admission", async () => {
+  const sent = [];
+  const child = childFixture((line, current) => {
+    const request = JSON.parse(line);
+    sent.push(request.action);
+    setImmediate(() => current.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\n"));
+  });
+  const client = new NativeComputerClient({ launch: () => child });
+  try {
+    await assert.rejects(client.request("screen.wait"), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "screenWaitVersion" });
+    assert.deepEqual(sent, ["capabilities"]);
+  } finally {
+    await client.close();
+  }
+});
+
 test("a control intent cancelled during Qt startup never reaches the native command pipe", async () => {
   let ready, sends = 0, cancelled = false;
   const client = new NativeComputerClient({ launch: () => { sends++; return childFixture(); } });

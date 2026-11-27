@@ -129,7 +129,8 @@ export const computerRequestSchema = { description: [
   'Observe the narrowest useful window, display or region with screen.capture. Keep displayId and layoutRevision while the layout is stable. Use the pixels of the image you inspected. Reuse its complete source, including imageView when present, or use frameId, imageItemId and any imageView when the target input.perform contract supports that reference. Refresh the observation if the target, layout or cached frame changes.',
   'Use input.perform for short input. Put actions already determined from the current, readable state in one ordered batch. If a value or target needed for a decision is unclear, capture that area again before acting on it. Use task-specific rules or local computation when available. Set captureAfter: true to verify the effect or decide actions that depend on the new state. For a drag, batch press, move, optional wait and release.',
   'input.perform owns control from acquisition through cleanup. It defaults to shared input. Use exclusive mode when taking turns on the same desktop. Keep observation read-only when no input is needed. Use explicit control.begin, input.execute and control.end for work that must retain control across requests.',
-  'Read completedActions, controlCleanup and returnState to verify input and cleanup. Confirm the intended UI change separately, using the returned or a fresh capture. On physical takeover, pause and observe again before resuming. When the outcome is uncertain, query input.status with the original requestId before deciding whether another input is needed.'
+  'Read completedActions, controlCleanup and returnState to verify input and cleanup. Confirm the intended UI change separately, using the returned or a fresh capture. On physical takeover, pause and observe again before resuming. When the outcome is uncertain, query input.status with the original requestId before deciding whether another input is needed.',
+  'If the next step depends on a change in the observed area, use screen.wait with the complete source of the last image. It waits on the target without holding input control and returns a fresh capture only when pixels change. Inspect the change before choosing dependent actions.'
 ].join('\n'), anyOf: [...computerControlRequestBranches, branch("file.stat", ["path"], fileFields),
   branch("file.read", ["path", "version", "offset"], { ...fileFields, version: text, offset: integer }),
   branch("upload.begin", ["uploadId", "path", "size", "sha256"], { ...fileFields, uploadId, size: { ...integer, maximum: COMPUTER_LIMITS.uploadBytes }, sha256: hash }),
@@ -138,6 +139,10 @@ export const computerRequestSchema = { description: [
   ...["upload.commit", "upload.status", "upload.abort"].map(action => branch(action, ["uploadId"], { uploadId })),
   branch("displays.list", []),
   branch("windows.list", [], { limit: { description: "The native Windows helper applies Convert.ToInt32 and its 1..200 bound." }, query: { description: "The Windows helper applies Convert.ToString and its UTF-16 length bound." } }),
+  branch("screen.wait", ["source"], {
+    source: { ...computerSourceSchema, required: [...computerSourceSchema.required, "frameId", "imageItemId"] },
+    waitMs: { type: "integer", minimum: 100, maximum: 5000, description: "Wait up to this many milliseconds in the same capture scope. Default 2500. Unchanged and cancelled results omit the image." }
+  }),
   branch("screen.capture", [], { ...computerCaptureFields, source: computerSourceSchema,
     captureSpec: { type: "object", properties: computerCaptureFields, additionalProperties: false },
     maxWidth: { type: "integer", minimum: 1, maximum: 3840, description: "An output width cap that only downsizes the capture. With an explicit display or region scope, omit it to preserve native pixels. Legacy requests without selectors retain the 1920-pixel overview default. Select a smaller width when the PNG or pixel budget is exceeded." } })

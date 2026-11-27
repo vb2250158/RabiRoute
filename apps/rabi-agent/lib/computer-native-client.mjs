@@ -81,8 +81,11 @@ export class NativeComputerClient extends EventEmitter {
   }
   async request(action, body = {}, options = {}) {
     if (this.stopping) throw new Error("Computer native owner is stopping.");
+    const waitingForScreen = action === "screen.wait";
+    const observation = action === "screen.capture" || waitingForScreen;
+    options.signal?.throwIfAborted();
     if (this.presentationIssue && ["annotation.show", "annotation.update", "annotation.track.start"].includes(action)) throw Object.assign(new Error(this.presentationIssue.message), { code: "COMPUTER_ANNOTATION_UNAVAILABLE", field: "qtPackageRef" });
-    if (this.qt && !this.presentationIssue && (action === "control.begin" || action === "screen.capture" || ["annotation.show", "annotation.update", "annotation.track.start"].includes(action))) {
+    if (this.qt && !this.presentationIssue && (action === "control.begin" || observation || ["annotation.show", "annotation.update", "annotation.track.start"].includes(action))) {
       try { await this.qt.start(); this.qtAvailable = true; }
       catch (cause) {
         this.qtAvailable = false;
@@ -96,6 +99,11 @@ export class NativeComputerClient extends EventEmitter {
     const scopedCapture = action === "screen.capture" && (body.captureSpec || [body, body.source].some(value => value?.scope !== undefined || value?.displayId !== undefined || value?.region !== undefined));
     const batch = action === "input.execute" && Array.isArray(body.actions);
     const sharedControl = action === "control.begin" && body.inputMode === "shared";
+    if (waitingForScreen && (await this.readNativeCapabilities()).screenWaitVersion !== 1) {
+      throw Object.assign(new Error("The selected native desktop worker does not support waiting for a screen change."), {
+        code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: "screenWaitVersion"
+      });
+    }
     if (batch || sharedControl || action === "displays.list" || scopedCapture) {
       const capabilities = await this.readNativeCapabilities();
       if (batch && isComputerSourceReference(body.source) && capabilities.captureSourceReferenceVersion !== 1) {
@@ -110,10 +118,15 @@ export class NativeComputerClient extends EventEmitter {
       if (!supported) throw Object.assign(new Error("The selected native desktop worker does not support " + (input ? extended ? "shared or held input batches" : "input batches and native return" : "display/region capture") + ". Select an updated desktop resource."), { code: "COMPUTER_NATIVE_FEATURE_UNSUPPORTED", field: input ? "inputBatchVersion" : "captureSpecVersion" });
     }
     options.beforeSend?.();
+    options.signal?.throwIfAborted();
     this.start(); const id = randomUUID();
     const timeoutMs = this.timeout("agent.computer.process", 30000);
     body = { ...body, ...(action === "input.execute" ? { deadlineUtcMs: Date.now() + timeoutMs } : {}), renderer: this.qt ? "qt" : "native", controlRenderer: this.qtAvailable ? "qt" : "native" };
-    return new Promise((resolve, reject) => {
+    const cancelScreenWait = () => {
+      if (!this.child || this.stopping) return;
+      void this.request("screen.wait.cancel", { captureId: id }).catch(error => this.emit("diagnostic", { code: error.code, message: error.message }));
+    };
+    const result = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         // Cancel the original native intent through its independent recovery executor.
@@ -122,14 +135,23 @@ export class NativeComputerClient extends EventEmitter {
           void this.request("input.cancel", { requestId: body.requestId, controlSessionId: body.controlSessionId, reason: "deadline" })
             .catch(error => this.emit("diagnostic", { code: error.code, message: error.message }));
         }
+        if (waitingForScreen) {
+          cancelScreenWait();
+          reject(Object.assign(new Error("Waiting for a screen change timed out."), { code: "COMPUTER_SCREEN_WAIT_TIMEOUT" }));
+          return;
+        }
         reject(Object.assign(new Error(action === "input.execute" ? "Native computer result remains unconfirmed; cancellation was requested for the original input intent." : "Native computer result remains unconfirmed; query the original request before continuing."), { code: "COMPUTER_RESULT_UNCERTAIN", uncertain: true, requestId: body.requestId, cancellationRequested: action === "input.execute" }));
       }, timeoutMs);
       this.pending.set(id, { action, resolve, reject, timer });
+      if (waitingForScreen) options.signal?.addEventListener("abort", cancelScreenWait, { once: true });
       this.child.stdin.write(JSON.stringify({ ...body, id, action }) + "\n", error => {
         if (!error || !this.pending.delete(id)) return;
         clearTimeout(timer); reject(Object.assign(error, { code: "COMPUTER_RESULT_UNCERTAIN", uncertain: true }));
       });
     });
+    if (!waitingForScreen) return result;
+    try { return await result; }
+    finally { options.signal?.removeEventListener("abort", cancelScreenWait); }
   }
   readNativeCapabilities() {
     if (!this.nativeCapabilities) {

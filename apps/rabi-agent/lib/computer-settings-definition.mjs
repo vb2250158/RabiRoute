@@ -130,6 +130,17 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
         "presentation"
       ]
     },
+    "screen.wait": {
+      "capability": "screenshots",
+      "feature": "observation",
+      "readOnly": true,
+      "settingsPaths": [
+        "annotation.tracking.frameCacheFrames",
+        "annotation.tracking.frameCacheBytes",
+        "annotation.tracking.frameCacheAgeMs",
+        "presentation"
+      ]
+    },
     "upload.abort": {
       "capability": "files",
       "feature": "files",
@@ -564,4 +575,4 @@ export const COMPUTER_SETTINGS_DEFINITION = freeze({
   },
   "schemaVersion": 1
 });
-export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "db70aa01bec9bba09883edf62c2c9fd3c5742b9d937e42a888435e619feecfd6";
+export const COMPUTER_SETTINGS_DEFINITION_DIGEST = "83468a4778fe250f30f1957cb5c4a0c546c2ae5621de611ff48bba5a14745333";

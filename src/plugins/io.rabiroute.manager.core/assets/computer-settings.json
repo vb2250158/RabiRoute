@@ -453,6 +453,17 @@
         "presentation"
       ]
     },
+    "screen.wait": {
+      "feature": "observation",
+      "capability": "screenshots",
+      "readOnly": true,
+      "settingsPaths": [
+        "annotation.tracking.frameCacheFrames",
+        "annotation.tracking.frameCacheBytes",
+        "annotation.tracking.frameCacheAgeMs",
+        "presentation"
+      ]
+    },
     "control.begin": {
       "settingsPaths": [
         "control",

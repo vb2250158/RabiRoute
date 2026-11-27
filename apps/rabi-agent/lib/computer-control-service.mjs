@@ -311,6 +311,15 @@ export class ComputerControlService {
     }
     return result;
   }
+  async waitForScreen(input, context) {
+    this.check("screen.wait", context);
+    const result = await this.native.request("screen.wait", {
+      source: input.source, waitMs: input.waitMs, instanceId: this.target(context),
+      settings: this.settings(context, "screen.wait"), observerLabel: this.source(context).label
+    }, { signal: context.signal, beforeSend: () => this.check("screen.wait", context) });
+    this.check("screen.wait", context);
+    return result;
+  }
   async withCapture(result, input, context) {
     if (!input.captureAfter) return result;
     const captureInput = { ...(input.source ?? {}), source: input.source, controlSessionId: result.controlSessionId };
