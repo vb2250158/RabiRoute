@@ -303,6 +303,9 @@ test("unified device control keeps the selected owner, action, and receipt ident
     registry: {} as LanAgentRegistry, isManagementRequestAuthorized: () => false
   })[0]!;
   const calls: unknown[] = [];
+  const legacyWindow = { windowId: "a1", pid: 500, title: "Legacy window", minimized: false,
+    bounds: { x: 0, y: 0, width: 640, height: 480 } };
+  const windows = [legacyWindow, { ...legacyWindow, windowId: "a2", minimized: true, clientWidth: 620, clientHeight: 440 }];
   const computer: DeviceComputerPort = {
     operation: desktopOperation,
     observationLabel: async () => "测试会话",
@@ -312,6 +315,9 @@ test("unified device control keeps the selected owner, action, and receipt ident
     ], sourceErrors: [] }),
     async invoke(input, target) {
       calls.push({ target, body: input.body });
+      if ((input.body as { action?: string }).action === "windows.list") {
+        return { status: 200, body: { code: 0, data: { windows, truncated: false } } };
+      }
       return { status: 200, body: { code: 0, data: { state: "completed" } } };
     }
   };
@@ -332,6 +338,9 @@ test("unified device control keeps the selected owner, action, and receipt ident
     assert.equal(response.status, 200, await response.clone().text());
     assert.deepEqual(calls.at(-1), { target, body });
   }
+  const listed = await post({ target: data.targets[0].target, action: "windows.list" });
+  assert.equal(listed.status, 200, await listed.clone().text());
+  assert.deepEqual((await listed.json()).data, { windows, truncated: false });
   assert.equal((await post({ target: data.targets[2].target, ...body })).status, 200);
   const phoneStatus = await post({ target: data.targets[2].target, action: "screen.status" });
   assert.equal(phoneStatus.status, 200);
