@@ -8,6 +8,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.100 - 2026-11-27
+
+- Reworked workbench canvas interaction: every card exposes exactly one input and one output port (the former content / input / step pairs of six buttons are gone); a drop resolves to a control edge or a material edge from whether the source node declares artifacts. Control edges are solid grey, material edges dashed green, and a selected node highlights each kind separately. Each control edge shows a condition badge at its midpoint that toggles between "completed" and "success".
+- The parameter panel left the card and became an independent canvas overlay (320px wide, at most 76vh tall, scrolling inside), so selecting a card no longer changes any card size. A floating toolbar appears above the selected card (text nodes also get font-size controls), and double-clicking opens a content window that edits the full text and writes it back to the node.
+- Cards gained corner badges: input material at the lower left, artifacts at the lower right, each showing a count and type glyphs. The first artifact previews inside the card body (text with a fade, first frame for image and video, audio player); text is read through the run-scoped artifact endpoint, which re-checks ownership and hash.
+- Node type and state are separated: `enabled: false` is expressed as a dashed border, reduced opacity and a struck-through title; a new `approval` attribute pauses a node at "waiting for confirmation" and continues from the next node once confirmed. The title row shows the "hard gate / needs confirmation / disabled" state badges. Human nodes support "mark done and continue", recording who confirmed, when, and which artifacts it relied on.
+- Run feedback: log lines are typed per node (commands show the command, model nodes show the received materials and the generation call, completion names the artifacts), each line jumps back to its node, the list filters by all / failed / warning and scrolls to the first error. The first line states the topology size and how many nodes will be skipped as disabled, and lists the nodes that will stop for confirmation.
+- The canvas list filters the current page as you type and only asks the server on Enter; draft and conflict notices collapse into one line; double-clicking empty canvas opens the add-node menu (text, image, video, audio, Agent, rehearsal stage, then fit to screen, paste, upload).
+- Run records are traceable: the detail view expands the agentAdapter and threadId bound by that run's frozen graph, the node-level differences against the previous graph (added / removed / modified and the changed fields), and the artifact hash verification result; mismatched, missing or unrecorded files are listed separately.
+- Concurrent writes on a network share: measured on SMB, an atomic replace never exposes a torn file, but concurrent renames return EPERM and read-modify-write loses updates. Atomic writes now retry EPERM/EACCES/EBUSY with backoff and then fail loudly instead of reporting success.
+
+
 ## 0.15.99 - 2026-11-27
 
 - Consolidate installed plugin lifecycle and computer-control guidance: CAS selection of imported versions, preservation on failure, and restoration of original uninstalled instances and data. Computer-control search prioritizes execution and explains observation, batches, readback and human takeover.
