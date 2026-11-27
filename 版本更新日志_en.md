@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.102 - 2026-11-28
+
+- Canvas card size now matches the interaction prototype: 206×128 by default (was 380×144), 140×80 minimum, still draggable and saved with the canvas.
+- Ports are 12px dots (were 22px labelled buttons) with a matching edge offset, so dense graphs no longer overlap.
+- Double-clicking a card title opens the content window, the same entry as the toolbar's Edit button; the prototype treats this as the primary path and only the button existed before.
+- Hovering a card shows the first line of its note plus type and gate, following the pointer.
+- Import now keeps each source node's operator note: it used to stay inside `legacy`, where no canvas surface reads it, so it was effectively lost on import. The note is review context only and does not change what the node executes.
+
 ## 0.15.101 - 2026-11-28
 
 - Fix window-list response validation in unified device control. The API passes through client-area dimensions from current connectors and accepts window lists from older connectors. Update the connector SDK to 0.4.18.
@@ -138,15 +146,6 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Windows Host switches independent tray packages, verifies generation and READY, and restores the previous tray on failure while Manager stays online.
 
 ## Unreleased
-
-## 0.15.102 - 2026-11-28
-
-- Canvas card size now matches the interaction prototype: 206×128 by default (was 380×144), 140×80 minimum, still draggable and saved with the canvas.
-- Ports are 12px dots (were 22px labelled buttons) with a matching edge offset, so dense graphs no longer overlap.
-- Double-clicking a card title opens the content window, the same entry as the toolbar's Edit button; the prototype treats this as the primary path and only the button existed before.
-- Hovering a card shows the first line of its note plus type and gate, following the pointer.
-- Import now keeps each source node's operator note: it used to stay inside `legacy`, where no canvas surface reads it, so it was effectively lost on import. The note is review context only and does not change what the node executes.
-
 
 ## 0.15.98 - 2026-11-26
 
