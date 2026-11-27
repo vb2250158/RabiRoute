@@ -22,8 +22,9 @@ function selectionWith(existing: string[], ids: string[], mode: SelectionMode): 
   return [...selection];
 }
 
+/** Minimums follow the prototype: a card never shrinks below 140x80. */
 function resizedCard(width: number, height: number): CardSize {
-  return { width: Math.round(Math.max(200, Math.min(1600, width))), height: Math.round(Math.max(76, Math.min(1200, height))) };
+  return { width: Math.round(Math.max(140, Math.min(1600, width))), height: Math.round(Math.max(80, Math.min(1200, height))) };
 }
 type SelectionCard = { id: string; left: number; top: number; right: number; bottom: number };
 
@@ -91,7 +92,7 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
 
   function cardSize(id: string): CardSize {
     const layout = positions.value[id];
-    return resizedCard(Number.isFinite(layout?.width) ? layout!.width! : 380,
+    return resizedCard(Number.isFinite(layout?.width) ? layout!.width! : 206,
       Number.isFinite(layout?.height) ? layout!.height! : defaultHeight(id));
   }
   function cardBounds(id: string, point: Point) {

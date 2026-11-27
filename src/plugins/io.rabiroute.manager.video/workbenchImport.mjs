@@ -21,6 +21,10 @@ export function importWorkbench(source, definition) {
     const id = ids.get(row.id), stage = row.stage || "未分组"; stages[stage] = (stages[stage] || 0) + 1;
     // Shell command strings, private installation paths and Agent fallback chains need explicit resolution.
     const config = { importedNodeId: row.id, parameterSchema: structuredClone(row.params||[]), parameterValues: {}, legacy: structuredClone(row) };
+    // The operator's own note is review context, not execution input: keep it visible on the card
+    // instead of leaving it only inside `legacy`, where no canvas surface reads it.
+    const note = typeof row.note === "string" ? row.note.trim() : "";
+    if (note) config.note = note;
     if (kind === "human") config.instructions = row.hint || row.note || "";
     else {
       config.unresolved = true;

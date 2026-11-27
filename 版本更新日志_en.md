@@ -138,6 +138,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.15.102 - 2026-11-28
+
+- Canvas card size now matches the interaction prototype: 206×128 by default (was 380×144), 140×80 minimum, still draggable and saved with the canvas.
+- Ports are 12px dots (were 22px labelled buttons) with a matching edge offset, so dense graphs no longer overlap.
+- Double-clicking a card title opens the content window, the same entry as the toolbar's Edit button; the prototype treats this as the primary path and only the button existed before.
+- Hovering a card shows the first line of its note plus type and gate, following the pointer.
+- Import now keeps each source node's operator note: it used to stay inside `legacy`, where no canvas surface reads it, so it was effectively lost on import. The note is review context only and does not change what the node executes.
+
+
 ## 0.15.98 - 2026-11-26
 
 - Publish the unified device control and remote Agent session updates with Core 0.1.33, Persona 0.1.54, SDK 0.4.13 and the Android slim app 0.3.75-dev (78).

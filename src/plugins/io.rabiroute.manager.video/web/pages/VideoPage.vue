@@ -157,9 +157,12 @@ function applyRatio(ratio: typeof ratios[number]) {
   width.value = size.width; height.value = size.height;
 }
 const filteredJobs = computed(() => (snapshot.value?.jobs || []).filter(job => (filter.value === "all" || (filter.value === "pending" ? !snapshot.value?.states[job.status]?.terminal : job.status === filter.value)) && job.prompt.toLowerCase().includes((search.value || "").trim().toLowerCase())));
+/** §2.4：默认 206×128（原型尺寸），可拖拽调整，尺寸随画布保存。 */
+const NODE_DEFAULT_WIDTH = 206;
+const NODE_DEFAULT_HEIGHT = 128;
 const canvas = useVideoCanvas(id => {
   const node = flowNodesById.value.get(id);
-  return node && node.config.textOutput !== true ? 76 : 214;
+  return node && node.config.textOutput !== true ? 78 : 128;
 });
 const minimapOpen = ref(true);
 const minimap = canvas.minimap;
@@ -1389,6 +1392,22 @@ watch(nodeArtifacts, async list => {
     previewTexts.value = { ...previewTexts.value, [first.id]: text };
   } catch { /* keep the declared type label when the body cannot be read */ }
 }, { immediate: true });
+/** §2.1: hovering a card explains what it does without opening the panel. */
+const nodeTip = ref<{ title: string; head: string; meta: string; x: number; y: number }>();
+function nodeNote(node: FlowNode): string {
+  for (const value of [node.config?.note, node.config?.description, node.config?.instructions]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+function showNodeTip(node: FlowNode, event: MouseEvent) {
+  const head = nodeNote(node).split("\n")[0] || "";
+  const gateLabel = node.gate ? " · 门禁" : "";
+  const kindLabel = workspaceDefinition.value?.capabilities[node.kind]?.label || node.kind;
+  nodeTip.value = { title: node.title || node.id, head: head.slice(0, 90), meta: `${kindLabel}${gateLabel} · 双击看全文`, x: event.clientX + 14, y: event.clientY + 14 };
+}
+function moveNodeTip(event: MouseEvent) { if (nodeTip.value) nodeTip.value = { ...nodeTip.value, x: event.clientX + 14, y: event.clientY + 14 }; }
+function hideNodeTip() { nodeTip.value = undefined; }
 function focusInputSource(id: string) {
   selectedIds.value = [id];
   canvas.center(id);
@@ -1966,7 +1985,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
     <v-dialog v-model="showCliSettings" max-width="520"><WorkbenchCliSettings v-if="showCliSettings" @close="showCliSettings=false"/></v-dialog>
     <p v-if="!draftLoaded && !mediaCanvasId" class="video-hint ma-4" role="status">正在打开工作台…</p>
     <section v-if="projectHome" class="project-home">
-      <div class="workbench-project-heading"><h1>我的项目</h1><v-btn variant="text" prepend-icon="mdi-refresh" aria-label="刷新项目列表" @click="loadProjects">刷新</v-btn><v-btn variant="text" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></div>
+      <div class="workbench-project-heading"><h1>我的项目</h1><span class="project-heading-actions"><v-btn variant="text" size="small" prepend-icon="mdi-refresh" aria-label="刷新项目列表" @click="loadProjects">刷新</v-btn><v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></span></div>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <p v-if="projectsLoading && !projectsLoaded" role="status" class="video-hint">正在加载项目…</p>
       <v-alert v-if="projectsError" type="error" variant="tonal">
@@ -2135,7 +2154,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(node.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
         <button class="workspace-port port-out" data-card-output="out" :data-card-id="node.id"
           aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, node.id)" @click.stop="armPortFromKeyboard($event, node.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
-        <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @keydown="nudgeCard($event,node.id)">
+        <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @dblclick.stop="action(() => openNodeEditor(node))" @keydown="nudgeCard($event,node.id)">
           <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}
           <!-- §2.1: 硬闸 / 需确认 / 已禁用 are states on the title row, not new node types. -->
           <span v-if="node.gate === true || node.config?.gate === true" class="workflow-title-badge gate">硬闸</span>
@@ -2143,7 +2162,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           <span v-if="node.enabled === false" class="workflow-title-badge disabled">已禁用</span>
           <v-icon icon="mdi-drag" size="16"/>
         </button>
-        <div class="workflow-card-body canvas-text-card" data-canvas-card-body>
+        <div class="workflow-card-body canvas-text-card" data-canvas-card-body
+          @mouseenter="showNodeTip(node, $event)" @mousemove="moveNodeTip($event)" @mouseleave="hideNodeTip">
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
           <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :style="{ fontSize: `${textSize(node.id)}px` }" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
           <template v-else>
@@ -2298,6 +2318,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <button type="button" aria-label="编辑内容" title="编辑内容" @click="action(() => openNodeEditor(toolbarNode!))">编辑</button>
         <button type="button" aria-label="下载内容" title="下载内容" @click="action(() => downloadNodeContent(toolbarNode!))">下载</button>
       </div>
+      <div v-if="nodeTip" class="canvas-node-tip" role="tooltip" :style="{ left: `${nodeTip.x}px`, top: `${nodeTip.y}px` }">
+        <strong>{{ nodeTip.title }}</strong>
+        <span v-if="nodeTip.head">{{ nodeTip.head }}</span>
+        <small>{{ nodeTip.meta }}</small>
+      </div>
       <div v-if="nodeEditorNode" class="canvas-editor-backdrop" @pointerdown.self="closeNodeEditor">
         <section class="canvas-editor" role="dialog" aria-modal="true" :aria-label="`${nodeEditorNode.title || '节点'}内容`" @pointerdown.stop>
           <header>
@@ -2409,6 +2434,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workflow-title-badge.gate { background:var(--rr-warning-surface); border:1px solid var(--rr-warning-border); color:var(--rr-warning-text); }
 .workflow-title-badge.approval { background:var(--rr-accent-surface); border:1px solid var(--rr-accent-border); color:var(--rr-accent-text); }
 .workflow-title-badge.disabled { background:var(--rr-subtle); border:1px solid var(--rr-border); color:var(--rr-muted); }
+/* §2.1：悬停说明，跟随指针并自动避让窗口边界。 */
+.canvas-node-tip { position:fixed; z-index:60; max-width:320px; display:flex; flex-direction:column; gap:3px; padding:8px 10px; border:1px solid var(--rr-border-strong); border-radius:9px; background:var(--rr-surface-glass); box-shadow:var(--rr-shadow-menu); color:var(--rr-text); font-size:12px; pointer-events:none; }
+.canvas-node-tip strong { font-size:12px; color:var(--rr-heading); }
+.canvas-node-tip span { color:var(--rr-muted); line-height:1.5; }
+.canvas-node-tip small { color:var(--rr-muted-faint); font-size:11px; }
 /* §5.3：一套「输入材料」列表，每行 源节点名 + 产物图标 + ↗ 定位 + × 移除。 */
 .canvas-input-list { display:flex; flex-direction:column; gap:2px; margin:0 0 10px; padding:0; list-style:none; }
 .canvas-input-list > li { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; background:var(--rr-subtle); font-size:12px; }
@@ -2448,7 +2478,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workspace-flow-wires .completed-connection.control-connection { stroke-dasharray:none; stroke-width:1.75; }
 .workspace-flow-wires .preview-connection { opacity:1; pointer-events:none; }
 /* P0-1：每张卡只有一个输入口和一个输出口，位置不随节点类型变化。 */
-.workspace-port { position:absolute; top:var(--canvas-port,72px); z-index:3; display:grid; place-items:center; width:22px; height:22px; transform:translateY(-50%); border:1px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
+.workspace-port { position:absolute; top:var(--canvas-port,72px); z-index:3; display:grid; place-items:center; width:12px; height:12px; transform:translateY(-50%); border:1.5px solid var(--rr-muted); border-radius:50%; background:var(--rr-surface); color:var(--rr-text); line-height:1; cursor:crosshair; }
 .workspace-port { opacity:0; transition:opacity 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .canvas-object:hover > .workspace-port,.canvas-selected > .workspace-port,.workspace-port:focus-visible,
 .linking-port .workspace-port.port-in { opacity:1; }
@@ -2462,8 +2492,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .creative-card .node-text-preview.muted { color:var(--rr-muted); }
 .creative-card .node-text-editor { width:100%; resize:none; border:0; outline:none; background:transparent; font:inherit; user-select:text; }
 .creative-card .node-text-editor::placeholder { color:var(--rr-muted); }
-.workspace-port.port-in { left:-11px; }
-.workspace-port.port-out { right:-11px; }
+.workspace-port.port-in { left:-6px; }
+.workspace-port.port-out { right:-6px; }
 .creation-stage .workspace-port.port-in { left:119px; }
 .workspace-port:hover,.workspace-port:focus-visible { border-color:var(--rr-accent); color:var(--rr-accent); }
 .canvas-reference-chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
@@ -2477,8 +2507,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .canvas-object:is(:hover,.canvas-selected) > .canvas-resize-handle,.canvas-resize-handle:focus-visible { opacity:1; }
 .canvas-resize-handle:is(:hover,:focus-visible) { color:var(--rr-accent); }
 .creation-stage .canvas-resize-handle { right:134px; }
-.workflow-card:not(.creative-card) { --canvas-default-height:76px; }
-.workflow-card { width:380px; min-height:144px; }
+.workflow-card:not(.creative-card) { --canvas-default-height:78px; }
+.workflow-card { width:206px; min-height:128px; }
 .workflow-card-body { position:relative; display:flex; align-items:flex-start; min-height:76px; height:var(--canvas-card-height,auto); padding:16px; font-size:13px; color:var(--rr-muted); cursor:grab; }
 .workflow-card-processing .workflow-card-body { border-color:var(--rr-accent); }
 .canvas-node-artifacts { margin:0 0 12px; }
@@ -2492,8 +2522,8 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 .workflow-card-disabled .canvas-drag-handle { text-decoration:line-through; }
 .video-workspace { position:absolute; inset:0; overflow:clip; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
 .video-workspace:focus { outline:none; }
-.creation-stage { position:absolute; width:calc(var(--canvas-card-width,380px) + 260px); display:flex; flex-direction:column; align-items:center; }
-.preview-stage { flex-shrink:0; width:var(--canvas-card-width,380px); height:var(--canvas-card-height,214px); background:var(--rr-surface); border:1px solid var(--rr-border-strong); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--rr-text); box-shadow:var(--rr-shadow-card); }
+.creation-stage { position:absolute; width:calc(var(--canvas-card-width,206px) + 260px); display:flex; flex-direction:column; align-items:center; }
+.preview-stage { flex-shrink:0; width:var(--canvas-card-width,206px); height:var(--canvas-card-height,214px); background:var(--rr-surface); border:1px solid var(--rr-border-strong); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--rr-text); box-shadow:var(--rr-shadow-card); }
 .preview-empty { text-align:center; max-width:80%; color:var(--rr-muted); }
 .preview-empty h2 { font-size:14px; margin:12px 0 8px; color:var(--rr-heading); font-weight:500; }
 .preview-empty p { font-size:12px; margin-bottom:12px; }
@@ -2603,8 +2633,8 @@ summary { cursor:pointer; }
 .canvas-card,.preview-stage { cursor:pointer; }
 .passive-video { pointer-events:none; }
 .canvas-selected > .canvas-video-card,.canvas-selected > .canvas-media-card,.canvas-selected > .canvas-text-card,.canvas-selected > .preview-stage { outline:1px solid var(--rr-accent); box-shadow:0 0 0 3px var(--rr-accent-surface); }
-.canvas-card { position:absolute; width:var(--canvas-card-width,380px); margin-left:130px; }
-.canvas-drag-handle { display:flex; align-items:center; gap:8px; height:34px; width:var(--canvas-card-width,380px); max-width:100%; color:var(--rr-heading); font-size:13px; cursor:pointer; text-align:left; touch-action:none; overflow:hidden; white-space:nowrap; }
+.canvas-card { position:absolute; width:var(--canvas-card-width,206px); margin-left:130px; }
+.canvas-drag-handle { display:flex; align-items:center; gap:8px; height:34px; width:var(--canvas-card-width,206px); max-width:100%; color:var(--rr-heading); font-size:13px; cursor:pointer; text-align:left; touch-action:none; overflow:hidden; white-space:nowrap; }
 .canvas-drag-handle .v-icon:last-child { margin-left:auto; opacity:.5; }
 .canvas-video-card,.canvas-media-card,.canvas-text-card { border:1px solid var(--rr-border-strong); border-radius:12px; background:var(--rr-surface); overflow:hidden; }
 .canvas-video-card>video,.canvas-media-card>img { display:block; width:100%; height:var(--canvas-card-height,214px); object-fit:contain; }
@@ -2722,15 +2752,21 @@ summary { cursor:pointer; }
 </style>
 
 <style scoped>
-.project-home { padding:48px; min-height:90vh; background:var(--rr-canvas); }
-.project-home h1 { font-size:22px; margin-bottom:30px; }
-.project-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:20px; max-width:1100px; }
-.project-tile { min-height:210px; border:1px solid var(--rr-border-strong); border-radius:18px; background:var(--rr-surface); padding:16px; text-align:left; display:flex; flex-direction:column; gap:10px; color:var(--rr-text); }
-.project-tile:hover { border-color:var(--rr-muted); }
-.project-new { border-style:dashed; align-items:center; justify-content:center; }
-.project-cover > img, .project-cover > video { display:block; width:100%; height:130px; object-fit:cover; border-radius:inherit; pointer-events:none; }
-.project-cover { background:var(--rr-subtle); height:130px; border-radius:12px; display:grid; place-items:center; color:var(--rr-muted); }
-.project-tile small { color:var(--rr-muted); font-size:12px; }
+/* The project home owns the full content box: the grid fills the available
+   width and the section scrolls when there are more cards than fit. */
+.project-home { box-sizing:border-box; width:100%; height:100%; overflow-y:auto; overscroll-behavior:contain; padding:clamp(16px,2.4vw,36px) clamp(16px,2.6vw,40px) 40px; background:var(--rr-canvas); }
+.project-home h1 { margin:0; font-size:22px; }
+.workbench-project-heading { margin-bottom:20px; }
+.project-heading-actions { display:flex; align-items:center; gap:4px; }
+.project-grid { display:grid; width:100%; grid-template-columns:repeat(auto-fill,minmax(min(100%,232px),1fr)); gap:clamp(12px,1.3vw,20px); }
+.project-tile { box-sizing:border-box; min-width:0; min-height:0; border:1px solid var(--rr-border-strong); border-radius:16px; background:var(--rr-surface); padding:12px; text-align:left; display:flex; flex-direction:column; gap:8px; color:var(--rr-text); transition:border-color .16s ease, box-shadow .16s ease; }
+.project-tile:hover { border-color:var(--rr-muted); box-shadow:0 6px 20px rgb(0 0 0 / 18%); }
+.project-new { border-style:dashed; align-items:center; justify-content:center; min-height:176px; }
+.project-cover { aspect-ratio:16 / 9; border-radius:10px; display:grid; place-items:center; overflow:hidden; background:var(--rr-subtle); color:var(--rr-muted); }
+.project-cover > img, .project-cover > video { display:block; width:100%; height:100%; object-fit:cover; border-radius:inherit; pointer-events:none; }
+.project-tile strong, .project-tile small { display:block; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.project-tile strong { padding:2px 2px 0; }
+.project-tile small { color:var(--rr-muted); font-size:12px; padding:0 2px; }
 .project-title { color:inherit; max-width:210px; padding:8px; outline:none; }
 </style>
 
