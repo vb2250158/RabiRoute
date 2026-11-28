@@ -1,7 +1,7 @@
 /** Inject the host's React instance and public component primitives. No browser audio owner is created. */
 export function createAssistantPanel(React: typeof import('react'), components: {
   Button?: import('react').ElementType; Input?: import('react').ElementType; Modal?: import('react').ElementType; HostSettings?: import('react').ElementType; settingsPresentation?:'modal'|'page';
-}): import('react').ComponentType<{ adapter: {
+}): import('react').ComponentType<{ hostSettingsProps?: Record<string, unknown>; adapter: {
   read(): Promise<any>;
   command(request: Record<string, unknown>): Promise<any>;
   /** Resolve host-owned images with the host's existing prefix and authentication. */

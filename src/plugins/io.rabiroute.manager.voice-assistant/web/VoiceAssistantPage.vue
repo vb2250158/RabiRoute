@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue';
+import {computed,onBeforeUnmount,onMounted,ref,shallowRef,watch} from 'vue';
 import {mountAssistantPanel} from './assistant-app';
 import {managerResourceUrl} from '../../../../ribiwebgui/src/managerApi';
 import {managerAvatarUrl} from './avatar-resource-url.mjs';
 import ComputerModelPicker from '../../../../ribiwebgui/src/components/ComputerModelPicker.vue';
+import AssistantModelPicker from './AssistantModelPicker.vue';
 import PeerServerSelect from '../../../../ribiwebgui/src/components/PeerServerSelect.vue';
 import {userFacingError} from '../../../../ribiwebgui/src/userFacingError';
 import type {SpeechTranscriptionResult} from '@shared/speechControlContract';
@@ -11,6 +12,14 @@ import SpeechRecognitionDetails from '../../io.rabiroute.manager.speech/web/comp
 import {createSpeechControlClient,speechControlClient} from '../../io.rabiroute.manager.speech/web/speech/speechControlClient';
 
 const container=ref<HTMLElement>();let dispose:(()=>void)|undefined;
+type PickerProps = InstanceType<typeof AssistantModelPicker>['$props'];
+const pickers=shallowRef<Record<string,{target:HTMLElement;props:PickerProps}>>({});
+function setModelPicker(id:string,target:HTMLElement|null,props?:PickerProps) {
+  const next={...pickers.value};
+  if(target&&props)next[id]={target,props};
+  else delete next[id];
+  pickers.value=next;
+}
 const uploadOpen = ref(false);
 const uploadFile = ref<File>();
 const computeDeviceId = ref("");
@@ -73,7 +82,7 @@ watch(uploadOpen, open => {
   result.value = undefined;
   uploadError.value = "";
 });
-onMounted(()=>{if(container.value)dispose=mountAssistantPanel(container.value,{resolveAvatarUrl:url=>managerAvatarUrl(url,managerResourceUrl,window.location.href)})});
+onMounted(()=>{if(container.value)dispose=mountAssistantPanel(container.value,{setModelPicker,resolveAvatarUrl:url=>managerAvatarUrl(url,managerResourceUrl,window.location.href)})});
 onBeforeUnmount(()=>{activeUpload?.abort();dispose?.()});
 </script>
 <template>
@@ -87,6 +96,9 @@ onBeforeUnmount(()=>{activeUpload?.abort();dispose?.()});
       </div>
     </div>
     <div ref="container" class="rabi-voice-assistant-body" />
+    <Teleport v-for="(picker,id) in pickers" :key="id" :to="picker.target">
+      <AssistantModelPicker v-bind="picker.props" />
+    </Teleport>
     <v-dialog v-model="uploadOpen" max-width="720">
       <v-card title="上传音频转写" class="app-card">
         <v-card-text class="assistant-upload-form">
@@ -186,47 +198,6 @@ onBeforeUnmount(()=>{activeUpload?.abort();dispose?.()});
   color: inherit;
   font: inherit;
 }
-.rabi-voice-assistant-body :deep(.rabi-host-model) {
-  margin-block: 10px;
-  border: 1px solid var(--va-line, #31454f);
-  border-radius: 8px;
-  background: var(--rr-input, #14242d);
-}
-.rabi-voice-assistant-body :deep(.rabi-host-model > summary) {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px 12px;
-  padding: 8px 12px;
-  list-style: none;
-  cursor: pointer;
-}
-.rabi-voice-assistant-body :deep(.rabi-host-model > summary::after) {
-  content: '';
-  grid-area: 1 / 2 / 3 / 3;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-}
-.rabi-voice-assistant-body :deep(.rabi-host-model[open] > summary::after) { transform: rotate(225deg); }
-.rabi-voice-assistant-body :deep(.rabi-host-model > summary > span),
-.rabi-voice-assistant-body :deep(.rabi-host-model-options small),
-.rabi-voice-assistant-body :deep(.rabi-host-model-heading) { color: var(--rr-muted-soft, #a8bac4); font-size: 12px; }
-.rabi-voice-assistant-body :deep(.rabi-host-model-options) { display: grid; padding: 4px; border-top: 1px solid var(--va-line, #31454f); }
-.rabi-voice-assistant-body :deep(.rabi-host-model-options > button) {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  text-align: start;
-}
-.rabi-voice-assistant-body :deep(.rabi-host-model-options > button:hover:not(:disabled)) { background: var(--rr-subtle, #20343d); }
-.rabi-voice-assistant-body :deep(.rabi-host-model-options > button > span:last-child) { margin-inline-start: auto; }
-.rabi-voice-assistant-body :deep(.rabi-host-model-heading),
-.rabi-voice-assistant-body :deep(.rabi-host-model-options > p) { padding: 6px 12px; }
 @media (max-width: 600px) {
   .rabi-voice-assistant { padding: 12px; }
 }

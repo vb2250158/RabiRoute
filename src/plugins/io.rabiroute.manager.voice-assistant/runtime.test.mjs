@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readdir,readFile,writeFile} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createVoiceAssistantOwner} from './src/runtime.mjs';
@@ -86,6 +86,47 @@ test('persona switches share connection settings while each real system prompt a
    const prompt=f.modelPrompts.at(-1).find(item=>item.role==='system').content;assert.ok(prompt.includes('你是人格 '+personaId));assert.ok(!prompt.includes('你是人格 '+(personaId==='A'?'B':'A')));
   }
   await f.restart();assert.equal((await f.owner.state()).settings.llmModel,'shared-model');assert.equal((await f.owner.messages()).filter(item=>item.role==='user').length,1);
+ }finally{await f.close()}
+});
+test('named model services drive dialogue, search, recognition and playback selections after restart',async()=>{
+ const modelCalls=[];
+ const [llmSecret,ttsSecret,searchSecret]=Array.from({length:3},()=>`generated-test-value-${randomUUID()}`);
+ const f=await fixture({createModel:options=>({async prompt(){
+    modelCalls.push({model:options.model,key:await options.resolveCredential(options.endpoint)});return 'catalog reply';
+ },destroy(){}})});
+ try {
+  const first=(await f.owner.session()).id;
+  const rows=[];
+  for(const entry of [
+    {kind:'llm',endpoint:'https://llm.example.test/v1/chat/completions',model:'llm-fixture',apiKey:llmSecret},
+    {kind:'asr',endpoint:'https://asr.example.test/v1/audio/transcriptions',model:'asr-fixture'},
+    {kind:'tts',endpoint:'https://tts.example.test/v1/audio/speech',model:'tts-fixture',voice:'fixture-voice',apiKey:ttsSecret},
+    {kind:'search',provider:'tavily',apiKey:searchSecret},
+  ])rows.push(await f.owner.saveModelService({provider:'compatible',name:entry.kind,...entry},()=>{}));
+  await assert.rejects(f.owner.command({action:'model-service-select',kind:'asr',id:rows[0].id}),/MODEL_SERVICE_NOT_FOUND/);
+  const online=(await f.owner.modelOptions('asr','api')).find(row=>row.value===rows[1].id);
+  assert.deepEqual(online,{value:rows[1].id,title:'asr',subtitle:'asr-fixture'});
+  const [local]=await f.owner.modelOptions('asr','host/');
+  await assert.rejects(f.owner.command({action:'model-service-select',kind:'tts',id:local.value}),/MODEL_SERVICE_NOT_FOUND/);
+  for(const row of rows)await f.owner.command({action:'model-service-select',kind:row.kind,id:row.id});
+  assert.equal((await f.owner.session()).id,first);
+  await f.owner.submit('fixture','catalog-test');
+  for(let n=0;n<80&&(await f.owner.state()).activity.pending;n++)await new Promise(resolve=>setTimeout(resolve,5));
+  assert.deepEqual(modelCalls,[{model:'llm-fixture',key:llmSecret}]);
+  await f.restart();
+  const state=await f.owner.state();
+  assert.equal(state.settings.asrModel,'asr-fixture');
+  assert.equal(state.settings.ttsVoice,'fixture-voice');
+  assert.equal(state.webSearch.provider,'tavily');
+  assert.equal((await f.owner.state('mobile')).capabilities.mobileCustomTts,true);
+  assert.doesNotMatch(JSON.stringify(state),/generated-test-value-/);
+  assert.doesNotMatch(JSON.stringify(await f.owner.modelServices()),/generated-test-value-/);
+  assert.equal(state.hostSettings.modelSelections.asr.id,online.value);
+  await f.owner.command({action:'model-service-select',kind:'asr',id:local.value});
+  assert.equal((await f.owner.state()).settings.asrModel,'asr');
+  assert.equal((await f.owner.state()).hostSettings.modelSelections.asr.id,local.value);
+  await f.restart();
+  assert.equal((await f.owner.state()).hostSettings.modelSelections.asr.id,local.value);
  }finally{await f.close()}
 });
 test('unavailable inherited voice models use a ready default while explicit unavailable choices remain visible and block capture',async()=>{

@@ -12,6 +12,7 @@ import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import { createVoiceAssistantHostAccess } from "./voiceAssistantHostAccess.js";
 import { createOwnedServiceAgentSender } from "./ownedServiceAgentSender.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { localModelSettingsRequestAllowed } from "./speechModelSettingsAccess.js";
 // @ts-expect-error The plugin exports operation definitions from ESM source.
 import { createVoiceAssistantOperations } from "../plugins/io.rabiroute.manager.voice-assistant/src/operations.mjs";
 // @ts-expect-error The formal ESM builder is also the CLI implementation.
@@ -29,7 +30,10 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
   const operations: any[] = [];
   const ports: Record<string, unknown> = {
     "manager.core@1": {}, "manager.persona@1": {}, "manager.speech@1": { speechControl: {} },
-    "host.agent-adapters@1": { environment: { RABIROUTE_STATE_ROOT: path.join(directory, "state") }, async prepareModules(ids: string[]) { assert.deepEqual(ids, []); }, manager: { readOnly: () => true, publishManagerEvent() {} } },
+    "host.agent-adapters@1": { environment: { RABIROUTE_STATE_ROOT: path.join(directory, "state") },
+      async prepareModules(ids: string[]) { assert.deepEqual(ids, ["manager/speechModelSettingsAccess"]); },
+      module(id: string) { assert.equal(id, "manager/speechModelSettingsAccess"); return { localModelSettingsRequestAllowed }; },
+      manager: { readOnly: () => true, publishManagerEvent() {} } },
     "host.manager.operations@1": { async registerOperationsAsync(items: any[]) { registrations++; operations.push(...items); return { dispose() { disposedRegistrations++; } }; } },
     "host.manager.voice-assistant@2": { deliveryAuthorityId: access.deliveryAuthorityId, bindAgentSender: sender.bind, endpoint() { endpointCalls++; throw Error("unexpected manager access"); } }
   };
@@ -52,6 +56,10 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
       await assert.rejects(sender.bind(provider)({ action, agentAdapter: "voice-assistant", threadId: "target", prompt: "fixture" }, "unopened"), /admission is unavailable/);
     assert.equal(registrations, 1);
     assert.deepEqual(operations.map(operation => operation.contract.operationId).sort(), [
+      "manager.model-services.api-models.read",
+      "manager.model-services.api-models.save",
+      "manager.model-services.assistant-selection.save",
+      "manager.model-services.models.read",
       "manager.voice-assistant.command",
       "manager.voice-assistant.messages",
       "manager.voice-assistant.mobile-asr",

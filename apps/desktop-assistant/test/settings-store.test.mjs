@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -75,5 +76,37 @@ test('Windows DPAPI round trip persists no plaintext', {skip:process.platform!==
     assert.ok(!document.includes('fixture-only-not-an-api-key'));
     const reloaded=await openSettingsStore(directory);
     assert.equal(await reloaded.credentials.resolve('llm',endpoint,'compatible'),'fixture-only-not-an-api-key');
+  }finally{await rm(directory,{recursive:true,force:true})}
+});
+
+test('named model services preserve legacy credentials and isolate keys at the same API endpoint', async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'assistant-model-services-'));
+  const protector={protect:async value=>Buffer.from(value).toString('base64'),unprotect:async value=>Buffer.from(value,'base64').toString()};
+  const fixtureSecrets=Array.from({length:3},()=>`generated-test-value-${randomUUID()}`);
+  const [legacySecret,firstSecret,secondSecret]=fixtureSecrets;
+  try {
+    const store=await openSettingsStore(directory,protector);
+    const endpoint='https://voice.example.test/v1/chat/completions';
+    await store.save({llmModel:'existing',llmEndpoint:endpoint});
+    await store.credentials.set('llm',endpoint,legacySecret,'compatible');
+    assert.equal(await store.modelServices.resolve('saved-llm'),legacySecret);
+    const base={kind:'llm',provider:'compatible',endpoint,model:'example'};
+    const [one,two]=await Promise.all([
+      store.modelServices.save({...base,name:'First',apiKey:firstSecret}),
+      store.modelServices.save({...base,name:'Second',apiKey:secondSecret}),
+    ]);
+    assert.notEqual(one.id,two.id);
+    assert.equal(await store.modelServices.resolve(one.id),firstSecret);
+    assert.equal(await store.modelServices.resolve(two.id),secondSecret);
+    await store.modelServices.save({...one,name:'Renamed'});
+    assert.equal(await store.modelServices.resolve(one.id),firstSecret);
+    await store.modelServices.save({...one,endpoint:'https://new.example.test/v1/chat/completions'});
+    assert.equal(await store.modelServices.resolve(one.id),undefined);
+    const reopened=await openSettingsStore(directory,protector);
+    assert.equal(await reopened.modelServices.resolve(two.id),secondSecret);
+    assert.equal(await reopened.modelServices.resolve('saved-llm'),legacySecret);
+    assert.deepEqual(Object.keys(reopened.modelServices.definitions()).sort(),['asr','image','llm','search','speaker','tts','video']);
+    assert.doesNotMatch(JSON.stringify(reopened.modelServices.list()),/generated-test-value-/);
+    assert.doesNotMatch(await readFile(join(directory,'settings.json'),'utf8'),/generated-test-value-/);
   }finally{await rm(directory,{recursive:true,force:true})}
 });

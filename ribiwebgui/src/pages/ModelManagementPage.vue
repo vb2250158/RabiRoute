@@ -12,6 +12,7 @@ import type {
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n/index";
 import ModelLibraryTable from "../components/ModelLibraryTable.vue";
+import ApiModelServices from "../components/ApiModelServices.vue";
 import { speechLibraryAbilities } from "../components/modelLibraryPresentation";
 import { speechModelManagementClient, SpeechModelManagementRequestError } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechModelManagementClient";
 
@@ -26,11 +27,11 @@ const speechDiagnosticsOpen = computed(() => route.query.section === "speech-dia
 function setSpeechDiagnostics(open: boolean) {
   void router.replace({ query: { ...route.query, section: open ? "speech-diagnostics" : undefined } });
 }
-type CapabilityFilter = SpeechManagedModelCapability | "image" | "video";
+type CapabilityFilter = SpeechManagedModelCapability | "image" | "video" | "llm" | "search";
 const capability = computed<CapabilityFilter>(() => {
   const tab = route.query.tab;
   if (tab === "workbench") return "video";
-  return tab === "asr" || tab === "speaker" || tab === "image" || tab === "video" ? tab : "tts";
+  return tab === "asr" || tab === "speaker" || tab === "image" || tab === "video" || tab === "llm" || tab === "search" ? tab : "tts";
 });
 const mediaKind = computed(() => capability.value === "image" || capability.value === "video" ? capability.value : undefined);
 function selectCapability(tab: CapabilityFilter) {
@@ -134,11 +135,13 @@ const copy = computed(() => isEnglish.value ? {
 });
 
 const capabilityItems = computed<{ value: CapabilityFilter; label: string; icon: string }[]>(() => [
+  { value: "llm", label: isEnglish.value ? "Language models" : "大语言模型", icon: "mdi-chat-processing-outline" },
   { value: "tts", label: copy.value.tts, icon: "mdi-account-voice" },
   { value: "asr", label: copy.value.asr, icon: "mdi-waveform" },
   { value: "speaker", label: copy.value.speaker, icon: "mdi-account-search-outline" },
   { value: "image", label: isEnglish.value ? "Image generation" : "图片生成模型", icon: "mdi-image-outline" },
-  { value: "video", label: isEnglish.value ? "Video generation" : "视频生成模型", icon: "mdi-video-outline" }
+  { value: "video", label: isEnglish.value ? "Video generation" : "视频生成模型", icon: "mdi-video-outline" },
+  { value: "search", label: isEnglish.value ? "Web search" : "联网搜索", icon: "mdi-web" }
 ]);
 const settingsLabel = computed(() => isEnglish.value ? "Model service settings" : "模型服务设置");
 
@@ -427,8 +430,10 @@ onBeforeUnmount(() => managerEvents?.close());
           :title="settingsLabel" :aria-label="settingsLabel" @click="openSettings(true)" />
       </div>
 
+      <ApiModelServices :kind="capability" :search="search ?? ''" />
+      <h3 v-if="capability !== 'llm' && capability !== 'search'" class="local-model-heading">{{ isEnglish ? "Local models" : "本地模型" }}</h3>
       <WorkbenchModels v-if="mediaKind" :kind="mediaKind" :labels="copy" :english="isEnglish" :search="search ?? ''" />
-      <ModelLibraryTable v-else :rows="speechRows" :labels="copy" :loading="loading">
+      <ModelLibraryTable v-else-if="capability !== 'llm' && capability !== 'search'" :rows="speechRows" :labels="copy" :loading="loading">
         <template #action="{ row: { model } }">
           <v-tooltip v-if="!model.downloaded" :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
             <template #activator="{ props }">
@@ -465,6 +470,7 @@ onBeforeUnmount(() => managerEvents?.close());
   gap: 12px;
   color: var(--rr-text);
 }
+.local-model-heading { margin: 0; font-size: 16px; }
 
 .environment-bar, .job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 12px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }
 .environment-bar > strong { color: var(--model-ink); }

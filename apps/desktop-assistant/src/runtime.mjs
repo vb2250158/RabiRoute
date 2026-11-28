@@ -16,8 +16,9 @@ import {createWebSearchService} from '@rabilink/desktop-voice-service/web-search
 import { createResidentWake, parseWakeAliases } from '../../../packages/desktop-voice-service/src/resident-wake.mjs';
 
 /** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function openAssistantRuntime({ directory, settingsDirectory=directory, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy, onCaptureActivity, onCaptureStopped, residentSpeech, dictionaryPolicy }) {
-  const store = await openSettingsStore(settingsDirectory);
+export async function openAssistantRuntime({ directory, settingsDirectory=directory, settingsStore, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy, onCaptureActivity, onCaptureStopped, residentSpeech, dictionaryPolicy }) {
+  const saved = settingsStore ?? await openSettingsStore(settingsDirectory);
+  const store = { ...saved, credentials: { ...saved.credentials } };
   let options={};
   try {options=JSON.parse(await readFile(join(directory,'host-options.json'),'utf8'));}
   catch(error) {if(error.code!=='ENOENT')throw Error('ASSISTANT_HOST_OPTIONS_INVALID');}
@@ -63,6 +64,7 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
   }
   let catalogPromise, catalogTime = 0, catalogCache=[];
   const modelCatalog = () => {
+    if (capabilities.managedModelServices) return undefined;
     const config=store.read();
     if(config.llmProvider!=='workbuddy-cli')return undefined;
     if(!catalogPromise||Date.now()-catalogTime>300000) {

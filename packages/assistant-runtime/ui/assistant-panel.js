@@ -174,7 +174,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     ASSISTANT_CONTEXT_STORAGE_FULL:'对话所在磁盘已满。请释放该磁盘的空间，再重试连接或保存。',
     SPEECH_CREDENTIAL_TARGET_CHANGED:'提供商或接口地址已变化，请刷新设置后重新保存密钥。',
   }
-  return function AssistantPanel({ adapter }) {
+  return function AssistantPanel({ adapter,hostSettingsProps }) {
     const [state,setState] = React.useState(null), [messages,setMessages] = React.useState([])
     const [message,setMessage] = React.useState(''), [text,setText] = React.useState(''), [pending,setPending] = React.useState(null)
     const [editing,setEditing] = React.useState(false), [draft,setDraft] = React.useState({}), [devices,setDevices] = React.useState([])
@@ -187,6 +187,7 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const [connectionError,setConnectionError]=React.useState(false)
     const [checksExpanded,setChecksExpanded]=React.useState(null)
     const preview=Boolean(state?.capabilities?.preview)
+    const managedModels=Boolean(state?.capabilities?.managedModelServices)
     const conversationMissing=assistantSetupGaps(state).some(item=>item.section==='conversation')
     const serviceRows=assistantServiceRows(state)
     const testJob=state?.diagnostics?.job,testRunning=testJob?.status==='running'
@@ -477,9 +478,9 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     }
     const searchLabels={disabled:'联网搜索已关闭',unsupported:'当前接口未声明搜索能力，请选择独立搜索服务',untested:'尚未测试',searching:'正在搜索…',completed:'已返回真实搜索结果',failed:'搜索失败'}
     const searchSettings=state?.capabilities?.webSearch&&h('div',{hidden:settingsTab!=='search',style:{display:settingsTab==='search'?'grid':'none',gap:20,alignItems:'start',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,340px),1fr))'}},
-      h('fieldset',null,h('legend',null,'联网搜索'),check('允许助手联网搜索','webSearchEnabled'),h('label',{style:label},'搜索服务',h('select',{'aria-label':'搜索服务',value:draft.webSearchProvider,onChange:event=>{edit('webSearchProvider',event.target.value);setKeys(current=>({...current,search:''}))}},(state.webSearch?.providers||[]).map(item=>h('option',{key:item.id,value:item.id},item.label)))),
+      h('fieldset',null,h('legend',null,'联网搜索'),check('允许助手联网搜索','webSearchEnabled'),!managedModels&&h(React.Fragment,null,h('label',{style:label},'搜索服务',h('select',{'aria-label':'搜索服务',value:draft.webSearchProvider,onChange:event=>{edit('webSearchProvider',event.target.value);setKeys(current=>({...current,search:''}))}},(state.webSearch?.providers||[]).map(item=>h('option',{key:item.id,value:item.id},item.label)))),
         h('p',{className:'va-help'},state.webSearch?.providers?.find(item=>item.id===draft.webSearchProvider)?.hint),
-        draft.webSearchProvider==='tavily'&&credential('search'),select('每次最多返回来源数','webSearchMaxResults',Array.from({length:10},(_,index)=>[index+1,(index+1)+' 条'])),
+        draft.webSearchProvider==='tavily'&&credential('search')),select('每次最多返回来源数','webSearchMaxResults',Array.from({length:10},(_,index)=>[index+1,(index+1)+' 条'])),
         h('p',{className:'va-note'},'只在需要查资料时搜索。搜索问题会发送给所选服务。')),
       h('section',{className:'va-check-card','aria-label':'搜索测试'},h('h3',null,'已保存的搜索连接'),h('p',null,state.webSearch?.label+(state.webSearch?.model?' · '+state.webSearch.model:'')),
         h('p',{role:'status'},searchLabels[state.webSearch?.status]||'尚未测试'),state.webSearch?.error&&h('p',{role:'alert'},errors[state.webSearch.error]||state.webSearch.error),
@@ -528,24 +529,25 @@ export function createAssistantPanel(React, { Button = 'button', Input = 'input'
     const settingsBody=h('div',{className:'va-settings'},
       preview&&h('div',{className:'va-preview va-preview-settings',role:'status'},h('strong',null,'仅预览设置 · 不能实际对话'),h('span',null,'模型是示例数据，不会连接 WorkBuddy 或其他服务。请勿填写真实密钥。')),
       h('nav',{className:'va-nav','aria-label':'设置分类'},[['conversation','对话'],...(state?.capabilities?.webSearch?[["search","联网搜索"]]:[]),['asr','语音识别'],['tts','语音播报'],['devices','设备'],['appearance','外观'],['setup','连接与测试']].map(([id,name])=>h(Button,{key:id,'aria-pressed':settingsTab==='speech'?speechKind===id:settingsTab===id,onClick:()=>navigateSettings(id)},name))),
-      h('fieldset',{className:'va-pages',disabled:busy,ref:pages},HostSettings&&h(HostSettings,{state,settingsTab,speechKind,command:invoke,query:adapter.command,dirty}),
+      h('fieldset',{className:'va-pages',disabled:busy,ref:pages},HostSettings&&h(HostSettings,{state,settingsTab,speechKind,command:invoke,query:adapter.command,dirty,...hostSettingsProps}),
       h('div',{hidden:settingsTab!=='setup'},state?.settings?.onboardingComplete===false&&h('h3',null,'开始使用语音助手'),state?.settings?.onboardingComplete===false&&h('p',null,'选择对话模型，配置识别和音色后，即可开始。'),h('div',{className:'va-setup-links'},[['conversation','对话模型'],['asr','语音识别'],['tts','语音播报'],['devices','音频设备']].map(([id,name])=>h(Button,{key:id,onClick:()=>navigateSettings(id)},name))),serviceTests||h('p',null,'在语音播报和设备设置中可以试听、测试麦克风。')),
       h('div',{hidden:settingsTab!=='conversation',className:'va-conversation-settings',style:{display:settingsTab==='conversation'?'grid':'none',gap:20}},
-      h('div',{className:'va-model-settings'},(state?.capabilities?.modelConfiguration||state?.capabilities?.host==='standalone')
+      h('div',{className:'va-model-settings'},!managedModels&&((state?.capabilities?.modelConfiguration||state?.capabilities?.host==='standalone')
         ?h('fieldset',null,h('legend',null,'对话模型'),providerSelect('llm'),h('p',{className:'va-help'},state.capabilities?.modelProviders?.find(item=>item.id===providerId('llm'))?.hint||'填写连接信息，刷新模型列表，选择模型后保存。'),providerId('llm')!=='workbuddy-cli'&&credential('llm'),modelSelect('llm'),providerId('llm')!=='workbuddy-cli'&&connectionDetails('llm'))
-        :h('fieldset',null,h('legend',null,'DSH 对话模型'),!hostModels.length&&h('p',{role:'status',className:'va-help'},state?.capabilities?.hostModelsError?'未能读取 DSH 模型目录，请点击“刷新模型”重试。':'尚未读到可用模型。请先在 DSH 的模型提供商中完成登录或连接，再回这里刷新。'),h('label',{style:label},'提供商',h('select',{'aria-label':'宿主提供商',value:selectedHost,disabled:busy||!hostGroups.length,onChange:event=>setHostProvider(event.target.value)},hostGroups.map(([id,name])=>h('option',{key:id,value:id},name)))),h('label',{style:label},'模型',h('select',{'aria-label':'宿主模型',value:state?.selectedModel?.provider===selectedHost?state.selectedModel.model:'',disabled:busy||!hostModels.length,onChange:event=>invoke({action:'select-model',provider:selectedHost,model:event.target.value},'模型已切换。')},h('option',{value:'',disabled:true},'选择模型'),hostModels.filter(item=>item.provider===selectedHost).map(item=>h('option',{key:item.model,value:item.model},item.label)))),h(Button,{disabled:busy,onClick:()=>invoke({action:'refresh-models'})},'刷新模型'),h('p',null,'这里自动读取 DSH 已配置的提供商和模型，无需重复填写密钥。选择模型立即生效。'),state?.capabilities?.presets&&select('助手预设','agentPreset',[['','使用默认预设'],...state.capabilities.presets.map(item=>[item.id,item.label])])),
+        :h('fieldset',null,h('legend',null,'DSH 对话模型'),!hostModels.length&&h('p',{role:'status',className:'va-help'},state?.capabilities?.hostModelsError?'未能读取 DSH 模型目录，请点击“刷新模型”重试。':'尚未读到可用模型。请先在 DSH 的模型提供商中完成登录或连接，再回这里刷新。'),h('label',{style:label},'提供商',h('select',{'aria-label':'宿主提供商',value:selectedHost,disabled:busy||!hostGroups.length,onChange:event=>setHostProvider(event.target.value)},hostGroups.map(([id,name])=>h('option',{key:id,value:id},name)))),h('label',{style:label},'模型',h('select',{'aria-label':'宿主模型',value:state?.selectedModel?.provider===selectedHost?state.selectedModel.model:'',disabled:busy||!hostModels.length,onChange:event=>invoke({action:'select-model',provider:selectedHost,model:event.target.value},'模型已切换。')},h('option',{value:'',disabled:true},'选择模型'),hostModels.filter(item=>item.provider===selectedHost).map(item=>h('option',{key:item.model,value:item.model},item.label)))),h(Button,{disabled:busy,onClick:()=>invoke({action:'refresh-models'})},'刷新模型'),h('p',null,'这里自动读取 DSH 已配置的提供商和模型，无需重复填写密钥。选择模型立即生效。'),state?.capabilities?.presets&&select('助手预设','agentPreset',[['','使用默认预设'],...state.capabilities.presets.map(item=>[item.id,item.label])]))),
       state?.capabilities?.contextManagement&&h('section',{className:'va-context-settings','aria-label':'上下文与记录'},h('h3',null,'上下文与记录'),h('p',null,state.context?.storage==='native'?'由宿主原生会话保存；刷新和重启后继续使用同一段对话。':'聊天记录和模型上下文加密保存在本机，刷新和重启后继续使用。'),h('div',{className:'va-context-stats'},h('span',null,'聊天记录：'+(state.context?.messageCount||0)+' 条'),h('span',null,'模型上下文：'+(state.context?.contextMessageCount??'由宿主管理')+(state.context?.contextMessageCount===undefined?'':' 条'))),state.context?.maxContextMessages&&h('p',{className:'va-note'},'模型使用最近 '+state.context.maxContextMessages+' 条、最多 '+state.context.maxContextCharacters.toLocaleString()+' 字符；较早聊天记录仍可查看。')),
       ),h('section',{className:'va-identity-settings'},h('h3',null,'助手身份'),field('助手名称','assistantName'),h('label',{style:label},'人设',h('textarea',{rows:4,readOnly:Boolean(state?.hostSettings?.personaId),value:draft.persona??'',onChange:event=>edit('persona',event.target.value),'aria-label':'人设'})),state?.capabilities?.host==='dsh'&&check('管理全部工作区的对话','manageAllWorkspaces'))),
       searchSettings,
       h('div',{hidden:settingsTab!=='speech',style:{display:settingsTab==='speech'?'grid':'none',gap:20}},
       h('fieldset',{hidden:speechKind!=='asr'||state?.hostSettings?.asrSource==='host',className:'va-service'},h('legend',null,'语音识别'),
-        h('div',{className:'va-speech-layout va-asr-layout'},h('section',{className:'va-connection-settings','aria-label':'识别连接'},h('h3',null,'识别连接'),
+        h('div',{className:'va-speech-layout va-asr-layout'},!managedModels&&h('section',{className:'va-connection-settings','aria-label':'识别连接'},h('h3',null,'识别连接'),
           h('div',{className:'va-basic-grid'},providerSelect('asr'),draft.asrMode==='local-whisper'?h('label',{style:label},'模型',h(Input,{readOnly:true,value:'Whisper base · CPU / int8'})):draft.asrMode!=='native'&&speechModel('asr')),
           !['native','local-whisper'].includes(draft.asrMode)&&h(React.Fragment,null,credential('asr'),connectionDetails('asr'))),
           !['native','local-whisper'].includes(draft.asrMode)&&h('section',{className:'va-recognition-settings','aria-label':'识别能力与偏好'},asrCapabilities()))),
       recognitionDictionary(),
       h('fieldset',{hidden:speechKind!=='tts'||state?.hostSettings?.ttsSource==='host',className:'va-service'},h('legend',null,'语音播报'),
         h('div',{className:'va-speech-layout va-tts-layout'},
+          managedModels?h('section',{'aria-label':'播报音色'},h('p',null,draft.ttsVoice||'请在模型服务配置音色。'),h(Button,{disabled:busy||!draft.ttsVoice,onClick:()=>void commitDraft().then(()=>command({action:'test-playback'},value=>value.message)).catch(()=>{})},'试听音色')):
           h('section',{className:'va-connection-settings va-tts-selection','aria-label':'播报连接'},h('div',{className:'va-tts-card-heading'},h('h3',null,'选择声音')),
             h('div',{className:'va-basic-grid'},providerSelect('tts'),speechModel('tts')),
             h('section',{className:'va-voice-settings','aria-label':'声音选择'},voicePicker(),

@@ -5,6 +5,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {openAssistantRuntime} from '../../../../apps/desktop-assistant/src/runtime.mjs';
 import {snapshotRecentSpeech} from '../../../../packages/assistant-runtime/src/speech-observation.js';
 import {openSettingsStore} from '../../../../apps/desktop-assistant/src/settings-store.mjs';
+import {assistantServiceKinds,defaultModelServiceId,modelServiceIdField,serviceSettings} from '../../../../apps/desktop-assistant/src/model-services.mjs';
 import {createHostEndpointSession} from '../../../../apps/rabi-agent/lib/host-endpoint.mjs';
 import {createManagerClient} from '../../../../apps/rabi-agent/lib/manager-client.mjs';
 import {asrDictionaryPolicy,createSpeechProviders} from '@rabilink/desktop-voice-service/speech-providers';
@@ -18,6 +19,8 @@ import {createMobileTts,mobileCustomTtsReady} from './mobile-tts.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.message||'RABI_OPERATION_FAILED'),{receipt:result});return result.data?.data??result.data};
 const validSource=value=>['host','custom'].includes(value);
+const hostModelRef=(deviceId,modelId)=>'host:'+JSON.stringify([deviceId,modelId]);
+const hostModelKinds=['asr','tts','backgroundAsr'];
 const mobileRequestId=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
 const mobileObservationValidators=Object.freeze({
   emotion:value=>typeof value==='string'&&/^[a-z][a-z_-]{0,31}$/i.test(value),
@@ -60,6 +63,9 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
   }
   const assertCurrent=()=>{if(closed)throw Error('ASSISTANT_CLOSED');signal.throwIfAborted()};
   const assertWritable=()=>{assertCurrent();if(readOnly())throw Error('ASSISTANT_READ_ONLY')};
+  let settingsOpening;
+  const connectionSettings=()=>settingsOpening??=openSettingsStore(connectionDirectory).catch(error=>{settingsOpening=undefined;throw error});
+  const selectedServiceId=(bound,kind)=>['asr','tts'].includes(kind)&&bound[kind+'Source']==='host'?'':bound[modelServiceIdField(kind)]||defaultModelServiceId(kind);
   const supportsResidentCapture=()=>typeof speech.speechRuntimeControl?.setAssistantResident==='function';
   const residentOwner=identity.activationId||identity.managerInstanceId;
   const compute=(deviceId,operation)=>speech.invokeOnComputeTarget?.(deviceId||'',operation) ?? operation();
@@ -98,7 +104,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
   }
   function prepareResidentPreference() {
     if(!supportsResidentCapture()||readOnly())return Promise.resolve();
-    return residentMigration??=openSettingsStore(connectionDirectory).then(migrateResidentPreference).catch(error=>{
+    return residentMigration??=connectionSettings().then(migrateResidentPreference).catch(error=>{
       residentMigration=undefined;
       throw error;
     });
@@ -235,13 +241,45 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       };
       const ownDirectory=join(directory,'sessions',hash(bound.personaId||'default'));
       await prepareResidentPreference();
-      const settings=await openSettingsStore(connectionDirectory);
-      if(!settings.read().llmModel){
+      const settings=await connectionSettings();
+      if(!settings.read().llmModel&&!bound.llmServiceId&&!settings.modelServices.getSaved(defaultModelServiceId('llm'),'llm')){
         const available=await modelCatalog({kind:'llm',provider:'workbuddy-cli',endpoint:'codebuddy://cn',workbuddyCli:hostOptions.workbuddyCli}).catch(()=>[]);
         const selected=available.find(item=>item.id===hostOptions.llmModel)||available.find(item=>item.isDefault);
         await settings.save({llmProvider:'workbuddy-cli',llmEndpoint:'codebuddy://cn',...(selected?{llmModel:selected.id}:{})});
       }
-      const overlay=value=>({...value,...(role?{persona:role.document,assistantName:personaLabel}:{}),...(hostOptions.electronExecutable&&!value.electronExecutable?{electronExecutable:hostOptions.electronExecutable}:{}),
+      const activeServices = new Map();
+      for (const kind of assistantServiceKinds) {
+        const id = selectedServiceId(bound, kind);
+        if (!id) continue;
+        const row = bound[modelServiceIdField(kind)] ? settings.modelServices.get(id,kind) : settings.modelServices.getSaved(id,kind);
+        if (row) activeServices.set(kind,row);
+        else if (bound[modelServiceIdField(kind)]) throw Error('MODEL_SERVICE_NOT_FOUND');
+      }
+      const serviceOverlay=Object.assign({},...Array.from(activeServices.values(),serviceSettings));
+      function configuredService(kind,endpoint,provider){
+        const row=activeServices.get(kind);
+        return row&&row.provider===provider&&row.endpoint===endpoint?row:undefined;
+      }
+      const settingsStore={...settings,credentials:{...settings.credentials,
+        async describe(kind,endpoint,provider){
+          const row=configuredService(kind,endpoint,provider);
+          if(!row)return settings.credentials.describe(kind,endpoint,provider);
+          const description=settings.modelServices.describe(row.id);
+          return {configured:Boolean(description?.configured||description?.credentialMode==='official-login'),writable:false,mode:description?.credentialMode};
+        },
+        async resolve(kind,endpoint,provider){
+          const row=configuredService(kind,endpoint,provider);
+          if(!row)return settings.credentials.resolve(kind,endpoint,provider);
+          const latest=settings.modelServices.get(row.id,kind);
+          if(latest?.provider!==row.provider||latest.endpoint!==row.endpoint)throw Error('MODEL_SERVICE_CONNECTION_CHANGED');
+          return settings.modelServices.resolve(row.id);
+        },
+        set(kind,endpoint,key,provider){
+          if(activeServices.has(kind))throw Error('MODEL_SERVICE_CONFIGURATION_REQUIRED');
+          return settings.credentials.set(kind,endpoint,key,provider);
+        },
+      }};
+      const overlay=value=>({...value,...serviceOverlay,...(role?{persona:role.document,assistantName:personaLabel}:{}),...(hostOptions.electronExecutable&&!value.electronExecutable?{electronExecutable:hostOptions.electronExecutable}:{}),
         ...(bound.asrSource==='host'?{asrMode:'compatible',asrModel:asrModel||''}:{}),
         ...(bound.ttsSource==='host'?hostVoiceSettings():{}),petId:bound.personaId});
       async function hostRecognize(model, dictionary, audio, abort) {
@@ -302,14 +340,14 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
           const key=presentation.responseId+':'+presentation.playbackId;
           if(config.petEnabled&&presentation.responseId&&presentation.speechStatus==='ended'&&!seen.has(key)){seen.add(key);record({voice:bound.personaId,kind:'tts',id:key,text:presentation.speechText||presentation.text,time:Date.now()})}},
         async dispose(){clearPet();await Promise.allSettled([...petPending]);seen.clear()}};
-      const next=await openAssistantRuntime({directory:ownDirectory,settingsDirectory:connectionDirectory,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
+      const next=await openAssistantRuntime({directory:ownDirectory,settingsStore,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
         dictionaryPolicy:config=>bound.asrSource==='host'?hostAsrDictionaryPolicy(models.find(item=>item.id===asrModel)):asrDictionaryPolicy(config),
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(ttsModels.find(item=>item.id===config.ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
         onCaptureActivity:wake.captureActivity,
         onCaptureStopped(){companionPresentation=false;wake.captureStopped();},
         onSubmitted:(message,config)=>{if(config.petEnabled&&bound.personaId&&message.source==='speech')record({kind:'asr',source:'voice-assistant',id:message.id,text:message.text,time:Date.now()})},
-        deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true,mobileVoiceSubmit:true},
+        deviceFactory:options=>{assertWritable();return deviceFactory?deviceFactory(options):openDesktopDevice({...options,runtimeEntry})},capabilities:{host:'rabi',modelConfiguration:true,mobileVoiceSubmit:true,managedModelServices:true},
         discoverTools:async()=>{const connection=await manager();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED');return createRabiOperationTools({sdk:connection.operations,sendAgent:sendAgent?request=>sendAgent(request,runtime.conversation.getSessionId()):undefined,assertCurrent:()=>{assertCurrent();if(epoch!==profileRevision)throw Error('ASSISTANT_CONTEXT_CHANGED')}})} });
       if(closed||epoch!==profileRevision){await next.dispose();throw Error('ASSISTANT_CONTEXT_CHANGED')}
       const mobileTts=createMobileTts({conversation:next.conversation,settings:()=>({...next.speechSettings(),voiceEnabled:true}),signal,
@@ -337,20 +375,22 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         get hostSources(){
         const {persona,model}=hostVoice();
         const voiceReady=Boolean(persona?.voiceReady);
-        const ttsIssue=bound.ttsSource!=='host'?null:ttsModelsError?'无法连接所选播报服务':!voiceReady?'请选择具备声线的人格，或使用自定义播报':!model?'未找到可用的播报模型':!readyModel(ttsModels,model)?'所选播报模型不可用，请重新选择':null;
+        const ttsIssue=bound.ttsSource!=='host'?null:ttsModelsError?'无法连接所选播报服务':!voiceReady?'请选择具备声线的人格，或选择已配置的 API 播报服务':!model?'未找到可用的播报模型':!readyModel(ttsModels,model)?'所选播报模型不可用，请重新选择':null;
         return {...bound,personaLabel,asrModel:asrModel||'',ttsModel:model||'',asrIssue,ttsIssue,voiceReady,models:hostModelSummary,modelsError,identitySource:role?'Rabi 人格正文全文；声线由宿主管理':'自定义人设'};
       }};
       return runtime;
     })();try{return await opening}finally{opening=undefined}
   }
   let profileCommandBusy=false;
+  const serviceFields=assistantServiceKinds.map(modelServiceIdField);
   function assertVoiceReady(current){
     if(current.hostSources.asrIssue)throw Error('HOST_ASR_CONFIGURATION_REQUIRED');
     if(current.hostSources.ttsIssue)throw Error('HOST_TTS_CONFIGURATION_REQUIRED');
   }
-  async function saveHostProfile(current,patch,{forVoice=false}={}){
+  async function saveHostProfile(current,patch,{forVoice=false,modelBinding=false}={}){
     if(current.conversation.activity().pending)throw Error('ASSISTANT_CONTEXT_BUSY');
-    for(const [key,value] of Object.entries(patch))if(['wakeEnabled','mobileLocalFallback'].includes(key)?typeof value!=='boolean':!['personaId','asrSource','ttsSource','asrModel','ttsModel','asrDeviceId','ttsDeviceId','backgroundAsrModel','backgroundAsrDeviceId'].includes(key)||typeof value!=='string'||value.length>200)throw Error('ASSISTANT_HOST_PROFILE_INVALID');
+    const profileFields=['personaId','asrSource','ttsSource','asrModel','ttsModel','asrDeviceId','ttsDeviceId','backgroundAsrModel','backgroundAsrDeviceId',...(modelBinding?serviceFields:[])];
+    for(const [key,value] of Object.entries(patch))if(['wakeEnabled','mobileLocalFallback'].includes(key)?typeof value!=='boolean':!profileFields.includes(key)||typeof value!=='string'||value.length>200)throw Error('ASSISTANT_HOST_PROFILE_INVALID');
     const next={...profile,...patch};
     if(!validSource(next.asrSource)||!validSource(next.ttsSource))throw Error('ASSISTANT_HOST_PROFILE_INVALID');
     if(next.personaId&&!(await personas()).some(item=>item.id===next.personaId))throw Error('ASSISTANT_PERSONA_UNAVAILABLE');
@@ -382,6 +422,66 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     }
     if(!forVoice)armWake();
     return {saved:true,settingsScopeChanged:true};
+  }
+  async function withModelSelection(operation) {
+    if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');
+    profileCommandBusy=true;
+    try { return await operation(); }
+    finally { profileCommandBusy=false; }
+  }
+  async function modelOptions(kind,group) {
+    assertCurrent();
+    if (group==='api' && assistantServiceKinds.includes(kind)) {
+      const settings=await connectionSettings();
+      assertCurrent();
+      return settings.modelServices.list().filter(row=>row.kind===kind)
+        .map(row=>({value:row.id,title:row.name,subtitle:row.model}));
+    }
+    if (!hostModelKinds.includes(kind)||typeof group!=='string'||!group.startsWith('host/')||group.length>205) throw Error('MODEL_SERVICE_NOT_FOUND');
+    const deviceId=group.slice(5);
+    const capability=kind==='backgroundAsr'?'asr':kind;
+    const rows=await compute(deviceId,()=>speech.speechControl.models(assertCurrent));
+    assertCurrent();
+    return rows.filter(row=>row.capability===capability&&row.enabled).map(row=>({
+      value:hostModelRef(deviceId,row.id),title:row.name||row.id,subtitle:row.id,props:{disabled:!row.available}
+    }));
+  }
+  function chosenModelOptions(sources,services) {
+    const entries={};
+    for(const kind of [...assistantServiceKinds,'backgroundAsr']){
+      const apiId=kind==='backgroundAsr'?'':selectedServiceId(profile,kind);
+      if(apiId){
+        const service=services.find(row=>row.id===apiId&&row.kind===kind);
+        entries[kind]={group:'api',id:service?.id||'',label:service?.name||''};
+        continue;
+      }
+      const deviceId=sources[kind+'DeviceId']||'';
+      const modelId=sources[kind+'Model']||(kind==='backgroundAsr'?'fireredasr2-aed':'');
+      entries[kind]={group:'host/'+deviceId,id:modelId?hostModelRef(deviceId,modelId):'',
+        label:sources.models.find(row=>row.id===modelId&&row.capability===(kind==='backgroundAsr'?'asr':kind))?.name||modelId};
+    }
+    return entries;
+  }
+  async function selectService({kind,id}) {
+    return withModelSelection(async()=>{
+      if(typeof id!=='string'||id.length>1200)throw Error('MODEL_SERVICE_NOT_FOUND');
+      if(id.startsWith('host:')&&hostModelKinds.includes(kind)){
+        let target;
+        try { target=JSON.parse(id.slice(5)); } catch { throw Error('MODEL_SERVICE_NOT_FOUND'); }
+        if(!Array.isArray(target)||target.length!==2||target.some(value=>typeof value!=='string'||value.length>200)||!target[1])throw Error('MODEL_SERVICE_NOT_FOUND');
+        const [deviceId,modelId]=target;
+        const options=await modelOptions(kind,'host/'+deviceId);
+        if(!options.some(row=>row.value===id&&!row.props?.disabled))throw Error('MODEL_SERVICE_NOT_FOUND');
+        const current=await open();
+        assertWritable();
+        return saveHostProfile(current,{[kind+'DeviceId']:deviceId,[kind+'Model']:modelId,...(kind==='backgroundAsr'?{}:{[kind+'Source']:'host'})});
+      }
+      if(!assistantServiceKinds.includes(kind)||!(await connectionSettings()).modelServices.get(id,kind))throw Error('MODEL_SERVICE_NOT_FOUND');
+      if(id===profile[modelServiceIdField(kind)]&&selectedServiceId(profile,kind)===id)return {saved:true};
+      const current=await open();
+      assertWritable();
+      return saveHostProfile(current,{[modelServiceIdField(kind)]:id,...(['asr','tts'].includes(kind)?{[kind+'Source']:'custom'}:{})},{modelBinding:true});
+    });
   }
   async function startOrConfigure(request){
     if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');
@@ -429,7 +529,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         assertCurrent();
         if(supportsResidentCapture()&&!readOnly()){
           await prepareResidentPreference();
-          const settings=await openSettingsStore(connectionDirectory);
+          const settings=await connectionSettings();
           await applyResidentCapture(settings.read().voiceEnabled);
         }
         armWake();
@@ -449,18 +549,40 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       try { modelComputers=(await speech.computeServers?.())?.peers??[]; }
       catch { /* Local models remain selectable while the remote directory is unavailable. */ }
       assertCurrent();
-      return {...state,hostSettings:{...current.hostSources,wake:wakeSnapshot(),lastError:lastHostError,personas:people,
+      const sources=current.hostSources;
+      const modelSelections=view==='mobile'?undefined:chosenModelOptions(sources,(await connectionSettings()).modelServices.list());
+      return {...state,hostSettings:{...sources,wake:wakeSnapshot(),lastError:lastHostError,personas:people,
+        ...(modelSelections?{modelSelections}:{}),
         ...(supportsResidentCapture()&&view!=='mobile'?{residentTranscription:residentState}:{}),modelComputers,
         mobileAudio:{recognition:current.streamingAsr()?'streaming':'utterance',sampleRate:mobileAsrSampleRate,...mobileWake}},
         capabilities:{...state.capabilities,host:'rabi',tools:true,modelConfiguration:true,mobileIndependentVoice:true,
           mobileCustomTts:mobileCustomTtsReady(current.hostSources.ttsSource,{...state.settings,voiceEnabled:true},state.credentials?.tts)}};
     },
+    async modelServices(){
+      assertCurrent();
+      const {modelServices}=await connectionSettings();
+      return {services:modelServices.list(),providers:modelServices.definitions()};
+    },
+    modelOptions,
+    async saveModelService(request, guard){
+      return withModelSelection(async()=>{
+        assertWritable();guard();
+        if(!request||typeof request!=='object'||Array.isArray(request))throw Error('MODEL_SERVICE_INVALID');
+        const settings=await connectionSettings();
+        const active=typeof request.id==='string'&&assistantServiceKinds.some(kind=>selectedServiceId(profile,kind)===request.id);
+        const current=active?await open():undefined;
+        if(current&&(current.conversation.activity().pending||current.host.captureState().phase!=='stopped'||mobileAsr||mobileBatch))throw Error('MODEL_SERVICE_IN_USE');
+        const result=await settings.modelServices.save(request,()=>{assertWritable();guard()});
+        if(current)await saveHostProfile(current,{});
+        return result;
+      });
+    },
     async synthesizeMobile(request,requestSignal){
-      assertWritable();const current=await open();assertWritable();
+      assertWritable();if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');const current=await open();assertWritable();
       return current.mobileTts.synthesize(request,requestSignal);
     },
     async transcribeMobile({audio,sessionId,source,signal:requestSignal}){
-      assertWritable();
+      assertWritable();if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');
       const current=await open(),epoch=profileRevision;
       const batch = new AbortController();
       const abort=AbortSignal.any([signal,batch.signal,...(requestSignal?[requestSignal]:[])]);
@@ -486,7 +608,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       }
     },
     async openMobileAsr({request,sessionId,signal:requestSignal}){
-      assertWritable();
+      assertWritable();if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');
       const current=await open(),epoch=profileRevision;
       assertWritable();requestSignal?.throwIfAborted();
       if(sessionId!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');
@@ -517,11 +639,13 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
     },
     async command(request){
       assertWritable();
+      if(request.action==='model-service-select')return selectService(request);
       if(request.action==='speech-models'){
         if(typeof request.deviceId!=='string'||request.deviceId.length>200)throw Error('ASSISTANT_HOST_PROFILE_INVALID');
         const models=await compute(request.deviceId,()=>speech.speechControl.models(assertCurrent));
         return models.map(hostSpeechModelSummary);
       }
+      if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');
       if(request.action==='start'||request.action==='start-for-persona'||request.action==='host-settings')return startOrConfigure(request);
       const current=await open();assertWritable();
       if(request.action==='mobile-voice-submit'){
@@ -553,7 +677,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       return current.command(request);
     },
     async session(){const current=await open();return {id:current.conversation.getSessionId(),name:current.hostSources.personaLabel||profile.personaId||'语音助手',cwd:directory,updatedAt:current.conversation.contextState().savedAt||null}},
-    async submit(text,requestId,expectedSession){assertWritable();const current=await open();assertWritable();if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
+    async submit(text,requestId,expectedSession){assertWritable();if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');const current=await open();assertWritable();if(profileCommandBusy)throw Error('ASSISTANT_CONTEXT_BUSY');if(expectedSession&&expectedSession!==current.conversation.getSessionId())throw Error('ASSISTANT_CONTEXT_CHANGED');return current.conversation.submit(text,requestId)},
     async recover(requestId,text){assertWritable();const current=await open();assertWritable();return current.conversation.acceptedRequest(requestId,text)},
     async dispose(){
       if(closed)return;

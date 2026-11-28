@@ -6,11 +6,15 @@ Recognition diagnostics use the packaged Microsoft MIT-licensed Mandarin questio
 
 The unique Rabi PC plugin adds **语音助手** at `/voice-assistant`. It owns its model session and does not require a Codex, DSH or persona Route. Its model/voice loops and settings UI reuse the same shared runtime as the standalone Web assistant. WorkBuddy uses the existing official domestic login; no account tokens are copied.
 
+Configure API connections under **Model services** for language models, web search, speech recognition and text to speech. Previously saved connections appear in the catalog. Multiple services can use the same endpoint with separate credentials. Keys are stored encrypted on the host. Enter a new key when changing the endpoint or protocol of a keyed connection.
+
+Voice Assistant settings select saved services. For live recognition and playback, select a connected device and its model in the same searchable panel, or select an API service from the catalog. Background transcription continues to use a device model. Speaker recognition, image and video tabs can also save API connections for consumers that support the configured protocol.
+
 Connection settings, encrypted credentials and onboarding are shared between personas. Encrypted conversation history and model context are isolated by persona and survive refresh/restart. Switching back restores the original history. The selected public persona document is applied in full; native voice settings remain with their original speech owner. Automation and Hook configuration are not silently converted into system instructions.
 
 The Rabi PC **Voice Assistant** switch controls background microphone capture. Detected utterances are saved as transcripts. Turning the switch off ends that PC's capture and voice conversation. The first upgrade adopts the previous host streaming setting. The mobile assistant controls the phone's recorder and recording history independently.
 
-Background transcription, live recognition and playback each have a model menu. Choose a local or remote computer, then choose a model it provides. The live recognition and playback menus also open custom provider settings. The selected computer starts its RabiSpeech engine when needed. Synthesis requests `play:false`, and the assistant plays the audio on its device. Personas without a host voice can still chat and use custom TTS.
+The voice assistant selects configured models from Model Services. The menu has a single search field. Selecting a group on the left updates the model list on the right. Selecting a model displays its name in the field. Background transcription supports local recognition models on this PC and connected computers. Live recognition and playback can also use configured API models. Model Services starts local models on demand. Synthesis requests `play:false`, and the assistant plays the audio on its device. Personas without a host voice can still chat and use API TTS.
 
 A paired Rabi mobile app can use the PC's selected custom TTS provider. The PC synthesizes segments of the assistant reply from the current conversation, and the phone plays the returned audio. The model can keep working during synthesis and playback.
 

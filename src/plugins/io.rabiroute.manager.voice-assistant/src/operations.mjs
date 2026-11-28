@@ -1,5 +1,6 @@
 import {mobileAsrAudioLimit,mobileAsrDurationMs} from './mobile-asr-stream.mjs';
 import {mobileTtsAudioLimit,mobileTtsTextLimit} from './mobile-tts.mjs';
+import {localModelSettingsRequestAllowed} from '@rabiroute/host-api/manager/speechModelSettingsAccess';
 
 const object={type:'object'},response={mediaType:'application/json',schema:{type:'object',additionalProperties:true}};
 const mobileSessionId={type:'string',minLength:1,maxLength:128};
@@ -26,7 +27,7 @@ async function readMobileAudio(body, signal) {
   }
 }
 
-export function createVoiceAssistantOperations(owner,run){
+export function createVoiceAssistantOperations(owner,run,identity){
   const operations=[['state','GET'],['messages','GET'],['command','POST'],['scan','GET']].map(([action,method])=>({
     discovery:{title:'语音助手 · '+action,category:{id:'voice-assistant',title:'语音助手'},provider:'voice-assistant'},
     contract:{operationId:'manager.voice-assistant.'+action,contractVersion:'1.0.0',method,pathTemplate:'/api/voice-assistant/'+action,exposure:'public',transport:'http',description:'Access the plugin-owned shared assistant session; stopping it never exits Rabi PC.',
@@ -34,6 +35,88 @@ export function createVoiceAssistantOperations(owner,run){
       effects:{mode:method==='GET'?'read':'native-assistant-command',description:'The assistant lifecycle, private settings and context retain their original owner. Tools keep their own receipts.'},recovery:{strategy:'original-session-readback',description:'Read state and messages using the original session and request ID. Never replay a tool after an unknown result.'},validators:[{id:'current-assistant-owner',description:'Current plugin activation and original Manager identity must remain current.'}]},
     async handler(input){try{return await run(async()=>({status:200,headers:{'cache-control':'no-store'},body:{code:0,data:await(action==='command'?owner.command(input.body):action==='scan'?owner.agent.operations.scan():action==='messages'?owner.messages(input.query?.view):owner.state(input.query?.view))}}))}catch(error){return {status:409,body:{code:-1,message:error.message}}}}
   }));
+  for (const method of ['GET','POST']) {
+    const write=method==='POST';
+    operations.push({
+      discovery:{title:write?'保存 API 模型服务':'读取 API 模型服务',category:{id:'model-services',title:'模型服务'},provider:'voice-assistant'},
+      contract:{operationId:'manager.model-services.api-models.'+(write?'save':'read'),contractVersion:'1.0.0',method,
+        pathTemplate:'/api/model-services/api-models',exposure:'public',transport:'http',
+        description:'Manage named API connections and their write-only credentials on this Manager.',
+        request:{path:object,query:object,headers:object,body:write?{kind:'json',maxBytes:16384,schema:{type:'object',required:['kind','name','provider'],properties:{
+          id:{type:'string',maxLength:64},kind:{enum:['llm','asr','tts','search','speaker','image','video']},name:{type:'string',minLength:1,maxLength:128},provider:{type:'string',maxLength:40},
+          endpoint:{type:'string',maxLength:2048},model:{type:'string',maxLength:256},resourceId:{type:'string',maxLength:256},voice:{type:'string',maxLength:256},recognitionMode:{type:'string',maxLength:30},apiKey:{type:'string',maxLength:8192,writeOnly:true}
+        },additionalProperties:false}}:{kind:'none'}},
+        responses:{200:response,400:response,403:response,409:response},
+        effects:{mode:write?'native-model-service-save':'read',description:'The local configuration owner validates the endpoint and stores credentials encrypted; responses never include keys.'},
+        recovery:{strategy:'read-back',description:'Reload the API model list from the same Manager before retrying an unconfirmed save.'},
+        validators:[{id:'model-service-connection',description:'Authenticated connection, current Manager identity, supported protocol and exact credential destination.'}]},
+      async handler(input){
+        const headers={'cache-control':'no-store'};
+        const guard=()=>{
+          input.signal?.throwIfAborted();
+          if(!localModelSettingsRequestAllowed(input.request))throw Error('MODEL_SERVICE_ACCESS_DENIED');
+          if(write&&(input.request.headers['x-rabiroute-expected-application-generation-id']!==identity?.applicationGenerationId
+            ||input.request.headers['x-rabiroute-expected-manager-instance-id']!==identity?.managerInstanceId))throw Error('MODEL_SERVICE_MANAGER_CHANGED');
+        };
+        try { return await run(async()=>{
+          guard();
+          const data=write?await owner.saveModelService(input.body,guard):await owner.modelServices();
+          return {status:200,headers,body:{code:0,data}};
+        }); }
+        catch(error){
+          const message=/^(?:MODEL_SERVICE|ASSISTANT|SPEECH)_[A-Z0-9_]{1,100}$/.test(error?.message)?error.message:'MODEL_SERVICE_OPERATION_FAILED';
+          return {status:message==='MODEL_SERVICE_ACCESS_DENIED'?403:409,headers,body:{code:-1,message}};
+        }
+      },
+    });
+  }
+  operations.push({
+    discovery:{title:'列出可用模型',category:{id:'model-services',title:'模型服务'},provider:'voice-assistant'},
+    contract:{operationId:'manager.model-services.models.read',contractVersion:'1.0.0',method:'GET',
+      pathTemplate:'/api/model-services/models',exposure:'public',transport:'http',
+      description:'List selectable model IDs from the selected group for a common model capability.',
+      request:{path:object,query:{...object,required:['kind','group'],properties:{
+        kind:{enum:['llm','search','asr','tts','backgroundAsr']},group:{type:'string',minLength:1,maxLength:205}
+      },additionalProperties:false},headers:object,body:{kind:'none'}},
+      responses:{200:response,403:response,409:response},
+      effects:{mode:'read',description:'Read model labels, public references and availability without returning credentials.'},
+      recovery:{strategy:'repeatable-read',description:'Read again when the selected group or computer changes.'},
+      validators:[{id:'model-service-connection',description:'Verify the requesting connection and route the lookup through the current model owner.'}]},
+    async handler(input) {
+      const headers={'cache-control':'no-store'};
+      if(!localModelSettingsRequestAllowed(input.request))return {status:403,headers,body:{code:-1,message:'MODEL_SERVICE_ACCESS_DENIED'}};
+      try {
+        return await run(async()=>({status:200,headers,body:{code:0,data:await owner.modelOptions(input.query.kind,input.query.group)}}));
+      } catch(error) {
+        const message=error?.message==='MODEL_SERVICE_NOT_FOUND'?error.message:'MODEL_SERVICE_OPERATION_FAILED';
+        return {status:409,headers,body:{code:-1,message}};
+      }
+    }
+  });
+  operations.push({
+    discovery:{title:'设置语音助手模型',category:{id:'model-services',title:'模型服务'},provider:'voice-assistant'},
+    contract:{operationId:'manager.model-services.assistant-selection.save',contractVersion:'1.0.0',method:'POST',
+      pathTemplate:'/api/model-services/assistant-selection',exposure:'public',transport:'http',
+      description:'Select a model for the current assistant by its model-service ID.',
+      request:{path:object,query:object,headers:object,body:{kind:'json',maxBytes:4096,
+        schema:{...object,required:['kind','id'],properties:{
+          kind:{enum:['llm','search','asr','tts','backgroundAsr']},id:{type:'string',minLength:1,maxLength:1200}
+        },additionalProperties:false}}},
+      responses:{200:response,403:response,409:response},
+      effects:{mode:'native-assistant-command',description:'Update the selected model in the existing assistant profile.'},
+      recovery:{strategy:'read-back',description:'Read the current assistant model selection before retrying an unconfirmed update.'},
+      validators:[{id:'model-service-binding',description:'Verify connection authority, current assistant ownership, and the model capability.'}]},
+    async handler(input) {
+      const headers={'cache-control':'no-store'};
+      if(!localModelSettingsRequestAllowed(input.request))return {status:403,headers,body:{code:-1,message:'MODEL_SERVICE_ACCESS_DENIED'}};
+      try {
+        return await run(async()=>({status:200,headers,body:{code:0,data:await owner.command({action:'model-service-select',kind:input.body.kind,id:input.body.id})}}));
+      } catch(error) {
+        const message=/^(?:MODEL_SERVICE|ASSISTANT)_[A-Z0-9_]{1,100}$/.test(error?.message)?error.message:'MODEL_SERVICE_OPERATION_FAILED';
+        return {status:409,headers,body:{code:-1,message}};
+      }
+    }
+  });
   operations.push({
     discovery:{title:'移动端实时语音识别',category:{id:'voice-assistant',title:'语音助手'},provider:'voice-assistant'},
     contract:{operationId:'manager.voice-assistant.mobile-asr',contractVersion:'1.0.0',method:'POST',pathTemplate:'/api/voice-assistant/mobile-asr',exposure:'public',transport:'http',

@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.103 - 2026-11-28
+
+- Model Services centralizes API model connections. The voice assistant uses one searchable, two-level picker to choose a model. Existing provider settings and credentials remain available.
+
 ## 0.15.102 - 2026-11-28
 
 - Canvas card size now matches the interaction prototype: 206×128 by default (was 380×144), 140×80 minimum, still draggable and saved with the canvas.
