@@ -87,3 +87,40 @@ test('an unconfirmed cancelled CLI child still fences new work until the origina
  try{abort.abort();t.mock.timers.tick(10000);await assert.rejects(operation,/WORKBUDDY_CLI_EXIT_UNCONFIRMED/);await assert.rejects(runWorkBuddyCli(options),/WORKBUDDY_CLI_EXIT_UNCONFIRMED/);assert.equal(spawns,1);}
  finally{child.emit('close',null,'SIGTERM');await operation.catch(()=>{});t.mock.timers.reset();}
 });
+
+test('terminal WorkBuddy usage retains numeric receipts and does not double-count progress',async()=>{
+  const receipts=[];
+  const usage={input_tokens:10,output_tokens:3,cache_read_input_tokens:30,cache_creation_input_tokens:5};
+  const snapshot={version:1,scope:'turn',kind:'snapshot',stages:[{source:'model',model:'fixture'}],
+    total:{usage,credits:1.5,creditStatus:'known'}};
+  const spawnProcess=()=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
+    child.stdin.on('finish',()=>queueMicrotask(()=>{
+      const meta={'codebuddy.ai/turnUsage':snapshot};
+      const frames=[{type:'system',subtype:'init',model:'fixture'},
+        {type:'system',subtype:'usage_update',_meta:meta},
+        {type:'result',subtype:'success',is_error:false,result:'response',usage,total_cost_usd:99,_meta:meta}];
+      child.stdout.write(frames.map(frame=>JSON.stringify(frame)).join('\n')+'\n');child.emit('close',0,null);
+    }));
+    return child;
+  };
+  assert.equal(await runWorkBuddyCli({prompt:'fixture',model:'fixture',spawnProcess,executable:{node:process.execPath,entry:'fixture'},onUsage:value=>receipts.push(value)}),'response');
+  assert.deepEqual(receipts,[{inputTokens:45,outputTokens:3,cachedTokens:30,uncachedTokens:15,measuredCacheInput:45,credits:1.5}]);
+});
+
+test('WorkBuddy appends tools and follow-ups to the stable wire prefix until bounded history prunes it',async()=>{
+  const captured=[];
+  const runner=async request=>{captured.push({system:request.systemPrompt,messages:JSON.parse(request.prompt).messages});request.onText('ok');return 'ok';};
+  const model=createWorkBuddyModel({model:'fixture',initialPrompts:[{role:'system',content:'fixed instructions'}],runner});
+  await collect(model,'first request');
+  await collect(model,JSON.stringify({type:'tool_result',content:'result A'}));
+  await collect(model,JSON.stringify({type:'tool_result',content:'result B'}));
+  await collect(model,'follow-up');
+  for(let i=1;i<captured.length;i++){
+    assert.equal(captured[i].system,captured[i-1].system);
+    assert.deepEqual(captured[i].messages.slice(0,captured[i-1].messages.length),captured[i-1].messages);
+  }
+  for(let i=0;i<16;i++)await collect(model,'input '+i);
+  assert.ok(captured.at(-1).messages.length<=25);
+  assert.ok(!captured.at(-1).messages.some(message=>message.content==='first request'));
+  model.destroy();
+});

@@ -1,15 +1,22 @@
 <script setup lang="ts" generic="T extends ModelLibraryRow">
 import { ref, shallowRef } from "vue";
+import ModelUsage from "./ModelUsage.vue";
+import { useI18n } from "../i18n/index";
 import type { ModelLibraryRow, ModelLibraryCapability, ModelLibraryLabels } from "./modelLibraryPresentation";
 
 defineProps<{
   rows: readonly T[];
   labels: ModelLibraryLabels;
   loading?: boolean;
+  usageKind?: string;
+  deviceId?: string;
 }>();
 defineSlots<{ action(props: { row: T }): unknown }>();
 
+const { isEnglish } = useI18n();
 const open = ref(false);
+const selectedModel = shallowRef<ModelLibraryRow>();
+const usageOpen = ref(false);
 const selected = shallowRef<{ model: string; sourceUrl?: string; ability: ModelLibraryCapability }>();
 let trigger: HTMLElement | null = null;
 
@@ -19,10 +26,17 @@ function showAbility(row: ModelLibraryRow, ability: ModelLibraryCapability, even
   open.value = true;
 }
 
+function showUsage(row: ModelLibraryRow, event: Event) {
+  trigger = event.currentTarget as HTMLElement;
+  selectedModel.value = row;
+  usageOpen.value = true;
+}
+
 function restoreFocus() {
   trigger?.focus();
   trigger = null;
   selected.value = undefined;
+  selectedModel.value = undefined;
 }
 </script>
 
@@ -42,7 +56,7 @@ function restoreFocus() {
       <tbody>
         <template v-for="row in rows" :key="row.id">
           <tr class="model-row">
-            <td><div class="model-table-name"><strong>{{ row.name }}</strong><code>{{ row.id }}</code></div></td>
+            <td><div class="model-table-name"><button v-if="usageKind" type="button" class="model-name-button" aria-haspopup="dialog" @click="showUsage(row, $event)">{{ row.name }}</button><strong v-else>{{ row.name }}</strong><code>{{ row.id }}</code></div></td>
             <td>
               <div class="model-table-abilities">
                 <v-chip v-for="ability in row.abilities" :key="ability.id" tag="button" type="button" size="small" variant="tonal"
@@ -63,6 +77,13 @@ function restoreFocus() {
     </table>
   </div>
   <v-empty-state v-else-if="!loading" icon="mdi-cube-off-outline" :title="labels.empty" />
+
+  <v-dialog v-model="usageOpen" max-width="560" :aria-label="selectedModel?.name" @after-leave="restoreFocus">
+    <v-card v-if="selectedModel && usageKind" :title="selectedModel.name" :subtitle="selectedModel.id">
+      <v-card-text><ModelUsage :kind="usageKind" :model-id="selectedModel.id" :device-id="deviceId ?? ''" /></v-card-text>
+      <v-card-actions><v-spacer /><v-btn variant="text" @click="usageOpen = false">{{ isEnglish ? "Close" : "关闭" }}</v-btn></v-card-actions>
+    </v-card>
+  </v-dialog>
 
   <v-dialog v-model="open" max-width="560" :aria-label="selected?.ability.label" @after-leave="restoreFocus">
     <v-card v-if="selected" :title="selected.ability.label" :subtitle="selected.model">
@@ -93,6 +114,8 @@ function restoreFocus() {
 .action-column { width: 11%; }
 .model-table-name { display: grid; min-width: 0; gap: 3px; }
 .model-table-name strong { color: var(--rr-heading); font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
+.model-name-button { justify-self: start; text-align: start; color: var(--rr-heading); font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+.model-name-button:hover, .model-name-button:focus-visible { text-decoration: underline; }
 .model-table-name code { color: var(--rr-muted); font-size: 10px; overflow-wrap: anywhere; }
 .model-table-abilities { display: flex; flex-wrap: wrap; gap: 5px; }
 .model-table-abilities :deep(button:focus-visible) { outline: 2px solid var(--rr-accent); outline-offset: 1px; }

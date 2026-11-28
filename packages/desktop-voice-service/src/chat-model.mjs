@@ -1,12 +1,13 @@
 import { createWorkBuddyModel } from './workbuddy-cli.mjs';
 import {snapshotModelContext} from './model-context.mjs';
+import {compatibleUsage} from './model-usage.mjs';
 
 /** Host model port for the shared assistant loop; no browser-owned keys. */
 export function createChatModel({ endpoint, model, initialPrompts = [], resolveCredential,
-  fetcher = fetch, signal, timeoutMs = 60000, provider = 'compatible',workbuddyCli,initialHistory=[],onHistoryChange=()=>{},projectAssistantHistory }) {
+  fetcher = fetch, signal, timeoutMs = 60000, provider = 'compatible',workbuddyCli,initialHistory=[],onHistoryChange=()=>{},projectAssistantHistory,onUsage }) {
   if(provider==='workbuddy-cli') {
     if(endpoint!=='codebuddy://cn')throw Error('ASSISTANT_MODEL_ENDPOINT_INVALID');
-    return createWorkBuddyModel({model,initialPrompts,signal,cli:workbuddyCli,initialHistory,onHistoryChange,projectAssistantHistory});
+    return createWorkBuddyModel({model,initialPrompts,signal,cli:workbuddyCli,initialHistory,onHistoryChange,projectAssistantHistory,onUsage});
   }
   const address = new URL(endpoint);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(address.hostname);
@@ -29,18 +30,20 @@ export function createChatModel({ endpoint, model, initialPrompts = [], resolveC
         const response = await fetcher(address.href, {
           method: 'POST', redirect: 'error', signal: requestSignal,
           headers: { 'content-type': 'application/json', ...(key ? { authorization: 'Bearer ' + key } : {}) },
-          body: JSON.stringify({ model, messages, stream: true }),
+          body: JSON.stringify({ model, messages, stream: true,
+            ...(onUsage && address.hostname === 'api.openai.com' ? {stream_options:{include_usage:true}} : {}) }),
         });
         if (!response.ok) throw Error('ASSISTANT_MODEL_HTTP_' + response.status);
         if (!response.body) throw Error('ASSISTANT_MODEL_EMPTY');
         reader = response.body.getReader();
       } catch (error) { busy = false; throw error; }
-      let pending = '', text = '', ended = false;
+      let pending = '', text = '', ended = false, usage;
       const decoder = new TextDecoder();
       const chunks = [];
       const finish = async (confirmed) => {
         if (ended) return;
         ended = true;
+        onUsage?.(compatibleUsage(usage));
         try { await reader.cancel(); } finally { reader.releaseLock(); busy = false; }
         if (confirmed) {
           history=snapshotModelContext([...history,...input,{role:'assistant',content:text}]);
@@ -63,6 +66,7 @@ export function createChatModel({ endpoint, model, initialPrompts = [], resolveC
                 if (data === '[DONE]') { await finish(true); continue; }
                 let value;
                 try { value = JSON.parse(data); } catch { throw Error('ASSISTANT_MODEL_RESPONSE_INVALID'); }
+                if (value.usage && !Array.isArray(value.usage)) usage=value.usage;
                 if (value.error) throw Error('ASSISTANT_MODEL_PROVIDER_ERROR');
                 const delta = value.choices?.[0]?.delta?.content;
                 if (typeof delta === 'string' && delta) {

@@ -146,7 +146,7 @@ onBeforeUnmount(() => { client.invalidate(); events?.close(); });
     <v-progress-linear v-if="busy && !snapshot" indeterminate />
     <template v-if="!settings">
       <p v-if="serviceDeviceId" class="section-note mb-2">当前安装目标为远端电脑，可在齿轮设置里查看。</p>
-      <ModelLibraryTable :rows="libraryRows" :labels="labels" :loading="busy || Boolean(error || snapshot?.computeError)">
+      <ModelLibraryTable :rows="libraryRows" :usage-kind="kind" :device-id="serviceDeviceId" :labels="labels" :loading="busy || Boolean(error || snapshot?.computeError)">
         <template #action="{ row: { model } }">
           <v-btn v-if="!model.installed" color="primary" variant="tonal" size="small" prepend-icon="mdi-download"
             :disabled="busy || installing || !snapshot || snapshot.online || Boolean(snapshot.computeError)"

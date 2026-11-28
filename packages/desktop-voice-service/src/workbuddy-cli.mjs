@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, dirname } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import {snapshotModelContext} from './model-context.mjs';
+import {workBuddyUsage} from './model-usage.mjs';
 
 const outstanding = new Set();
 let operationTail=Promise.resolve();
@@ -49,7 +50,7 @@ function environment() {
 }
 
 /** One owned CLI operation. Output is projected to text/models, never account payloads. */
-async function runOwnedWorkBuddyCli({ model, prompt, systemPrompt = '', signal, onText = () => {},
+async function runOwnedWorkBuddyCli({ model, prompt, systemPrompt = '', signal, onText = () => {}, onUsage,
   timeoutMs = 120000, spawnProcess = spawn, executable, directory, cli, nativeWebSearch = false }) {
   if (outstanding.size) throw Error('WORKBUDDY_CLI_EXIT_UNCONFIRMED');
   signal?.throwIfAborted();
@@ -131,9 +132,9 @@ async function runOwnedWorkBuddyCli({ model, prompt, systemPrompt = '', signal, 
         onText(delta);
       }
       if (message.type === 'result') {
-        // Retain only the terminal answer, never the init account/token object.
+        // The final per-turn receipt is cumulative. Do not add intermediate usage events.
         result = { success: message.subtype === 'success' && message.is_error === false,
-          text: typeof message.result === 'string' ? message.result : '' };
+          text: typeof message.result === 'string' ? message.result : '', usage: onUsage ? workBuddyUsage(message,model) : undefined };
       }
     };
     try {
@@ -169,6 +170,7 @@ async function runOwnedWorkBuddyCli({ model, prompt, systemPrompt = '', signal, 
           else resolve(models);
           return;
         }
+        if (result?.success || (result?.usage && Object.values(result.usage).some(value=>value!==undefined))) onUsage?.(result.usage);
         if (!result?.success || !result.text) { reject(Error('WORKBUDDY_REPLY_FAILED')); return; }
         if(nativeWebSearch){
           if(!searchResults.length){reject(Error('WORKBUDDY_SEARCH_NOT_EXECUTED'));return;}
@@ -191,8 +193,10 @@ async function runOwnedWorkBuddyCli({ model, prompt, systemPrompt = '', signal, 
 }
 
 /** Same model port as compatible providers, with bounded in-memory conversation. */
-export function createWorkBuddyModel({ model, initialPrompts = [], signal, runner = runWorkBuddyCli,cli,initialHistory=[],onHistoryChange=()=>{},projectAssistantHistory=raw=>raw }) {
+export function createWorkBuddyModel({ model, initialPrompts = [], signal, runner = runWorkBuddyCli,cli,initialHistory=[],onHistoryChange=()=>{},projectAssistantHistory=raw=>raw,onUsage }) {
   const lifetime = new AbortController();
+  const systemPrompt = initialPrompts.filter(item => item.role === 'system').map(item => item.content).join('\n\n');
+  const seed = initialPrompts.filter(item => item.role !== 'system');
   let history = snapshotModelContext(initialHistory), busy = false;
   return {
     async promptStreaming(input) {
@@ -203,11 +207,8 @@ export function createWorkBuddyModel({ model, initialPrompts = [], signal, runne
       const queue = [];
       let wake, done = false, failure;
       const notify = () => { wake?.(); wake = undefined; };
-      const systemPrompt = initialPrompts.filter(item => item.role === 'system').map(item => item.content).join('\n\n');
-      const prompt = JSON.stringify({ messages: [
-        ...initialPrompts.filter(item => item.role !== 'system'), ...history, ...input,
-      ] });
-      const operation = runner({ model, prompt, systemPrompt, cli, signal: requestSignal,
+      const prompt = JSON.stringify({ messages: [...seed, ...history, ...input] });
+      const operation = runner({ model, prompt, systemPrompt, cli, signal: requestSignal, onUsage,
         onText: text => { queue.push(text); notify(); } }).then(text => {
         history=snapshotModelContext([...history,...input,{role:'assistant',content:projectAssistantHistory(text,input)}]);
         onHistoryChange(snapshotModelContext(history));

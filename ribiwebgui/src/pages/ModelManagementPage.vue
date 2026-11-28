@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type {
   SpeechManagedModel,
@@ -13,7 +13,9 @@ import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n/index";
 import ModelLibraryTable from "../components/ModelLibraryTable.vue";
 import ApiModelServices from "../components/ApiModelServices.vue";
-import { speechLibraryAbilities } from "../components/modelLibraryPresentation";
+import PeerServerSelect from "../components/PeerServerSelect.vue";
+import { speechControlClient } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechControlClient";
+import { speechLibraryAbilities, type ModelLibraryRow } from "../components/modelLibraryPresentation";
 import { speechModelManagementClient, SpeechModelManagementRequestError } from "../../../src/plugins/io.rabiroute.manager.speech/web/speech/speechModelManagementClient";
 
 const WorkbenchModels = defineAsyncComponent(() => import("../../../src/plugins/io.rabiroute.manager.video/web/pages/WorkbenchModelService.vue"));
@@ -146,8 +148,36 @@ const capabilityItems = computed<{ value: CapabilityFilter; label: string; icon:
 const settingsLabel = computed(() => isEnglish.value ? "Model service settings" : "模型服务设置");
 
 const models = computed(() => (snapshot.value?.models ?? []).filter(model => model.capability === capability.value));
-const speechRows = computed(() => {
+const deviceId = computed(() => typeof route.query.deviceId === "string" ? route.query.deviceId : "");
+const remoteSpeech = ref<Awaited<ReturnType<typeof speechControlClient.models>>["models"]>([]);
+const remoteSpeechError = ref("");
+const remoteSpeechLoading = ref(false);
+function selectModelDevice(value: string) {
+  void router.replace({ query: { ...route.query, deviceId: value || undefined } });
+}
+watch(() => [deviceId.value, capability.value] as const, async ([device, kind], _previous, onCleanup) => {
+  const controller = new AbortController();
+  onCleanup(() => controller.abort());
+  remoteSpeech.value = [];
+  remoteSpeechError.value = "";
+  remoteSpeechLoading.value = false;
+  if (!device || !["asr", "tts", "speaker"].includes(kind)) return;
+  remoteSpeechLoading.value = true;
+  try {
+    const response = await speechControlClient.models({ computeDeviceId: device, signal: controller.signal });
+    if (!controller.signal.aborted) remoteSpeech.value = response.models;
+  } catch (error) {
+    if (!controller.signal.aborted) remoteSpeechError.value = userFacingError(error);
+  } finally {
+    if (!controller.signal.aborted) remoteSpeechLoading.value = false;
+  }
+}, { immediate: true });
+const speechRows = computed<(ModelLibraryRow & { model?: SpeechManagedModel })[]>(() => {
   const query = (search.value ?? "").trim().toLocaleLowerCase();
+  if (deviceId.value) return remoteSpeech.value.filter(model => model.capability === capability.value &&
+    [model.name, model.id].some(text => text.toLocaleLowerCase().includes(query)))
+    .map(model => ({ id: model.id, name: model.name,
+      size: "—", runtime: isEnglish.value ? "Connected device" : "已连接设备", runtimeIcon: "mdi-laptop", abilities: [] }));
   return models.value.flatMap(model => {
     const abilities = speechLibraryAbilities(model, capabilityLabel(model.capability), capabilityIcon(model.capability), isEnglish.value);
     if (query && ![model.name, model.family, model.alias, model.purposeZh, model.purposeEn, ...abilities.map(item => item.label)]
@@ -431,11 +461,15 @@ onBeforeUnmount(() => managerEvents?.close());
       </div>
 
       <ApiModelServices :kind="capability" :search="search ?? ''" />
-      <h3 v-if="capability !== 'llm' && capability !== 'search'" class="local-model-heading">{{ isEnglish ? "Local models" : "本地模型" }}</h3>
+      <div v-if="capability !== 'llm' && capability !== 'search'" class="local-model-header">
+        <h3 class="local-model-heading">{{ isEnglish ? "Local models" : "本地模型" }}</h3>
+        <PeerServerSelect :model-value="deviceId" @changed="selectModelDevice" />
+      </div>
+      <v-alert v-if="!mediaKind && remoteSpeechError" type="error" variant="tonal" density="compact">{{ remoteSpeechError }}</v-alert>
       <WorkbenchModels v-if="mediaKind" :kind="mediaKind" :labels="copy" :english="isEnglish" :search="search ?? ''" />
-      <ModelLibraryTable v-else-if="capability !== 'llm' && capability !== 'search'" :rows="speechRows" :labels="copy" :loading="loading">
+      <ModelLibraryTable v-else-if="capability !== 'llm' && capability !== 'search'" :rows="speechRows" :labels="copy" :loading="loading || remoteSpeechLoading" :usage-kind="capability" :device-id="deviceId">
         <template #action="{ row: { model } }">
-          <v-tooltip v-if="!model.downloaded" :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
+          <v-tooltip v-if="model && !model.downloaded" :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
             <template #activator="{ props }">
               <span v-bind="props">
                 <v-btn color="primary" variant="tonal" size="small" prepend-icon="mdi-download"
@@ -470,6 +504,7 @@ onBeforeUnmount(() => managerEvents?.close());
   gap: 12px;
   color: var(--rr-text);
 }
+.local-model-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .local-model-heading { margin: 0; font-size: 16px; }
 
 .environment-bar, .job-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 12px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }

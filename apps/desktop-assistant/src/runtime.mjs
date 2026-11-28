@@ -16,7 +16,7 @@ import {createWebSearchService} from '@rabilink/desktop-voice-service/web-search
 import { createResidentWake, parseWakeAliases } from '../../../packages/desktop-voice-service/src/resident-wake.mjs';
 
 /** Thin binding only: shared host owns lifecycle and the shared SDK owns conversation. */
-export async function openAssistantRuntime({ directory, settingsDirectory=directory, settingsStore, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy, onCaptureActivity, onCaptureStopped, residentSpeech, dictionaryPolicy }) {
+export async function openAssistantRuntime({ directory, settingsDirectory=directory, settingsStore, deviceFactory = openDesktopDevice, providerFactory = createSpeechProviders, hostOptions, recognitionSampleUrl, discoverTools, pet, settingsOverlay = value => value, capabilities = {}, onOpenSettings = () => {}, createModel = createChatModel, credentialDescription = value => value, onSubmitted, expressionPolicy, onCaptureActivity, onCaptureStopped, residentSpeech, dictionaryPolicy, onSearchUsage }) {
   const saved = settingsStore ?? await openSettingsStore(settingsDirectory);
   const store = { ...saved, credentials: { ...saved.credentials } };
   let options={};
@@ -31,7 +31,7 @@ export async function openAssistantRuntime({ directory, settingsDirectory=direct
   const listModels=request=>listProviderModels({...request,workbuddyCli:options.workbuddyCli});
   const conversationStore=await openConversationStore(directory);
   try {
-  const webSearch=createWebSearchService({settings:store.read,credentials:store.credentials,workbuddyCli:options.workbuddyCli});
+  const webSearch=createWebSearchService({settings:store.read,credentials:store.credentials,workbuddyCli:options.workbuddyCli,onUsage:onSearchUsage});
   let conversation, diagnostics, disposed = false, closing = false;
   let wakeSettings, wakeUpdate = Promise.resolve();
   const providers=(config,context={})=>{

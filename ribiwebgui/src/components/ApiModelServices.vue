@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "../i18n/index";
 import { userFacingError } from "../userFacingError";
+import ModelUsage from "./ModelUsage.vue";
 
 type Provider = { id: string; label: string; credentialMode?: string; modes?: { id:string; label:string; endpoint:string }[]; defaults: { endpoint?: string; model?: string; resourceId?: string; voice?: string; recognitionMode?: string } };
 type Service = { id?: string; kind: string; provider: string; name: string; model: string; endpoint: string; voice?: string; resourceId?: string; recognitionMode?: string; configured?: boolean; credentialMode?: string };
@@ -145,15 +146,16 @@ onBeforeUnmount(() => controller.abort());
     <div v-else-if="rows.length" class="api-model-list">
       <div v-for="row in rows" :key="row.id" class="api-model-row">
         <div><strong>{{ row.name }}</strong><small>{{ [providerLabel(row.provider), row.model].filter(Boolean).join(' · ') }}</small></div>
-        <v-btn variant="text" size="small" :disabled="saving" @click="edit(row)">{{ label('配置', 'Configure') }}</v-btn>
+        <v-btn variant="text" size="small" :disabled="saving" @click="edit(row)">{{ label('详情', 'Details') }}</v-btn>
       </div>
     </div>
     <p v-else-if="!loading" class="api-note">{{ label('暂无 API 模型。', 'No API models yet.') }}</p>
     <p v-if="generic" class="api-note">{{ label('可保存连接信息。此类别的 API 调用需由支持对应协议的功能接入。', 'Save connection details here. Calling the API requires a feature that supports its protocol.') }}</p>
     <v-dialog :model-value="Boolean(draft)" :persistent="saving" max-width="660" @update:model-value="open => { if (!open) cancel(); }">
-      <v-card v-if="draft" :title="draft.id ? label('配置 API 模型', 'Configure API model') : label('添加 API 模型', 'Add API model')">
+      <v-card v-if="draft" :title="original?.name || label('添加 API 模型', 'Add API model')">
         <form @submit.prevent="save">
           <v-card-text class="api-form">
+            <ModelUsage v-if="original?.id" :kind="original.kind" :model-id="original.id" />
             <v-text-field v-model="draft.name" required :label="label('服务名称', 'Service name')" maxlength="128" :disabled="saving" />
             <v-autocomplete :model-value="draft.provider" :items="providers" item-title="label" item-value="id" :label="label('接口协议', 'API protocol')" :disabled="saving" @update:model-value="chooseProvider" />
             <v-text-field v-if="draft.endpoint || kind !== 'search'" v-model="draft.endpoint" :readonly="kind === 'search' || Boolean(provider?.credentialMode)" :label="label('完整接口地址', 'Full API endpoint')" :disabled="saving" />

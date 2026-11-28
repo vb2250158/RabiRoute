@@ -60,6 +60,7 @@ async function activateReadOnlyPackage(directory: string, packageRoot: string) {
       "manager.model-services.api-models.save",
       "manager.model-services.assistant-selection.save",
       "manager.model-services.models.read",
+      "manager.model-services.usage.read",
       "manager.voice-assistant.command",
       "manager.voice-assistant.messages",
       "manager.voice-assistant.mobile-asr",

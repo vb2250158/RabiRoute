@@ -5,6 +5,8 @@ import {createHash,randomUUID} from 'node:crypto';
 import {openAssistantRuntime} from '../../../../apps/desktop-assistant/src/runtime.mjs';
 import {snapshotRecentSpeech} from '../../../../packages/assistant-runtime/src/speech-observation.js';
 import {openSettingsStore} from '../../../../apps/desktop-assistant/src/settings-store.mjs';
+import {createModelUsageStore} from '../../../../apps/desktop-assistant/src/model-usage-store.mjs';
+import {createChatModel} from '../../../../packages/desktop-voice-service/src/chat-model.mjs';
 import {assistantServiceKinds,defaultModelServiceId,modelServiceIdField,serviceSettings} from '../../../../apps/desktop-assistant/src/model-services.mjs';
 import {createHostEndpointSession} from '../../../../apps/rabi-agent/lib/host-endpoint.mjs';
 import {createManagerClient} from '../../../../apps/rabi-agent/lib/manager-client.mjs';
@@ -21,6 +23,14 @@ const payload=result=>{if(!result.ok)throw Object.assign(Error(result.data?.mess
 const validSource=value=>['host','custom'].includes(value);
 const hostModelRef=(deviceId,modelId)=>'host:'+JSON.stringify([deviceId,modelId]);
 const hostModelKinds=['asr','tts','backgroundAsr'];
+// Catalog installation aliases and service inference identities are distinct.
+const speechUsageIds=Object.freeze({
+  'tts-qwen3-0.6b':'local-tts/qwen3-tts-0.6b-base','tts-qwen3-1.7b':'local-tts/qwen3-tts-1.7b-base',
+  'tts-cosyvoice3-0.5b':'local-tts/cosyvoice3-0.5b','tts-gpt-sovits':'local-tts/gpt-sovits','tts-indextts2':'local-tts/indextts2',
+  'asr-whisper-tiny':'faster-whisper/tiny','asr-whisper-small':'faster-whisper/small','asr-whisper-large-v3-turbo':'faster-whisper/large-v3-turbo',
+  'asr-qwen3-0.6b':'qwen3-asr/qwen3-asr-0.6b','asr-qwen3-1.7b':'qwen3-asr/qwen3-asr-1.7b',
+  'asr-sensevoice-small':'sensevoice/sensevoice-small','asr-fireredasr2-aed':'fireredasr2/fireredasr2-aed'
+});
 const mobileRequestId=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
 const mobileObservationValidators=Object.freeze({
   emotion:value=>typeof value==='string'&&/^[a-z][a-z_-]{0,31}$/i.test(value),
@@ -57,6 +67,12 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
   if(!validSource(profile.asrSource)||!validSource(profile.ttsSource)||typeof profile.wakeEnabled!=='boolean')throw Error('ASSISTANT_HOST_PROFILE_INVALID');
   try{hostOptions={...JSON.parse(await readFile(join(directory,'host-options.json'),'utf8')),...hostOptions}}catch(error){if(error.code!=='ENOENT')throw Error('ASSISTANT_HOST_OPTIONS_INVALID')}
   const connectionDirectory=join(directory,'connection');await mkdir(connectionDirectory,{recursive:true});
+  const modelUsageStore=createModelUsageStore(join(connectionDirectory,'model-usage.sqlite'));
+  function recordUsage(row,usage={}) {
+    if(!row||closed||readOnly())return;
+    try { modelUsageStore.record(row,usage); }
+    catch { publish('voice_assistant_model_usage_failed',{code:'MODEL_USAGE_WRITE_FAILED'}); }
+  }
   // Preserve the first installed connection profile; only conversation context is persona-scoped.
   for(const source of [join(directory,'sessions',hash('default'),'settings.json'),join(directory,'sessions',hash(profile.personaId||'default'),'settings.json')]){
     try{await copyFile(source,join(connectionDirectory,'settings.json'),1);break}catch(error){if(error.code==='EEXIST')break;if(error.code!=='ENOENT')throw error}
@@ -256,6 +272,14 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         else if (bound[modelServiceIdField(kind)]) throw Error('MODEL_SERVICE_NOT_FOUND');
       }
       const serviceOverlay=Object.assign({},...Array.from(activeServices.values(),serviceSettings));
+      const tracked=(kind,config)=>{
+        const row=activeServices.get(kind)||settings.modelServices.get(selectedServiceId(bound,kind),kind);
+        if(kind==='search')return row?.provider===config.webSearchProvider?row:undefined;
+        const provider=kind==='llm'?config.provider:kind==='asr'?config.asrMode:config.ttsProvider;
+        const endpoint=kind==='llm'?config.endpoint:config[kind+'Endpoint'];
+        const model=kind==='llm'?config.model:config[kind+'Model'];
+        return row&&row.provider===provider&&row.endpoint===endpoint&&row.model===model?row:undefined;
+      };
       function configuredService(kind,endpoint,provider){
         const row=activeServices.get(kind);
         return row&&row.provider===provider&&row.endpoint===endpoint?row:undefined;
@@ -296,6 +320,38 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       }
       const providerFactory=options=>{
         const provider=customProviderFactory(options);
+        const asr=tracked('asr',options.config),tts=tracked('tts',options.config);
+        if(asr&&provider.recognize){
+          const recognize=provider.recognize.bind(provider);
+          provider.recognize=async(...args)=>{
+            const result=await recognize(...args);
+            recordUsage(asr,{audioSeconds:result?.duration});
+            return result;
+          };
+        }
+        if(asr&&provider.createAsr){
+          const createAsr=provider.createAsr.bind(provider);
+          provider.createAsr=options=>{
+            const stream=createAsr(options),start=stream.start.bind(stream);
+            return {...stream,async start(round){const result=await start(round);recordUsage(asr);return result;}};
+          };
+        }
+        if(tts&&provider.synthesize){
+          const synthesize=provider.synthesize.bind(provider);
+          provider.synthesize=async(...args)=>{
+            const audio=await synthesize(...args);
+            recordUsage(tts);
+            return audio;
+          };
+        }
+        if(tts&&provider.openSpeechStream){
+          const openSpeech=provider.openSpeechStream.bind(provider);
+          provider.openSpeechStream=async options=>{
+            const stream=await openSpeech(options);
+            void stream.finished.then(result=>recordUsage(tts,{audioSeconds:result?.duration}),()=>{});
+            return stream;
+          };
+        }
         if(bound.asrSource==='host'){
           delete provider.createAsr;provider.asrFeedback={mode:'utterance',label:'整句转录'};
           provider.recognize=(audio,abort)=>hostRecognize(asrModel,options.config.asrDictionary,audio,abort);
@@ -340,7 +396,9 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
           const key=presentation.responseId+':'+presentation.playbackId;
           if(config.petEnabled&&presentation.responseId&&presentation.speechStatus==='ended'&&!seen.has(key)){seen.add(key);record({voice:bound.personaId,kind:'tts',id:key,text:presentation.speechText||presentation.text,time:Date.now()})}},
         async dispose(){clearPet();await Promise.allSettled([...petPending]);seen.clear()}};
-      const next=await openAssistantRuntime({directory:ownDirectory,settingsStore,hostOptions,settingsOverlay:overlay,providerFactory,pet,createModel,recognitionSampleUrl,
+      const next=await openAssistantRuntime({directory:ownDirectory,settingsStore,hostOptions,settingsOverlay:overlay,providerFactory,pet,recognitionSampleUrl,
+        createModel:options=>(createModel||createChatModel)({...options,onUsage:usage=>recordUsage(tracked('llm',options),usage)}),
+        onSearchUsage:()=>recordUsage(tracked('search',overlay(settings.read())),{}),
         dictionaryPolicy:config=>bound.asrSource==='host'?hostAsrDictionaryPolicy(models.find(item=>item.id===asrModel)):asrDictionaryPolicy(config),
         ...(bound.ttsSource==='host'?{expressionPolicy:config=>hostSpeechExpressionPolicy(ttsModels.find(item=>item.id===config.ttsModel),config)}:{}),
         credentialDescription:(value,kind)=>bound[kind+'Source']==='host'?{configured:true,writable:false,mode:'host-service'}:value,
@@ -564,6 +622,34 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
       return {services:modelServices.list(),providers:modelServices.definitions()};
     },
     modelOptions,
+    async modelUsage({kind,id,deviceId}){
+      assertCurrent();
+      if(deviceId===undefined){
+        const row=(await connectionSettings()).modelServices.get(id,kind);
+        if(!row)throw Error('MODEL_SERVICE_NOT_FOUND');
+        assertCurrent();
+        return {...modelUsageStore.read(row),source:'observed-calls',credits:row.provider==='workbuddy-cli'};
+      }
+      if(kind==='asr'||kind==='tts'){
+        const limit=1000;
+        const records=await compute(deviceId,()=>speech.speechControl.records({kind,limit},assertCurrent));
+        assertCurrent();
+        const modelId=Object.hasOwn(speechUsageIds,id)?speechUsageIds[id]:id;
+        const separator=modelId.indexOf('/');
+        const rows=records.filter(row=>row.kind===kind&&(row.model===modelId||separator>0
+          && row.provider===modelId.slice(0,separator)&&row.model===modelId.slice(separator+1)));
+        const audio=rows.filter(row=>typeof row.duration==='number'&&Number.isFinite(row.duration)&&row.duration>0);
+        return {requests:rows.length,metrics:audio.length?{audioSeconds:{value:audio.reduce((sum,row)=>sum+row.duration,0),measured:audio.length}}:{},
+          source:'speech-records',limited:records.length===limit};
+      }
+      if(kind==='image'||kind==='video'){
+        const value=await call('manager.video.jobs.list',{});
+        const rows=(value.jobs||[]).filter(row=>row.model===id&&(row.computeDeviceId||'')===deviceId
+          && (row.providerJobId||row.startedAt||row.status==='completed'));
+        return {requests:rows.length,metrics:{},source:'manager-media-jobs'};
+      }
+      return {requests:null,metrics:{},source:'unavailable'};
+    },
     async saveModelService(request, guard){
       return withModelSelection(async()=>{
         assertWritable();guard();
@@ -689,7 +775,7 @@ export async function createVoiceAssistantOwner({identity,stateRoot,speech,publi
         await Promise.resolve().then(()=>speech.speechRuntimeControl.setAssistantResident(
           {enabled:false,ownerId:residentOwner,release:true},AbortSignal.timeout(5000))).catch(()=>{});
       }
-      await clientOpening?.catch(()=>{});await client?.close();runtime=undefined;
+      await clientOpening?.catch(()=>{});await client?.close();modelUsageStore.close();runtime=undefined;
     }
   };
 }

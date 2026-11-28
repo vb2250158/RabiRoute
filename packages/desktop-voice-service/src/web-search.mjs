@@ -30,7 +30,7 @@ function effective(config){
 }
 
 /** Standalone search port. Only the query is sent; providers never receive chat history or speech estimates. */
-export function createWebSearchService({settings,credentials,workbuddyCli,runner=runWorkBuddyCli,fetchImpl=fetch}){
+export function createWebSearchService({settings,credentials,workbuddyCli,runner=runWorkBuddyCli,fetchImpl=fetch,onUsage}){
   let last,closed=false,active;
   const identity=()=>{const c=settings();return JSON.stringify([c.webSearchEnabled,c.webSearchProvider,c.webSearchMaxResults,effective(c)]);};
   const snapshot=()=>{
@@ -75,6 +75,7 @@ export function createWebSearchService({settings,credentials,workbuddyCli,runner
             summary=(data.output||[]).flatMap(item=>(item.content||[]).filter(part=>part.type==='output_text').map(part=>part.text||'')).join('\n').slice(0,12000);
           }else sources=searchSources((data.results||[]).map(item=>({...item,snippet:item.content})),c.webSearchMaxResults);
         }
+        onUsage?.();
         requestSignal.throwIfAborted();
         if(!sources.length)throw Error('WEB_SEARCH_NO_SOURCES');
         const result={query,provider:selected.label,model:selected.model,sources,...(summary?{summary}:{})};

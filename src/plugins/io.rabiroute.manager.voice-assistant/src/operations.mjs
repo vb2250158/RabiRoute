@@ -94,6 +94,29 @@ export function createVoiceAssistantOperations(owner,run,identity){
     }
   });
   operations.push({
+    discovery:{title:'查看模型用量',category:{id:'model-services',title:'模型服务'},provider:'voice-assistant'},
+    contract:{operationId:'manager.model-services.usage.read',contractVersion:'1.0.0',method:'GET',
+      pathTemplate:'/api/model-services/usage',exposure:'public',transport:'http',
+      description:'Read count and available measurements for one configured connection or provider device and model.',
+      request:{path:object,query:{...object,required:['kind','id'],properties:{
+        kind:{enum:['llm','search','asr','tts','speaker','image','video']},
+        id:{type:'string',minLength:1,maxLength:256},deviceId:{type:'string',maxLength:200}
+      },additionalProperties:false},headers:object,body:{kind:'none'}},
+      responses:{200:response,403:response,409:response},
+      effects:{mode:'read',description:'Return aggregated usage numbers without raw prompts, speech records, or account data.'},
+      recovery:{strategy:'repeatable-read',description:'Read the same connection or device and model again.'},
+      validators:[{id:'model-usage-connection',description:'Verify the requesting connection before reading aggregate measurements.'}]},
+    async handler(input) {
+      const headers={'cache-control':'no-store'};
+      if(!localModelSettingsRequestAllowed(input.request))return {status:403,headers,body:{code:-1,message:'MODEL_SERVICE_ACCESS_DENIED'}};
+      try { return await run(async()=>({status:200,headers,body:{code:0,data:await owner.modelUsage(input.query)}})); }
+      catch(error){
+        const message=error?.message==='MODEL_SERVICE_NOT_FOUND'?error.message:'MODEL_USAGE_UNAVAILABLE';
+        return {status:409,headers,body:{code:-1,message}};
+      }
+    }
+  });
+  operations.push({
     discovery:{title:'设置语音助手模型',category:{id:'model-services',title:'模型服务'},provider:'voice-assistant'},
     contract:{operationId:'manager.model-services.assistant-selection.save',contractVersion:'1.0.0',method:'POST',
       pathTemplate:'/api/model-services/assistant-selection',exposure:'public',transport:'http',
