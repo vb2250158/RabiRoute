@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.15.105 - 2026-11-28
+
+- The canvas fills the browser viewport and exits to the project's canvas list. Project and canvas lists align with the centered header. Canvases can be renamed in place, and the parameter panel uses its measured height to stay within the viewport.
+
 ## 0.15.103 - 2026-11-28
 
 - Model Services centralizes API model connections. The voice assistant uses one searchable, two-level picker to choose a model. Existing provider settings and credentials remain available.

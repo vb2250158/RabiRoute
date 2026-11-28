@@ -128,7 +128,6 @@ defineExpose({ reset });
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  margin: 0 24px;
   padding-top: 4px;
 }
 .canvas-grid {

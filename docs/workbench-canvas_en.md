@@ -2,7 +2,9 @@ English | [简体中文](workbench-canvas.md)
 
 # Workbench canvases
 
-Open a project from My Projects to see its canvas list and choose a canvas. Workbench upgrades legacy projects on first open, keeps their name and identifier, and places their original cards, layout, and prompts in the first canvas. It retains a recoverable copy of the prior record. Flow node settings appear below the selected card. Drag from a Flow Next port to schedule the next node, or link text cards to pass text into other media cards.
+Open a project from My Projects and choose a canvas. The editor fills the browser viewport. Select Exit Canvas in the upper-left corner to save your edits and return to the project's canvas list.
+
+Workbench upgrades legacy projects on first open, keeps their name and identifier, and places their original cards, layout, and prompts in the first canvas. It retains a recoverable copy of the prior record. Flow node settings appear below the selected card. Drag from a Flow Next port to schedule the next node, or link text cards to pass text into other media cards.
 
 Migration backs up the complete original, fences the legacy file against old writers, then commits the new project. Interrupted commits appear as “恢复迁移” in the project list and resume on the original machine. A changed source or backup digest stops recovery and preserves both records.
 

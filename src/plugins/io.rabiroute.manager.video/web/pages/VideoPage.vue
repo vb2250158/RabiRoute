@@ -713,6 +713,7 @@ const projectTitle = ref("未命名画布");
 const workbenchProjectTitle = ref("");
 const projectHome = ref(!projectId.value);
 const mediaCanvasId = ref("");
+const canvasOpen = computed(() => !projectHome.value && !!mediaCanvasId.value);
 const workflowPanel = ref<"settings" | "run">();
 const showCliSettings = ref(false);
 /** §1.1: the content window edits the node's own text and writes it back on save. */
@@ -1243,11 +1244,65 @@ function cancelPort() {
 }
 /** The parameter panel is its own canvas layer, so selecting a card never changes its size. */
 const parameterNodeId = computed(() => selectedWorkflowNode.value?.id ?? "");
+/** Workspace box in screen space, kept current so the panel can place itself. */
+const workspaceSize = ref({ width: 0, height: 0, left: 0, top: 0 });
+const PANEL_WIDTH = 330;
+const PANEL_MARGIN = 12;
+/**
+ * The panel is a direct child of `.video-workspace`, so `left`/`top` are relative
+ * to that box, not to the window. Project the card's world rect through the canvas
+ * transform, convert into workspace-local coordinates, then place the panel below
+ * the card, flip above when the bottom would overflow, and clamp on both axes.
+ */
 const parameterPanelStyle = computed(() => {
-  const id = parameterNodeId.value, point = id ? canvas.positions.value[id] : undefined;
-  if (!id || !point) return { left: "0px", top: "0px" };
-  return { left: `${point.x}px`, top: `${point.y + 34 + canvas.cardSize(id).height + 10}px` };
+  const id = parameterNodeId.value;
+  const point = id ? canvas.positions.value[id] : undefined;
+  if (!id || !point) return { display: "none" };
+  const scale = canvas.scale.value, offset = canvas.offset.value;
+  const size = canvas.cardSize(id);
+  const box = workspaceSize.value;
+  const viewportWidth = box.width || (typeof window !== "undefined" ? window.innerWidth : 0);
+  const viewportHeight = box.height || (typeof window !== "undefined" ? window.innerHeight : 0);
+  // Card rect in workspace-local pixels: the card origin is the layout point plus
+  // the 130px text gutter, then the canvas pan/zoom transform.
+  const cardLeft = offset.x + (point.x + 130) * scale;
+  const cardTop = offset.y + point.y * scale;
+  const cardWidth = size.width * scale;
+  const cardHeight = (34 + size.height) * scale;
+  const available = viewportHeight - PANEL_MARGIN * 2;
+  const below = cardTop + cardHeight + 10;
+  const above = cardTop - 10;
+  let top: number, maxHeight: number;
+  if (below + PANEL_MARGIN <= viewportHeight) {
+    top = below;
+    maxHeight = viewportHeight - below - PANEL_MARGIN;
+  } else if (above - PANEL_MARGIN >= Math.min(240, available)) {
+    maxHeight = Math.min(available, above - PANEL_MARGIN);
+    top = above - maxHeight;
+  } else {
+    // Neither side fits: pin inside the viewport and let the panel's own scroll take over.
+    top = PANEL_MARGIN;
+    maxHeight = available;
+  }
+  const left = Math.max(PANEL_MARGIN, Math.min(cardLeft, viewportWidth - PANEL_WIDTH - PANEL_MARGIN));
+  // The honoured height is what the panel will actually occupy, so the clamp must use it
+  // rather than the requested max, or an over-tall panel still lands outside the viewport.
+  const height = Math.max(180, Math.min(maxHeight, available));
+  const clampedTop = Math.max(PANEL_MARGIN, Math.min(top, viewportHeight - PANEL_MARGIN - height));
+  return { left: `${Math.round(left)}px`, top: `${Math.round(clampedTop)}px`, width: `${PANEL_WIDTH}px`,
+    maxHeight: `${Math.round(height)}px` };
 });
+function measureWorkspace() {
+  const element = canvas.viewport.value;
+  if (!element) return;
+  const rect = element.getBoundingClientRect();
+  workspaceSize.value = { width: rect.width, height: rect.height, left: rect.left, top: rect.top };
+}
+onMounted(() => {
+  measureWorkspace();
+  window.addEventListener("resize", measureWorkspace);
+});
+onBeforeUnmount(() => window.removeEventListener("resize", measureWorkspace));
 function closeCanvasOverlays() {
   cancelPort();
   pendingInput.value = undefined;
@@ -1408,6 +1463,37 @@ function showNodeTip(node: FlowNode, event: MouseEvent) {
 }
 function moveNodeTip(event: MouseEvent) { if (nodeTip.value) nodeTip.value = { ...nodeTip.value, x: event.clientX + 14, y: event.clientY + 14 }; }
 function hideNodeTip() { nodeTip.value = undefined; }
+/** F4: double-clicking the title renames in place; the body keeps the content-window entry. */
+const renamingNodeId = ref("");
+const renameDraft = ref("");
+const renameInput = ref<HTMLInputElement>();
+async function beginRename(node: FlowNode) {
+  selectedIds.value = [node.id];
+  renamingNodeId.value = node.id;
+  renameDraft.value = node.title || "";
+  await nextTick();
+  renameInput.value?.focus();
+  renameInput.value?.select();
+}
+function cancelRename() {
+  renamingNodeId.value = "";
+  renameDraft.value = "";
+}
+async function commitRename(node: FlowNode) {
+  const title = renameDraft.value.trim();
+  if (!title || title === (node.title || "")) { cancelRename(); return; }
+  try {
+    await saveWorkflowNodes(nodes => nodes.map(row => row.id === node.id ? { ...row, title } : row));
+    cancelRename();
+  } catch (failure) {
+    notice.value = failure instanceof Error ? failure.message : "节点名称保存失败。";
+  }
+}
+function renameKeydown(event: KeyboardEvent, node: FlowNode) {
+  if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); void commitRename(node); }
+  else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelRename(); }
+  else event.stopPropagation();
+}
 function focusInputSource(id: string) {
   selectedIds.value = [id];
   canvas.center(id);
@@ -1981,11 +2067,17 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 </script>
 
 <template>
-  <v-theme-provider with-background class="video-page">
+  <v-theme-provider with-background class="video-page" :class="{ 'video-page--canvas': canvasOpen }">
     <v-dialog v-model="showCliSettings" max-width="520"><WorkbenchCliSettings v-if="showCliSettings" @close="showCliSettings=false"/></v-dialog>
     <p v-if="!draftLoaded && !mediaCanvasId" class="video-hint ma-4" role="status">正在打开工作台…</p>
-    <section v-if="projectHome" class="project-home">
-      <div class="workbench-project-heading"><h1>我的项目</h1><span class="project-heading-actions"><v-btn variant="text" size="small" prepend-icon="mdi-refresh" aria-label="刷新项目列表" @click="loadProjects">刷新</v-btn><v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn></span></div>
+    <section v-if="projectHome" class="page-shell project-home">
+      <div class="workbench-project-heading">
+        <h2>我的项目</h2>
+        <div class="project-heading-actions">
+          <v-btn variant="text" size="small" prepend-icon="mdi-refresh" aria-label="刷新项目列表" @click="loadProjects">刷新</v-btn>
+          <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
+        </div>
+      </div>
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <p v-if="projectsLoading && !projectsLoaded" role="status" class="video-hint">正在加载项目…</p>
       <v-alert v-if="projectsError" type="error" variant="tonal">
@@ -2006,12 +2098,12 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         </button>
       </div>
     </section>
-    <section v-else-if="catalogProjectId === projectId && workbenchProjectTitle" v-show="!mediaCanvasId" class="project-home">
+    <section v-else-if="catalogProjectId === projectId && workbenchProjectTitle" v-show="!canvasOpen" class="page-shell project-home">
       <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
       <WorkbenchPanel :key="projectId" :project-id="projectId" :project-title="workbenchProjectTitle" :resolve-cover="resolvePreview" :list-hidden="!!mediaCanvasId" :list-revision="catalogRevision" :last-opened-canvas-id="lastOpenedCanvasId" mode="list" @back="action(showProjects)"
         @media="(id,runId) => action(() => openMediaCanvas(id,runId))" @cli-settings="showCliSettings=true"/>
     </section>
-    <section v-else-if="!mediaCanvasId && error" class="project-home">
+    <section v-else-if="!mediaCanvasId && error" class="page-shell project-home">
       <v-btn prepend-icon="mdi-arrow-left" variant="text" @click="action(showProjects)">我的项目</v-btn>
       <v-alert type="error" variant="tonal">{{ error }}</v-alert>
     </section>
@@ -2021,20 +2113,21 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
       </v-card-text></v-card>
     </v-dialog>
     <PeerServerSelect :model-value="serviceDeviceId" v-slot="computers">
-    <div v-show="!projectHome && !!mediaCanvasId">
-    <Teleport v-if="!projectHome && !!mediaCanvasId" to="#page-topbar-controls" defer>
-    <div class="video-heading workspace-heading">
-      <v-btn prepend-icon="mdi-arrow-left" variant="text" size="small" @click="action(showProjectCanvases)">画布列表</v-btn>
-      <strong v-if="flowNodes.length && !canvasItems.length">{{projectTitle}}</strong>
-      <input v-else v-model="projectTitle" class="project-title" aria-label="画布名称" maxlength="100" />
-      <span class="canvas-status">{{ statusError || (snapshot ? (snapshot.computeError ? '服务暂不可用' : snapshot.online ? '服务已就绪' : '按需启动') : '正在连接') }}</span>
-      <v-btn v-if="statusError" variant="text" size="small" @click="refresh()">重试连接</v-btn>
-      <v-spacer />
-      <v-btn v-if="mediaCanvasId" variant="text" size="small" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
-      <v-btn v-if="flowNodes.length" variant="text" size="small" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
-      <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
-    </div>
-    </Teleport>
+    <div v-show="canvasOpen" class="workbench-canvas-shell">
+    <header class="workspace-heading" aria-label="画布工具栏">
+      <div class="workspace-identity">
+        <v-btn class="exit-canvas" prepend-icon="mdi-arrow-left" variant="tonal" :disabled="busy" @click="action(showProjectCanvases)">退出画布</v-btn>
+        <strong v-if="flowNodes.length && !canvasItems.length" :title="projectTitle">{{ projectTitle }}</strong>
+        <input v-else v-model="projectTitle" class="project-title" aria-label="画布名称" maxlength="100" />
+      </div>
+      <div class="workspace-actions">
+        <span class="canvas-status">{{ statusError || (snapshot ? (snapshot.computeError ? '服务暂不可用' : snapshot.online ? '服务已就绪' : '按需启动') : '正在连接') }}</span>
+        <v-btn v-if="statusError" variant="text" size="small" @click="refresh()">重试连接</v-btn>
+        <v-btn variant="text" size="small" @click="action(() => openWorkflowPanel('settings'))">画布设置</v-btn>
+        <v-btn v-if="flowNodes.length" variant="text" size="small" @click="action(() => openWorkflowPanel('run'))">运行</v-btn>
+        <v-btn variant="text" size="small" prepend-icon="mdi-robot-outline" @click="showCliSettings=true">Agent 设置</v-btn>
+      </div>
+    </header>
     <v-alert v-if="draftFailure" type="error" variant="tonal">{{ draftFailure }}</v-alert>
     <v-alert v-if="error || snapshot?.computeError" type="error" variant="tonal" class="mb-4">{{ error || snapshot?.computeError }}</v-alert>
     <div ref="viewport" class="video-workspace" tabindex="0" aria-label="画布编辑区" :class="{'canvas-dragging':dragging,'canvas-hand':canPan,'linking-port':!!workflowWire}" :style="canvasGrid" @contextmenu="openCanvasMenu" @pointerdown.capture="dismissCanvasPopovers" @pointerdown="backgroundPointerDown" @dblclick="backgroundDoubleClick" @pointermove="moveWorkspacePointer" @pointerup="endWorkspaceGesture" @pointercancel="cancelWorkspaceGesture" @lostpointercapture.self="cancelWorkspaceGesture" @pointerleave="canvas.leave" @click.capture="canvas.preventDragClick" @wheel="canvas.wheel" @focusout="keepCanvasFocus" @keydown="canvasKeyDown" @keydown.esc="closeCanvasOverlays">
@@ -2081,7 +2174,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <button class="workspace-port port-in" :data-card-port="'in'" :data-card-id="item.id" aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(item.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
         <button class="workspace-port port-out" :data-card-output="'out'" :data-card-id="item.id" aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, item.id)" @click.stop="armPortFromKeyboard($event, item.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
         </template>
-        <button class="canvas-drag-handle" :aria-label="`移动${item.title}`" @click="!$event.detail && selectCard(item)" @keydown="nudgeCard($event,item.id)"><v-icon :icon="canvasKinds.find(row=>row.kind===item.kind)?.icon" size="16" />{{ item.title }}<v-icon icon="mdi-drag" size="16" /></button>
+        <button class="canvas-drag-handle" :aria-label="`移动${item.title}`" @click="!$event.detail && selectCard(item)" @keydown="nudgeCard($event,item.id)"><v-icon :icon="canvasKinds.find(row=>row.kind===item.kind)?.icon" size="16" />{{ item.title }}</button>
         <div v-if="item.kind==='video'" class="canvas-video-card" data-canvas-card-body>
           <video v-if="canvasVideoUrl(item)" draggable="false" class="passive-video" :src="canvasVideoUrl(item)" preload="metadata" />
           <div v-else class="canvas-card-empty"><v-icon icon="mdi-video-outline" size="32" /><span>上传或生成视频</span><label class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" :aria-label="`上传${item.title}`" :disabled="busy || uploading" @change="uploadCanvasAsset($event,item)" /></label></div>
@@ -2154,15 +2247,20 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
           aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(node.id))"><v-icon icon="mdi-link-variant" size="13"/></button>
         <button class="workspace-port port-out" data-card-output="out" :data-card-id="node.id"
           aria-label="输出：控制与材料" title="输出：控制与材料" @pointerdown.stop="beginPort($event, node.id)" @click.stop="armPortFromKeyboard($event, node.id)"><v-icon icon="mdi-link-variant" size="13"/></button>
-        <button class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @dblclick.stop="action(() => openNodeEditor(node))" @keydown="nudgeCard($event,node.id)">
+        <button v-if="renamingNodeId !== node.id" class="canvas-drag-handle" :aria-label="node.title || '流程节点'" @click="!$event.detail && (selectedIds=[node.id])" @dblclick.stop="action(() => beginRename(node))" @keydown="nudgeCard($event,node.id)">
           <v-icon :icon="nodeIcon(node)" size="16"/>{{ node.title || workspaceDefinition?.capabilities[node.kind]?.label || node.kind }}
           <!-- §2.1: 硬闸 / 需确认 / 已禁用 are states on the title row, not new node types. -->
           <span v-if="node.gate === true || node.config?.gate === true" class="workflow-title-badge gate">硬闸</span>
           <span v-if="node.approval === true || node.config?.approval === true" class="workflow-title-badge approval">需确认</span>
           <span v-if="node.enabled === false" class="workflow-title-badge disabled">已禁用</span>
-          <v-icon icon="mdi-drag" size="16"/>
         </button>
+        <div v-else class="canvas-drag-handle canvas-rename-row">
+          <v-icon :icon="nodeIcon(node)" size="16"/>
+          <input ref="renameInput" v-model="renameDraft" class="canvas-rename-input" :aria-label="`改名 ${node.title || '节点'}`"
+            @pointerdown.stop @click.stop @dblclick.stop @keydown="renameKeydown($event, node)" @blur="commitRename(node)" />
+        </div>
         <div class="workflow-card-body canvas-text-card" data-canvas-card-body
+          @dblclick.stop="action(() => openNodeEditor(node))"
           @mouseenter="showNodeTip(node, $event)" @mousemove="moveNodeTip($event)" @mouseleave="hideNodeTip">
           <span v-if="nodeRunStates?.[node.id]" class="node-run-badge" role="status">{{ workspaceDefinition?.nodeStates[nodeRunStates[node.id]!]?.label || nodeRunStates[node.id] }}</span>
           <textarea v-if="node.config.textOutput===true" class="node-text-preview node-text-editor" :class="{muted:!nodeText(node).trim()}" :style="{ fontSize: `${textSize(node.id)}px` }" :value="nodeText(node)" :aria-label="`${node.title || '文本'}内容`" placeholder="直接写，或让 Agent 生成" @pointerdown.stop @input="writeNodeText(node, ($event.target as HTMLTextAreaElement).value)" @blur="persistNodeText(node)" @wheel.stop />
@@ -2194,7 +2292,7 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <template v-if="workspaceGraph">
         <button class="workspace-port port-in" :data-card-port="'in'" :data-card-id="activeVideoId" aria-label="输入：控制与材料" title="输入：控制与材料" @pointerdown.stop @click.stop="action(() => connectPort(activeVideoId))"><v-icon icon="mdi-link-variant" size="13"/></button>
         </template>
-        <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="!$event.detail && selectCard(activeVideo)" @keydown="nudgeCard($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}<v-icon icon="mdi-drag" size="16" /></button>
+        <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="!$event.detail && selectCard(activeVideo)" @keydown="nudgeCard($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}</button>
         <div class="preview-stage" data-canvas-card-body>
           <MediaVideoPlayer v-if="canvasVideoUrl(activeVideo)" :key="activeVideo.id" :src="canvasVideoUrl(activeVideo)!" />
           <div v-else class="preview-empty"><v-icon :icon="selected ? 'mdi-movie-open-outline' : 'mdi-play-box-outline'" size="32" /><h2>{{ selected ? snapshot?.states[selected.status]?.label || selected.status : '让想象成为镜头' }}</h2><p>{{ selected?.error || (selected ? '生成结果会出现在这里' : '从一段描述或参考素材开始') }}</p><label v-if="!selected" class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" aria-label="上传当前视频素材" :disabled="busy || uploading" @change="uploadCanvasAsset($event,activeVideo)" /></label><VideoGenerationProgress v-if="selected && ['running','queued'].includes(selected.status)" :job="selected" /></div>
@@ -2274,41 +2372,6 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!videoInputPrompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="snapshot && !snapshot.online" class="video-hint">提交时会启动所选电脑的生成服务。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
       </section>
       </div>
-        <div v-if="selectedWorkflowNode" class="composer workflow-node-parameters" role="dialog"
-          :aria-label="`${selectedWorkflowNode.title || '节点'}参数`" :style="parameterPanelStyle" @pointerdown.stop @contextmenu.stop @wheel.stop>
-          <header class="workflow-parameters-head">
-            <strong>{{ selectedWorkflowNode.title || workspaceDefinition?.capabilities[selectedWorkflowNode.kind]?.label || selectedWorkflowNode.kind }}</strong>
-            <span v-if="selectedWorkflowNode.approval === true" class="workflow-parameters-flag">需人工确认</span>
-            <span v-if="selectedWorkflowNode.enabled === false" class="workflow-parameters-flag muted">已停用</span>
-            <button type="button" class="workflow-parameters-close" aria-label="关闭参数面板" @click="selectedIds=[]">关闭</button>
-          </header>
-          <div class="workflow-parameters-scroll">
-            <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + parameterNodeId" mode="node" @cli-settings="showCliSettings=true" :project-id="projectId" :canvas-id="mediaCanvasId"
-              :node-id="parameterNodeId" :material-inputs="selectedWorkflowNode.inputs" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(parameterNodeId)?.length">
-              <template #references>
-                <div v-if="pendingInput && pendingInput.to === parameterNodeId" class="canvas-reference-chips" role="group" aria-label="选择上游材料">
-                  <button v-for="key in pendingInput.keys" :key="key" @click="action(() => confirmPendingInput(key))">{{ key }}</button>
-                  <button @click="pendingInput=undefined">取消</button>
-                </div>
-                <ul v-if="mergedInputsByTarget.get(parameterNodeId)?.length" class="canvas-input-list" aria-label="输入材料">
-                  <li v-for="row in mergedInputsByTarget.get(parameterNodeId)" :key="row.from">
-                    <span class="canvas-input-glyph" aria-hidden="true">{{ row.artifactKinds.map(kind => artifactGlyph(kind)).join(" ") }}</span>
-                    <span class="canvas-input-name" :title="row.title">{{ row.title }}</span>
-                    <button type="button" class="canvas-input-action" :aria-label="`定位上游节点 ${row.title}`" title="定位到源节点" @click="action(() => focusInputSourceAction(row.from))">↗</button>
-                    <button type="button" class="canvas-input-action" :aria-label="`移除来自 ${row.title} 的输入`" title="移除" @click="action(() => removeMergedInputAction(row, parameterNodeId))">×</button>
-                  </li>
-                </ul>
-                <details v-if="nodeArtifacts.length" class="canvas-node-artifacts" open>
-                  <summary>已核验产物（{{ nodeArtifacts.length }}）</summary>
-                  <a v-for="artifact in nodeArtifacts" :key="artifact.id" :href="managerResourceUrl(artifact.href)" :title="artifact.path" target="_blank" rel="noopener noreferrer">
-                    <v-icon icon="mdi-file-outline" size="16" aria-hidden="true"/><span>{{ artifact.name }}</span>
-                    <v-icon icon="mdi-open-in-new" size="14" aria-hidden="true"/>
-                  </a>
-                </details>
-              </template>
-            </WorkbenchPanel>
-          </div>
-        </div>
       </div>
       <div v-if="toolbarNode" class="canvas-toolbar" role="toolbar" :aria-label="`${toolbarNode.title || '节点'}工具`" :style="toolbarStyle" @pointerdown.stop @click.stop>
         <template v-if="toolbarNode.config.textOutput === true">
@@ -2323,8 +2386,44 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
         <span v-if="nodeTip.head">{{ nodeTip.head }}</span>
         <small>{{ nodeTip.meta }}</small>
       </div>
-      <div v-if="nodeEditorNode" class="canvas-editor-backdrop" @pointerdown.self="closeNodeEditor">
-        <section class="canvas-editor" role="dialog" aria-modal="true" :aria-label="`${nodeEditorNode.title || '节点'}内容`" @pointerdown.stop>
+      <!-- 参数浮层是 video-workspace 的直接子层：不在 canvas-world 内，所以既不受画布
+           transform 影响，也不会继承 canvas-world 的 pointer-events:none。 -->
+      <div v-if="selectedWorkflowNode" class="composer workflow-node-parameters" role="dialog"
+        :aria-label="`${selectedWorkflowNode.title || '节点'}参数`" :style="parameterPanelStyle" @pointerdown.stop @contextmenu.stop @wheel.stop>
+        <header class="workflow-parameters-head">
+          <strong>{{ selectedWorkflowNode.title || workspaceDefinition?.capabilities[selectedWorkflowNode.kind]?.label || selectedWorkflowNode.kind }}</strong>
+          <span v-if="selectedWorkflowNode.approval === true" class="workflow-parameters-flag">需人工确认</span>
+          <span v-if="selectedWorkflowNode.enabled === false" class="workflow-parameters-flag muted">已停用</span>
+          <button type="button" class="workflow-parameters-close" aria-label="关闭参数面板" @click="selectedIds=[]">关闭</button>
+        </header>
+        <div class="workflow-parameters-scroll">
+          <WorkbenchPanel :key="projectId + ':' + mediaCanvasId + ':' + parameterNodeId" mode="node" @cli-settings="showCliSettings=true" :project-id="projectId" :canvas-id="mediaCanvasId"
+            :node-id="parameterNodeId" :material-inputs="selectedWorkflowNode.inputs" :commit="saveInspectorDraft" :prepare-run="prepareNodeRun" :save-result="saveNodeResult" :content-count="contentRefs.get(parameterNodeId)?.length">
+            <template #references>
+              <div v-if="pendingInput && pendingInput.to === parameterNodeId" class="canvas-reference-chips" role="group" aria-label="选择上游材料">
+                <button v-for="key in pendingInput.keys" :key="key" @click="action(() => confirmPendingInput(key))">{{ key }}</button>
+                <button @click="pendingInput=undefined">取消</button>
+              </div>
+              <ul v-if="mergedInputsByTarget.get(parameterNodeId)?.length" class="canvas-input-list" aria-label="输入材料">
+                <li v-for="row in mergedInputsByTarget.get(parameterNodeId)" :key="row.from">
+                  <span class="canvas-input-glyph" aria-hidden="true">{{ row.artifactKinds.map(kind => artifactGlyph(kind)).join(" ") }}</span>
+                  <span class="canvas-input-name" :title="row.title">{{ row.title }}</span>
+                  <button type="button" class="canvas-input-action" :aria-label="`定位上游节点 ${row.title}`" title="定位到源节点" @click="action(() => focusInputSourceAction(row.from))">↗</button>
+                  <button type="button" class="canvas-input-action" :aria-label="`移除来自 ${row.title} 的输入`" title="移除" @click="action(() => removeMergedInputAction(row, parameterNodeId))">×</button>
+                </li>
+              </ul>
+              <details v-if="nodeArtifacts.length" class="canvas-node-artifacts" open>
+                <summary>已核验产物（{{ nodeArtifacts.length }}）</summary>
+                <a v-for="artifact in nodeArtifacts" :key="artifact.id" :href="managerResourceUrl(artifact.href)" :title="artifact.path" target="_blank" rel="noopener noreferrer">
+                  <v-icon icon="mdi-file-outline" size="16" aria-hidden="true"/><span>{{ artifact.name }}</span>
+                  <v-icon icon="mdi-open-in-new" size="14" aria-hidden="true"/>
+                </a>
+              </details>
+            </template>
+          </WorkbenchPanel>
+        </div>
+      </div>
+      <div v-if="nodeEditorNode" class="canvas-editor-backdrop" @pointerdown.self="closeNodeEditor">        <section class="canvas-editor" role="dialog" aria-modal="true" :aria-label="`${nodeEditorNode.title || '节点'}内容`" @pointerdown.stop>
           <header>
             <strong>{{ nodeEditorNode.title || nodeEditorNode.id }}</strong>
             <span class="canvas-editor-size">{{ nodeEditorSize }}px</span>
@@ -2395,22 +2494,27 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 
 <style scoped>
 .video-page { --rr-primary:var(--rr-accent); --rr-panel:var(--rr-surface); position:relative; width:100%; height:var(--rr-content-height, calc(100dvh - var(--v-layout-top, 0px))); min-height:540px; margin:0; padding:0; color:var(--rr-text); background:var(--rr-canvas) !important; overflow:hidden; color-scheme:inherit; }
-.video-heading { display:flex; align-items:center; gap:16px; margin-bottom:20px; }
-.video-heading>div:first-child { margin-right:auto; }
-.video-heading h1 { font-size:24px; }
-.video-heading span,.video-hint,small,time { color:var(--rr-muted); }
+.video-page--canvas { height:100dvh; min-height:0; }
+:global(.shell-main:has(.video-page--canvas)) { padding:0 !important; transition:none; }
+:global(.shell-main:has(.video-page--canvas) > :is(.page-bar, .v-alert, .v-btn)) { display:none !important; }
+:global(.v-application__wrap:has(> .shell-main .video-page--canvas) > :is(.app-sidebar, .v-navigation-drawer__scrim)) { display:none !important; }
+.workbench-canvas-shell { display:flex; flex-direction:column; height:100%; }
+.video-hint,small,time { color:var(--rr-muted); }
 .workflow-dialog-content { padding:0 !important; }
 /* P0-2：参数面板是画布内独立浮层，只由内容和拖拽决定卡片尺寸。 */
 /* Later `.composer { width:100% }` has the same specificity, so the panel rule
    must outrank it by class count rather than by source order. */
-.composer.workflow-node-parameters { position:absolute; z-index:6; width:320px; max-height:76vh; margin-top:0; display:flex; flex-direction:column; }
+/* The panel is a direct child of .video-workspace: screen-space left/top come from
+   parameterPanelStyle, so it must not inherit the canvas transform or its
+   pointer-events:none. Width is fixed at 330px and never scales. */
+.composer.workflow-node-parameters { position:absolute; z-index:8; width:330px; max-height:none; margin-top:0; display:flex; flex-direction:column; pointer-events:auto; box-sizing:border-box; }
 .workflow-parameters-head { display:flex; align-items:center; gap:8px; padding:9px 10px 2px 12px; }
 .workflow-parameters-head strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .workflow-parameters-flag { flex-shrink:0; padding:1px 7px; border-radius:10px; background:var(--rr-accent-surface); color:var(--rr-heading); font-size:11px; }
 .workflow-parameters-flag.muted { background:var(--rr-subtle); color:var(--rr-muted); }
 .workflow-parameters-close { margin-left:auto; flex-shrink:0; padding:4px 8px; border-radius:8px; color:var(--rr-muted); font-size:12px; }
 .workflow-parameters-close:is(:hover,:focus-visible) { color:var(--rr-text); background:var(--rr-subtle); }
-.workflow-parameters-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 12px; }
+.workflow-parameters-scroll { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:6px 12px 12px; pointer-events:auto; }
 .canvas-wire-hint { position:absolute; z-index:5; transform:translate(-50%,-50%); padding:2px 8px; border-radius:10px; border:1px solid var(--rr-border-strong); background:var(--rr-surface); color:var(--rr-heading); font-size:11px; white-space:nowrap; pointer-events:none; }
 .canvas-wire-hint.kind-input { border-color:var(--rr-success-border); color:var(--rr-success-text); }
 /* §7.3：连线中点显示条件徽章，点击切换 完成/成功。 */
@@ -2520,7 +2624,11 @@ onBeforeUnmount(() => { disposed = true; mediaService.invalidate(); statusContro
 /* P0-4：停用是状态，不是类型。虚线边框 + 降透明度 + 标题划线，运行时由 run 跳过。 */
 .workflow-card-disabled { opacity:.62; outline:1px dashed var(--rr-border-strong); outline-offset:-1px; }
 .workflow-card-disabled .canvas-drag-handle { text-decoration:line-through; }
-.video-workspace { position:absolute; inset:0; overflow:clip; touch-action:none; background-image:radial-gradient(var(--rr-grid-line) .8px,transparent .8px); background-size:24px 24px; }
+/* Dotted canvas texture: 78px pitch with a 2px dot, taken from the reference
+   layout. The dot colour stays on the theme token so light and dark both work. */
+.video-workspace { position:relative; flex:1; min-height:0; overflow:clip; touch-action:none;
+  background-image:radial-gradient(circle, var(--rr-grid-line) 0 1px, transparent 1px);
+  background-size:78px 78px; }
 .video-workspace:focus { outline:none; }
 .creation-stage { position:absolute; width:calc(var(--canvas-card-width,206px) + 260px); display:flex; flex-direction:column; align-items:center; }
 .preview-stage { flex-shrink:0; width:var(--canvas-card-width,206px); height:var(--canvas-card-height,214px); background:var(--rr-surface); border:1px solid var(--rr-border-strong); border-radius:10px; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--rr-text); box-shadow:var(--rr-shadow-card); }
@@ -2590,14 +2698,17 @@ summary { cursor:pointer; }
 .work-card p { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; padding:10px 12px 4px; font-size:13px; }
 .work-card time { padding:0 12px; font-size:11px; }
 .library-empty { padding:24px 8px; text-align:center; color:var(--rr-muted); font-size:14px; }
-.workbench-project-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
-.workspace-heading { display:flex; align-items:center; gap:8px; width:100%; height:auto; padding:0; margin:0; min-width:0; }
-.workspace-heading>strong { overflow:hidden; max-width:300px; font-size:13px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.workbench-project-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+.workspace-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:12px 16px; border-bottom:1px solid var(--rr-border-soft); }
+.workspace-identity,.workspace-actions { display:flex; align-items:center; gap:8px; min-width:0; }
+.workspace-identity { flex:1 1 250px; }
+.workspace-actions { flex-wrap:wrap; margin-inline-start:auto; }
+.workspace-identity > strong { overflow:hidden; max-width:300px; font-size:14px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.exit-canvas { flex:none; }
 .workspace-heading .canvas-status { overflow:hidden; color:var(--rr-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.workspace-heading .project-title { min-width:140px; max-width:300px; padding:4px 6px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--rr-text); font-size:13px; }
+.workspace-heading .project-title { width:100%; min-width:0; max-width:300px; padding:6px 8px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--rr-text); font-size:14px; text-overflow:ellipsis; }
 .workspace-heading .project-title:is(:hover,:focus-within) { border-color:var(--rr-border); background:var(--rr-surface); }
 .workspace-heading :deep(.v-btn) { font-size:12px; letter-spacing:0; }
-.workspace-heading :deep(.v-switch) { flex:0 0 auto; }
 .workspace-tools { position:absolute; z-index:6; left:16px; top:50%; transform:translateY(-50%); display:grid; gap:4px; padding:6px; border:1px solid var(--rr-border); border-radius:24px; background:var(--rr-surface); }
 .workspace-tools button { width:36px; height:40px; border-radius:18px; color:var(--rr-text); }
 .composer :deep(.v-field__input) { font-size:13px; line-height:1.7; }
@@ -2613,7 +2724,8 @@ summary { cursor:pointer; }
 .generate-feedback p { font-size:11px; margin-bottom:10px; }
 .asset-help { font-size:10px; }
 @media(max-width:600px) {
-  .workspace-heading { gap:4px; }
+  .workspace-heading { gap:4px; padding:8px 10px; }
+  .workspace-actions { margin-inline-start:0; }
   .workspace-heading .canvas-status { display:none; }
 
 
@@ -2634,8 +2746,10 @@ summary { cursor:pointer; }
 .passive-video { pointer-events:none; }
 .canvas-selected > .canvas-video-card,.canvas-selected > .canvas-media-card,.canvas-selected > .canvas-text-card,.canvas-selected > .preview-stage { outline:1px solid var(--rr-accent); box-shadow:0 0 0 3px var(--rr-accent-surface); }
 .canvas-card { position:absolute; width:var(--canvas-card-width,206px); margin-left:130px; }
-.canvas-drag-handle { display:flex; align-items:center; gap:8px; height:34px; width:var(--canvas-card-width,206px); max-width:100%; color:var(--rr-heading); font-size:13px; cursor:pointer; text-align:left; touch-action:none; overflow:hidden; white-space:nowrap; }
-.canvas-drag-handle .v-icon:last-child { margin-left:auto; opacity:.5; }
+.canvas-drag-handle { display:flex; align-items:center; gap:8px; height:34px; width:var(--canvas-card-width,206px); max-width:100%; color:var(--rr-heading); font-size:13px; cursor:grab; text-align:left; touch-action:none; overflow:hidden; white-space:nowrap; }
+/* F4：改名输入框占满标题行，保持与标题相同的排版。 */
+.canvas-rename-row { cursor:text; }
+.canvas-rename-input { flex:1; min-width:0; padding:1px 4px; border:1px solid var(--rr-accent-border); border-radius:5px; background:var(--rr-input); color:var(--rr-heading); font:inherit; outline:none; }
 .canvas-video-card,.canvas-media-card,.canvas-text-card { border:1px solid var(--rr-border-strong); border-radius:12px; background:var(--rr-surface); overflow:hidden; }
 .canvas-video-card>video,.canvas-media-card>img { display:block; width:100%; height:var(--canvas-card-height,214px); object-fit:contain; }
 .canvas-media-card>audio { width:100%; margin-top:24px; }
@@ -2752,16 +2866,17 @@ summary { cursor:pointer; }
 </style>
 
 <style scoped>
-/* The project home owns the full content box: the grid fills the available
-   width and the section scrolls when there are more cards than fit. */
-.project-home { box-sizing:border-box; width:100%; height:100%; overflow-y:auto; overscroll-behavior:contain; padding:clamp(16px,2.4vw,36px) clamp(16px,2.6vw,40px) 40px; background:var(--rr-canvas); }
-.project-home h1 { margin:0; font-size:22px; }
-.workbench-project-heading { margin-bottom:20px; }
-.project-heading-actions { display:flex; align-items:center; gap:4px; }
+/* Share the page shell's width and align the inner edges with the top bar. */
+.project-home { display:block; box-sizing:border-box; height:100%; overflow-y:auto; overscroll-behavior:contain; padding-inline:32px; }
+@media(max-width:720px) { .project-home { padding-inline:16px; } }
+.workbench-project-heading { margin-bottom:16px; }
+.workbench-project-heading h2 { margin:0; font-size:20px; }
+.project-heading-actions { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
 .project-grid { display:grid; width:100%; grid-template-columns:repeat(auto-fill,minmax(min(100%,232px),1fr)); gap:clamp(12px,1.3vw,20px); }
 .project-tile { box-sizing:border-box; min-width:0; min-height:0; border:1px solid var(--rr-border-strong); border-radius:16px; background:var(--rr-surface); padding:12px; text-align:left; display:flex; flex-direction:column; gap:8px; color:var(--rr-text); transition:border-color .16s ease, box-shadow .16s ease; }
-.project-tile:hover { border-color:var(--rr-muted); box-shadow:0 6px 20px rgb(0 0 0 / 18%); }
-.project-new { border-style:dashed; align-items:center; justify-content:center; min-height:176px; }
+.project-tile:hover,.project-tile:focus-visible { border-color:var(--rr-accent); box-shadow:0 6px 20px rgb(0 0 0 / 18%); }
+.project-tile:focus-visible { outline:2px solid var(--rr-accent); outline-offset:2px; }
+.project-new { border-style:dashed; align-items:center; justify-content:center; min-height:176px; color:var(--rr-accent); }
 .project-cover { aspect-ratio:16 / 9; border-radius:10px; display:grid; place-items:center; overflow:hidden; background:var(--rr-subtle); color:var(--rr-muted); }
 .project-cover > img, .project-cover > video { display:block; width:100%; height:100%; object-fit:cover; border-radius:inherit; pointer-events:none; }
 .project-tile strong, .project-tile small { display:block; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }

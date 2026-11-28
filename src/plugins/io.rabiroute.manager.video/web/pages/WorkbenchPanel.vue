@@ -267,7 +267,7 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
         <v-btn :disabled="busy || !dirty" color="primary" @click="action(save)">保存</v-btn>
       </template>
       <v-btn v-if="mode === 'list'" variant="text" prepend-icon="mdi-robot-outline" @click="emit('cliSettings')">Agent 设置</v-btn>
-      <v-btn v-if="mode === 'list'" :disabled="busy" @click="action(create)">新建画布</v-btn>
+      <v-btn v-if="mode === 'list'" :disabled="busy" variant="tonal" color="secondary" prepend-icon="mdi-plus" @click="action(create)">新建画布</v-btn>
       <v-btn v-if="mode !== 'list'" :disabled="busy" variant="text" @click="action(backToProjects)">关闭</v-btn>
     </header>
     <v-alert v-if="error&&!conflict" type="error" variant="tonal">{{error}}</v-alert>
@@ -357,6 +357,16 @@ onBeforeUnmount(()=>{rememberDraft();disposed=true;++openId;++listId;++initId;++
 </style>
 
 <style scoped>
+.workbench-catalog > .workbench-header { padding:0 0 12px; gap:8px; }
+.workbench-catalog > .workbench-header > strong { min-width:0; overflow-wrap:anywhere; font-size:16px; }
+.workbench-catalog > .list-tools { flex-wrap:wrap; gap:8px; padding:16px 0 12px; }
+.workbench-catalog > .list-tools > h2 { font-size:20px; font-weight:600; letter-spacing:0; }
+.workbench-catalog > .list-tools > input { width:min(100%, 280px); }
+.workbench-catalog > .list-message,.workbench-catalog > .draft-notice,.workbench-catalog > .import-tools { margin-inline:0; }
+.workbench-catalog > .list-footer { flex-wrap:wrap; padding-inline:0; }
+@media(max-width:600px) {
+  .workbench-catalog > .list-tools > input { flex:1 1 100%; max-width:none; }
+}
 .creative-inspector { gap:8px; }
 .creative-inspector .creative-prompt { min-height:108px; font-size:14px; line-height:1.6; background:var(--rr-surface-raised,var(--rr-surface)); color:var(--rr-text); border-color:var(--rr-border); }
 .creative-footer { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }

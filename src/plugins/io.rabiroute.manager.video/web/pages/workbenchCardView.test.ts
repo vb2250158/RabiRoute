@@ -78,6 +78,36 @@ test("a card with no artifacts and no inputs shows zero on both corners", () => 
   assert.deepEqual({ out: badges.outputCount, into: badges.inputCount, glyphs: badges.outputGlyphs }, { out: 0, into: 0, glyphs: [] });
 });
 
+test("a declared-but-unrun node still shows the real artifact type", () => {
+  // Regression: the corner used to fall back to one neutral dot per declared
+  // artifact, so every pending card showed "• 2" even though its requirements
+  // named the exact files it will write.
+  const pending = node({ requirements: [
+    { key: "brief", path: "reports/brief-${date}.md", freshness: "produced" },
+    { key: "plan", path: "制作工程/visual-plan.json", freshness: "produced" },
+  ] });
+  const badges = cardBadges(pending, [], []);
+  assert.equal(badges.outputCount, 2);
+  assert.deepEqual(badges.outputGlyphs, ["T"]);
+});
+
+test("declared mixed media keeps one glyph per distinct kind", () => {
+  const pending = node({ requirements: [
+    { key: "clip", path: "成片/早报.mp4", freshness: "produced" },
+    { key: "voice", path: "音频/配音.wav", freshness: "produced" },
+    { key: "cover", path: "封面/封面.png", freshness: "produced" },
+    { key: "script", path: "台本/净台词.txt", freshness: "produced" },
+  ] });
+  assert.deepEqual(cardBadges(pending, [], []).outputGlyphs, ["▶", "♪", "◫", "T"]);
+});
+
+test("a requirement without a path is not invented as a typed artifact", () => {
+  const pending = node({ requirements: [{ key: "report", freshness: "validated" }] });
+  const badges = cardBadges(pending, [], []);
+  assert.equal(badges.outputCount, 1);
+  assert.deepEqual(badges.outputGlyphs, ["•"]);
+});
+
 test("produced artifacts win over declarations once the node has run", () => {
   const badges = cardBadges(node({ requirements: [{ key: "a", freshness: "produced" }] }), [{ path: "out.mp4" }], []);
   assert.equal(badges.outputCount, 1);

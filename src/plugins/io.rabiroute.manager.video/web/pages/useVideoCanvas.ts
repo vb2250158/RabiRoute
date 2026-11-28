@@ -79,7 +79,13 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   let observer: ResizeObserver | undefined;
   let previousSize: Point | undefined;
   const transform = computed(() => ({ transform: `translate(${offset.value.x}px, ${offset.value.y}px) scale(${scale.value})` }));
-  const grid = computed(() => ({ backgroundSize: `${24 * scale.value}px ${24 * scale.value}px`, backgroundPosition: `${offset.value.x}px ${offset.value.y}px` }));
+  // The dot lattice is a screen-space texture, not part of the document: it keeps a
+  // fixed 78px pitch and 2px dot at any zoom, so panning shifts it and zooming does not
+  // turn the dots into blobs. Colours come from the theme token, never hard-coded.
+  const grid = computed(() => ({
+    backgroundSize: "78px 78px",
+    backgroundPosition: `${offset.value.x}px ${offset.value.y}px`,
+  }));
   const visibleBounds = computed(() => {
     const margin = 180;
     return {

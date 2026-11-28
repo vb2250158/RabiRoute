@@ -69,9 +69,20 @@ export function mergedInputs(input: {
 }
 
 /** Counts shown on the two corners of a card. */
+/**
+ * Counts and type glyphs shown on the two corners of a card.
+ *
+ * A card that has not run yet still declares what it will produce, and those
+ * declarations carry a path — so the corner can show the real type. Falling back
+ * to bare placeholders would print one neutral dot per artifact, which reads as
+ * "unknown" even though the node told us exactly what it writes.
+ */
 export function cardBadges(node: FlowNode | undefined, outputs: readonly ArtifactLike[], inputs: readonly MergedInput[]) {
-  const declared = (node?.requirements ?? []).length;
-  const output = artifactBadge(outputs.length ? outputs : Array.from({ length: declared }, () => ({})));
+  const declared = (node?.requirements ?? []).map(requirement => ({
+    key: typeof requirement?.key === "string" ? requirement.key : undefined,
+    path: typeof requirement?.path === "string" ? requirement.path : undefined,
+  }));
+  const output = artifactBadge(outputs.length ? outputs : declared);
   return {
     outputCount: output.count,
     outputGlyphs: output.glyphs,
