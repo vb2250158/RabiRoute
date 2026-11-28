@@ -26,6 +26,37 @@ test("a badge counts every artifact but shows one glyph per distinct kind", () =
   assert.deepEqual(badge.glyphs, ["T", "▶"]);
 });
 
+test("a material link resolves its type from the producer's requirement path", () => {
+  // Regression: material links carry declaration keys like `result-1`, not paths,
+  // so the corner used to show a neutral dot for every material input.
+  const rows = mergedInputs({
+    material: [{ from: "src", sourceTitle: "采集", artifactKeys: ["result-1", "raw-markdown"] }],
+    text: [],
+    pathByKey: (sourceId, key) => sourceId === "src"
+      ? ({ "result-1": "reports/raw.jsonl", "raw-markdown": "reports/raw.md" } as Record<string, string>)[key]
+      : undefined,
+  });
+  assert.deepEqual(rows[0]!.artifactKinds, ["text"]);
+});
+
+test("a material link whose producer has no matching path stays neutral", () => {
+  const rows = mergedInputs({
+    material: [{ from: "src", sourceTitle: "采集", artifactKeys: ["result-1"] }],
+    text: [],
+    pathByKey: () => undefined,
+  });
+  assert.deepEqual(rows[0]!.artifactKinds, ["other"]);
+});
+
+test("mixed material types from one producer keep each glyph once", () => {
+  const rows = mergedInputs({
+    material: [{ from: "src", sourceTitle: "出片", artifactKeys: ["clip", "cover"] }],
+    text: [],
+    pathByKey: (_s, key) => key === "clip" ? "成片/早报.mp4" : "封面/封面.png",
+  });
+  assert.deepEqual(rows[0]!.artifactKinds, ["video", "image"]);
+});
+
 test("material links and text links from the same source merge into one row", () => {
   // §5.3: these used to be two separate chip rows, so one upstream node could
   // appear twice and neither row told the whole story.
@@ -34,8 +65,9 @@ test("material links and text links from the same source merge into one row", ()
     text: [{ id: "sources", title: "采集" }, { id: "notes", title: "笔记" }],
   });
   assert.equal(rows.length, 2);
+  // Types are deduplicated per source, so two text artifacts yield one glyph.
   assert.deepEqual(rows[0], { from: "sources", title: "采集", kind: "material",
-    artifactKeys: ["news.md", "raw.json"], artifactKinds: ["text", "text"] });
+    artifactKeys: ["news.md", "raw.json"], artifactKinds: ["text"] });
   assert.deepEqual(rows[1], { from: "notes", title: "笔记", kind: "text", artifactKeys: [], artifactKinds: ["text"] });
 });
 

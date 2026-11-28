@@ -753,7 +753,15 @@ const mergedInputsByTarget = computed(() => {
     const material = materialByTarget.get(node.id) ?? [];
     const text = (textByTarget.get(node.id) ?? []).map(source => ({ id: source.id, title: source.title }));
     if (!material.length && !text.length) continue;
-    byTarget.set(node.id, mergedInputs({ material, text }));
+    byTarget.set(node.id, mergedInputs({
+      material, text,
+      // A material link carries a declaration key; only the producer knows its path.
+      pathByKey: (sourceId, key) => {
+        const producer = flowNodesById.value.get(sourceId);
+        const requirement = (producer?.requirements ?? []).find(row => row?.key === key);
+        return typeof requirement?.path === "string" ? requirement.path : undefined;
+      },
+    }));
   }
   return byTarget;
 });
@@ -1244,65 +1252,43 @@ function cancelPort() {
 }
 /** The parameter panel is its own canvas layer, so selecting a card never changes its size. */
 const parameterNodeId = computed(() => selectedWorkflowNode.value?.id ?? "");
-/** Workspace box in screen space, kept current so the panel can place itself. */
-const workspaceSize = ref({ width: 0, height: 0, left: 0, top: 0 });
 const PANEL_WIDTH = 330;
 const PANEL_MARGIN = 12;
-/**
- * The panel is a direct child of `.video-workspace`, so `left`/`top` are relative
- * to that box, not to the window. Project the card's world rect through the canvas
- * transform, convert into workspace-local coordinates, then place the panel below
- * the card, flip above when the bottom would overflow, and clamp on both axes.
- */
+const PANEL_MIN_HEIGHT = 180;
+/** Place the panel in the canvas's own viewport, outside the pan/zoom transform. */
 const parameterPanelStyle = computed(() => {
   const id = parameterNodeId.value;
   const point = id ? canvas.positions.value[id] : undefined;
   if (!id || !point) return { display: "none" };
+
+  const { x: viewportWidth, y: viewportHeight } = canvas.viewportSize.value;
+  const width = Math.min(PANEL_WIDTH, viewportWidth - PANEL_MARGIN * 2);
+  const availableHeight = viewportHeight - PANEL_MARGIN * 2;
+  if (width <= 0 || availableHeight <= 0) return { display: "none" };
+
   const scale = canvas.scale.value, offset = canvas.offset.value;
-  const size = canvas.cardSize(id);
-  const box = workspaceSize.value;
-  const viewportWidth = box.width || (typeof window !== "undefined" ? window.innerWidth : 0);
-  const viewportHeight = box.height || (typeof window !== "undefined" ? window.innerHeight : 0);
-  // Card rect in workspace-local pixels: the card origin is the layout point plus
-  // the 130px text gutter, then the canvas pan/zoom transform.
   const cardLeft = offset.x + (point.x + 130) * scale;
   const cardTop = offset.y + point.y * scale;
-  const cardWidth = size.width * scale;
-  const cardHeight = (34 + size.height) * scale;
-  const available = viewportHeight - PANEL_MARGIN * 2;
+  const cardHeight = (34 + canvas.cardSize(id).height) * scale;
   const below = cardTop + cardHeight + 10;
   const above = cardTop - 10;
-  let top: number, maxHeight: number;
-  if (below + PANEL_MARGIN <= viewportHeight) {
+  const belowSpace = viewportHeight - PANEL_MARGIN - below;
+  const aboveSpace = above - PANEL_MARGIN;
+  let top = PANEL_MARGIN;
+  let height = availableHeight;
+  if (belowSpace >= PANEL_MIN_HEIGHT) {
+    height = Math.min(belowSpace, availableHeight);
     top = below;
-    maxHeight = viewportHeight - below - PANEL_MARGIN;
-  } else if (above - PANEL_MARGIN >= Math.min(240, available)) {
-    maxHeight = Math.min(available, above - PANEL_MARGIN);
-    top = above - maxHeight;
-  } else {
-    // Neither side fits: pin inside the viewport and let the panel's own scroll take over.
-    top = PANEL_MARGIN;
-    maxHeight = available;
+  } else if (aboveSpace >= PANEL_MIN_HEIGHT) {
+    height = Math.min(aboveSpace, availableHeight);
+    top = above - height;
   }
-  const left = Math.max(PANEL_MARGIN, Math.min(cardLeft, viewportWidth - PANEL_WIDTH - PANEL_MARGIN));
-  // The honoured height is what the panel will actually occupy, so the clamp must use it
-  // rather than the requested max, or an over-tall panel still lands outside the viewport.
-  const height = Math.max(180, Math.min(maxHeight, available));
+
+  const left = Math.max(PANEL_MARGIN, Math.min(cardLeft, viewportWidth - PANEL_MARGIN - width));
   const clampedTop = Math.max(PANEL_MARGIN, Math.min(top, viewportHeight - PANEL_MARGIN - height));
-  return { left: `${Math.round(left)}px`, top: `${Math.round(clampedTop)}px`, width: `${PANEL_WIDTH}px`,
+  return { left: `${Math.round(left)}px`, top: `${Math.round(clampedTop)}px`, width: `${Math.round(width)}px`,
     maxHeight: `${Math.round(height)}px` };
 });
-function measureWorkspace() {
-  const element = canvas.viewport.value;
-  if (!element) return;
-  const rect = element.getBoundingClientRect();
-  workspaceSize.value = { width: rect.width, height: rect.height, left: rect.left, top: rect.top };
-}
-onMounted(() => {
-  measureWorkspace();
-  window.addEventListener("resize", measureWorkspace);
-});
-onBeforeUnmount(() => window.removeEventListener("resize", measureWorkspace));
 function closeCanvasOverlays() {
   cancelPort();
   pendingInput.value = undefined;

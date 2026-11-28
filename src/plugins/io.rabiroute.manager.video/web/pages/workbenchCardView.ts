@@ -5,10 +5,11 @@ import type { FlowNode } from "./workbenchEditor";
 export type ArtifactKind = "text" | "image" | "video" | "audio" | "other";
 
 const extensions: Record<string, ArtifactKind> = {
-  txt: "text", md: "text", json: "text", csv: "text", log: "text",
-  png: "image", jpg: "image", jpeg: "image", webp: "image", gif: "image", bmp: "image",
-  mp4: "video", mov: "video", webm: "video", mkv: "video",
-  wav: "audio", mp3: "audio", m4a: "audio", flac: "audio", ogg: "audio",
+  txt: "text", md: "text", json: "text", jsonl: "text", ndjson: "text", csv: "text", tsv: "text", log: "text",
+  yml: "text", yaml: "text", xml: "text", html: "text", srt: "text", vtt: "text", py: "text", js: "text", ts: "text",
+  png: "image", jpg: "image", jpeg: "image", webp: "image", gif: "image", bmp: "image", svg: "image", avif: "image",
+  mp4: "video", mov: "video", webm: "video", mkv: "video", avi: "video", m4v: "video",
+  wav: "audio", mp3: "audio", m4a: "audio", flac: "audio", ogg: "audio", aac: "audio", opus: "audio",
 };
 
 export const artifactKindGlyphs: Record<ArtifactKind, string> = {
@@ -46,19 +47,28 @@ export type MergedInput = {
  * The canvas used to render material links and text links as two separate chip
  * rows; one card can receive both from the same upstream node. Merge by source
  * so a single row explains everything that card will consume at run time.
+ *
+ * `artifactKeys` are declaration keys such as `result-1`, not file paths, so the
+ * producer's requirements are the only place the real type can come from.
  */
 export function mergedInputs(input: {
   material: readonly { from: string; sourceTitle: string; artifactKeys: readonly string[] }[];
   text: readonly { id: string; title: string }[];
+  pathByKey?: (sourceId: string, artifactKey: string) => string | undefined;
 }): MergedInput[] {
   const rows = new Map<string, MergedInput>();
+  const kindOf = (sourceId: string, key: string): ArtifactKind => {
+    const path = input.pathByKey?.(sourceId, key);
+    return path ? artifactKind(path) : artifactKind(key);
+  };
   for (const link of input.material) {
     const keys = [...link.artifactKeys];
     const current = rows.get(link.from);
     rows.set(link.from, current
       ? { ...current, artifactKeys: [...new Set([...current.artifactKeys, ...keys])],
-        artifactKinds: [...new Set([...current.artifactKinds, ...keys.map(artifactKind)])] }
-      : { from: link.from, title: link.sourceTitle, kind: "material", artifactKeys: keys, artifactKinds: keys.map(artifactKind) });
+        artifactKinds: [...new Set([...current.artifactKinds, ...keys.map(key => kindOf(link.from, key))])] }
+      : { from: link.from, title: link.sourceTitle, kind: "material", artifactKeys: keys,
+        artifactKinds: [...new Set(keys.map(key => kindOf(link.from, key)))] });
   }
   for (const source of input.text) {
     const current = rows.get(source.id);

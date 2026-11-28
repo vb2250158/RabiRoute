@@ -8,7 +8,7 @@
     {
       "id": "manager:video",
       "package": "io.rabiroute.manager.video",
-      "version": "0.2.35",
+      "version": "0.2.37",
       "enabled": true,
       "config": {},
       "grants": [],

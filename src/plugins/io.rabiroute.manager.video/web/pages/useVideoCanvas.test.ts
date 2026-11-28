@@ -57,6 +57,22 @@ async function fixture(cards: CardRect[] = [], offset = { left: 0, top: 0 }) {
   } as unknown as HTMLElement;
   return canvas;
 }
+test("the canvas exposes its mounted viewport size independently of pan and zoom", async () => {
+  const canvas = await fixture();
+  const viewport = canvas.viewport.value!;
+  Object.defineProperties(viewport, {
+    clientWidth: { value: 380 },
+    clientHeight: { value: 220 },
+  });
+  canvas.add("text");
+  canvas.fit();
+  assert.deepEqual(canvas.viewportSize.value, { x: 380, y: 220 });
+  canvas.offset.value = { x: -200, y: 340 };
+  canvas.zoom(1.6);
+  assert.deepEqual(canvas.viewportSize.value, { x: 380, y: 220 });
+  assert.ok(canvas.minimap.value.view.width > 0);
+});
+
 function pointer(x: number, y: number, id = 1) {
   return { clientX: x, clientY: y, pointerId: id, button: 0, preventDefault() {} } as PointerEvent;
 }

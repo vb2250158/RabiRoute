@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, readonly, ref, watch } from "vue";
 
 type Point = { x: number; y: number };
 export type NodeLayout = Point & { width?: number; height?: number };
@@ -408,5 +408,5 @@ export function useVideoCanvas(defaultHeight: (id: string) => number = () => 214
   onBeforeUnmount(() => observer?.disconnect());
   function world(point: Point) { return { x: (point.x - offset.value.x) / scale.value, y: (point.y - offset.value.y) / scale.value }; }
   function moving(pointerId: number) { return gesture?.pointer === pointerId && gesture.started; }
-  return { selectedIds, marquee, minimap, locateMinimap, viewport, scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, visibleBounds, visibleCardIds, add, position, cardSize, cardRect, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, moving, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory, applyLayout };
+  return { selectedIds, marquee, minimap, locateMinimap, viewport, viewportSize: readonly(viewportSize), scale, offset, handMode, spacePan, canPan, dragging, changingLayout, positions, transform, grid, visibleBounds, visibleCardIds, add, position, cardSize, cardRect, portOffsets, zoom, center, fit, begin, beginResize, resizeWithKeyboard, backgroundDown, move, moving, end, cancel, leave, clearDragClick, preventDragClick, wheel, nudge, world, canUndo, canRedo, restoreLayout, clearHistory, applyLayout };
 }

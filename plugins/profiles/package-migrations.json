@@ -705,9 +705,11 @@
         "0.2.31",
         "0.2.32",
         "0.2.33",
-        "0.2.34"
+        "0.2.34",
+        "0.2.35",
+        "0.2.36"
       ],
-      "toVersion": "0.2.35"
+      "toVersion": "0.2.37"
     },
     {
       "packageId": "io.rabiroute.manager.wearable-companion",
